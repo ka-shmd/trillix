@@ -1,5 +1,7 @@
 # trierra
 
+[![CI](https://github.com/ka-shmd/trierra/actions/workflows/ci.yml/badge.svg)](https://github.com/ka-shmd/trierra/actions/workflows/ci.yml)
+
 SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first) + PostgreSQL 16 + React/TypeScript.
 Монорепозиторий: Go-API в `cmd/` и `internal/`, кабинет в `web/app`, публичный рендерер в
 `web/renderer`, миграции в `migrations/`, инфраструктура в `deploy/`.
@@ -18,9 +20,11 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 ## Текущий статус
 
-Фаза 0 «Фундамент и CI», шаги 1–6 выполнены: скелет монорепозитория, минимальный API-сервер,
-Postgres в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite (react-ts, strict TS,
-eslint + prettier). CI появится на шаге 7.
+**Фаза 0 «Фундамент и CI» завершена.** Скелет монорепозитория, минимальный API-сервер, Postgres
+в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite (react-ts, strict TS,
+eslint + prettier), GitHub Actions CI. Дальше — фаза 1 (аутентификация).
+
+`main` защищён: изменения идут через PR с зелёным CI (джобы `go`, `web (app)`, `web (renderer)`).
 
 ## Быстрый старт
 
