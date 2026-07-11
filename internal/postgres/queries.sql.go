@@ -395,6 +395,48 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 	return items, nil
 }
 
+const updateFormDraftSchema = `-- name: UpdateFormDraftSchema :one
+UPDATE forms
+SET draft_schema = $3, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND updated_at = $4::timestamptz
+RETURNING id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at
+`
+
+type UpdateFormDraftSchemaParams struct {
+	ID                uuid.UUID
+	WorkspaceID       uuid.UUID
+	DraftSchema       []byte
+	ExpectedUpdatedAt pgtype.Timestamptz
+}
+
+// Автосейв билдера с оптимистичной блокировкой: строка обновляется, только если
+// форма в воркспейсе И её updated_at совпадает с присланным клиентом. Иначе 0
+// строк — service различает «чужая/нет формы» (проверено заранее) от расхождения
+// версии (updated_at сдвинула другая вкладка → 409). updated_at двигаем вручную.
+func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraftSchemaParams) (Form, error) {
+	row := q.db.QueryRow(ctx, updateFormDraftSchema,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.DraftSchema,
+		arg.ExpectedUpdatedAt,
+	)
+	var i Form
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.DraftSchema,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormTitle = `-- name: UpdateFormTitle :one
 UPDATE forms
 SET title = $3, updated_at = now()

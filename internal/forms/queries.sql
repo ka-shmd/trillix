@@ -56,6 +56,18 @@ SET title = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormDraftSchema :one
+-- Автосейв билдера с оптимистичной блокировкой: строка обновляется, только если
+-- форма в воркспейсе И её updated_at совпадает с присланным клиентом. Иначе 0
+-- строк — service различает «чужая/нет формы» (проверено заранее) от расхождения
+-- версии (updated_at сдвинула другая вкладка → 409). updated_at двигаем вручную.
+UPDATE forms
+SET draft_schema = $3, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND updated_at = sqlc.arg(expected_updated_at)::timestamptz
+RETURNING id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at;
+
 -- name: DeleteForm :execrows
 -- Удаляет только в пределах воркспейса; возвращает число удалённых строк
 -- (0 → чужая/несуществующая форма).

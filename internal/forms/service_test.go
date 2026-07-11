@@ -2,6 +2,7 @@ package forms
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -31,6 +32,12 @@ type fakeStore struct {
 	updated bool
 	deleted bool
 	deleteN int64
+
+	// Управление путём автосейва схемы.
+	schemaSaved  bool
+	schemaErr    error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
+	lastSchema   json.RawMessage
+	lastExpected time.Time
 
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS    uuid.UUID
@@ -80,6 +87,16 @@ func (f *fakeStore) ListFormsAfter(_ context.Context, _ postgres.DBTX, _ uuid.UU
 func (f *fakeStore) UpdateFormTitle(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error) {
 	f.updated = true
 	return Form{ID: id, WorkspaceID: workspaceID, Title: title}, nil
+}
+
+func (f *fakeStore) UpdateFormDraftSchema(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error) {
+	f.lastSchema = schema
+	f.lastExpected = expectedUpdatedAt
+	if f.schemaErr != nil {
+		return Form{}, f.schemaErr
+	}
+	f.schemaSaved = true
+	return Form{ID: id, WorkspaceID: workspaceID, DraftSchema: schema}, nil
 }
 
 func (f *fakeStore) DeleteForm(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
@@ -165,6 +182,74 @@ func TestUpdateTitle_EmptyTitle_Rejected(t *testing.T) {
 	}
 	if store.updated {
 		t.Fatal("пустое название не должно доходить до БД")
+	}
+}
+
+// --- Автосейв схемы: валидация, доступ, оптимистичная блокировка ---
+
+func TestUpdateDraftSchema_InvalidSchema_Rejected(t *testing.T) {
+	store := &fakeStore{form: Form{}, member: true}
+	svc := newTestService(store)
+
+	// Неизвестный тип блока — ValidateSchema отвергает до всякого доступа к БД.
+	bad := json.RawMessage(`{"blocks":[{"id":"b","type":"slider","label":"x"}]}`)
+	_, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), bad, time.Now())
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if store.schemaSaved {
+		t.Fatal("невалидная схема не должна доходить до БД")
+	}
+}
+
+func TestUpdateDraftSchema_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	ok := json.RawMessage(`{"blocks":[]}`)
+	_, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), ok, time.Now())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не раскрывается)", err)
+	}
+	if store.schemaSaved {
+		t.Fatal("чужая форма не должна обновляться")
+	}
+}
+
+func TestUpdateDraftSchema_StaleUpdatedAt_ReturnsConflict(t *testing.T) {
+	// Доступ есть, но условный UPDATE не нашёл строки (updated_at сдвинут) → ErrNoRows.
+	store := &fakeStore{form: Form{}, member: true, schemaErr: pgx.ErrNoRows}
+	svc := newTestService(store)
+
+	ok := json.RawMessage(`{"blocks":[]}`)
+	_, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), ok, time.Now())
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+}
+
+func TestUpdateDraftSchema_Valid_CanonicalizesAndPassesExpected(t *testing.T) {
+	store := &fakeStore{form: Form{}, member: true}
+	svc := newTestService(store)
+
+	expected := time.Now().Truncate(time.Microsecond)
+	// Без schemaVersion — канонизация должна её проставить (=1).
+	in := json.RawMessage(`{"blocks":[{"id":"b","type":"short_text","label":"Имя"}]}`)
+	if _, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), in, expected); err != nil {
+		t.Fatalf("UpdateDraftSchema: %v", err)
+	}
+	if !store.schemaSaved {
+		t.Fatal("валидная схема должна сохраниться")
+	}
+	if !store.lastExpected.Equal(expected) {
+		t.Fatalf("expectedUpdatedAt = %v, ожидалось %v", store.lastExpected, expected)
+	}
+	var saved domain.FormSchema
+	if err := json.Unmarshal(store.lastSchema, &saved); err != nil {
+		t.Fatalf("сохранённая схема не парсится: %v", err)
+	}
+	if saved.SchemaVersion != domain.SchemaVersion {
+		t.Fatalf("schemaVersion не канонизирован: %d", saved.SchemaVersion)
 	}
 }
 

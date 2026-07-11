@@ -56,6 +56,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusUnprocessableEntity, "validation_failed"
 	case errors.Is(err, domain.ErrEmailTaken):
 		return http.StatusConflict, "email_taken"
+	case errors.Is(err, domain.ErrConflict):
+		return http.StatusConflict, "conflict"
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		return http.StatusUnauthorized, "invalid_credentials"
 	case errors.Is(err, domain.ErrUnauthorized):

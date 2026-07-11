@@ -2,6 +2,7 @@ package forms
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -37,6 +38,7 @@ type Store interface {
 	ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error)
 	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
+	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 }
 
@@ -137,6 +139,38 @@ func (s *Service) UpdateTitle(ctx context.Context, userID, formID uuid.UUID, tit
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateDraftSchema сохраняет черновик схемы формы (автосейв билдера). Порядок:
+// строгая валидация документа (мусор → ErrValidation/422), проверка доступа
+// (чужая/нет формы → 404), затем условный UPDATE с оптимистичной блокировкой по
+// expectedUpdatedAt (расхождение → ErrConflict/409). В БД пишется канонизированная
+// схема (перемаршалённый результат ValidateSchema), а не сырые байты клиента.
+func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error) {
+	parsed, err := domain.ValidateSchema(rawSchema)
+	if err != nil {
+		return Form{}, err
+	}
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		return Form{}, fmt.Errorf("marshal schema: %w", err)
+	}
+
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+
+	updated, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, canonical, expectedUpdatedAt)
+	if err != nil {
+		// Доступ уже подтверждён выше — 0 строк означает, что updated_at сдвинули
+		// параллельно (другая вкладка), а не отсутствие/чужую форму.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrConflict
 		}
 		return Form{}, err
 	}

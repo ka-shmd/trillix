@@ -20,6 +20,7 @@ func TestWriteError_Mapping(t *testing.T) {
 	}{
 		{"validation", domain.ErrValidation, http.StatusUnprocessableEntity, "validation_failed"},
 		{"email taken", domain.ErrEmailTaken, http.StatusConflict, "email_taken"},
+		{"conflict", domain.ErrConflict, http.StatusConflict, "conflict"},
 		{"invalid creds", domain.ErrInvalidCredentials, http.StatusUnauthorized, "invalid_credentials"},
 		{"unauthorized", domain.ErrUnauthorized, http.StatusUnauthorized, "unauthorized"},
 		{"forbidden", domain.ErrForbidden, http.StatusForbidden, "forbidden"},
