@@ -6,15 +6,21 @@ import (
 	"time"
 )
 
-// New собирает http.Server: маршруты и таймауты (без них публичный
-// эндпоинт уязвим к slowloris).
-func New(addr string, log *slog.Logger) *http.Server {
+// New собирает http.Server: healthz, маршруты модулей (registrars) и общую
+// цепочку middleware (request_id → recover → лог). Таймауты обязательны —
+// без них публичный эндпоинт уязвим к slowloris.
+func New(addr string, log *slog.Logger, registrars ...RouteRegistrar) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz(log))
+	for _, register := range registrars {
+		register(mux)
+	}
+
+	handler := chain(mux, withRequestID(log), withRecover, withRequestLog)
 
 	return &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

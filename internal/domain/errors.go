@@ -10,6 +10,7 @@ var (
 	ErrForbidden    = errors.New("forbidden")
 	ErrValidation   = errors.New("validation failed")
 	ErrUnauthorized = errors.New("unauthorized")
+	ErrRateLimited  = errors.New("too many requests")
 
 	// Аутентификация.
 	ErrEmailTaken         = errors.New("email already registered")
