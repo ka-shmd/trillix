@@ -63,8 +63,8 @@ func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool) *H
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/register", h.register)
 	mux.Handle("POST /api/v1/auth/login", h.rateLimitByIP(http.HandlerFunc(h.login)))
-	mux.Handle("POST /api/v1/auth/logout", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.logout))))
-	mux.Handle("GET /api/v1/auth/me", h.requireAuth(http.HandlerFunc(h.me)))
+	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
+	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
 }
 
 type credentialsRequest struct {
@@ -125,9 +125,12 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, userResponse{ID: user.ID.String(), Email: user.Email})
 }
 
-// requireAuth пропускает запрос только с живой сессией, кладя пользователя в
+// RequireAuth пропускает запрос только с живой сессией, кладя пользователя в
 // контекст. Промах — 401 (не 403): факт существования ресурса не раскрывается.
-func (h *Handler) requireAuth(next http.Handler) http.Handler {
+// Экспортирован для переиспользования другими модулями (forms и далее): их
+// приватные роуты оборачиваются этим middleware, а пользователя достают из
+// контекста через UserFromContext.
+func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookieName)
 		if err != nil {
@@ -144,11 +147,12 @@ func (h *Handler) requireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// requireCSRF — double-submit: заголовок X-CSRF-Token обязан совпасть с cookie
+// RequireCSRF — double-submit: заголовок X-CSRF-Token обязан совпасть с cookie
 // csrf_token (её значение читаемо JS, но кросс-доменно недоступно из-за SOP).
+// Экспортирован для мутаций других модулей (POST/PATCH/DELETE forms).
 // TODO(фаза 7): добавить строгую проверку Origin против сконфигурированного
 // origin приложения — она осмысленна только в кросс-доменной схеме prod-local.
-func (h *Handler) requireCSRF(next http.Handler) http.Handler {
+func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(csrfCookieName)
 		header := r.Header.Get(csrfHeaderName)

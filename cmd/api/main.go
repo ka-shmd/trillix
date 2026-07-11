@@ -13,6 +13,7 @@ import (
 
 	"github.com/ka-shmd/trierra/internal/auth"
 	"github.com/ka-shmd/trierra/internal/config"
+	"github.com/ka-shmd/trierra/internal/forms"
 	"github.com/ka-shmd/trierra/internal/httpserver"
 	"github.com/ka-shmd/trierra/internal/periodic"
 	"github.com/ka-shmd/trierra/internal/postgres"
@@ -94,7 +95,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure)
 
-	srv := httpserver.New(cfg.HTTPAddr, log, authHandler.Routes)
+	formsSvc := forms.NewService(pool, forms.Repo{})
+	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
+	srv := httpserver.New(cfg.HTTPAddr, log, authHandler.Routes, formsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
