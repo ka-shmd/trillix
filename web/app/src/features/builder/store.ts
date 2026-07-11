@@ -4,6 +4,7 @@ import {
   type Block,
   type BlockType,
   type FormSchema,
+  type Option,
   SCHEMA_VERSION,
   isChoiceType,
 } from '@entities/formSchema'
@@ -17,9 +18,11 @@ import {
 // смене formId нужен свежий стор — контекст-провайдер (шаг 4) создаёт по одному
 // на инстанс, а тесты — по одному на кейс.
 
-// Стабильный client-side id блока. Префикс — для читаемости JSON; уникальность
-// держится на случайности UUID. Сервер (ValidateSchema) — финальная проверка.
+// Стабильные client-side id блока/опции. Префикс — для читаемости JSON;
+// уникальность держится на случайности UUID. Сервер (ValidateSchema) — финальная
+// проверка непустоты/длины/уникальности.
 const newBlockId = (): string => `blk_${crypto.randomUUID()}`
+const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 
 // Редактируемые поля блока. id и type через updateBlock не меняются: id стабилен
 // (на него ссылаются ответы), смена типа — это другой блок, не правка этого.
@@ -43,6 +46,11 @@ export type BuilderActions = {
   // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не трогает).
   moveBlock: (id: string, dir: 'up' | 'down') => void
   duplicateBlock: (id: string) => void
+  // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
+  addOption: (blockId: string) => void
+  updateOption: (blockId: string, optionId: string, label: string) => void
+  removeOption: (blockId: string, optionId: string) => void
+  moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
   select: (id: string | null) => void
   // markSaved снимает dirty после успешного PATCH (автосейв — шаг 6).
   markSaved: () => void
@@ -71,6 +79,27 @@ export function newBlock(type: BlockType): Block {
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного
 // (в т.ч. массива options) не задевала исходник из Query или дубликат.
 const cloneBlock = (b: Block): Block => structuredClone(b)
+
+// mutateOptions применяет fn к опциям choice-блока и возвращает патч состояния.
+// non-choice/несуществующий блок и «fn вернул тот же массив» (no-op на границе)
+// дают пустой патч — состояние и dirty не меняются.
+function mutateOptions(
+  blocks: Block[],
+  blockId: string,
+  fn: (options: Option[]) => Option[],
+): Partial<BuilderState> {
+  const block = blocks.find((b) => b.id === blockId)
+  if (!block || !isChoiceType(block.type)) return {}
+  const options = block.settings?.options ?? []
+  const next = fn(options)
+  if (next === options) return {}
+  return {
+    blocks: blocks.map((b) =>
+      b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b,
+    ),
+    dirty: true,
+  }
+}
 
 export function createBuilderStore(): StoreApi<BuilderStore> {
   return createStore<BuilderStore>((set, get) => ({
@@ -122,6 +151,38 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         blocks.splice(i + 1, 0, copy)
         return { blocks, selectedId: copy.id, dirty: true }
       }),
+
+    addOption: (blockId) =>
+      set((s) =>
+        mutateOptions(s.blocks, blockId, (opts) => [...opts, { id: newOptionId(), label: '' }]),
+      ),
+
+    updateOption: (blockId, optionId, label) =>
+      set((s) =>
+        mutateOptions(s.blocks, blockId, (opts) =>
+          opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
+        ),
+      ),
+
+    removeOption: (blockId, optionId) =>
+      set((s) =>
+        mutateOptions(s.blocks, blockId, (opts) => opts.filter((o) => o.id !== optionId)),
+      ),
+
+    moveOption: (blockId, optionId, dir) =>
+      set((s) =>
+        mutateOptions(s.blocks, blockId, (opts) => {
+          const i = opts.findIndex((o) => o.id === optionId)
+          const j = dir === 'up' ? i - 1 : i + 1
+          const a = opts[i]
+          const b = opts[j]
+          if (!a || !b) return opts // не найдено или граница — тот же массив (no-op)
+          const next = opts.slice()
+          next[i] = b
+          next[j] = a
+          return next
+        }),
+      ),
 
     select: (id) => set({ selectedId: id }),
 

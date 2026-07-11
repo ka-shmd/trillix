@@ -103,6 +103,66 @@ describe('createBuilderStore', () => {
     expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('A')
   })
 
+  it('addOption добавляет пустой вариант choice-блоку', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().addOption(id)
+
+    const opts = store.getState().blocks[0]?.settings?.options
+    expect(opts).toHaveLength(1)
+    expect(opts?.[0]?.label).toBe('')
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('addOption на non-choice — no-op, dirty не поднимается', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().addOption(id)
+
+    expect(store.getState().blocks[0]?.settings?.options).toBeUndefined()
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('updateOption/removeOption правят конкретный вариант', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('multi_choice')
+    const id = store.getState().blocks[0]!.id
+    store.getState().addOption(id)
+    store.getState().addOption(id)
+    const [o1, o2] = store.getState().blocks[0]!.settings!.options!.map((o) => o.id)
+
+    store.getState().updateOption(id, o1!, 'Go')
+    expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('Go')
+
+    store.getState().removeOption(id, o2!)
+    const opts = store.getState().blocks[0]!.settings!.options!
+    expect(opts).toHaveLength(1)
+    expect(opts[0]?.id).toBe(o1)
+  })
+
+  it('moveOption меняет порядок и no-op на границе', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    store.getState().addOption(id)
+    store.getState().addOption(id)
+    const [a, b] = store.getState().blocks[0]!.settings!.options!.map((o) => o.id)
+
+    store.getState().moveOption(id, b!, 'up')
+    expect(store.getState().blocks[0]!.settings!.options!.map((o) => o.id)).toEqual([b, a])
+
+    store.getState().markSaved()
+    store.getState().moveOption(id, b!, 'up') // уже сверху — граница
+    expect(store.getState().blocks[0]!.settings!.options!.map((o) => o.id)).toEqual([b, a])
+    expect(store.getState().dirty).toBe(false)
+  })
+
   it('hydrate загружает схему и сбрасывает dirty/selection', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text') // делает dirty + выделение
