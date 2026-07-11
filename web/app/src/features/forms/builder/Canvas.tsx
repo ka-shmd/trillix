@@ -5,7 +5,7 @@ import { useBuilderStore } from './storeContext'
 
 // Канвас — упорядоченный список блоков. label и description правятся инлайн прямо
 // здесь; фокус/клик по блоку выделяет его (правая панель показывает required и
-// опции). Перемещение блоков — шаг 7, автосейв правок — шаг 6.
+// опции). Тулбар блока (шаг 7) двигает его вверх/вниз и удаляет; dnd — фаза 8.
 export function Canvas() {
   const blocks = useBuilderStore((s) => s.blocks)
 
@@ -22,9 +22,9 @@ export function Canvas() {
   return (
     <section className="builder-pane builder-canvas" aria-label="Форма">
       <ol className="canvas-list">
-        {blocks.map((block) => (
+        {blocks.map((block, i) => (
           <li key={block.id}>
-            <CanvasBlock block={block} />
+            <CanvasBlock block={block} isFirst={i === 0} isLast={i === blocks.length - 1} />
           </li>
         ))}
       </ol>
@@ -32,9 +32,19 @@ export function Canvas() {
   )
 }
 
-function CanvasBlock({ block }: { block: Block }) {
+function CanvasBlock({
+  block,
+  isFirst,
+  isLast,
+}: {
+  block: Block
+  isFirst: boolean
+  isLast: boolean
+}) {
   const selected = useBuilderStore((s) => s.selectedId === block.id)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const moveBlock = useBuilderStore((s) => s.moveBlock)
+  const removeBlock = useBuilderStore((s) => s.removeBlock)
   const select = useBuilderStore((s) => s.select)
 
   return (
@@ -44,7 +54,35 @@ function CanvasBlock({ block }: { block: Block }) {
       onFocusCapture={() => select(block.id)}
       onClick={() => select(block.id)}
     >
-      <span className="canvas-block-type">{blockTypeLabel(block.type)}</span>
+      <div className="canvas-block-head">
+        <span className="canvas-block-type">{blockTypeLabel(block.type)}</span>
+        <div className="canvas-block-toolbar">
+          <button
+            type="button"
+            aria-label="Переместить вверх"
+            disabled={isFirst}
+            onClick={() => moveBlock(block.id, 'up')}
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            aria-label="Переместить вниз"
+            disabled={isLast}
+            onClick={() => moveBlock(block.id, 'down')}
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            className="canvas-block-remove"
+            aria-label="Удалить блок"
+            onClick={() => removeBlock(block.id)}
+          >
+            ✕
+          </button>
+        </div>
+      </div>
       <input
         className="canvas-block-label"
         value={block.label}

@@ -485,9 +485,43 @@ button.primary {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+.canvas-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .canvas-block-type {
   font-size: 0.75rem;
   color: var(--muted);
+}
+
+.canvas-block-toolbar {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.canvas-block-toolbar button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text);
+}
+
+.canvas-block-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.canvas-block-toolbar button.canvas-block-remove {
+  color: var(--danger);
+  border-color: #f0c2c2;
 }
 
 .canvas-block-label,
