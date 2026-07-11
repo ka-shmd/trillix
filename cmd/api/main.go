@@ -11,9 +11,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ka-shmd/trierra/internal/auth"
 	"github.com/ka-shmd/trierra/internal/config"
 	"github.com/ka-shmd/trierra/internal/httpserver"
 	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trierra/internal/ratelimit"
+)
+
+// Жёсткий лимит на POST /auth/login по IP: запас 5 попыток, пополнение ~1 в 12 с.
+const (
+	loginRatePerSec = 1.0 / 12.0
+	loginBurst      = 5
 )
 
 func main() {
@@ -71,7 +79,17 @@ func runMigrate(args []string, cfg config.Config, log *slog.Logger) error {
 }
 
 func runServer(cfg config.Config, log *slog.Logger) error {
-	srv := httpserver.New(cfg.HTTPAddr, log)
+	pool, err := postgres.NewPool(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
+	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure)
+
+	srv := httpserver.New(cfg.HTTPAddr, log, authHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -29,6 +29,10 @@ const (
 
 	sessionTokenBytes   = 32 // 256 бит энтропии
 	uniqueViolationCode = "23505"
+
+	// DefaultSessionTTL — время жизни сессии (и cookie). Пока константа; станет
+	// конфигом при появлении .env.prod-local (фаза 7).
+	DefaultSessionTTL = 30 * 24 * time.Hour
 )
 
 // Store — интерфейс доступа к данным auth, объявленный на стороне потребителя
