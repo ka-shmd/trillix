@@ -28,6 +28,11 @@ jobs:
           version: v2.12.2
           # ./... заполз бы в web/**/node_modules с посторонними .go-файлами.
           args: ./cmd/... ./internal/... ./migrations/...
+      - name: sqlc drift check
+        run: |
+          go tool sqlc generate
+          git diff --exit-code internal/postgres \
+            || { echo "::error::internal/postgres устарел — запусти 'make sqlc' и закоммить"; exit 1; }
       - name: test
         run: go test -race ./cmd/... ./internal/... ./migrations/...
 

@@ -1,0 +1,16 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    # Схема берётся из миграций (единый источник истины). sqlc распознаёт формат
+    # golang-migrate по именам *.up.sql / *.down.sql и применяет только up.
+    schema: "migrations"
+    queries: "internal/auth/queries.sql"
+    gen:
+      go:
+        # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).
+        package: "postgres"
+        out: "internal/postgres"
+        sql_package: "pgx/v5"
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"

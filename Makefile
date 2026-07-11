@@ -13,7 +13,7 @@ include .env
 export
 endif
 
-.PHONY: help dev db-up db-down migrate-up migrate-down seed test lint lint-go lint-web
+.PHONY: help dev db-up db-down migrate-up migrate-down seed sqlc test lint lint-go lint-web
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -36,6 +36,9 @@ migrate-down: ## Откатить последнюю миграцию
 
 seed: ## Наполнить БД тестовыми данными (заглушка — наполнится позже)
 	@echo "seed: пока не реализовано (наполнится в фазе 2)"
+
+sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
+	go tool sqlc generate
 
 test: ## Прогнать Go-тесты с детектором гонок
 	go test -race $(GO_PKGS)
