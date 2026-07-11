@@ -32,6 +32,9 @@ type fakeStore struct {
 	createdMember    bool
 	createdSession   bool
 	deletedSession   bool
+
+	deleteExpiredN   int64
+	deleteExpiredErr error
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email, passwordHash string) (User, error) {
@@ -77,7 +80,7 @@ func (f *fakeStore) DeleteSession(_ context.Context, _ postgres.DBTX, _ []byte) 
 }
 
 func (f *fakeStore) DeleteExpiredSessions(_ context.Context, _ postgres.DBTX) (int64, error) {
-	return 0, nil
+	return f.deleteExpiredN, f.deleteExpiredErr
 }
 
 func newService(store *fakeStore) *Service {
@@ -216,5 +219,26 @@ func TestUserByToken_NoSession(t *testing.T) {
 	_, err := svc.UserByToken(context.Background(), "dead-token")
 	if !errors.Is(err, domain.ErrUnauthorized) {
 		t.Fatalf("err = %v, want ErrUnauthorized", err)
+	}
+}
+
+func TestPurgeExpiredSessions_ReturnsCount(t *testing.T) {
+	store := &fakeStore{deleteExpiredN: 7}
+	svc := newService(store)
+	n, err := svc.PurgeExpiredSessions(context.Background())
+	if err != nil {
+		t.Fatalf("PurgeExpiredSessions: %v", err)
+	}
+	if n != 7 {
+		t.Fatalf("удалено = %d, ожидалось 7", n)
+	}
+}
+
+func TestPurgeExpiredSessions_WrapsError(t *testing.T) {
+	sentinel := errors.New("db down")
+	store := &fakeStore{deleteExpiredErr: sentinel}
+	svc := newService(store)
+	if _, err := svc.PurgeExpiredSessions(context.Background()); !errors.Is(err, sentinel) {
+		t.Fatalf("err = %v, ожидалась обёртка над %v", err, sentinel)
 	}
 }

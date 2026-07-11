@@ -163,6 +163,16 @@ func (s *Service) UserByToken(ctx context.Context, token string) (User, error) {
 	return user, nil
 }
 
+// PurgeExpiredSessions удаляет протухшие сессии; возвращает число удалённых
+// строк. Вызывается фоновой периодической задачей (ARCHITECTURE §4.4).
+func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
+	n, err := s.repo.DeleteExpiredSessions(ctx, s.db)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired sessions: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Service) createSession(ctx context.Context, userID uuid.UUID) (string, error) {
 	token, err := newSessionToken()
 	if err != nil {

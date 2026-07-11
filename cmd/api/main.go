@@ -14,6 +14,7 @@ import (
 	"github.com/ka-shmd/trierra/internal/auth"
 	"github.com/ka-shmd/trierra/internal/config"
 	"github.com/ka-shmd/trierra/internal/httpserver"
+	"github.com/ka-shmd/trierra/internal/periodic"
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
 )
@@ -22,6 +23,10 @@ import (
 const (
 	loginRatePerSec = 1.0 / 12.0
 	loginBurst      = 5
+
+	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
+	sessionCleanupInterval = time.Hour
+	sessionCleanupTimeout  = 30 * time.Second
 )
 
 func main() {
@@ -94,6 +99,25 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Фоновые периодические задачи живут, пока не отменён ctx (SIGINT/SIGTERM).
+	tasks := periodic.NewRunner(log)
+	tasks.Start(ctx, periodic.Task{
+		Name:     "session-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, sessionCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredSessions(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired sessions purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+
 	serveErr := make(chan error, 1)
 	go func() {
 		log.Info("http server listening", slog.String("addr", cfg.HTTPAddr))
@@ -112,6 +136,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+	// ctx уже отменён (stop по сигналу); дождаться остановки фоновых задач до
+	// закрытия пула (defer), иначе чистка может выстрелить в закрытый пул.
+	tasks.Wait()
 	log.Info("http server stopped")
 	return nil
 }
