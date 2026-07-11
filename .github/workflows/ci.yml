@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Отменять устаревшие прогоны на том же ref, чтобы не жечь минуты.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          # ./... заполз бы в web/**/node_modules с посторонними .go-файлами.
+          args: ./cmd/... ./internal/... ./migrations/...
+      - name: test
+        run: go test -race ./cmd/... ./internal/... ./migrations/...
+
+  web:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [app, renderer]
+    defaults:
+      run:
+        working-directory: web/${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/${{ matrix.project }}/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
