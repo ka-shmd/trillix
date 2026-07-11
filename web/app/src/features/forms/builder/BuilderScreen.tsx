@@ -1,11 +1,13 @@
 import { useState } from 'react'
 
-import { type FormDetail } from '../../entities/form'
+import { type FormDetail } from '../../../entities/form'
 import { Canvas } from './Canvas'
 import { Palette } from './Palette'
+import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SettingsPanel } from './SettingsPanel'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
+import { useAutosave } from './useAutosave'
 
 // BuilderScreen — трёхколоночный каркас редактора: палитра / канвас / настройки.
 // Стор создаётся один раз на инстанс и сразу гидрируется черновиком с сервера;
@@ -18,8 +20,14 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
     return s
   })
 
+  const { status, retry } = useAutosave(store, detail.id, detail.updatedAt)
+
   return (
     <BuilderStoreContext.Provider value={store}>
+      {status === 'conflict' && <ConflictBanner />}
+      <div className="builder-bar">
+        <SaveIndicator status={status} onRetry={retry} />
+      </div>
       <div className="builder">
         <Palette />
         <Canvas />

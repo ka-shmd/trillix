@@ -341,6 +341,61 @@ button.primary {
   color: var(--muted);
 }
 
+.builder-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.6rem;
+  min-height: 1.4rem;
+}
+
+.save-status {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.save-status-ok {
+  color: #15803d;
+}
+
+.save-status-error {
+  color: var(--danger);
+}
+
+.save-retry {
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.builder-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  background: #fef2f2;
+  border: 1px solid #f0c2c2;
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.builder-conflict button {
+  cursor: pointer;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  border-radius: 7px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+}
+
 /* Три колонки: палитра / канвас / настройки. На узких экранах — в один столбец. */
 .builder {
   display: grid;

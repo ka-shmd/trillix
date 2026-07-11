@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
-import { BuilderScreen } from '../../features/builder/BuilderScreen'
+import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
 
 // Редактор формы (/forms/$formId/edit): грузит форму через Query и отдаёт билдеру.
 export const Route = createFileRoute('/_app/forms/$formId/edit')({
