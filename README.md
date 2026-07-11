@@ -12,14 +12,15 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 ## Требования
 
 - Go 1.25+
+- Node.js 20+ и npm (два фронта в `web/app` и `web/renderer`)
 - Docker + Docker Compose (Postgres в dev-контуре)
 - [golangci-lint](https://golangci-lint.run) v2 — для `make lint`
 
 ## Текущий статус
 
-Фаза 0 «Фундамент и CI», шаги 1–5 выполнены: скелет монорепозитория, минимальный API-сервер,
-Postgres в Docker, Makefile и раннер миграций, golangci-lint. Фронтовые проверки (eslint/tsc)
-и CI появятся на шагах 6–7.
+Фаза 0 «Фундамент и CI», шаги 1–6 выполнены: скелет монорепозитория, минимальный API-сервер,
+Postgres в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite (react-ts, strict TS,
+eslint + prettier). CI появится на шаге 7.
 
 ## Быстрый старт
 
@@ -34,6 +35,17 @@ make dev            # поднять Postgres и запустить API на х�
 curl localhost:8080/healthz
 # {"status":"ok"}
 ```
+
+## Фронтенды
+
+Два отдельных Vite-проекта. Первый запуск — установить зависимости в каждом:
+
+```sh
+cd web/app      && npm install && npm run dev   # кабинет:  http://localhost:5173
+cd web/renderer && npm install && npm run dev   # рендерер: http://localhost:5174
+```
+
+`web/app` проксирует `/api` на Go-сервер `:8080` (в dev CORS не нужен). Пока оба рендерят строку текста.
 
 ## Команды
 

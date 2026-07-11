@@ -1,7 +1,11 @@
 # Единая точка входа. Значения окружения берутся из .env (cp .env.dev .env).
-# Часть целей (полный lint, фронтовые тесты) наполнится на шагах 5–6.
+# `make test` пока только Go; фронтовый vitest подключится на шаге 7.
 
 COMPOSE := docker compose --env-file .env -f compose.dev.yml
+
+# Явный список Go-пакетов: `./...` заполз бы в web/**/node_modules, где npm-пакеты
+# приносят посторонние .go-файлы (напр. flatted). Go не умеет игнорировать node_modules.
+GO_PKGS := ./cmd/... ./internal/... ./migrations/...
 
 # Подгрузить .env в окружение рецептов, если он есть.
 ifneq (,$(wildcard .env))
@@ -9,7 +13,7 @@ include .env
 export
 endif
 
-.PHONY: help dev db-up db-down migrate-up migrate-down seed test lint
+.PHONY: help dev db-up db-down migrate-up migrate-down seed test lint lint-go lint-web
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -34,7 +38,13 @@ seed: ## Наполнить БД тестовыми данными (заглуш
 	@echo "seed: пока не реализовано (наполнится в фазе 2)"
 
 test: ## Прогнать Go-тесты с детектором гонок
-	go test -race ./...
+	go test -race $(GO_PKGS)
 
-lint: ## Статические проверки Go (govet/errcheck/staticcheck + формат gofumpt); eslint/tsc — на шаге 6
-	golangci-lint run ./...
+lint: lint-go lint-web ## Все статические проверки: Go + оба фронта
+
+lint-go: ## Go: golangci-lint (govet, errcheck, staticcheck, gofumpt)
+	golangci-lint run $(GO_PKGS)
+
+lint-web: ## Фронты: eslint + tsc (требует npm install в web/app и web/renderer)
+	cd web/app && npm run lint && npm run typecheck
+	cd web/renderer && npm run lint && npm run typecheck
