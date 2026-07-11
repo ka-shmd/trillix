@@ -13,12 +13,13 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 - Go 1.25+
 - Docker + Docker Compose (Postgres в dev-контуре)
+- [golangci-lint](https://golangci-lint.run) v2 — для `make lint`
 
 ## Текущий статус
 
-Фаза 0 «Фундамент и CI», шаги 1–4 выполнены: скелет монорепозитория, минимальный API-сервер,
-Postgres в Docker, Makefile и раннер миграций. Полный `make lint` (golangci-lint) и фронтовые
-тесты появятся на шагах 5–6.
+Фаза 0 «Фундамент и CI», шаги 1–5 выполнены: скелет монорепозитория, минимальный API-сервер,
+Postgres в Docker, Makefile и раннер миграций, golangci-lint. Фронтовые проверки (eslint/tsc)
+и CI появятся на шагах 6–7.
 
 ## Быстрый старт
 
@@ -45,7 +46,7 @@ curl localhost:8080/healthz
 | `make db-down`  | Погасить Postgres (данные остаются в volume `pg_data`) |
 | `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
 | `make test`     | `go test -race ./...`                                  |
-| `make lint`     | `go vet` + проверка `gofmt`                            |
+| `make lint`     | `golangci-lint run` (govet, errcheck, staticcheck, gofumpt) |
 | `make seed`     | Заглушка (наполнится в фазе 2)                          |
 
 Раннер миграций встроен в бинарник: `api migrate up` / `api migrate down` (в проде — та же

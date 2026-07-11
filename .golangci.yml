@@ -1,0 +1,13 @@
+version: "2"
+
+# Набор из DEV-PLAN фазы 0: errcheck, govet, staticcheck (линтеры) + gofumpt (форматтер).
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+
+formatters:
+  enable:
+    - gofumpt
