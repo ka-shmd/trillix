@@ -343,9 +343,33 @@ button.primary {
 
 .builder-bar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 0.6rem;
   min-height: 1.4rem;
+}
+
+/* Переключатель Редактор/Превью */
+.builder-modes {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.builder-modes button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.builder-modes button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .save-status {
@@ -644,4 +668,70 @@ button.primary {
   padding: 0.4rem 0.7rem;
   font-size: 0.85rem;
   color: var(--accent);
+}
+
+/* --- Поля формы (превью; общие классы @fields, рендерер фазы 4 стилизует их
+   своим CSS) --- */
+.rf-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 38rem;
+}
+
+.rf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.rf-required {
+  color: var(--danger);
+}
+
+.rf-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.rf-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+}
+
+.rf-input:disabled {
+  background: #f1f3f6;
+  color: var(--muted);
+}
+
+.rf-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.rf-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
 }

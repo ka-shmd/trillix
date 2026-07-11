@@ -13,7 +13,10 @@
        рендерера — маппим zod на локальный пакет явно. */
     "paths": {
       "@entities/*": ["../shared/entities/*"],
-      "zod": ["./node_modules/zod"]
+      "@fields/*": ["../shared/fields/*"],
+      "zod": ["./node_modules/zod"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
     },
 
     /* Bundler mode */
@@ -34,5 +37,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "../shared/entities"]
+  "include": ["src", "../shared/entities", "../shared/fields"]
 }
