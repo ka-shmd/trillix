@@ -1,0 +1,252 @@
+package forms
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ka-shmd/trierra/internal/domain"
+	"github.com/ka-shmd/trierra/internal/postgres"
+)
+
+// fakeStore — управляемая реализация Store для юнитов сервиса (без БД).
+type fakeStore struct {
+	personalWS  uuid.UUID
+	personalErr error
+
+	form   Form
+	getErr error
+
+	member    bool
+	memberErr error
+
+	listRows []Form
+	listErr  error
+
+	created bool
+	updated bool
+	deleted bool
+	deleteN int64
+
+	// Захват аргументов последнего вызова — для проверок «куда положили».
+	lastCreateWS    uuid.UUID
+	lastCreateTitle string
+	lastCreateSlug  string
+	lastListLimit   int32
+	lastListAfter   bool
+}
+
+func (f *fakeStore) GetPersonalWorkspace(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (uuid.UUID, error) {
+	return f.personalWS, f.personalErr
+}
+
+func (f *fakeStore) IsWorkspaceMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (bool, error) {
+	return f.member, f.memberErr
+}
+
+func (f *fakeStore) CreateForm(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title, slug string) (Form, error) {
+	f.created = true
+	f.lastCreateWS = workspaceID
+	f.lastCreateTitle = title
+	f.lastCreateSlug = slug
+	return Form{ID: id, WorkspaceID: workspaceID, Title: title, Slug: slug, Status: "draft"}, nil
+}
+
+func (f *fakeStore) GetForm(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Form, error) {
+	if f.getErr != nil {
+		return Form{}, f.getErr
+	}
+	form := f.form
+	form.ID = id
+	return form, nil
+}
+
+func (f *fakeStore) ListForms(_ context.Context, _ postgres.DBTX, _ uuid.UUID, limit int32) ([]Form, error) {
+	f.lastListLimit = limit
+	f.lastListAfter = false
+	return f.listRows, f.listErr
+}
+
+func (f *fakeStore) ListFormsAfter(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ time.Time, _ uuid.UUID, limit int32) ([]Form, error) {
+	f.lastListLimit = limit
+	f.lastListAfter = true
+	return f.listRows, f.listErr
+}
+
+func (f *fakeStore) UpdateFormTitle(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error) {
+	f.updated = true
+	return Form{ID: id, WorkspaceID: workspaceID, Title: title}, nil
+}
+
+func (f *fakeStore) DeleteForm(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
+	f.deleted = true
+	return f.deleteN, nil
+}
+
+func newTestService(store *fakeStore) *Service {
+	return NewService(nil, store)
+}
+
+// --- Анти-IDOR: доступ к чужой форме неотличим от отсутствующей (404) ---
+
+func TestGet_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.Get(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не должна раскрываться)", err)
+	}
+}
+
+func TestGet_FormMissing_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{getErr: pgx.ErrNoRows}
+	svc := newTestService(store)
+
+	_, err := svc.Get(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGet_Member_Success(t *testing.T) {
+	wsID := domain.NewID()
+	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}, member: true}
+	svc := newTestService(store)
+
+	form, err := svc.Get(context.Background(), domain.NewID(), domain.NewID())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if form.Title != "My form" {
+		t.Fatalf("title = %q, ожидалось \"My form\"", form.Title)
+	}
+}
+
+func TestUpdateTitle_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.UpdateTitle(context.Background(), domain.NewID(), domain.NewID(), "hacked")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if store.updated {
+		t.Fatal("чужая форма не должна обновляться")
+	}
+}
+
+func TestDelete_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	err := svc.Delete(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if store.deleted {
+		t.Fatal("чужая форма не должна удаляться")
+	}
+}
+
+// --- Валидация ---
+
+func TestUpdateTitle_EmptyTitle_Rejected(t *testing.T) {
+	store := &fakeStore{form: Form{}, member: true}
+	svc := newTestService(store)
+
+	_, err := svc.UpdateTitle(context.Background(), domain.NewID(), domain.NewID(), "   ")
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if store.updated {
+		t.Fatal("пустое название не должно доходить до БД")
+	}
+}
+
+// --- Create ---
+
+func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
+	wsID := domain.NewID()
+	store := &fakeStore{personalWS: wsID}
+	svc := newTestService(store)
+
+	form, err := svc.Create(context.Background(), domain.NewID(), "  ")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if store.lastCreateWS != wsID {
+		t.Fatalf("форма создана в воркспейсе %v, ожидался личный %v", store.lastCreateWS, wsID)
+	}
+	if form.Title != defaultFormTitle {
+		t.Fatalf("title = %q, ожидался дефолт %q", form.Title, defaultFormTitle)
+	}
+	if len(store.lastCreateSlug) != domain.SlugLen {
+		t.Fatalf("slug %q неверной длины", store.lastCreateSlug)
+	}
+}
+
+// --- Пагинация: limit+1 строк превращаются в NextCursor ---
+
+func TestList_HasNextPage_SetsCursor(t *testing.T) {
+	// Запрошен limit=2, репозиторий вернул 3 (limit+1) → есть следующая страница.
+	base := time.Now()
+	rows := []Form{
+		{ID: domain.NewID(), UpdatedAt: base},
+		{ID: domain.NewID(), UpdatedAt: base.Add(-time.Minute)},
+		{ID: domain.NewID(), UpdatedAt: base.Add(-2 * time.Minute)},
+	}
+	store := &fakeStore{personalWS: domain.NewID(), listRows: rows}
+	svc := newTestService(store)
+
+	page, err := svc.List(context.Background(), domain.NewID(), nil, 2)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if store.lastListLimit != 3 {
+		t.Fatalf("репозиторий запрошен с limit=%d, ожидалось limit+1=3", store.lastListLimit)
+	}
+	if len(page.Forms) != 2 {
+		t.Fatalf("в страницу попало %d форм, ожидалось 2", len(page.Forms))
+	}
+	if page.NextCursor == nil {
+		t.Fatal("NextCursor не выставлен, хотя есть следующая страница")
+	}
+	if page.NextCursor.ID != rows[1].ID {
+		t.Fatalf("курсор указывает на %v, ожидалась последняя показанная форма %v", page.NextCursor.ID, rows[1].ID)
+	}
+}
+
+func TestList_LastPage_NoCursor(t *testing.T) {
+	rows := []Form{{ID: domain.NewID(), UpdatedAt: time.Now()}}
+	store := &fakeStore{personalWS: domain.NewID(), listRows: rows}
+	svc := newTestService(store)
+
+	page, err := svc.List(context.Background(), domain.NewID(), nil, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if page.NextCursor != nil {
+		t.Fatal("на последней странице курсора быть не должно")
+	}
+	if len(page.Forms) != 1 {
+		t.Fatalf("форм = %d, ожидалась 1", len(page.Forms))
+	}
+}
+
+func TestList_WithCursor_UsesAfterQuery(t *testing.T) {
+	store := &fakeStore{personalWS: domain.NewID(), listRows: nil}
+	svc := newTestService(store)
+
+	_, err := svc.List(context.Background(), domain.NewID(), &Cursor{UpdatedAt: time.Now(), ID: domain.NewID()}, 50)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !store.lastListAfter {
+		t.Fatal("с курсором должен вызываться ListFormsAfter")
+	}
+}
