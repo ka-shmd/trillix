@@ -10,6 +10,8 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 Документация — в `docs/`: [ARCHITECTURE](docs/ARCHITECTURE.md) (как устроено и почему),
 [DEV-PLAN](docs/DEV-PLAN.md) (что делаем и когда), [PROCESS](docs/PROCESS.md) (как работаем).
+Справочники по реализованному: [API](docs/API.md) (эндпоинты, тела, коды ошибок),
+[SCHEMA](docs/SCHEMA.md) (таблицы, ключи, индексы) — производные от кода, правятся вместе с ним.
 
 ## Требования
 
@@ -68,7 +70,7 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
 | `make test`     | `go test -race ./...`                                  |
 | `make lint`     | `golangci-lint run` (govet, errcheck, staticcheck, gofumpt) |
-| `make seed`     | Заглушка (наполнится в фазе 2)                          |
+| `make seed`     | Демо-данные: пользователь `demo@trierra.local` / `demo-password` + 60 форм |
 
 Раннер миграций встроен в бинарник: `api migrate up` / `api migrate down` (в проде — та же
 init-команда). Остановка сервера — SIGINT/SIGTERM (Ctrl+C): активные запросы дорабатываются
