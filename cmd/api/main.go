@@ -57,8 +57,10 @@ func runCommand(args []string, cfg config.Config, log *slog.Logger) error {
 	switch args[0] {
 	case "migrate":
 		return runMigrate(args[1:], cfg, log)
+	case "seed":
+		return runSeed(cfg, log)
 	default:
-		return fmt.Errorf("unknown command %q (known: migrate)", args[0])
+		return fmt.Errorf("unknown command %q (known: migrate, seed)", args[0])
 	}
 }
 
