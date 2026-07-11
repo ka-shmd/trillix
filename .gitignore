@@ -1,0 +1,19 @@
+# Секреты и локальное окружение (.env.example, .env.dev, .env.prod-local — в репозитории)
+.env
+
+# Go
+/api
+*.test
+coverage.out
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# ОС
+.DS_Store
