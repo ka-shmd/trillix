@@ -11,6 +11,8 @@ import (
 type Config struct {
 	// HTTPAddr — адрес HTTP-сервера, например "127.0.0.1:8080".
 	HTTPAddr string
+	// DatabaseURL — DSN подключения к Postgres.
+	DatabaseURL string
 }
 
 // Load читает конфигурацию из env и валидирует её. Отсутствие обязательной
@@ -27,7 +29,8 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		HTTPAddr: required("HTTP_ADDR"),
+		HTTPAddr:    required("HTTP_ADDR"),
+		DatabaseURL: required("DATABASE_URL"),
 	}
 
 	if len(missing) > 0 {

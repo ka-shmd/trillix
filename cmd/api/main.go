@@ -1,8 +1,10 @@
-// Command api — composition root: конфиг, зависимости, запуск HTTP-сервера.
+// Command api — composition root. Без аргументов запускает HTTP-сервер;
+// подкоманда `migrate up|down` прогоняет миграции тем же бинарником.
 package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/ka-shmd/trierra/internal/config"
 	"github.com/ka-shmd/trierra/internal/httpserver"
+	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
 func main() {
@@ -22,6 +25,52 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(os.Args) > 1 {
+		if err := runCommand(os.Args[1:], cfg, log); err != nil {
+			log.Error("command failed", slog.String("command", os.Args[1]), slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
+
+	if err := runServer(cfg, log); err != nil {
+		log.Error("server failed", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+}
+
+func runCommand(args []string, cfg config.Config, log *slog.Logger) error {
+	switch args[0] {
+	case "migrate":
+		return runMigrate(args[1:], cfg, log)
+	default:
+		return fmt.Errorf("unknown command %q (known: migrate)", args[0])
+	}
+}
+
+func runMigrate(args []string, cfg config.Config, log *slog.Logger) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: api migrate up|down")
+	}
+	switch args[0] {
+	case "up":
+		if err := postgres.MigrateUp(cfg.DatabaseURL); err != nil {
+			return err
+		}
+		log.Info("migrations applied")
+		return nil
+	case "down":
+		if err := postgres.MigrateDown(cfg.DatabaseURL); err != nil {
+			return err
+		}
+		log.Info("migration reverted", slog.Int("steps", 1))
+		return nil
+	default:
+		return fmt.Errorf("unknown migrate direction %q (up|down)", args[0])
+	}
+}
+
+func runServer(cfg config.Config, log *slog.Logger) error {
 	srv := httpserver.New(cfg.HTTPAddr, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -35,8 +84,7 @@ func main() {
 
 	select {
 	case err := <-serveErr:
-		log.Error("http server", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("listen: %w", err)
 	case <-ctx.Done():
 	}
 
@@ -44,8 +92,8 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("shutdown: %w", err)
 	}
 	log.Info("http server stopped")
+	return nil
 }
