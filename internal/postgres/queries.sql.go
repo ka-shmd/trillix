@@ -12,6 +12,51 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const createForm = `-- name: CreateForm :one
+INSERT INTO forms (id, workspace_id, title, slug)
+VALUES ($1, $2, $3, $4)
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type CreateFormParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Title       string
+	Slug        string
+}
+
+type CreateFormRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+func (q *Queries) CreateForm(ctx context.Context, arg CreateFormParams) (CreateFormRow, error) {
+	row := q.db.QueryRow(ctx, createForm,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Slug,
+	)
+	var i CreateFormRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -100,6 +145,26 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteForm = `-- name: DeleteForm :execrows
+DELETE FROM forms
+WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteFormParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+// Удаляет только в пределах воркспейса; возвращает число удалённых строк
+// (0 → чужая/несуществующая форма).
+func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteForm, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
@@ -107,6 +172,50 @@ DELETE FROM sessions WHERE token_hash = $1
 func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	_, err := q.db.Exec(ctx, deleteSession, tokenHash)
 	return err
+}
+
+const getForm = `-- name: GetForm :one
+SELECT id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at
+FROM forms
+WHERE id = $1
+`
+
+// Полная форма, включая черновик схемы: GET /forms/{id} отдаёт draft_schema
+// (заглушка редактора в фазе 2, живой билдер — в фазе 3).
+func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (Form, error) {
+	row := q.db.QueryRow(ctx, getForm, id)
+	var i Form
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.DraftSchema,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPersonalWorkspace = `-- name: GetPersonalWorkspace :one
+
+SELECT workspace_id
+FROM workspace_members
+WHERE user_id = $1
+ORDER BY created_at ASC
+LIMIT 1
+`
+
+// Запросы модуля forms. Схема — migrations/0003_forms. Генерация: `make sqlc`.
+// Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
+// «Текущий воркспейс» дашборда, куда кладутся и откуда читаются формы.
+func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getPersonalWorkspace, userID)
+	var workspace_id uuid.UUID
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
@@ -143,6 +252,187 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const isWorkspaceMember = `-- name: IsWorkspaceMember :one
+SELECT EXISTS (
+    SELECT 1 FROM workspace_members
+    WHERE workspace_id = $1 AND user_id = $2
+)
+`
+
+type IsWorkspaceMemberParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Проверка права доступа к ресурсу: состоит ли пользователь в воркспейсе формы.
+// Основа анти-IDOR — id формы из URL не доказывает право (ARCHITECTURE §4.3).
+func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isWorkspaceMember, arg.WorkspaceID, arg.UserID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listFormsAfter = `-- name: ListFormsAfter :many
+SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+FROM forms
+WHERE workspace_id = $1
+  AND (updated_at, id) < ($3::timestamptz, $4::uuid)
+ORDER BY updated_at DESC, id DESC
+LIMIT $2
+`
+
+type ListFormsAfterParams struct {
+	WorkspaceID     uuid.UUID
+	Limit           int32
+	CursorUpdatedAt pgtype.Timestamptz
+	CursorID        uuid.UUID
+}
+
+type ListFormsAfterRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Следующая страница составным курсором (updated_at, id): строго «старше» якоря
+// по паре колонок — стабильно даже если форму отредактировали во время листания.
+func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) ([]ListFormsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listFormsAfter,
+		arg.WorkspaceID,
+		arg.Limit,
+		arg.CursorUpdatedAt,
+		arg.CursorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormsAfterRow
+	for rows.Next() {
+		var i ListFormsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Slug,
+			&i.Status,
+			&i.PublishedVersionID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFormsFirstPage = `-- name: ListFormsFirstPage :many
+SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+FROM forms
+WHERE workspace_id = $1
+ORDER BY updated_at DESC, id DESC
+LIMIT $2
+`
+
+type ListFormsFirstPageParams struct {
+	WorkspaceID uuid.UUID
+	Limit       int32
+}
+
+type ListFormsFirstPageRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
+// вызывающий по «лишней» строке понимает, есть ли следующая страница.
+func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPageParams) ([]ListFormsFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listFormsFirstPage, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormsFirstPageRow
+	for rows.Next() {
+		var i ListFormsFirstPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Title,
+			&i.Slug,
+			&i.Status,
+			&i.PublishedVersionID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateFormTitle = `-- name: UpdateFormTitle :one
+UPDATE forms
+SET title = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormTitleParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Title       string
+}
+
+type UpdateFormTitleRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк
+// (service трактует это как «не найдена/чужая»). updated_at двигаем вручную.
+func (q *Queries) UpdateFormTitle(ctx context.Context, arg UpdateFormTitleParams) (UpdateFormTitleRow, error) {
+	row := q.db.QueryRow(ctx, updateFormTitle, arg.ID, arg.WorkspaceID, arg.Title)
+	var i UpdateFormTitleRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

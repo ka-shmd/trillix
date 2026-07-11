@@ -33,8 +33,9 @@ migrate-up: ## Применить все миграции
 migrate-down: ## Откатить последнюю миграцию
 	go run ./cmd/api migrate down
 
-seed: ## Наполнить БД тестовыми данными (заглушка — наполнится позже)
-	@echo "seed: пока не реализовано (наполнится в фазе 2)"
+seed: ## Наполнить БД демо-данными (пользователь demo@trierra.local / demo-password + 60 форм)
+	go run ./cmd/api seed
+	@echo "seed готов: вход demo@trierra.local / demo-password"
 
 sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
 	go tool sqlc generate

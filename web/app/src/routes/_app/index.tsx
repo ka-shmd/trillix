@@ -1,15 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
-// Домашний экран приложения (/). Пока пустой — формы появятся в фазе 2.
+// Домашний экран приложения (/) — редирект на дашборд форм: он и есть главная.
 export const Route = createFileRoute('/_app/')({
-  component: HomePage,
+  beforeLoad: () => {
+    throw redirect({ to: '/forms' })
+  },
 })
-
-function HomePage() {
-  return (
-    <section className="empty-state">
-      <h1>Пока тут пусто</h1>
-      <p>Конструктор форм появится в следующих фазах. Сейчас важно, что вы вошли.</p>
-    </section>
-  )
-}

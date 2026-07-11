@@ -4,7 +4,9 @@ sql:
     # Схема берётся из миграций (единый источник истины). sqlc распознаёт формат
     # golang-migrate по именам *.up.sql / *.down.sql и применяет только up.
     schema: "migrations"
-    queries: "internal/auth/queries.sql"
+    queries:
+      - "internal/auth/queries.sql"
+      - "internal/forms/queries.sql"
     gen:
       go:
         # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).

@@ -14,6 +14,8 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
+import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
+import { Route as AppFormsFormIdEditRouteImport } from './routes/_app/forms.$formId.edit'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/_auth',
@@ -38,16 +40,30 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AuthRoute,
 } as any)
+const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
+  id: '/forms/',
+  path: '/forms/',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFormsFormIdEditRoute = AppFormsFormIdEditRouteImport.update({
+  id: '/forms/$formId/edit',
+  path: '/forms/$formId/edit',
+  getParentRoute: () => AppRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
+  '/forms/': typeof AppFormsIndexRoute
+  '/forms/$formId/edit': typeof AppFormsFormIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
+  '/forms': typeof AppFormsIndexRoute
+  '/forms/$formId/edit': typeof AppFormsFormIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -56,12 +72,14 @@ export interface FileRoutesById {
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/register': typeof AuthRegisterRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/forms/': typeof AppFormsIndexRoute
+  '/_app/forms/$formId/edit': typeof AppFormsFormIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/register'
+  fullPaths: '/' | '/login' | '/register' | '/forms/' | '/forms/$formId/edit'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/register'
+  to: '/' | '/login' | '/register' | '/forms' | '/forms/$formId/edit'
   id:
     | '__root__'
     | '/_app'
@@ -69,6 +87,8 @@ export interface FileRouteTypes {
     | '/_auth/login'
     | '/_auth/register'
     | '/_app/'
+    | '/_app/forms/'
+    | '/_app/forms/$formId/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -113,15 +133,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/_app/forms/': {
+      id: '/_app/forms/'
+      path: '/forms'
+      fullPath: '/forms/'
+      preLoaderRoute: typeof AppFormsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/forms/$formId/edit': {
+      id: '/_app/forms/$formId/edit'
+      path: '/forms/$formId/edit'
+      fullPath: '/forms/$formId/edit'
+      preLoaderRoute: typeof AppFormsFormIdEditRouteImport
+      parentRoute: typeof AppRoute
+    }
   }
 }
 
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
+  AppFormsIndexRoute: typeof AppFormsIndexRoute
+  AppFormsFormIdEditRoute: typeof AppFormsFormIdEditRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
+  AppFormsIndexRoute: AppFormsIndexRoute,
+  AppFormsFormIdEditRoute: AppFormsFormIdEditRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

@@ -163,6 +163,20 @@ func (s *Service) UserByToken(ctx context.Context, token string) (User, error) {
 	return user, nil
 }
 
+// UserByEmail возвращает пользователя по email (нормализуя его). Нет такого —
+// domain.ErrNotFound. Нужен утилитам вроде сидирования, где надо найти уже
+// существующего пользователя; в обычном потоке аутентификации не используется.
+func (s *Service) UserByEmail(ctx context.Context, email string) (User, error) {
+	user, err := s.repo.GetUserByEmail(ctx, s.db, normalizeEmail(email))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, domain.ErrNotFound
+		}
+		return User{}, fmt.Errorf("user by email: %w", err)
+	}
+	return user, nil
+}
+
 // PurgeExpiredSessions удаляет протухшие сессии; возвращает число удалённых
 // строк. Вызывается фоновой периодической задачей (ARCHITECTURE §4.4).
 func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {

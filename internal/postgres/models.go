@@ -9,6 +9,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Form struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	DraftSchema        []byte
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+type FormVersion struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	Version   int32
+	Schema    []byte
+	CreatedAt pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID
