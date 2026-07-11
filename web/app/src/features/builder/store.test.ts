@@ -1,0 +1,144 @@
+import { describe, expect, it } from 'vitest'
+
+import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
+
+import { createBuilderStore } from './store'
+
+// Стор билдера — чистый TS, гоняем напрямую через getState(), без React.
+
+describe('createBuilderStore', () => {
+  it('стартует пустым и не dirty', () => {
+    const s = createBuilderStore().getState()
+    expect(s.blocks).toEqual([])
+    expect(s.selectedId).toBeNull()
+    expect(s.dirty).toBe(false)
+  })
+
+  it('addBlock добавляет в конец, выделяет новый и помечает dirty', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('email')
+
+    const s = store.getState()
+    expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+    expect(s.selectedId).toBe(s.blocks[1]?.id)
+    expect(s.dirty).toBe(true)
+    // id уникальны.
+    expect(s.blocks[0]?.id).not.toBe(s.blocks[1]?.id)
+  })
+
+  it('choice-блок стартует с пустым списком опций, non-choice — без опций', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    store.getState().addBlock('number')
+
+    const [choice, number] = store.getState().blocks
+    expect(choice?.settings?.options).toEqual([])
+    expect(number?.settings?.options).toBeUndefined()
+  })
+
+  it('updateBlock патчит только целевой блок', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('short_text')
+    const [first, second] = store.getState().blocks
+    store.getState().markSaved()
+
+    store.getState().updateBlock(first!.id, { label: 'Имя', required: true })
+
+    const s = store.getState()
+    expect(s.blocks[0]?.label).toBe('Имя')
+    expect(s.blocks[0]?.required).toBe(true)
+    expect(s.blocks[1]?.id).toBe(second!.id)
+    expect(s.blocks[1]?.label).toBe('')
+    expect(s.dirty).toBe(true)
+  })
+
+  it('removeBlock удаляет блок и снимает выделение, если удалили выделенный', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+
+    store.getState().removeBlock(id)
+
+    const s = store.getState()
+    expect(s.blocks).toHaveLength(0)
+    expect(s.selectedId).toBeNull()
+  })
+
+  it('moveBlock двигает блок и no-op на границе', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // a
+    store.getState().addBlock('email') // b
+    store.getState().addBlock('number') // c
+    const [a, b, c] = store.getState().blocks.map((x) => x.id)
+
+    store.getState().moveBlock(b!, 'up')
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, a, c])
+
+    // Верхний вверх — граница, ничего не меняется и dirty не поднимается.
+    store.getState().markSaved()
+    store.getState().moveBlock(b!, 'up')
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, a, c])
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const orig = store.getState().blocks[0]!
+    store.getState().updateBlock(orig.id, { settings: { options: [{ id: 'o1', label: 'A' }] } })
+
+    store.getState().duplicateBlock(orig.id)
+
+    const s = store.getState()
+    expect(s.blocks).toHaveLength(2)
+    const copy = s.blocks[1]!
+    expect(copy.id).not.toBe(orig.id)
+    expect(copy.type).toBe('single_choice')
+    expect(s.selectedId).toBe(copy.id)
+
+    // Глубокая копия: правка опций дубликата не задевает оригинал.
+    store.getState().updateBlock(copy.id, { settings: { options: [{ id: 'o1', label: 'Z' }] } })
+    expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('A')
+  })
+
+  it('hydrate загружает схему и сбрасывает dirty/selection', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // делает dirty + выделение
+    const schema: FormSchema = {
+      schemaVersion: 1,
+      blocks: [{ id: 'x', type: 'email', label: 'Почта' }],
+    }
+
+    store.getState().hydrate(schema)
+
+    const s = store.getState()
+    expect(s.blocks).toEqual(schema.blocks)
+    expect(s.dirty).toBe(false)
+    expect(s.selectedId).toBeNull()
+    // Копия, а не та же ссылка (стор владеет своими блоками).
+    expect(s.blocks[0]).not.toBe(schema.blocks[0])
+  })
+
+  it('markSaved снимает dirty', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    expect(store.getState().dirty).toBe(true)
+    store.getState().markSaved()
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('toSchema отдаёт валидный по контракту документ', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('single_choice')
+    store.getState().updateBlock(store.getState().blocks[0]!.id, { label: 'Имя' })
+
+    const schema = store.getState().toSchema()
+    expect(schema.schemaVersion).toBe(1)
+    expect(schema.blocks).toHaveLength(2)
+    // Выход стора обязан проходить ту же Zod-проверку, что и на сервере.
+    expect(formSchemaSchema.safeParse(schema).success).toBe(true)
+  })
+})
