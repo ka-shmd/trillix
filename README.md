@@ -10,6 +10,8 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 Документация — в `docs/`: [ARCHITECTURE](docs/ARCHITECTURE.md) (как устроено и почему),
 [DEV-PLAN](docs/DEV-PLAN.md) (что делаем и когда), [PROCESS](docs/PROCESS.md) (как работаем).
+Справочники по реализованному: [API](docs/API.md) (эндпоинты, тела, коды ошибок),
+[SCHEMA](docs/SCHEMA.md) (таблицы, ключи, индексы) — производные от кода, правятся вместе с ним.
 
 ## Требования
 
@@ -20,14 +22,18 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 ## Текущий статус
 
-**Фаза 1 «Аутентификация» завершена.** Регистрация, вход, сессия, выход: миграция схемы auth
-(users / workspaces / members / sessions), argon2id-хеши паролей, cookie-сессии (httpOnly,
-SHA-256 токена в БД), CSRF double-submit, rate limit на логин, фоновая чистка истёкших сессий.
-Интеграционные тесты против Postgres в testcontainers (в CI). Фронт кабинета: экраны
-Login/Register, гард сессии и выход на TanStack Router + Query. Дальше — фаза 2 (формы как сущности).
+**Фаза 2 «Формы как сущности (CRUD)» завершена.** Дашборд форм: создать → список → переименовать →
+удалить. Миграция `forms` / `form_versions`, CRUD за `RequireAuth` с проверкой членства в воркспейсе
+(анти-IDOR: чужая форма → 404), курсорная пагинация составным ключом, `slug` (nanoid), `make seed`
+(демо-пользователь + 60 форм). Фронт: грид карточек (TanStack Query, подгрузка курсором), инлайн-
+переименование, удаление с подтверждением, заглушка редактора. Интеграционные тесты изоляции
+воркспейсов в CI. Дальше — фаза 3 (билдер). Реализованное API и таблицы — в [docs/API.md](docs/API.md)
+и [docs/SCHEMA.md](docs/SCHEMA.md).
 
-Фаза 0 «Фундамент и CI» — завершена ранее: скелет монорепозитория, минимальный API-сервер,
-Postgres в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite, GitHub Actions CI.
+Ранее завершены: **фаза 1 «Аутентификация»** (регистрация/вход/сессия/выход, argon2id, cookie-сессии,
+CSRF, rate limit, чистка сессий, экраны Login/Register) и **фаза 0 «Фундамент и CI»** (скелет
+монорепозитория, API-сервер, Postgres в Docker, Makefile, раннер миграций, golangci-lint, два
+каркаса Vite, GitHub Actions).
 
 `main` защищён: изменения идут через PR с зелёным CI (джобы `go`, `web (app)`, `web (renderer)`).
 
@@ -54,7 +60,8 @@ cd web/app      && npm install && npm run dev   # кабинет:  http://localh
 cd web/renderer && npm install && npm run dev   # рендерер: http://localhost:5174
 ```
 
-`web/app` проксирует `/api` на Go-сервер `:8080` (в dev CORS не нужен). Пока оба рендерят строку текста.
+`web/app` проксирует `/api` на Go-сервер `:8080` (в dev CORS не нужен). Кабинет — вход и дашборд форм;
+рендерер пока рендерит строку текста (наполнится в фазе 4).
 
 ## Команды
 
@@ -68,7 +75,7 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
 | `make test`     | `go test -race ./...`                                  |
 | `make lint`     | `golangci-lint run` (govet, errcheck, staticcheck, gofumpt) |
-| `make seed`     | Заглушка (наполнится в фазе 2)                          |
+| `make seed`     | Демо-данные: пользователь `demo@trierra.local` / `demo-password` + 60 форм |
 
 Раннер миграций встроен в бинарник: `api migrate up` / `api migrate down` (в проде — та же
 init-команда). Остановка сервера — SIGINT/SIGTERM (Ctrl+C): активные запросы дорабатываются
