@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -13,6 +14,10 @@ type Config struct {
 	HTTPAddr string
 	// DatabaseURL — DSN подключения к Postgres.
 	DatabaseURL string
+	// CookieSecure — ставить ли флаг Secure на cookie сессии. В dev по http —
+	// false, в prod-local/prod по https — true. Первый пример «различие
+	// контуров живёт в env», а не в ветвлении по имени окружения.
+	CookieSecure bool
 }
 
 // Load читает конфигурацию из env и валидирует её. Отсутствие обязательной
@@ -32,9 +37,17 @@ func Load() (Config, error) {
 		HTTPAddr:    required("HTTP_ADDR"),
 		DatabaseURL: required("DATABASE_URL"),
 	}
+	cookieSecureRaw := required("COOKIE_SECURE")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
 	}
+
+	cookieSecure, err := strconv.ParseBool(cookieSecureRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid COOKIE_SECURE %q: want true or false", cookieSecureRaw)
+	}
+	cfg.CookieSecure = cookieSecure
+
 	return cfg, nil
 }
