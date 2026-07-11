@@ -324,21 +324,152 @@ button.primary {
   border: 0;
 }
 
-/* --- Заглушка редактора --- */
-.editor-stub {
-  max-width: 48rem;
-  margin: 0 auto;
+/* --- Билдер --- */
+.builder-topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
-.editor-stub-note {
+.builder-title {
+  font-weight: 600;
+}
+
+.builder-loading,
+.builder-error-box {
   color: var(--muted);
 }
 
-.editor-stub-json {
+/* Три колонки: палитра / канвас / настройки. На узких экранах — в один столбец. */
+.builder {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr) 18rem;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 60rem) {
+  .builder {
+    grid-template-columns: 1fr;
+  }
+}
+
+.builder-pane {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 1rem;
-  overflow-x: auto;
+}
+
+.builder-canvas {
+  min-height: 24rem;
+}
+
+.builder-pane-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+}
+
+.builder-hint {
+  color: var(--muted);
   font-size: 0.85rem;
+}
+
+.palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.palette-btn {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.palette-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.canvas-empty {
+  display: grid;
+  place-items: center;
+  min-height: 20rem;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.canvas-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.canvas-block {
+  width: 100%;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+  color: var(--text);
+}
+
+.canvas-block:hover {
+  border-color: var(--accent);
+}
+
+.canvas-block.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.canvas-block-label {
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.canvas-block-type {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.settings-meta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settings-meta div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.settings-meta dt {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.settings-meta dd {
+  margin: 0;
+  word-break: break-word;
 }

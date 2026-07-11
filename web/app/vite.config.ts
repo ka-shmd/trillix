@@ -7,6 +7,10 @@ import { tanstackRouter } from '@tanstack/router-plugin/vite'
 // кабинета и рендерера (см. web/shared/entities/formSchema.ts). Лежит вне корня
 // проекта, поэтому fs.allow расширяется на родительский web/.
 const entities = fileURLToPath(new URL('../shared/entities', import.meta.url))
+// web/shared не имеет своего node_modules, поэтому bare-импорт zod из общей
+// схемы не резолвится при сборке (Rolldown ищет относительно импортёра). Маппим
+// zod на локальный пакет кабинета — зеркало tsconfig.app.json paths.
+const zod = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 
 // Кабинет на :5173. Прокси /api на Go-сервер :8080 убирает необходимость в CORS в dev.
 // https://vite.dev/config/
@@ -15,7 +19,7 @@ export default defineConfig({
   // стоять перед react(). Файл коммитится и обновляется на каждом dev/build.
   plugins: [tanstackRouter({ target: 'react' }), react()],
   resolve: {
-    alias: { '@entities': entities },
+    alias: { '@entities': entities, zod },
   },
   server: {
     port: 5173,
