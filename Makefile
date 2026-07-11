@@ -1,5 +1,4 @@
 # Единая точка входа. Значения окружения берутся из .env (cp .env.dev .env).
-# `make test` пока только Go; фронтовый vitest подключится на шаге 7.
 
 COMPOSE := docker compose --env-file .env -f compose.dev.yml
 
@@ -13,7 +12,7 @@ include .env
 export
 endif
 
-.PHONY: help dev db-up db-down migrate-up migrate-down seed test lint lint-go lint-web
+.PHONY: help dev db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -37,8 +36,20 @@ migrate-down: ## Откатить последнюю миграцию
 seed: ## Наполнить БД тестовыми данными (заглушка — наполнится позже)
 	@echo "seed: пока не реализовано (наполнится в фазе 2)"
 
-test: ## Прогнать Go-тесты с детектором гонок
+sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
+	go tool sqlc generate
+
+test: test-go test-web ## Все тесты: Go (юниты + интеграционные) и фронтовый vitest
+
+test-go: ## Go с гонками; интеграционные (тег integration) — против testcontainers-Postgres (нужен Docker)
+	go test -race -tags=integration $(GO_PKGS)
+
+test-unit: ## Только быстрые Go-юниты без Docker (без интеграционных)
 	go test -race $(GO_PKGS)
+
+test-web: ## Фронтовые тесты (vitest в web/app и web/renderer)
+	cd web/app && npm test
+	cd web/renderer && npm test
 
 lint: lint-go lint-web ## Все статические проверки: Go + оба фронта
 

@@ -20,9 +20,14 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 ## Текущий статус
 
-**Фаза 0 «Фундамент и CI» завершена.** Скелет монорепозитория, минимальный API-сервер, Postgres
-в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite (react-ts, strict TS,
-eslint + prettier), GitHub Actions CI. Дальше — фаза 1 (аутентификация).
+**Фаза 1 «Аутентификация» завершена.** Регистрация, вход, сессия, выход: миграция схемы auth
+(users / workspaces / members / sessions), argon2id-хеши паролей, cookie-сессии (httpOnly,
+SHA-256 токена в БД), CSRF double-submit, rate limit на логин, фоновая чистка истёкших сессий.
+Интеграционные тесты против Postgres в testcontainers (в CI). Фронт кабинета: экраны
+Login/Register, гард сессии и выход на TanStack Router + Query. Дальше — фаза 2 (формы как сущности).
+
+Фаза 0 «Фундамент и CI» — завершена ранее: скелет монорепозитория, минимальный API-сервер,
+Postgres в Docker, Makefile и раннер миграций, golangci-lint, два каркаса Vite, GitHub Actions CI.
 
 `main` защищён: изменения идут через PR с зелёным CI (джобы `go`, `web (app)`, `web (renderer)`).
 

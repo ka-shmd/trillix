@@ -6,7 +6,8 @@ import tseslint from 'typescript-eslint'
 import prettier from 'eslint-config-prettier'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  // routeTree.gen.ts — сгенерированный роутером файл, не форматируем и не линтуем.
+  { ignores: ['dist', 'src/routeTree.gen.ts'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -21,6 +22,14 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+    },
+  },
+  // Файловые маршруты TanStack Router обязаны экспортировать `Route` рядом с
+  // компонентом — это не ошибка fast-refresh, а требование роутера.
+  {
+    files: ['src/routes/**/*.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
   // eslint-config-prettier — последним: гасит правила форматирования, ими занимается prettier.

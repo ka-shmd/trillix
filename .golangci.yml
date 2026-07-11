@@ -1,5 +1,11 @@
 version: "2"
 
+# Компилировать и файлы под тегом integration (интеграционные тесты), иначе они
+# выпадают из проверки.
+run:
+  build-tags:
+    - integration
+
 # Набор из DEV-PLAN фазы 0: errcheck, govet, staticcheck (линтеры) + gofumpt (форматтер).
 linters:
   default: none
