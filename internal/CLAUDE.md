@@ -2,7 +2,7 @@
 
 ## Зависимости — заморожены
 
-Runtime: `pgx/v5`, `golang.org/x/crypto`, `golang-migrate`, `google/uuid`. Dev-time: `sqlc`, `golangci-lint`, `testcontainers-go`. Добавление ЛЮБОЙ другой — только через вопрос человеку с обоснованием «почему 50 строк своего кода хуже». Токен-бакет, nanoid, UUIDv7, чтение env — десятки строк, пишутся руками (и уже написаны — искать в `internal/`, grep перед созданием нового).
+Runtime: `pgx/v5`, `golang.org/x/crypto`, `golang-migrate`, `google/uuid`. Dev-time: `sqlc`, `golangci-lint`, `testcontainers-go`. Добавление ЛЮБОЙ другой — только через вопрос человеку с обоснованием «почему 50 строк своего кода хуже». Токен-бакет, nanoid, чтение env — десятки строк, пишутся руками (и уже написаны — искать в `internal/`, grep перед созданием нового). UUIDv7 — из `github.com/google/uuid` (замороженная runtime-зависимость выше); единая точка генерации — `domain.NewID`.
 
 ## Go-инструменты — по явному списку пакетов, не `./...`
 
