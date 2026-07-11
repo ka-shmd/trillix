@@ -31,3 +31,7 @@ Runtime: `pgx/v5`, `golang.org/x/crypto`, `golang-migrate`, `google/uuid`. Dev-t
 ## Конфигурация
 
 Новая настройка = поле в `config.Config` + строка в `.env.example` с комментарием + валидация при старте + значения в `.env.dev` и `.env.prod-local`. Все четыре — в одном коммите. `os.Getenv` вне пакета `config` запрещён. Ветвление по имени окружения (`if env == "dev"`) запрещено — ветвиться можно только по смысловым флагам (`cfg.CookieSecure`).
+
+## Тесты
+
+Юнит-тесты герметичны и не требуют Docker (`make test-unit` / обычный `go test`). Интеграционные тесты (эндпоинт против настоящего Postgres — PROCESS §3) помечаются `//go:build integration` и поднимают базу через хелпер `internal/pgtest` (один контейнер на пакет из `TestMain`, изоляция — `TRUNCATE ... CASCADE` между тестами). Гоняются под тегом: `make test-go` / `go test -tags=integration` (и так же в CI); без тега тот же `go test` их не собирает. Эталон — `internal/auth/integration_test.go`. В интеграционном тесте rate-limiter подменяется `ratelimit.AllowAll{}` (инвариант 6), а не ослабляется.

@@ -34,7 +34,9 @@ jobs:
           git diff --exit-code internal/postgres \
             || { echo "::error::internal/postgres устарел — запусти 'make sqlc' и закоммить"; exit 1; }
       - name: test
-        run: go test -race ./cmd/... ./internal/... ./migrations/...
+        # Тег integration включает интеграционные тесты против Postgres в
+        # testcontainers; Docker на ubuntu-раннерах доступен из коробки.
+        run: go test -race -tags=integration ./cmd/... ./internal/... ./migrations/...
 
   web:
     runs-on: ubuntu-latest
