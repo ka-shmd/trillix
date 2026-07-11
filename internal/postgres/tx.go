@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// TxRunner привязывает WithTx к конкретному пулу, чтобы service зависел от
+// маленького интерфейса (WithTx без пула), а не от *pgxpool.Pool напрямую —
+// в юнит-тестах он подменяется фейком, выполняющим fn без реальной транзакции.
+type TxRunner struct {
+	Pool *pgxpool.Pool
+}
+
+// WithTx выполняет fn в одной транзакции против связанного пула.
+func (r TxRunner) WithTx(ctx context.Context, fn func(pgx.Tx) error) error {
+	return WithTx(ctx, r.Pool, fn)
+}
+
 // WithTx выполняет fn в одной транзакции: коммит при nil-ошибке, иначе откат.
 // Вызывается из service-слоя там, где несколько операций обязаны быть атомарны
 // (регистрация = user + workspace + membership; публикация формы = version +
