@@ -19,7 +19,10 @@ import (
 	"github.com/ka-shmd/trierra/internal/httpserver"
 )
 
-const maxFormBodyBytes = 4 << 10 // 4 КБ — тело содержит лишь title
+// maxFormBodyBytes — потолок тела запросов forms. 64 КБ: title крошечный, но
+// PATCH автосейва несёт весь draft_schema (до ~200 блоков). Внутренние лимиты
+// документа стережёт ValidateSchema; MaxBytesReader — грубый внешний предел.
+const maxFormBodyBytes = 64 << 10
 
 // Middleware — HTTP-обёртка (RequireAuth/RequireCSRF из auth), инжектируемая в
 // composition root: forms не завязан на конкретный тип auth.Handler.
@@ -31,6 +34,7 @@ type formsService interface {
 	List(ctx context.Context, userID uuid.UUID, after *Cursor, limit int) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
+	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 }
 
@@ -79,6 +83,16 @@ type listResponse struct {
 
 type titleRequest struct {
 	Title string `json:"title"`
+}
+
+// patchRequest — тело PATCH /forms/{id}. Указатели различают «поле отсутствует»
+// (nil) от «прислано». За один запрос меняется ровно одно из title/draftSchema:
+// title — переименование с дашборда (без блокировки, как в фазе 2); draftSchema —
+// автосейв билдера, требует updatedAt для оптимистичной блокировки.
+type patchRequest struct {
+	Title       *string          `json:"title"`
+	DraftSchema *json.RawMessage `json:"draftSchema"`
+	UpdatedAt   *time.Time       `json:"updatedAt"`
 }
 
 func toFormResponse(f Form) formResponse {
@@ -170,11 +184,31 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	req, ok := decodeTitle(w, r)
+	req, ok := decodePatch(w, r)
 	if !ok {
 		return
 	}
-	form, err := h.svc.UpdateTitle(r.Context(), userID, formID, req.Title)
+
+	var (
+		form Form
+		err  error
+	)
+	switch {
+	case req.DraftSchema != nil && req.Title != nil:
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется либо title, либо draftSchema", domain.ErrValidation))
+		return
+	case req.DraftSchema != nil:
+		if req.UpdatedAt == nil {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: updatedAt обязателен при сохранении схемы", domain.ErrValidation))
+			return
+		}
+		form, err = h.svc.UpdateDraftSchema(r.Context(), userID, formID, *req.DraftSchema, *req.UpdatedAt)
+	case req.Title != nil:
+		form, err = h.svc.UpdateTitle(r.Context(), userID, formID, *req.Title)
+	default:
+		httpserver.WriteError(w, r, fmt.Errorf("%w: пустой запрос: ожидался title или draftSchema", domain.ErrValidation))
+		return
+	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -240,6 +274,20 @@ func decodeTitle(w http.ResponseWriter, r *http.Request) (titleRequest, bool) {
 	if err := dec.Decode(&req); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
 		return titleRequest{}, false
+	}
+	return req, true
+}
+
+// decodePatch читает тело PATCH (title и/или draftSchema + updatedAt). Пустое
+// тело недопустимо (в отличие от создания) — обработчик сам решит, чего не хватает.
+func decodePatch(w http.ResponseWriter, r *http.Request) (patchRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req patchRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return patchRequest{}, false
 	}
 	return req, true
 }

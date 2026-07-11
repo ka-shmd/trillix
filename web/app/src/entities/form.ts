@@ -1,8 +1,10 @@
 import { z } from 'zod'
 
+import { formSchemaSchema } from '@entities/formSchema'
+
 // Доменные типы форм. Единственный источник — эти Zod-схемы (web/CLAUDE.md),
-// зеркалят DTO из internal/forms/handler.go. Схема блоков черновика появится в
-// фазе 3 (общая с рендерером); пока draftSchema — непрозрачный JSON.
+// зеркалят DTO из internal/forms/handler.go. Черновик схемы (draftSchema)
+// парсится общим с рендерером formSchemaSchema прямо на границе API.
 export const formStatusSchema = z.enum(['draft', 'published', 'closed'])
 
 // Карточка формы в списке и ответ создания/переименования.
@@ -17,9 +19,9 @@ export const formSchema = z.object({
 
 export type Form = z.infer<typeof formSchema>
 
-// GET /forms/{id}: карточка + черновик схемы (для заглушки редактора фазы 2).
+// GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор).
 export const formDetailSchema = formSchema.extend({
-  draftSchema: z.unknown(),
+  draftSchema: formSchemaSchema,
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>

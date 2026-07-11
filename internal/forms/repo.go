@@ -163,6 +163,32 @@ func (Repo) UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspace
 	}, nil
 }
 
+// UpdateFormDraftSchema сохраняет черновик схемы с оптимистичной блокировкой:
+// UPDATE проходит, только если updated_at совпадает с expectedUpdatedAt. Расхождение
+// (или удалённая параллельно форма) → 0 строк → pgx.ErrNoRows, которую service
+// трактует как конфликт (доступ он проверяет заранее отдельным чтением).
+func (Repo) UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error) {
+	row, err := postgres.New(db).UpdateFormDraftSchema(ctx, postgres.UpdateFormDraftSchemaParams{
+		ID:                id,
+		WorkspaceID:       workspaceID,
+		DraftSchema:       schema,
+		ExpectedUpdatedAt: pgtype.Timestamptz{Time: expectedUpdatedAt, Valid: true},
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form draft schema: %w", err)
+	}
+	return Form{
+		ID:          row.ID,
+		WorkspaceID: row.WorkspaceID,
+		Title:       row.Title,
+		Slug:        row.Slug,
+		Status:      row.Status,
+		DraftSchema: json.RawMessage(row.DraftSchema),
+		CreatedAt:   row.CreatedAt.Time,
+		UpdatedAt:   row.UpdatedAt.Time,
+	}, nil
+}
+
 // DeleteForm удаляет форму в пределах воркспейса; возвращает число удалённых строк.
 func (Repo) DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).DeleteForm(ctx, postgres.DeleteFormParams{ID: id, WorkspaceID: workspaceID})

@@ -8,6 +8,17 @@
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
 
+    /* @entities → общий каталог доменных Zod-схем web/shared/entities. Он лежит
+       вне корня проекта, поэтому bare-импорт zod оттуда не находит node_modules
+       рендерера — маппим zod на локальный пакет явно. */
+    "paths": {
+      "@entities/*": ["../shared/entities/*"],
+      "@fields/*": ["../shared/fields/*"],
+      "zod": ["./node_modules/zod"],
+      "react": ["./node_modules/@types/react"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
+    },
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -26,5 +37,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "../shared/entities", "../shared/fields"]
 }

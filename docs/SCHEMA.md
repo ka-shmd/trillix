@@ -6,7 +6,7 @@
 
 - **Идентификаторы** — UUIDv7, генерируются в приложении (`domain.NewID`), упорядочены по времени создания → дружелюбны к btree.
 - **Время** — `TIMESTAMPTZ`, дефолт `now()`.
-- **JSONB** (`draft_schema`, `schema`) валидируется в приложении (`ValidateSchema`, с фазы 3), а не констрейнтами БД; на реляционные поля — `NOT NULL`/`FK`/`UNIQUE` обязательны.
+- **JSONB** (`draft_schema`, `schema`) валидируется в приложении (`ValidateSchema` — `internal/domain/schema.go`), а не констрейнтами БД; на реляционные поля — `NOT NULL`/`FK`/`UNIQUE` обязательны. Формат документа — ниже, в разделе «Контракт схемы формы (JSONB)».
 - **Иммутабельность** `form_versions` священна: строки этой таблицы никогда не обновляются (только INSERT при публикации).
 
 ## Связи
@@ -99,6 +99,46 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `schema` | `JSONB` | `NOT NULL` — иммутабельный снапшот |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | | | `UNIQUE (form_id, version)` |
+
+---
+
+## Контракт схемы формы (JSONB)
+
+Содержимое `forms.draft_schema` и `form_versions.schema` — один документ единого формата (**ARCHITECTURE §3.4** — источник истины). Зеркальные реализации контракта: Go-типы и валидатор `ValidateSchema` в `internal/domain/schema.go`; Zod-схема `formSchemaSchema` в `web/shared/entities/formSchema.ts` (общая для кабинета и рендерера). Любая правка формата меняет оба места одним PR с тестами обеих сторон.
+
+```jsonc
+{
+  "schemaVersion": 1,              // опционально; отсутствует → трактуется как 1
+  "blocks": [
+    {
+      "id": "blk_9f2k1x",          // стабильный, генерируется клиентом; уникален в форме
+      "type": "short_text",         // short_text | long_text | email | number
+                                    // | single_choice | multi_choice | date
+      "label": "Ваше имя",
+      "description": "",            // опционально
+      "required": true,             // опционально, по умолчанию false
+      "settings": {                 // опционально; у не-choice пуст
+        "options": [                // только у single_choice / multi_choice
+          { "id": "opt_1", "label": "Друзья" }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Валидатор строгий (лишние поля запрещены). Это валидатор **черновика**: пустой `label` и choice без опций допустимы — недособранное состояние, которое автосейв обязан хранить; требование «непустой label, ≥1 опция» — правило момента публикации (фаза 4).
+
+**Лимиты** (те же числа в Go и Zod):
+
+| Что | Предел |
+|---|---|
+| блоков в форме | ≤ 200 |
+| опций в choice-блоке | ≤ 100 |
+| длина `label` | ≤ 1000 |
+| длина `description` | ≤ 2000 |
+| длина `label` опции | ≤ 500 |
+| длина `id` | ≤ 64 |
 
 ---
 

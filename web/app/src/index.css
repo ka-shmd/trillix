@@ -324,21 +324,414 @@ button.primary {
   border: 0;
 }
 
-/* --- Заглушка редактора --- */
-.editor-stub {
-  max-width: 48rem;
-  margin: 0 auto;
+/* --- Билдер --- */
+.builder-topbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
-.editor-stub-note {
+.builder-title {
+  font-weight: 600;
+}
+
+.builder-loading,
+.builder-error-box {
   color: var(--muted);
 }
 
-.editor-stub-json {
+.builder-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+  min-height: 1.4rem;
+}
+
+/* Переключатель Редактор/Превью */
+.builder-modes {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.builder-modes button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.builder-modes button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.save-status {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.save-status-ok {
+  color: #15803d;
+}
+
+.save-status-error {
+  color: var(--danger);
+}
+
+.save-retry {
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.builder-conflict {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  background: #fef2f2;
+  border: 1px solid #f0c2c2;
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  margin-bottom: 0.8rem;
+  font-size: 0.9rem;
+}
+
+.builder-conflict button {
+  cursor: pointer;
+  border: 1px solid var(--danger);
+  background: transparent;
+  color: var(--danger);
+  border-radius: 7px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+/* Три колонки: палитра / канвас / настройки. На узких экранах — в один столбец. */
+.builder {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr) 18rem;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 60rem) {
+  .builder {
+    grid-template-columns: 1fr;
+  }
+}
+
+.builder-pane {
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   padding: 1rem;
-  overflow-x: auto;
+}
+
+.builder-canvas {
+  min-height: 24rem;
+}
+
+.builder-pane-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+}
+
+.builder-hint {
+  color: var(--muted);
   font-size: 0.85rem;
+}
+
+.palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.palette-btn {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.palette-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.canvas-empty {
+  display: grid;
+  place-items: center;
+  min-height: 20rem;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.canvas-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.canvas-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.85rem;
+}
+
+.canvas-block.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.canvas-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.canvas-block-type {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.canvas-block-toolbar {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.canvas-block-toolbar button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.8rem;
+  line-height: 1;
+  color: var(--text);
+}
+
+.canvas-block-toolbar button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.canvas-block-toolbar button.canvas-block-remove {
+  color: var(--danger);
+  border-color: #f0c2c2;
+}
+
+.canvas-block-label,
+.canvas-block-desc {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  resize: vertical;
+}
+
+.canvas-block-label {
+  font-weight: 600;
+}
+
+.canvas-block-desc {
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.canvas-block-label:hover,
+.canvas-block-desc:hover {
+  border-color: var(--border);
+}
+
+.canvas-block-label:focus,
+.canvas-block-desc:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+/* --- Панель настроек --- */
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-type {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.settings-required {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.options-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+}
+
+.options-title {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.options-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.option-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.45rem;
+  font: inherit;
+}
+
+.option-actions {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.option-actions button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 6px;
+  width: 1.9rem;
+  height: 1.9rem;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.option-actions button.option-remove {
+  color: var(--danger);
+  border-color: #f0c2c2;
+}
+
+.option-add {
+  align-self: flex-start;
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  background: transparent;
+  border-radius: 7px;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+/* --- Поля формы (превью; общие классы @fields, рендерер фазы 4 стилизует их
+   своим CSS) --- */
+.rf-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 38rem;
+}
+
+.rf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.rf-required {
+  color: var(--danger);
+}
+
+.rf-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.rf-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+}
+
+.rf-input:disabled {
+  background: #f1f3f6;
+  color: var(--muted);
+}
+
+.rf-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.rf-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
 }

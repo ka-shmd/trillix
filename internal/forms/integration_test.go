@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trierra/internal/auth"
+	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/forms"
 	"github.com/ka-shmd/trierra/internal/pgtest"
 	"github.com/ka-shmd/trierra/internal/postgres"
@@ -131,6 +132,9 @@ func TestForms_WorkspaceIsolation(t *testing.T) {
 	getFormDetail(t, bob, srv, form.ID, http.StatusNotFound)
 	// B переименовывает форму A → 404 (и не меняет её).
 	patchTitle(t, bob, srv, form.ID, "взломано", http.StatusNotFound)
+	// B сохраняет схему в форму A → 404 (проверка членства бьёт раньше блокировки:
+	// не 409, чтобы не раскрывать существование чужой формы).
+	patchDraftSchema(t, bob, srv, form.ID, `{"blocks":[]}`, "2020-01-01T00:00:00Z", http.StatusNotFound)
 	// B удаляет форму A → 404.
 	deleteForm(t, bob, srv, form.ID, http.StatusNotFound)
 
@@ -142,6 +146,48 @@ func TestForms_WorkspaceIsolation(t *testing.T) {
 	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Title != "Секрет Алисы" {
 		t.Fatalf("форму A изменили: title = %q", d.Title)
 	}
+}
+
+// Автосейв билдера: валидная схема сохраняется (канонизированной, updated_at
+// сдвигается), мусор → 422, устаревший updated_at → 409, схема без updated_at → 422.
+func TestForms_DraftSchemaAutosave(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "builder@example.com")
+
+	form := createForm(t, c, srv, "Анкета")
+
+	// Валидное сохранение: schemaVersion опущен — сервер обязан канонизировать (=1).
+	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	saved := patchDraftSchema(t, c, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	if saved.UpdatedAt == form.UpdatedAt {
+		t.Fatalf("updated_at не сдвинулся после сохранения: %s", saved.UpdatedAt)
+	}
+
+	// GET отдаёт канонизированный документ: schemaVersion проставлен (=1), блок цел.
+	// Порядок ключей задаёт JSONB (не Go-маршалинг), поэтому сверяем разбором.
+	got := parseSchema(t, getFormDetail(t, c, srv, form.ID, http.StatusOK).DraftSchema)
+	if got.SchemaVersion != 1 || len(got.Blocks) != 1 {
+		t.Fatalf("канонизация не проставила schemaVersion/блок: %+v", got)
+	}
+	if b := got.Blocks[0]; b.ID != "b1" || b.Type != "short_text" || b.Label != "Имя" || !b.Required {
+		t.Fatalf("блок сохранён неверно: %+v", b)
+	}
+
+	// Мусор (неизвестный тип блока) с актуальным updated_at → 422.
+	garbage := `{"blocks":[{"id":"b1","type":"slider","label":"x"}]}`
+	patchDraftSchema(t, c, srv, form.ID, garbage, saved.UpdatedAt, http.StatusUnprocessableEntity)
+
+	// Устаревший updated_at (исходный, уже сдвинутый первым сохранением) → 409.
+	patchDraftSchema(t, c, srv, form.ID, `{"blocks":[]}`, form.UpdatedAt, http.StatusConflict)
+
+	// draftSchema без updatedAt → 422 (оптимистичная блокировка обязательна).
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"draftSchema":{"blocks":[]}}`, csrf(t, c, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("схема без updatedAt: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
 }
 
 // Пагинация: 5 форм, страницы по 2 — курсор без дублей и потерь.
@@ -248,6 +294,24 @@ func patchTitle(t *testing.T, c *http.Client, srv *httptest.Server, id, title st
 	return f
 }
 
+// patchDraftSchema шлёт автосейв {draftSchema, updatedAt}. updatedAt передаётся
+// строкой ровно как получен из формы (round-trip RFC3339 для оптимистичной блокировки).
+func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, schemaJSON, updatedAt string, wantStatus int) formDTO {
+	t.Helper()
+	body := `{"draftSchema":` + schemaJSON + `,"updatedAt":"` + updatedAt + `"}`
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH схема: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDTO{}
+	}
+	var f formDTO
+	decode(t, r, &f)
+	return f
+}
+
 func deleteForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) {
 	t.Helper()
 	r := do(t, c, http.MethodDelete, srv.URL+"/api/v1/forms/"+id, "", csrf(t, c, srv.URL))
@@ -266,6 +330,15 @@ func listForms(t *testing.T, c *http.Client, srv *httptest.Server, query string)
 	var l listDTO
 	decode(t, r, &l)
 	return l
+}
+
+func parseSchema(t *testing.T, raw json.RawMessage) domain.FormSchema {
+	t.Helper()
+	var s domain.FormSchema
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("draftSchema не парсится: %v (%s)", err, raw)
+	}
+	return s
 }
 
 func cursorParam(cursor string) string {

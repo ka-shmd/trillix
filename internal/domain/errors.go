@@ -12,6 +12,10 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrRateLimited  = errors.New("too many requests")
 
+	// ErrConflict — оптимистичная блокировка: клиент прислал устаревший updated_at,
+	// ресурс изменён параллельно (другая вкладка). Маппится в 409 (ARCHITECTURE §5.1).
+	ErrConflict = errors.New("conflict")
+
 	// Аутентификация.
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
