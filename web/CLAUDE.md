@@ -16,6 +16,8 @@ Zod-схемы в `entities` — единственный источник ти�
 
 Feature-sliced: маршрут в `routes/`, логика и компоненты фичи в `features/<имя>/`, переиспользуемое между фичами — в `shared/`, доменные типы — в `entities/`. Импорты направлены вниз (`features → entities → shared`); импорт одной фичи из другой запрещён — общее выносится в entities/shared.
 
+Маршруты в `web/app` — file-based (плагин `@tanstack/router-plugin` в `vite.config.ts`): дерево генерируется в `src/routeTree.gen.ts`, который **коммитится** (нужен для `tsc -b` в CI) и обновляется на каждом dev/build; в eslint для `src/routes/**` выключен `react-refresh/only-export-components` — роут-файлы обязаны экспортировать `Route`. Layout-группы через pathless-маршруты (`_auth`, `_app`), гард сессии — в `beforeLoad` через `context.queryClient` (см. `routes/_app.tsx` — эталон).
+
 ## Мутации
 
 Каждая мутация обязана инвалидировать или патчить затронутые query-ключи — забытая инвалидация это баг, а не мелочь. Query-ключи — только через фабрику ключей фичи (`formKeys.list()`, `formKeys.detail(id)`), строковые литералы ключей в компонентах запрещены.
