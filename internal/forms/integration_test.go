@@ -60,10 +60,12 @@ func newStack(t *testing.T) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
+	formsPublic := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"))
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
 	formsH.Routes(mux)
+	formsPublic.Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -264,6 +266,49 @@ func TestForms_PublishIsolation(t *testing.T) {
 	}
 }
 
+// Публичная выдача по slug: опубликованная форма доступна без авторизации (схема,
+// version, token, ETag); черновик и закрытая → 404; повтор с If-None-Match → 304.
+func TestForms_PublicFetch(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner-public@example.com")
+	anon := newClient(t) // без сессии — публичный доступ
+
+	form := createForm(t, owner, srv, "Публичный опрос")
+
+	// Черновик по slug недоступен (приватное не раскрывается) → 404.
+	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+
+	// Публикуем непустую схему.
+	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, owner, srv, form.ID, http.StatusOK)
+
+	// Публичная выдача: 200, title/version/schema/token, ETag выставлен.
+	pub, etag := getPublicOK(t, anon, srv, form.Slug)
+	if pub.Title != "Публичный опрос" || pub.Version != 1 {
+		t.Fatalf("публичная форма: %+v", pub)
+	}
+	if pub.Token == "" || etag == "" {
+		t.Fatalf("нет token (%q) или ETag (%q)", pub.Token, etag)
+	}
+	got := parseSchema(t, pub.Schema)
+	if len(got.Blocks) != 1 || got.Blocks[0].ID != "b1" {
+		t.Fatalf("схема опубликованной версии неверна: %+v", got)
+	}
+
+	// Повтор с If-None-Match = ETag → 304 без тела.
+	r := doWithHeader(t, anon, http.MethodGet, srv.URL+"/public/v1/forms/"+form.Slug, "If-None-Match", etag)
+	if r.StatusCode != http.StatusNotModified {
+		t.Fatalf("условный запрос: статус %d, ожидалось 304", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// После снятия с публикации → 404 (закрытая не отдаётся).
+	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
+	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+}
+
 // Пагинация: 5 форм, страницы по 2 — курсор без дублей и потерь.
 func TestForms_CursorPagination(t *testing.T) {
 	resetDB(t)
@@ -386,6 +431,48 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 	var f formDTO
 	decode(t, r, &f)
 	return f
+}
+
+type publicFormDTO struct {
+	Title   string          `json:"title"`
+	Version int32           `json:"version"`
+	Schema  json.RawMessage `json:"schema"`
+	Token   string          `json:"token"`
+}
+
+func getPublic(t *testing.T, c *http.Client, srv *httptest.Server, slug string, wantStatus int) {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/public/v1/forms/"+slug, "", "")
+	if r.StatusCode != wantStatus {
+		t.Fatalf("GET public форма: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+func getPublicOK(t *testing.T, c *http.Client, srv *httptest.Server, slug string) (publicFormDTO, string) {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/public/v1/forms/"+slug, "", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("GET public форма: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	etag := r.Header.Get("ETag")
+	var pub publicFormDTO
+	decode(t, r, &pub)
+	return pub, etag
+}
+
+func doWithHeader(t *testing.T, c *http.Client, method, u, header, value string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, u, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set(header, value)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
 }
 
 func publishForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) formDTO {

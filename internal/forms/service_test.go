@@ -41,6 +41,10 @@ type fakeStore struct {
 	lastVersion     int32
 	lastSnapshot    json.RawMessage
 
+	// Управление публичной выдачей по slug.
+	publicForm PublicForm
+	publicErr  error
+
 	// Управление путём автосейва схемы.
 	schemaSaved  bool
 	schemaErr    error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
@@ -132,6 +136,13 @@ func (f *fakeStore) SetFormPublished(_ context.Context, _ postgres.DBTX, id, wor
 func (f *fakeStore) SetFormClosed(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
 	f.closed = true
 	return Form{ID: id, WorkspaceID: workspaceID, Status: "closed"}, nil
+}
+
+func (f *fakeStore) GetPublishedFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
+	if f.publicErr != nil {
+		return PublicForm{}, f.publicErr
+	}
+	return f.publicForm, nil
 }
 
 // fakeTx выполняет fn без реальной транзакции (nil-tx: fakeStore игнорирует db).

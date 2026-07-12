@@ -33,6 +33,15 @@ type Form struct {
 	UpdatedAt          time.Time
 }
 
+// PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
+// опубликованной версии. VersionID (id этой версии) иммутабелен и служит ETag'ом.
+type PublicForm struct {
+	Title     string
+	Version   int32
+	Schema    json.RawMessage
+	VersionID uuid.UUID
+}
+
 // ptrUUID переводит nullable uuid из sqlc (pgtype.UUID) в *uuid.UUID: NULL → nil.
 func ptrUUID(v pgtype.UUID) *uuid.UUID {
 	if !v.Valid {
@@ -231,6 +240,22 @@ func (Repo) DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uu
 		return 0, fmt.Errorf("delete form: %w", err)
 	}
 	return n, nil
+}
+
+// GetPublishedFormBySlug возвращает опубликованную форму по slug. pgx.ErrNoRows
+// (черновик/закрытая/нет формы) пробрасывается обёрнутым — service вернёт 404.
+func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error) {
+	row, err := postgres.New(db).GetPublishedFormBySlug(ctx, slug)
+	if err != nil {
+		return PublicForm{}, fmt.Errorf("get published form by slug: %w", err)
+	}
+	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
+	return PublicForm{
+		Title:     row.Title,
+		Version:   row.Version,
+		Schema:    json.RawMessage(row.Schema),
+		VersionID: uuid.UUID(row.PublishedVersionID.Bytes),
+	}, nil
 }
 
 // NextFormVersion возвращает номер следующей версии формы (1 для первой публикации).

@@ -91,6 +91,16 @@ RETURNING id, workspace_id, title, slug, status, draft_schema, published_version
 DELETE FROM forms
 WHERE id = $1 AND workspace_id = $2;
 
+-- name: GetPublishedFormBySlug :one
+-- Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
+-- status='published' гарантируют, что черновик/закрытая форма не вернут строку
+-- (вызывающий → 404, приватное не раскрывается). published_version_id — источник
+-- ETag (иммутабелен на версию).
+SELECT f.title, fv.version, fv.schema, f.published_version_id
+FROM forms f
+JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1 AND f.status = 'published';
+
 -- name: NextFormVersion :one
 -- Следующий номер версии формы: max+1 (1 для первой публикации). Уникальность
 -- (form_id, version) в схеме страхует от гонки двух параллельных публикаций —

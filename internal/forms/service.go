@@ -44,6 +44,7 @@ type Store interface {
 	InsertFormVersion(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error)
 	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
 	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
+	GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 }
 
 var _ Store = Repo{}
@@ -276,6 +277,20 @@ func (s *Service) Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form
 	// published_version_id не меняет).
 	closed.PublishedVersion = form.PublishedVersion
 	return closed, nil
+}
+
+// PublicForm возвращает опубликованную форму по slug для публичного рендерера.
+// Без проверки воркспейса (форма публична), но только опубликованную: черновик,
+// закрытая или несуществующая → domain.ErrNotFound (404, приватное не раскрывается).
+func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, error) {
+	pf, err := s.repo.GetPublishedFormBySlug(ctx, s.db, slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PublicForm{}, domain.ErrNotFound
+		}
+		return PublicForm{}, err
+	}
+	return pf, nil
 }
 
 // formForUser загружает форму и проверяет членство пользователя в её воркспейсе.

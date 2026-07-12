@@ -18,7 +18,15 @@ type Config struct {
 	// false, в prod-local/prod по https — true. Первый пример «различие
 	// контуров живёт в env», а не в ветвлении по имени окружения.
 	CookieSecure bool
+	// FormTokenSecret — ключ HMAC-подписи токена времени выдачи публичной формы
+	// (антиспам: минимальное время заполнения, фазы 4–5). Секрет: не логируется,
+	// в прод-контурах генерируется заново. В dev — локальное одноразовое значение.
+	FormTokenSecret []byte
 }
+
+// minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
+// подделывается перебором. 16 байт — разумный минимум для dev; прод длиннее.
+const minFormTokenSecretLen = 16
 
 // Load читает конфигурацию из env и валидирует её. Отсутствие обязательной
 // переменной — ошибка старта процесса, а не первого запроса; в сообщении
@@ -38,6 +46,7 @@ func Load() (Config, error) {
 		DatabaseURL: required("DATABASE_URL"),
 	}
 	cookieSecureRaw := required("COOKIE_SECURE")
+	formTokenSecret := required("FORM_TOKEN_SECRET")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -48,6 +57,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid COOKIE_SECURE %q: want true or false", cookieSecureRaw)
 	}
 	cfg.CookieSecure = cookieSecure
+
+	if len(formTokenSecret) < minFormTokenSecretLen {
+		return Config{}, fmt.Errorf("FORM_TOKEN_SECRET too short: want >= %d bytes", minFormTokenSecretLen)
+	}
+	cfg.FormTokenSecret = []byte(formTokenSecret)
 
 	return cfg, nil
 }

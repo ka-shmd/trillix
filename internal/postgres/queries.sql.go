@@ -243,6 +243,36 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 	return workspace_id, err
 }
 
+const getPublishedFormBySlug = `-- name: GetPublishedFormBySlug :one
+SELECT f.title, fv.version, fv.schema, f.published_version_id
+FROM forms f
+JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1 AND f.status = 'published'
+`
+
+type GetPublishedFormBySlugRow struct {
+	Title              string
+	Version            int32
+	Schema             []byte
+	PublishedVersionID pgtype.UUID
+}
+
+// Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
+// status='published' гарантируют, что черновик/закрытая форма не вернут строку
+// (вызывающий → 404, приватное не раскрывается). published_version_id — источник
+// ETag (иммутабелен на версию).
+func (q *Queries) GetPublishedFormBySlug(ctx context.Context, slug string) (GetPublishedFormBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getPublishedFormBySlug, slug)
+	var i GetPublishedFormBySlugRow
+	err := row.Scan(
+		&i.Title,
+		&i.Version,
+		&i.Schema,
+		&i.PublishedVersionID,
+	)
+	return i, err
+}
+
 const getSessionUser = `-- name: GetSessionUser :one
 SELECT u.id, u.email, u.password_hash, u.created_at
 FROM sessions s
