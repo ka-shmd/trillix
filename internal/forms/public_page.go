@@ -26,6 +26,7 @@ var formPageTmpl = template.Must(template.New("formpage").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}}</title>
+<meta name="description" content="{{.MetaDescription}}">
 <meta property="og:type" content="website">
 <meta property="og:title" content="{{.Title}}">
 {{if .Description}}<meta property="og:description" content="{{.Description}}">
@@ -41,15 +42,23 @@ var formPageTmpl = template.Must(template.New("formpage").Parse(`<!doctype html>
 `))
 
 type formPageData struct {
-	Title       string
-	Description string
-	OGImage     string
-	URL         string
-	ScriptSrc   string
+	Title string
+	// Description — тизер для og:description (заголовки блоков); может быть пустым,
+	// тогда og:description опускается. MetaDescription — стандартный <meta
+	// name="description">, всегда непустой (SEO): тот же тизер или фолбэк.
+	Description     string
+	MetaDescription string
+	OGImage         string
+	URL             string
+	ScriptSrc       string
 }
 
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
 const maxOGDescriptionLen = 200
+
+// fallbackMetaDescription — <meta name="description"> для формы без заполненных
+// заголовков вопросов (пустой тизер): описание страницы для поисковиков.
+const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
 
 // getHTML отдаёт HTML-документ формы /r/{slug} с OG-мета опубликованной версии.
 // Только опубликованная форма; черновик/закрытая/нет формы → 404 (тем же путём,
@@ -62,12 +71,18 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	desc := ogDescriptionFromSchema(pf.Schema)
+	metaDesc := desc
+	if metaDesc == "" {
+		metaDesc = fallbackMetaDescription
+	}
 	data := formPageData{
-		Title:       pf.Title,
-		Description: ogDescriptionFromSchema(pf.Schema),
-		OGImage:     h.ogImageURL,
-		URL:         h.publicBaseURL + "/r/" + slug,
-		ScriptSrc:   h.publicBaseURL + "/src/main.tsx",
+		Title:           pf.Title,
+		Description:     desc,
+		MetaDescription: metaDesc,
+		OGImage:         h.ogImageURL,
+		URL:             h.publicBaseURL + "/r/" + slug,
+		ScriptSrc:       h.publicBaseURL + "/src/main.tsx",
 	}
 
 	// Рендерим в буфер: ошибка шаблона (маловероятна — статичный шаблон) не должна

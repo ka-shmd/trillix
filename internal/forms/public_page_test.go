@@ -39,6 +39,7 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 		`<meta property="og:image" content="http://localhost:5174/og-preview.png">`,
 		`<meta property="og:url" content="http://localhost:5174/r/abc123">`,
 		`<meta property="og:description" content="Ваше имя · Оценка">`, // подзаголовок из блоков
+		`<meta name="description" content="Ваше имя · Оценка">`,        // стандартный SEO-мета
 		`src="http://localhost:5174/src/main.tsx"`,                     // тело грузит SPA
 	} {
 		if !strings.Contains(body, want) {
@@ -66,12 +67,16 @@ func TestPublicHTML_TitleInjection_Escaped(t *testing.T) {
 	}
 }
 
-// Пустая форма без вопросов → og:description опускается (тег не выводится).
-func TestPublicHTML_NoBlocks_OmitsDescription(t *testing.T) {
+// Пустая форма без вопросов → og:description опускается (тизера нет), но
+// стандартный <meta name="description"> присутствует с фолбэком (SEO).
+func TestPublicHTML_NoBlocks_OmitsOGButKeepsMetaDescription(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{Title: "Пустая", Version: 1, Schema: json.RawMessage(`{"blocks":[]}`), VersionID: uuid.New()}}
 	body := getHTMLPage(t, svc, "abc").Body.String()
 	if strings.Contains(body, "og:description") {
 		t.Fatalf("для формы без вопросов og:description не ожидался:\n%s", body)
+	}
+	if !strings.Contains(body, `<meta name="description" content="`+fallbackMetaDescription+`">`) {
+		t.Fatalf("ожидался фолбэк-мета описания для пустой формы:\n%s", body)
 	}
 }
 
