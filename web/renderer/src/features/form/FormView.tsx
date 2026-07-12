@@ -12,7 +12,9 @@ import { type Errors, validateAll, validateBlock } from './validation'
 // в sessionStorage, клиентская валидация (required/email/число/дата) по blur и на
 // «Отправить». Реальная отправка — фаза 5; пока валидная форма пишется в консоль.
 export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
-  const [answers, dispatch] = useReducer(answersReducer, null, () => loadAnswers(slug, form.version))
+  const [answers, dispatch] = useReducer(answersReducer, null, () =>
+    loadAnswers(slug, form.version),
+  )
   const [errors, setErrors] = useState<Errors>({})
   const [submitted, setSubmitted] = useState(false)
 
@@ -85,7 +87,9 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         </p>
       )}
       {submitted && !hasErrors && (
-        <p className="form-note">Форма заполнена верно. Отправка ответов появится в следующей версии.</p>
+        <p className="form-note">
+          Форма заполнена верно. Отправка ответов появится в следующей версии.
+        </p>
       )}
     </main>
   )

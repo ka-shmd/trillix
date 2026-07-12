@@ -31,7 +31,10 @@ export function usePublicForm(slug: string): FormState {
       })
       .catch((e: unknown) => {
         if (!active) return
-        setState({ status: 'error', message: e instanceof Error ? e.message : 'неизвестная ошибка' })
+        setState({
+          status: 'error',
+          message: e instanceof Error ? e.message : 'неизвестная ошибка',
+        })
       })
     return () => {
       active = false

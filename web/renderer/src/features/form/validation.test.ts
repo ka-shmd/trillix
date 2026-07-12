@@ -11,9 +11,15 @@ function block(over: Partial<Block> & Pick<Block, 'type'>): Block {
 
 describe('validateBlock — required', () => {
   it('обязательное пустое → сообщение (все виды пустоты)', () => {
-    expect(validateBlock(block({ type: 'short_text', required: true }), undefined)).toBe('Обязательное поле')
-    expect(validateBlock(block({ type: 'short_text', required: true }), '')).toBe('Обязательное поле')
-    expect(validateBlock(block({ type: 'multi_choice', required: true }), [])).toBe('Обязательное поле')
+    expect(validateBlock(block({ type: 'short_text', required: true }), undefined)).toBe(
+      'Обязательное поле',
+    )
+    expect(validateBlock(block({ type: 'short_text', required: true }), '')).toBe(
+      'Обязательное поле',
+    )
+    expect(validateBlock(block({ type: 'multi_choice', required: true }), [])).toBe(
+      'Обязательное поле',
+    )
   })
   it('обязательное заполненное → null', () => {
     expect(validateBlock(block({ type: 'short_text', required: true }), 'текст')).toBeNull()

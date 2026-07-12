@@ -58,3 +58,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+        # Бюджет веса — только у рендерера (публичная форма грузится на телефоне);
+        # превышение валит сборку. Кабинету бюджет не задаём.
+      - name: bundle budget
+        if: matrix.project == 'renderer'
+        run: npm run check:bundle

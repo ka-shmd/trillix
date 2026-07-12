@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fetchPublicForm } from './api'
 
 function stubFetch(response: Response) {
-  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(response)))
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(() => Promise.resolve(response)),
+  )
 }
 
 afterEach(() => {
