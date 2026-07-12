@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react'
-import { type Block, type BlockType, isChoiceType } from '@entities/formSchema'
+import { type Block, type BlockType, isChoiceType, isContentType } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
 import { Input } from '@/components/ui/input'
@@ -29,6 +29,8 @@ export interface BlockRowProps {
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
   focusMe: boolean
   onFocusHandled: () => void
+  // openMenuOnMount — строку создали по «/»: сразу открыть меню выбора типа.
+  openMenuOnMount: boolean
   onAddBelow: (id: string) => void
   onBackspaceEmpty: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
@@ -46,6 +48,7 @@ export function BlockRow({
   total,
   focusMe,
   onFocusHandled,
+  openMenuOnMount,
   onAddBelow,
   onBackspaceEmpty,
   onArrow,
@@ -56,8 +59,10 @@ export function BlockRow({
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const labelRef = useRef<HTMLTextAreaElement>(null)
-  const [slashOpen, setSlashOpen] = useState(false)
+  // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
+  const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
   const [focused, setFocused] = useState(false)
+  const isContent = isContentType(block.type)
 
   useEffect(() => {
     if (!focusMe) return
@@ -147,13 +152,17 @@ export function BlockRow({
             >
               Переместить вниз
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              checked={block.required ?? false}
-              onCheckedChange={(v) => updateBlock(block.id, { required: v })}
-            >
-              Обязательный
-            </DropdownMenuCheckboxItem>
+            {!isContent && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={block.required ?? false}
+                  onCheckedChange={(v) => updateBlock(block.id, { required: v })}
+                >
+                  Обязательный
+                </DropdownMenuCheckboxItem>
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={() => removeBlock(block.id)}>
               <Trash2 className="size-4" /> Удалить
@@ -171,14 +180,18 @@ export function BlockRow({
               value={block.label}
               // Плейсхолдер — только у активной строки: незанятый блок выглядит
               // пустой строкой с кареткой (как в Notion/Tally), без подсказок.
-              placeholder={focused ? 'Напишите вопрос или «/» для поля' : undefined}
+              placeholder={
+                focused ? (isContent ? 'Текст, или «/» для поля' : 'Вопрос, или «/» для типа') : undefined
+              }
               onChange={(e) => updateBlock(block.id, { label: e.target.value })}
               onKeyDown={onLabelKeyDown}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
-              className="w-full resize-none bg-transparent text-base font-medium leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground/60"
+              className={`w-full resize-none bg-transparent leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground/60 ${
+                isContent ? 'text-base' : 'text-base font-medium'
+              }`}
             />
-            {block.required && (
+            {!isContent && block.required && (
               <span className="mt-1 select-none text-base text-destructive" title="Обязательный">
                 *
               </span>
@@ -187,8 +200,8 @@ export function BlockRow({
 
           {/* Живое превью поля показываем, только когда у вопроса есть текст:
               пустой блок = просто строка с кареткой. Choice всегда показывает
-              варианты — тип выбран осознанно. */}
-          {isChoiceType(block.type) ? (
+              варианты — тип выбран осознанно. Text (неотвечаемый) — только абзац. */}
+          {isContent ? null : isChoiceType(block.type) ? (
             <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
           ) : block.label.trim() !== '' ? (
             <FieldPreview type={block.type} />

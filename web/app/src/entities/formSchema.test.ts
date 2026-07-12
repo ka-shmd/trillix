@@ -31,6 +31,9 @@ describe('formSchemaSchema — валидные', () => {
         { id: 'blk_7', type: 'multi_choice', label: 'Языки', settings: { options: [{ id: 'o1', label: 'Go' }] } },
       ],
     },
+    'неотвечаемый text-блок': {
+      blocks: [{ id: 'b', type: 'text', label: 'Раздел А', settings: {} }],
+    },
     'choice без опций — валидный черновик': {
       blocks: [{ id: 'b', type: 'single_choice', label: '', settings: {} }],
     },

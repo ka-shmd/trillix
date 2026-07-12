@@ -114,6 +114,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
       "id": "blk_9f2k1x",          // стабильный, генерируется клиентом; уникален в форме
       "type": "short_text",         // short_text | long_text | email | number
                                     // | single_choice | multi_choice | date
+                                    // | text (неотвечаемый абзац: без ответа,
+                                    //   исключён из ValidateAnswers/CSV/таблицы)
       "label": "Ваше имя",
       "description": "",            // опционально
       "required": true,             // опционально, по умолчанию false

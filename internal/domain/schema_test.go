@@ -23,6 +23,7 @@ func TestValidateSchema_Valid(t *testing.T) {
 				{"id":"blk_7","type":"multi_choice","label":"Языки","required":false,"settings":{"options":[{"id":"o1","label":"Go"}]}}
 			]
 		}`,
+		"неотвечаемый text-блок": `{"blocks":[{"id":"b","type":"text","label":"Раздел А","required":false,"settings":{}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
 		"пустой label — валидный черновик":     `{"blocks":[{"id":"b","type":"short_text","label":"","required":false,"settings":{}}]}`,
 		"settings опущен": `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,

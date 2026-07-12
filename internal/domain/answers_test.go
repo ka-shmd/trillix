@@ -151,3 +151,26 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// Неотвечаемый блок (text) исключён из валидации: ответа не требует (даже с
+// required=true в данных) и не участвует в проверке. Присланный на него ответ —
+// «несуществующий вопрос», как и для любого чужого id.
+func TestValidateAnswers_TextBlockNonAnswerable(t *testing.T) {
+	schema := FormSchema{Blocks: []Block{
+		{ID: "intro", Type: BlockText, Label: "Добро пожаловать", Required: true},
+		field("name", BlockShortText, true),
+	}}
+
+	if err := ValidateAnswers(schema, raws(map[string]string{"name": `"Иван"`})); err != nil {
+		t.Fatalf("text без ответа должен быть валиден: %v", err)
+	}
+
+	err := ValidateAnswers(schema, raws(map[string]string{"name": `"Иван"`, "intro": `"x"`}))
+	var fields AnswerErrors
+	if !errors.As(err, &fields) {
+		t.Fatalf("ответ на text-блок должен дать AnswerErrors, получено: %v", err)
+	}
+	if _, ok := fields["intro"]; !ok {
+		t.Fatalf("ожидалось сообщение под intro (несуществующий вопрос), карта: %v", fields)
+	}
+}

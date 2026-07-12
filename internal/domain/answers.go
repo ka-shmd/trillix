@@ -55,6 +55,11 @@ func ValidateAnswers(schema FormSchema, answers map[string]json.RawMessage) erro
 	known := make(map[string]struct{}, len(schema.Blocks))
 	for i := range schema.Blocks {
 		b := schema.Blocks[i]
+		// Неотвечаемый блок (text) не ждёт ответа: не в known, не валидируем.
+		// Присланный на него ответ попадёт ниже в «несуществующий вопрос».
+		if b.Type.isContent() {
+			continue
+		}
 		known[b.ID] = struct{}{}
 		if msg := validateAnswer(b, answers[b.ID]); msg != "" {
 			errs[b.ID] = msg

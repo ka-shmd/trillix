@@ -133,6 +133,13 @@
   max-width: 38rem;
 }
 
+/* Неотвечаемый блок text — статический абзац формы. */
+.rf-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--foreground);
+}
+
 .rf-field {
   display: flex;
   flex-direction: column;

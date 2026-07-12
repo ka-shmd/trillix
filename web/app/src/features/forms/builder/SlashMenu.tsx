@@ -6,6 +6,7 @@ import {
   CircleDot,
   Hash,
   Mail,
+  Pilcrow,
   Type,
 } from 'lucide-react'
 import { type BlockType } from '@entities/formSchema'
@@ -22,6 +23,7 @@ import {
 
 // Иконка на тип поля — визуальная опора в меню. Ключи покрывают все семь типов.
 const typeIcons: Record<BlockType, ReactNode> = {
+  text: <Pilcrow className="size-4" />,
   short_text: <Type className="size-4" />,
   long_text: <AlignLeft className="size-4" />,
   email: <Mail className="size-4" />,

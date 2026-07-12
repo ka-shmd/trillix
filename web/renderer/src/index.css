@@ -99,6 +99,13 @@ body {
   gap: 1.5rem;
 }
 
+/* Неотвечаемый блок text — статический абзац формы. */
+.rf-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
 .rf-field {
   display: flex;
   flex-direction: column;

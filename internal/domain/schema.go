@@ -30,7 +30,9 @@ const (
 	MaxIDLen          = 64
 )
 
-// BlockType — тип поля формы. Ровно семь значений MVP (ARCHITECTURE 3.4).
+// BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
+// неотвечаемый «text» — статический абзац на полотне (заголовок/пояснение). text
+// не собирает ответ: исключён из ValidateAnswers и CSV.
 type BlockType string
 
 const (
@@ -41,12 +43,13 @@ const (
 	BlockSingleChoice BlockType = "single_choice"
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
+	BlockText         BlockType = "text"
 )
 
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockNumber,
-		BlockSingleChoice, BlockMultiChoice, BlockDate:
+		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText:
 		return true
 	default:
 		return false
@@ -56,6 +59,12 @@ func (t BlockType) valid() bool {
 // isChoice — у choice-типов настройки несут список опций; у остальных settings пуст.
 func (t BlockType) isChoice() bool {
 	return t == BlockSingleChoice || t == BlockMultiChoice
+}
+
+// isContent — неотвечаемый блок (пока только text): статический контент на
+// полотне, не собирает ответ. Исключается из валидации ответов и выгрузки.
+func (t BlockType) isContent() bool {
+	return t == BlockText
 }
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте

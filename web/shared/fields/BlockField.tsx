@@ -1,6 +1,6 @@
 import { type ChangeEvent } from 'react'
 
-import { type Block } from '@entities/formSchema'
+import { type Block, isContentType } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
@@ -23,6 +23,12 @@ type BlockFieldProps = {
 }
 
 export function BlockField({ block, value, onChange, disabled = true, error, onBlur }: BlockFieldProps) {
+  // Неотвечаемый блок (text) — статический абзац: без подписи-вопроса, звёздочки,
+  // контрола и ошибок. Пустой текст в черновике не показываем.
+  if (isContentType(block.type)) {
+    return block.label.trim() ? <p className="rf-text">{block.label}</p> : null
+  }
+
   const errorId = error ? `${block.id}-error` : undefined
   return (
     <FieldShell block={block} error={error} errorId={errorId}>
@@ -134,6 +140,10 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
       return (
         <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
       )
+    case 'text':
+      // Неотвечаемый блок обрабатывается в BlockField до FieldShell; сюда не
+      // доходит — ветка для исчерпывающести switch по типам.
+      return null
   }
 }
 

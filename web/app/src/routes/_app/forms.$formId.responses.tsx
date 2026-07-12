@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
-import { type Block } from '@entities/formSchema'
+import { type Block, isAnswerableType } from '@entities/formSchema'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import {
@@ -44,7 +44,9 @@ function ResponsesPage() {
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
   const total = list.data?.pages[0]?.total ?? 0
-  const blocks = form.data?.draftSchema.blocks ?? []
+  // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (text) ответов
+  // не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
+  const blocks = (form.data?.draftSchema.blocks ?? []).filter((b) => isAnswerableType(b.type))
 
   return (
     <section className="mx-auto max-w-6xl p-6">
