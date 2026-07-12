@@ -109,6 +109,16 @@ FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1 AND f.status = 'published';
 
+-- name: ListFormVersions :many
+-- Все опубликованные версии формы (снапшоты схем), по возрастанию номера. Нужен
+-- CSV-экспорту (фаза 6): колонки — объединение блоков по всем версиям, а подписи
+-- choice-опций берутся из версии, по которой отправлен ответ. Версий на форму
+-- немного — грузятся разом. form_versions иммутабельна, порядок стабилен.
+SELECT version, schema
+FROM form_versions
+WHERE form_id = $1
+ORDER BY version;
+
 -- name: NextFormVersion :one
 -- Следующий номер версии формы: max+1 (1 для первой публикации). Уникальность
 -- (form_id, version) в схеме страхует от гонки двух параллельных публикаций —

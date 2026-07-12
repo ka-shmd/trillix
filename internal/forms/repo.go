@@ -51,6 +51,14 @@ type PublicForm struct {
 	VersionID uuid.UUID
 }
 
+// Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
+// Нужен CSV-экспорту (объединение колонок по версиям, подписи опций из версии
+// ответа). Схема иммутабельна и уже канонизирована при публикации.
+type Version struct {
+	Number int32
+	Schema json.RawMessage
+}
+
 // ptrUUID переводит nullable uuid из sqlc (pgtype.UUID) в *uuid.UUID: NULL → nil.
 func ptrUUID(v pgtype.UUID) *uuid.UUID {
 	if !v.Valid {
@@ -269,6 +277,20 @@ func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug s
 		Schema:    json.RawMessage(row.Schema),
 		VersionID: uuid.UUID(row.PublishedVersionID.Bytes),
 	}, nil
+}
+
+// ListFormVersions возвращает все опубликованные версии формы (снапшоты) по
+// возрастанию номера — для CSV-экспорта.
+func (Repo) ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error) {
+	rows, err := postgres.New(db).ListFormVersions(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("list form versions: %w", err)
+	}
+	out := make([]Version, len(rows))
+	for i, r := range rows {
+		out[i] = Version{Number: r.Version, Schema: json.RawMessage(r.Schema)}
+	}
+	return out, nil
 }
 
 // NextFormVersion возвращает номер следующей версии формы (1 для первой публикации).

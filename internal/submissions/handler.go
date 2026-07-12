@@ -3,8 +3,10 @@ package submissions
 import (
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,10 +22,19 @@ import (
 // submissions не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
 
-// listService — часть сервиса, нужная приватному транспорту листинга.
+// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт).
 type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
+	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
 }
+
+// utf8BOM — метка порядка байтов: Excel без неё принимает UTF-8 CSV за ANSI и
+// ломает кириллицу. Пишется первой, до заголовка таблицы.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// csvFlushEvery — как часто сбрасывать буфер csv.Writer в сеть: ответ начинает
+// течь клиенту, не дожидаясь всей выборки.
+const csvFlushEvery = 500
 
 // Handler — приватный транспорт модуля submissions: автор смотрит ответы своей формы.
 // Только чтение (GET), поэтому за RequireAuth, но без CSRF.
@@ -38,6 +49,7 @@ func NewHandler(svc listService, requireAuth Middleware) *Handler {
 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
 }
 
 // --- DTO ---
@@ -91,6 +103,70 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		resp.NextCursor = &enc
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).
+// Заголовки и статус 200 пишутся ЛЕНИВО — на первой строке (заголовке таблицы):
+// пока не пошёл body, ошибка авторизации из сервиса (чужая/нет формы) ещё может
+// стать 404 через WriteError. После начала стрима статус не поменять — ошибку
+// (обрыв записи, отмена ctx) только логируем на самом верху.
+func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+
+	var (
+		cw      *csv.Writer
+		started bool
+		written int
+	)
+	emit := func(record []string) error {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			w.Header().Set("Content-Disposition", csvContentDisposition(formID))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(utf8BOM)
+			cw = csv.NewWriter(w)
+		}
+		if err := cw.Write(record); err != nil {
+			return err
+		}
+		if written++; written%csvFlushEvery == 0 {
+			cw.Flush()
+			return cw.Error()
+		}
+		return nil
+	}
+
+	err := h.svc.ExportCSV(r.Context(), userID, formID, emit)
+	if !started {
+		// Тело ещё не начато → ошибка маппится на статус (404/…). Сюда попадаем только
+		// при ошибке авторизации: успешный экспорт всегда эмитит заголовок таблицы.
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	cw.Flush()
+	if err == nil {
+		err = cw.Error()
+	}
+	if err != nil {
+		// Стрим уже начат (200 отправлен) — статус не изменить. Логируем на самом верху.
+		httpserver.LoggerFrom(r.Context()).Error("csv export interrupted",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// csvContentDisposition — имя скачиваемого файла. ASCII-фолбэк + RFC 5987 filename*
+// (на случай нелатинских частей в будущем); сейчас имя из id формы — уже ASCII.
+func csvContentDisposition(formID uuid.UUID) string {
+	name := "submissions-" + formID.String() + ".csv"
+	return fmt.Sprintf("attachment; filename=%q", name)
 }
 
 // --- Разбор запроса ---

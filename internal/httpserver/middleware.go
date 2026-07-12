@@ -35,6 +35,11 @@ func loggerFrom(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
+// LoggerFrom — экспортируемый доступ к логгеру запроса (с request_id) для
+// handler'ов, которым нужно залогировать на самом верху то, что уже нельзя вернуть
+// как ошибку (напр. обрыв стриминга после отправки статуса).
+func LoggerFrom(ctx context.Context) *slog.Logger { return loggerFrom(ctx) }
+
 // withRequestID генерирует request_id, кладёт логгер с ним в контекст и отдаёт
 // его в заголовке ответа — каждая строка лога любого слоя привязана к запросу.
 func withRequestID(base *slog.Logger) Middleware {

@@ -43,7 +43,7 @@ migrate-up: ## Применить все миграции
 migrate-down: ## Откатить последнюю миграцию
 	go run ./cmd/api migrate down
 
-seed: ## Наполнить БД демо-данными (пользователь demo@trierra.local / demo-password + 60 форм)
+seed: ## Наполнить БД демо-данными (demo@trierra.local / demo-password + 60 форм + CSV-демо с 2 версиями и 10k ответов)
 	go run ./cmd/api seed
 	@echo "seed готов: вход demo@trierra.local / demo-password"
 

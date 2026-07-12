@@ -34,6 +34,9 @@ type Forms interface {
 	// чужая или несуществующая → domain.ErrNotFound (анти-IDOR, приватное не
 	// раскрывается). Листингу нужен только факт доступа, не поля формы.
 	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
+	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
+	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
+	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
@@ -156,6 +159,69 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 		page.NextCursor = &Cursor{ID: last.ID}
 	}
 	return page, nil
+}
+
+// exportBatch — размер порции keyset-итерации при экспорте. Память экспорта плоская
+// (одна порция за раз) независимо от общего числа ответов — DoD «10k строк не растит
+// память».
+const exportBatch = 1000
+
+// ExportCSV потоково выгружает все ответы формы в emit (по строке; первая — заголовок).
+// Порядок: авторизация + чтение версий (чужая/нет формы → 404), сборка модели колонок
+// (объединение блоков по версиям), затем keyset-итерация ответов порциями exportBatch —
+// каждая строка эмитится сразу, без накопления всей выборки. Между порциями уважается
+// отмена ctx (клиент закрыл соединение). emit-ошибка (обрыв записи в сеть) прерывает
+// экспорт.
+func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error {
+	versions, err := s.forms.Versions(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+
+	vs := make([]domain.VersionedSchema, 0, len(versions))
+	for _, v := range versions {
+		schema, e := domain.ValidateSchema(v.Schema)
+		if e != nil {
+			// Опубликованный снапшот обязан быть валиден (проверен при публикации) —
+			// иначе нарушен инвариант иммутабельности версии.
+			return fmt.Errorf("parse version %d schema of form %s: %w", v.Number, formID, e)
+		}
+		vs = append(vs, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
+	}
+
+	builder := domain.NewCSVBuilder(vs)
+	if err := emit(builder.Header()); err != nil {
+		return err
+	}
+
+	var after *Cursor
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var rows []Submission
+		if after == nil {
+			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, exportBatch)
+		} else {
+			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, exportBatch)
+		}
+		if err != nil {
+			return err
+		}
+		for i := range rows {
+			var answers map[string]json.RawMessage
+			if e := json.Unmarshal(rows[i].Answers, &answers); e != nil {
+				return fmt.Errorf("unmarshal answers of submission %s: %w", rows[i].ID, e)
+			}
+			if e := emit(builder.Row(rows[i].ID.String(), rows[i].CreatedAt, int(rows[i].FormVersion), answers)); e != nil {
+				return e
+			}
+		}
+		if len(rows) < exportBatch {
+			return nil
+		}
+		after = &Cursor{ID: rows[len(rows)-1].ID}
+	}
 }
 
 func clampLimit(limit int) int {

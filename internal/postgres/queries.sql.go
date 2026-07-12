@@ -421,6 +421,42 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 	return exists, err
 }
 
+const listFormVersions = `-- name: ListFormVersions :many
+SELECT version, schema
+FROM form_versions
+WHERE form_id = $1
+ORDER BY version
+`
+
+type ListFormVersionsRow struct {
+	Version int32
+	Schema  []byte
+}
+
+// Все опубликованные версии формы (снапшоты схем), по возрастанию номера. Нужен
+// CSV-экспорту (фаза 6): колонки — объединение блоков по всем версиям, а подписи
+// choice-опций берутся из версии, по которой отправлен ответ. Версий на форму
+// немного — грузятся разом. form_versions иммутабельна, порядок стабилен.
+func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]ListFormVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listFormVersions, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormVersionsRow
+	for rows.Next() {
+		var i ListFormVersionsRow
+		if err := rows.Scan(&i.Version, &i.Schema); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormsAfter = `-- name: ListFormsAfter :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
