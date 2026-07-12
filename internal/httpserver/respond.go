@@ -58,6 +58,14 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		message = "internal server error"
 	}
 
+	// Пофайловые нарушения (валидация ответа респондента: block_id → сообщение)
+	// кладутся в fields конверта — рендерер подсветит конкретные поля.
+	var fields domain.AnswerErrors
+	if errors.As(err, &fields) {
+		WriteJSON(w, r, status, errorEnvelope{Error: errorBody{Code: code, Message: message, Fields: fields}})
+		return
+	}
+
 	WriteJSON(w, r, status, errorEnvelope{Error: errorBody{Code: code, Message: message}})
 }
 
@@ -80,6 +88,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, domain.ErrRateLimited):
 		return http.StatusTooManyRequests, "rate_limited"
+	case errors.Is(err, domain.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, "payload_too_large"
 	default:
 		return http.StatusInternalServerError, "internal"
 	}

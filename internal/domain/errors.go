@@ -12,6 +12,10 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrRateLimited  = errors.New("too many requests")
 
+	// ErrTooLarge — тело запроса превысило потолок (MaxBytesReader). Маппится в 413.
+	// Приём ответа ограничивает тело 256 КБ (ARCHITECTURE §4.4, инвариант 3).
+	ErrTooLarge = errors.New("request entity too large")
+
 	// ErrConflict — оптимистичная блокировка: клиент прислал устаревший updated_at,
 	// ресурс изменён параллельно (другая вкладка). Маппится в 409 (ARCHITECTURE §5.1).
 	ErrConflict = errors.New("conflict")
