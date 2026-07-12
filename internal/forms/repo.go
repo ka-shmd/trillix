@@ -41,7 +41,10 @@ type Form struct {
 
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
 // опубликованной версии. VersionID (id этой версии) иммутабелен и служит ETag'ом.
+// FormID — id самой формы: рендереру не отдаётся, но нужен приёму ответа (модуль
+// submissions привязывает submission к form_id и form_version_id).
 type PublicForm struct {
+	FormID    uuid.UUID
 	Title     string
 	Version   int32
 	Schema    json.RawMessage
@@ -260,6 +263,7 @@ func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug s
 	}
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
+		FormID:    row.FormID,
 		Title:     row.Title,
 		Version:   row.Version,
 		Schema:    json.RawMessage(row.Schema),

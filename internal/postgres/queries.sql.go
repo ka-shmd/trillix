@@ -251,13 +251,14 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 }
 
 const getPublishedFormBySlug = `-- name: GetPublishedFormBySlug :one
-SELECT f.title, fv.version, fv.schema, f.published_version_id
+SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1 AND f.status = 'published'
 `
 
 type GetPublishedFormBySlugRow struct {
+	FormID             uuid.UUID
 	Title              string
 	Version            int32
 	Schema             []byte
@@ -267,11 +268,13 @@ type GetPublishedFormBySlugRow struct {
 // Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
 // status='published' гарантируют, что черновик/закрытая форма не вернут строку
 // (вызывающий → 404, приватное не раскрывается). published_version_id — источник
-// ETag (иммутабелен на версию).
+// ETag (иммутабелен на версию). f.id (form_id) нужен приёму ответа (фаза 5) для
+// привязки submission к форме и её версии.
 func (q *Queries) GetPublishedFormBySlug(ctx context.Context, slug string) (GetPublishedFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublishedFormBySlug, slug)
 	var i GetPublishedFormBySlugRow
 	err := row.Scan(
+		&i.FormID,
 		&i.Title,
 		&i.Version,
 		&i.Schema,
@@ -348,6 +351,40 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 	var i InsertFormVersionRow
 	err := row.Scan(&i.ID, &i.Version)
 	return i, err
+}
+
+const insertSubmission = `-- name: InsertSubmission :execrows
+
+INSERT INTO submissions (id, form_id, form_version_id, answers, meta)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertSubmissionParams struct {
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	Answers       []byte
+	Meta          []byte
+}
+
+// Запросы модуля submissions. Схема — migrations/0004_submissions. Генерация:
+// `make sqlc` (общий пакет internal/postgres).
+// Приём ответа. id генерирует клиент (UUIDv7) — повторная отправка после сетевого
+// сбоя даёт тот же id и упирается в PK: ON CONFLICT DO NOTHING делает ретрай
+// идемпотентным (0 затронутых строк = ответ уже принят, для клиента это успех).
+func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertSubmission,
+		arg.ID,
+		arg.FormID,
+		arg.FormVersionID,
+		arg.Answers,
+		arg.Meta,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const isWorkspaceMember = `-- name: IsWorkspaceMember :one

@@ -102,8 +102,9 @@ WHERE id = $1 AND workspace_id = $2;
 -- Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
 -- status='published' гарантируют, что черновик/закрытая форма не вернут строку
 -- (вызывающий → 404, приватное не раскрывается). published_version_id — источник
--- ETag (иммутабелен на версию).
-SELECT f.title, fv.version, fv.schema, f.published_version_id
+-- ETag (иммутабелен на версию). f.id (form_id) нужен приёму ответа (фаза 5) для
+-- привязки submission к форме и её версии.
+SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1 AND f.status = 'published';

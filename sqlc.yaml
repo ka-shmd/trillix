@@ -7,6 +7,7 @@ sql:
     queries:
       - "internal/auth/queries.sql"
       - "internal/forms/queries.sql"
+      - "internal/submissions/queries.sql"
     gen:
       go:
         # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).

@@ -36,6 +36,15 @@ type Session struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Submission struct {
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	Answers       []byte
+	Meta          []byte
+	CreatedAt     pgtype.Timestamptz
+}
+
 type User struct {
 	ID           uuid.UUID
 	Email        string

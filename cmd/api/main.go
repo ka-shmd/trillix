@@ -18,12 +18,19 @@ import (
 	"github.com/ka-shmd/trierra/internal/periodic"
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
+	"github.com/ka-shmd/trierra/internal/submissions"
 )
 
 // Жёсткий лимит на POST /auth/login по IP: запас 5 попыток, пополнение ~1 в 12 с.
 const (
 	loginRatePerSec = 1.0 / 12.0
 	loginBurst      = 5
+
+	// Жёсткий лимит на POST приёма ответа по IP (отдельный от логина): запас 20,
+	// пополнение ~1 в 3 с (устойчиво ~20/мин). Терпимо к киоску, где несколько
+	// человек отвечают с одного IP, но режет автоматический перебор.
+	submitRatePerSec = 1.0 / 3.0
+	submitBurst      = 20
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -101,7 +108,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL)
 
-	srv := httpserver.New(cfg.HTTPAddr, log, authHandler.Routes, formsHandler.Routes, formsPublic.Routes)
+	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
+	submissionsSvc := submissions.NewService(pool, formsSvc, submissions.Repo{})
+	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime)
+
+	srv := httpserver.New(cfg.HTTPAddr, log,
+		authHandler.Routes, formsHandler.Routes, formsPublic.Routes, submissionsPublic.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
