@@ -1,0 +1,153 @@
+package domain
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+)
+
+// choice собирает choice-блок с опциями по их id (label = id — для теста неважен).
+func choice(id string, t BlockType, required bool, optIDs ...string) Block {
+	b := Block{ID: id, Type: t, Required: required}
+	for _, o := range optIDs {
+		b.Settings.Options = append(b.Settings.Options, Option{ID: o, Label: o})
+	}
+	return b
+}
+
+func field(id string, t BlockType, required bool) Block {
+	return Block{ID: id, Type: t, Required: required}
+}
+
+// raws переводит литералы JSON в карту сырых ответов, как её отдаёт разбор тела.
+func raws(m map[string]string) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage, len(m))
+	for k, v := range m {
+		out[k] = json.RawMessage(v)
+	}
+	return out
+}
+
+// allTypes — форма со всеми семью типами, все необязательные (общий стенд валидных
+// проверок). choice-блоки несут по две опции o1/o2.
+func allTypes(required bool) FormSchema {
+	return FormSchema{
+		SchemaVersion: SchemaVersion,
+		Blocks: []Block{
+			field("short", BlockShortText, required),
+			field("long", BlockLongText, required),
+			field("mail", BlockEmail, required),
+			field("num", BlockNumber, required),
+			field("date", BlockDate, required),
+			choice("single", BlockSingleChoice, required, "o1", "o2"),
+			choice("multi", BlockMultiChoice, required, "o1", "o2"),
+		},
+	}
+}
+
+func TestValidateAnswers_Valid(t *testing.T) {
+	cases := map[string]struct {
+		schema  FormSchema
+		answers map[string]string
+	}{
+		"все типы заполнены верно": {
+			allTypes(false),
+			map[string]string{
+				"short":  `"Иван"`,
+				"long":   `"длинный текст"`,
+				"mail":   `"a@b.co"`,
+				"num":    `"42"`,
+				"date":   `"2024-01-02"`,
+				"single": `"o1"`,
+				"multi":  `["o1","o2"]`,
+			},
+		},
+		"необязательные пропущены целиком": {allTypes(false), map[string]string{}},
+		"необязательные заданы пустыми": {
+			allTypes(false),
+			map[string]string{"short": `""`, "mail": `""`, "single": `""`, "multi": `[]`},
+		},
+		"число дробное и отрицательное": {
+			FormSchema{Blocks: []Block{field("n", BlockNumber, true)}},
+			map[string]string{"n": `"-3.14"`},
+		},
+		"число ноль":                {FormSchema{Blocks: []Block{field("n", BlockNumber, true)}}, map[string]string{"n": `"0"`}},
+		"multi_choice один вариант": {allTypes(false), map[string]string{"multi": `["o2"]`}},
+		"обязательные все заполнены": {
+			allTypes(true),
+			map[string]string{
+				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "num": `"1"`,
+				"date": `"2024-12-31"`, "single": `"o2"`, "multi": `["o1"]`,
+			},
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateAnswers(c.schema, raws(c.answers)); err != nil {
+				t.Fatalf("ожидался валидный ответ, получена ошибка: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAnswers_Invalid(t *testing.T) {
+	cases := map[string]struct {
+		schema   FormSchema
+		answers  map[string]string
+		badBlock string // block_id, под которым ждём сообщение в карте
+	}{
+		// Обязательность (по типам).
+		"required short пустой":         {allTypes(true), map[string]string{"short": `""`}, "short"},
+		"required short пропущен":       {FormSchema{Blocks: []Block{field("short", BlockShortText, true)}}, map[string]string{}, "short"},
+		"required multi пустой список":  {FormSchema{Blocks: []Block{choice("multi", BlockMultiChoice, true, "o1")}}, map[string]string{"multi": `[]`}, "multi"},
+		"required single пустая строка": {FormSchema{Blocks: []Block{choice("single", BlockSingleChoice, true, "o1")}}, map[string]string{"single": `""`}, "single"},
+
+		// Формат.
+		"email кривой":         {FormSchema{Blocks: []Block{field("mail", BlockEmail, true)}}, map[string]string{"mail": `"нет-собаки"`}, "mail"},
+		"число не число":       {FormSchema{Blocks: []Block{field("num", BlockNumber, true)}}, map[string]string{"num": `"abc"`}, "num"},
+		"число NaN":            {FormSchema{Blocks: []Block{field("num", BlockNumber, true)}}, map[string]string{"num": `"NaN"`}, "num"},
+		"число Inf":            {FormSchema{Blocks: []Block{field("num", BlockNumber, true)}}, map[string]string{"num": `"Inf"`}, "num"},
+		"дата неверный формат": {FormSchema{Blocks: []Block{field("date", BlockDate, true)}}, map[string]string{"date": `"2024/01/02"`}, "date"},
+		"дата несуществующая":  {FormSchema{Blocks: []Block{field("date", BlockDate, true)}}, map[string]string{"date": `"2024-13-40"`}, "date"},
+
+		// Принадлежность опций.
+		"single чужой id": {allTypes(false), map[string]string{"single": `"zzz"`}, "single"},
+		"multi чужой id":  {allTypes(false), map[string]string{"multi": `["o1","zzz"]`}, "multi"},
+		"multi дубли id":  {allTypes(false), map[string]string{"multi": `["o1","o1"]`}, "multi"},
+
+		// Неверный JSON-тип значения.
+		"short как число":         {allTypes(false), map[string]string{"short": `42`}, "short"},
+		"single как массив":       {allTypes(false), map[string]string{"single": `["o1"]`}, "single"},
+		"multi как строка":        {allTypes(false), map[string]string{"multi": `"o1"`}, "multi"},
+		"multi элемент не строка": {allTypes(false), map[string]string{"multi": `[1,2]`}, "multi"},
+
+		// Ответ на несуществующий блок.
+		"лишний block_id": {allTypes(false), map[string]string{"ghost": `"x"`}, "ghost"},
+
+		// Длина.
+		"short слишком длинный": {
+			FormSchema{Blocks: []Block{field("short", BlockShortText, false)}},
+			map[string]string{"short": `"` + strings.Repeat("я", MaxTextAnswerLen+1) + `"`},
+			"short",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateAnswers(c.schema, raws(c.answers))
+			if err == nil {
+				t.Fatalf("ожидалась ошибка валидации, получено nil")
+			}
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("ошибка не оборачивает ErrValidation: %v", err)
+			}
+			var fields AnswerErrors
+			if !errors.As(err, &fields) {
+				t.Fatalf("ошибка не несёт карту полей AnswerErrors: %v", err)
+			}
+			if _, ok := fields[c.badBlock]; !ok {
+				t.Fatalf("ожидалось сообщение под block_id %q, карта: %v", c.badBlock, fields)
+			}
+		})
+	}
+}
