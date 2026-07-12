@@ -1,4 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { useBuilderStore } from './storeContext'
 import { BlockRow } from './BlockRow'
 import { useRenameForm } from '../queries'
@@ -17,8 +31,21 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
+
+  // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
+  // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  function onDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (over && active.id !== over.id) reorderBlocks(String(active.id), String(over.id))
+  }
 
   // Создаёт новую строку (тип text): опционально засевает первый символ и просит
   // открыть меню типов. Возвращает фокус на неё.
@@ -59,22 +86,29 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
       {blocks.length === 0 ? (
         <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
       ) : (
-        <ol className="mt-6 flex flex-col gap-0.5">
-          {blocks.map((b, i) => (
-            <BlockRow
-              key={b.id}
-              block={b}
-              index={i}
-              total={blocks.length}
-              focusMe={focusId === b.id}
-              onFocusHandled={() => setFocusId(null)}
-              openMenuOnMount={menuForId === b.id}
-              onAddBelow={handleAddBelow}
-              onBackspaceEmpty={handleBackspaceEmpty}
-              onArrow={handleArrow}
-            />
-          ))}
-        </ol>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext
+            items={blocks.map((b) => b.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <ol className="mt-6 flex flex-col gap-0.5">
+              {blocks.map((b, i) => (
+                <BlockRow
+                  key={b.id}
+                  block={b}
+                  index={i}
+                  total={blocks.length}
+                  focusMe={focusId === b.id}
+                  onFocusHandled={() => setFocusId(null)}
+                  openMenuOnMount={menuForId === b.id}
+                  onAddBelow={handleAddBelow}
+                  onBackspaceEmpty={handleBackspaceEmpty}
+                  onArrow={handleArrow}
+                />
+              ))}
+            </ol>
+          </SortableContext>
+        </DndContext>
       )}
 
       {blocks.length > 0 && (

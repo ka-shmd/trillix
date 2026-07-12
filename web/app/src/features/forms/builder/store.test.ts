@@ -140,6 +140,26 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
+  it('reorderBlocks переносит блок на позицию другого (dnd)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // a
+    store.getState().addBlock('email') // b
+    store.getState().addBlock('number') // c
+    const [a, b, c] = store.getState().blocks.map((x) => x.id)
+
+    // Перетащили a на место c → порядок b, c, a.
+    store.getState().reorderBlocks(a!, c!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    expect(store.getState().dirty).toBe(true)
+
+    // Та же позиция / неизвестный id — no-op, dirty не поднимается.
+    store.getState().markSaved()
+    store.getState().reorderBlocks(b!, b!)
+    store.getState().reorderBlocks('нет', c!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    expect(store.getState().dirty).toBe(false)
+  })
+
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')

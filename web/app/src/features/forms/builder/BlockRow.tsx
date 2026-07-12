@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react'
+import { useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { Copy, GripVertical, MoreHorizontal, Plus, Trash2, X } from 'lucide-react'
 import { type Block, type BlockType, isChoiceType, isContentType } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
@@ -36,12 +38,11 @@ export interface BlockRowProps {
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
 
-// BlockRow — одна строка полотна в стиле Tally: редактируемый заголовок вопроса и
-// под ним живое превью настоящего поля (для choice — редактируемые варианты).
-// Управление блоком спрятано в левый gutter (появляется по наведению): «+» —
-// добавить ниже, ручка-хват — меню (тип/дубль/перемещение/обязательность/удаление).
-// Клавиатура: Enter — новый блок, «/» — меню типов, Backspace в пустом — удалить и
-// уйти на предыдущий, ↑/↓ на границе — переход, Alt+↑/↓ — перемещение.
+// BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
+// (dnd) и «+», по центру редактируемый заголовок и живое превью поля, справа —
+// меню действий и удаление. Клавиатура: Enter — новый блок, «/» — меню типов,
+// Backspace в пустом — удалить и уйти на предыдущий, ↑/↓ на границе — переход,
+// Alt+↑/↓ — перемещение.
 export function BlockRow({
   block,
   index,
@@ -63,6 +64,11 @@ export function BlockRow({
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
   const [focused, setFocused] = useState(false)
   const isContent = isContentType(block.type)
+
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: block.id,
+  })
+  const style = { transform: CSS.Transform.toString(transform), transition }
 
   useEffect(() => {
     if (!focusMe) return
@@ -116,63 +122,35 @@ export function BlockRow({
     requestAnimationFrame(focusLabelEnd)
   }
 
+  const gutterBtn =
+    'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+  const fade =
+    'opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100'
+
   return (
-    <li className="group relative rounded-md py-1.5 pl-9 pr-2 transition-colors hover:bg-muted/40 focus-within:bg-muted/40">
-      {/* Левый gutter: появляется по наведению, живёт в отступе pl-9. */}
-      <div className="absolute left-0 top-2 flex items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`group relative flex gap-1 rounded-md py-1 transition-colors hover:bg-muted/40 focus-within:bg-muted/40 ${
+        isDragging ? 'z-10 opacity-70' : ''
+      }`}
+    >
+      {/* Левый gutter в поле: перетаскивание + добавить ниже. Ширина зарезервирована
+          (align с заголовком pl-9), иконки проявляются по наведению — не налезают. */}
+      <div className={`flex w-8 shrink-0 items-start justify-end gap-0.5 pt-1.5 ${fade}`}>
         <button
           type="button"
-          onClick={() => onAddBelow(block.id)}
-          aria-label="Добавить вопрос ниже"
-          className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+          {...attributes}
+          {...listeners}
+          aria-label="Перетащить блок"
+          className={`${gutterBtn} cursor-grab active:cursor-grabbing`}
         >
-          <Plus className="size-4" />
+          <GripVertical className="size-4" />
         </button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              aria-label="Действия с блоком"
-              className="flex size-6 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <GripVertical className="size-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48">
-            <DropdownMenuItem onSelect={() => setSlashOpen(true)}>Сменить тип поля</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => duplicateBlock(block.id)}>
-              <Copy className="size-4" /> Дублировать
-            </DropdownMenuItem>
-            <DropdownMenuItem disabled={index === 0} onSelect={() => moveBlock(block.id, 'up')}>
-              Переместить вверх
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={index === total - 1}
-              onSelect={() => moveBlock(block.id, 'down')}
-            >
-              Переместить вниз
-            </DropdownMenuItem>
-            {!isContent && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuCheckboxItem
-                  checked={block.required ?? false}
-                  onCheckedChange={(v) => updateBlock(block.id, { required: v })}
-                >
-                  Обязательный
-                </DropdownMenuCheckboxItem>
-              </>
-            )}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem variant="destructive" onSelect={() => removeBlock(block.id)}>
-              <Trash2 className="size-4" /> Удалить
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
 
       <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex items-start gap-1">
             <textarea
               ref={labelRef}
@@ -198,9 +176,9 @@ export function BlockRow({
             )}
           </div>
 
-          {/* Живое превью поля показываем, только когда у вопроса есть текст:
-              пустой блок = просто строка с кареткой. Choice всегда показывает
-              варианты — тип выбран осознанно. Text (неотвечаемый) — только абзац. */}
+          {/* Живое превью поля показываем, только когда у вопроса есть текст: пустой
+              блок = просто строка с кареткой. Choice всегда показывает варианты.
+              Text (неотвечаемый) — только абзац. */}
           {isContent ? null : isChoiceType(block.type) ? (
             <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
           ) : block.label.trim() !== '' ? (
@@ -208,6 +186,61 @@ export function BlockRow({
           ) : null}
         </div>
       </SlashMenu>
+
+      {/* Правый тулбар: добавить ниже, меню действий, удаление. */}
+      <div className={`flex shrink-0 items-start gap-0.5 pt-1 ${fade}`}>
+        <button
+          type="button"
+          onClick={() => onAddBelow(block.id)}
+          aria-label="Добавить блок ниже"
+          className={gutterBtn}
+        >
+          <Plus className="size-4" />
+        </button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" aria-label="Действия с блоком" className={gutterBtn}>
+              <MoreHorizontal className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuItem onSelect={() => setSlashOpen(true)}>Сменить тип поля</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => duplicateBlock(block.id)}>
+              <Copy className="size-4" /> Дублировать
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={index === 0} onSelect={() => moveBlock(block.id, 'up')}>
+              Переместить вверх
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={index === total - 1}
+              onSelect={() => moveBlock(block.id, 'down')}
+            >
+              Переместить вниз
+            </DropdownMenuItem>
+            {!isContent && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuCheckboxItem
+                  checked={block.required ?? false}
+                  onCheckedChange={(v) => updateBlock(block.id, { required: v })}
+                >
+                  Обязательный
+                </DropdownMenuCheckboxItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <button
+          type="button"
+          onClick={() => removeBlock(block.id)}
+          aria-label="Удалить блок"
+          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+        >
+          <Trash2 className="size-4" />
+        </button>
+      </div>
     </li>
   )
 }

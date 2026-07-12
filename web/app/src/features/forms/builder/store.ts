@@ -54,6 +54,9 @@ export type BuilderActions = {
   removeBlock: (id: string) => void
   // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не трогает).
   moveBlock: (id: string, dir: 'up' | 'down') => void
+  // reorderBlocks переносит activeId на позицию overId (drag-and-drop, dnd-kit).
+  // Неизвестный id или та же позиция — no-op (dirty не трогает).
+  reorderBlocks: (activeId: string, overId: string) => void
   duplicateBlock: (id: string) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
   addOption: (blockId: string) => void
@@ -177,6 +180,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         const blocks = s.blocks.slice()
         blocks[i] = b
         blocks[j] = a
+        return { blocks, dirty: true }
+      }),
+
+    reorderBlocks: (activeId, overId) =>
+      set((s) => {
+        const from = s.blocks.findIndex((b) => b.id === activeId)
+        const to = s.blocks.findIndex((b) => b.id === overId)
+        if (from < 0 || to < 0 || from === to) return s
+        const blocks = s.blocks.slice()
+        const [moved] = blocks.splice(from, 1)
+        if (!moved) return s
+        blocks.splice(to, 0, moved)
         return { blocks, dirty: true }
       }),
 
