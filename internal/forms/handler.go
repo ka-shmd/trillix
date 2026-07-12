@@ -80,6 +80,9 @@ type formResponse struct {
 	// «есть неопубликованные изменения»). Точен на GET/список; у ответов мутаций
 	// всегда false (см. Form.HasUnpublishedChanges).
 	HasUnpublishedChanges bool `json:"hasUnpublishedChanges"`
+	// submissionCount — число ответов формы (счётчик на карточке). Точен на
+	// GET/список; у ответов мутаций всегда 0.
+	SubmissionCount int64 `json:"submissionCount"`
 }
 
 // formDetailResponse — GET /forms/{id}: метаданные + черновик схемы.
@@ -117,6 +120,7 @@ func toFormResponse(f Form) formResponse {
 		UpdatedAt:             f.UpdatedAt,
 		PublishedVersion:      f.PublishedVersion,
 		HasUnpublishedChanges: f.HasUnpublishedChanges,
+		SubmissionCount:       f.SubmissionCount,
 	}
 	if f.PublishedVersionID != nil {
 		id := f.PublishedVersionID.String()

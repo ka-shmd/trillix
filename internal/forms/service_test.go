@@ -45,6 +45,9 @@ type fakeStore struct {
 	publicForm PublicForm
 	publicErr  error
 
+	// Управление чтением версий (CSV-экспорт).
+	versions []Version
+
 	// Управление путём автосейва схемы.
 	schemaSaved  bool
 	schemaErr    error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
@@ -118,6 +121,10 @@ func (f *fakeStore) DeleteForm(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 
 func (f *fakeStore) NextFormVersion(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int32, error) {
 	return f.nextVersion, nil
+}
+
+func (f *fakeStore) ListFormVersions(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Version, error) {
+	return f.versions, nil
 }
 
 func (f *fakeStore) InsertFormVersion(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error) {

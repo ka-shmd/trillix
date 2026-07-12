@@ -12,6 +12,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSubmissions = `-- name: CountSubmissions :one
+SELECT count(*) FROM submissions WHERE form_id = $1
+`
+
+// Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
+// idx_submissions_form_id (index-only на form_id).
+func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissions, formID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createForm = `-- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
@@ -174,6 +187,27 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	return err
 }
 
+const deleteSubmission = `-- name: DeleteSubmission :execrows
+DELETE FROM submissions
+WHERE id = $1 AND form_id = $2
+`
+
+type DeleteSubmissionParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Удаление одного ответа (GDPR-гигиена). Ограничено form_id: ответ чужой формы по
+// угаданному id не удалить (доступ к самой форме сервис проверяет отдельно). 0
+// удалённых строк → ответа нет/не в этой форме → 404.
+func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSubmission, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
@@ -182,6 +216,7 @@ SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.publis
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -198,6 +233,7 @@ type GetFormRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -218,6 +254,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersionID,
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
+		&i.SubmissionCount,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -408,10 +445,47 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 	return exists, err
 }
 
+const listFormVersions = `-- name: ListFormVersions :many
+SELECT version, schema
+FROM form_versions
+WHERE form_id = $1
+ORDER BY version
+`
+
+type ListFormVersionsRow struct {
+	Version int32
+	Schema  []byte
+}
+
+// Все опубликованные версии формы (снапшоты схем), по возрастанию номера. Нужен
+// CSV-экспорту (фаза 6): колонки — объединение блоков по всем версиям, а подписи
+// choice-опций берутся из версии, по которой отправлен ответ. Версий на форму
+// немного — грузятся разом. form_versions иммутабельна, порядок стабилен.
+func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]ListFormVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listFormVersions, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormVersionsRow
+	for rows.Next() {
+		var i ListFormVersionsRow
+		if err := rows.Scan(&i.Version, &i.Schema); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormsAfter = `-- name: ListFormsAfter :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -437,6 +511,7 @@ type ListFormsAfterRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -466,6 +541,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
+			&i.SubmissionCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -483,6 +559,7 @@ const listFormsFirstPage = `-- name: ListFormsFirstPage :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -505,6 +582,7 @@ type ListFormsFirstPageRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -529,8 +607,110 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
+			&i.SubmissionCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1
+  AND s.id < $3::uuid
+ORDER BY s.id DESC
+LIMIT $2
+`
+
+type ListSubmissionsAfterParams struct {
+	FormID   uuid.UUID
+	Limit    int32
+	CursorID uuid.UUID
+}
+
+type ListSubmissionsAfterRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
+// стабильно, ответы иммутабельны. Тот же индекс и порядок.
+func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsAfterParams) ([]ListSubmissionsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsAfter, arg.FormID, arg.Limit, arg.CursorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsAfterRow
+	for rows.Next() {
+		var i ListSubmissionsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1
+ORDER BY s.id DESC
+LIMIT $2
+`
+
+type ListSubmissionsFirstPageParams struct {
+	FormID uuid.UUID
+	Limit  int32
+}
+
+type ListSubmissionsFirstPageRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
+// времени → ORDER BY id DESC даёт хронологию без нестабильности created_at. JOIN
+// form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
+// NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
+// понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissionsFirstPageParams) ([]ListSubmissionsFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsFirstPage, arg.FormID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsFirstPageRow
+	for rows.Next() {
+		var i ListSubmissionsFirstPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
 		); err != nil {
 			return nil, err
 		}

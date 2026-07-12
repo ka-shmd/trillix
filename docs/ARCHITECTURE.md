@@ -130,6 +130,10 @@ CREATE TABLE submissions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_submissions_form ON submissions (form_id, created_at DESC);
+-- Листинг ответов кабинета идёт курсором по id (UUIDv7 монотонен → «новые сверху»;
+-- created_at при пакетной вставке нестабилен). Индекс покрывает фильтр по form_id
+-- и keyset/сортировку по id одной структурой.
+CREATE INDEX idx_submissions_form_id ON submissions (form_id, id DESC);
 
 -- Сессии в БД, а не JWT: мгновенный отзыв, «выйти со всех устройств»,
 -- нет проблемы ротации ключей. Хранится только SHA-256 от токена.
@@ -293,6 +297,7 @@ POST   /forms/{id}/unpublish
 
 GET    /forms/{id}/submissions        ответы (курсорная пагинация по UUIDv7-id)
 GET    /forms/{id}/submissions/export CSV (стриминг, encoding/csv прямо в ResponseWriter)
+DELETE /forms/{id}/submissions/{sid}  удалить один ответ (GDPR-гигиена)
 
 Публичный API (без авторизации), префикс /public/v1:
 

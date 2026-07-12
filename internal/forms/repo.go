@@ -35,8 +35,12 @@ type Form struct {
 	PublishedVersionID    *uuid.UUID
 	PublishedVersion      *int32
 	HasUnpublishedChanges bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// SubmissionCount — число ответов формы (счётчик на карточке дашборда и в шапке
+	// таблицы ответов). Считают только читающие запросы (Get/List); у результатов
+	// мутаций 0 (как и PublishedVersion) — фронт берёт актуальное из Get/списка.
+	SubmissionCount int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
@@ -49,6 +53,14 @@ type PublicForm struct {
 	Version   int32
 	Schema    json.RawMessage
 	VersionID uuid.UUID
+}
+
+// Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
+// Нужен CSV-экспорту (объединение колонок по версиям, подписи опций из версии
+// ответа). Схема иммутабельна и уже канонизирована при публикации.
+type Version struct {
+	Number int32
+	Schema json.RawMessage
 }
 
 // ptrUUID переводит nullable uuid из sqlc (pgtype.UUID) в *uuid.UUID: NULL → nil.
@@ -134,6 +146,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		PublishedVersionID:    ptrUUID(row.PublishedVersionID),
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
+		SubmissionCount:       row.SubmissionCount,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -159,6 +172,7 @@ func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UU
 			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			SubmissionCount:       r.SubmissionCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}
@@ -188,6 +202,7 @@ func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uu
 			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			SubmissionCount:       r.SubmissionCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}
@@ -269,6 +284,20 @@ func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug s
 		Schema:    json.RawMessage(row.Schema),
 		VersionID: uuid.UUID(row.PublishedVersionID.Bytes),
 	}, nil
+}
+
+// ListFormVersions возвращает все опубликованные версии формы (снапшоты) по
+// возрастанию номера — для CSV-экспорта.
+func (Repo) ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error) {
+	rows, err := postgres.New(db).ListFormVersions(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("list form versions: %w", err)
+	}
+	out := make([]Version, len(rows))
+	for i, r := range rows {
+		out[i] = Version{Number: r.Version, Schema: json.RawMessage(r.Schema)}
+	}
+	return out, nil
 }
 
 // NextFormVersion возвращает номер следующей версии формы (1 для первой публикации).

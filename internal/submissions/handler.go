@@ -2,143 +2,262 @@ package submissions
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ka-shmd/trierra/internal/auth"
 	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/httpserver"
-	"github.com/ka-shmd/trierra/internal/token"
 )
 
-const (
-	// maxSubmitBodyBytes — потолок тела приёма ответа (ARCHITECTURE §4.4). Превышение
-	// → 413, а не молчаливое усечение.
-	maxSubmitBodyBytes = 256 << 10
+// Middleware — HTTP-обёртка (RequireAuth из auth), инжектируемая в composition root:
+// submissions не завязан на конкретный тип auth.Handler.
+type Middleware = func(http.Handler) http.Handler
 
-	// DefaultMinFillTime — минимальное правдоподобное время заполнения формы. Ответ,
-	// пришедший быстрее (возраст токена меньше), — бот. Порог антиспама, одинаковый
-	// во всех контурах (не env: смыслового различия между dev/prod нет).
-	DefaultMinFillTime = 3 * time.Second
-)
-
-// submitService — часть сервиса, нужная публичному транспорту приёма.
-type submitService interface {
-	Submit(ctx context.Context, slug string, id uuid.UUID, answers map[string]json.RawMessage, meta Meta) error
+// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт + удаление).
+type listService interface {
+	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
+	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
+	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 }
 
-// RateLimiter — жёсткий лимитер по IP на приём ответа (отдельный от общего и от
-// логина). Реализация — ratelimit.TokenBucket; в тестах — пермиссивный (инвариант 6).
-type RateLimiter interface {
-	Allow(key string) bool
+// utf8BOM — метка порядка байтов: Excel без неё принимает UTF-8 CSV за ANSI и
+// ломает кириллицу. Пишется первой, до заголовка таблицы.
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+// csvFlushEvery — как часто сбрасывать буфер csv.Writer в сеть: ответ начинает
+// течь клиенту, не дожидаясь всей выборки.
+const csvFlushEvery = 500
+
+// Handler — приватный транспорт модуля submissions: автор смотрит и удаляет ответы
+// своей формы. Чтение (GET) — за RequireAuth; удаление (DELETE) — ещё и за RequireCSRF.
+type Handler struct {
+	svc         listService
+	requireAuth Middleware
+	requireCSRF Middleware
 }
 
-// PublicHandler — публичный транспорт приёма ответов (без авторизации/CSRF). Держит
-// секрет токена (проверка минимального времени заполнения) и лимитер.
-type PublicHandler struct {
-	svc         submitService
-	limiter     RateLimiter
-	tokenSecret []byte
-	minFillTime time.Duration
-	now         func() time.Time // подменяется в тестах
+func NewHandler(svc listService, requireAuth, requireCSRF Middleware) *Handler {
+	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
 }
 
-func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime time.Duration) *PublicHandler {
-	return &PublicHandler{
-		svc:         svc,
-		limiter:     limiter,
-		tokenSecret: tokenSecret,
-		minFillTime: minFillTime,
-		now:         time.Now,
-	}
+func (h *Handler) Routes(mux *http.ServeMux) {
+	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
+	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 }
 
-func (h *PublicHandler) Routes(mux *http.ServeMux) {
-	mux.Handle("POST /public/v1/forms/{slug}/submissions", h.rateLimitByIP(http.HandlerFunc(h.submit)))
+// --- DTO ---
+
+type submissionResponse struct {
+	ID          string          `json:"id"`
+	FormVersion int32           `json:"formVersion"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	Answers     json.RawMessage `json:"answers"`
 }
 
-// submitRequest — тело POST. submission_id генерирует клиент (UUIDv7, идемпотентность);
-// token — подписанное время выдачи из GET формы (антиспам); website — honeypot
-// (скрытое поле, человек его не видит; заполнено → бот). Лишние поля запрещены.
-type submitRequest struct {
-	SubmissionID string                     `json:"submission_id"`
-	Token        string                     `json:"token"`
-	Answers      map[string]json.RawMessage `json:"answers"`
-	Website      string                     `json:"website"` // honeypot
+type listResponse struct {
+	Submissions []submissionResponse `json:"submissions"`
+	NextCursor  *string              `json:"nextCursor"`
+	Total       int64                `json:"total"`
 }
 
-type submitResponse struct {
-	ID string `json:"id"`
-}
-
-func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-
-	var req submitRequest
-	if err := dec.Decode(&req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			httpserver.WriteError(w, r, fmt.Errorf("%w: тело больше %d байт", domain.ErrTooLarge, maxSubmitBodyBytes))
-			return
-		}
-		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
 		return
 	}
-
-	// Honeypot: заполненное скрытое поле — признак бота. Отвечаем как на успех
-	// (200), но ничего не пишем — бот не понимает, что отброшен, и не подстраивается.
-	if req.Website != "" {
-		w.WriteHeader(http.StatusOK)
+	formID, ok := parseFormID(w, r)
+	if !ok {
 		return
 	}
-
-	// Минимальное время заполнения: подпись токена + его возраст. Битый/поддельный
-	// токен и слишком быстрый ответ неотличимы для клиента (единый 422), чтобы не
-	// подсказывать боту, какой из барьеров он задел.
-	issuedAt, err := token.IssuedAt(h.tokenSecret, req.Token)
-	if err != nil || h.now().Sub(issuedAt) < h.minFillTime {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: форма отправлена слишком быстро", domain.ErrValidation))
+	after, ok := parseCursor(w, r)
+	if !ok {
 		return
 	}
+	limit := parseLimit(r.URL.Query().Get("limit"))
 
-	id, err := uuid.Parse(req.SubmissionID)
+	page, err := h.svc.ListForForm(r.Context(), userID, formID, after, limit)
 	if err != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: неверный submission_id", domain.ErrValidation))
-		return
-	}
-
-	meta := Meta{UserAgent: r.UserAgent(), Referer: r.Referer()}
-	if err := h.svc.Submit(r.Context(), r.PathValue("slug"), id, req.Answers, meta); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusCreated, submitResponse{ID: id.String()})
-}
 
-func (h *PublicHandler) rateLimitByIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.limiter.Allow(clientIP(r)) {
-			w.Header().Set("Retry-After", "60")
-			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много отправок", domain.ErrRateLimited))
-			return
+	items := make([]submissionResponse, len(page.Submissions))
+	for i, s := range page.Submissions {
+		items[i] = submissionResponse{
+			ID:          s.ID.String(),
+			FormVersion: s.FormVersion,
+			CreatedAt:   s.CreatedAt,
+			Answers:     s.Answers,
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	resp := listResponse{Submissions: items, Total: page.Total}
+	if page.NextCursor != nil {
+		enc := encodeCursor(*page.NextCursor)
+		resp.NextCursor = &enc
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
-// clientIP — IP без порта. TODO(фаза 7/9): за Caddy брать из X-Forwarded-For,
-// доверяя только прокси (то же замечание, что и в auth.clientIP).
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+// export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).
+// Заголовки и статус 200 пишутся ЛЕНИВО — на первой строке (заголовке таблицы):
+// пока не пошёл body, ошибка авторизации из сервиса (чужая/нет формы) ещё может
+// стать 404 через WriteError. После начала стрима статус не поменять — ошибку
+// (обрыв записи, отмена ctx) только логируем на самом верху.
+func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
 	}
-	return host
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+
+	var (
+		cw      *csv.Writer
+		started bool
+		written int
+	)
+	emit := func(record []string) error {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			w.Header().Set("Content-Disposition", csvContentDisposition(formID))
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(utf8BOM)
+			cw = csv.NewWriter(w)
+		}
+		if err := cw.Write(record); err != nil {
+			return err
+		}
+		if written++; written%csvFlushEvery == 0 {
+			cw.Flush()
+			return cw.Error()
+		}
+		return nil
+	}
+
+	err := h.svc.ExportCSV(r.Context(), userID, formID, emit)
+	if !started {
+		// Тело ещё не начато → ошибка маппится на статус (404/…). Сюда попадаем только
+		// при ошибке авторизации: успешный экспорт всегда эмитит заголовок таблицы.
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	cw.Flush()
+	if err == nil {
+		err = cw.Error()
+	}
+	if err != nil {
+		// Стрим уже начат (200 отправлен) — статус не изменить. Логируем на самом верху.
+		httpserver.LoggerFrom(r.Context()).Error("csv export interrupted",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// csvContentDisposition — имя скачиваемого файла. ASCII-фолбэк + RFC 5987 filename*
+// (на случай нелатинских частей в будущем); сейчас имя из id формы — уже ASCII.
+func csvContentDisposition(formID uuid.UUID) string {
+	name := "submissions-" + formID.String() + ".csv"
+	return fmt.Sprintf("attachment; filename=%q", name)
+}
+
+// delete удаляет один ответ формы (GDPR-гигиена). За RequireAuth+RequireCSRF.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	subID, err := uuid.Parse(r.PathValue("sid"))
+	if err != nil {
+		// Неразбираемый id → 404 (несуществующий ответ), без раскрытия чего-либо.
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.DeleteForForm(r.Context(), userID, formID, subID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Разбор запроса ---
+
+// currentUserID достаёт пользователя, положенного RequireAuth. Отсутствие — 401
+// (защита от неверной сборки цепочки middleware).
+func currentUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return uuid.Nil, false
+	}
+	return u.ID, true
+}
+
+// parseFormID разбирает {id}; неразбираемый uuid → 404 (несуществующая форма,
+// без раскрытия чего-либо), а не 400.
+func parseFormID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+func parseLimit(raw string) int {
+	if raw == "" {
+		return 0 // сервис подставит DefaultPageLimit
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// parseCursor разбирает непрозрачный ?cursor. Отсутствует → первая страница;
+// присутствует, но битый → 422 (клиент передал испорченный курсор).
+func parseCursor(w http.ResponseWriter, r *http.Request) (*Cursor, bool) {
+	raw := r.URL.Query().Get("cursor")
+	if raw == "" {
+		return nil, true
+	}
+	c, err := decodeCursor(raw)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверный курсор", domain.ErrValidation))
+		return nil, false
+	}
+	return c, true
+}
+
+// Курсор ответов — одна колонка (id): кодируем uuid в непрозрачную base64url-строку.
+func encodeCursor(c Cursor) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(c.ID.String()))
+}
+
+func decodeCursor(s string) (*Cursor, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	id, err := uuid.Parse(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("cursor: parse id: %w", err)
+	}
+	return &Cursor{ID: id}, nil
 }

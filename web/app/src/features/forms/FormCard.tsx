@@ -48,6 +48,9 @@ export function FormCard({ form }: { form: Form }) {
 
       {!editing && (
         <div className="form-card-actions">
+          <Link to="/forms/$formId/responses" params={{ formId: form.id }}>
+            Ответы ({form.submissionCount})
+          </Link>
           <button type="button" onClick={() => setEditing(true)}>
             Переименовать
           </button>

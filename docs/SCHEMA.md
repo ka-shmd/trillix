@@ -155,6 +155,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `meta` | `JSONB` | `NOT NULL DEFAULT '{}'` — user_agent, referer (без IP в открытом виде) |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 
-**Индексы:** `idx_submissions_form (form_id, created_at DESC)` — листинг ответов формы новыми сверху (фаза 6).
+**Индексы:**
+- `idx_submissions_form_id (form_id, id DESC)` (0005) — курсорный листинг ответов формы новыми сверху (фаза 6): `id` (UUIDv7) монотонен по времени, а `created_at` при пакетной вставке нестабилен, поэтому курсор и сортировка идут по `id`. Индекс покрывает фильтр по `form_id` и keyset/сортировку по `id` одной структурой.
+- `idx_submissions_form (form_id, created_at DESC)` (0004) — исходный сортировочный индекс листинга.
 
 **Формат `answers`** (зеркалит клиентский тип `Answer`, `web/shared/fields/answer.ts`): текстовые типы и `single_choice` — строка; `multi_choice` — массив id выбранных опций; `number`/`date` хранятся строкой, формат проверяет `ValidateAnswers`.

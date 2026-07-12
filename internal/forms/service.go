@@ -45,6 +45,7 @@ type Store interface {
 	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
 	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
+	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
 }
 
 var _ Store = Repo{}
@@ -291,6 +292,17 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 		return PublicForm{}, err
 	}
 	return pf, nil
+}
+
+// Versions возвращает все опубликованные версии формы (снапшоты схем) для её автора.
+// Авторизация как у остальных операций по ресурсу (чужая/нет формы → 404). Пустой
+// срез — форму ещё не публиковали. Нужен CSV-экспорту (модуль submissions).
+func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID) ([]Version, error) {
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListFormVersions(ctx, s.db, form.ID)
 }
 
 // formForUser загружает форму и проверяет членство пользователя в её воркспейсе.
