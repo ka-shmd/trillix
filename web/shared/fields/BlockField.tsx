@@ -16,12 +16,25 @@ type BlockFieldProps = {
   value?: Answer
   onChange?: (next: Answer) => void
   disabled?: boolean
+  // Рендерер: сообщение об ошибке валидации и колбэк потери фокуса (проверка по
+  // blur). В превью билдера отсутствуют — поле ведёт себя как раньше.
+  error?: string
+  onBlur?: () => void
 }
 
-export function BlockField({ block, value, onChange, disabled = true }: BlockFieldProps) {
+export function BlockField({ block, value, onChange, disabled = true, error, onBlur }: BlockFieldProps) {
+  const errorId = error ? `${block.id}-error` : undefined
   return (
-    <FieldShell block={block}>
-      <FieldControl block={block} value={value} onChange={onChange} disabled={disabled} />
+    <FieldShell block={block} error={error} errorId={errorId}>
+      <FieldControl
+        block={block}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        invalid={!!error}
+        errorId={errorId}
+        onBlur={onBlur}
+      />
     </FieldShell>
   )
 }
@@ -31,15 +44,25 @@ type ControlProps = {
   value?: Answer
   onChange?: (next: Answer) => void
   disabled: boolean
+  invalid: boolean
+  errorId?: string
+  onBlur?: () => void
 }
 
-function FieldControl({ block, value, onChange, disabled }: ControlProps) {
+function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBlur }: ControlProps) {
   const label = block.label.trim() || 'Без названия'
   // Текстовые контролы управляемые: пустая строка вместо undefined, чтобы React
   // не переключал input между controlled/uncontrolled. onChange присутствует
   // всегда (иначе React ругается на value без onChange); в превью не срабатывает.
   const text = typeof value === 'string' ? value : ''
   const onText = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange?.(e.target.value)
+  // Общие a11y-атрибуты текстовых полей: пометка невалидности и связь с
+  // сообщением об ошибке. undefined убирает атрибут в валидном состоянии.
+  const invalidProps = {
+    'aria-invalid': invalid || undefined,
+    'aria-describedby': invalid ? errorId : undefined,
+    onBlur,
+  }
 
   switch (block.type) {
     case 'short_text':
@@ -51,6 +74,7 @@ function FieldControl({ block, value, onChange, disabled }: ControlProps) {
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          {...invalidProps}
         />
       )
     case 'long_text':
@@ -62,6 +86,7 @@ function FieldControl({ block, value, onChange, disabled }: ControlProps) {
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          {...invalidProps}
         />
       )
     case 'email':
@@ -74,6 +99,7 @@ function FieldControl({ block, value, onChange, disabled }: ControlProps) {
           disabled={disabled}
           aria-label={label}
           placeholder="you@example.com"
+          {...invalidProps}
         />
       )
     case 'number':
@@ -85,6 +111,7 @@ function FieldControl({ block, value, onChange, disabled }: ControlProps) {
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          {...invalidProps}
         />
       )
     case 'date':
@@ -96,12 +123,17 @@ function FieldControl({ block, value, onChange, disabled }: ControlProps) {
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          {...invalidProps}
         />
       )
     case 'single_choice':
-      return <ChoiceList block={block} multiple={false} value={value} onChange={onChange} disabled={disabled} />
+      return (
+        <ChoiceList block={block} multiple={false} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
+      )
     case 'multi_choice':
-      return <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} />
+      return (
+        <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
+      )
   }
 }
 
@@ -115,12 +147,14 @@ function ChoiceList({
   value,
   onChange,
   disabled,
+  onBlur,
 }: {
   block: Block
   multiple: boolean
   value?: Answer
   onChange?: (next: Answer) => void
   disabled: boolean
+  onBlur?: () => void
 }) {
   const options = block.settings?.options ?? []
   if (options.length === 0) {
@@ -133,7 +167,7 @@ function ChoiceList({
     onChange(multiple ? toggleMulti(selectedMany, id, checked) : id)
   }
   return (
-    <div className="rf-options" role="group" aria-label={block.label.trim() || 'Без названия'}>
+    <div className="rf-options" role="group" aria-label={block.label.trim() || 'Без названия'} onBlur={onBlur}>
       {options.map((o) => {
         const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
         return (

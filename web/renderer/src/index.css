@@ -41,14 +41,30 @@ body {
 
 .submit-btn {
   align-self: flex-start;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 8px;
   padding: 0.6rem 1.1rem;
   font: inherit;
   font-weight: 600;
-  background: var(--card);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.form-note {
+  margin: 0;
+  font-size: 0.9rem;
   color: var(--muted);
-  cursor: not-allowed;
+}
+
+.form-note-error {
+  color: var(--danger);
+}
+
+.rf-error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--danger);
 }
 
 /* --- Статус-экраны (loading / notfound / error) --- */
