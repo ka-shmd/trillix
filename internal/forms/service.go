@@ -40,9 +40,22 @@ type Store interface {
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
+	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
+	InsertFormVersion(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error)
+	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
+	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
+	GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 }
 
 var _ Store = Repo{}
+
+// Transactor открывает транзакцию (без знания о конкретном пуле). Реализация —
+// postgres.TxRunner; в юнит-тестах — фейк, выполняющий fn без реальной БД.
+// Публикация обязана быть атомарной: снапшот версии + published_version_id одной
+// транзакцией (инвариант internal/CLAUDE.md).
+type Transactor interface {
+	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
+}
 
 // Cursor — курсор списка форм: пара (updatedAt, id), однозначно указывающая на
 // последнюю показанную форму. Транспорт кодирует его в непрозрачную строку.
@@ -61,12 +74,13 @@ type Page struct {
 // права доступа: id формы из URL не доказывает членство в её воркспейсе
 // (ARCHITECTURE §4.3, инвариант безопасности 1).
 type Service struct {
-	db   postgres.DBTX
+	db   postgres.DBTX // пул: нетранзакционные операции (чтение, одиночные записи)
+	tx   Transactor    // для атомарной публикации (версия + published_version_id)
 	repo Store
 }
 
-func NewService(db postgres.DBTX, repo Store) *Service {
-	return &Service{db: db, repo: repo}
+func NewService(db postgres.DBTX, tx Transactor, repo Store) *Service {
+	return &Service{db: db, tx: tx, repo: repo}
 }
 
 // Create создаёт форму в личном воркспейсе пользователя с пустым черновиком.
@@ -192,6 +206,91 @@ func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// Publish публикует форму: снимает иммутабельный снапшот текущего черновика в новую
+// версию (version = max+1) и переводит форму в published, привязывая эту версию —
+// одной транзакцией (инвариант «версия + published_version_id атомарны»). Черновик
+// перед снапшотом валидируется (ValidateSchema): в БД он и так канонизирован, но
+// публикация — «точка невозврата», проверяем ещё раз. Повторная публикация (в т.ч.
+// после закрытия) даёт следующий номер версии.
+func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+
+	parsed, err := domain.ValidateSchema(form.DraftSchema)
+	if err != nil {
+		return Form{}, err
+	}
+	snapshot, err := json.Marshal(parsed)
+	if err != nil {
+		return Form{}, fmt.Errorf("marshal schema: %w", err)
+	}
+
+	var published Form
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		version, e := s.repo.NextFormVersion(ctx, tx, form.ID)
+		if e != nil {
+			return e
+		}
+		versionID, e := s.repo.InsertFormVersion(ctx, tx, domain.NewID(), form.ID, version, snapshot)
+		if e != nil {
+			return e
+		}
+		published, e = s.repo.SetFormPublished(ctx, tx, form.ID, form.WorkspaceID, versionID)
+		if e != nil {
+			// Доступ подтверждён выше — 0 строк значит форму удалили параллельно.
+			if errors.Is(e, pgx.ErrNoRows) {
+				return domain.ErrNotFound
+			}
+			return e
+		}
+		// SetFormPublished номер версии не выбирает (см. queries.sql) — проставляем
+		// только что вставленный.
+		published.PublishedVersion = &version
+		return nil
+	})
+	if err != nil {
+		return Form{}, err
+	}
+	return published, nil
+}
+
+// Unpublish снимает форму с публикации: status='closed'. published_version_id и его
+// номер сохраняются (кабинет покажет «Закрыта · была версия N»). Одиночный UPDATE —
+// транзакция не нужна.
+func (s *Service) Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	closed, err := s.repo.SetFormClosed(ctx, s.db, form.ID, form.WorkspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	// SetFormClosed номер версии не выбирает — переносим из прочитанной формы (закрытие
+	// published_version_id не меняет).
+	closed.PublishedVersion = form.PublishedVersion
+	return closed, nil
+}
+
+// PublicForm возвращает опубликованную форму по slug для публичного рендерера.
+// Без проверки воркспейса (форма публична), но только опубликованную: черновик,
+// закрытая или несуществующая → domain.ErrNotFound (404, приватное не раскрывается).
+func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, error) {
+	pf, err := s.repo.GetPublishedFormBySlug(ctx, s.db, slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PublicForm{}, domain.ErrNotFound
+		}
+		return PublicForm{}, err
+	}
+	return pf, nil
 }
 
 // formForUser загружает форму и проверяет членство пользователя в её воркспейсе.

@@ -1,0 +1,152 @@
+/* Стили публичного рендерера. Поля (.rf-*) — те же классы, что в кабинете
+   (web/app/src/index.css): вид у респондента один и там, и там. Общий CSS-пакет
+   не заводим (два самостоятельных vite-проекта), поэтому переменные и правила
+   полей продублированы намеренно и минимально. */
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --border: #d8dce2;
+  --text: #1b1f24;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --danger: #b91c1c;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+/* --- Страница формы --- */
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.form-title {
+  margin: 0;
+  font-size: 1.6rem;
+  line-height: 1.25;
+}
+
+.submit-btn {
+  align-self: flex-start;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.6rem 1.1rem;
+  font: inherit;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.form-note {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.form-note-error {
+  color: var(--danger);
+}
+
+.rf-error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--danger);
+}
+
+/* --- Статус-экраны (loading / notfound / error) --- */
+.status {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 0.5rem;
+  text-align: center;
+  padding: 1.25rem;
+}
+
+.status-title {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.status-detail {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* --- Поля формы (зеркало web/app/src/index.css .rf-*) --- */
+.rf-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.rf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.rf-required {
+  color: var(--danger);
+}
+
+.rf-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.rf-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: var(--card);
+  color: var(--text);
+  resize: vertical;
+}
+
+.rf-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.rf-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-style: italic;
+}

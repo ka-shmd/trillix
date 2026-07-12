@@ -33,6 +33,18 @@ type fakeStore struct {
 	deleted bool
 	deleteN int64
 
+	// Управление путём публикации.
+	nextVersion     int32
+	versionInserted bool
+	published       bool
+	closed          bool
+	lastVersion     int32
+	lastSnapshot    json.RawMessage
+
+	// Управление публичной выдачей по slug.
+	publicForm PublicForm
+	publicErr  error
+
 	// Управление путём автосейва схемы.
 	schemaSaved  bool
 	schemaErr    error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
@@ -104,8 +116,44 @@ func (f *fakeStore) DeleteForm(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return f.deleteN, nil
 }
 
+func (f *fakeStore) NextFormVersion(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int32, error) {
+	return f.nextVersion, nil
+}
+
+func (f *fakeStore) InsertFormVersion(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error) {
+	f.versionInserted = true
+	f.lastVersion = version
+	f.lastSnapshot = schema
+	return id, nil
+}
+
+func (f *fakeStore) SetFormPublished(_ context.Context, _ postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error) {
+	f.published = true
+	vid := versionID
+	return Form{ID: id, WorkspaceID: workspaceID, Status: "published", PublishedVersionID: &vid}, nil
+}
+
+func (f *fakeStore) SetFormClosed(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
+	f.closed = true
+	return Form{ID: id, WorkspaceID: workspaceID, Status: "closed"}, nil
+}
+
+func (f *fakeStore) GetPublishedFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
+	if f.publicErr != nil {
+		return PublicForm{}, f.publicErr
+	}
+	return f.publicForm, nil
+}
+
+// fakeTx выполняет fn без реальной транзакции (nil-tx: fakeStore игнорирует db).
+type fakeTx struct{}
+
+func (fakeTx) WithTx(_ context.Context, fn func(pgx.Tx) error) error {
+	return fn(nil)
+}
+
 func newTestService(store *fakeStore) *Service {
-	return NewService(nil, store)
+	return NewService(nil, fakeTx{}, store)
 }
 
 // --- Анти-IDOR: доступ к чужой форме неотличим от отсутствующей (404) ---
@@ -167,6 +215,97 @@ func TestDelete_NotMember_ReturnsNotFound(t *testing.T) {
 	}
 	if store.deleted {
 		t.Fatal("чужая форма не должна удаляться")
+	}
+}
+
+// --- Публикация ---
+
+func TestPublish_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не раскрывается)", err)
+	}
+	if store.versionInserted || store.published {
+		t.Fatal("чужая форма не должна публиковаться")
+	}
+}
+
+func TestPublish_InvalidDraft_Rejected(t *testing.T) {
+	// Черновик с неизвестным типом блока — ValidateSchema отвергает до снапшота.
+	bad := json.RawMessage(`{"blocks":[{"id":"b","type":"slider","label":"x"}]}`)
+	store := &fakeStore{form: Form{DraftSchema: bad}, member: true}
+	svc := newTestService(store)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if store.versionInserted {
+		t.Fatal("невалидный черновик не должен снапшотиться")
+	}
+}
+
+func TestPublish_Success_SnapshotsAndSetsVersion(t *testing.T) {
+	draft := json.RawMessage(`{"blocks":[]}`)
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: draft},
+		member:      true,
+		nextVersion: 1,
+	}
+	svc := newTestService(store)
+
+	form, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !store.versionInserted || !store.published {
+		t.Fatal("публикация должна вставить версию и перевести форму в published")
+	}
+	if store.lastVersion != 1 {
+		t.Fatalf("вставлена версия %d, ожидалась 1", store.lastVersion)
+	}
+	if form.Status != "published" {
+		t.Fatalf("status = %q, ожидался published", form.Status)
+	}
+	if form.PublishedVersion == nil || *form.PublishedVersion != 1 {
+		t.Fatalf("publishedVersion = %v, ожидалась 1", form.PublishedVersion)
+	}
+}
+
+func TestUnpublish_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.Unpublish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if store.closed {
+		t.Fatal("чужая форма не должна закрываться")
+	}
+}
+
+func TestUnpublish_Success_CarriesVersion(t *testing.T) {
+	v := int32(2)
+	store := &fakeStore{
+		form:   Form{WorkspaceID: domain.NewID(), Status: "published", PublishedVersion: &v},
+		member: true,
+	}
+	svc := newTestService(store)
+
+	form, err := svc.Unpublish(context.Background(), domain.NewID(), domain.NewID())
+	if err != nil {
+		t.Fatalf("Unpublish: %v", err)
+	}
+	if form.Status != "closed" {
+		t.Fatalf("status = %q, ожидался closed", form.Status)
+	}
+	// Номер последней опубликованной версии сохраняется («была версия N»).
+	if form.PublishedVersion == nil || *form.PublishedVersion != 2 {
+		t.Fatalf("publishedVersion = %v, ожидалась 2", form.PublishedVersion)
 	}
 }
 

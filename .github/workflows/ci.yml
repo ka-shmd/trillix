@@ -58,3 +58,27 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+        # Дальше — проверки только рендерера (публичная форма грузится на телефоне):
+        # бюджет веса и Lighthouse. LHCI поднимает сервер над собранным dist/ и
+        # гоняет lighthouse (mobile) — тестируется прод-статика, не dev-сервер.
+        # Chrome предустановлен на ubuntu-раннере.
+      - name: bundle budget
+        if: matrix.project == 'renderer'
+        run: npm run check:bundle
+      - name: Lighthouse (mobile) — Performance ≥ 90
+        if: matrix.project == 'renderer'
+        run: npx --yes @lhci/cli@0.14.x autorun
+      - name: Lighthouse score (медиана прогонов)
+        # !cancelled() — показать баллы даже если гейт выше упал (collect уже
+        # записал manifest.json до ассертов).
+        if: ${{ !cancelled() && matrix.project == 'renderer' }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const m = JSON.parse(fs.readFileSync(".lighthouseci/manifest.json", "utf8"));
+            const r = m.find((x) => x.isRepresentativeRun) || m[0];
+            console.log("Lighthouse (mobile), медиана:");
+            for (const [k, v] of Object.entries(r.summary)) {
+              console.log(`  ${k}: ${Math.round(v * 100)}`);
+            }
+          '

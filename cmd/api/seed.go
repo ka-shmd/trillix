@@ -34,7 +34,7 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
-	formsSvc := forms.NewService(pool, forms.Repo{})
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 
 	// Создать демо-пользователя или найти уже существующего.
 	user, _, err := authSvc.Register(ctx, seedEmail, seedPassword)

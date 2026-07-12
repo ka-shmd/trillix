@@ -2,11 +2,22 @@ import { type ReactNode } from 'react'
 
 import { type Block } from '@entities/formSchema'
 
-// Обёртка одного поля формы: подпись, звёздочка для обязательных и описание.
-// Общая для превью билдера и публичного рендерера (фаза 4) — вид у респондента
-// один и тот же. Пустая подпись показывается плейсхолдером, чтобы недособранный
-// черновик всё равно выглядел как поле, а не пустота.
-export function FieldShell({ block, children }: { block: Block; children: ReactNode }) {
+// Обёртка одного поля формы: подпись, звёздочка для обязательных, описание и —
+// в рендерере — сообщение об ошибке валидации. Общая для превью билдера и
+// публичного рендерера (вид у респондента один и тот же). Пустая подпись
+// показывается плейсхолдером, чтобы недособранный черновик выглядел как поле.
+// error/errorId передаёт только рендерер; в превью их нет — вид не меняется.
+export function FieldShell({
+  block,
+  children,
+  error,
+  errorId,
+}: {
+  block: Block
+  children: ReactNode
+  error?: string
+  errorId?: string
+}) {
   const label = block.label.trim() || 'Без названия'
   return (
     <div className="rf-field">
@@ -21,6 +32,11 @@ export function FieldShell({ block, children }: { block: Block; children: ReactN
       </div>
       {block.description && <p className="rf-desc">{block.description}</p>}
       {children}
+      {error && (
+        <p className="rf-error" id={errorId} role="alert">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

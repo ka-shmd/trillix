@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useStore } from 'zustand'
 
 import { type FormDetail } from '../../../entities/form'
 import { Canvas } from './Canvas'
 import { Palette } from './Palette'
 import { PreviewPane } from './PreviewPane'
+import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SettingsPanel } from './SettingsPanel'
 import { createBuilderStore } from './store'
@@ -25,6 +27,11 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
   const { status, retry } = useAutosave(store, detail.id, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+
+  // Публиковать можно только когда серверный черновик догнал редактор: нет
+  // несохранённых правок и последний автосейв успешен (иначе снапшот будет старым).
+  const dirty = useStore(store, (s) => s.dirty)
+  const canPublish = status === 'saved' && !dirty
 
   return (
     <BuilderStoreContext.Provider value={store}>
@@ -50,6 +57,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
         </div>
         <SaveIndicator status={status} onRetry={retry} />
       </div>
+      <PublishControls form={detail} canPublish={canPublish} />
       {mode === 'edit' ? (
         <div className="builder">
           <Palette />
