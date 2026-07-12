@@ -187,6 +187,27 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	return err
 }
 
+const deleteSubmission = `-- name: DeleteSubmission :execrows
+DELETE FROM submissions
+WHERE id = $1 AND form_id = $2
+`
+
+type DeleteSubmissionParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Удаление одного ответа (GDPR-гигиена). Ограничено form_id: ответ чужой формы по
+// угаданному id не удалить (доступ к самой форме сервис проверяет отдельно). 0
+// удалённых строк → ответа нет/не в этой форме → 404.
+func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSubmission, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,

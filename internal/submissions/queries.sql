@@ -33,6 +33,13 @@ WHERE s.form_id = $1
 ORDER BY s.id DESC
 LIMIT $2;
 
+-- name: DeleteSubmission :execrows
+-- Удаление одного ответа (GDPR-гигиена). Ограничено form_id: ответ чужой формы по
+-- угаданному id не удалить (доступ к самой форме сервис проверяет отдельно). 0
+-- удалённых строк → ответа нет/не в этой форме → 404.
+DELETE FROM submissions
+WHERE id = $1 AND form_id = $2;
+
 -- name: CountSubmissions :one
 -- Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
 -- idx_submissions_form_id (index-only на form_id).

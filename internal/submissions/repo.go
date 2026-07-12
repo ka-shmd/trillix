@@ -85,6 +85,16 @@ func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, 
 	return out, nil
 }
 
+// DeleteSubmission удаляет один ответ в пределах формы; возвращает число удалённых
+// строк (0 → ответа нет или он принадлежит другой форме).
+func (Repo) DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteSubmission(ctx, postgres.DeleteSubmissionParams{ID: id, FormID: formID})
+	if err != nil {
+		return 0, fmt.Errorf("delete submission: %w", err)
+	}
+	return n, nil
+}
+
 // CountSubmissions — общее число ответов формы (счётчик кабинета).
 func (Repo) CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).CountSubmissions(ctx, formID)

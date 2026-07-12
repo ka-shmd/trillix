@@ -36,7 +36,7 @@ func fullStack(t *testing.T) *httptest.Server {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	subSvc := submissions.NewService(testPool, formsSvc, submissions.Repo{})
 	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime)
-	subPrivate := submissions.NewHandler(subSvc, authH.RequireAuth)
+	subPrivate := submissions.NewHandler(subSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)

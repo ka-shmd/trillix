@@ -16,3 +16,9 @@ export function listSubmissions(formId: string, cursor?: string): Promise<Submis
 export function submissionsExportUrl(formId: string): string {
   return `/api/v1/forms/${formId}/submissions/export`
 }
+
+// Удаление одного ответа (GDPR-гигиена): 204 без тела, требует CSRF (apiRequest сам
+// добавит заголовок на не-GET).
+export function deleteSubmission(formId: string, submissionId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/submissions/${submissionId}`, { method: 'DELETE' })
+}

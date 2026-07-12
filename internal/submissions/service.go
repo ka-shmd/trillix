@@ -45,6 +45,7 @@ type Store interface {
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
+	DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 }
 
 var _ Store = Repo{}
@@ -222,6 +223,23 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 		}
 		after = &Cursor{ID: rows[len(rows)-1].ID}
 	}
+}
+
+// DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация через
+// forms.Get (чужая/нет формы → 404), затем удаление в пределах формы. Отсутствие
+// ответа (или он из другой формы) → domain.ErrNotFound.
+func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error {
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return err
+	}
+	n, err := s.repo.DeleteSubmission(ctx, s.db, submissionID, formID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func clampLimit(limit int) int {

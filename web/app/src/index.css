@@ -1034,3 +1034,25 @@ a.button,
 .builder-topbar-link {
   margin-left: auto;
 }
+
+.submission-panel-foot {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.submission-panel-foot button.danger {
+  cursor: pointer;
+  border: 1px solid #f0c2c2;
+  background: transparent;
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.9rem;
+}
+
+.submission-panel-error {
+  color: var(--danger);
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}

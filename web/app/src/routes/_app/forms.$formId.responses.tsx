@@ -4,7 +4,10 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { type Block } from '@entities/formSchema'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
-import { submissionsListQueryOptions } from '../../features/submissions/queries'
+import {
+  submissionsListQueryOptions,
+  useDeleteSubmission,
+} from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
 import { formatAnswer } from '../../features/submissions/answerFormat'
 import { formatDate } from '../../shared/format'
@@ -120,6 +123,7 @@ function ResponsesPage() {
         <SubmissionPanel
           submission={selected}
           blocks={blocks}
+          formId={formId}
           onClose={() => setSelected(null)}
         />
       )}
@@ -132,14 +136,24 @@ function ResponsesPage() {
 function SubmissionPanel({
   submission,
   blocks,
+  formId,
   onClose,
 }: {
   submission: Submission
   blocks: Block[]
+  formId: string
   onClose: () => void
 }) {
   const knownIds = new Set(blocks.map((b) => b.id))
   const extraIds = Object.keys(submission.answers).filter((id) => !knownIds.has(id))
+  const remove = useDeleteSubmission(formId)
+
+  function handleDelete() {
+    if (window.confirm('Удалить этот ответ? Действие необратимо.')) {
+      // Список инвалидируется в onSuccess мутации; панель закрываем.
+      remove.mutate(submission.id, { onSuccess: onClose })
+    }
+  }
 
   return (
     <aside className="submission-panel" aria-label="Полный ответ">
@@ -167,6 +181,17 @@ function SubmissionPanel({
           </div>
         ))}
       </dl>
+
+      <div className="submission-panel-foot">
+        {remove.isError && (
+          <p role="alert" className="submission-panel-error">
+            Не удалось удалить. Попробуйте ещё раз.
+          </p>
+        )}
+        <button type="button" className="danger" onClick={handleDelete} disabled={remove.isPending}>
+          {remove.isPending ? 'Удаляем…' : 'Удалить ответ'}
+        </button>
+      </div>
     </aside>
   )
 }

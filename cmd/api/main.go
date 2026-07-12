@@ -111,7 +111,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, formsSvc, submissions.Repo{})
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime)
-	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth)
+	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log,
 		authHandler.Routes, formsHandler.Routes, formsPublic.Routes,

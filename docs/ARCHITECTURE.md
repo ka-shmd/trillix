@@ -297,6 +297,7 @@ POST   /forms/{id}/unpublish
 
 GET    /forms/{id}/submissions        ответы (курсорная пагинация по UUIDv7-id)
 GET    /forms/{id}/submissions/export CSV (стриминг, encoding/csv прямо в ResponseWriter)
+DELETE /forms/{id}/submissions/{sid}  удалить один ответ (GDPR-гигиена)
 
 Публичный API (без авторизации), префикс /public/v1:
 

@@ -22,10 +22,11 @@ import (
 // submissions не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
 
-// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт).
+// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт + удаление).
 type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
+	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 }
 
 // utf8BOM — метка порядка байтов: Excel без неё принимает UTF-8 CSV за ANSI и
@@ -36,20 +37,22 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // течь клиенту, не дожидаясь всей выборки.
 const csvFlushEvery = 500
 
-// Handler — приватный транспорт модуля submissions: автор смотрит ответы своей формы.
-// Только чтение (GET), поэтому за RequireAuth, но без CSRF.
+// Handler — приватный транспорт модуля submissions: автор смотрит и удаляет ответы
+// своей формы. Чтение (GET) — за RequireAuth; удаление (DELETE) — ещё и за RequireCSRF.
 type Handler struct {
 	svc         listService
 	requireAuth Middleware
+	requireCSRF Middleware
 }
 
-func NewHandler(svc listService, requireAuth Middleware) *Handler {
-	return &Handler{svc: svc, requireAuth: requireAuth}
+func NewHandler(svc listService, requireAuth, requireCSRF Middleware) *Handler {
+	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
+	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 }
 
 // --- DTO ---
@@ -167,6 +170,29 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 func csvContentDisposition(formID uuid.UUID) string {
 	name := "submissions-" + formID.String() + ".csv"
 	return fmt.Sprintf("attachment; filename=%q", name)
+}
+
+// delete удаляет один ответ формы (GDPR-гигиена). За RequireAuth+RequireCSRF.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	subID, err := uuid.Parse(r.PathValue("sid"))
+	if err != nil {
+		// Неразбираемый id → 404 (несуществующий ответ), без раскрытия чего-либо.
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.DeleteForForm(r.Context(), userID, formID, subID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Разбор запроса ---
