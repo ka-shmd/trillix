@@ -9,17 +9,26 @@ const entities = fileURLToPath(new URL('../shared/entities', import.meta.url))
 // @fields → общие компоненты полей; фаза 4 рендерит ими опубликованную форму.
 // react маппится на локальный пакет: общий код лежит вне node_modules рендерера.
 const fields = fileURLToPath(new URL('../shared/fields', import.meta.url))
+// react и zod маппятся на локальный пакет: общий код (@entities/@fields) лежит вне
+// node_modules рендерера, и его bare-импорты иначе не резолвятся при сборке.
 const reactPkg = fileURLToPath(new URL('./node_modules/react', import.meta.url))
+const zodPkg = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 
 // Публичный рендерер на :5174. Прокси /public на API добавится в фазе 4.
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: { '@entities': entities, '@fields': fields, react: reactPkg },
+    alias: { '@entities': entities, '@fields': fields, react: reactPkg, zod: zodPkg },
   },
   server: {
     port: 5174,
+    // /public проксируется на Go-API (:8080), как /api в кабинете — CORS в dev не
+    // нужен, рендерер и API одного origin. HTML-страница /r/{slug} тоже отдаётся
+    // API, но в dev её открывает vite (index.html), схему тянем через /public.
+    proxy: {
+      '/public': 'http://localhost:8080',
+    },
     fs: {
       allow: ['..'],
     },
