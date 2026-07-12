@@ -41,3 +41,13 @@ export function saveAnswers(slug: string, version: number, answers: Answers): vo
     // сама форма продолжает работать в памяти.
   }
 }
+
+// После успешной отправки черновик больше не нужен: чистим, чтобы F5 на экране
+// «Спасибо» не воскресил заполненную форму.
+export function clearAnswers(slug: string, version: number): void {
+  try {
+    sessionStorage.removeItem(storageKey(slug, version))
+  } catch {
+    // Недоступный sessionStorage — ничего не делаем, черновик и так не сохранялся.
+  }
+}
