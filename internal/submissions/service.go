@@ -12,21 +12,52 @@ import (
 	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
-// maxMetaFieldLen — потолок длины строк меты (user_agent, referer): обрезаем, чтобы
-// раздутый заголовок не распухал JSONB. Само тело ограничено MaxBytesReader'ом,
-// но заголовки в лимит тела не входят.
-const maxMetaFieldLen = 512
+const (
+	// maxMetaFieldLen — потолок длины строк меты (user_agent, referer): обрезаем, чтобы
+	// раздутый заголовок не распухал JSONB. Само тело ограничено MaxBytesReader'ом,
+	// но заголовки в лимит тела не входят.
+	maxMetaFieldLen = 512
 
-// Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (её id,
-// версию и схему) либо domain.ErrNotFound для черновика/закрытой/несуществующей.
-// Реализация — *forms.Service; общение через интерфейс сервиса (не чужой repo).
+	// DefaultPageLimit / MaxPageLimit — размер страницы листинга ответов. Запрошенный
+	// клиентом limit зажимается в [1, MaxPageLimit]; пустой → Default. Совпадает с
+	// forms по значениям, но свой — модули не делят константы пагинации.
+	DefaultPageLimit = 50
+	MaxPageLimit     = 100
+)
+
+// Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (приём
+// ответа) и авторизует доступ автора к форме по id (листинг). Реализация —
+// *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// Get проверяет членство пользователя в воркспейсе формы и возвращает её;
+	// чужая или несуществующая → domain.ErrNotFound (анти-IDOR, приватное не
+	// раскрывается). Листингу нужен только факт доступа, не поля формы.
+	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, answers, meta json.RawMessage) (int64, error)
+	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
+	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
+	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
+}
+
+var _ Store = Repo{}
+
+// Cursor — курсор листинга ответов: id последнего показанного ответа. Ответы
+// иммутабельны и монотонны по id (UUIDv7), поэтому курсор одноколоночный (в отличие
+// от составного у forms). Транспорт кодирует его в непрозрачную строку.
+type Cursor struct {
+	ID uuid.UUID
+}
+
+// Page — страница ответов, курсор на следующую (nil на последней) и общий счётчик.
+type Page struct {
+	Submissions []Submission
+	NextCursor  *Cursor
+	Total       int64
 }
 
 var _ Store = Repo{}
@@ -88,6 +119,54 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return err
 	}
 	return nil
+}
+
+// ListForForm возвращает страницу ответов формы для её автора. Порядок: авторизация
+// через forms.Get (чужая/нет формы → 404, приватное не раскрывается), затем чтение
+// страницы. after — курсор предыдущей страницы (nil для первой). Общий счётчик
+// считается всегда (кабинет показывает «N ответов»).
+func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error) {
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return Page{}, err
+	}
+	limit = clampLimit(limit)
+
+	total, err := s.repo.CountSubmissions(ctx, s.db, formID)
+	if err != nil {
+		return Page{}, err
+	}
+
+	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в
+	// ответ не отдаём, а превращаем в курсор.
+	fetch := int32(limit + 1)
+	var rows []Submission
+	if after == nil {
+		rows, err = s.repo.ListSubmissions(ctx, s.db, formID, fetch)
+	} else {
+		rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, fetch)
+	}
+	if err != nil {
+		return Page{}, err
+	}
+
+	page := Page{Submissions: rows, Total: total}
+	if len(rows) > limit {
+		last := rows[limit-1]
+		page.Submissions = rows[:limit]
+		page.NextCursor = &Cursor{ID: last.ID}
+	}
+	return page, nil
+}
+
+func clampLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return DefaultPageLimit
+	case limit > MaxPageLimit:
+		return MaxPageLimit
+	default:
+		return limit
+	}
 }
 
 func truncate(s string, n int) string {

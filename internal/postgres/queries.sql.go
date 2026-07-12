@@ -12,6 +12,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSubmissions = `-- name: CountSubmissions :one
+SELECT count(*) FROM submissions WHERE form_id = $1
+`
+
+// Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
+// idx_submissions_form_id (index-only на form_id).
+func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissions, formID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createForm = `-- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
@@ -531,6 +544,107 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.HasUnpublishedChanges,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1
+  AND s.id < $3::uuid
+ORDER BY s.id DESC
+LIMIT $2
+`
+
+type ListSubmissionsAfterParams struct {
+	FormID   uuid.UUID
+	Limit    int32
+	CursorID uuid.UUID
+}
+
+type ListSubmissionsAfterRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
+// стабильно, ответы иммутабельны. Тот же индекс и порядок.
+func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsAfterParams) ([]ListSubmissionsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsAfter, arg.FormID, arg.Limit, arg.CursorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsAfterRow
+	for rows.Next() {
+		var i ListSubmissionsAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1
+ORDER BY s.id DESC
+LIMIT $2
+`
+
+type ListSubmissionsFirstPageParams struct {
+	FormID uuid.UUID
+	Limit  int32
+}
+
+type ListSubmissionsFirstPageRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
+// времени → ORDER BY id DESC даёт хронологию без нестабильности created_at. JOIN
+// form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
+// NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
+// понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissionsFirstPageParams) ([]ListSubmissionsFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsFirstPage, arg.FormID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsFirstPageRow
+	for rows.Next() {
+		var i ListSubmissionsFirstPageRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
 		); err != nil {
 			return nil, err
 		}
