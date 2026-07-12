@@ -47,7 +47,7 @@ function ResponsesPage() {
   const blocks = form.data?.draftSchema.blocks ?? []
 
   return (
-    <section className="mx-auto max-w-6xl">
+    <section className="mx-auto max-w-6xl p-6">
       <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
           <Link

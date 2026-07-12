@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { ChevronDown, ChevronUp, Trash2, X } from 'lucide-react'
+import { Copy, GripVertical, Plus, Trash2, X } from 'lucide-react'
 import { type Block, type BlockType, isChoiceType } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
-import { blockTypeLabel } from './blockTypes'
 import { SlashMenu } from './SlashMenu'
-import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 
 // Автовысота textarea: строка вопроса растёт под контент, не заводя скролл.
 function autosize(el: HTMLTextAreaElement | null) {
@@ -21,40 +29,38 @@ export interface BlockRowProps {
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
   focusMe: boolean
   onFocusHandled: () => void
-  onEnter: (id: string) => void
+  onAddBelow: (id: string) => void
   onBackspaceEmpty: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
 
-// BlockRow — одна строка полотна: тип (slash-меню), редактируемый label и
-// description, инлайн-опции для choice, тулбар (обязательность, перемещение,
-// удаление). Клавиатура: Enter — новый блок, «/» — меню типов, Backspace в пустом
-// — удалить и уйти на предыдущий, ↑/↓ на границе — переход, Alt+↑/↓ — перемещение.
+// BlockRow — одна строка полотна в стиле Tally: редактируемый заголовок вопроса и
+// под ним живое превью настоящего поля (для choice — редактируемые варианты).
+// Управление блоком спрятано в левый gutter (появляется по наведению): «+» —
+// добавить ниже, ручка-хват — меню (тип/дубль/перемещение/обязательность/удаление).
+// Клавиатура: Enter — новый блок, «/» — меню типов, Backspace в пустом — удалить и
+// уйти на предыдущий, ↑/↓ на границе — переход, Alt+↑/↓ — перемещение.
 export function BlockRow({
   block,
   index,
   total,
   focusMe,
   onFocusHandled,
-  onEnter,
+  onAddBelow,
   onBackspaceEmpty,
   onArrow,
 }: BlockRowProps) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const labelRef = useRef<HTMLTextAreaElement>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [slashOpen, setSlashOpen] = useState(false)
 
   useEffect(() => {
     if (!focusMe) return
-    const el = labelRef.current
-    if (el) {
-      el.focus()
-      const len = el.value.length
-      el.setSelectionRange(len, len)
-    }
+    focusLabelEnd()
     onFocusHandled()
   }, [focusMe, onFocusHandled])
 
@@ -74,10 +80,10 @@ export function BlockRow({
     const el = e.currentTarget
     if (e.key === 'Enter') {
       e.preventDefault()
-      onEnter(block.id)
+      onAddBelow(block.id)
     } else if (e.key === '/' && block.label === '') {
       e.preventDefault()
-      setMenuOpen(true)
+      setSlashOpen(true)
     } else if (
       e.key === 'Backspace' &&
       block.label === '' &&
@@ -100,92 +106,113 @@ export function BlockRow({
 
   function pickType(type: BlockType) {
     changeBlockType(block.id, type)
-    setMenuOpen(false)
+    setSlashOpen(false)
     requestAnimationFrame(focusLabelEnd)
   }
 
   return (
-    <li className="group relative rounded-lg border border-transparent px-2 py-2 transition-colors hover:border-border hover:bg-muted/30 focus-within:border-border">
-      <div className="flex items-start gap-2">
-        <SlashMenu open={menuOpen} onOpenChange={setMenuOpen} onPick={pickType}>
-          <button
-            type="button"
-            onClick={() => setMenuOpen(true)}
-            className="mt-1 shrink-0 rounded px-1.5 py-0.5 text-xs font-medium text-muted-foreground hover:bg-muted"
-            title="Сменить тип (или «/» в пустой строке)"
-          >
-            {blockTypeLabel(block.type)}
-          </button>
-        </SlashMenu>
-
-        <div className="min-w-0 flex-1">
-          <textarea
-            ref={labelRef}
-            rows={1}
-            value={block.label}
-            placeholder="Вопрос — впишите текст или «/» для выбора типа"
-            onChange={(e) => updateBlock(block.id, { label: e.target.value })}
-            onKeyDown={onLabelKeyDown}
-            className="w-full resize-none bg-transparent text-base font-medium leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground"
-          />
-          <textarea
-            rows={1}
-            value={block.description ?? ''}
-            placeholder="Описание (необязательно)"
-            onChange={(e) => updateBlock(block.id, { description: e.target.value })}
-            onInput={(e) => autosize(e.currentTarget)}
-            className="w-full resize-none bg-transparent text-sm leading-snug text-muted-foreground outline-none"
-          />
-          {isChoiceType(block.type) && <OptionsInline block={block} onLeaveTop={focusLabelEnd} />}
-        </div>
-
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          <label className="mr-1 flex cursor-pointer items-center gap-1 text-xs text-muted-foreground">
-            <input
-              type="checkbox"
+    <li className="group relative rounded-md py-1.5 pl-9 pr-2 transition-colors hover:bg-muted/40 focus-within:bg-muted/40">
+      {/* Левый gutter: появляется по наведению, живёт в отступе pl-9. */}
+      <div className="absolute left-0 top-2 flex items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <button
+          type="button"
+          onClick={() => onAddBelow(block.id)}
+          aria-label="Добавить вопрос ниже"
+          className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <Plus className="size-4" />
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label="Действия с блоком"
+              className="flex size-6 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <GripVertical className="size-4" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48">
+            <DropdownMenuItem onSelect={() => setSlashOpen(true)}>Сменить тип поля</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => duplicateBlock(block.id)}>
+              <Copy className="size-4" /> Дублировать
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={index === 0} onSelect={() => moveBlock(block.id, 'up')}>
+              Переместить вверх
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={index === total - 1}
+              onSelect={() => moveBlock(block.id, 'down')}
+            >
+              Переместить вниз
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
               checked={block.required ?? false}
-              onChange={(e) => updateBlock(block.id, { required: e.target.checked })}
-            />
-            Обяз.
-          </label>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6"
-            disabled={index === 0}
-            onClick={() => moveBlock(block.id, 'up')}
-            aria-label="Переместить вверх"
-          >
-            <ChevronUp className="size-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6"
-            disabled={index === total - 1}
-            onClick={() => moveBlock(block.id, 'down')}
-            aria-label="Переместить вниз"
-          >
-            <ChevronDown className="size-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-6 text-muted-foreground hover:text-destructive"
-            onClick={() => removeBlock(block.id)}
-            aria-label="Удалить блок"
-          >
-            <Trash2 className="size-4" />
-          </Button>
-        </div>
+              onCheckedChange={(v) => updateBlock(block.id, { required: v })}
+            >
+              Обязательный
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => removeBlock(block.id)}>
+              <Trash2 className="size-4" /> Удалить
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
+
+      <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
+        <div className="min-w-0">
+          <div className="flex items-start gap-1">
+            <textarea
+              ref={labelRef}
+              rows={1}
+              value={block.label}
+              placeholder="Напишите вопрос или «/» для выбора типа"
+              onChange={(e) => updateBlock(block.id, { label: e.target.value })}
+              onKeyDown={onLabelKeyDown}
+              className="w-full resize-none bg-transparent text-base font-medium leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground"
+            />
+            {block.required && (
+              <span className="mt-1 select-none text-base text-destructive" title="Обязательный">
+                *
+              </span>
+            )}
+          </div>
+
+          {isChoiceType(block.type) ? (
+            <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
+          ) : (
+            <FieldPreview type={block.type} />
+          )}
+        </div>
+      </SlashMenu>
     </li>
   )
 }
 
-// OptionsInline — варианты choice-блока строками прямо под вопросом. Клавиатура:
-// Enter — новый вариант (фокус на него), Backspace в пустом — удалить и уйти на
-// предыдущий вариант (или на label, если это был первый).
+// FieldPreview — как поле увидит респондент: инертный (disabled) контрол под
+// заголовком. Даёт tally-ощущение «редактор = форма», не будучи интерактивным.
+function FieldPreview({ type }: { type: BlockType }) {
+  const cls = 'pointer-events-none mt-1.5 bg-muted/40'
+  switch (type) {
+    case 'long_text':
+      return <Textarea disabled rows={2} placeholder="Развёрнутый ответ" className={cls} />
+    case 'email':
+      return <Input disabled placeholder="you@example.com" className={cls} />
+    case 'number':
+      return <Input disabled placeholder="0" className={cls} />
+    case 'date':
+      return <Input disabled placeholder="дд.мм.гггг" className={cls} />
+    case 'short_text':
+    default:
+      return <Input disabled placeholder="Короткий ответ" className={cls} />
+  }
+}
+
+// OptionsInline — варианты choice-блока строками прямо под вопросом, с глифом
+// радио/чекбокса как у готового поля. Клавиатура: Enter — новый вариант (фокус на
+// него), Backspace в пустом — удалить и уйти на предыдущий (или на заголовок).
 function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => void }) {
   const addOption = useBuilderStore((s) => s.addOption)
   const updateOption = useBuilderStore((s) => s.updateOption)
@@ -220,12 +247,12 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
   }
 
   return (
-    <div className="mt-1.5 flex flex-col gap-1">
+    <div className="mt-2 flex flex-col gap-1.5">
       {options.map((o, i) => (
-        <div key={o.id} className="flex items-center gap-1.5">
+        <div key={o.id} className="flex items-center gap-2">
           <span
-            className={`size-3.5 shrink-0 border border-muted-foreground/50 ${
-              block.type === 'single_choice' ? 'rounded-full' : 'rounded-[3px]'
+            className={`size-4 shrink-0 border border-muted-foreground/40 ${
+              block.type === 'single_choice' ? 'rounded-full' : 'rounded-[4px]'
             }`}
             aria-hidden="true"
           />
@@ -244,7 +271,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
             type="button"
             onClick={() => removeOption(block.id, o.id)}
             aria-label="Удалить вариант"
-            className="text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+            className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
           >
             <X className="size-3.5" />
           </button>
@@ -256,9 +283,9 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
           pendingFocus.current = 'last'
           addOption(block.id)
         }}
-        className="w-fit pl-5 text-left text-sm text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
       >
-        + Добавить вариант
+        <Plus className="size-4" /> Добавить вариант
       </button>
     </div>
   )

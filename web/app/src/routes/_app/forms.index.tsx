@@ -25,7 +25,7 @@ function FormsDashboard() {
   const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
 
   return (
-    <section className="mx-auto max-w-5xl">
+    <section className="mx-auto max-w-5xl p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Мои формы</h1>
         <Button onClick={handleCreate} disabled={create.isPending} className="gap-2">

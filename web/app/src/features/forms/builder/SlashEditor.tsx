@@ -18,7 +18,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     setFocusId(first ? first.id : addBlockAfter(null, 'short_text'))
   }
 
-  function handleEnter(id: string) {
+  function handleAddBelow(id: string) {
     setFocusId(addBlockAfter(id, 'short_text'))
   }
 
@@ -57,7 +57,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
               total={blocks.length}
               focusMe={focusId === b.id}
               onFocusHandled={() => setFocusId(null)}
-              onEnter={handleEnter}
+              onAddBelow={handleAddBelow}
               onBackspaceEmpty={handleBackspaceEmpty}
               onArrow={handleArrow}
             />

@@ -1,10 +1,11 @@
 import { useState } from 'react'
+import { Share2 } from 'lucide-react'
 
 import { type Form } from '../../../entities/form'
 import { usePublishForm, useUnpublishForm } from '../queries'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
 // Базовый URL публичной части — из env (различие контуров живёт в конфигурации).
 // В dev переменной обычно нет: fallback на локальный рендерер. Фаза 7 задаёт
@@ -12,9 +13,10 @@ import { Input } from '@/components/ui/input'
 const PUBLIC_BASE =
   (import.meta.env.VITE_PUBLIC_BASE_URL as string | undefined) ?? 'http://localhost:5174'
 
-// Публикация формы в шапке билдера: кнопка «Опубликовать», статус/версия, ссылка
-// на публичную форму с копированием, бейдж неопубликованных правок, «Закрыть
-// форму». Читает живые поля формы из detail (кэш патчат мутации и автосейв).
+// Компактный контрол публикации для тонкой шапки редактора: «Опубликовать»
+// (primary), а у опубликованной — «Поделиться» (поповер со ссылкой/копированием/
+// закрытием) + отдельная кнопка «Опубликовать изменения», когда есть неопубликованные
+// правки. Логика та же, что и раньше (те же мутации, оптимистичная блокировка).
 //
 // canPublish=false, пока есть несохранённые правки: публикация снимает снапшот
 // серверного черновика, поэтому сначала он должен догнать редактор (автосейв).
@@ -48,63 +50,64 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
   }
 
   return (
-    <div className="flex flex-col gap-2 border-b bg-muted/30 px-4 py-2.5">
-      <div className="flex flex-wrap items-center gap-3">
-        {needsPublish && (
-          <Button
-            size="sm"
-            disabled={!canPublish || busy}
-            onClick={() => publish.mutate(form.id)}
-          >
-            {publishLabel}
-          </Button>
-        )}
-
-        {isPublished && (
-          <span className="text-sm text-muted-foreground" role="status">
-            Опубликовано · версия {form.publishedVersion}
-          </span>
-        )}
-        {isClosed && (
-          <span className="text-sm text-muted-foreground" role="status">
-            Закрыта{form.publishedVersion != null && ` · была версия ${form.publishedVersion}`}
-          </span>
-        )}
-
-        {isPublished && form.hasUnpublishedChanges && (
-          <Badge variant="secondary">Есть неопубликованные изменения</Badge>
-        )}
-
-        {isPublished && (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => unpublish.mutate(form.id)}>
-            Закрыть форму
-          </Button>
-        )}
-      </div>
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {isClosed && <span className="text-xs text-muted-foreground">Форма закрыта</span>}
 
       {isPublished && (
-        <div className="flex items-center gap-2">
-          <Input
-            type="text"
-            readOnly
-            value={link}
-            aria-label="Ссылка на форму"
-            onFocus={(e) => e.currentTarget.select()}
-            className="h-8 max-w-md font-mono text-xs"
-          />
-          <Button size="sm" variant="outline" onClick={onCopy}>
-            {copied ? 'Скопировано' : 'Копировать'}
-          </Button>
-        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-1.5">
+              <Share2 className="size-4" /> Поделиться
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-80">
+            <p className="text-sm font-medium">Опубликовано · версия {form.publishedVersion}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Ссылка на форму для респондентов:
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <Input
+                readOnly
+                value={link}
+                aria-label="Ссылка на форму"
+                onFocus={(e) => e.currentTarget.select()}
+                className="h-8 font-mono text-xs"
+              />
+              <Button size="sm" onClick={onCopy}>
+                {copied ? 'Готово' : 'Копировать'}
+              </Button>
+            </div>
+            {form.hasUnpublishedChanges && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Есть неопубликованные изменения — нажмите «Опубликовать изменения».
+              </p>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => unpublish.mutate(form.id)}
+              className="mt-2 w-full justify-start text-muted-foreground"
+            >
+              Закрыть форму
+            </Button>
+          </PopoverContent>
+        </Popover>
       )}
 
-      {!canPublish && needsPublish && !busy && (
-        <p className="text-xs text-muted-foreground">
-          Дождитесь сохранения черновика, чтобы опубликовать.
-        </p>
+      {needsPublish && (
+        <Button
+          size="sm"
+          disabled={!canPublish || busy}
+          onClick={() => publish.mutate(form.id)}
+          title={!canPublish ? 'Дождитесь сохранения черновика' : undefined}
+        >
+          {publishLabel}
+        </Button>
       )}
+
       {publish.isError && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="w-full text-right text-xs text-destructive" role="alert">
           Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.
         </p>
       )}
