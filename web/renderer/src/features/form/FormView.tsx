@@ -45,9 +45,17 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
 
   // Один id на всё время жизни экрана: любые повторы (авто и ручные) идут под ним.
   const submissionId = useRef<string>('')
-  // Защита от setState после размонтирования во время долгого ретрая.
+  // Защита от setState после размонтирования во время долгого ретрая. Флаг ставится
+  // в true при монтировании и в false при размонтировании — под StrictMode (dev
+  // делает mount→unmount→mount) инициализации useRef(true) недостаточно: cleanup
+  // первого прохода обнулил бы флаг навсегда, и код после await молча не сработал бы.
   const active = useRef(true)
-  useEffect(() => () => void (active.current = false), [])
+  useEffect(() => {
+    active.current = true
+    return () => {
+      active.current = false
+    }
+  }, [])
 
   useEffect(() => {
     saveAnswers(slug, form.version, answers)
