@@ -40,6 +40,7 @@ SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.publis
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -51,6 +52,7 @@ WHERE f.id = $1;
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -64,6 +66,7 @@ LIMIT $2;
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id

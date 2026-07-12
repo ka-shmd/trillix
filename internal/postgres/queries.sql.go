@@ -195,6 +195,7 @@ SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.publis
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -211,6 +212,7 @@ type GetFormRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -231,6 +233,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersionID,
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
+		&i.SubmissionCount,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -461,6 +464,7 @@ const listFormsAfter = `-- name: ListFormsAfter :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -486,6 +490,7 @@ type ListFormsAfterRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -515,6 +520,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
+			&i.SubmissionCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -532,6 +538,7 @@ const listFormsFirstPage = `-- name: ListFormsFirstPage :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -554,6 +561,7 @@ type ListFormsFirstPageRow struct {
 	PublishedVersionID    pgtype.UUID
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
+	SubmissionCount       int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -578,6 +586,7 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
+			&i.SubmissionCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

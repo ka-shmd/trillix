@@ -35,8 +35,12 @@ type Form struct {
 	PublishedVersionID    *uuid.UUID
 	PublishedVersion      *int32
 	HasUnpublishedChanges bool
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	// SubmissionCount — число ответов формы (счётчик на карточке дашборда и в шапке
+	// таблицы ответов). Считают только читающие запросы (Get/List); у результатов
+	// мутаций 0 (как и PublishedVersion) — фронт берёт актуальное из Get/списка.
+	SubmissionCount int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
@@ -142,6 +146,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		PublishedVersionID:    ptrUUID(row.PublishedVersionID),
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
+		SubmissionCount:       row.SubmissionCount,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -167,6 +172,7 @@ func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UU
 			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			SubmissionCount:       r.SubmissionCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}
@@ -196,6 +202,7 @@ func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uu
 			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			SubmissionCount:       r.SubmissionCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}

@@ -18,6 +18,9 @@ function FormEditor() {
       <header className="builder-topbar">
         <Link to="/forms">← К формам</Link>
         {query.data && <span className="builder-title">{query.data.title}</span>}
+        <Link to="/forms/$formId/responses" params={{ formId }} className="builder-topbar-link">
+          Ответы
+        </Link>
       </header>
 
       {query.isPending ? (

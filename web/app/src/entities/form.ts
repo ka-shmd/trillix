@@ -22,6 +22,9 @@ export const formSchema = z.object({
   publishedVersion: z.number().int().nullable(),
   publishedVersionId: z.string().nullable(),
   hasUnpublishedChanges: z.boolean(),
+  // Число ответов формы (счётчик на карточке). Точен на GET/списке; у ответов
+  // мутаций всегда 0 (карточка обновляется из списка).
+  submissionCount: z.number().int(),
 })
 
 export type Form = z.infer<typeof formSchema>
