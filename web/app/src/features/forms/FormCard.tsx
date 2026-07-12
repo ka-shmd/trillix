@@ -1,8 +1,30 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
+import { MoreHorizontal } from 'lucide-react'
 import type { Form } from '../../entities/form'
 import { formatDate } from '../../shared/format'
 import { useDeleteForm, useRenameForm } from './queries'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 const statusLabels: Record<Form['status'], string> = {
   draft: 'Черновик',
@@ -10,22 +32,23 @@ const statusLabels: Record<Form['status'], string> = {
   closed: 'Закрыта',
 }
 
+const statusVariants: Record<Form['status'], 'secondary' | 'default' | 'outline'> = {
+  draft: 'secondary',
+  published: 'default',
+  closed: 'outline',
+}
+
 // FormCard — карточка формы: заголовок ведёт в редактор, инлайн-переименование
 // и удаление с подтверждением. Правки формы — серверный стейт, идут через мутации
-// (инвалидируют список), локален только UI-стейт режима редактирования.
+// (инвалидируют список), локален только UI-стейт режима редактирования/диалога.
 export function FormCard({ form }: { form: Form }) {
   const [editing, setEditing] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const rename = useRenameForm()
   const remove = useDeleteForm()
 
-  function handleDelete() {
-    if (window.confirm(`Удалить форму «${form.title}»? Это действие необратимо.`)) {
-      remove.mutate(form.id)
-    }
-  }
-
   return (
-    <article className="form-card" aria-busy={remove.isPending}>
+    <Card className="flex min-h-36 flex-col gap-3 p-4" aria-busy={remove.isPending}>
       {editing ? (
         <RenameForm
           initial={form.title}
@@ -36,35 +59,66 @@ export function FormCard({ form }: { form: Form }) {
           }
         />
       ) : (
-        <Link to="/forms/$formId/edit" params={{ formId: form.id }} className="form-card-title">
-          {form.title}
-        </Link>
-      )}
-
-      <div className="form-card-meta">
-        <span className={`form-badge form-badge-${form.status}`}>{statusLabels[form.status]}</span>
-        <span className="form-card-date">Изменена {formatDate(form.updatedAt)}</span>
-      </div>
-
-      {!editing && (
-        <div className="form-card-actions">
-          <Link to="/forms/$formId/responses" params={{ formId: form.id }}>
-            Ответы ({form.submissionCount})
-          </Link>
-          <button type="button" onClick={() => setEditing(true)}>
-            Переименовать
-          </button>
-          <button
-            type="button"
-            className="danger"
-            onClick={handleDelete}
-            disabled={remove.isPending}
+        <div className="flex items-start justify-between gap-2">
+          <Link
+            to="/forms/$formId/edit"
+            params={{ formId: form.id }}
+            className="break-words text-base font-semibold hover:text-primary"
           >
-            {remove.isPending ? 'Удаляем…' : 'Удалить'}
-          </button>
+            {form.title}
+          </Link>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-7 shrink-0">
+                <MoreHorizontal className="size-4" />
+                <span className="sr-only">Действия</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                <Link to="/forms/$formId/responses" params={{ formId: form.id }}>
+                  Ответы ({form.submissionCount})
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setEditing(true)}>Переименовать</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setConfirmOpen(true)}
+                disabled={remove.isPending}
+              >
+                Удалить
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
-    </article>
+
+      <div className="mt-auto flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <Badge variant={statusVariants[form.status]}>{statusLabels[form.status]}</Badge>
+        <span>Изменена {formatDate(form.updatedAt)}</span>
+      </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить форму «{form.title}»?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Это действие необратимо. Все ответы формы также будут удалены.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => remove.mutate(form.id)}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              Удалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
   )
 }
 
@@ -90,24 +144,24 @@ function RenameForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="form-rename">
-      <label htmlFor={`rename-${initial}`} className="visually-hidden">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+      <label htmlFor={`rename-${initial}`} className="sr-only">
         Название формы
       </label>
-      <input
+      <Input
         id={`rename-${initial}`}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         autoFocus
         maxLength={200}
       />
-      <div className="form-rename-actions">
-        <button type="submit" disabled={pending || !trimmed}>
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={pending || !trimmed}>
           {pending ? 'Сохраняем…' : 'Сохранить'}
-        </button>
-        <button type="button" onClick={onCancel} disabled={pending}>
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={pending}>
           Отмена
-        </button>
+        </Button>
       </div>
     </form>
   )

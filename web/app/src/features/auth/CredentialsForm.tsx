@@ -1,6 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { credentialsSchema, type Credentials } from './validation'
 import { ApiError } from '../../shared/api/errors'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 type FieldErrors = Partial<Record<'email' | 'password', string>>
 
@@ -56,16 +59,16 @@ export function CredentialsForm({ submitLabel, pending, serverError, onSubmit }:
   }
 
   return (
-    <form onSubmit={handleSubmit} noValidate>
+    <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
       {server.formError && (
-        <p role="alert" className="form-error">
+        <p role="alert" className="text-sm text-destructive">
           {server.formError}
         </p>
       )}
 
-      <div className="field">
-        <label htmlFor="email">Email</label>
-        <input
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="email">Email</Label>
+        <Input
           id="email"
           name="email"
           type="email"
@@ -76,15 +79,15 @@ export function CredentialsForm({ submitLabel, pending, serverError, onSubmit }:
           aria-describedby={fieldErrors.email ? 'email-error' : undefined}
         />
         {fieldErrors.email && (
-          <p id="email-error" role="alert" className="field-error">
+          <p id="email-error" role="alert" className="text-sm text-destructive">
             {fieldErrors.email}
           </p>
         )}
       </div>
 
-      <div className="field">
-        <label htmlFor="password">Пароль</label>
-        <input
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="password">Пароль</Label>
+        <Input
           id="password"
           name="password"
           type="password"
@@ -95,15 +98,15 @@ export function CredentialsForm({ submitLabel, pending, serverError, onSubmit }:
           aria-describedby={fieldErrors.password ? 'password-error' : undefined}
         />
         {fieldErrors.password && (
-          <p id="password-error" role="alert" className="field-error">
+          <p id="password-error" role="alert" className="text-sm text-destructive">
             {fieldErrors.password}
           </p>
         )}
       </div>
 
-      <button type="submit" disabled={pending}>
+      <Button type="submit" disabled={pending} className="w-full">
         {pending ? 'Отправка…' : submitLabel}
-      </button>
+      </Button>
     </form>
   )
 }
