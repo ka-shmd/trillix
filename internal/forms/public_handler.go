@@ -20,18 +20,28 @@ type publicFormService interface {
 // опубликованной версии по slug. Отдельный от Handler ровно потому, что у этих
 // роутов нет RequireAuth — их регистрирует composition root без приватных middleware.
 type PublicHandler struct {
-	svc         publicFormService
-	tokenSecret []byte
-	now         func() time.Time // подменяется в тестах
+	svc           publicFormService
+	tokenSecret   []byte
+	publicBaseURL string           // база рендерера: og:url и src SPA-скрипта на /r/{slug}
+	ogImageURL    string           // абсолютный URL картинки превью (og:image)
+	now           func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc publicFormService, tokenSecret []byte) *PublicHandler {
-	return &PublicHandler{svc: svc, tokenSecret: tokenSecret, now: time.Now}
+func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL string) *PublicHandler {
+	return &PublicHandler{
+		svc:           svc,
+		tokenSecret:   tokenSecret,
+		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
+		ogImageURL:    ogImageURL,
+		now:           time.Now,
+	}
 }
 
-// Routes регистрирует публичные эндпоинты форм на общем mux (префикс /public/v1).
+// Routes регистрирует публичные эндпоинты форм на общем mux: JSON-ручку рендерера
+// (/public/v1) и HTML-страницу формы с OG-мета (/r/{slug}).
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
+	mux.HandleFunc("GET /r/{slug}", h.getHTML)
 }
 
 // publicFormResponse — тело GET /public/v1/forms/{slug}. token — подписанное время

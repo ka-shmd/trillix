@@ -34,6 +34,18 @@ func WriteJSON(w http.ResponseWriter, r *http.Request, status int, payload any) 
 	}
 }
 
+// WriteHTML пишет готовый HTML-документ (уже отрендеренный вызывающим) с заданным
+// статусом. Ошибку записи логирует (заголовки уже ушли — тело просто оборвётся).
+// Content-Type ставит сам; прочие заголовки (Cache-Control) вызывающий выставляет
+// на w.Header() до вызова.
+func WriteHTML(w http.ResponseWriter, r *http.Request, status int, html []byte) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if _, err := w.Write(html); err != nil {
+		loggerFrom(r.Context()).Error("write html response", slog.String("error", err.Error()))
+	}
+}
+
 // WriteError — единственное место маппинга доменных ошибок на HTTP-статусы
 // (handler'ы своих http.Error не пишут). 5xx не раскрывают внутренний текст
 // клиенту, но логируются с request_id.

@@ -99,7 +99,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
-	formsPublic := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret)
+	formsPublic := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL)
 
 	srv := httpserver.New(cfg.HTTPAddr, log, authHandler.Routes, formsHandler.Routes, formsPublic.Routes)
 

@@ -60,7 +60,8 @@ func newStack(t *testing.T) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
-	formsPublic := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"))
+	formsPublic := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
+		"http://localhost:5174", "http://localhost:5174/og-preview.png")
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -307,6 +308,44 @@ func TestForms_PublicFetch(t *testing.T) {
 	// После снятия с публикации → 404 (закрытая не отдаётся).
 	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
 	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+}
+
+// HTML-страница формы /r/{slug} (OG-мета от Go): опубликованная → 200 text/html с
+// экранированным og:title; черновик → 404 (приватное не раскрывается по HTML-пути).
+func TestForms_PublicHTMLPage(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner-html@example.com")
+	anon := newClient(t)
+
+	// Инъекция в title (без кавычек — они сломали бы JSON-тело; кавычечный кейс — в юнитах).
+	form := createForm(t, owner, srv, "Опрос <script>alert(1)</script>")
+
+	// Черновик по HTML-пути → 404.
+	r := do(t, anon, http.MethodGet, srv.URL+"/r/"+form.Slug, "", "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("черновик /r: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, owner, srv, form.ID, http.StatusOK)
+
+	r = do(t, anon, http.MethodGet, srv.URL+"/r/"+form.Slug, "", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("опубликованная /r: статус %d, ожидалось 200", r.StatusCode)
+	}
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("Content-Type = %q, ожидался text/html", ct)
+	}
+	html := body2(t, r) // закрывает тело
+	if strings.Contains(html, "<script>alert(1)") {
+		t.Fatalf("сырой инъектированный тег в HTML:\n%s", html)
+	}
+	if !strings.Contains(html, `property="og:title"`) || !strings.Contains(html, "og:description") {
+		t.Fatalf("нет OG-меты в HTML:\n%s", html)
+	}
 }
 
 // Пагинация: 5 форм, страницы по 2 — курсор без дублей и потерь.

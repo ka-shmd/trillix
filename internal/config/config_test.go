@@ -11,6 +11,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db?sslmode=disable")
 		t.Setenv("COOKIE_SECURE", "false")
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
 
 		cfg, err := Load()
 		if err != nil {
@@ -35,6 +37,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
 		t.Setenv("COOKIE_SECURE", "true")
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
 
 		cfg, err := Load()
 		if err != nil {
@@ -50,6 +54,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
 		t.Setenv("COOKIE_SECURE", "yes-please")
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
@@ -62,10 +68,26 @@ func TestLoad(t *testing.T) {
 		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
 		t.Setenv("COOKIE_SECURE", "false")
 		t.Setenv("FORM_TOKEN_SECRET", "short")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "FORM_TOKEN_SECRET") {
 			t.Fatalf("ожидалась ошибка про FORM_TOKEN_SECRET, получено: %v", err)
+		}
+	})
+
+	t.Run("относительный PUBLIC_RENDERER_BASE_URL — ошибка", func(t *testing.T) {
+		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
+		t.Setenv("COOKIE_SECURE", "false")
+		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "/relative")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "PUBLIC_RENDERER_BASE_URL") {
+			t.Fatalf("ожидалась ошибка про PUBLIC_RENDERER_BASE_URL, получено: %v", err)
 		}
 	})
 
