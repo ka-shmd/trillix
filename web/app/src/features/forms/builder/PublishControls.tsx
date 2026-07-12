@@ -2,6 +2,9 @@ import { useState } from 'react'
 
 import { type Form } from '../../../entities/form'
 import { usePublishForm, useUnpublishForm } from '../queries'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 
 // Базовый URL публичной части — из env (различие контуров живёт в конфигурации).
 // В dev переменной обычно нет: fallback на локальный рендерер. Фаза 7 задаёт
@@ -45,67 +48,63 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
   }
 
   return (
-    <div className="publish">
-      <div className="publish-row">
+    <div className="flex flex-col gap-2 border-b bg-muted/30 px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-3">
         {needsPublish && (
-          <button
-            type="button"
-            className="publish-btn"
+          <Button
+            size="sm"
             disabled={!canPublish || busy}
             onClick={() => publish.mutate(form.id)}
           >
             {publishLabel}
-          </button>
+          </Button>
         )}
 
         {isPublished && (
-          <span className="publish-status" role="status">
+          <span className="text-sm text-muted-foreground" role="status">
             Опубликовано · версия {form.publishedVersion}
           </span>
         )}
         {isClosed && (
-          <span className="publish-status publish-status-closed" role="status">
+          <span className="text-sm text-muted-foreground" role="status">
             Закрыта{form.publishedVersion != null && ` · была версия ${form.publishedVersion}`}
           </span>
         )}
 
         {isPublished && form.hasUnpublishedChanges && (
-          <span className="publish-badge">Есть неопубликованные изменения</span>
+          <Badge variant="secondary">Есть неопубликованные изменения</Badge>
         )}
 
         {isPublished && (
-          <button
-            type="button"
-            className="publish-close"
-            disabled={busy}
-            onClick={() => unpublish.mutate(form.id)}
-          >
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => unpublish.mutate(form.id)}>
             Закрыть форму
-          </button>
+          </Button>
         )}
       </div>
 
       {isPublished && (
-        <div className="publish-link">
-          <input
-            className="publish-link-input"
+        <div className="flex items-center gap-2">
+          <Input
             type="text"
             readOnly
             value={link}
             aria-label="Ссылка на форму"
             onFocus={(e) => e.currentTarget.select()}
+            className="h-8 max-w-md font-mono text-xs"
           />
-          <button type="button" className="publish-copy" onClick={onCopy}>
+          <Button size="sm" variant="outline" onClick={onCopy}>
             {copied ? 'Скопировано' : 'Копировать'}
-          </button>
+          </Button>
         </div>
       )}
 
       {!canPublish && needsPublish && !busy && (
-        <p className="publish-hint">Дождитесь сохранения черновика, чтобы опубликовать.</p>
+        <p className="text-xs text-muted-foreground">
+          Дождитесь сохранения черновика, чтобы опубликовать.
+        </p>
       )}
       {publish.isError && (
-        <p className="publish-error" role="alert">
+        <p className="text-sm text-destructive" role="alert">
           Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.
         </p>
       )}

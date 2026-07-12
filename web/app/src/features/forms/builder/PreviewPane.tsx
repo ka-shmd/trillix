@@ -9,9 +9,9 @@ export function PreviewPane() {
 
   if (blocks.length === 0) {
     return (
-      <div className="canvas-empty">
-        <p>Пока нечего показать — добавьте блоки в редакторе.</p>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Пока нечего показать — добавьте блоки в редакторе.
+      </p>
     )
   }
 
