@@ -175,16 +175,33 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 }
 
 const getForm = `-- name: GetForm :one
-SELECT id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at
-FROM forms
-WHERE id = $1
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.id = $1
 `
 
+type GetFormRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	DraftSchema        []byte
+	PublishedVersionID pgtype.UUID
+	PublishedVersion   pgtype.Int4
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
 // Полная форма, включая черновик схемы: GET /forms/{id} отдаёт draft_schema
-// (заглушка редактора в фазе 2, живой билдер — в фазе 3).
-func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (Form, error) {
+// (заглушка редактора в фазе 2, живой билдер — в фазе 3). published_version — номер
+// опубликованной версии (NULL для черновика), для шапки билдера «версия N».
+func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error) {
 	row := q.db.QueryRow(ctx, getForm, id)
-	var i Form
+	var i GetFormRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
@@ -193,6 +210,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (Form, error) {
 		&i.Status,
 		&i.DraftSchema,
 		&i.PublishedVersionID,
+		&i.PublishedVersion,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -209,6 +227,13 @@ LIMIT 1
 `
 
 // Запросы модуля forms. Схема — migrations/0003_forms. Генерация: `make sqlc`.
+//
+// published_version — номер (form_versions.version) текущей опубликованной версии
+// формы (NULL, пока форму не публиковали). Читающие запросы (Get/List) достают его
+// LEFT JOIN по published_version_id — тип nullable. Мутации его НЕ выбирают: сервис
+// и так знает версию (при публикации — из InsertFormVersion, иначе переносит из
+// заранее прочитанной формы), а коррелированный подзапрос в RETURNING sqlc считает
+// NOT NULL, из-за чего скан NULL (черновик) на них падал бы.
 // Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
 // «Текущий воркспейс» дашборда, куда кладутся и откуда читаются формы.
 func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
@@ -256,6 +281,38 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	return i, err
 }
 
+const insertFormVersion = `-- name: InsertFormVersion :one
+INSERT INTO form_versions (id, form_id, version, schema)
+VALUES ($1, $2, $3, $4)
+RETURNING id, version
+`
+
+type InsertFormVersionParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Version int32
+	Schema  []byte
+}
+
+type InsertFormVersionRow struct {
+	ID      uuid.UUID
+	Version int32
+}
+
+// Иммутабельный снапшот черновика при публикации. Возвращает id — им проставляется
+// forms.published_version_id в той же транзакции.
+func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionParams) (InsertFormVersionRow, error) {
+	row := q.db.QueryRow(ctx, insertFormVersion,
+		arg.ID,
+		arg.FormID,
+		arg.Version,
+		arg.Schema,
+	)
+	var i InsertFormVersionRow
+	err := row.Scan(&i.ID, &i.Version)
+	return i, err
+}
+
 const isWorkspaceMember = `-- name: IsWorkspaceMember :one
 SELECT EXISTS (
     SELECT 1 FROM workspace_members
@@ -278,11 +335,14 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 }
 
 const listFormsAfter = `-- name: ListFormsAfter :many
-SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
-FROM forms
-WHERE workspace_id = $1
-  AND (updated_at, id) < ($3::timestamptz, $4::uuid)
-ORDER BY updated_at DESC, id DESC
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.workspace_id = $1
+  AND (f.updated_at, f.id) < ($3::timestamptz, $4::uuid)
+ORDER BY f.updated_at DESC, f.id DESC
 LIMIT $2
 `
 
@@ -300,6 +360,7 @@ type ListFormsAfterRow struct {
 	Slug               string
 	Status             string
 	PublishedVersionID pgtype.UUID
+	PublishedVersion   pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
 }
@@ -327,6 +388,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.Slug,
 			&i.Status,
 			&i.PublishedVersionID,
+			&i.PublishedVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -341,10 +403,13 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 }
 
 const listFormsFirstPage = `-- name: ListFormsFirstPage :many
-SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
-FROM forms
-WHERE workspace_id = $1
-ORDER BY updated_at DESC, id DESC
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.workspace_id = $1
+ORDER BY f.updated_at DESC, f.id DESC
 LIMIT $2
 `
 
@@ -360,6 +425,7 @@ type ListFormsFirstPageRow struct {
 	Slug               string
 	Status             string
 	PublishedVersionID pgtype.UUID
+	PublishedVersion   pgtype.Int4
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
 }
@@ -382,6 +448,7 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.Slug,
 			&i.Status,
 			&i.PublishedVersionID,
+			&i.PublishedVersion,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -393,6 +460,105 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 		return nil, err
 	}
 	return items, nil
+}
+
+const nextFormVersion = `-- name: NextFormVersion :one
+SELECT (coalesce(max(version), 0) + 1)::int AS next_version
+FROM form_versions
+WHERE form_id = $1
+`
+
+// Следующий номер версии формы: max+1 (1 для первой публикации). Уникальность
+// (form_id, version) в схеме страхует от гонки двух параллельных публикаций —
+// вторая упрётся в constraint. Каст к int, чтобы sqlc вывел не-nullable тип.
+func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, nextFormVersion, formID)
+	var next_version int32
+	err := row.Scan(&next_version)
+	return next_version, err
+}
+
+const setFormClosed = `-- name: SetFormClosed :one
+UPDATE forms
+SET status = 'closed', updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type SetFormClosedParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type SetFormClosedRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Снятие с публикации: status='closed'. published_version_id не трогаем — знаем,
+// какая версия была последней опубликованной. В пределах воркспейса.
+func (q *Queries) SetFormClosed(ctx context.Context, arg SetFormClosedParams) (SetFormClosedRow, error) {
+	row := q.db.QueryRow(ctx, setFormClosed, arg.ID, arg.WorkspaceID)
+	var i SetFormClosedRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setFormPublished = `-- name: SetFormPublished :one
+UPDATE forms
+SET status = 'published', published_version_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type SetFormPublishedParams struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	PublishedVersionID pgtype.UUID
+}
+
+type SetFormPublishedRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Публикация: status='published' + ссылка на свежую версию. В пределах воркспейса;
+// 0 строк (чужая/нет формы) service трактует как 404. updated_at двигаем вручную.
+func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedParams) (SetFormPublishedRow, error) {
+	row := q.db.QueryRow(ctx, setFormPublished, arg.ID, arg.WorkspaceID, arg.PublishedVersionID)
+	var i SetFormPublishedRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateFormDraftSchema = `-- name: UpdateFormDraftSchema :one

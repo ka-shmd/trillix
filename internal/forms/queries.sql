@@ -1,4 +1,11 @@
 -- Запросы модуля forms. Схема — migrations/0003_forms. Генерация: `make sqlc`.
+--
+-- published_version — номер (form_versions.version) текущей опубликованной версии
+-- формы (NULL, пока форму не публиковали). Читающие запросы (Get/List) достают его
+-- LEFT JOIN по published_version_id — тип nullable. Мутации его НЕ выбирают: сервис
+-- и так знает версию (при публикации — из InsertFormVersion, иначе переносит из
+-- заранее прочитанной формы), а коррелированный подзапрос в RETURNING sqlc считает
+-- NOT NULL, из-за чего скан NULL (черновик) на них падал бы.
 
 -- name: GetPersonalWorkspace :one
 -- Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
@@ -24,28 +31,38 @@ RETURNING id, workspace_id, title, slug, status, published_version_id, created_a
 
 -- name: GetForm :one
 -- Полная форма, включая черновик схемы: GET /forms/{id} отдаёт draft_schema
--- (заглушка редактора в фазе 2, живой билдер — в фазе 3).
-SELECT id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at
-FROM forms
-WHERE id = $1;
+-- (заглушка редактора в фазе 2, живой билдер — в фазе 3). published_version — номер
+-- опубликованной версии (NULL для черновика), для шапки билдера «версия N».
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.id = $1;
 
 -- name: ListFormsFirstPage :many
 -- Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
 -- вызывающий по «лишней» строке понимает, есть ли следующая страница.
-SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
-FROM forms
-WHERE workspace_id = $1
-ORDER BY updated_at DESC, id DESC
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.workspace_id = $1
+ORDER BY f.updated_at DESC, f.id DESC
 LIMIT $2;
 
 -- name: ListFormsAfter :many
 -- Следующая страница составным курсором (updated_at, id): строго «старше» якоря
 -- по паре колонок — стабильно даже если форму отредактировали во время листания.
-SELECT id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
-FROM forms
-WHERE workspace_id = $1
-  AND (updated_at, id) < (sqlc.arg(cursor_updated_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
-ORDER BY updated_at DESC, id DESC
+SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+    fv.version AS published_version,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.workspace_id = $1
+  AND (f.updated_at, f.id) < (sqlc.arg(cursor_updated_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+ORDER BY f.updated_at DESC, f.id DESC
 LIMIT $2;
 
 -- name: UpdateFormTitle :one
@@ -73,3 +90,34 @@ RETURNING id, workspace_id, title, slug, status, draft_schema, published_version
 -- (0 → чужая/несуществующая форма).
 DELETE FROM forms
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: NextFormVersion :one
+-- Следующий номер версии формы: max+1 (1 для первой публикации). Уникальность
+-- (form_id, version) в схеме страхует от гонки двух параллельных публикаций —
+-- вторая упрётся в constraint. Каст к int, чтобы sqlc вывел не-nullable тип.
+SELECT (coalesce(max(version), 0) + 1)::int AS next_version
+FROM form_versions
+WHERE form_id = $1;
+
+-- name: InsertFormVersion :one
+-- Иммутабельный снапшот черновика при публикации. Возвращает id — им проставляется
+-- forms.published_version_id в той же транзакции.
+INSERT INTO form_versions (id, form_id, version, schema)
+VALUES ($1, $2, $3, $4)
+RETURNING id, version;
+
+-- name: SetFormPublished :one
+-- Публикация: status='published' + ссылка на свежую версию. В пределах воркспейса;
+-- 0 строк (чужая/нет формы) service трактует как 404. updated_at двигаем вручную.
+UPDATE forms
+SET status = 'published', published_version_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: SetFormClosed :one
+-- Снятие с публикации: status='closed'. published_version_id не трогаем — знаем,
+-- какая версия была последней опубликованной. В пределах воркспейса.
+UPDATE forms
+SET status = 'closed', updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;

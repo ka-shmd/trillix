@@ -58,7 +58,7 @@ func newStack(t *testing.T) *httptest.Server {
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, false)
 
-	formsSvc := forms.NewService(testPool, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
@@ -190,6 +190,80 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	closeBody(t, r)
 }
 
+// Публикация: две публикации подряд дают версии 1 и 2 (published_version_id
+// указывает на свежую), unpublish закрывает форму, сохраняя номер версии. Черновая
+// форма по прямому GET остаётся черновиком до публикации.
+func TestForms_PublishVersioning(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "publisher@example.com")
+
+	form := createForm(t, c, srv, "Анкета")
+	if form.PublishedVersion != nil || form.PublishedVersionID != nil {
+		t.Fatalf("свежая форма не должна иметь опубликованной версии: %+v", form)
+	}
+
+	// Кладём непустой черновик, чтобы снапшот был осмысленным.
+	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	_ = patchDraftSchema(t, c, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+
+	// Первая публикация → версия 1, статус published, id версии выдан.
+	pub1 := publishForm(t, c, srv, form.ID, http.StatusOK)
+	if pub1.Status != "published" {
+		t.Fatalf("status = %q, ожидался published", pub1.Status)
+	}
+	if pub1.PublishedVersion == nil || *pub1.PublishedVersion != 1 {
+		t.Fatalf("publishedVersion = %v, ожидалась 1", pub1.PublishedVersion)
+	}
+	if pub1.PublishedVersionID == nil {
+		t.Fatal("publishedVersionId не выдан после публикации")
+	}
+
+	// Правим черновик и публикуем снова → версия 2, id версии меняется.
+	// updated_at сдвинут публикацией (SetFormPublished двигает его) — берём из pub1.
+	_ = patchDraftSchema(t, c, srv, form.ID, schema, pub1.UpdatedAt, http.StatusOK)
+	pub2 := publishForm(t, c, srv, form.ID, http.StatusOK)
+	if pub2.PublishedVersion == nil || *pub2.PublishedVersion != 2 {
+		t.Fatalf("publishedVersion = %v, ожидалась 2", pub2.PublishedVersion)
+	}
+	if *pub2.PublishedVersionID == *pub1.PublishedVersionID {
+		t.Fatal("id версии не сменился при повторной публикации")
+	}
+
+	// GET отдаёт актуальные статус и номер версии.
+	got := getFormDetail(t, c, srv, form.ID, http.StatusOK)
+	if got.Status != "published" || got.PublishedVersion == nil || *got.PublishedVersion != 2 {
+		t.Fatalf("GET после публикаций: %+v", got.formDTO)
+	}
+
+	// Снятие с публикации → closed, номер последней версии сохраняется.
+	closed := unpublishForm(t, c, srv, form.ID, http.StatusOK)
+	if closed.Status != "closed" {
+		t.Fatalf("status = %q, ожидался closed", closed.Status)
+	}
+	if closed.PublishedVersion == nil || *closed.PublishedVersion != 2 {
+		t.Fatalf("после закрытия publishedVersion = %v, ожидалась 2", closed.PublishedVersion)
+	}
+}
+
+// Публикация чужой формы недоступна: B публикует/закрывает форму A → 404, форма A
+// остаётся черновиком.
+func TestForms_PublishIsolation(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice2@example.com")
+	bob := registerUser(t, srv, "bob2@example.com")
+
+	form := createForm(t, alice, srv, "Секрет Алисы")
+
+	publishForm(t, bob, srv, form.ID, http.StatusNotFound)
+	unpublishForm(t, bob, srv, form.ID, http.StatusNotFound)
+
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Status != "draft" {
+		t.Fatalf("форму A опубликовали в обход прав: статус %q", d.Status)
+	}
+}
+
 // Пагинация: 5 форм, страницы по 2 — курсор без дублей и потерь.
 func TestForms_CursorPagination(t *testing.T) {
 	resetDB(t)
@@ -231,12 +305,14 @@ func TestForms_CursorPagination(t *testing.T) {
 // --- DTO и HTTP-хелперы ---
 
 type formDTO struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	Slug      string `json:"slug"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	ID                 string  `json:"id"`
+	Title              string  `json:"title"`
+	Slug               string  `json:"slug"`
+	Status             string  `json:"status"`
+	CreatedAt          string  `json:"createdAt"`
+	UpdatedAt          string  `json:"updatedAt"`
+	PublishedVersion   *int    `json:"publishedVersion"`
+	PublishedVersionID *string `json:"publishedVersionId"`
 }
 
 type formDetailDTO struct {
@@ -302,6 +378,31 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
 	if r.StatusCode != wantStatus {
 		t.Fatalf("PATCH схема: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDTO{}
+	}
+	var f formDTO
+	decode(t, r, &f)
+	return f
+}
+
+func publishForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) formDTO {
+	t.Helper()
+	return postFormAction(t, c, srv, id, "publish", wantStatus)
+}
+
+func unpublishForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) formDTO {
+	t.Helper()
+	return postFormAction(t, c, srv, id, "unpublish", wantStatus)
+}
+
+func postFormAction(t *testing.T, c *http.Client, srv *httptest.Server, id, action string, wantStatus int) formDTO {
+	t.Helper()
+	r := do(t, c, http.MethodPost, srv.URL+"/api/v1/forms/"+id+"/"+action, "", csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("POST %s: статус %d, ожидалось %d; тело=%s", action, r.StatusCode, wantStatus, body2(t, r))
 	}
 	if wantStatus != http.StatusOK {
 		closeBody(t, r)

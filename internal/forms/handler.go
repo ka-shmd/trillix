@@ -36,6 +36,8 @@ type formsService interface {
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
+	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
+	Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 }
 
 // Handler — HTTP-транспорт модуля forms. Все роуты приватные (за RequireAuth);
@@ -57,6 +59,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
 	mux.Handle("PATCH /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
+	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
+	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
 }
 
 // --- DTO ---
@@ -68,6 +72,10 @@ type formResponse struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// publishedVersion/publishedVersionId — текущая опубликованная версия (null,
+	// пока форму не публиковали; после закрытия сохраняются — «была версия N»).
+	PublishedVersion   *int32  `json:"publishedVersion"`
+	PublishedVersionID *string `json:"publishedVersionId"`
 }
 
 // formDetailResponse — GET /forms/{id}: метаданные + черновик схемы.
@@ -96,14 +104,20 @@ type patchRequest struct {
 }
 
 func toFormResponse(f Form) formResponse {
-	return formResponse{
-		ID:        f.ID.String(),
-		Title:     f.Title,
-		Slug:      f.Slug,
-		Status:    f.Status,
-		CreatedAt: f.CreatedAt,
-		UpdatedAt: f.UpdatedAt,
+	resp := formResponse{
+		ID:               f.ID.String(),
+		Title:            f.Title,
+		Slug:             f.Slug,
+		Status:           f.Status,
+		CreatedAt:        f.CreatedAt,
+		UpdatedAt:        f.UpdatedAt,
+		PublishedVersion: f.PublishedVersion,
 	}
+	if f.PublishedVersionID != nil {
+		id := f.PublishedVersionID.String()
+		resp.PublishedVersionID = &id
+	}
+	return resp
 }
 
 // --- Handlers ---
@@ -230,6 +244,42 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// publish снимает снапшот черновика в новую версию и публикует форму. Тела нет.
+func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Publish(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormResponse(form))
+}
+
+// unpublish закрывает форму (status='closed'). Тела нет.
+func (h *Handler) unpublish(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Unpublish(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormResponse(form))
 }
 
 // --- Разбор запроса ---

@@ -89,11 +89,15 @@
   "id": "019f…",
   "title": "Опрос клиентов",
   "slug": "59LfFK0F4X",
-  "status": "draft",              // draft | published | closed
+  "status": "draft",                 // draft | published | closed
   "createdAt": "2026-07-11T18:33:43.335082+03:00",
-  "updatedAt": "2026-07-11T18:33:43.335082+03:00"
+  "updatedAt": "2026-07-11T18:33:43.335082+03:00",
+  "publishedVersion": null,          // номер опубликованной версии | null
+  "publishedVersionId": null         // id опубликованной версии | null
 }
 ```
+
+`publishedVersion`/`publishedVersionId` — `null`, пока форму не публиковали. После `closed` сохраняются (кабинет показывает «была версия N»).
 
 ### `GET /forms`
 Список форм личного воркспейса, свежие правки сверху. Курсорная пагинация.
@@ -126,4 +130,14 @@
 ### `DELETE /forms/{id}`
 Удаление формы (каскадно уносит версии и, позже, ответы). Требует CSRF.
 - **204** без тела.
+- **Ошибки:** `404 not_found`.
+
+### `POST /forms/{id}/publish`
+Публикация: одной транзакцией снимает иммутабельный снапшот текущего черновика в новую версию (`version = max+1`, счёт с 1), переводит форму в `published` и привязывает эту версию. Черновик перед снапшотом валидируется `ValidateSchema`. Повторная публикация (в т.ч. после `closed`) даёт следующий номер версии. Требует CSRF, тела нет.
+- **200:** обновлённый `Form` (`status: "published"`, `publishedVersion`/`publishedVersionId` заполнены).
+- **Ошибки:** `404 not_found`; `422 validation_failed` (черновик не проходит `ValidateSchema`).
+
+### `POST /forms/{id}/unpublish`
+Снятие с публикации: `status='closed'`. `publishedVersion`/`publishedVersionId` **сохраняются** (последняя опубликованная версия). Требует CSRF, тела нет.
+- **200:** обновлённый `Form` (`status: "closed"`).
 - **Ошибки:** `404 not_found`.
