@@ -20,17 +20,23 @@ import (
 // (оба nil, пока форму не публиковали). Номер версии читающие запросы (Get/List)
 // достают LEFT JOIN'ом; мутации его не выбирают — там сервис проставляет его сам
 // (см. queries.sql), поэтому у результатов мутаций PublishedVersion может быть nil.
+//
+// HasUnpublishedChanges — черновик отличается от опубликованной версии (бейдж в
+// шапке билдера). Считают только Get/List (сравнение draft_schema с fv.schema);
+// у результатов мутаций всегда false — для create/publish/unpublish это верно, а
+// rename фронт всё равно тут же перечитывает.
 type Form struct {
-	ID                 uuid.UUID
-	WorkspaceID        uuid.UUID
-	Title              string
-	Slug               string
-	Status             string
-	DraftSchema        json.RawMessage
-	PublishedVersionID *uuid.UUID
-	PublishedVersion   *int32
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	Title                 string
+	Slug                  string
+	Status                string
+	DraftSchema           json.RawMessage
+	PublishedVersionID    *uuid.UUID
+	PublishedVersion      *int32
+	HasUnpublishedChanges bool
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
@@ -116,16 +122,17 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		return Form{}, fmt.Errorf("get form: %w", err)
 	}
 	return Form{
-		ID:                 row.ID,
-		WorkspaceID:        row.WorkspaceID,
-		Title:              row.Title,
-		Slug:               row.Slug,
-		Status:             row.Status,
-		DraftSchema:        json.RawMessage(row.DraftSchema),
-		PublishedVersionID: ptrUUID(row.PublishedVersionID),
-		PublishedVersion:   ptrInt32(row.PublishedVersion),
-		CreatedAt:          row.CreatedAt.Time,
-		UpdatedAt:          row.UpdatedAt.Time,
+		ID:                    row.ID,
+		WorkspaceID:           row.WorkspaceID,
+		Title:                 row.Title,
+		Slug:                  row.Slug,
+		Status:                row.Status,
+		DraftSchema:           json.RawMessage(row.DraftSchema),
+		PublishedVersionID:    ptrUUID(row.PublishedVersionID),
+		PublishedVersion:      ptrInt32(row.PublishedVersion),
+		HasUnpublishedChanges: row.HasUnpublishedChanges,
+		CreatedAt:             row.CreatedAt.Time,
+		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
 }
 
@@ -141,15 +148,16 @@ func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UU
 	out := make([]Form, len(rows))
 	for i, r := range rows {
 		out[i] = Form{
-			ID:                 r.ID,
-			WorkspaceID:        r.WorkspaceID,
-			Title:              r.Title,
-			Slug:               r.Slug,
-			Status:             r.Status,
-			PublishedVersionID: ptrUUID(r.PublishedVersionID),
-			PublishedVersion:   ptrInt32(r.PublishedVersion),
-			CreatedAt:          r.CreatedAt.Time,
-			UpdatedAt:          r.UpdatedAt.Time,
+			ID:                    r.ID,
+			WorkspaceID:           r.WorkspaceID,
+			Title:                 r.Title,
+			Slug:                  r.Slug,
+			Status:                r.Status,
+			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
+			PublishedVersion:      ptrInt32(r.PublishedVersion),
+			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			CreatedAt:             r.CreatedAt.Time,
+			UpdatedAt:             r.UpdatedAt.Time,
 		}
 	}
 	return out, nil
@@ -169,15 +177,16 @@ func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uu
 	out := make([]Form, len(rows))
 	for i, r := range rows {
 		out[i] = Form{
-			ID:                 r.ID,
-			WorkspaceID:        r.WorkspaceID,
-			Title:              r.Title,
-			Slug:               r.Slug,
-			Status:             r.Status,
-			PublishedVersionID: ptrUUID(r.PublishedVersionID),
-			PublishedVersion:   ptrInt32(r.PublishedVersion),
-			CreatedAt:          r.CreatedAt.Time,
-			UpdatedAt:          r.UpdatedAt.Time,
+			ID:                    r.ID,
+			WorkspaceID:           r.WorkspaceID,
+			Title:                 r.Title,
+			Slug:                  r.Slug,
+			Status:                r.Status,
+			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
+			PublishedVersion:      ptrInt32(r.PublishedVersion),
+			HasUnpublishedChanges: r.HasUnpublishedChanges,
+			CreatedAt:             r.CreatedAt.Time,
+			UpdatedAt:             r.UpdatedAt.Time,
 		}
 	}
 	return out, nil

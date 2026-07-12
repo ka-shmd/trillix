@@ -15,6 +15,13 @@ export const formSchema = z.object({
   status: formStatusSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
+  // Публикация (фаза 4). publishedVersion/publishedVersionId — null, пока форму
+  // не публиковали (после закрытия сохраняются). hasUnpublishedChanges — черновик
+  // разошёлся с опубликованной версией (бейдж в шапке билдера); точен на
+  // GET/списке, у ответов мутаций всегда false.
+  publishedVersion: z.number().int().nullable(),
+  publishedVersionId: z.string().nullable(),
+  hasUnpublishedChanges: z.boolean(),
 })
 
 export type Form = z.infer<typeof formSchema>

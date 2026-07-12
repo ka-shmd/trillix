@@ -93,11 +93,14 @@
   "createdAt": "2026-07-11T18:33:43.335082+03:00",
   "updatedAt": "2026-07-11T18:33:43.335082+03:00",
   "publishedVersion": null,          // номер опубликованной версии | null
-  "publishedVersionId": null         // id опубликованной версии | null
+  "publishedVersionId": null,        // id опубликованной версии | null
+  "hasUnpublishedChanges": false     // черновик разошёлся с опубликованной версией
 }
 ```
 
 `publishedVersion`/`publishedVersionId` — `null`, пока форму не публиковали. После `closed` сохраняются (кабинет показывает «была версия N»).
+
+`hasUnpublishedChanges` — `true`, когда черновик формы отличается от опубликованной версии (сравнение `draft_schema` со снапшотом; переименование, не входящее в версию, его не поднимает). **Точен на `GET /forms/{id}` и `GET /forms`;** в ответах мутаций (create/publish/unpublish/rename) всегда `false` — актуальное значение кабинет берёт из `GET`.
 
 ### `GET /forms`
 Список форм личного воркспейса, свежие правки сверху. Курсорная пагинация.

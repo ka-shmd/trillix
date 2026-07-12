@@ -76,6 +76,10 @@ type formResponse struct {
 	// пока форму не публиковали; после закрытия сохраняются — «была версия N»).
 	PublishedVersion   *int32  `json:"publishedVersion"`
 	PublishedVersionID *string `json:"publishedVersionId"`
+	// hasUnpublishedChanges — черновик отличается от опубликованной версии (бейдж
+	// «есть неопубликованные изменения»). Точен на GET/список; у ответов мутаций
+	// всегда false (см. Form.HasUnpublishedChanges).
+	HasUnpublishedChanges bool `json:"hasUnpublishedChanges"`
 }
 
 // formDetailResponse — GET /forms/{id}: метаданные + черновик схемы.
@@ -105,13 +109,14 @@ type patchRequest struct {
 
 func toFormResponse(f Form) formResponse {
 	resp := formResponse{
-		ID:               f.ID.String(),
-		Title:            f.Title,
-		Slug:             f.Slug,
-		Status:           f.Status,
-		CreatedAt:        f.CreatedAt,
-		UpdatedAt:        f.UpdatedAt,
-		PublishedVersion: f.PublishedVersion,
+		ID:                    f.ID.String(),
+		Title:                 f.Title,
+		Slug:                  f.Slug,
+		Status:                f.Status,
+		CreatedAt:             f.CreatedAt,
+		UpdatedAt:             f.UpdatedAt,
+		PublishedVersion:      f.PublishedVersion,
+		HasUnpublishedChanges: f.HasUnpublishedChanges,
 	}
 	if f.PublishedVersionID != nil {
 		id := f.PublishedVersionID.String()

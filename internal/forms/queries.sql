@@ -35,6 +35,11 @@ RETURNING id, workspace_id, title, slug, status, published_version_id, created_a
 -- опубликованной версии (NULL для черновика), для шапки билдера «версия N».
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
+    -- Черновик отличается от опубликованной версии → в шапке билдера бейдж «есть
+    -- неопубликованные изменения». Сравнение JSONB (draft_schema и снапшот пишутся
+    -- канонизированными, так что сразу после публикации они равны). Заголовок в
+    -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -45,6 +50,7 @@ WHERE f.id = $1;
 -- вызывающий по «лишней» строке понимает, есть ли следующая страница.
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -57,6 +63,7 @@ LIMIT $2;
 -- по паре колонок — стабильно даже если форму отредактировали во время листания.
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id

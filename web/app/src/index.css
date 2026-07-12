@@ -6,7 +6,12 @@
   --muted: #6b7280;
   --accent: #2563eb;
   --danger: #b91c1c;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
   color: var(--text);
 }
 
@@ -418,6 +423,111 @@ button.primary {
   border-radius: 7px;
   padding: 0.35rem 0.8rem;
   font-size: 0.85rem;
+}
+
+/* --- Публикация (шапка билдера) --- */
+.publish {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.8rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.publish-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.publish-btn {
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.publish-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.publish-status {
+  font-size: 0.85rem;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.publish-status-closed {
+  color: var(--muted);
+}
+
+.publish-badge {
+  font-size: 0.78rem;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+}
+
+.publish-close {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.82rem;
+  margin-left: auto;
+}
+
+.publish-link {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.publish-link-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.82rem;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.publish-copy {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.publish-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.publish-error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--danger);
 }
 
 /* Три колонки: палитра / канвас / настройки. На узких экранах — в один столбец. */

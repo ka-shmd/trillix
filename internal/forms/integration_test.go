@@ -249,6 +249,51 @@ func TestForms_PublishVersioning(t *testing.T) {
 	}
 }
 
+// hasUnpublishedChanges: true только когда черновик разошёлся с опубликованной
+// версией. До публикации сравнивать не с чем; переименование (title не
+// версионируется) бейдж не поднимает; повторная публикация его снимает.
+func TestForms_HasUnpublishedChanges(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "badge@example.com")
+
+	form := createForm(t, c, srv, "Анкета")
+	schemaA := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	_ = patchDraftSchema(t, c, srv, form.ID, schemaA, form.UpdatedAt, http.StatusOK)
+
+	// Неопубликованная форма — бейджа нет (сравнивать не с чем).
+	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("у неопубликованной формы не должно быть неопубликованных изменений")
+	}
+
+	// Публикация → черновик == снапшот → бейджа нет.
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("сразу после публикации изменений быть не должно")
+	}
+
+	// Переименование не версионируется → бейдж не поднимается.
+	patchTitle(t, c, srv, form.ID, "Анкета 2", http.StatusOK)
+	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("переименование не должно давать неопубликованных изменений")
+	}
+
+	// Правка черновика → расходится с версией → бейдж. updated_at сдвинут
+	// публикацией и переименованием — берём свежий из GET.
+	cur := getFormDetail(t, c, srv, form.ID, http.StatusOK)
+	schemaB := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя и фамилия","description":"","required":true,"settings":{}}]}`
+	_ = patchDraftSchema(t, c, srv, form.ID, schemaB, cur.UpdatedAt, http.StatusOK)
+	if !getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("после правки черновика ожидались неопубликованные изменения")
+	}
+
+	// Повторная публикация снимает бейдж.
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("после повторной публикации бейдж должен исчезнуть")
+	}
+}
+
 // Публикация чужой формы недоступна: B публикует/закрывает форму A → 404, форма A
 // остаётся черновиком.
 func TestForms_PublishIsolation(t *testing.T) {
@@ -389,14 +434,15 @@ func TestForms_CursorPagination(t *testing.T) {
 // --- DTO и HTTP-хелперы ---
 
 type formDTO struct {
-	ID                 string  `json:"id"`
-	Title              string  `json:"title"`
-	Slug               string  `json:"slug"`
-	Status             string  `json:"status"`
-	CreatedAt          string  `json:"createdAt"`
-	UpdatedAt          string  `json:"updatedAt"`
-	PublishedVersion   *int    `json:"publishedVersion"`
-	PublishedVersionID *string `json:"publishedVersionId"`
+	ID                    string  `json:"id"`
+	Title                 string  `json:"title"`
+	Slug                  string  `json:"slug"`
+	Status                string  `json:"status"`
+	CreatedAt             string  `json:"createdAt"`
+	UpdatedAt             string  `json:"updatedAt"`
+	PublishedVersion      *int    `json:"publishedVersion"`
+	PublishedVersionID    *string `json:"publishedVersionId"`
+	HasUnpublishedChanges bool    `json:"hasUnpublishedChanges"`
 }
 
 type formDetailDTO struct {

@@ -18,7 +18,11 @@ const DEBOUNCE_MS = 800
 // в терминальный статус 'conflict' — дальше молчим, пользователь перезагружает.
 //
 // Возвращает статус для индикатора и retry для ручного повтора после ошибки.
-export function useAutosave(store: StoreApi<BuilderStore>, formId: string, initialUpdatedAt: string) {
+export function useAutosave(
+  store: StoreApi<BuilderStore>,
+  formId: string,
+  initialUpdatedAt: string,
+) {
   const qc = useQueryClient()
   const [status, setStatus] = useState<SaveStatus>('saved')
 
@@ -65,7 +69,16 @@ export function useAutosave(store: StoreApi<BuilderStore>, formId: string, initi
         // повторный вход в форму гидрировал стор сохранённым состоянием и токеном.
         qc.invalidateQueries({ queryKey: formKeys.list() })
         qc.setQueryData<FormDetail>(formKeys.detail(formId), (old) =>
-          old ? { ...old, updatedAt: form.updatedAt, draftSchema: snapshot } : old,
+          old
+            ? {
+                ...old,
+                updatedAt: form.updatedAt,
+                draftSchema: snapshot,
+                // Правка черновика опубликованной формы разводит его с версией →
+                // бейдж «есть неопубликованные изменения» (у черновика остаётся false).
+                hasUnpublishedChanges: old.publishedVersionId !== null,
+              }
+            : old,
         )
         // Отмечаем сохранённым, только если за время запроса не появилось новых
         // правок — иначе dirty остаётся и finally перепланирует сохранение.

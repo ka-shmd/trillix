@@ -5,7 +5,16 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { formKeys } from './keys'
-import { createForm, deleteForm, getForm, listForms, renameForm } from './api'
+import {
+  createForm,
+  deleteForm,
+  getForm,
+  listForms,
+  publishForm,
+  renameForm,
+  unpublishForm,
+} from './api'
+import { type FormDetail } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
@@ -49,5 +58,35 @@ export function useDeleteForm() {
   return useMutation({
     mutationFn: (id: string) => deleteForm(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
+  })
+}
+
+// Публикация/снятие патчат detail возвращённой формой (status, версия,
+// hasUnpublishedChanges=false), сохраняя draftSchema из кэша — билдер не
+// перегидрируется. Список инвалидируется (статус на карточке).
+
+export function usePublishForm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => publishForm(id),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+        old ? { ...old, ...form } : old,
+      )
+    },
+  })
+}
+
+export function useUnpublishForm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => unpublishForm(id),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+        old ? { ...old, ...form } : old,
+      )
+    },
   })
 }

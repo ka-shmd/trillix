@@ -177,6 +177,11 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
+    -- Черновик отличается от опубликованной версии → в шапке билдера бейдж «есть
+    -- неопубликованные изменения». Сравнение JSONB (draft_schema и снапшот пишутся
+    -- канонизированными, так что сразу после публикации они равны). Заголовок в
+    -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -184,16 +189,17 @@ WHERE f.id = $1
 `
 
 type GetFormRow struct {
-	ID                 uuid.UUID
-	WorkspaceID        uuid.UUID
-	Title              string
-	Slug               string
-	Status             string
-	DraftSchema        []byte
-	PublishedVersionID pgtype.UUID
-	PublishedVersion   pgtype.Int4
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	Title                 string
+	Slug                  string
+	Status                string
+	DraftSchema           []byte
+	PublishedVersionID    pgtype.UUID
+	PublishedVersion      pgtype.Int4
+	HasUnpublishedChanges bool
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 // Полная форма, включая черновик схемы: GET /forms/{id} отдаёт draft_schema
@@ -211,6 +217,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.DraftSchema,
 		&i.PublishedVersionID,
 		&i.PublishedVersion,
+		&i.HasUnpublishedChanges,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -367,6 +374,7 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 const listFormsAfter = `-- name: ListFormsAfter :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -384,15 +392,16 @@ type ListFormsAfterParams struct {
 }
 
 type ListFormsAfterRow struct {
-	ID                 uuid.UUID
-	WorkspaceID        uuid.UUID
-	Title              string
-	Slug               string
-	Status             string
-	PublishedVersionID pgtype.UUID
-	PublishedVersion   pgtype.Int4
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	Title                 string
+	Slug                  string
+	Status                string
+	PublishedVersionID    pgtype.UUID
+	PublishedVersion      pgtype.Int4
+	HasUnpublishedChanges bool
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 // Следующая страница составным курсором (updated_at, id): строго «старше» якоря
@@ -419,6 +428,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.Status,
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
+			&i.HasUnpublishedChanges,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -435,6 +445,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 const listFormsFirstPage = `-- name: ListFormsFirstPage :many
 SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -449,15 +460,16 @@ type ListFormsFirstPageParams struct {
 }
 
 type ListFormsFirstPageRow struct {
-	ID                 uuid.UUID
-	WorkspaceID        uuid.UUID
-	Title              string
-	Slug               string
-	Status             string
-	PublishedVersionID pgtype.UUID
-	PublishedVersion   pgtype.Int4
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	Title                 string
+	Slug                  string
+	Status                string
+	PublishedVersionID    pgtype.UUID
+	PublishedVersion      pgtype.Int4
+	HasUnpublishedChanges bool
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
 }
 
 // Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
@@ -479,6 +491,7 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.Status,
 			&i.PublishedVersionID,
 			&i.PublishedVersion,
+			&i.HasUnpublishedChanges,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
