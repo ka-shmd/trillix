@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useBuilderStore } from './storeContext'
 import { BlockRow } from './BlockRow'
 import { useRenameForm } from '../queries'
+import { DEFAULT_FORM_TITLE } from '../../../entities/form'
 
 // SlashEditor — полотно редактора: название формы первой строкой, ниже блоки как
 // редактируемые строки. Фокусом между строками управляет focusId (после Enter/
@@ -36,19 +37,19 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-4 py-8">
+    <div className="mx-auto max-w-2xl px-6 py-10">
       <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
 
       {blocks.length === 0 ? (
         <button
           type="button"
           onClick={() => setFocusId(addBlockAfter(null, 'short_text'))}
-          className="mt-4 w-full rounded-lg border border-dashed border-border px-4 py-6 text-left text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground"
+          className="mt-6 block w-full pl-9 text-left text-base text-muted-foreground/50 hover:text-muted-foreground"
         >
-          Нажмите, чтобы добавить первый вопрос. Внутри строки «/» открывает выбор типа.
+          Напишите вопрос или «/» для выбора типа поля
         </button>
       ) : (
-        <ol className="mt-4 flex flex-col gap-1">
+        <ol className="mt-6 flex flex-col gap-0.5">
           {blocks.map((b, i) => (
             <BlockRow
               key={b.id}
@@ -91,7 +92,8 @@ function FormTitleInput({
   onEnter: () => void
 }) {
   const rename = useRenameForm()
-  const [title, setTitle] = useState(initialTitle)
+  // Дефолтное имя показываем пустым полем → виден плейсхолдер.
+  const [title, setTitle] = useState(initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle)
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -124,7 +126,7 @@ function FormTitleInput({
       onKeyDown={onKeyDown}
       placeholder="Без названия"
       aria-label="Название формы"
-      className="w-full bg-transparent text-3xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/50"
+      className="mb-2 w-full bg-transparent pl-9 text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

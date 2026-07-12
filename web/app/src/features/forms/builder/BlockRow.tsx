@@ -57,6 +57,7 @@ export function BlockRow({
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const labelRef = useRef<HTMLTextAreaElement>(null)
   const [slashOpen, setSlashOpen] = useState(false)
+  const [focused, setFocused] = useState(false)
 
   useEffect(() => {
     if (!focusMe) return
@@ -168,10 +169,14 @@ export function BlockRow({
               ref={labelRef}
               rows={1}
               value={block.label}
-              placeholder="Напишите вопрос или «/» для выбора типа"
+              // Плейсхолдер — только у активной строки: незанятый блок выглядит
+              // пустой строкой с кареткой (как в Notion/Tally), без подсказок.
+              placeholder={focused ? 'Напишите вопрос или «/» для поля' : undefined}
               onChange={(e) => updateBlock(block.id, { label: e.target.value })}
               onKeyDown={onLabelKeyDown}
-              className="w-full resize-none bg-transparent text-base font-medium leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground"
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              className="w-full resize-none bg-transparent text-base font-medium leading-snug outline-none placeholder:font-normal placeholder:text-muted-foreground/60"
             />
             {block.required && (
               <span className="mt-1 select-none text-base text-destructive" title="Обязательный">
@@ -180,11 +185,14 @@ export function BlockRow({
             )}
           </div>
 
+          {/* Живое превью поля показываем, только когда у вопроса есть текст:
+              пустой блок = просто строка с кареткой. Choice всегда показывает
+              варианты — тип выбран осознанно. */}
           {isChoiceType(block.type) ? (
             <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
-          ) : (
+          ) : block.label.trim() !== '' ? (
             <FieldPreview type={block.type} />
-          )}
+          ) : null}
         </div>
       </SlashMenu>
     </li>

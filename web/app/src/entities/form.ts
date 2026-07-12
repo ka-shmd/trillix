@@ -29,6 +29,17 @@ export const formSchema = z.object({
 
 export type Form = z.infer<typeof formSchema>
 
+// Дефолт названия с бэкенда (internal/forms/service.go) для формы без имени. В UI
+// показываем его как «Без названия» (плейсхолдер), а не как введённый текст.
+export const DEFAULT_FORM_TITLE = 'Untitled form'
+
+export const isUntitled = (title: string): boolean =>
+  title.trim() === '' || title === DEFAULT_FORM_TITLE
+
+// Заголовок формы для показа: плейсхолдер для безымянной, иначе сам title.
+export const displayFormTitle = (title: string): string =>
+  isUntitled(title) ? 'Без названия' : title
+
 // GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор).
 export const formDetailSchema = formSchema.extend({
   draftSchema: formSchemaSchema,

@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
-import type { Form } from '../../entities/form'
+import { type Form, displayFormTitle, isUntitled } from '../../entities/form'
 import { formatDate } from '../../shared/format'
 import { useDeleteForm, useRenameForm } from './queries'
 import { Badge } from '@/components/ui/badge'
@@ -51,7 +51,7 @@ export function FormCard({ form }: { form: Form }) {
     <Card className="flex min-h-36 flex-col gap-3 p-4" aria-busy={remove.isPending}>
       {editing ? (
         <RenameForm
-          initial={form.title}
+          initial={isUntitled(form.title) ? '' : form.title}
           pending={rename.isPending}
           onCancel={() => setEditing(false)}
           onSubmit={(title) =>
@@ -63,9 +63,11 @@ export function FormCard({ form }: { form: Form }) {
           <Link
             to="/forms/$formId/edit"
             params={{ formId: form.id }}
-            className="break-words text-base font-semibold hover:text-primary"
+            className={`break-words text-base font-semibold hover:text-primary ${
+              isUntitled(form.title) ? 'text-muted-foreground' : ''
+            }`}
           >
-            {form.title}
+            {displayFormTitle(form.title)}
           </Link>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
