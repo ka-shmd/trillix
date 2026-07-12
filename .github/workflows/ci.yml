@@ -63,3 +63,23 @@ jobs:
       - name: bundle budget
         if: matrix.project == 'renderer'
         run: npm run check:bundle
+
+  # Lighthouse рендерера: DoD фазы 4 — Performance (mobile) ≥ 90. Отдельная джоба
+  # (медленнее веб-проверок), гоняется параллельно. Chrome предустановлен на
+  # ubuntu-раннере; LHCI поднимает сервер над dist/ и сам находит браузер.
+  lighthouse:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web/renderer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/renderer/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Lighthouse (mobile) — Performance ≥ 90
+        run: npx --yes @lhci/cli@0.14.x autorun

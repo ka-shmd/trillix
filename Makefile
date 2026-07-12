@@ -12,7 +12,7 @@ include .env
 export
 endif
 
-.PHONY: help dev db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web
+.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -20,6 +20,16 @@ help: ## Показать список целей
 
 dev: db-up ## Поднять Postgres и запустить API на хосте
 	go run ./cmd/api
+
+dev-all: ## Весь dev-контур одной командой: Postgres + API + оба фронта (Ctrl-C — стоп)
+	./scripts/dev-all.sh
+
+dev-stop: ## Остановить API и фронты dev-all (по портам 8080/5173/5174)
+	@for p in 8080 5173 5174; do \
+		pids=$$(lsof -ti tcp:$$p 2>/dev/null || true); \
+		if [ -n "$$pids" ]; then kill $$pids 2>/dev/null || true; echo "  :$$p остановлен ($$pids)"; \
+		else echo "  :$$p свободен"; fi; \
+	done
 
 db-up: ## Поднять Postgres в Docker
 	$(COMPOSE) up -d

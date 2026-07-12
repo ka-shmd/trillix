@@ -1,0 +1,18 @@
+{
+  "//": "Бюджет производительности публичного рендерера (DoD фазы 4: Lighthouse mobile ≥90). LHCI поднимает свой сервер над dist/ и гоняет lighthouse на собранном SPA; форм-фактор по умолчанию — mobile. numberOfRuns=3 → медиана (меньше флака). Порог веса бандла отдельно стережёт scripts/check-bundle.mjs.",
+  "ci": {
+    "collect": {
+      "staticDistDir": "./dist",
+      "numberOfRuns": 3
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["error", { "minScore": 0.9 }]
+      }
+    },
+    "upload": {
+      "target": "filesystem",
+      "outputDir": ".lighthouseci"
+    }
+  }
+}

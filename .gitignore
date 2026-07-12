@@ -9,6 +9,7 @@ coverage.out
 # Node
 node_modules/
 dist/
+.lighthouseci/
 
 # IDE
 .idea/
