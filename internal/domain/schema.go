@@ -28,6 +28,7 @@ const (
 	MaxDescriptionLen = 2000
 	MaxOptionLabelLen = 500
 	MaxIDLen          = 64
+	MaxSubmitLabelLen = 100
 )
 
 // BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
@@ -90,10 +91,12 @@ type Block struct {
 	Settings    BlockSettings `json:"settings"`
 }
 
-// FormSchema — документ черновика формы: версия формата и упорядоченный список блоков.
+// FormSchema — документ черновика формы: версия формата, список блоков и текст
+// кнопки отправки (пусто → рендерер берёт дефолт).
 type FormSchema struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Blocks        []Block `json:"blocks"`
+	SubmitLabel   string  `json:"submitLabel"`
 }
 
 // ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы.
@@ -128,6 +131,9 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 
 	if len(s.Blocks) > MaxBlocks {
 		return FormSchema{}, schemaErr("больше %d блоков", MaxBlocks)
+	}
+	if n := utf8.RuneCountInString(s.SubmitLabel); n > MaxSubmitLabelLen {
+		return FormSchema{}, schemaErr("submitLabel длиннее %d символов", MaxSubmitLabelLen)
 	}
 
 	seen := make(map[string]struct{}, len(s.Blocks))

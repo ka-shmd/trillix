@@ -105,10 +105,12 @@ export function useAutosave(
       void run()
     }
 
-    // Дебаунс на изменения документа: перемещение/правка меняют ссылку blocks;
-    // выбор блока (selectedId) документ не трогает и сохранение не будит.
+    // Дебаунс на изменения документа: перемещение/правка меняют ссылку blocks,
+    // правка текста кнопки — submitLabel; выбор блока (selectedId) документ не
+    // трогает и сохранение не будит.
     const unsub = store.subscribe((state, prev) => {
-      if (state.blocks !== prev.blocks && !conflictRef.current) schedule()
+      const changed = state.blocks !== prev.blocks || state.submitLabel !== prev.submitLabel
+      if (changed && !conflictRef.current) schedule()
     })
 
     return () => {

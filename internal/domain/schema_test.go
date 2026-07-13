@@ -24,6 +24,7 @@ func TestValidateSchema_Valid(t *testing.T) {
 			]
 		}`,
 		"неотвечаемый text-блок": `{"blocks":[{"id":"b","type":"text","label":"Раздел А","required":false,"settings":{}}]}`,
+		"submitLabel задан":      `{"blocks":[],"submitLabel":"Готово"}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
 		"пустой label — валидный черновик":     `{"blocks":[{"id":"b","type":"short_text","label":"","required":false,"settings":{}}]}`,
 		"settings опущен": `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,
@@ -53,8 +54,10 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		strings.Join(manyOpts, ",") + `]}}]}`
 
 	longLabel := `{"blocks":[{"id":"b","type":"short_text","label":"` + strings.Repeat("я", MaxLabelLen+1) + `","settings":{}}]}`
+	longSubmit := `{"blocks":[],"submitLabel":"` + strings.Repeat("я", MaxSubmitLabelLen+1) + `"}`
 
 	cases := map[string]string{
+		"слишком длинный submitLabel": longSubmit,
 		"битый JSON":                  `{"blocks":`,
 		"хвост после документа":       `{"blocks":[]}{}`,
 		"неизвестная schemaVersion":   `{"schemaVersion":2,"blocks":[]}`,

@@ -4,6 +4,7 @@ import {
   MAX_BLOCKS,
   MAX_LABEL_LEN,
   MAX_OPTIONS,
+  MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 
 // Зеркало internal/domain/schema_test.go: те же валидные/невалидные кейсы, чтобы
@@ -34,6 +35,7 @@ describe('formSchemaSchema — валидные', () => {
     'неотвечаемый text-блок': {
       blocks: [{ id: 'b', type: 'text', label: 'Раздел А', settings: {} }],
     },
+    'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'choice без опций — валидный черновик': {
       blocks: [{ id: 'b', type: 'single_choice', label: '', settings: {} }],
     },
@@ -103,6 +105,10 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'слишком длинный label': {
       blocks: [{ id: 'b', type: 'short_text', label: 'я'.repeat(MAX_LABEL_LEN + 1) }],
+    },
+    'слишком длинный submitLabel': {
+      blocks: [],
+      submitLabel: 'я'.repeat(MAX_SUBMIT_LABEL_LEN + 1),
     },
   }
 

@@ -13,10 +13,15 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
+import { DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { BlockRow } from './BlockRow'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
 // Дефолтный тип новой строки — «text» (неотвечаемый абзац). Пишешь текст, а «/»
 // превращает строку в поле нужного типа — как в Notion/Tally.
@@ -92,11 +97,10 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
             strategy={verticalListSortingStrategy}
           >
             <ol className="mt-6 flex flex-col gap-0.5">
-              {blocks.map((b, i) => (
+              {blocks.map((b) => (
                 <BlockRow
                   key={b.id}
                   block={b}
-                  index={i}
                   total={blocks.length}
                   focusMe={focusId === b.id}
                   onFocusHandled={() => setFocusId(null)}
@@ -115,11 +119,50 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
         <button
           type="button"
           onClick={() => startBlock(blocks[blocks.length - 1]?.id ?? null)}
-          className="mt-2 pl-9 text-left text-sm text-muted-foreground hover:text-foreground"
+          className="mt-2 pl-20 text-left text-sm text-muted-foreground hover:text-foreground"
         >
           + Добавить блок
         </button>
       )}
+
+      <SubmitButtonEditor />
+    </div>
+  )
+}
+
+// SubmitButtonEditor — кнопка отправки формы (всегда видна). Клик открывает поповер
+// со сменой её текста; пусто → показывается дефолт. Пишет в стор (форма-уровень),
+// автосейв сохраняет вместе со схемой.
+function SubmitButtonEditor() {
+  const submitLabel = useBuilderStore((s) => s.submitLabel)
+  const setSubmitLabel = useBuilderStore((s) => s.setSubmitLabel)
+  const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
+
+  return (
+    <div className="mt-8 pl-20">
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button type="button" title="Нажмите, чтобы изменить текст кнопки">
+            {label}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-72">
+          <Label htmlFor="submit-label" className="text-sm font-medium">
+            Текст кнопки отправки
+          </Label>
+          <Input
+            id="submit-label"
+            value={submitLabel}
+            placeholder={DEFAULT_SUBMIT_LABEL}
+            maxLength={MAX_SUBMIT_LABEL_LEN}
+            onChange={(e) => setSubmitLabel(e.target.value)}
+            className="mt-1.5"
+          />
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Эту кнопку респондент нажимает, чтобы отправить ответ.
+          </p>
+        </PopoverContent>
+      </Popover>
     </div>
   )
 }
@@ -156,7 +199,7 @@ function EmptyStarter({
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
-      className="mt-6 cursor-text pl-9 leading-relaxed text-muted-foreground/60 outline-none"
+      className="mt-6 cursor-text pl-20 leading-relaxed text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
@@ -223,7 +266,7 @@ function FormTitleInput({
       onKeyDown={onKeyDown}
       placeholder="Без названия"
       aria-label="Название формы"
-      className="mb-2 w-full bg-transparent pl-9 text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
+      className="mb-2 w-full bg-transparent pl-20 text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

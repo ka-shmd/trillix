@@ -30,6 +30,8 @@ export type BlockPatch = Partial<Pick<Block, 'label' | 'description' | 'required
 
 export type BuilderState = {
   blocks: Block[]
+  // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт дефолт.
+  submitLabel: string
   selectedId: string | null
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
@@ -64,6 +66,8 @@ export type BuilderActions = {
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
   select: (id: string | null) => void
+  // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
+  setSubmitLabel: (label: string) => void
   // markSaved снимает dirty после успешного PATCH (автосейв — шаг 6).
   markSaved: () => void
   // toSchema сериализует документ для отправки на бэкенд.
@@ -116,11 +120,17 @@ function mutateOptions(
 export function createBuilderStore(): StoreApi<BuilderStore> {
   return createStore<BuilderStore>((set, get) => ({
     blocks: [],
+    submitLabel: '',
     selectedId: null,
     dirty: false,
 
     hydrate: (schema) =>
-      set({ blocks: schema.blocks.map(cloneBlock), selectedId: null, dirty: false }),
+      set({
+        blocks: schema.blocks.map(cloneBlock),
+        submitLabel: schema.submitLabel ?? '',
+        selectedId: null,
+        dirty: false,
+      }),
 
     addBlock: (type) => {
       const block = newBlock(type)
@@ -240,8 +250,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
     select: (id) => set({ selectedId: id }),
 
+    setSubmitLabel: (label) => set({ submitLabel: label, dirty: true }),
+
     markSaved: () => set({ dirty: false }),
 
-    toSchema: () => ({ schemaVersion: SCHEMA_VERSION, blocks: get().blocks }),
+    toSchema: () => ({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: get().blocks,
+      submitLabel: get().submitLabel,
+    }),
   }))
 }

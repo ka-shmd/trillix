@@ -258,6 +258,22 @@ describe('createBuilderStore', () => {
     expect(s.blocks[0]).not.toBe(schema.blocks[0])
   })
 
+  it('setSubmitLabel меняет текст кнопки и помечает dirty; toSchema его несёт', () => {
+    const store = createBuilderStore()
+    expect(store.getState().submitLabel).toBe('')
+
+    store.getState().setSubmitLabel('Готово')
+    expect(store.getState().submitLabel).toBe('Готово')
+    expect(store.getState().dirty).toBe(true)
+    expect(store.getState().toSchema().submitLabel).toBe('Готово')
+  })
+
+  it('hydrate загружает submitLabel из схемы', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({ schemaVersion: 1, blocks: [], submitLabel: 'Отправить ответ' })
+    expect(store.getState().submitLabel).toBe('Отправить ответ')
+  })
+
   it('markSaved снимает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')

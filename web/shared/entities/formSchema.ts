@@ -18,6 +18,10 @@ export const MAX_LABEL_LEN = 1000
 export const MAX_DESCRIPTION_LEN = 2000
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
+export const MAX_SUBMIT_LABEL_LEN = 100
+
+// Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
+export const DEFAULT_SUBMIT_LABEL = 'Отправить'
 
 // Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс неотвечаемый
 // 'text' — статический абзац на полотне. text не собирает ответ (исключён из
@@ -104,6 +108,8 @@ export const formSchemaSchema = z
   .strictObject({
     schemaVersion: z.literal(SCHEMA_VERSION).optional(),
     blocks: z.array(blockSchema).max(MAX_BLOCKS),
+    // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт DEFAULT_SUBMIT_LABEL.
+    submitLabel: z.string().max(MAX_SUBMIT_LABEL_LEN).optional(),
   })
   .superRefine((s, ctx) => {
     const seen = new Set<string>()

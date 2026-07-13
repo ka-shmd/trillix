@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
 
+import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 
@@ -62,6 +63,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   }, [slug, form.version, answers])
 
   const blocks = form.schema.blocks
+  const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
 
   const setBlockError = (blockId: string, msg: string | null) =>
@@ -172,7 +174,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         onClick={() => void onSubmit()}
         disabled={phase === 'submitting'}
       >
-        {phase === 'submitting' ? 'Отправка…' : 'Отправить'}
+        {phase === 'submitting' ? 'Отправка…' : submitLabel}
       </button>
       {attempted && hasFieldErrors && (
         <p className="form-note form-note-error" role="alert">
