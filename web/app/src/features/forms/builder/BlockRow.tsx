@@ -174,7 +174,7 @@ export function BlockRow({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             className={`w-full resize-none bg-transparent leading-7 outline-none placeholder:font-normal placeholder:text-muted-foreground/60 ${
-              isContent ? 'text-base' : 'text-base font-medium'
+              isContent ? 'text-base' : 'text-lg font-semibold'
             }`}
           />
 
