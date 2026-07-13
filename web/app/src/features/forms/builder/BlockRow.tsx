@@ -129,9 +129,7 @@ export function BlockRow({
     <li
       ref={setNodeRef}
       style={style}
-      className={`group relative rounded-md py-1.5 transition-colors hover:bg-muted/30 ${
-        isDragging ? 'z-10 opacity-70' : ''
-      }`}
+      className={`group relative rounded-md py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Всегда видимы; h-8 + items-center и
@@ -172,14 +170,15 @@ export function BlockRow({
             rows={1}
             value={block.label}
             // Плейсхолдер показываем у любого пустого блока (в т.ч. неактивного),
-            // чтобы пустая строка не выглядела «пропавшей».
-            placeholder={isContent ? 'Текст, или «/» для поля' : 'Вопрос, или «/» для типа'}
+            // чтобы пустая строка не выглядела «пропавшей». У вопроса «/» уже не
+            // работает (тип выбран) — подсказку про слэш не показываем.
+            placeholder={isContent ? 'Текст, или «/» для поля' : 'Введите текст вопроса'}
             onChange={(e) => updateBlock(block.id, { label: e.target.value })}
             onKeyDown={onLabelKeyDown}
             className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
               isContent
-                ? 'text-xl placeholder:font-normal'
-                : 'text-2xl font-semibold placeholder:font-semibold'
+                ? 'text-lg placeholder:font-normal'
+                : 'text-xl font-semibold placeholder:font-semibold'
             }`}
           />
 
@@ -207,7 +206,7 @@ function AnswerField({ block }: { block: Block }) {
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
-  const cls = 'mt-1.5 border-muted-foreground/30 text-lg'
+  const cls = 'mt-1.5 border-muted-foreground/30 text-base'
 
   if (!supportsPlaceholder(block.type)) {
     return (
@@ -286,7 +285,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
       {options.map((o, i) => (
         <div key={o.id} className="flex items-center gap-2">
           <span
-            className={`size-5 shrink-0 border border-muted-foreground/40 ${
+            className={`size-4 shrink-0 border border-muted-foreground/40 ${
               block.type === 'single_choice' ? 'rounded-full' : 'rounded-[4px]'
             }`}
             aria-hidden="true"
@@ -300,7 +299,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
             aria-label={`Вариант ${i + 1}`}
             onChange={(e) => updateOption(block.id, o.id, e.target.value)}
             onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
-            className="min-w-0 flex-1 bg-transparent text-lg outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
           />
           <button
             type="button"
@@ -318,7 +317,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
           pendingFocus.current = 'last'
           addOption(block.id)
         }}
-        className="flex w-fit items-center gap-2 text-lg text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-2 text-base text-muted-foreground hover:text-foreground"
       >
         <Plus className="size-4" /> Добавить вариант
       </button>
