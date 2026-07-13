@@ -1,19 +1,15 @@
 import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
-import { type BlockType } from '@entities/formSchema'
-import {
-  BLOCK_GROUP_LABELS,
-  BLOCK_GROUP_ORDER,
-  BLOCK_TYPES,
-} from './blockTypes'
+import { type Block, type BlockType, isChoiceType } from '@entities/formSchema'
+import { BlockField } from '@fields/BlockField'
+import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, BLOCK_TYPES } from './blockTypes'
 import { typeIcons } from './blockTypeIcons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 
 // Полноценное модальное окно выбора типа блока — открывается кнопкой «+». Слева —
 // типы по группам (Вопросы / Лэйаут), справа — описание активного типа и пример
-// его вида, сверху — поиск по названию. Выбор создаёт блок нужного типа.
+// его вида (реальный блок, как в форме), сверху — поиск по названию.
 export function BlockTypeDialog({
   open,
   onOpenChange,
@@ -25,7 +21,7 @@ export function BlockTypeDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0">
+      <DialogContent className="max-w-3xl gap-0 overflow-hidden p-0">
         <DialogTitle className="sr-only">Добавить блок</DialogTitle>
         <DialogDescription className="sr-only">Выберите тип блока формы.</DialogDescription>
         {/* Тело — отдельный компонент внутри Content: Radix размонтирует его при
@@ -66,9 +62,9 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
         </div>
       </div>
 
-      <div className="flex h-80">
+      <div className="flex h-[30rem]">
         {/* Левая часть: типы по группам. */}
-        <div className="w-56 shrink-0 overflow-y-auto border-r p-2">
+        <div className="w-60 shrink-0 overflow-y-auto border-r p-2">
           {BLOCK_GROUP_ORDER.map((g) => {
             const items = filtered.filter((b) => b.group === g)
             if (items.length === 0) return null
@@ -100,21 +96,23 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
           )}
         </div>
 
-        {/* Правая часть: описание активного типа + пример. */}
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* Правая часть: описание (сверху) и пример (снизу), разделённые бордером. */}
+        <div className="flex flex-1 flex-col overflow-y-auto">
           {activeMeta && (
             <>
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">{typeIcons[activeMeta.type]}</span>
-                <h3 className="text-sm font-semibold">{activeMeta.label}</h3>
+              <div className="p-5">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">{typeIcons[activeMeta.type]}</span>
+                  <h3 className="text-base font-semibold">{activeMeta.label}</h3>
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">{activeMeta.description}</p>
               </div>
-              <p className="mt-1.5 text-sm text-muted-foreground">{activeMeta.description}</p>
 
-              <div className="mt-4 rounded-lg border bg-muted/30 p-3">
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="border-t p-5">
+                <div className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Пример
                 </div>
-                <TypePreview type={activeMeta.type} />
+                <BlockField block={sampleBlock(activeMeta.type)} />
               </div>
             </>
           )}
@@ -124,49 +122,24 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
   )
 }
 
-// TypePreview — как блок выглядит у респондента: для вопроса заголовок + контрол,
-// для text — абзац. Инертный (pointer-events-none) — это иллюстрация, не поле.
-function TypePreview({ type }: { type: BlockType }) {
-  if (type === 'text') {
-    return <p className="text-sm">Пример пояснительного текста для респондента.</p>
+// sampleBlock — образец блока для превью: реальный @fields/BlockField рисует его
+// как увидит респондент. choice получает пару вариантов, text — абзац-пример.
+function sampleBlock(type: BlockType): Block {
+  const base: Block = {
+    id: 'sample',
+    type,
+    label: type === 'text' ? 'Пример пояснительного текста для респондента.' : 'Ваш вопрос',
   }
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-sm font-medium">Ваш вопрос</span>
-      <FieldSample type={type} />
-    </div>
-  )
-}
-
-function FieldSample({ type }: { type: BlockType }) {
-  const cls = 'pointer-events-none bg-background'
-  switch (type) {
-    case 'long_text':
-      return <Textarea disabled rows={2} placeholder="Развёрнутый ответ" className={cls} />
-    case 'email':
-      return <Input disabled placeholder="you@example.com" className={cls} />
-    case 'number':
-      return <Input disabled placeholder="0" className={cls} />
-    case 'date':
-      return <Input disabled placeholder="дд.мм.гггг" className={cls} />
-    case 'single_choice':
-    case 'multi_choice':
-      return (
-        <div className="flex flex-col gap-1.5">
-          {['Вариант 1', 'Вариант 2'].map((o) => (
-            <span key={o} className="flex items-center gap-2 text-sm">
-              <span
-                className={`size-4 shrink-0 border border-muted-foreground/40 ${
-                  type === 'single_choice' ? 'rounded-full' : 'rounded-[4px]'
-                }`}
-              />
-              {o}
-            </span>
-          ))}
-        </div>
-      )
-    case 'short_text':
-    default:
-      return <Input disabled placeholder="Короткий ответ" className={cls} />
+  if (isChoiceType(type)) {
+    return {
+      ...base,
+      settings: {
+        options: [
+          { id: 's1', label: 'Вариант 1' },
+          { id: 's2', label: 'Вариант 2' },
+        ],
+      },
+    }
   }
+  return base
 }
