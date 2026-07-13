@@ -24,13 +24,13 @@ export interface BlockTypeMeta {
 export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
   {
     type: 'short_text',
-    label: 'Короткий текст',
+    label: 'Короткий ответ',
     group: 'question',
     description: 'Однострочный ответ — имя, короткая фраза, ссылка.',
   },
   {
     type: 'long_text',
-    label: 'Длинный текст',
+    label: 'Длинный ответ',
     group: 'question',
     description: 'Многострочный развёрнутый ответ.',
   },
