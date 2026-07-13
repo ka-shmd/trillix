@@ -122,15 +122,15 @@ export function BlockRow({
     <li
       ref={setNodeRef}
       style={style}
-      className={`group relative flex items-start rounded-md py-1 transition-colors hover:bg-muted/40 focus-within:bg-muted/40 ${
+      className={`group relative rounded-md py-1.5 transition-colors hover:bg-muted/40 focus-within:bg-muted/40 ${
         isDragging ? 'z-10 opacity-70' : ''
       }`}
     >
-      {/* Все элементы управления — в левом поле строки (ширина w-20, левее текста;
-          align с заголовком pl-20). Всегда видимы. Высота h-7 + items-center и
-          leading-7 у текста → значки на одном уровне со строкой. Порядок:
-          удалить, добавить, перетащить. */}
-      <div className="flex h-8 w-20 shrink-0 items-center justify-end gap-0.5 pr-2">
+      {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
+          сам текст остаётся по центру колонки. Всегда видимы; h-8 + items-center и
+          leading-8 у текста → значки на уровне строки. Порядок: удалить, добавить,
+          перетащить. */}
+      <div className="absolute right-full top-1.5 mr-1 flex h-8 items-center gap-0.5">
         <button
           type="button"
           onClick={() => removeBlock(block.id)}
@@ -159,7 +159,7 @@ export function BlockRow({
       </div>
 
       <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
-        <div className="min-w-0 flex-1 pr-2">
+        <div className="min-w-0">
           <textarea
             ref={labelRef}
             rows={1}
@@ -175,7 +175,7 @@ export function BlockRow({
             onBlur={() => setFocused(false)}
             className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
               isContent
-                ? 'text-base placeholder:font-normal'
+                ? 'text-lg placeholder:font-normal'
                 : 'text-xl font-semibold placeholder:font-semibold'
             }`}
           />
@@ -268,7 +268,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
             aria-label={`Вариант ${i + 1}`}
             onChange={(e) => updateOption(block.id, o.id, e.target.value)}
             onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
           />
           <button
             type="button"
@@ -286,7 +286,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
           pendingFocus.current = 'last'
           addOption(block.id)
         }}
-        className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-2 text-base text-muted-foreground hover:text-foreground"
       >
         <Plus className="size-4" /> Добавить вариант
       </button>

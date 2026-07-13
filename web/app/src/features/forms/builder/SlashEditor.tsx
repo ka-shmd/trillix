@@ -102,7 +102,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    <div className="mx-auto max-w-2xl px-6 py-10">
+    <div className="mx-auto max-w-3xl px-20 py-14">
       <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
 
       {blocks.length === 0 ? (
@@ -113,7 +113,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
             items={blocks.map((b) => b.id)}
             strategy={verticalListSortingStrategy}
           >
-            <ol className="mt-6 flex flex-col gap-0.5">
+            <ol className="mt-8 flex flex-col gap-1.5">
               {blocks.map((b) => (
                 <BlockRow
                   key={b.id}
@@ -137,7 +137,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
         <button
           type="button"
           onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
-          className="mt-2 pl-20 text-left text-sm text-muted-foreground hover:text-foreground"
+          className="mt-4 text-left text-sm text-muted-foreground hover:text-foreground"
         >
           + Добавить блок
         </button>
@@ -159,10 +159,10 @@ function SubmitButtonEditor() {
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
 
   return (
-    <div className="mt-8 pl-20">
+    <div className="mt-10">
       <Popover>
         <PopoverTrigger asChild>
-          <Button type="button" title="Нажмите, чтобы изменить текст кнопки">
+          <Button type="button" size="lg" title="Нажмите, чтобы изменить текст кнопки">
             {label}
           </Button>
         </PopoverTrigger>
@@ -219,7 +219,7 @@ function EmptyStarter({
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
-      className="mt-6 cursor-text pl-20 leading-relaxed text-muted-foreground/60 outline-none"
+      className="mt-8 cursor-text text-lg leading-relaxed text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
@@ -286,7 +286,7 @@ function FormTitleInput({
       onKeyDown={onKeyDown}
       placeholder="Без названия"
       aria-label="Название формы"
-      className="mb-2 w-full bg-transparent pl-20 text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
+      className="mb-4 w-full bg-transparent text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
     />
   )
 }
