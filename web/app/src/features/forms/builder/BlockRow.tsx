@@ -130,7 +130,7 @@ export function BlockRow({
           align с заголовком pl-20). Всегда видимы. Высота h-7 + items-center и
           leading-7 у текста → значки на одном уровне со строкой. Порядок:
           удалить, добавить, перетащить. */}
-      <div className="flex h-7 w-20 shrink-0 items-center justify-end gap-0.5 pr-2">
+      <div className="flex h-8 w-20 shrink-0 items-center justify-end gap-0.5 pr-2">
         <button
           type="button"
           onClick={() => removeBlock(block.id)}
@@ -173,8 +173,10 @@ export function BlockRow({
             onKeyDown={onLabelKeyDown}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            className={`w-full resize-none bg-transparent leading-7 outline-none placeholder:font-normal placeholder:text-muted-foreground/60 ${
-              isContent ? 'text-base' : 'text-lg font-semibold'
+            className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
+              isContent
+                ? 'text-base placeholder:font-normal'
+                : 'text-xl font-semibold placeholder:font-semibold'
             }`}
           />
 
