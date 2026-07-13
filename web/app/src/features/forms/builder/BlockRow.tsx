@@ -91,7 +91,9 @@ export function BlockRow({
     if (e.key === 'Enter') {
       e.preventDefault()
       onAddBelow(block.id)
-    } else if (e.key === '/' && block.label === '') {
+    } else if (e.key === '/' && block.label === '' && isContent) {
+      // Тип выбирается только у ещё не выбранного (text) блока. У блока с уже
+      // выбранным типом «/» не открывает меню — тип менять нельзя.
       e.preventDefault()
       setSlashOpen(true)
     } else if (
@@ -127,7 +129,7 @@ export function BlockRow({
     <li
       ref={setNodeRef}
       style={style}
-      className={`group relative rounded-md py-1.5 transition-colors hover:bg-muted/40 focus-within:bg-muted/40 ${
+      className={`group relative rounded-md py-1.5 transition-colors hover:bg-muted/30 ${
         isDragging ? 'z-10 opacity-70' : ''
       }`}
     >
@@ -176,8 +178,8 @@ export function BlockRow({
             onKeyDown={onLabelKeyDown}
             className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
               isContent
-                ? 'text-lg placeholder:font-normal'
-                : 'text-xl font-semibold placeholder:font-semibold'
+                ? 'text-xl placeholder:font-normal'
+                : 'text-2xl font-semibold placeholder:font-semibold'
             }`}
           />
 
@@ -199,13 +201,26 @@ export function BlockRow({
 // респондент. date — статичное превью (в поле даты плейсхолдер не показывается).
 function AnswerField({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const [focused, setFocused] = useState(false)
   const ph = block.settings?.placeholder ?? ''
   const setPh = (value: string) =>
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
-  const hint = 'Плейсхолдер ответа (необязательно)'
+  // Подсказку-хинт показываем только при фокусе (клике) на поле.
+  const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
+  const cls = 'mt-1.5 border-muted-foreground/30 text-lg'
 
   if (!supportsPlaceholder(block.type)) {
-    return <Input type="date" disabled className="pointer-events-none mt-3 max-w-56 bg-muted/30" />
+    return (
+      <Input
+        type="date"
+        disabled
+        className="pointer-events-none mt-1.5 max-w-56 border-muted-foreground/30 bg-muted/30"
+      />
+    )
+  }
+  const focusProps = {
+    onFocus: () => setFocused(true),
+    onBlur: () => setFocused(false),
   }
   if (block.type === 'long_text') {
     return (
@@ -214,12 +229,19 @@ function AnswerField({ block }: { block: Block }) {
         onChange={(e) => setPh(e.target.value)}
         rows={2}
         placeholder={hint}
-        className="mt-3"
+        className={cls}
+        {...focusProps}
       />
     )
   }
   return (
-    <Input value={ph} onChange={(e) => setPh(e.target.value)} placeholder={hint} className="mt-3" />
+    <Input
+      value={ph}
+      onChange={(e) => setPh(e.target.value)}
+      placeholder={hint}
+      className={cls}
+      {...focusProps}
+    />
   )
 }
 
@@ -260,11 +282,11 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
   }
 
   return (
-    <div className="mt-2 flex flex-col gap-1.5">
+    <div className="mt-1.5 flex flex-col gap-1.5">
       {options.map((o, i) => (
         <div key={o.id} className="flex items-center gap-2">
           <span
-            className={`size-4 shrink-0 border border-muted-foreground/40 ${
+            className={`size-5 shrink-0 border border-muted-foreground/40 ${
               block.type === 'single_choice' ? 'rounded-full' : 'rounded-[4px]'
             }`}
             aria-hidden="true"
@@ -278,7 +300,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
             aria-label={`Вариант ${i + 1}`}
             onChange={(e) => updateOption(block.id, o.id, e.target.value)}
             onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
-            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
+            className="min-w-0 flex-1 bg-transparent text-lg outline-none placeholder:text-muted-foreground"
           />
           <button
             type="button"
@@ -296,7 +318,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
           pendingFocus.current = 'last'
           addOption(block.id)
         }}
-        className="flex w-fit items-center gap-2 text-base text-muted-foreground hover:text-foreground"
+        className="flex w-fit items-center gap-2 text-lg text-muted-foreground hover:text-foreground"
       >
         <Plus className="size-4" /> Добавить вариант
       </button>
