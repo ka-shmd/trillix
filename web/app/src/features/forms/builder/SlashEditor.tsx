@@ -102,7 +102,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-20 py-14">
+    <div className="mx-auto max-w-3xl px-20 pb-24 pt-24">
       <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
 
       {blocks.length === 0 ? (
@@ -195,11 +195,6 @@ function EmptyStarter({
 }: {
   onStart: (opts?: { openMenu?: boolean; seed?: string }) => void
 }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ref.current?.focus()
-  }, [])
-
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === 'Enter') {
       e.preventDefault()
@@ -215,7 +210,6 @@ function EmptyStarter({
 
   return (
     <div
-      ref={ref}
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
@@ -256,8 +250,17 @@ function FormTitleInput({
   const [title, setTitle] = useState(initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle)
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), [])
+
+  // При заходе на форму каретка сразу в начале названия.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(0, 0)
+  }, [])
 
   function onChange(value: string) {
     setTitle(value)
@@ -281,6 +284,7 @@ function FormTitleInput({
 
   return (
     <input
+      ref={inputRef}
       value={title}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}

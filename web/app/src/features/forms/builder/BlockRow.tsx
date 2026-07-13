@@ -55,7 +55,6 @@ export function BlockRow({
   const labelRef = useRef<HTMLTextAreaElement>(null)
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
-  const [focused, setFocused] = useState(false)
   const isContent = isContentType(block.type)
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -130,7 +129,7 @@ export function BlockRow({
           сам текст остаётся по центру колонки. Всегда видимы; h-8 + items-center и
           leading-8 у текста → значки на уровне строки. Порядок: удалить, добавить,
           перетащить. */}
-      <div className="absolute right-full top-1.5 mr-1 flex h-8 items-center gap-0.5">
+      <div className="absolute right-full top-1.5 mr-1 flex h-8 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
         <button
           type="button"
           onClick={() => removeBlock(block.id)}
@@ -164,15 +163,11 @@ export function BlockRow({
             ref={labelRef}
             rows={1}
             value={block.label}
-            // Плейсхолдер — только у активной строки: незанятый блок выглядит пустой
-            // строкой с кареткой (как в Notion/Tally), без подсказок.
-            placeholder={
-              focused ? (isContent ? 'Текст, или «/» для поля' : 'Вопрос, или «/» для типа') : undefined
-            }
+            // Плейсхолдер показываем у любого пустого блока (в т.ч. неактивного),
+            // чтобы пустая строка не выглядела «пропавшей».
+            placeholder={isContent ? 'Текст, или «/» для поля' : 'Вопрос, или «/» для типа'}
             onChange={(e) => updateBlock(block.id, { label: e.target.value })}
             onKeyDown={onLabelKeyDown}
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
             className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
               isContent
                 ? 'text-lg placeholder:font-normal'
