@@ -119,10 +119,11 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
       "label": "Ваше имя",
       "description": "",            // опционально
       "required": true,             // опционально, по умолчанию false
-      "settings": {                 // опционально; у не-choice пуст
+      "settings": {                 // опционально
         "options": [                // только у single_choice / multi_choice
           { "id": "opt_1", "label": "Друзья" }
-        ]
+        ],
+        "placeholder": "Например…"  // текстовые поля ввода (≤200); подсказка в поле
       }
     }
   ],

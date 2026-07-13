@@ -102,7 +102,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-20 pb-24 pt-24">
+    <div className="mx-auto max-w-3xl px-20 pb-24 pt-36">
       <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
 
       {blocks.length === 0 ? (
@@ -290,7 +290,7 @@ function FormTitleInput({
       onKeyDown={onKeyDown}
       placeholder="Без названия"
       aria-label="Название формы"
-      className="mb-4 w-full bg-transparent text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
+      className="mb-5 w-full bg-transparent text-5xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

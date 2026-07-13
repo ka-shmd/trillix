@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, Plus, Trash2, X } from 'lucide-react'
-import { type Block, type BlockType, isChoiceType, isContentType } from '@entities/formSchema'
+import {
+  type Block,
+  type BlockType,
+  isChoiceType,
+  isContentType,
+  supportsPlaceholder,
+} from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
 import { Input } from '@/components/ui/input'
@@ -175,37 +181,46 @@ export function BlockRow({
             }`}
           />
 
-          {/* Живое превью поля показываем, только когда у вопроса есть текст: пустой
-              блок = просто строка с кареткой. Choice всегда показывает варианты.
-              Text (неотвечаемый) — только абзац. */}
+          {/* Text (неотвечаемый) — только абзац. Choice — варианты. Остальные
+              (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
           {isContent ? null : isChoiceType(block.type) ? (
             <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
-          ) : block.label.trim() !== '' ? (
-            <FieldPreview type={block.type} />
-          ) : null}
+          ) : (
+            <AnswerField block={block} />
+          )}
         </div>
       </SlashMenu>
     </li>
   )
 }
 
-// FieldPreview — как поле увидит респондент: инертный (disabled) контрол под
-// заголовком. Даёт tally-ощущение «редактор = форма», не будучи интерактивным.
-function FieldPreview({ type }: { type: BlockType }) {
-  const cls = 'pointer-events-none mt-1.5 bg-muted/40'
-  switch (type) {
-    case 'long_text':
-      return <Textarea disabled rows={2} placeholder="Развёрнутый ответ" className={cls} />
-    case 'email':
-      return <Input disabled placeholder="you@example.com" className={cls} />
-    case 'number':
-      return <Input disabled placeholder="0" className={cls} />
-    case 'date':
-      return <Input disabled placeholder="дд.мм.гггг" className={cls} />
-    case 'short_text':
-    default:
-      return <Input disabled placeholder="Короткий ответ" className={cls} />
+// AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
+// автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит
+// респондент. date — статичное превью (в поле даты плейсхолдер не показывается).
+function AnswerField({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const ph = block.settings?.placeholder ?? ''
+  const setPh = (value: string) =>
+    updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
+  const hint = 'Плейсхолдер ответа (необязательно)'
+
+  if (!supportsPlaceholder(block.type)) {
+    return <Input type="date" disabled className="pointer-events-none mt-3 max-w-56 bg-muted/30" />
   }
+  if (block.type === 'long_text') {
+    return (
+      <Textarea
+        value={ph}
+        onChange={(e) => setPh(e.target.value)}
+        rows={2}
+        placeholder={hint}
+        className="mt-3"
+      />
+    )
+  }
+  return (
+    <Input value={ph} onChange={(e) => setPh(e.target.value)} placeholder={hint} className="mt-3" />
+  )
 }
 
 // OptionsInline — варианты choice-блока строками прямо под вопросом, с глифом

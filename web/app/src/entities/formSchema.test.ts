@@ -4,6 +4,7 @@ import {
   MAX_BLOCKS,
   MAX_LABEL_LEN,
   MAX_OPTIONS,
+  MAX_PLACEHOLDER_LEN,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 
@@ -36,6 +37,9 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'text', label: 'Раздел А', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'placeholder у текстового поля': {
+      blocks: [{ id: 'b', type: 'short_text', label: 'Имя', settings: { placeholder: 'Иван' } }],
+    },
     'choice без опций — валидный черновик': {
       blocks: [{ id: 'b', type: 'single_choice', label: '', settings: {} }],
     },
@@ -109,6 +113,16 @@ describe('formSchemaSchema — невалидные', () => {
     'слишком длинный submitLabel': {
       blocks: [],
       submitLabel: 'я'.repeat(MAX_SUBMIT_LABEL_LEN + 1),
+    },
+    'слишком длинный placeholder': {
+      blocks: [
+        {
+          id: 'b',
+          type: 'short_text',
+          label: 'x',
+          settings: { placeholder: 'я'.repeat(MAX_PLACEHOLDER_LEN + 1) },
+        },
+      ],
     },
   }
 

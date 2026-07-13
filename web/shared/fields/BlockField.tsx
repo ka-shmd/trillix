@@ -61,6 +61,8 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
   // не переключал input между controlled/uncontrolled. onChange присутствует
   // всегда (иначе React ругается на value без onChange); в превью не срабатывает.
   const text = typeof value === 'string' ? value : ''
+  // Плейсхолдер поля из настроек (автор задаёт его в билдере); пусто → undefined.
+  const ph = block.settings?.placeholder?.trim() || undefined
   const onText = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange?.(e.target.value)
   // Общие a11y-атрибуты текстовых полей: пометка невалидности и связь с
   // сообщением об ошибке. undefined убирает атрибут в валидном состоянии.
@@ -80,6 +82,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )
@@ -92,6 +95,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )
@@ -104,7 +108,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
-          placeholder="you@example.com"
+          placeholder={ph ?? 'you@example.com'}
           {...invalidProps}
         />
       )
@@ -117,6 +121,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )

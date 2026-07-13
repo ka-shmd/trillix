@@ -29,6 +29,7 @@ const (
 	MaxOptionLabelLen = 500
 	MaxIDLen          = 64
 	MaxSubmitLabelLen = 100
+	MaxPlaceholderLen = 200
 )
 
 // BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
@@ -75,10 +76,11 @@ type Option struct {
 	Label string `json:"label"`
 }
 
-// BlockSettings — типоспецифичные настройки блока. Пока единственное поле —
-// options у choice-типов; у остальных типов объект пуст.
+// BlockSettings — типоспецифичные настройки блока: options у choice-типов и
+// placeholder у текстовых полей ввода.
 type BlockSettings struct {
-	Options []Option `json:"options,omitempty"`
+	Options     []Option `json:"options,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
 }
 
 // Block — один вопрос формы.
@@ -164,6 +166,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	}
 	if n := utf8.RuneCountInString(b.Description); n > MaxDescriptionLen {
 		return schemaErr("%s: description длиннее %d символов", at, MaxDescriptionLen)
+	}
+	if n := utf8.RuneCountInString(b.Settings.Placeholder); n > MaxPlaceholderLen {
+		return schemaErr("%s: placeholder длиннее %d символов", at, MaxPlaceholderLen)
 	}
 
 	if !b.Type.isChoice() {
