@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { ArrowRight, Search } from 'lucide-react'
 import { type Block, type BlockType, isChoiceType } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, BLOCK_TYPES } from './blockTypes'
 import { typeIcons } from './blockTypeIcons'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
@@ -21,7 +22,7 @@ export function BlockTypeDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl gap-0 overflow-hidden p-0">
+      <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl">
         <DialogTitle className="sr-only">Добавить блок</DialogTitle>
         <DialogDescription className="sr-only">Выберите тип блока формы.</DialogDescription>
         {/* Тело — отдельный компонент внутри Content: Radix размонтирует его при
@@ -49,22 +50,33 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
 
   return (
     <>
-      <div className="border-b p-3 pr-12">
-        <div className="relative">
+      <div className="flex items-center gap-2 border-b p-3 pr-14">
+        <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && shown) onPick(shown)
+            }}
             placeholder="Поиск по названию…"
             className="pl-8"
           />
         </div>
+        <Button
+          type="button"
+          onClick={() => shown && onPick(shown)}
+          disabled={!shown}
+          className="shrink-0 gap-1.5"
+        >
+          Добавить <ArrowRight className="size-4" />
+        </Button>
       </div>
 
-      <div className="flex h-[30rem]">
+      <div className="flex h-[34rem]">
         {/* Левая часть: типы по группам. */}
-        <div className="w-60 shrink-0 overflow-y-auto border-r p-2">
+        <div className="w-64 shrink-0 overflow-y-auto border-r p-2">
           {BLOCK_GROUP_ORDER.map((g) => {
             const items = filtered.filter((b) => b.group === g)
             if (items.length === 0) return null
@@ -77,8 +89,8 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
                   <button
                     key={b.type}
                     type="button"
-                    onClick={() => onPick(b.type)}
-                    onMouseEnter={() => setActive(b.type)}
+                    onClick={() => setActive(b.type)}
+                    onDoubleClick={() => onPick(b.type)}
                     onFocus={() => setActive(b.type)}
                     className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm ${
                       shown === b.type ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
