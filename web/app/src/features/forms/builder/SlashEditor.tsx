@@ -13,9 +13,10 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
+import { type BlockType, DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { BlockRow } from './BlockRow'
+import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
 import { Button } from '@/components/ui/button'
@@ -39,6 +40,10 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
+  // Диалог выбора типа (кнопка «+»): открыт ли и после какого блока вставлять
+  // (null — в конец).
+  const [insertOpen, setInsertOpen] = useState(false)
+  const [insertAfterId, setInsertAfterId] = useState<string | null>(null)
 
   // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
   // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки.
@@ -69,6 +74,18 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
 
   function handleAddBelow(id: string) {
     startBlock(id)
+  }
+
+  // Кнопка «+»: открыть диалог выбора типа блока (после блока id).
+  function handleInsertBelow(id: string) {
+    setInsertAfterId(id)
+    setInsertOpen(true)
+  }
+
+  // Выбор типа в диалоге: создать блок этого типа на нужной позиции.
+  function handlePickInsertType(type: BlockType) {
+    setFocusId(addBlockAfter(insertAfterId, type))
+    setInsertOpen(false)
   }
 
   function handleBackspaceEmpty(id: string) {
@@ -106,6 +123,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   onFocusHandled={() => setFocusId(null)}
                   openMenuOnMount={menuForId === b.id}
                   onAddBelow={handleAddBelow}
+                  onInsertBelow={handleInsertBelow}
                   onBackspaceEmpty={handleBackspaceEmpty}
                   onArrow={handleArrow}
                 />
@@ -118,12 +136,14 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
       {blocks.length > 0 && (
         <button
           type="button"
-          onClick={() => startBlock(blocks[blocks.length - 1]?.id ?? null)}
+          onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
           className="mt-2 pl-20 text-left text-sm text-muted-foreground hover:text-foreground"
         >
           + Добавить блок
         </button>
       )}
+
+      <BlockTypeDialog open={insertOpen} onOpenChange={setInsertOpen} onPick={handlePickInsertType} />
 
       <SubmitButtonEditor />
     </div>

@@ -22,9 +22,12 @@ export interface BlockRowProps {
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
   focusMe: boolean
   onFocusHandled: () => void
-  // openMenuOnMount — строку создали по «/»: сразу открыть меню выбора типа.
+  // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
+  // onAddBelow — Enter: новая текстовая строка без меню (продолжаем писать).
   onAddBelow: (id: string) => void
+  // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
+  onInsertBelow: (id: string) => void
   onBackspaceEmpty: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
@@ -41,6 +44,7 @@ export function BlockRow({
   onFocusHandled,
   openMenuOnMount,
   onAddBelow,
+  onInsertBelow,
   onBackspaceEmpty,
   onArrow,
 }: BlockRowProps) {
@@ -137,8 +141,8 @@ export function BlockRow({
         </button>
         <button
           type="button"
-          onClick={() => onAddBelow(block.id)}
-          aria-label="Добавить блок ниже"
+          onClick={() => onInsertBelow(block.id)}
+          aria-label="Добавить блок ниже (выбрать тип)"
           className={iconBtn}
         >
           <Plus className="size-4" />
