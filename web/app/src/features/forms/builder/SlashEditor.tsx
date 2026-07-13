@@ -288,7 +288,7 @@ function FormTitleInput({
       value={title}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
-      placeholder="Без названия"
+      placeholder="Название формы"
       aria-label="Название формы"
       className="mb-5 w-full bg-transparent text-5xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
     />
