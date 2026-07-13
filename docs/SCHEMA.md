@@ -144,6 +144,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `description` | ≤ 2000 |
 | длина `label` опции | ≤ 500 |
 | длина `id` | ≤ 64 |
+| длина `submitLabel` | ≤ 100 |
+| длина `settings.placeholder` | ≤ 200 |
 
 ---
 
