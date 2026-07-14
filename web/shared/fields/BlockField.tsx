@@ -188,6 +188,7 @@ function ChoiceList({
         return (
           <label key={o.id} className="rf-option">
             <input
+              className={multiple ? 'rf-mark rf-mark--check' : 'rf-mark rf-mark--radio'}
               type={multiple ? 'checkbox' : 'radio'}
               name={block.id}
               checked={checked}

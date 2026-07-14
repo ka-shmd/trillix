@@ -11,8 +11,6 @@ import {
 } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 
 // Автовысота textarea: строка вопроса растёт под контент, не заводя скролл.
 function autosize(el: HTMLTextAreaElement | null) {
@@ -175,10 +173,10 @@ export function BlockRow({
             placeholder={isContent ? 'Текст, или «/» для поля' : 'Введите текст вопроса'}
             onChange={(e) => updateBlock(block.id, { label: e.target.value })}
             onKeyDown={onLabelKeyDown}
-            className={`w-full resize-none bg-transparent leading-8 outline-none placeholder:text-muted-foreground/60 ${
+            className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
               isContent
-                ? 'text-lg placeholder:font-normal'
-                : 'text-xl font-semibold placeholder:font-semibold'
+                ? 'rf-text placeholder:font-normal'
+                : 'rf-label placeholder:font-semibold'
             }`}
           />
 
@@ -206,16 +204,11 @@ function AnswerField({ block }: { block: Block }) {
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
-  const cls = 'mt-1.5 border-muted-foreground/30 text-base'
+  // Вид поля — общий rf-input (единый с превью/рендерером); mt-1.5 — layout редактора.
+  const cls = 'rf-input mt-1.5'
 
   if (!supportsPlaceholder(block.type)) {
-    return (
-      <Input
-        type="date"
-        disabled
-        className="pointer-events-none mt-1.5 max-w-56 border-muted-foreground/30 bg-muted/30"
-      />
-    )
+    return <input type="date" disabled className={`${cls} max-w-56 pointer-events-none`} />
   }
   const focusProps = {
     onFocus: () => setFocused(true),
@@ -223,7 +216,7 @@ function AnswerField({ block }: { block: Block }) {
   }
   if (block.type === 'long_text') {
     return (
-      <Textarea
+      <textarea
         value={ph}
         onChange={(e) => setPh(e.target.value)}
         rows={2}
@@ -234,7 +227,7 @@ function AnswerField({ block }: { block: Block }) {
     )
   }
   return (
-    <Input
+    <input
       value={ph}
       onChange={(e) => setPh(e.target.value)}
       placeholder={hint}
@@ -285,9 +278,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
       {options.map((o, i) => (
         <div key={o.id} className="flex items-center gap-2">
           <span
-            className={`size-4 shrink-0 border border-muted-foreground/40 ${
-              block.type === 'single_choice' ? 'rounded-full' : 'rounded-[4px]'
-            }`}
+            className={`rf-mark ${block.type === 'single_choice' ? 'rf-mark--radio' : 'rf-mark--check'}`}
             aria-hidden="true"
           />
           <input

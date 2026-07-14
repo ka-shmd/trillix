@@ -3,18 +3,17 @@
    main.tsx после этого файла. Здесь — только токены и классы, специфичные для
    страницы рендерера (обёртка, кнопка отправки, статус-экраны). */
 :root {
-  --bg: #f6f7f9;
-  --text: #1b1f24;
-  --muted: #6b7280;
+  /* Цвета/фон формы — общие токены из fields.css (единый вид с редактором и
+     превью). Фолбэки на случай, если общий CSS не подгрузился. --accent —
+     только рендерер (кнопка отправки), в редакторе такого элемента нет. */
   --accent: #2563eb;
-  --danger: #b91c1c;
   font-family:
     system-ui,
     -apple-system,
     'Segoe UI',
     Roboto,
     sans-serif;
-  color: var(--text);
+  color: var(--rf-text, #1b1f24);
 }
 
 * {
@@ -23,7 +22,7 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--rf-surface, #ffffff);
 }
 
 /* --- Страница формы --- */
@@ -57,11 +56,11 @@ body {
 .form-note {
   margin: 0;
   font-size: 0.9rem;
-  color: var(--muted);
+  color: var(--rf-muted, #6b7280);
 }
 
 .form-note-error {
-  color: var(--danger);
+  color: var(--rf-danger, #b91c1c);
 }
 
 /* --- Статус-экраны (loading / notfound / error) --- */
@@ -81,5 +80,5 @@ body {
 
 .status-detail {
   margin: 0;
-  color: var(--muted);
+  color: var(--rf-muted, #6b7280);
 }
