@@ -15,11 +15,59 @@
   --rf-muted: oklch(0.554 0.046 257.417); /* shadcn --muted-foreground */
   --rf-surface: oklch(1 0 0); /* белый холст/поле (--background/--card) */
   --rf-danger: oklch(0.577 0.245 27.325); /* shadcn --destructive */
+  --rf-primary: oklch(0.208 0.042 265.755); /* shadcn --primary (кнопка отправки) */
+  --rf-primary-foreground: oklch(0.984 0.003 247.858); /* shadcn --primary-foreground */
   --rf-radius: 8px;
   /* Рамка поля и глифа — muted-foreground с прозрачностью, как в редакторе
      (border-muted-foreground/30 и /40). */
   --rf-field-border: color-mix(in oklab, var(--rf-muted) 30%, transparent);
   --rf-mark-border: color-mix(in oklab, var(--rf-muted) 40%, transparent);
+}
+
+/* Раскладка всей формы: заголовок, поля, кнопка отправки. Надевают и превью
+   билдера, и рендерер — вертикальный ритм совпадает. */
+.rf-page {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+/* Заголовок формы — text-5xl/700/tracking-tight редактора. */
+.rf-title {
+  margin: 0;
+  font-size: 3rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--rf-text);
+}
+
+/* Кнопка отправки — shadcn primary size=lg редактора (h-10, px-6, text-sm/500). */
+.rf-submit {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.5rem;
+  padding: 0 1.5rem;
+  border: 0;
+  border-radius: var(--rf-radius);
+  background: var(--rf-primary);
+  color: var(--rf-primary-foreground);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  cursor: pointer;
+}
+
+.rf-submit:hover {
+  opacity: 0.9;
+}
+
+.rf-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Колонка полей и одно поле. */

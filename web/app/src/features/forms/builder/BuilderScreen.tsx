@@ -80,7 +80,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
         <SlashEditor formId={detail.id} initialTitle={detail.title} />
       ) : (
         <section aria-label="Просмотр формы" className="mx-auto max-w-2xl px-6 py-10">
-          <PreviewPane />
+          <PreviewPane title={detail.title} />
         </section>
       )}
     </BuilderStoreContext.Provider>

@@ -3,10 +3,8 @@
    main.tsx после этого файла. Здесь — только токены и классы, специфичные для
    страницы рендерера (обёртка, кнопка отправки, статус-экраны). */
 :root {
-  /* Цвета/фон формы — общие токены из fields.css (единый вид с редактором и
-     превью). Фолбэки на случай, если общий CSS не подгрузился. --accent —
-     только рендерер (кнопка отправки), в редакторе такого элемента нет. */
-  --accent: #2563eb;
+  /* Цвета/фон/вид формы — общие токены и классы из fields.css (единый вид с
+     редактором и превью). Фолбэки на случай, если общий CSS не подгрузился. */
   font-family:
     system-ui,
     -apple-system,
@@ -25,32 +23,12 @@ body {
   background: var(--rf-surface, #ffffff);
 }
 
-/* --- Страница формы --- */
+/* --- Страница формы. Внешние поля/центрирование — здесь; вертикальный ритм
+   (заголовок/поля/кнопка) даёт общий .rf-page из fields.css. --- */
 .page {
   max-width: 40rem;
   margin: 0 auto;
   padding: 2.5rem 1.25rem 4rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.5rem;
-}
-
-.form-title {
-  margin: 0;
-  font-size: 1.6rem;
-  line-height: 1.25;
-}
-
-.submit-btn {
-  align-self: flex-start;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 0.6rem 1.1rem;
-  font: inherit;
-  font-weight: 600;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
 }
 
 .form-note {

@@ -19,7 +19,6 @@ import { BlockRow } from './BlockRow'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -162,9 +161,9 @@ function SubmitButtonEditor() {
     <div className="mt-10">
       <Popover>
         <PopoverTrigger asChild>
-          <Button type="button" size="lg" title="Нажмите, чтобы изменить текст кнопки">
+          <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
             {label}
-          </Button>
+          </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72">
           <Label htmlFor="submit-label" className="text-sm font-medium">
@@ -290,7 +289,7 @@ function FormTitleInput({
       onKeyDown={onKeyDown}
       placeholder="Название формы"
       aria-label="Название формы"
-      className="mb-5 w-full bg-transparent text-5xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40"
+      className="rf-title mb-5 w-full bg-transparent outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

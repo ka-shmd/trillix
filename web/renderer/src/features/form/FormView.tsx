@@ -153,8 +153,8 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   const hasFieldErrors = Object.keys(errors).length > 0
 
   return (
-    <main className="page">
-      <h1 className="form-title">{form.title.trim() || 'Форма'}</h1>
+    <main className="page rf-page">
+      <h1 className="rf-title">{form.title.trim() || 'Форма'}</h1>
       <div className="rf-form">
         {blocks.map((block) => (
           <BlockField
@@ -169,7 +169,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         ))}
       </div>
       <button
-        className="submit-btn"
+        className="rf-submit"
         type="button"
         onClick={() => void onSubmit()}
         disabled={phase === 'submitting'}
