@@ -35,6 +35,11 @@ type Config struct {
 	// dev — vite-dev отдаёт исходник `/src/main.tsx`; prod-local/prod — собранный
 	// стабильный entry `/renderer.js`. Абсолютный путь от корня (начинается с «/»).
 	PublicRendererScriptPath string
+	// AppOrigin — origin кабинета (scheme://host[:port]) для строгой проверки
+	// заголовка Origin в CSRF-защите мутаций (defense-in-depth поверх double-submit).
+	// dev — http://localhost:5173 (vite кабинета); prod-local — https://app.localhost;
+	// прод — https://app.<домен>. Без завершающего слеша (Origin его не несёт).
+	AppOrigin string
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -63,6 +68,7 @@ func Load() (Config, error) {
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
 	cfg.OGImageURL = required("OG_IMAGE_URL")
 	cfg.PublicRendererScriptPath = required("PUBLIC_RENDERER_SCRIPT_PATH")
+	cfg.AppOrigin = strings.TrimRight(required("APP_ORIGIN"), "/")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -91,6 +97,11 @@ func Load() (Config, error) {
 	// битую ссылку на скрипт, поэтому требуем ведущий «/».
 	if !strings.HasPrefix(cfg.PublicRendererScriptPath, "/") {
 		return Config{}, fmt.Errorf("invalid PUBLIC_RENDERER_SCRIPT_PATH %q: want leading slash", cfg.PublicRendererScriptPath)
+	}
+	// Origin сравнивается по точному строковому равенству с заголовком Origin,
+	// поэтому должен быть валидным http(s)-origin (без пути и слеша — слеш уже срезан).
+	if !isHTTPURL(cfg.AppOrigin) {
+		return Config{}, fmt.Errorf("invalid APP_ORIGIN %q: want http(s):// origin", cfg.AppOrigin)
 	}
 
 	return cfg, nil

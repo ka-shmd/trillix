@@ -56,7 +56,7 @@ func resetDB(t *testing.T) {
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	svc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
-	h := auth.NewHandler(svc, ratelimit.AllowAll{}, false)
+	h := auth.NewHandler(svc, ratelimit.AllowAll{}, false, "http://localhost:5173")
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	srv := httptest.NewServer(mux)

@@ -53,10 +53,12 @@ type Handler struct {
 	svc          authService
 	loginLimiter RateLimiter
 	cookieSecure bool
+	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
+	appOrigin string
 }
 
-func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool) *Handler {
-	return &Handler{svc: svc, loginLimiter: loginLimiter, cookieSecure: cookieSecure}
+func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool, appOrigin string) *Handler {
+	return &Handler{svc: svc, loginLimiter: loginLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin}
 }
 
 // Routes регистрирует эндпоинты auth на общем mux (RouteRegistrar).
@@ -147,13 +149,20 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 	})
 }
 
-// RequireCSRF — double-submit: заголовок X-CSRF-Token обязан совпасть с cookie
-// csrf_token (её значение читаемо JS, но кросс-доменно недоступно из-за SOP).
-// Экспортирован для мутаций других модулей (POST/PATCH/DELETE forms).
-// TODO(фаза 7): добавить строгую проверку Origin против сконфигурированного
-// origin приложения — она осмысленна только в кросс-доменной схеме prod-local.
+// RequireCSRF защищает мутации двумя механизмами. (1) Проверка Origin: если
+// браузер прислал заголовок Origin, он обязан точно совпасть с origin кабинета
+// (h.appOrigin) — чужой origin отклоняется до сверки токена. Пустой Origin (редкие
+// клиенты, не выставляющие его) проходит на double-submit. (2) Double-submit:
+// заголовок X-CSRF-Token обязан совпасть с cookie csrf_token (её значение читаемо
+// JS, но кросс-доменно недоступно из-за SOP). Вместе с SameSite=Lax на cookie
+// сессии это перекрывает CSRF со всех сторон. Экспортирован для мутаций других
+// модулей (POST/PATCH/DELETE forms).
 func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); origin != "" && origin != h.appOrigin {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: недопустимый Origin", domain.ErrForbidden))
+			return
+		}
 		cookie, err := r.Cookie(csrfCookieName)
 		header := r.Header.Get(csrfHeaderName)
 		if err != nil || header == "" ||

@@ -50,8 +50,10 @@ type denyLimiter struct{}
 
 func (denyLimiter) Allow(string) bool { return false }
 
+const testAppOrigin = "http://localhost:5173"
+
 func newTestHandler(svc authService, limiter RateLimiter) http.Handler {
-	h := NewHandler(svc, limiter, false)
+	h := NewHandler(svc, limiter, false, testAppOrigin)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux
@@ -188,5 +190,44 @@ func TestLogout_Succeeds(t *testing.T) {
 	}
 	if c := cookieByName(rec.Result().Cookies(), sessionCookieName); c == nil || c.MaxAge != -1 {
 		t.Fatalf("session cookie не сброшена: %+v", c)
+	}
+}
+
+func TestRequireCSRF_RejectsForeignOrigin(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestHandler(svc, ratelimit.AllowAll{})
+
+	// Валидный double-submit-токен, но чужой Origin → 403 (проверка Origin бьёт первой).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
+	req.Header.Set(csrfHeaderName, "tok")
+	req.Header.Set("Origin", "http://evil.example")
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("чужой Origin: статус = %d, ожидалось 403", rec.Code)
+	}
+	if svc.loggedOut {
+		t.Fatal("Logout не должен вызываться при чужом Origin")
+	}
+}
+
+func TestRequireCSRF_AllowsMatchingOrigin(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestHandler(svc, ratelimit.AllowAll{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
+	req.Header.Set(csrfHeaderName, "tok")
+	req.Header.Set("Origin", testAppOrigin)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("свой Origin: статус = %d, ожидалось 204; тело=%s", rec.Code, rec.Body)
+	}
+	if !svc.loggedOut {
+		t.Fatal("Logout не был вызван при своём Origin")
 	}
 }

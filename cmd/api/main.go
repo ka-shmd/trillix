@@ -102,7 +102,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
-	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure, cfg.AppOrigin)
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)

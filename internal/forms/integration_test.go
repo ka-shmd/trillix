@@ -56,7 +56,7 @@ func resetDB(t *testing.T) {
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
-	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, false)
+	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, false, "http://localhost:5173")
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
