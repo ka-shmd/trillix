@@ -1,0 +1,72 @@
+# Прод-контур (Фаза 7). Тот же файл поднимает и prod-local (на *.localhost с
+# локальным CA Caddy), и настоящий прод на VPS (реальные домены + Let's Encrypt) —
+# различия живут только в .env и переменной домена, не в этом файле.
+#
+# Запуск: docker compose --env-file .env -f deploy/compose.prod.yml up -d
+# (обычно через `make prod-local`, шаг 5 — там же собирается образ и статика).
+#
+# На этом шаге (2) файл ещё не запускается end-to-end: Caddyfile и статика
+# фронтов появятся в шагах 3–4. Проверяемая здесь часть — цепочка
+# postgres → migrate → api.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    # Порт наружу НЕ публикуется: база доступна только по внутренней docker-сети
+    # (инвариант харденинга — ARCHITECTURE §6.5).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Одноразовый прогон миграций тем же образом, что и api (миграции встроены в
+  # бинарник через go:embed). Гейт для api: тот стартует только после успешного
+  # завершения этого сервиса, поэтому схема всегда актуальна до первого запроса.
+  migrate:
+    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    command: ["migrate", "up"]
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    env_file: ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Порт наружу НЕ публикуется: наружу api смотрит только через Caddy.
+    # Healthcheck внутри контейнера не ставим — distroless без shell/curl;
+    # живость проверяет внешний мониторинг по /healthz (фаза 10).
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro    # появится в шаге 3
+      - ./static:/srv/static:ro                # раскладывается в шаге 4
+      - caddy_data:/data                        # сертификаты локального CA / Let's Encrypt
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:
