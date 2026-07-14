@@ -64,7 +64,12 @@ export function BlockRow({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
   })
-  const style = { transform: CSS.Transform.toString(transform), transition }
+  // Translate, а не Transform: блоки разной высоты, и dnd-kit кладёт в transform
+  // scaleY, чтобы переносимый блок «подгонялся» под высоту соседнего слота — из-за
+  // этого он визуально сжимался/растягивался при перетаскивании. Translate.toString
+  // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
+  // свою высоту. Смещение соседей (scale=1) от этого не страдает.
+  const style = { transform: CSS.Translate.toString(transform), transition }
 
   useEffect(() => {
     if (!focusMe) return
