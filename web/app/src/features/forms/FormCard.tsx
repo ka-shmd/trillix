@@ -61,7 +61,9 @@ export function FormCard({ form }: { form: Form }) {
       ) : (
         <div className="flex items-start justify-between gap-2">
           <Link
-            to="/forms/$formId/edit"
+            // Опубликованную форму открываем на «Поделиться» (ссылка, превью,
+            // управление); черновик/закрытую — в редактор.
+            to={form.status === 'published' ? '/forms/$formId/share' : '/forms/$formId/edit'}
             params={{ formId: form.id }}
             className={`break-words text-base font-semibold hover:text-primary ${
               isUntitled(form.title) ? 'text-muted-foreground' : ''
