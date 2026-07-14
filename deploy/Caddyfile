@@ -3,19 +3,31 @@
 # *.localhost → внутренний CA (prod-local), реальный домен → Let's Encrypt (прод).
 # Никакого ветвления по контуру внутри файла.
 #
+# Две origin, а не три (ADR §10): кабинет и его API — один origin (same-origin,
+# без CORS); публичный рендерер — отдельный origin как граница безопасности
+# (cookie сессии кабинета туда не попадает). Выделенного API-домена в MVP нет.
+#
 # Статика фронтов раздаётся напрямую (/srv/static/{app,renderer} из volume, шаг 4);
 # в Go проксируется только динамика. Заголовки безопасности (CSP/nosniff/frame)
 # добавляются отдельно в шаге 8.
 
-# --- Кабинет: чистая статика (в API ходит кросс-доменно на {$API_DOMAIN}) ---
+# --- Кабинет: статика + приватный API того же origin ---
 {$APP_DOMAIN} {
 	encode gzip
-	root * /srv/static/app
-	# Хешированные ассеты Vite неизменяемы — кэшируем навсегда.
-	header /assets/* Cache-Control "public, max-age=31536000, immutable"
-	# SPA-fallback: любой неизвестный путь отдаёт index.html (клиентский роутинг).
-	try_files {path} /index.html
-	file_server
+
+	# Приватный API кабинета — тот же origin, поэтому CORS не нужен, cookie
+	# сессии остаётся host-only на этом домене.
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	# Всё остальное — статика кабинета с SPA-fallback.
+	handle {
+		root * /srv/static/app
+		# Хешированные ассеты Vite неизменяемы — кэшируем навсегда.
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
 }
 
 # --- Публичный рендерер: статика + динамика формы из Go (тот же origin) ---
@@ -38,9 +50,4 @@
 		try_files {path} /index.html
 		file_server
 	}
-}
-
-# --- Приватный API кабинета (кросс-доменные запросы с {$APP_DOMAIN}) ---
-{$API_DOMAIN} {
-	reverse_proxy api:8080
 }
