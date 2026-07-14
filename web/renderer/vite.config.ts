@@ -31,7 +31,13 @@ export default defineConfig({
         // маленький entry.
         entryFileNames: 'renderer.js',
         chunkFileNames: 'assets/[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash][extname]',
+        // CSS — стабильным именем /renderer.css: HTML-страницу формы /r/{slug}
+        // отдаёт Go, он ссылается на стили по фиксированному пути (PUBLIC_RENDERER_
+        // STYLE_PATH), не зная хеша. Прочие ассеты остаются хешированными под /assets/.
+        assetFileNames: (info) => {
+          const name = (info.names?.[0] ?? info.name ?? '') as string
+          return name.endsWith('.css') ? 'renderer.css' : 'assets/[name]-[hash][extname]'
+        },
       },
     },
   },

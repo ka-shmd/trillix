@@ -17,7 +17,7 @@ include .env
 export
 endif
 
-.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down
+.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down prod-local-trust
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -67,6 +67,13 @@ prod-local: ## Репетиция прода: собрать образ+стат
 
 prod-local-down: ## Погасить prod-local (тома с данными сохраняются; -v сотрёт БД)
 	set -a && . ./.env.prod-local && set +a && $(PROD_COMPOSE) down
+
+prod-local-trust: ## Доверить локальный CA Caddy (даёт настоящий «замочек» на *.localhost; требует sudo)
+	docker cp $(PROD_PROJECT)-caddy-1:/data/caddy/pki/authorities/local/root.crt /tmp/caddy-local-ca.crt
+	sudo cp /tmp/caddy-local-ca.crt /usr/local/share/ca-certificates/caddy-local-ca.crt
+	sudo update-ca-certificates
+	@echo "Системный trust обновлён. Chrome/Chromium — перезапустить (берёт системный стор)."
+	@echo "Firefox — свой стор: about:config → security.enterprise_roots.enabled=true (или импорт /tmp/caddy-local-ca.crt в Authorities)."
 
 test: test-go test-web ## Все тесты: Go (юниты + интеграционные) и фронтовый vitest
 

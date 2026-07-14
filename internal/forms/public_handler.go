@@ -25,16 +25,18 @@ type PublicHandler struct {
 	publicBaseURL string           // база рендерера: og:url и src SPA-скрипта на /r/{slug}
 	ogImageURL    string           // абсолютный URL картинки превью (og:image)
 	scriptPath    string           // путь entry-скрипта рендерера (dev: /src/main.tsx, prod: /renderer.js)
+	stylePath     string           // путь CSS рендерера (пусто в dev, /renderer.css в проде)
 	now           func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, scriptPath string) *PublicHandler {
+func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, scriptPath, stylePath string) *PublicHandler {
 	return &PublicHandler{
 		svc:           svc,
 		tokenSecret:   tokenSecret,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		ogImageURL:    ogImageURL,
 		scriptPath:    scriptPath,
+		stylePath:     stylePath,
 		now:           time.Now,
 	}
 }

@@ -40,6 +40,11 @@ type Config struct {
 	// dev — http://localhost:5173 (vite кабинета); prod-local — https://app.localhost;
 	// прод — https://app.<домен>. Без завершающего слеша (Origin его не несёт).
 	AppOrigin string
+	// PublicRendererStylePath — путь к CSS рендерера на HTML-странице формы /r/{slug}
+	// (Go вставляет <link rel="stylesheet">). ОПЦИОНАЛЬНАЯ: в dev пусто — vite-dev
+	// инжектит стили через JS, отдельного файла нет; в prod-local/prod — собранный
+	// стабильный `/renderer.css`. Если задана — начинается с «/».
+	PublicRendererStylePath string
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -69,6 +74,8 @@ func Load() (Config, error) {
 	cfg.OGImageURL = required("OG_IMAGE_URL")
 	cfg.PublicRendererScriptPath = required("PUBLIC_RENDERER_SCRIPT_PATH")
 	cfg.AppOrigin = strings.TrimRight(required("APP_ORIGIN"), "/")
+	// Опциональная (пустая в dev): os.Getenv напрямую, не через required().
+	cfg.PublicRendererStylePath = os.Getenv("PUBLIC_RENDERER_STYLE_PATH")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -102,6 +109,9 @@ func Load() (Config, error) {
 	// поэтому должен быть валидным http(s)-origin (без пути и слеша — слеш уже срезан).
 	if !isHTTPURL(cfg.AppOrigin) {
 		return Config{}, fmt.Errorf("invalid APP_ORIGIN %q: want http(s):// origin", cfg.AppOrigin)
+	}
+	if cfg.PublicRendererStylePath != "" && !strings.HasPrefix(cfg.PublicRendererStylePath, "/") {
+		return Config{}, fmt.Errorf("invalid PUBLIC_RENDERER_STYLE_PATH %q: want leading slash", cfg.PublicRendererStylePath)
 	}
 
 	return cfg, nil

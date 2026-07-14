@@ -28,11 +28,12 @@ const (
 	testBaseURL = "http://localhost:5174"
 	testOGImage = "http://localhost:5174/og-preview.png"
 	testScript  = "/src/main.tsx"
+	testStyle   = "/renderer.css"
 )
 
 func newPublicMux(svc publicFormService) *http.ServeMux {
 	mux := http.NewServeMux()
-	NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, testScript).Routes(mux)
+	NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, testScript, testStyle).Routes(mux)
 	return mux
 }
 

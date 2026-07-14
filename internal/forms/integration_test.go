@@ -61,7 +61,7 @@ func newStack(t *testing.T) *httptest.Server {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 	formsPublic := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
-		"http://localhost:5174", "http://localhost:5174/og-preview.png", "/src/main.tsx")
+		"http://localhost:5174", "http://localhost:5174/og-preview.png", "/src/main.tsx", "/renderer.css")
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
