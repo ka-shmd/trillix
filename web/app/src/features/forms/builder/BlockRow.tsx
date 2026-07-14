@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, Plus, Trash2, X } from 'lucide-react'
+import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
 import {
   type Block,
   type BlockType,
@@ -161,6 +161,11 @@ export function BlockRow({
         </button>
       </div>
 
+      {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
+          левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
+          ответов не собирает, required к нему неприменим. */}
+      {isContent ? null : <RequiredToggle block={block} />}
+
       <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
         <div className="min-w-0">
           <textarea
@@ -190,6 +195,37 @@ export function BlockRow({
         </div>
       </SlashMenu>
     </li>
+  )
+}
+
+// RequiredToggle — контрол обязательности в правом поле блока (absolute left-full),
+// зеркально левому кластеру значков. Это редактируемый контрол, а не индикатор:
+// совпадать видом с звёздочкой rf-required рендерера не обязан, только менять
+// block.required. Включённым виден всегда и подсвечен (показывает состояние),
+// выключенным — проявляется на hover/фокусе строки. Настоящий <button aria-pressed>
+// в Tab-обходе; текст состояния — в title/aria-label (значок компактен, как слева).
+function RequiredToggle({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const required = block.required
+  return (
+    <div
+      className={`absolute left-full top-1.5 ml-1 flex h-8 items-center transition-opacity ${
+        required ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+      }`}
+    >
+      <button
+        type="button"
+        aria-pressed={required}
+        aria-label={required ? 'Обязательный вопрос' : 'Сделать вопрос обязательным'}
+        title={required ? 'Обязательный вопрос' : 'Сделать обязательным'}
+        onClick={() => updateBlock(block.id, { required: !required })}
+        className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
+          required ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        <Asterisk className="size-4" />
+      </button>
+    </div>
   )
 }
 
