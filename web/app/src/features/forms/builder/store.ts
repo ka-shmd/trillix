@@ -30,6 +30,8 @@ export type BlockPatch = Partial<Pick<Block, 'label' | 'description' | 'required
 
 export type BuilderState = {
   blocks: Block[]
+  // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт дефолт.
+  submitLabel: string
   selectedId: string | null
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
@@ -41,10 +43,22 @@ export type BuilderActions = {
   // hydrate загружает форму, пришедшую через Query, в стор (чистое состояние).
   hydrate: (schema: FormSchema) => void
   addBlock: (type: BlockType) => void
+  // addBlockAfter вставляет блок сразу после afterId (или в конец при null) и
+  // возвращает его id — slash-редактору нужен id, чтобы поставить фокус на новую
+  // строку (Enter создаёт следующий блок под текущим, а не в конце списка).
+  addBlockAfter: (afterId: string | null, type: BlockType) => string
+  // changeBlockType меняет тип блока на месте (id стабилен), сохраняя label/
+  // description/required и сбрасывая тип-специфичные settings. Это конверсия типа
+  // slash-командой («/» → выбор типа) — ощущается как правка того же блока, как в
+  // Notion. Возвращает id для фокуса. На несуществующем блоке — no-op.
+  changeBlockType: (id: string, type: BlockType) => string
   updateBlock: (id: string, patch: BlockPatch) => void
   removeBlock: (id: string) => void
   // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не трогает).
   moveBlock: (id: string, dir: 'up' | 'down') => void
+  // reorderBlocks переносит activeId на позицию overId (drag-and-drop, dnd-kit).
+  // Неизвестный id или та же позиция — no-op (dirty не трогает).
+  reorderBlocks: (activeId: string, overId: string) => void
   duplicateBlock: (id: string) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
   addOption: (blockId: string) => void
@@ -52,6 +66,8 @@ export type BuilderActions = {
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
   select: (id: string | null) => void
+  // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
+  setSubmitLabel: (label: string) => void
   // markSaved снимает dirty после успешного PATCH (автосейв — шаг 6).
   markSaved: () => void
   // toSchema сериализует документ для отправки на бэкенд.
@@ -104,15 +120,51 @@ function mutateOptions(
 export function createBuilderStore(): StoreApi<BuilderStore> {
   return createStore<BuilderStore>((set, get) => ({
     blocks: [],
+    submitLabel: '',
     selectedId: null,
     dirty: false,
 
     hydrate: (schema) =>
-      set({ blocks: schema.blocks.map(cloneBlock), selectedId: null, dirty: false }),
+      set({
+        blocks: schema.blocks.map(cloneBlock),
+        submitLabel: schema.submitLabel ?? '',
+        selectedId: null,
+        dirty: false,
+      }),
 
     addBlock: (type) => {
       const block = newBlock(type)
       set((s) => ({ blocks: [...s.blocks, block], selectedId: block.id, dirty: true }))
+    },
+
+    addBlockAfter: (afterId, type) => {
+      const block = newBlock(type)
+      set((s) => {
+        const i = afterId ? s.blocks.findIndex((b) => b.id === afterId) : -1
+        const at = i >= 0 ? i + 1 : s.blocks.length
+        const blocks = s.blocks.slice()
+        blocks.splice(at, 0, block)
+        return { blocks, selectedId: block.id, dirty: true }
+      })
+      return block.id
+    },
+
+    changeBlockType: (id, type) => {
+      set((s) => {
+        const src = s.blocks.find((b) => b.id === id)
+        if (!src) return s
+        // newBlock даёт корректные дефолтные settings под тип (choice → пустой
+        // список опций, non-choice → пустые); переносим текст и обязательность.
+        const converted: Block = {
+          ...newBlock(type),
+          id,
+          label: src.label,
+          description: src.description,
+          required: src.required,
+        }
+        return { blocks: s.blocks.map((b) => (b.id === id ? converted : b)), selectedId: id, dirty: true }
+      })
+      return id
     },
 
     updateBlock: (id, patch) =>
@@ -138,6 +190,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         const blocks = s.blocks.slice()
         blocks[i] = b
         blocks[j] = a
+        return { blocks, dirty: true }
+      }),
+
+    reorderBlocks: (activeId, overId) =>
+      set((s) => {
+        const from = s.blocks.findIndex((b) => b.id === activeId)
+        const to = s.blocks.findIndex((b) => b.id === overId)
+        if (from < 0 || to < 0 || from === to) return s
+        const blocks = s.blocks.slice()
+        const [moved] = blocks.splice(from, 1)
+        if (!moved) return s
+        blocks.splice(to, 0, moved)
         return { blocks, dirty: true }
       }),
 
@@ -186,8 +250,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
     select: (id) => set({ selectedId: id }),
 
+    setSubmitLabel: (label) => set({ submitLabel: label, dirty: true }),
+
     markSaved: () => set({ dirty: false }),
 
-    toSchema: () => ({ schemaVersion: SCHEMA_VERSION, blocks: get().blocks }),
+    toSchema: () => ({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: get().blocks,
+      submitLabel: get().submitLabel,
+    }),
   }))
 }

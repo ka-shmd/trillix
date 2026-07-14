@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 
 // @entities → общий каталог доменных Zod-схем web/shared/entities, единый для
@@ -14,15 +15,17 @@ const fields = fileURLToPath(new URL('../shared/fields', import.meta.url))
 // Маппим их на локальные пакеты кабинета — зеркало tsconfig.app.json paths.
 const zod = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 const reactPkg = fileURLToPath(new URL('./node_modules/react', import.meta.url))
+// @ → src кабинета: путь shadcn-компонентов (@/components/ui, @/lib/utils).
+const src = fileURLToPath(new URL('./src', import.meta.url))
 
 // Кабинет на :5173. Прокси /api на Go-сервер :8080 убирает необходимость в CORS в dev.
 // https://vite.dev/config/
 export default defineConfig({
   // Роутер-плагин генерирует src/routeTree.gen.ts из файловых маршрутов; должен
   // стоять перед react(). Файл коммитится и обновляется на каждом dev/build.
-  plugins: [tanstackRouter({ target: 'react' }), react()],
+  plugins: [tanstackRouter({ target: 'react' }), react(), tailwindcss()],
   resolve: {
-    alias: { '@entities': entities, '@fields': fields, zod, react: reactPkg },
+    alias: { '@entities': entities, '@fields': fields, '@': src, zod, react: reactPkg },
   },
   server: {
     port: 5173,

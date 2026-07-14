@@ -42,6 +42,25 @@ func TestCSVBuilder_UnionColumnsAcrossVersions(t *testing.T) {
 	}
 }
 
+// Неотвечаемый блок (text) не становится колонкой CSV — у него нет ответов.
+func TestCSVBuilder_ExcludesTextBlocks(t *testing.T) {
+	intro := Block{ID: "intro", Type: BlockText, Label: "Раздел А"}
+	name := Block{ID: "name", Type: BlockShortText, Label: "Имя"}
+
+	bld := NewCSVBuilder([]VersionedSchema{vs(1, intro, name)})
+
+	got := bld.Header()
+	want := []string{"ID ответа", "Отправлен", "Версия формы", "Имя"}
+	if len(got) != len(want) {
+		t.Fatalf("заголовок = %v, ожидался без text-колонки %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("колонка %d = %q, ожидалась %q", i, got[i], want[i])
+		}
+	}
+}
+
 // Ответ v1 попадает в колонку выбывшего вопроса; блок, которого нет в версии ответа,
 // даёт пустую ячейку.
 func TestCSVBuilder_RowRespectsAnswerVersion(t *testing.T) {

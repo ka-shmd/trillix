@@ -18,8 +18,15 @@ export const MAX_LABEL_LEN = 1000
 export const MAX_DESCRIPTION_LEN = 2000
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
+export const MAX_SUBMIT_LABEL_LEN = 100
+export const MAX_PLACEHOLDER_LEN = 200
 
-// Семь типов полей MVP (ARCHITECTURE 3.4).
+// Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
+export const DEFAULT_SUBMIT_LABEL = 'Отправить'
+
+// Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс неотвечаемый
+// 'text' — статический абзац на полотне. text не собирает ответ (исключён из
+// ValidateAnswers/CSV/таблицы), рендерится статикой.
 export const blockTypeSchema = z.enum([
   'short_text',
   'long_text',
@@ -28,11 +35,25 @@ export const blockTypeSchema = z.enum([
   'single_choice',
   'multi_choice',
   'date',
+  'text',
 ])
 export type BlockType = z.infer<typeof blockTypeSchema>
 
 const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'multi_choice'])
 export const isChoiceType = (t: BlockType): boolean => CHOICE_TYPES.has(t)
+
+// Типы, у которых респондент вводит текст — для них можно задать плейсхолдер.
+const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
+  'short_text',
+  'long_text',
+  'email',
+  'number',
+])
+export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
+
+// Неотвечаемый (контентный) блок: пока только 'text'. Зеркалит Go isContent().
+export const isContentType = (t: BlockType): boolean => t === 'text'
+export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
 // Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
 // навязываем — id генерируется клиентом, важны непустота и уникальность.
@@ -49,6 +70,8 @@ export type Option = z.infer<typeof optionSchema>
 // валидное состояние non-choice блока. Лишние ключи запрещены (strictObject).
 const settingsSchema = z.strictObject({
   options: z.array(optionSchema).max(MAX_OPTIONS).optional(),
+  // Плейсхолдер поля ввода (текстовые типы). У остальных игнорируется.
+  placeholder: z.string().max(MAX_PLACEHOLDER_LEN).optional(),
 })
 
 // Один вопрос формы. Пустой label и choice без опций допустимы — это нормальное
@@ -97,6 +120,8 @@ export const formSchemaSchema = z
   .strictObject({
     schemaVersion: z.literal(SCHEMA_VERSION).optional(),
     blocks: z.array(blockSchema).max(MAX_BLOCKS),
+    // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт DEFAULT_SUBMIT_LABEL.
+    submitLabel: z.string().max(MAX_SUBMIT_LABEL_LEN).optional(),
   })
   .superRefine((s, ctx) => {
     const seen = new Set<string>()

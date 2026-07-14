@@ -6,27 +6,27 @@ export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry
   switch (status) {
     case 'saving':
       return (
-        <span className="save-status" role="status">
+        <span className="text-sm text-muted-foreground" role="status">
           Сохранение…
         </span>
       )
     case 'saved':
       return (
-        <span className="save-status save-status-ok" role="status">
+        <span className="text-sm text-muted-foreground" role="status">
           Все изменения сохранены
         </span>
       )
     case 'error':
       return (
-        <span className="save-status save-status-error" role="status">
+        <span className="text-sm text-destructive" role="status">
           Не удалось сохранить —{' '}
-          <button type="button" className="save-retry" onClick={onRetry}>
+          <button type="button" className="underline underline-offset-2" onClick={onRetry}>
             Повторить
           </button>
         </span>
       )
     case 'conflict':
-      return <span className="save-status save-status-error">Сохранение приостановлено</span>
+      return <span className="text-sm text-destructive">Сохранение приостановлено</span>
   }
 }
 
@@ -34,9 +34,16 @@ export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry
 // в MVP разрешается перезагрузкой: перечитать серверную версию и продолжить с неё.
 export function ConflictBanner() {
   return (
-    <div className="builder-conflict" role="alert">
+    <div
+      className="flex flex-wrap items-center justify-between gap-2 border-b border-destructive/40 bg-destructive/5 px-4 py-2 text-sm"
+      role="alert"
+    >
       <span>Форма изменена в другой вкладке. Обновите страницу, чтобы продолжить редактирование.</span>
-      <button type="button" onClick={() => window.location.reload()}>
+      <button
+        type="button"
+        className="font-medium text-destructive underline underline-offset-2"
+        onClick={() => window.location.reload()}
+      >
         Обновить
       </button>
     </div>

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { type Block } from '@entities/formSchema'
+import { type Block, isContentType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 
 import { type Answers } from './answers'
@@ -23,6 +23,8 @@ function isEmpty(value: Answer | undefined): boolean {
 // Проверка одного блока: null — ок. Пустое необязательное поле валидно; формат
 // проверяется только у заполненного значения.
 export function validateBlock(block: Block, value: Answer | undefined): string | null {
+  // Неотвечаемый блок (text) не собирает ответ — всегда валиден.
+  if (isContentType(block.type)) return null
   if (isEmpty(value)) {
     return block.required ? REQUIRED : null
   }

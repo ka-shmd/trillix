@@ -1,7 +1,10 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery } from '@tanstack/react-query'
+import { Plus } from 'lucide-react'
 import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
 import { FormCard } from '../../features/forms/FormCard'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 
 // Дашборд форм (/forms): грид карточек с курсорной подгрузкой, создание формы.
 export const Route = createFileRoute('/_app/forms/')({
@@ -22,44 +25,51 @@ function FormsDashboard() {
   const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
 
   return (
-    <section className="forms-page">
-      <div className="forms-header">
-        <h1>Мои формы</h1>
-        <button type="button" className="primary" onClick={handleCreate} disabled={create.isPending}>
+    <section className="mx-auto max-w-5xl p-6">
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-semibold tracking-tight">Мои формы</h1>
+        <Button onClick={handleCreate} disabled={create.isPending} className="gap-2">
+          <Plus className="size-4" />
           {create.isPending ? 'Создаём…' : 'Новая форма'}
-        </button>
+        </Button>
       </div>
 
       {query.isPending ? (
         <FormsSkeleton />
       ) : query.isError ? (
-        <div className="forms-error" role="alert">
-          <p>Не удалось загрузить формы.</p>
-          <button type="button" onClick={() => query.refetch()}>
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+          <p className="mb-3 text-sm">Не удалось загрузить формы.</p>
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
             Повторить
-          </button>
+          </Button>
         </div>
       ) : forms.length === 0 ? (
-        <div className="empty-state">
-          <h2>Пока нет ни одной формы</h2>
-          <p>Создайте первую — она появится здесь.</p>
+        <div className="mx-auto mt-12 max-w-md text-center">
+          <h2 className="text-lg font-medium">Пока нет ни одной формы</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Создайте первую — она появится здесь.
+          </p>
+          <Button onClick={handleCreate} disabled={create.isPending} className="mt-4 gap-2">
+            <Plus className="size-4" />
+            Новая форма
+          </Button>
         </div>
       ) : (
         <>
-          <div className="forms-grid">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4">
             {forms.map((form) => (
               <FormCard key={form.id} form={form} />
             ))}
           </div>
           {query.hasNextPage && (
-            <div className="forms-more">
-              <button
-                type="button"
+            <div className="mt-6 flex justify-center">
+              <Button
+                variant="outline"
                 onClick={() => query.fetchNextPage()}
                 disabled={query.isFetchingNextPage}
               >
                 {query.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-              </button>
+              </Button>
             </div>
           )}
         </>
@@ -71,9 +81,12 @@ function FormsDashboard() {
 // Скелетоны на время первой загрузки — экран не мигает пустотой.
 function FormsSkeleton() {
   return (
-    <div className="forms-grid" aria-hidden="true">
+    <div
+      className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4"
+      aria-hidden="true"
+    >
       {Array.from({ length: 6 }, (_, i) => (
-        <div key={i} className="form-card form-card-skeleton" />
+        <Skeleton key={i} className="h-36 rounded-xl" />
       ))}
     </div>
   )

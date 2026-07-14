@@ -1,6 +1,6 @@
 import { type ChangeEvent } from 'react'
 
-import { type Block } from '@entities/formSchema'
+import { type Block, isContentType } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
@@ -23,6 +23,12 @@ type BlockFieldProps = {
 }
 
 export function BlockField({ block, value, onChange, disabled = true, error, onBlur }: BlockFieldProps) {
+  // Неотвечаемый блок (text) — статический абзац: без подписи-вопроса, звёздочки,
+  // контрола и ошибок. Пустой текст в черновике не показываем.
+  if (isContentType(block.type)) {
+    return block.label.trim() ? <p className="rf-text">{block.label}</p> : null
+  }
+
   const errorId = error ? `${block.id}-error` : undefined
   return (
     <FieldShell block={block} error={error} errorId={errorId}>
@@ -55,6 +61,8 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
   // не переключал input между controlled/uncontrolled. onChange присутствует
   // всегда (иначе React ругается на value без onChange); в превью не срабатывает.
   const text = typeof value === 'string' ? value : ''
+  // Плейсхолдер поля из настроек (автор задаёт его в билдере); пусто → undefined.
+  const ph = block.settings?.placeholder?.trim() || undefined
   const onText = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange?.(e.target.value)
   // Общие a11y-атрибуты текстовых полей: пометка невалидности и связь с
   // сообщением об ошибке. undefined убирает атрибут в валидном состоянии.
@@ -74,6 +82,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )
@@ -86,6 +95,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )
@@ -98,7 +108,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
-          placeholder="you@example.com"
+          placeholder={ph ?? 'you@example.com'}
           {...invalidProps}
         />
       )
@@ -111,6 +121,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           onChange={onText}
           disabled={disabled}
           aria-label={label}
+          placeholder={ph}
           {...invalidProps}
         />
       )
@@ -134,6 +145,10 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
       return (
         <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
       )
+    case 'text':
+      // Неотвечаемый блок обрабатывается в BlockField до FieldShell; сюда не
+      // доходит — ветка для исчерпывающести switch по типам.
+      return null
   }
 }
 
@@ -173,6 +188,7 @@ function ChoiceList({
         return (
           <label key={o.id} className="rf-option">
             <input
+              className={multiple ? 'rf-mark rf-mark--check' : 'rf-mark rf-mark--radio'}
               type={multiple ? 'checkbox' : 'radio'}
               name={block.id}
               checked={checked}

@@ -69,6 +69,10 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 	b.headers = append(b.headers, csvMetaHeader...)
 	for i := len(versions) - 1; i >= 0; i-- {
 		for _, blk := range versions[i].Schema.Blocks {
+			// Неотвечаемые блоки (text) — не колонки: у них нет ответов.
+			if blk.Type.isContent() {
+				continue
+			}
 			if _, ok := seen[blk.ID]; ok {
 				continue
 			}

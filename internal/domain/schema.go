@@ -28,9 +28,13 @@ const (
 	MaxDescriptionLen = 2000
 	MaxOptionLabelLen = 500
 	MaxIDLen          = 64
+	MaxSubmitLabelLen = 100
+	MaxPlaceholderLen = 200
 )
 
-// BlockType — тип поля формы. Ровно семь значений MVP (ARCHITECTURE 3.4).
+// BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
+// неотвечаемый «text» — статический абзац на полотне (заголовок/пояснение). text
+// не собирает ответ: исключён из ValidateAnswers и CSV.
 type BlockType string
 
 const (
@@ -41,12 +45,13 @@ const (
 	BlockSingleChoice BlockType = "single_choice"
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
+	BlockText         BlockType = "text"
 )
 
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockNumber,
-		BlockSingleChoice, BlockMultiChoice, BlockDate:
+		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText:
 		return true
 	default:
 		return false
@@ -58,6 +63,12 @@ func (t BlockType) isChoice() bool {
 	return t == BlockSingleChoice || t == BlockMultiChoice
 }
 
+// isContent — неотвечаемый блок (пока только text): статический контент на
+// полотне, не собирает ответ. Исключается из валидации ответов и выгрузки.
+func (t BlockType) isContent() bool {
+	return t == BlockText
+}
+
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.
 type Option struct {
@@ -65,10 +76,11 @@ type Option struct {
 	Label string `json:"label"`
 }
 
-// BlockSettings — типоспецифичные настройки блока. Пока единственное поле —
-// options у choice-типов; у остальных типов объект пуст.
+// BlockSettings — типоспецифичные настройки блока: options у choice-типов и
+// placeholder у текстовых полей ввода.
 type BlockSettings struct {
-	Options []Option `json:"options,omitempty"`
+	Options     []Option `json:"options,omitempty"`
+	Placeholder string   `json:"placeholder,omitempty"`
 }
 
 // Block — один вопрос формы.
@@ -81,10 +93,12 @@ type Block struct {
 	Settings    BlockSettings `json:"settings"`
 }
 
-// FormSchema — документ черновика формы: версия формата и упорядоченный список блоков.
+// FormSchema — документ черновика формы: версия формата, список блоков и текст
+// кнопки отправки (пусто → рендерер берёт дефолт).
 type FormSchema struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Blocks        []Block `json:"blocks"`
+	SubmitLabel   string  `json:"submitLabel"`
 }
 
 // ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы.
@@ -120,6 +134,9 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	if len(s.Blocks) > MaxBlocks {
 		return FormSchema{}, schemaErr("больше %d блоков", MaxBlocks)
 	}
+	if n := utf8.RuneCountInString(s.SubmitLabel); n > MaxSubmitLabelLen {
+		return FormSchema{}, schemaErr("submitLabel длиннее %d символов", MaxSubmitLabelLen)
+	}
 
 	seen := make(map[string]struct{}, len(s.Blocks))
 	for i := range s.Blocks {
@@ -149,6 +166,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	}
 	if n := utf8.RuneCountInString(b.Description); n > MaxDescriptionLen {
 		return schemaErr("%s: description длиннее %d символов", at, MaxDescriptionLen)
+	}
+	if n := utf8.RuneCountInString(b.Settings.Placeholder); n > MaxPlaceholderLen {
+		return schemaErr("%s: placeholder длиннее %d символов", at, MaxPlaceholderLen)
 	}
 
 	if !b.Type.isChoice() {

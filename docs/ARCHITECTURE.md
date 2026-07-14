@@ -160,6 +160,7 @@ CREATE INDEX idx_sessions_expires ON sessions (expires_at);
       "id": "blk_9f2k1x",            // стабильный id, генерируется на клиенте
       "type": "short_text",           // short_text | long_text | email | number
                                       // | single_choice | multi_choice | date
+                                      // | text (неотвечаемый абзац, фаза 6.5)
       "label": "Ваше имя",
       "description": "",
       "required": true,
@@ -319,6 +320,10 @@ POST   /forms/{slug}/submissions      отправка ответа
 
 Стек: Vite, React 18, TypeScript strict, TanStack Router (file-based, типобезопасные параметры маршрутов), TanStack Query (весь серверный стейт). Дополнительно оправданы только три маленькие зависимости: Zod (валидация ответов API и единый источник типов), zustand (локальный стейт билдера, ~1 КБ) и dnd-kit (drag-and-drop блоков — писать своё здесь неоправданно).
 
+Для UI-слоя кабинета (фаза 6.5, Notion/Tally-редизайн) заморозка зависимостей снята: подключены **Tailwind CSS v4 + shadcn/ui** (Radix-примитивы, `class-variance-authority`, `tailwind-merge`, `clsx`, `lucide-react`). Обоснование в ADR-сводке. Это касается **только web/app**: рендерер (web/renderer) остаётся на react+zod, а общие компоненты полей `@fields` (используются обоими приложениями) не переводятся на Tailwind — сохраняют фреймворко-независимые `rf-*` CSS-классы, чтобы не тянуть Tailwind в рендерер и не ломать его бюджет 95 КиБ.
+
+Вид всей формы — заголовок (`rf-title`), поля (`rf-label`/`rf-input`/`rf-mark`), кнопка отправки (`rf-submit`), раскладка (`rf-page`) — описан один раз в `web/shared/fields/fields.css` (правила `rf-*` + токены `--rf-*`, независимые от Tailwind/shadcn) и надевается **тремя** поверхностями: редактором (`BlockRow`/`SlashEditor` навешивают `rf-*` поверх Tailwind-layout/dnd), превью билдера (`PreviewPane`) и рендерером (`FormView`). Источник истины вида — форма в режиме редактирования; значения `rf-*` повторяют токены/утилиты shadcn-редактора, но в plain-CSS, чтобы рендерер читал их без Tailwind. Так все три вида формы совпадают (WYSIWYG), а бюджет рендерера не затронут (перенесён CSS, не JS). Практический гайд «как добавить тип поля/элемент/стиль в полотно и не разъехаться» — `web/shared/fields/README.md`.
+
 Организация кода — feature-sliced, зеркально бэкенду:
 
 ```
@@ -457,3 +462,5 @@ GitHub Actions, два пайплайна. **CI на каждый PR:** `go vet`
 | Курсорная пагинация | OFFSET | Не деградирует на больших таблицах ответов |
 | Caddy | Nginx | Авто-TLS и конфиг кратно проще при том же результате |
 | In-memory rate limit | Redis | Один инстанс; интерфейс позволяет заменить позже |
+| shadcn/ui + Tailwind в кабинете (web/app) | Ручной CSS / только Radix-примитивы | Notion/Tally-оболочка и slash-редактор требуют богатого набора доступных примитивов (command-палитра, dropdown, dialog, sidebar); скорость сборки UI перевешивает +6 зависимостей. **Только web/app**: рендерер (web/renderer) остаётся на react+zod под бюджетом 95 КиБ, общие компоненты `@fields` не переводятся на Tailwind |
+| Вид поля — общий `web/shared/fields/fields.css` (`rf-*` + токены `--rf-*`), надевают редактор, превью и рендерер | Дублировать вид в каждой поверхности (Tailwind в редакторе, `rf-*` в `index.css` фронтов) | Форму видят три поверхности (редактор-эталон, превью, респондент); единый визуальный язык в plain-CSS исключает рассинхрон. Редактор надевает `rf-*` поверх Tailwind-layout, рендерер читает тот же CSS без Tailwind → бюджет 95 КиБ не затронут |

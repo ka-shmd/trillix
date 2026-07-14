@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { type Block } from '@entities/formSchema'
+import { ArrowLeft } from 'lucide-react'
+import { type Block, isAnswerableType } from '@entities/formSchema'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import {
@@ -12,6 +13,22 @@ import { submissionsExportUrl } from '../../features/submissions/api'
 import { formatAnswer } from '../../features/submissions/answerFormat'
 import { formatDate } from '../../shared/format'
 import { type Submission } from '../../entities/submission'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 
 // Таблица ответов формы (/forms/$formId/responses): курсорная подгрузка (новые
 // сверху), клик по строке — панель полного ответа, экспорт в CSV, счётчик.
@@ -27,106 +44,121 @@ function ResponsesPage() {
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
   const total = list.data?.pages[0]?.total ?? 0
-  const blocks = form.data?.draftSchema.blocks ?? []
+  // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (text) ответов
+  // не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
+  const blocks = (form.data?.draftSchema.blocks ?? []).filter((b) => isAnswerableType(b.type))
 
   return (
-    <section className="responses-page">
-      <header className="responses-header">
+    <section className="mx-auto max-w-6xl p-6">
+      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <Link to="/forms">← К формам</Link>
-          <h1>{form.data ? `Ответы · ${form.data.title}` : 'Ответы'}</h1>
+          <Link
+            to="/forms"
+            className="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" /> К формам
+          </Link>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {form.data ? `Ответы · ${form.data.title}` : 'Ответы'}
+          </h1>
           {!list.isPending && !list.isError && (
-            <p className="responses-count">
+            <p className="mt-1 text-sm text-muted-foreground">
               {total === 0 ? 'Пока нет ответов' : `${total} ${plural(total)}`}
             </p>
           )}
         </div>
         {total > 0 && (
           // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
-          <a className="button" href={submissionsExportUrl(formId)}>
-            Экспорт CSV
-          </a>
+          <Button asChild variant="outline">
+            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
+          </Button>
         )}
       </header>
 
       {form.isError ? (
-        <div role="alert" className="responses-error">
-          <p>Форма не найдена.</p>
-          <Link to="/forms">Вернуться к списку</Link>
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+          <p className="mb-3 text-sm">Форма не найдена.</p>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/forms">Вернуться к списку</Link>
+          </Button>
         </div>
       ) : list.isPending ? (
-        <p className="responses-loading">Загрузка ответов…</p>
+        <p className="text-sm text-muted-foreground">Загрузка ответов…</p>
       ) : list.isError ? (
-        <div role="alert" className="responses-error">
-          <p>Не удалось загрузить ответы.</p>
-          <button type="button" onClick={() => list.refetch()}>
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+          <p className="mb-3 text-sm">Не удалось загрузить ответы.</p>
+          <Button variant="outline" size="sm" onClick={() => list.refetch()}>
             Повторить
-          </button>
+          </Button>
         </div>
       ) : submissions.length === 0 ? (
-        <div className="empty-state">
-          <h2>Ответов пока нет</h2>
-          <p>Опубликуйте форму и поделитесь ссылкой — ответы появятся здесь.</p>
+        <div className="mx-auto mt-12 max-w-md text-center">
+          <h2 className="text-lg font-medium">Ответов пока нет</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Опубликуйте форму и поделитесь ссылкой — ответы появятся здесь.
+          </p>
         </div>
       ) : (
         <>
-          <div className="responses-table-wrap">
-            <table className="responses-table">
-              <thead>
-                <tr>
-                  <th scope="col">Отправлен</th>
-                  <th scope="col">Версия</th>
+          <div className="overflow-x-auto rounded-lg border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Отправлен</TableHead>
+                  <TableHead>Версия</TableHead>
                   {blocks.map((b) => (
-                    <th key={b.id} scope="col">
-                      {blockTitle(b)}
-                    </th>
+                    <TableHead key={b.id}>{blockTitle(b)}</TableHead>
                   ))}
-                  <th scope="col">
-                    <span className="visually-hidden">Действия</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
+                  <TableHead>
+                    <span className="sr-only">Действия</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {submissions.map((s) => (
-                  <tr key={s.id}>
-                    <td>{formatDate(s.createdAt)}</td>
-                    <td>{s.formVersion}</td>
+                  <TableRow key={s.id}>
+                    <TableCell className="whitespace-nowrap">{formatDate(s.createdAt)}</TableCell>
+                    <TableCell>{s.formVersion}</TableCell>
                     {blocks.map((b) => (
-                      <td key={b.id}>{formatAnswer(b, s.answers[b.id])}</td>
+                      <TableCell key={b.id}>{formatAnswer(b, s.answers[b.id])}</TableCell>
                     ))}
-                    <td>
-                      <button type="button" onClick={() => setSelected(s)}>
+                    <TableCell>
+                      <Button variant="ghost" size="sm" onClick={() => setSelected(s)}>
                         Открыть
-                      </button>
-                    </td>
-                  </tr>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           {list.hasNextPage && (
-            <div className="responses-more">
-              <button
-                type="button"
+            <div className="mt-6 flex justify-center">
+              <Button
+                variant="outline"
                 onClick={() => list.fetchNextPage()}
                 disabled={list.isFetchingNextPage}
               >
                 {list.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-              </button>
+              </Button>
             </div>
           )}
         </>
       )}
 
-      {selected && (
-        <SubmissionPanel
-          submission={selected}
-          blocks={blocks}
-          formId={formId}
-          onClose={() => setSelected(null)}
-        />
-      )}
+      <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
+        <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+          {selected && (
+            <SubmissionPanel
+              submission={selected}
+              blocks={blocks}
+              formId={formId}
+              onClose={() => setSelected(null)}
+            />
+          )}
+        </SheetContent>
+      </Sheet>
     </section>
   )
 }
@@ -149,50 +181,54 @@ function SubmissionPanel({
   const remove = useDeleteSubmission(formId)
 
   function handleDelete() {
-    if (window.confirm('Удалить этот ответ? Действие необратимо.')) {
-      // Список инвалидируется в onSuccess мутации; панель закрываем.
-      remove.mutate(submission.id, { onSuccess: onClose })
-    }
+    // Список инвалидируется в onSuccess мутации; панель закрываем.
+    remove.mutate(submission.id, { onSuccess: onClose })
   }
 
   return (
-    <aside className="submission-panel" aria-label="Полный ответ">
-      <div className="submission-panel-head">
-        <h2>Ответ от {formatDate(submission.createdAt)}</h2>
-        <button type="button" onClick={onClose} aria-label="Закрыть">
-          ✕
-        </button>
-      </div>
-      <p className="submission-panel-meta">Версия формы: {submission.formVersion}</p>
+    <>
+      <SheetHeader>
+        <SheetTitle>Ответ от {formatDate(submission.createdAt)}</SheetTitle>
+        <SheetDescription>Версия формы: {submission.formVersion}</SheetDescription>
+      </SheetHeader>
 
-      <dl className="submission-answers">
+      <dl className="flex flex-col gap-4 px-4">
         {blocks.map((b) => (
           <div key={b.id}>
-            <dt>{blockTitle(b)}</dt>
-            <dd>{formatAnswer(b, submission.answers[b.id]) || <span className="muted">—</span>}</dd>
+            <dt className="text-sm font-medium">{blockTitle(b)}</dt>
+            <dd className="mt-0.5 text-sm text-muted-foreground">
+              {formatAnswer(b, submission.answers[b.id]) || '—'}
+            </dd>
           </div>
         ))}
         {extraIds.map((id) => (
           <div key={id}>
-            <dt>
-              {id} <span className="muted">(из прежней версии)</span>
+            <dt className="text-sm font-medium">
+              {id} <span className="text-muted-foreground">(из прежней версии)</span>
             </dt>
-            <dd>{formatAnswer(undefined, submission.answers[id])}</dd>
+            <dd className="mt-0.5 text-sm text-muted-foreground">
+              {formatAnswer(undefined, submission.answers[id])}
+            </dd>
           </div>
         ))}
       </dl>
 
-      <div className="submission-panel-foot">
+      <div className="mt-auto flex flex-col gap-2 px-4 pb-4">
         {remove.isError && (
-          <p role="alert" className="submission-panel-error">
+          <p role="alert" className="text-sm text-destructive">
             Не удалось удалить. Попробуйте ещё раз.
           </p>
         )}
-        <button type="button" className="danger" onClick={handleDelete} disabled={remove.isPending}>
+        <Button
+          variant="outline"
+          className="text-destructive hover:text-destructive"
+          onClick={handleDelete}
+          disabled={remove.isPending}
+        >
           {remove.isPending ? 'Удаляем…' : 'Удалить ответ'}
-        </button>
+        </Button>
       </div>
-    </aside>
+    </>
   )
 }
 

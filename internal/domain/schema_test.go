@@ -23,9 +23,12 @@ func TestValidateSchema_Valid(t *testing.T) {
 				{"id":"blk_7","type":"multi_choice","label":"Языки","required":false,"settings":{"options":[{"id":"o1","label":"Go"}]}}
 			]
 		}`,
+		"неотвечаемый text-блок":               `{"blocks":[{"id":"b","type":"text","label":"Раздел А","required":false,"settings":{}}]}`,
+		"submitLabel задан":                    `{"blocks":[],"submitLabel":"Готово"}`,
+		"placeholder у текстового поля":        `{"blocks":[{"id":"b","type":"short_text","label":"Имя","settings":{"placeholder":"Например, Иван"}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
 		"пустой label — валидный черновик":     `{"blocks":[{"id":"b","type":"short_text","label":"","required":false,"settings":{}}]}`,
-		"settings опущен": `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,
+		"settings опущен":                      `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -52,8 +55,13 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		strings.Join(manyOpts, ",") + `]}}]}`
 
 	longLabel := `{"blocks":[{"id":"b","type":"short_text","label":"` + strings.Repeat("я", MaxLabelLen+1) + `","settings":{}}]}`
+	longSubmit := `{"blocks":[],"submitLabel":"` + strings.Repeat("я", MaxSubmitLabelLen+1) + `"}`
+	longPlaceholder := `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"placeholder":"` +
+		strings.Repeat("я", MaxPlaceholderLen+1) + `"}}]}`
 
 	cases := map[string]string{
+		"слишком длинный submitLabel": longSubmit,
+		"слишком длинный placeholder": longPlaceholder,
 		"битый JSON":                  `{"blocks":`,
 		"хвост после документа":       `{"blocks":[]}{}`,
 		"неизвестная schemaVersion":   `{"schemaVersion":2,"blocks":[]}`,

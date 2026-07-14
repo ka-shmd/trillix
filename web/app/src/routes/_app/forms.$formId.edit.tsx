@@ -3,8 +3,11 @@ import { useQuery } from '@tanstack/react-query'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
+import { Button } from '@/components/ui/button'
 
 // Редактор формы (/forms/$formId/edit): грузит форму через Query и отдаёт билдеру.
+// Вся навигация/публикация — в шапке BuilderScreen; название правится первой
+// строкой полотна. Здесь только загрузка/ошибка и чистое полотно во всю ширину.
 export const Route = createFileRoute('/_app/forms/$formId/edit')({
   component: FormEditor,
 })
@@ -13,27 +16,20 @@ function FormEditor() {
   const { formId } = Route.useParams()
   const query = useQuery(formDetailQueryOptions(formId))
 
-  return (
-    <div className="builder-page">
-      <header className="builder-topbar">
-        <Link to="/forms">← К формам</Link>
-        {query.data && <span className="builder-title">{query.data.title}</span>}
-        <Link to="/forms/$formId/responses" params={{ formId }} className="builder-topbar-link">
-          Ответы
-        </Link>
-      </header>
-
-      {query.isPending ? (
-        <p className="builder-loading">Загрузка…</p>
-      ) : query.isError ? (
-        <div role="alert" className="builder-error-box">
-          <p>Форма не найдена.</p>
+  if (query.isPending) {
+    return <p className="p-6 text-sm text-muted-foreground">Загрузка…</p>
+  }
+  if (query.isError) {
+    return (
+      <div role="alert" className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+        <p className="mb-3 text-sm">Форма не найдена.</p>
+        <Button asChild variant="outline" size="sm">
           <Link to="/forms">Вернуться к списку</Link>
-        </div>
-      ) : (
-        // key={formId} — свежий стор билдера на каждую форму.
-        <BuilderScreen key={formId} detail={query.data} />
-      )}
-    </div>
-  )
+        </Button>
+      </div>
+    )
+  }
+
+  // key={formId} — свежий стор билдера на каждую форму.
+  return <BuilderScreen key={formId} detail={query.data} />
 }

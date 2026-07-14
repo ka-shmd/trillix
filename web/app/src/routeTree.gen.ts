@@ -15,6 +15,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
+import { Route as AppFormsFormIdShareRouteImport } from './routes/_app/forms.$formId.share'
 import { Route as AppFormsFormIdResponsesRouteImport } from './routes/_app/forms.$formId.responses'
 import { Route as AppFormsFormIdEditRouteImport } from './routes/_app/forms.$formId.edit'
 
@@ -46,6 +47,11 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   path: '/forms/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppFormsFormIdShareRoute = AppFormsFormIdShareRouteImport.update({
+  id: '/forms/$formId/share',
+  path: '/forms/$formId/share',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsFormIdResponsesRoute = AppFormsFormIdResponsesRouteImport.update({
   id: '/forms/$formId/responses',
   path: '/forms/$formId/responses',
@@ -64,6 +70,7 @@ export interface FileRoutesByFullPath {
   '/forms/': typeof AppFormsIndexRoute
   '/forms/$formId/edit': typeof AppFormsFormIdEditRoute
   '/forms/$formId/responses': typeof AppFormsFormIdResponsesRoute
+  '/forms/$formId/share': typeof AppFormsFormIdShareRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -72,6 +79,7 @@ export interface FileRoutesByTo {
   '/forms': typeof AppFormsIndexRoute
   '/forms/$formId/edit': typeof AppFormsFormIdEditRoute
   '/forms/$formId/responses': typeof AppFormsFormIdResponsesRoute
+  '/forms/$formId/share': typeof AppFormsFormIdShareRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -83,6 +91,7 @@ export interface FileRoutesById {
   '/_app/forms/': typeof AppFormsIndexRoute
   '/_app/forms/$formId/edit': typeof AppFormsFormIdEditRoute
   '/_app/forms/$formId/responses': typeof AppFormsFormIdResponsesRoute
+  '/_app/forms/$formId/share': typeof AppFormsFormIdShareRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -93,6 +102,7 @@ export interface FileRouteTypes {
     | '/forms/'
     | '/forms/$formId/edit'
     | '/forms/$formId/responses'
+    | '/forms/$formId/share'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -101,6 +111,7 @@ export interface FileRouteTypes {
     | '/forms'
     | '/forms/$formId/edit'
     | '/forms/$formId/responses'
+    | '/forms/$formId/share'
   id:
     | '__root__'
     | '/_app'
@@ -111,6 +122,7 @@ export interface FileRouteTypes {
     | '/_app/forms/'
     | '/_app/forms/$formId/edit'
     | '/_app/forms/$formId/responses'
+    | '/_app/forms/$formId/share'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -162,6 +174,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/forms/$formId/share': {
+      id: '/_app/forms/$formId/share'
+      path: '/forms/$formId/share'
+      fullPath: '/forms/$formId/share'
+      preLoaderRoute: typeof AppFormsFormIdShareRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/$formId/responses': {
       id: '/_app/forms/$formId/responses'
       path: '/forms/$formId/responses'
@@ -184,6 +203,7 @@ interface AppRouteChildren {
   AppFormsIndexRoute: typeof AppFormsIndexRoute
   AppFormsFormIdEditRoute: typeof AppFormsFormIdEditRoute
   AppFormsFormIdResponsesRoute: typeof AppFormsFormIdResponsesRoute
+  AppFormsFormIdShareRoute: typeof AppFormsFormIdShareRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -191,6 +211,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppFormsIndexRoute: AppFormsIndexRoute,
   AppFormsFormIdEditRoute: AppFormsFormIdEditRoute,
   AppFormsFormIdResponsesRoute: AppFormsFormIdResponsesRoute,
+  AppFormsFormIdShareRoute: AppFormsFormIdShareRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

@@ -83,6 +83,83 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
+  it('addBlockAfter вставляет после указанного блока и возвращает id', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // a
+    store.getState().addBlock('number') // c
+    const [a, c] = store.getState().blocks.map((x) => x.id)
+    store.getState().markSaved()
+
+    const newId = store.getState().addBlockAfter(a!, 'email')
+
+    const s = store.getState()
+    expect(s.blocks.map((x) => x.id)).toEqual([a, newId, c])
+    expect(s.blocks[1]?.type).toBe('email')
+    expect(s.selectedId).toBe(newId)
+    expect(s.dirty).toBe(true)
+  })
+
+  it('addBlockAfter с null добавляет в конец', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const a = store.getState().blocks[0]!.id
+
+    const newId = store.getState().addBlockAfter(null, 'date')
+
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([a, newId])
+  })
+
+  it('changeBlockType меняет тип на месте, сохраняя id/label/required и сбрасывая опции', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    store.getState().updateBlock(id, { label: 'Выбор', required: true })
+    store.getState().addOption(id)
+    store.getState().markSaved()
+
+    const returned = store.getState().changeBlockType(id, 'short_text')
+
+    const b = store.getState().blocks[0]!
+    expect(returned).toBe(id)
+    expect(b.id).toBe(id) // id стабилен
+    expect(b.type).toBe('short_text')
+    expect(b.label).toBe('Выбор') // текст сохранён
+    expect(b.required).toBe(true)
+    expect(b.settings?.options).toBeUndefined() // тип-специфика сброшена
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('changeBlockType на несуществующем блоке — no-op', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().markSaved()
+
+    store.getState().changeBlockType('нет-такого', 'email')
+
+    expect(store.getState().blocks[0]?.type).toBe('short_text')
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('reorderBlocks переносит блок на позицию другого (dnd)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // a
+    store.getState().addBlock('email') // b
+    store.getState().addBlock('number') // c
+    const [a, b, c] = store.getState().blocks.map((x) => x.id)
+
+    // Перетащили a на место c → порядок b, c, a.
+    store.getState().reorderBlocks(a!, c!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    expect(store.getState().dirty).toBe(true)
+
+    // Та же позиция / неизвестный id — no-op, dirty не поднимается.
+    store.getState().markSaved()
+    store.getState().reorderBlocks(b!, b!)
+    store.getState().reorderBlocks('нет', c!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    expect(store.getState().dirty).toBe(false)
+  })
+
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
@@ -179,6 +256,22 @@ describe('createBuilderStore', () => {
     expect(s.selectedId).toBeNull()
     // Копия, а не та же ссылка (стор владеет своими блоками).
     expect(s.blocks[0]).not.toBe(schema.blocks[0])
+  })
+
+  it('setSubmitLabel меняет текст кнопки и помечает dirty; toSchema его несёт', () => {
+    const store = createBuilderStore()
+    expect(store.getState().submitLabel).toBe('')
+
+    store.getState().setSubmitLabel('Готово')
+    expect(store.getState().submitLabel).toBe('Готово')
+    expect(store.getState().dirty).toBe(true)
+    expect(store.getState().toSchema().submitLabel).toBe('Готово')
+  })
+
+  it('hydrate загружает submitLabel из схемы', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({ schemaVersion: 1, blocks: [], submitLabel: 'Отправить ответ' })
+    expect(store.getState().submitLabel).toBe('Отправить ответ')
   })
 
   it('markSaved снимает dirty', () => {

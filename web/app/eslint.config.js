@@ -32,6 +32,17 @@ export default tseslint.config(
       'react-refresh/only-export-components': 'off',
     },
   },
+  // Вендоренный код shadcn/ui (src/components/ui, хуки, lib/utils) — не наш стиль,
+  // копируется из реестра как есть. Гасим правила, которые он штатно нарушает
+  // (fast-refresh, чистота рендера в примитивах), чтобы не патчить чужой генератор.
+  {
+    files: ['src/components/ui/**/*.{ts,tsx}', 'src/hooks/**/*.{ts,tsx}', 'src/lib/utils.ts'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
   // eslint-config-prettier — последним: гасит правила форматирования, ими занимается prettier.
   prettier,
 )

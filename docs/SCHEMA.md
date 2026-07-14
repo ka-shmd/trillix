@@ -114,16 +114,21 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
       "id": "blk_9f2k1x",          // стабильный, генерируется клиентом; уникален в форме
       "type": "short_text",         // short_text | long_text | email | number
                                     // | single_choice | multi_choice | date
+                                    // | text (неотвечаемый абзац: без ответа,
+                                    //   исключён из ValidateAnswers/CSV/таблицы)
       "label": "Ваше имя",
       "description": "",            // опционально
       "required": true,             // опционально, по умолчанию false
-      "settings": {                 // опционально; у не-choice пуст
+      "settings": {                 // опционально
         "options": [                // только у single_choice / multi_choice
           { "id": "opt_1", "label": "Друзья" }
-        ]
+        ],
+        "placeholder": "Например…"  // текстовые поля ввода (≤200); подсказка в поле
       }
     }
-  ]
+  ],
+  "submitLabel": "Отправить"        // опционально; текст кнопки отправки (≤100),
+                                    // пусто → рендерер берёт дефолт «Отправить»
 }
 ```
 
@@ -139,6 +144,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `description` | ≤ 2000 |
 | длина `label` опции | ≤ 500 |
 | длина `id` | ≤ 64 |
+| длина `submitLabel` | ≤ 100 |
+| длина `settings.placeholder` | ≤ 200 |
 
 ---
 

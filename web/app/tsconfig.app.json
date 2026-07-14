@@ -12,6 +12,7 @@
        вне корня проекта, поэтому bare-импорт zod оттуда не находит node_modules
        кабинета — маппим zod на локальный пакет явно. */
     "paths": {
+      "@/*": ["./src/*"],
       "@entities/*": ["../shared/entities/*"],
       "@fields/*": ["../shared/fields/*"],
       "zod": ["./node_modules/zod"],

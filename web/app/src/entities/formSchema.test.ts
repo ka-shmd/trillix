@@ -4,6 +4,8 @@ import {
   MAX_BLOCKS,
   MAX_LABEL_LEN,
   MAX_OPTIONS,
+  MAX_PLACEHOLDER_LEN,
+  MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 
 // Зеркало internal/domain/schema_test.go: те же валидные/невалидные кейсы, чтобы
@@ -30,6 +32,13 @@ describe('formSchemaSchema — валидные', () => {
         },
         { id: 'blk_7', type: 'multi_choice', label: 'Языки', settings: { options: [{ id: 'o1', label: 'Go' }] } },
       ],
+    },
+    'неотвечаемый text-блок': {
+      blocks: [{ id: 'b', type: 'text', label: 'Раздел А', settings: {} }],
+    },
+    'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'placeholder у текстового поля': {
+      blocks: [{ id: 'b', type: 'short_text', label: 'Имя', settings: { placeholder: 'Иван' } }],
     },
     'choice без опций — валидный черновик': {
       blocks: [{ id: 'b', type: 'single_choice', label: '', settings: {} }],
@@ -100,6 +109,20 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'слишком длинный label': {
       blocks: [{ id: 'b', type: 'short_text', label: 'я'.repeat(MAX_LABEL_LEN + 1) }],
+    },
+    'слишком длинный submitLabel': {
+      blocks: [],
+      submitLabel: 'я'.repeat(MAX_SUBMIT_LABEL_LEN + 1),
+    },
+    'слишком длинный placeholder': {
+      blocks: [
+        {
+          id: 'b',
+          type: 'short_text',
+          label: 'x',
+          settings: { placeholder: 'я'.repeat(MAX_PLACEHOLDER_LEN + 1) },
+        },
+      ],
     },
   }
 
