@@ -101,7 +101,10 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-20 pb-24 pt-36">
+    // Метрики холста = общий .rf-page (fields.css): десктоп 144/80/96, мобильный
+    // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
+    // превью/рендерером на узком экране.
+    <div className="mx-auto max-w-3xl px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-36">
       <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
 
       {blocks.length === 0 ? (

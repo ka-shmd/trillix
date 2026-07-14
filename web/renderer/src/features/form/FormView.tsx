@@ -153,7 +153,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   const hasFieldErrors = Object.keys(errors).length > 0
 
   return (
-    <main className="page rf-page">
+    <main className="rf-page">
       <h1 className="rf-title">{form.title.trim() || 'Форма'}</h1>
       <div className="rf-form">
         {blocks.map((block) => (

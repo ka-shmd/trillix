@@ -79,7 +79,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {mode === 'edit' ? (
         <SlashEditor formId={detail.id} initialTitle={detail.title} />
       ) : (
-        <section aria-label="Просмотр формы" className="mx-auto max-w-2xl px-6 py-10">
+        <section aria-label="Просмотр формы">
           <PreviewPane title={detail.title} />
         </section>
       )}

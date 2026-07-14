@@ -23,7 +23,9 @@ export function PreviewPane({ title }: { title: string }) {
           ))}
         </div>
       )}
-      <button type="button" className="rf-submit" disabled>
+      {/* Не disabled: превью показывает кнопку как у респондента (активной);
+          обработчика нет, поэтому клик всё равно ничего не делает. */}
+      <button type="button" className="rf-submit">
         {label}
       </button>
     </div>
