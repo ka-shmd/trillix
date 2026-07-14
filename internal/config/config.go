@@ -30,6 +30,11 @@ type Config struct {
 	// OGImageURL — абсолютный URL картинки превью ссылок (og:image). В MVP — общая
 	// брендовая заглушка; своя картинка на форму — пост-MVP (нужна загрузка файлов).
 	OGImageURL string
+	// PublicRendererScriptPath — путь к entry-скрипту рендерера на HTML-странице
+	// формы /r/{slug} (Go подставляет его в <script src>). Различие контуров:
+	// dev — vite-dev отдаёт исходник `/src/main.tsx`; prod-local/prod — собранный
+	// стабильный entry `/renderer.js`. Абсолютный путь от корня (начинается с «/»).
+	PublicRendererScriptPath string
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -57,6 +62,7 @@ func Load() (Config, error) {
 	formTokenSecret := required("FORM_TOKEN_SECRET")
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
 	cfg.OGImageURL = required("OG_IMAGE_URL")
+	cfg.PublicRendererScriptPath = required("PUBLIC_RENDERER_SCRIPT_PATH")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -80,6 +86,11 @@ func Load() (Config, error) {
 	}
 	if !isHTTPURL(cfg.OGImageURL) {
 		return Config{}, fmt.Errorf("invalid OG_IMAGE_URL %q: want http(s):// URL", cfg.OGImageURL)
+	}
+	// Путь склеивается с publicBaseURL как base+path; относительный путь дал бы
+	// битую ссылку на скрипт, поэтому требуем ведущий «/».
+	if !strings.HasPrefix(cfg.PublicRendererScriptPath, "/") {
+		return Config{}, fmt.Errorf("invalid PUBLIC_RENDERER_SCRIPT_PATH %q: want leading slash", cfg.PublicRendererScriptPath)
 	}
 
 	return cfg, nil

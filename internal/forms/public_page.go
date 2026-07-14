@@ -82,7 +82,7 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		MetaDescription: metaDesc,
 		OGImage:         h.ogImageURL,
 		URL:             h.publicBaseURL + "/r/" + slug,
-		ScriptSrc:       h.publicBaseURL + "/src/main.tsx",
+		ScriptSrc:       h.publicBaseURL + h.scriptPath,
 	}
 
 	// Рендерим в буфер: ошибка шаблона (маловероятна — статичный шаблон) не должна

@@ -27,11 +27,12 @@ var testSecret = []byte("dev-only-form-token-secret-not-a-real-key")
 const (
 	testBaseURL = "http://localhost:5174"
 	testOGImage = "http://localhost:5174/og-preview.png"
+	testScript  = "/src/main.tsx"
 )
 
 func newPublicMux(svc publicFormService) *http.ServeMux {
 	mux := http.NewServeMux()
-	NewPublicHandler(svc, testSecret, testBaseURL, testOGImage).Routes(mux)
+	NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, testScript).Routes(mux)
 	return mux
 }
 
