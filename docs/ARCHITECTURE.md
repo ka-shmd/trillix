@@ -387,22 +387,23 @@ services:
 ```
 
 ```
-# Caddyfile (суть)
-app.example.com {
+# Caddyfile (суть). Домены — через env ({$APP_DOMAIN} и т.д.), один файл на
+# prod-local (*.localhost, внутренний CA) и прод (реальные домены, Let's Encrypt).
+{$APP_DOMAIN} {
     root * /srv/static/app
     try_files {path} /index.html      # SPA fallback
     file_server
     header /assets/* Cache-Control "public, max-age=31536000, immutable"
 }
-f.example.com {
+{$RENDERER_DOMAIN} {
+    @api path /r/* /public/*          # HTML-документ (OG-мета) и публичный API — из Go
+    reverse_proxy @api api:8080        # /public — рендерер зовёт same-origin, без CORS
     root * /srv/static/renderer
-    @doc path /r/*                    # HTML-документ формы — из Go (OG-мета)
-    reverse_proxy @doc api:8080
     try_files {path} /index.html      # ассеты и всё прочее — статикой
     file_server
 }
-api.example.com {
-    reverse_proxy api:8080
+{$API_DOMAIN} {
+    reverse_proxy api:8080             # приватный API кабинета (кросс-домен с {$APP_DOMAIN})
 }
 ```
 

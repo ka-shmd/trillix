@@ -54,6 +54,12 @@ services:
 
   caddy:
     image: caddy:2
+    environment:
+      # Домены трёх сайтов — Caddyfile читает их как {$APP_DOMAIN} и т.д.
+      # prod-local: app.localhost / f.localhost / api.localhost; прод: реальные.
+      APP_DOMAIN: ${APP_DOMAIN}
+      RENDERER_DOMAIN: ${RENDERER_DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
     ports:
       - "80:80"
       - "443:443"
