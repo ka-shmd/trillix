@@ -252,9 +252,19 @@ function FormTitleInput({
   const [title, setTitle] = useState(initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle)
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), [])
+
+  // Автовысота: заголовок — textarea (а не input), чтобы длинное название
+  // переносилось так же, как <h1 rf-title> у респондента (единая line-box, без
+  // одностроки-переполнения инпута). Растёт под контент, без скролла.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [title])
 
   // При заходе на форму каретка сразу в начале названия.
   useEffect(() => {
@@ -277,7 +287,9 @@ function FormTitleInput({
     }, 800)
   }
 
-  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+  // Enter/↓ — уйти на первый блок; Enter в заголовке не заводит перевод строки
+  // (title однострочный логически, хоть и переносится визуально при отрисовке).
+  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' || e.key === 'ArrowDown') {
       e.preventDefault()
       onEnter()
@@ -285,14 +297,15 @@ function FormTitleInput({
   }
 
   return (
-    <input
+    <textarea
       ref={inputRef}
+      rows={1}
       value={title}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
       placeholder="Название формы"
       aria-label="Название формы"
-      className="rf-title mb-5 w-full bg-transparent outline-none placeholder:text-muted-foreground/40"
+      className="rf-title mb-5 w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

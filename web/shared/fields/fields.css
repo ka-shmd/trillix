@@ -46,9 +46,12 @@
   }
 }
 
-/* Заголовок формы — text-5xl/700/tracking-tight редактора. */
+/* Заголовок формы — text-5xl/700/tracking-tight редактора. Padding 0, чтобы
+   <textarea> редактора и <h1> рендерера имели одинаковую коробку (у textarea
+   есть UA-паддинг). */
 .rf-title {
   margin: 0;
+  padding: 0;
   font-size: 3rem;
   line-height: 1;
   font-weight: 700;
