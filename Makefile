@@ -2,6 +2,11 @@
 
 COMPOSE := docker compose --env-file .env -f compose.dev.yml
 
+# prod-local контур: тот же образ/compose, что уедет на прод, но на *.localhost.
+API_IMAGE    := ghcr.io/ka-shmd/trierra-api:latest
+PROD_PROJECT := trierra-prod-local
+PROD_COMPOSE := docker compose -p $(PROD_PROJECT) --env-file .env.prod-local -f deploy/compose.prod.yml
+
 # Явный список Go-пакетов: `./...` заполз бы в web/**/node_modules, где npm-пакеты
 # приносят посторонние .go-файлы (напр. flatted). Go не умеет игнорировать node_modules.
 GO_PKGS := ./cmd/... ./internal/... ./migrations/...
@@ -12,7 +17,7 @@ include .env
 export
 endif
 
-.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web
+.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -49,6 +54,19 @@ seed: ## Наполнить БД демо-данными (demo@trierra.local / d
 
 sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
 	go tool sqlc generate
+
+# Важно: .env.prod-local источается в ТОТ ЖЕ шелл, где идёт compose/сборка.
+# Makefile выше делает `include .env; export` (dev-значения для go run), а у docker
+# compose переменные шелла приоритетнее --env-file — без source dev-DATABASE_URL
+# (127.0.0.1) перекрыл бы prod-local. source в рецепте возвращает верный контур.
+prod-local: ## Репетиция прода: собрать образ+статику, поднять стек под https на *.localhost, smoke
+	docker build -f deploy/Dockerfile -t $(API_IMAGE) .
+	set -a && . ./.env.prod-local && set +a && \
+		./scripts/build-static.sh && $(PROD_COMPOSE) up -d
+	./scripts/prod-local-smoke.sh $(PROD_PROJECT)
+
+prod-local-down: ## Погасить prod-local (тома с данными сохраняются; -v сотрёт БД)
+	set -a && . ./.env.prod-local && set +a && $(PROD_COMPOSE) down
 
 test: test-go test-web ## Все тесты: Go (юниты + интеграционные) и фронтовый vitest
 

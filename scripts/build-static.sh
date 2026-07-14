@@ -35,8 +35,12 @@ echo "==> проверка бюджета бандла рендерера"
 npm --prefix "$root/web/renderer" run check:bundle
 
 echo "==> раскладка статики в $static"
-rm -rf "$static"
+# Каталог $static Caddy держит как bind-mount (compose.prod.yml). Удалять его
+# целиком нельзя — rm+пересоздание меняет inode и рвёт mount в уже запущенном
+# caddy (тот начинает видеть пустоту). Поэтому сохраняем корень, заменяем лишь
+# содержимое app/ и renderer/.
 mkdir -p "$static"
+rm -rf "$static/app" "$static/renderer"
 cp -r "$root/web/app/dist" "$static/app"
 cp -r "$root/web/renderer/dist" "$static/renderer"
 

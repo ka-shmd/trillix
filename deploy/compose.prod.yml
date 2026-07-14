@@ -1,13 +1,25 @@
 # Прод-контур (Фаза 7). Тот же файл поднимает и prod-local (на *.localhost с
 # локальным CA Caddy), и настоящий прод на VPS (реальные домены + Let's Encrypt) —
-# различия живут только в .env и переменной домена, не в этом файле.
+# различия живут только в env-файле, не в этом файле.
 #
-# Запуск: docker compose --env-file .env -f deploy/compose.prod.yml up -d
-# (обычно через `make prod-local`, шаг 5 — там же собирается образ и статика).
-#
-# На этом шаге (2) файл ещё не запускается end-to-end: Caddyfile и статика
-# фронтов появятся в шагах 3–4. Проверяемая здесь часть — цепочка
-# postgres → migrate → api.
+# Запуск: docker compose --env-file .env.prod-local -f deploy/compose.prod.yml up -d
+# (обычно через `make prod-local`). Указанный --env-file — единственный источник:
+# из него идут и подстановки ${...} ниже, и окружение контейнеров api/migrate
+# (через environment-якорь), поэтому dev/prod-local различаются только выбором файла.
+
+# Окружение приложения (api и одноразовый migrate — один бинарник, config.Load()
+# требует полный набор даже для `migrate up`). Значения берутся из --env-file через
+# подстановку — так контейнер получает ровно тот контур, что указан при запуске,
+# без риска подхватить чужой env_file.
+x-app-env: &app-env
+  HTTP_ADDR: ${HTTP_ADDR}
+  DATABASE_URL: ${DATABASE_URL}
+  COOKIE_SECURE: ${COOKIE_SECURE}
+  FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}
+  PUBLIC_RENDERER_BASE_URL: ${PUBLIC_RENDERER_BASE_URL}
+  OG_IMAGE_URL: ${OG_IMAGE_URL}
+  PUBLIC_RENDERER_SCRIPT_PATH: ${PUBLIC_RENDERER_SCRIPT_PATH}
+  APP_ORIGIN: ${APP_ORIGIN}
 
 services:
   postgres:
@@ -33,7 +45,7 @@ services:
   migrate:
     image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
     command: ["migrate", "up"]
-    env_file: ../.env
+    environment: *app-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -41,7 +53,7 @@ services:
 
   api:
     image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
-    env_file: ../.env
+    environment: *app-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,8 +76,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro    # появится в шаге 3
-      - ./static:/srv/static:ro                # раскладывается в шаге 4
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro    # deploy/Caddyfile
+      - ./static:/srv/static:ro                # deploy/static (scripts/build-static.sh)
       - caddy_data:/data                        # сертификаты локального CA / Let's Encrypt
       - caddy_config:/config
     depends_on:
