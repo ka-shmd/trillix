@@ -89,9 +89,12 @@ export function BlockRow({
     if (e.key === 'Enter') {
       e.preventDefault()
       onAddBelow(block.id)
-    } else if (e.key === '/' && block.label === '' && isContent) {
-      // Тип выбирается только у ещё не выбранного (text) блока. У блока с уже
-      // выбранным типом «/» не открывает меню — тип менять нельзя.
+    } else if (e.key === '/' && isContent) {
+      // «/» открывает меню типов у неотвечаемого (text) блока — в т.ч. когда текст
+      // уже набран: он станет подписью выбранного поля (changeBlockType сохраняет
+      // label), как «напиши вопрос → «/» → выбери тип» в Tally. У блока с уже
+      // выбранным типом «/» не работает — смена типа запрещена. Компромисс:
+      // литеральный «/» в text-абзаце с клавиатуры не ввести (всегда команда).
       e.preventDefault()
       setSlashOpen(true)
     } else if (
@@ -185,6 +188,10 @@ export function BlockRow({
             }`}
           />
 
+          {/* Описание вопроса (block.description) — только у отвечаемых блоков:
+              неотвечаемый text описания не имеет (рендерится статикой). */}
+          {isContent ? null : <DescriptionField block={block} />}
+
           {/* Text (неотвечаемый) — только абзац. Choice — варианты. Остальные
               (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
           {isContent ? null : isChoiceType(block.type) ? (
@@ -226,6 +233,51 @@ function RequiredToggle({ block }: { block: Block }) {
         <Asterisk className="size-4" />
       </button>
     </div>
+  )
+}
+
+// DescriptionField — редактируемое описание вопроса (block.description). Рендерер
+// показывает его как rf-desc под подписью (FieldShell) — тот же вид и в редакторе
+// (WYSIWYG, класс rf-desc из fields.css). Пустое описание не шумит: показываем
+// кнопку «+ Описание» (на hover/фокусе строки), клик раскрывает поле; с непустым —
+// поле видно всегда. Пустое при потере фокуса сворачивается обратно к кнопке.
+function DescriptionField({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  const desc = block.description ?? ''
+  const [open, setOpen] = useState(desc.trim().length > 0)
+
+  useEffect(() => {
+    if (open) autosize(ref.current)
+  }, [desc, open])
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true)
+          requestAnimationFrame(() => ref.current?.focus())
+        }}
+        className="mt-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        + Описание
+      </button>
+    )
+  }
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      value={desc}
+      onChange={(e) => updateBlock(block.id, { description: e.target.value })}
+      onBlur={() => {
+        if (!desc.trim()) setOpen(false)
+      }}
+      placeholder="Описание (необязательно)"
+      aria-label="Описание вопроса"
+      className="rf-desc mt-1 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/50"
+    />
   )
 }
 
