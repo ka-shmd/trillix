@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowLeft, Pencil } from 'lucide-react'
 
-import { type Form, displayFormTitle } from '../../entities/form'
+import { type Block } from '@entities/formSchema'
+import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +15,7 @@ import { Input } from '@/components/ui/input'
 // опубликованной формы. Сверху — название и переход в редактор; ниже — две
 // карточки (ссылка и её превью); внизу — управление жизненным циклом
 // (перепубликация изменений, закрытие, повторная публикация закрытой).
-export function ShareView({ form }: { form: Form }) {
+export function ShareView({ form }: { form: FormDetail }) {
   const link = publicFormUrl(form.slug)
   const neverPublished = form.publishedVersion === null
   const isClosed = form.status === 'closed'
@@ -56,7 +57,11 @@ export function ShareView({ form }: { form: Form }) {
         <>
           <div className="grid gap-4 md:grid-cols-2">
             <LinkBlock link={link} inactive={isClosed} />
-            <PreviewBlock title={displayFormTitle(form.title)} host={publicFormHost()} />
+            <PreviewBlock
+              title={displayFormTitle(form.title)}
+              host={publicFormHost()}
+              teaser={linkTeaser(form.draftSchema.blocks)}
+            />
           </div>
           <ManageSection form={form} />
         </>
@@ -122,11 +127,27 @@ function LinkBlock({ link, inactive }: { link: string; inactive: boolean }) {
   )
 }
 
-// PreviewBlock — визуальный макет карточки ссылки (как при пересылке в мессенджер).
-// TODO(OG): это приблизительный вид. Настоящий превью требует серверных
-// OG-мета-тегов (og:title/og:description) на публичной странице /r/{slug} —
-// рендерер сейчас client-side SPA со статичным index.html. См. docs/POST-MVP.md.
-function PreviewBlock({ title, host }: { title: string; host: string }) {
+// linkTeaser — тизер карточки: заголовки первых трёх непустых блоков через « · ».
+// Зеркалит серверный ogDescriptionFromSchema (internal/forms/public_page.go),
+// формирующий og:description опубликованной версии. Здесь считаем по текущему
+// черновику — приближение, расходится с опубликованным лишь при неопубликованных
+// правках.
+function linkTeaser(blocks: Block[]): string {
+  const labels: string[] = []
+  for (const b of blocks) {
+    const label = b.label.trim()
+    if (!label) continue
+    labels.push(label)
+    if (labels.length === 3) break
+  }
+  return labels.join(' · ')
+}
+
+// PreviewBlock — предпросмотр карточки ссылки, как её строит сервер из OG-мета
+// (internal/forms/public_page.go, страница /r/{slug}): og:title = название формы,
+// og:description = заголовки первых вопросов. Здесь — приближение того же вида
+// (сервер дополнительно отдаёт og:image); точная отрисовка зависит от площадки.
+function PreviewBlock({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
     <div className="rounded-lg border p-5">
       <h2 className="text-base font-medium">Как выглядит ссылка</h2>
@@ -135,13 +156,13 @@ function PreviewBlock({ title, host }: { title: string; host: string }) {
           <p className="truncate text-xs text-muted-foreground">{host}</p>
           <p className="mt-0.5 font-medium">{title}</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Онлайн-форма — заполните и отправьте ответ.
+            {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
           </p>
         </div>
       </div>
       <p className="mt-3 text-sm text-muted-foreground">
-        Примерно так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит
-        от площадки.
+        Так карточка выглядит при пересылке в мессенджерах и соцсетях: сервер отдаёт og:title
+        (название) и og:description (заголовки первых вопросов). Точный вид зависит от площадки.
       </p>
     </div>
   )
