@@ -215,7 +215,7 @@ CI в GitHub с первого дня, но без деплоя: его рабо
 
 **Шаги.**
 
-1. Multi-stage Dockerfile для Go: сборка в `golang:1.22` → `distroless/static`, `CGO_ENABLED=0`, ~15 МБ. Локальная проверка: образ собирается, healthz отвечает из контейнера.
+1. Multi-stage Dockerfile для Go: сборка в `golang:1.26` (в тон `go.mod`) → `distroless/static:nonroot`, `CGO_ENABLED=0`, ~25 МБ. Локальная проверка: образ собирается, healthz отвечает из контейнера.
 2. `deploy/compose.prod.yml`: caddy + api + postgres; Postgres без порта наружу; healthcheck'и; `restart: unless-stopped`; api стартует после миграций (init-команда `migrate up` тем же образом).
 3. `deploy/Caddyfile`: три сайта `app.localhost`, `f.localhost`, `api.localhost` — Caddy сам выдаёт TLS от внутреннего CA; статика фронтов из volume, SPA-fallback, иммутабельный кэш `/assets/*`; reverse proxy на api. Доменные имена — параметром окружения, чтобы этот же файл работал на проде с реальными доменами.
 4. Прод-сборка фронтов: `vite build` обоих проектов, скрипт раскладки статики в volume Caddy; базовые URL API и публичной части — через `VITE_*`-переменные на этапе сборки.
