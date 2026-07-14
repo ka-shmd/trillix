@@ -4,6 +4,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from './routeTree.gen'
 import './index.css'
+// Общие стили полей формы (rf-*) — единый источник с рендерером, см.
+// web/shared/fields/fields.css. После index.css: unlayered rf-* перебивают base-слой Tailwind.
+import '@fields/fields.css'
 
 const queryClient = new QueryClient()
 const router = createRouter({ routeTree, context: { queryClient } })

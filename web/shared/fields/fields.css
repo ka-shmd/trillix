@@ -1,0 +1,95 @@
+/* Единый источник вида полей формы (компоненты @fields/*, классы rf-*).
+   Импортируется и кабинетом (web/app), и рендерером (web/renderer) — то, что видит
+   автор в превью билдера и респондент в опубликованной форме, описано здесь один раз.
+
+   Цвета/радиус берутся из нейтральных токенов --rf-* ниже. Приложение может
+   переопределить любой --rf- (например, кабинет — внутри .dark), но по умолчанию не
+   переопределяет, поэтому поля выглядят одинаково в обоих фронтах.
+
+   Это НЕ shadcn-слой: правила rf-* и токены --rf-* независимы от Tailwind/shadcn
+   (те стилизуют только UI-кит кабинета) и не тянут Tailwind в рендерер. */
+:root {
+  --rf-text: #1b1f24;
+  --rf-muted: #6b7280;
+  --rf-border: #d8dce2;
+  --rf-surface: #ffffff;
+  --rf-surface-muted: #f6f7f9;
+  --rf-danger: #b91c1c;
+  --rf-radius: 8px;
+}
+
+.rf-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Неотвечаемый блок text — статический абзац формы. */
+.rf-text {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--rf-text);
+}
+
+.rf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.rf-required {
+  color: var(--rf-danger);
+}
+
+.rf-desc {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--rf-muted);
+}
+
+.rf-input {
+  width: 100%;
+  border: 1px solid var(--rf-border);
+  border-radius: var(--rf-radius);
+  padding: 0.55rem 0.7rem;
+  font: inherit;
+  background: var(--rf-surface);
+  color: var(--rf-text);
+  resize: vertical;
+}
+
+.rf-input:disabled {
+  background: var(--rf-surface-muted);
+  color: var(--rf-muted);
+}
+
+.rf-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.rf-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+}
+
+.rf-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--rf-muted);
+  font-style: italic;
+}
+
+.rf-error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--rf-danger);
+}
