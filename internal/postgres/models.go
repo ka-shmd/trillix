@@ -19,6 +19,7 @@ type Form struct {
 	PublishedVersionID pgtype.UUID
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+	Name               pgtype.Text
 }
 
 type FormVersion struct {

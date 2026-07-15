@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,11 +56,17 @@ type fakeStore struct {
 	lastExpected time.Time
 
 	// Захват аргументов последнего вызова — для проверок «куда положили».
-	lastCreateWS    uuid.UUID
-	lastCreateTitle string
-	lastCreateSlug  string
-	lastListLimit   int32
-	lastListAfter   bool
+	lastCreateWS     uuid.UUID
+	lastCreateTitle  string
+	lastCreateSlug   string
+	lastCreateName   *string
+	lastCreateSchema json.RawMessage
+
+	// Управление нумерацией копий (ListFormNames).
+	formNames     []FormName
+	formNamesErr  error
+	lastListLimit int32
+	lastListAfter bool
 }
 
 func (f *fakeStore) GetPersonalWorkspace(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (uuid.UUID, error) {
@@ -76,6 +83,25 @@ func (f *fakeStore) CreateForm(_ context.Context, _ postgres.DBTX, id, workspace
 	f.lastCreateTitle = title
 	f.lastCreateSlug = slug
 	return Form{ID: id, WorkspaceID: workspaceID, Title: title, Slug: slug, Status: "draft"}, nil
+}
+
+func (f *fakeStore) CreateFormWithSchema(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title, slug string, name *string, schema json.RawMessage) (Form, error) {
+	f.created = true
+	f.lastCreateWS = workspaceID
+	f.lastCreateTitle = title
+	f.lastCreateSlug = slug
+	f.lastCreateName = name
+	f.lastCreateSchema = schema
+	return Form{ID: id, WorkspaceID: workspaceID, Name: name, Title: title, Slug: slug, Status: "draft", DraftSchema: schema}, nil
+}
+
+func (f *fakeStore) UpdateFormName(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error) {
+	f.updated = true
+	return Form{ID: id, WorkspaceID: workspaceID, Name: name}, nil
+}
+
+func (f *fakeStore) ListFormNames(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]FormName, error) {
+	return f.formNames, f.formNamesErr
 }
 
 func (f *fakeStore) GetForm(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Form, error) {
@@ -163,6 +189,8 @@ func newTestService(store *fakeStore) *Service {
 	return NewService(nil, fakeTx{}, store)
 }
 
+func strptr(s string) *string { return &s }
+
 // --- Анти-IDOR: доступ к чужой форме неотличим от отсутствующей (404) ---
 
 func TestGet_NotMember_ReturnsNotFound(t *testing.T) {
@@ -222,6 +250,153 @@ func TestDelete_NotMember_ReturnsNotFound(t *testing.T) {
 	}
 	if store.deleted {
 		t.Fatal("чужая форма не должна удаляться")
+	}
+}
+
+// --- Дубликация формы ---
+
+func TestDuplicate_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.Duplicate(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не должна дублироваться)", err)
+	}
+	if store.created {
+		t.Fatal("чужая форма не должна дублироваться")
+	}
+}
+
+func TestDuplicate_CleanTitle_SuffixInName(t *testing.T) {
+	wsID := domain.NewID()
+	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя"}]}`)
+	store := &fakeStore{
+		// У оригинала имя не задано (name=nil) — база берётся из title.
+		form:   Form{WorkspaceID: wsID, Title: "Анкета", Slug: "old-slug", Status: "published", DraftSchema: schema},
+		member: true,
+	}
+	svc := newTestService(store)
+
+	dup, err := svc.Duplicate(context.Background(), domain.NewID(), domain.NewID())
+	if err != nil {
+		t.Fatalf("Duplicate: %v", err)
+	}
+	// Публичный заголовок копируется ДОСЛОВНО — суффикса в нём нет.
+	if dup.Title != "Анкета" {
+		t.Fatalf("title = %q, ожидался чистый \"Анкета\"", dup.Title)
+	}
+	// Суффикс «(копия)» уходит во ВНУТРЕННЕЕ имя.
+	if dup.Name == nil || *dup.Name != "Анкета (копия)" {
+		t.Fatalf("name = %v, ожидалось \"Анкета (копия)\"", dup.Name)
+	}
+	if dup.WorkspaceID != wsID {
+		t.Fatalf("копия попала в чужой воркспейс: %v != %v", dup.WorkspaceID, wsID)
+	}
+	if dup.Status != "draft" {
+		t.Fatalf("status = %q, копия должна начинаться черновиком", dup.Status)
+	}
+	if string(store.lastCreateSchema) != string(schema) {
+		t.Fatalf("схема не скопирована: %q", store.lastCreateSchema)
+	}
+	if store.lastCreateSlug == "old-slug" || store.lastCreateSlug == "" {
+		t.Fatalf("slug должен быть новым, а не %q", store.lastCreateSlug)
+	}
+}
+
+func TestDuplicate_NumbersBySiblings(t *testing.T) {
+	wsID := domain.NewID()
+	name := "Анкета (копия)"
+	store := &fakeStore{
+		form:   Form{WorkspaceID: wsID, Name: &name, Title: "Анкета", DraftSchema: json.RawMessage(`{"blocks":[]}`)},
+		member: true,
+		// В воркспейсе уже есть оригинал и первая копия → следующая должна стать «(копия 2)».
+		formNames: []FormName{{Title: "Анкета"}, {Name: strptr("Анкета (копия)"), Title: "Анкета"}},
+	}
+	svc := newTestService(store)
+
+	dup, err := svc.Duplicate(context.Background(), domain.NewID(), domain.NewID())
+	if err != nil {
+		t.Fatalf("Duplicate: %v", err)
+	}
+	// База — «Анкета» (хвост «(копия)» у источника отрезан, не стекается).
+	if dup.Name == nil || *dup.Name != "Анкета (копия 2)" {
+		t.Fatalf("name = %v, ожидалось \"Анкета (копия 2)\"", dup.Name)
+	}
+	if dup.Title != "Анкета" {
+		t.Fatalf("title = %q, ожидался чистый \"Анкета\"", dup.Title)
+	}
+}
+
+func TestNextCopyName(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		siblings []FormName
+		want     string
+	}{
+		{"первая копия", "Анкета", nil, "Анкета (копия)"},
+		{"копия копии не стекает", "Анкета (копия)", nil, "Анкета (копия)"},
+		{
+			"нумерация по соседям",
+			"Анкета",
+			[]FormName{{Title: "Анкета"}, {Name: strptr("Анкета (копия)"), Title: "x"}},
+			"Анкета (копия 2)",
+		},
+		{
+			"дыра в нумерации — берём max+1",
+			"Анкета",
+			[]FormName{{Name: strptr("Анкета (копия 5)"), Title: "x"}},
+			"Анкета (копия 6)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextCopyName(tc.src, tc.siblings); got != tc.want {
+				t.Fatalf("nextCopyName(%q) = %q, want %q", tc.src, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCopyName_TruncatesToFitLimit(t *testing.T) {
+	// База впритык к лимиту: суффикс обязан сохраниться, итог — влезть в maxTitleLen.
+	base := strings.Repeat("я", maxTitleLen)
+	got := copyName(base, 1)
+	if len(got) > maxTitleLen {
+		t.Fatalf("итог %d байт > лимита %d", len(got), maxTitleLen)
+	}
+	if !strings.HasSuffix(got, " (копия)") {
+		t.Fatalf("суффикс потерян: %q", got)
+	}
+}
+
+// --- Внутреннее имя (переименование на дашборде) ---
+
+func TestUpdateName_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "новое имя")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if store.updated {
+		t.Fatal("чужую форму не должно переименовывать")
+	}
+}
+
+func TestUpdateName_Empty_ResetsToNil(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	svc := newTestService(store)
+
+	form, err := svc.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "   ")
+	if err != nil {
+		t.Fatalf("UpdateName: %v", err)
+	}
+	// Пустое имя → NULL (кабинет вернётся к показу публичного заголовка).
+	if form.Name != nil {
+		t.Fatalf("name = %v, ожидался nil при пустом вводе", form.Name)
 	}
 }
 

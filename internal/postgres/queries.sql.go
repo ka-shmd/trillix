@@ -28,7 +28,7 @@ func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64
 const createForm = `-- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
 
 type CreateFormParams struct {
@@ -41,6 +41,7 @@ type CreateFormParams struct {
 type CreateFormRow struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
 	Title              string
 	Slug               string
 	Status             string
@@ -60,6 +61,62 @@ func (q *Queries) CreateForm(ctx context.Context, arg CreateFormParams) (CreateF
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createFormWithSchema = `-- name: CreateFormWithSchema :one
+INSERT INTO forms (id, workspace_id, title, slug, name, draft_schema)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type CreateFormWithSchemaParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Title       string
+	Slug        string
+	Name        pgtype.Text
+	DraftSchema []byte
+}
+
+type CreateFormWithSchemaRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Как CreateForm, но с заданным именем и черновиком схемы: дубликация формы задаёт
+// name = «{база} (копия N)» и копирует draft_schema исходника; title (публичный
+// заголовок) копируется как есть. Статус — дефолтный draft (публикация не
+// переносится), поэтому published_version_id в RETURNING всегда NULL.
+func (q *Queries) CreateFormWithSchema(ctx context.Context, arg CreateFormWithSchemaParams) (CreateFormWithSchemaRow, error) {
+	row := q.db.QueryRow(ctx, createFormWithSchema,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Title,
+		arg.Slug,
+		arg.Name,
+		arg.DraftSchema,
+	)
+	var i CreateFormWithSchemaRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,
@@ -209,7 +266,7 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 }
 
 const getForm = `-- name: GetForm :one
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
     -- Черновик отличается от опубликованной версии → в шапке билдера бейдж «есть
     -- неопубликованные изменения». Сравнение JSONB (draft_schema и снапшот пишутся
@@ -226,6 +283,7 @@ WHERE f.id = $1
 type GetFormRow struct {
 	ID                    uuid.UUID
 	WorkspaceID           uuid.UUID
+	Name                  pgtype.Text
 	Title                 string
 	Slug                  string
 	Status                string
@@ -247,6 +305,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,
@@ -445,6 +504,38 @@ func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberPa
 	return exists, err
 }
 
+const listFormNames = `-- name: ListFormNames :many
+SELECT name, title FROM forms WHERE workspace_id = $1
+`
+
+type ListFormNamesRow struct {
+	Name  pgtype.Text
+	Title string
+}
+
+// Имена и заголовки всех форм воркспейса — для нумерации копий: сервис вычисляет
+// отображаемое имя (name ?? title) каждой формы и подбирает следующий «(копия N)»
+// без коллизий. Форм на воркспейс немного, грузятся разом.
+func (q *Queries) ListFormNames(ctx context.Context, workspaceID uuid.UUID) ([]ListFormNamesRow, error) {
+	rows, err := q.db.Query(ctx, listFormNames, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormNamesRow
+	for rows.Next() {
+		var i ListFormNamesRow
+		if err := rows.Scan(&i.Name, &i.Title); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormVersions = `-- name: ListFormVersions :many
 SELECT version, schema
 FROM form_versions
@@ -482,7 +573,7 @@ func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]Lis
 }
 
 const listFormsAfter = `-- name: ListFormsAfter :many
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
@@ -505,6 +596,7 @@ type ListFormsAfterParams struct {
 type ListFormsAfterRow struct {
 	ID                    uuid.UUID
 	WorkspaceID           uuid.UUID
+	Name                  pgtype.Text
 	Title                 string
 	Slug                  string
 	Status                string
@@ -535,6 +627,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
+			&i.Name,
 			&i.Title,
 			&i.Slug,
 			&i.Status,
@@ -556,7 +649,7 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 }
 
 const listFormsFirstPage = `-- name: ListFormsFirstPage :many
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
@@ -576,6 +669,7 @@ type ListFormsFirstPageParams struct {
 type ListFormsFirstPageRow struct {
 	ID                    uuid.UUID
 	WorkspaceID           uuid.UUID
+	Name                  pgtype.Text
 	Title                 string
 	Slug                  string
 	Status                string
@@ -601,6 +695,7 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,
+			&i.Name,
 			&i.Title,
 			&i.Slug,
 			&i.Status,
@@ -742,7 +837,7 @@ const setFormClosed = `-- name: SetFormClosed :one
 UPDATE forms
 SET status = 'closed', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
 
 type SetFormClosedParams struct {
@@ -753,6 +848,7 @@ type SetFormClosedParams struct {
 type SetFormClosedRow struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
 	Title              string
 	Slug               string
 	Status             string
@@ -769,6 +865,7 @@ func (q *Queries) SetFormClosed(ctx context.Context, arg SetFormClosedParams) (S
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,
@@ -783,7 +880,7 @@ const setFormPublished = `-- name: SetFormPublished :one
 UPDATE forms
 SET status = 'published', published_version_id = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
 
 type SetFormPublishedParams struct {
@@ -795,6 +892,7 @@ type SetFormPublishedParams struct {
 type SetFormPublishedRow struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
 	Title              string
 	Slug               string
 	Status             string
@@ -811,6 +909,7 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,
@@ -827,7 +926,7 @@ SET draft_schema = $3, updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
   AND updated_at = $4::timestamptz
-RETURNING id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at
+RETURNING id, workspace_id, name, title, slug, status, draft_schema, published_version_id, created_at, updated_at
 `
 
 type UpdateFormDraftSchemaParams struct {
@@ -837,21 +936,35 @@ type UpdateFormDraftSchemaParams struct {
 	ExpectedUpdatedAt pgtype.Timestamptz
 }
 
+type UpdateFormDraftSchemaRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	DraftSchema        []byte
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
 // Автосейв билдера с оптимистичной блокировкой: строка обновляется, только если
 // форма в воркспейсе И её updated_at совпадает с присланным клиентом. Иначе 0
 // строк — service различает «чужая/нет формы» (проверено заранее) от расхождения
 // версии (updated_at сдвинула другая вкладка → 409). updated_at двигаем вручную.
-func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraftSchemaParams) (Form, error) {
+func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraftSchemaParams) (UpdateFormDraftSchemaRow, error) {
 	row := q.db.QueryRow(ctx, updateFormDraftSchema,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.DraftSchema,
 		arg.ExpectedUpdatedAt,
 	)
-	var i Form
+	var i UpdateFormDraftSchemaRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,
@@ -863,11 +976,56 @@ func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraft
 	return i, err
 }
 
+const updateFormName = `-- name: UpdateFormName :one
+UPDATE forms
+SET name = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNameParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        pgtype.Text
+}
+
+type UpdateFormNameRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Внутреннее имя формы (дашборд): переименование в кабинете и суффикс «(копия N)»
+// при дубле. Публичный заголовок (title) не трогает. В пределах воркспейса; 0 строк
+// (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
+func (q *Queries) UpdateFormName(ctx context.Context, arg UpdateFormNameParams) (UpdateFormNameRow, error) {
+	row := q.db.QueryRow(ctx, updateFormName, arg.ID, arg.WorkspaceID, arg.Name)
+	var i UpdateFormNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormTitle = `-- name: UpdateFormTitle :one
 UPDATE forms
 SET title = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
 
 type UpdateFormTitleParams struct {
@@ -879,6 +1037,7 @@ type UpdateFormTitleParams struct {
 type UpdateFormTitleRow struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
 	Title              string
 	Slug               string
 	Status             string
@@ -889,12 +1048,14 @@ type UpdateFormTitleRow struct {
 
 // Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк
 // (service трактует это как «не найдена/чужая»). updated_at двигаем вручную.
+// title — ПУБЛИЧНЫЙ заголовок (первая строка билдера); имя дашборда — UpdateFormName.
 func (q *Queries) UpdateFormTitle(ctx context.Context, arg UpdateFormTitleParams) (UpdateFormTitleRow, error) {
 	row := q.db.QueryRow(ctx, updateFormTitle, arg.ID, arg.WorkspaceID, arg.Title)
 	var i UpdateFormTitleRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
+		&i.Name,
 		&i.Title,
 		&i.Slug,
 		&i.Status,

@@ -29,8 +29,20 @@ export function createForm(title?: string): Promise<Form> {
   })
 }
 
+// Переименование ПУБЛИЧНОГО заголовка (первая строка билдера). Его видит респондент.
 export function renameForm(id: string, title: string): Promise<Form> {
   return apiRequest(`/forms/${id}`, { method: 'PATCH', body: { title }, schema: formSchema })
+}
+
+// Переименование ВНУТРЕННЕГО имени (дашборд). Не трогает публичный заголовок; пустая
+// строка сбрасывает имя (кабинет снова показывает заголовок). См. ADR §10.
+export function updateFormName(id: string, name: string): Promise<Form> {
+  return apiRequest(`/forms/${id}`, { method: 'PATCH', body: { name }, schema: formSchema })
+}
+
+// Дубликация: копия формы «{название} (копия)» с тем же черновиком, всегда draft.
+export function duplicateForm(id: string): Promise<Form> {
+  return apiRequest(`/forms/${id}/duplicate`, { method: 'POST', schema: formSchema })
 }
 
 export function deleteForm(id: string): Promise<void> {

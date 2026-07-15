@@ -173,6 +173,86 @@ func TestForms_WorkspaceIsolation(t *testing.T) {
 	}
 }
 
+// Дубликация формы: копия в том же воркспейсе с «(копия)» в названии, скопированным
+// черновиком и новыми id/slug; всегда черновик. Чужую форму дублировать нельзя (404).
+func TestForms_Duplicate(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	form := createForm(t, alice, srv, "Анкета")
+	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	patchDraftSchema(t, alice, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+
+	dup := duplicateForm(t, alice, srv, form.ID, http.StatusCreated)
+	// Публичный заголовок копируется ДОСЛОВНО (чистый), суффикс «(копия)» — во
+	// внутреннем имени (дашборд). ADR §10: разъезд name/title.
+	if dup.Title != "Анкета" {
+		t.Fatalf("title копии = %q, ожидался чистый \"Анкета\"", dup.Title)
+	}
+	if dup.Name == nil || *dup.Name != "Анкета (копия)" {
+		t.Fatalf("name копии = %v, ожидалось \"Анкета (копия)\"", dup.Name)
+	}
+	if dup.Status != "draft" {
+		t.Fatalf("status копии = %q, ожидался draft", dup.Status)
+	}
+	if dup.ID == form.ID || dup.Slug == form.Slug || dup.Slug == "" {
+		t.Fatalf("копия должна иметь новые id/slug: %+v (оригинал %s/%s)", dup, form.ID, form.Slug)
+	}
+
+	// Черновик копии = черновик оригинала (канонизированный).
+	got := parseSchema(t, getFormDetail(t, alice, srv, dup.ID, http.StatusOK).DraftSchema)
+	if len(got.Blocks) != 1 || got.Blocks[0].ID != "b1" || got.Blocks[0].Label != "Имя" {
+		t.Fatalf("схема копии не совпадает с оригиналом: %+v", got)
+	}
+
+	// Вторая копия — нумерация без коллизий: «(копия 2)».
+	dup2 := duplicateForm(t, alice, srv, form.ID, http.StatusCreated)
+	if dup2.Name == nil || *dup2.Name != "Анкета (копия 2)" {
+		t.Fatalf("name второй копии = %v, ожидалось \"Анкета (копия 2)\"", dup2.Name)
+	}
+
+	// Три формы (оригинал + две копии) в списке владельца.
+	if list := listForms(t, alice, srv, ""); len(list.Forms) != 3 {
+		t.Fatalf("у владельца ожидалось 3 формы, получено %d", len(list.Forms))
+	}
+
+	// Изоляция: bob не дублирует форму alice → 404, его список пуст.
+	duplicateForm(t, bob, srv, form.ID, http.StatusNotFound)
+	if list := listForms(t, bob, srv, ""); len(list.Forms) != 0 {
+		t.Fatalf("список bob не пуст: %+v", list.Forms)
+	}
+}
+
+// Внутреннее имя (PATCH {name}): задаётся и сбрасывается, публичный заголовок (title)
+// при этом не меняется. Чужую форму переименовать нельзя (404).
+func TestForms_UpdateName(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	form := createForm(t, alice, srv, "Публичный заголовок")
+
+	named := patchName(t, alice, srv, form.ID, "Рабочее имя", http.StatusOK)
+	if named.Name == nil || *named.Name != "Рабочее имя" {
+		t.Fatalf("name = %v, ожидалось \"Рабочее имя\"", named.Name)
+	}
+	if named.Title != "Публичный заголовок" {
+		t.Fatalf("title изменился при переименовании: %q", named.Title)
+	}
+
+	// Пустое имя → сброс в null (кабинет снова показывает заголовок).
+	reset := patchName(t, alice, srv, form.ID, "", http.StatusOK)
+	if reset.Name != nil {
+		t.Fatalf("name = %v, ожидался null после сброса", reset.Name)
+	}
+
+	// Чужую форму переименовать нельзя.
+	patchName(t, bob, srv, form.ID, "взлом", http.StatusNotFound)
+}
+
 // Автосейв билдера: валидная схема сохраняется (канонизированной, updated_at
 // сдвигается), мусор → 422, устаревший updated_at → 409, схема без updated_at → 422.
 func TestForms_DraftSchemaAutosave(t *testing.T) {
@@ -457,6 +537,7 @@ func TestForms_CursorPagination(t *testing.T) {
 
 type formDTO struct {
 	ID                    string  `json:"id"`
+	Name                  *string `json:"name"`
 	Title                 string  `json:"title"`
 	Slug                  string  `json:"slug"`
 	Status                string  `json:"status"`
@@ -512,6 +593,22 @@ func patchTitle(t *testing.T, c *http.Client, srv *httptest.Server, id, title st
 	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"title":"`+title+`"}`, csrf(t, c, srv.URL))
 	if r.StatusCode != wantStatus {
 		t.Fatalf("PATCH форма: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDTO{}
+	}
+	var f formDTO
+	decode(t, r, &f)
+	return f
+}
+
+// patchName шлёт PATCH {name} — внутреннее имя (дашборд). Публичный заголовок не трогает.
+func patchName(t *testing.T, c *http.Client, srv *httptest.Server, id, name string, wantStatus int) formDTO {
+	t.Helper()
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"name":"`+name+`"}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH имя: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
 	}
 	if wantStatus != http.StatusOK {
 		closeBody(t, r)
@@ -599,6 +696,23 @@ func postFormAction(t *testing.T, c *http.Client, srv *httptest.Server, id, acti
 		t.Fatalf("POST %s: статус %d, ожидалось %d; тело=%s", action, r.StatusCode, wantStatus, body2(t, r))
 	}
 	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDTO{}
+	}
+	var f formDTO
+	decode(t, r, &f)
+	return f
+}
+
+// duplicateForm дёргает POST /forms/{id}/duplicate; на успехе (201) декодирует
+// новую форму, иначе (напр. 404) — закрывает тело и возвращает пустую.
+func duplicateForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) formDTO {
+	t.Helper()
+	r := do(t, c, http.MethodPost, srv.URL+"/api/v1/forms/"+id+"/duplicate", "", csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("POST duplicate: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusCreated {
 		closeBody(t, r)
 		return formDTO{}
 	}

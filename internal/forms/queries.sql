@@ -27,13 +27,22 @@ SELECT EXISTS (
 -- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: CreateFormWithSchema :one
+-- Как CreateForm, но с заданным именем и черновиком схемы: дубликация формы задаёт
+-- name = «{база} (копия N)» и копирует draft_schema исходника; title (публичный
+-- заголовок) копируется как есть. Статус — дефолтный draft (публикация не
+-- переносится), поэтому published_version_id в RETURNING всегда NULL.
+INSERT INTO forms (id, workspace_id, title, slug, name, draft_schema)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
 -- name: GetForm :one
 -- Полная форма, включая черновик схемы: GET /forms/{id} отдаёт draft_schema
 -- (заглушка редактора в фазе 2, живой билдер — в фазе 3). published_version — номер
 -- опубликованной версии (NULL для черновика), для шапки билдера «версия N».
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
     -- Черновик отличается от опубликованной версии → в шапке билдера бейдж «есть
     -- неопубликованные изменения». Сравнение JSONB (draft_schema и снапшот пишутся
@@ -49,7 +58,7 @@ WHERE f.id = $1;
 -- name: ListFormsFirstPage :many
 -- Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
 -- вызывающий по «лишней» строке понимает, есть ли следующая страница.
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
@@ -63,7 +72,7 @@ LIMIT $2;
 -- name: ListFormsAfter :many
 -- Следующая страница составным курсором (updated_at, id): строго «старше» якоря
 -- по паре колонок — стабильно даже если форму отредактировали во время листания.
-SELECT f.id, f.workspace_id, f.title, f.slug, f.status, f.published_version_id,
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
@@ -78,10 +87,26 @@ LIMIT $2;
 -- name: UpdateFormTitle :one
 -- Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк
 -- (service трактует это как «не найдена/чужая»). updated_at двигаем вручную.
+-- title — ПУБЛИЧНЫЙ заголовок (первая строка билдера); имя дашборда — UpdateFormName.
 UPDATE forms
 SET title = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormName :one
+-- Внутреннее имя формы (дашборд): переименование в кабинете и суффикс «(копия N)»
+-- при дубле. Публичный заголовок (title) не трогает. В пределах воркспейса; 0 строк
+-- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
+UPDATE forms
+SET name = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: ListFormNames :many
+-- Имена и заголовки всех форм воркспейса — для нумерации копий: сервис вычисляет
+-- отображаемое имя (name ?? title) каждой формы и подбирает следующий «(копия N)»
+-- без коллизий. Форм на воркспейс немного, грузятся разом.
+SELECT name, title FROM forms WHERE workspace_id = $1;
 
 -- name: UpdateFormDraftSchema :one
 -- Автосейв билдера с оптимистичной блокировкой: строка обновляется, только если
@@ -93,7 +118,7 @@ SET draft_schema = $3, updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
   AND updated_at = sqlc.arg(expected_updated_at)::timestamptz
-RETURNING id, workspace_id, title, slug, status, draft_schema, published_version_id, created_at, updated_at;
+RETURNING id, workspace_id, name, title, slug, status, draft_schema, published_version_id, created_at, updated_at;
 
 -- name: DeleteForm :execrows
 -- Удаляет только в пределах воркспейса; возвращает число удалённых строк
@@ -143,7 +168,7 @@ RETURNING id, version;
 UPDATE forms
 SET status = 'published', published_version_id = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
 -- name: SetFormClosed :one
 -- Снятие с публикации: status='closed'. published_version_id не трогаем — знаем,
@@ -151,4 +176,4 @@ RETURNING id, workspace_id, title, slug, status, published_version_id, created_a
 UPDATE forms
 SET status = 'closed', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, title, slug, status, published_version_id, created_at, updated_at;
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;

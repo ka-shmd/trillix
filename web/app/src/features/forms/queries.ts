@@ -8,11 +8,13 @@ import { formKeys } from './keys'
 import {
   createForm,
   deleteForm,
+  duplicateForm,
   getForm,
   listForms,
   publishForm,
   renameForm,
   unpublishForm,
+  updateFormName,
 } from './api'
 import { type Form, type FormDetail } from '../../entities/form'
 
@@ -62,6 +64,31 @@ export function useRenameForm() {
       qc.invalidateQueries({ queryKey: formKeys.list() })
       qc.setQueryData<FormDetail>(formKeys.detail(form.id), renameDetailPatch(form))
     },
+  })
+}
+
+// Переименование внутреннего имени (дашборд). Как и rename заголовка, двигает
+// updated_at — патчим detail (name + updatedAt), чтобы не словить 409 автосейва.
+export function useUpdateFormName() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => updateFormName(id, name),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+        old ? { ...old, name: form.name, updatedAt: form.updatedAt } : old,
+      )
+    },
+  })
+}
+
+// Дубликация создаёт новую форму — инвалидируем список, чтобы копия появилась
+// сверху (остаёмся на дашборде, в редактор не уходим).
+export function useDuplicateForm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => duplicateForm(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
   })
 }
 
