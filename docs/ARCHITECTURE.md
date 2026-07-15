@@ -334,8 +334,8 @@ web/app/src/
 │   ├── _auth/          #   layout-группа: login, register
 │   └── _app/           #   layout-группа с проверкой сессии
 │       ├── forms.index.tsx          # список форм
-│       ├── forms.$formId.edit.tsx   # билдер
-│       └── forms.$formId.responses.tsx
+│       ├── forms.$slug.edit.tsx     # билдер (URL адресует форму slug'ом, как /r/{slug})
+│       └── forms.$slug.responses.tsx
 ├── features/
 │   ├── auth/           # api.ts, hooks.ts, компоненты
 │   ├── form-builder/   # стор билдера, палитра блоков, канвас, панель настроек
