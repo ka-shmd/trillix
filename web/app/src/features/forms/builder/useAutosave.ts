@@ -47,6 +47,16 @@ export function useAutosave(
   const conflictRef = useRef(false)
   const runRef = useRef<() => void>(() => {})
 
+  // initialUpdatedAt — только фолбэк токена блокировки (реальный берётся из кэша),
+  // поэтому держим его в ref и НЕ кладём в зависимости основного эффекта. Иначе rename
+  // заголовка (двигает updatedAt в detail-кэше → новый проп) пересоздавал бы эффект, а
+  // его cleanup гасил бы незавершённый дебаунс автосейва схемы — правка молча терялась,
+  // «Опубликовать» залипала disabled. Ref синхронизируется отдельным эффектом.
+  const initialUpdatedAtRef = useRef(initialUpdatedAt)
+  useEffect(() => {
+    initialUpdatedAtRef.current = initialUpdatedAt
+  }, [initialUpdatedAt])
+
   useEffect(() => {
     const clearTimer = () => {
       if (timerRef.current) clearTimeout(timerRef.current)
@@ -78,7 +88,7 @@ export function useAutosave(
         const form = await saveDraftSchema(
           formId,
           snapshot,
-          formLockToken(qc, formId, initialUpdatedAt),
+          formLockToken(qc, formId, initialUpdatedAtRef.current),
         )
         ok = true
         // Список форм сортируется по updatedAt — он изменился; detail патчим, чтобы
@@ -133,7 +143,9 @@ export function useAutosave(
       unsub()
       clearTimer()
     }
-  }, [store, formId, initialUpdatedAt, qc])
+    // initialUpdatedAt намеренно НЕ в зависимостях — см. initialUpdatedAtRef выше:
+    // его смена (rename заголовка) не должна пересоздавать эффект и гасить дебаунс.
+  }, [store, formId, qc])
 
   // Предупреждение при уходе с несохранёнными правками (в т.ч. пока идёт сохранение).
   useEffect(() => {
