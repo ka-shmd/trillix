@@ -19,5 +19,8 @@ dist/
 .vscode/
 *.swp
 
+# Локальная оснастка запуска preview-браузера (не часть продукта)
+.claude/launch.json
+
 # ОС
 .DS_Store
