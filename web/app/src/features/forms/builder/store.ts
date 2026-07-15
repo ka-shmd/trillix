@@ -28,6 +28,14 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // (на него ссылаются ответы), смена типа — это другой блок, не правка этого.
 export type BlockPatch = Partial<Pick<Block, 'label' | 'description' | 'required' | 'settings'>>
 
+// Snapshot — снимок документа (blocks + submitLabel) для стеков undo/redo. selectedId
+// и dirty — производный UI, в снапшот не входят; при откате selectedId чинится, если
+// выделенный блок исчез.
+export type Snapshot = { blocks: Block[]; submitLabel: string }
+
+// Потолок глубины истории: длинная сессия не должна расти в памяти без предела.
+const MAX_HISTORY = 100
+
 export type BuilderState = {
   blocks: Block[]
   // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт дефолт.
@@ -37,6 +45,16 @@ export type BuilderState = {
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
   // считается правкой и dirty не трогает.
   dirty: boolean
+  // past/future — стеки снапшотов для undo/redo. past хранит состояния ДО каждого
+  // изменения (вершина — последнее); future наполняется при undo. Любое новое
+  // изменение чистит future (ветка redo обрывается).
+  past: Snapshot[]
+  future: Snapshot[]
+  // lastTag коалесит непрерывный ввод: соседние правки с одинаковым ненулевым тегом
+  // (набор в одно поле) делят один шаг истории. Структурные операции — тег null,
+  // всегда свой шаг. Сбрасывается undo/redo, чтобы после отмены новый ввод не
+  // прилипал к докатанному снапшоту.
+  lastTag: string | null
 }
 
 export type BuilderActions = {
@@ -68,6 +86,9 @@ export type BuilderActions = {
   select: (id: string | null) => void
   // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
   setSubmitLabel: (label: string) => void
+  // undo/redo откатывают и повторяют изменения документа. Пустой стек — no-op.
+  undo: () => void
+  redo: () => void
   // markSaved снимает dirty после успешного PATCH (автосейв — шаг 6).
   markSaved: () => void
   // toSchema сериализует документ для отправки на бэкенд.
@@ -96,168 +117,243 @@ export function newBlock(type: BlockType): Block {
 // (в т.ч. массива options) не задевала исходник из Query или дубликат.
 const cloneBlock = (b: Block): Block => structuredClone(b)
 
-// mutateOptions применяет fn к опциям choice-блока и возвращает патч состояния.
-// non-choice/несуществующий блок и «fn вернул тот же массив» (no-op на границе)
-// дают пустой патч — состояние и dirty не меняются.
+// mutateOptions применяет fn к опциям choice-блока и возвращает патч блоков или
+// null. non-choice/несуществующий блок и «fn вернул тот же массив» (no-op на
+// границе) дают null — commit не тронет ни состояние, ни историю.
 function mutateOptions(
   blocks: Block[],
   blockId: string,
   fn: (options: Option[]) => Option[],
-): Partial<BuilderState> {
+): Pick<BuilderState, 'blocks'> | null {
   const block = blocks.find((b) => b.id === blockId)
-  if (!block || !isChoiceType(block.type)) return {}
+  if (!block || !isChoiceType(block.type)) return null
   const options = block.settings?.options ?? []
   const next = fn(options)
-  if (next === options) return {}
+  if (next === options) return null
   return {
     blocks: blocks.map((b) =>
       b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b,
     ),
-    dirty: true,
   }
 }
 
+// snapshot снимает документ (только blocks+submitLabel) для стеков истории.
+const snapshot = (s: BuilderState): Snapshot => ({ blocks: s.blocks, submitLabel: s.submitLabel })
+
+// fixSelection чинит выделение после отката: если выделенный блок в новом наборе
+// исчез, снимаем выделение.
+const fixSelection = (selectedId: string | null, blocks: Block[]): string | null =>
+  selectedId && blocks.some((b) => b.id === selectedId) ? selectedId : null
+
+// textTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
+// (label/description/settings-placeholder) в один блок делят шаг истории; патч с
+// required (или иным дискретным полем) — свой шаг (тег null).
+function updateBlockTag(id: string, patch: BlockPatch): string | null {
+  const keys = Object.keys(patch)
+  const textOnly =
+    keys.length > 0 && keys.every((k) => k === 'label' || k === 'description' || k === 'settings')
+  return textOnly ? `ub:${id}:${keys.sort().join('+')}` : null
+}
+
 export function createBuilderStore(): StoreApi<BuilderStore> {
-  return createStore<BuilderStore>((set, get) => ({
-    blocks: [],
-    submitLabel: '',
-    selectedId: null,
-    dirty: false,
-
-    hydrate: (schema) =>
-      set({
-        blocks: schema.blocks.map(cloneBlock),
-        submitLabel: schema.submitLabel ?? '',
-        selectedId: null,
-        dirty: false,
-      }),
-
-    addBlock: (type) => {
-      const block = newBlock(type)
-      set((s) => ({ blocks: [...s.blocks, block], selectedId: block.id, dirty: true }))
-    },
-
-    addBlockAfter: (afterId, type) => {
-      const block = newBlock(type)
+  return createStore<BuilderStore>((set, get) => {
+    // commit — единственный путь мутации документа: применяет патч от producer и
+    // записывает историю. producer возвращает null для no-op (граница move, чужой
+    // блок) — тогда ни состояние, ни история не трогаются. tag коалесит соседние
+    // правки: одинаковый ненулевой тег продолжает текущий шаг (снапшот в past уже
+    // лежит), иначе кладётся новый снапшот. Любая мутация чистит future и ставит
+    // dirty.
+    function commit(
+      tag: string | null,
+      producer: (s: BuilderStore) => Partial<BuilderState> | null,
+    ): void {
       set((s) => {
-        const i = afterId ? s.blocks.findIndex((b) => b.id === afterId) : -1
-        const at = i >= 0 ? i + 1 : s.blocks.length
-        const blocks = s.blocks.slice()
-        blocks.splice(at, 0, block)
-        return { blocks, selectedId: block.id, dirty: true }
+        const patch = producer(s)
+        if (patch === null) return s
+        const coalesce = tag !== null && tag === s.lastTag
+        const past = coalesce ? s.past : [...s.past, snapshot(s)].slice(-MAX_HISTORY)
+        return { ...patch, past, future: [], lastTag: tag, dirty: true }
       })
-      return block.id
-    },
+    }
 
-    changeBlockType: (id, type) => {
-      set((s) => {
-        const src = s.blocks.find((b) => b.id === id)
-        if (!src) return s
-        // newBlock даёт корректные дефолтные settings под тип (choice → пустой
-        // список опций, non-choice → пустые); переносим текст и обязательность.
-        const converted: Block = {
-          ...newBlock(type),
-          id,
-          label: src.label,
-          description: src.description,
-          required: src.required,
-        }
-        return { blocks: s.blocks.map((b) => (b.id === id ? converted : b)), selectedId: id, dirty: true }
-      })
-      return id
-    },
+    return {
+      blocks: [],
+      submitLabel: '',
+      selectedId: null,
+      dirty: false,
+      past: [],
+      future: [],
+      lastTag: null,
 
-    updateBlock: (id, patch) =>
-      set((s) => ({
-        blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
-        dirty: true,
-      })),
-
-    removeBlock: (id) =>
-      set((s) => ({
-        blocks: s.blocks.filter((b) => b.id !== id),
-        selectedId: s.selectedId === id ? null : s.selectedId,
-        dirty: true,
-      })),
-
-    moveBlock: (id, dir) =>
-      set((s) => {
-        const i = s.blocks.findIndex((b) => b.id === id)
-        const j = dir === 'up' ? i - 1 : i + 1
-        const a = s.blocks[i]
-        const b = s.blocks[j]
-        if (!a || !b) return s // блок не найден или уже на границе — ничего не меняем
-        const blocks = s.blocks.slice()
-        blocks[i] = b
-        blocks[j] = a
-        return { blocks, dirty: true }
-      }),
-
-    reorderBlocks: (activeId, overId) =>
-      set((s) => {
-        const from = s.blocks.findIndex((b) => b.id === activeId)
-        const to = s.blocks.findIndex((b) => b.id === overId)
-        if (from < 0 || to < 0 || from === to) return s
-        const blocks = s.blocks.slice()
-        const [moved] = blocks.splice(from, 1)
-        if (!moved) return s
-        blocks.splice(to, 0, moved)
-        return { blocks, dirty: true }
-      }),
-
-    duplicateBlock: (id) =>
-      set((s) => {
-        const i = s.blocks.findIndex((b) => b.id === id)
-        const src = s.blocks[i]
-        if (!src) return s
-        const copy: Block = { ...cloneBlock(src), id: newBlockId() }
-        const blocks = s.blocks.slice()
-        blocks.splice(i + 1, 0, copy)
-        return { blocks, selectedId: copy.id, dirty: true }
-      }),
-
-    addOption: (blockId) =>
-      set((s) =>
-        mutateOptions(s.blocks, blockId, (opts) => [...opts, { id: newOptionId(), label: '' }]),
-      ),
-
-    updateOption: (blockId, optionId, label) =>
-      set((s) =>
-        mutateOptions(s.blocks, blockId, (opts) =>
-          opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
-        ),
-      ),
-
-    removeOption: (blockId, optionId) =>
-      set((s) =>
-        mutateOptions(s.blocks, blockId, (opts) => opts.filter((o) => o.id !== optionId)),
-      ),
-
-    moveOption: (blockId, optionId, dir) =>
-      set((s) =>
-        mutateOptions(s.blocks, blockId, (opts) => {
-          const i = opts.findIndex((o) => o.id === optionId)
-          const j = dir === 'up' ? i - 1 : i + 1
-          const a = opts[i]
-          const b = opts[j]
-          if (!a || !b) return opts // не найдено или граница — тот же массив (no-op)
-          const next = opts.slice()
-          next[i] = b
-          next[j] = a
-          return next
+      hydrate: (schema) =>
+        set({
+          blocks: schema.blocks.map(cloneBlock),
+          submitLabel: schema.submitLabel ?? '',
+          selectedId: null,
+          dirty: false,
+          past: [],
+          future: [],
+          lastTag: null,
         }),
-      ),
 
-    select: (id) => set({ selectedId: id }),
+      addBlock: (type) => {
+        const block = newBlock(type)
+        commit(null, (s) => ({ blocks: [...s.blocks, block], selectedId: block.id }))
+      },
 
-    setSubmitLabel: (label) => set({ submitLabel: label, dirty: true }),
+      addBlockAfter: (afterId, type) => {
+        const block = newBlock(type)
+        commit(null, (s) => {
+          const i = afterId ? s.blocks.findIndex((b) => b.id === afterId) : -1
+          const at = i >= 0 ? i + 1 : s.blocks.length
+          const blocks = s.blocks.slice()
+          blocks.splice(at, 0, block)
+          return { blocks, selectedId: block.id }
+        })
+        return block.id
+      },
 
-    markSaved: () => set({ dirty: false }),
+      changeBlockType: (id, type) => {
+        commit(null, (s) => {
+          const src = s.blocks.find((b) => b.id === id)
+          if (!src) return null
+          // newBlock даёт корректные дефолтные settings под тип (choice → пустой
+          // список опций, non-choice → пустые); переносим текст и обязательность.
+          const converted: Block = {
+            ...newBlock(type),
+            id,
+            label: src.label,
+            description: src.description,
+            required: src.required,
+          }
+          return { blocks: s.blocks.map((b) => (b.id === id ? converted : b)), selectedId: id }
+        })
+        return id
+      },
 
-    toSchema: () => ({
-      schemaVersion: SCHEMA_VERSION,
-      blocks: get().blocks,
-      submitLabel: get().submitLabel,
-    }),
-  }))
+      updateBlock: (id, patch) =>
+        commit(updateBlockTag(id, patch), (s) => ({
+          blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
+        })),
+
+      removeBlock: (id) =>
+        commit(null, (s) => ({
+          blocks: s.blocks.filter((b) => b.id !== id),
+          selectedId: s.selectedId === id ? null : s.selectedId,
+        })),
+
+      moveBlock: (id, dir) =>
+        commit(null, (s) => {
+          const i = s.blocks.findIndex((b) => b.id === id)
+          const j = dir === 'up' ? i - 1 : i + 1
+          const a = s.blocks[i]
+          const b = s.blocks[j]
+          if (!a || !b) return null // блок не найден или уже на границе — ничего не меняем
+          const blocks = s.blocks.slice()
+          blocks[i] = b
+          blocks[j] = a
+          return { blocks }
+        }),
+
+      reorderBlocks: (activeId, overId) =>
+        commit(null, (s) => {
+          const from = s.blocks.findIndex((b) => b.id === activeId)
+          const to = s.blocks.findIndex((b) => b.id === overId)
+          if (from < 0 || to < 0 || from === to) return null
+          const blocks = s.blocks.slice()
+          const [moved] = blocks.splice(from, 1)
+          if (!moved) return null
+          blocks.splice(to, 0, moved)
+          return { blocks }
+        }),
+
+      duplicateBlock: (id) =>
+        commit(null, (s) => {
+          const i = s.blocks.findIndex((b) => b.id === id)
+          const src = s.blocks[i]
+          if (!src) return null
+          const copy: Block = { ...cloneBlock(src), id: newBlockId() }
+          const blocks = s.blocks.slice()
+          blocks.splice(i + 1, 0, copy)
+          return { blocks, selectedId: copy.id }
+        }),
+
+      addOption: (blockId) =>
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => [
+            ...opts,
+            { id: newOptionId(), label: '' },
+          ]),
+        ),
+
+      updateOption: (blockId, optionId, label) =>
+        commit(`uo:${blockId}:${optionId}`, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) =>
+            opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
+          ),
+        ),
+
+      removeOption: (blockId, optionId) =>
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => opts.filter((o) => o.id !== optionId)),
+        ),
+
+      moveOption: (blockId, optionId, dir) =>
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => {
+            const i = opts.findIndex((o) => o.id === optionId)
+            const j = dir === 'up' ? i - 1 : i + 1
+            const a = opts[i]
+            const b = opts[j]
+            if (!a || !b) return opts // не найдено или граница — тот же массив (no-op)
+            const next = opts.slice()
+            next[i] = b
+            next[j] = a
+            return next
+          }),
+        ),
+
+      select: (id) => set({ selectedId: id }),
+
+      setSubmitLabel: (label) => commit('sl', () => ({ submitLabel: label })),
+
+      undo: () =>
+        set((s) => {
+          const prev = s.past[s.past.length - 1]
+          if (!prev) return s
+          return {
+            blocks: prev.blocks,
+            submitLabel: prev.submitLabel,
+            selectedId: fixSelection(s.selectedId, prev.blocks),
+            past: s.past.slice(0, -1),
+            future: [...s.future, snapshot(s)],
+            lastTag: null,
+            dirty: true,
+          }
+        }),
+
+      redo: () =>
+        set((s) => {
+          const next = s.future[s.future.length - 1]
+          if (!next) return s
+          return {
+            blocks: next.blocks,
+            submitLabel: next.submitLabel,
+            selectedId: fixSelection(s.selectedId, next.blocks),
+            past: [...s.past, snapshot(s)],
+            future: s.future.slice(0, -1),
+            lastTag: null,
+            dirty: true,
+          }
+        }),
+
+      markSaved: () => set({ dirty: false }),
+
+      toSchema: () => ({
+        schemaVersion: SCHEMA_VERSION,
+        blocks: get().blocks,
+        submitLabel: get().submitLabel,
+      }),
+    }
+  })
 }

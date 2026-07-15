@@ -295,3 +295,117 @@ describe('createBuilderStore', () => {
     expect(formSchemaSchema.safeParse(schema).success).toBe(true)
   })
 })
+
+describe('createBuilderStore — undo/redo', () => {
+  it('undo откатывает последнюю структурную правку, redo возвращает', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('email')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+
+    store.getState().undo()
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text'])
+
+    store.getState().redo()
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+  })
+
+  it('undo/redo восстанавливают submitLabel и ставят dirty', () => {
+    const store = createBuilderStore()
+    store.getState().setSubmitLabel('Готово')
+    store.getState().markSaved()
+    expect(store.getState().dirty).toBe(false)
+
+    store.getState().undo()
+    expect(store.getState().submitLabel).toBe('')
+    expect(store.getState().dirty).toBe(true)
+
+    store.getState().redo()
+    expect(store.getState().submitLabel).toBe('Готово')
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('undo/redo на пустом стеке — no-op', () => {
+    const store = createBuilderStore()
+    store.getState().undo()
+    store.getState().redo()
+    expect(store.getState().blocks).toEqual([])
+    // Пустая история не наплодила снапшотов и не поставила dirty.
+    expect(store.getState().dirty).toBe(false)
+    expect(store.getState().past).toEqual([])
+    expect(store.getState().future).toEqual([])
+  })
+
+  it('новая правка после undo обрывает ветку redo', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('email')
+    store.getState().undo() // future = [email-состояние]
+    expect(store.getState().future).toHaveLength(1)
+
+    store.getState().addBlock('number') // новая ветка чистит future
+    expect(store.getState().future).toEqual([])
+    store.getState().redo() // нечего повторять — no-op
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'number'])
+  })
+
+  it('граничный no-op (moveBlock на краю) не пишет историю', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const before = store.getState().past.length
+    store.getState().moveBlock(store.getState().blocks[0]!.id, 'up') // уже первый
+    expect(store.getState().past.length).toBe(before)
+  })
+
+  it('непрерывный ввод текста коалесится в один шаг отмены', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().updateBlock(id, { label: 'И' })
+    store.getState().updateBlock(id, { label: 'Им' })
+    store.getState().updateBlock(id, { label: 'Имя' })
+
+    // Один undo убирает весь набранный текст, а не по символу.
+    store.getState().undo()
+    expect(store.getState().blocks[0]!.label).toBe('')
+    // Второй undo убирает уже сам блок.
+    store.getState().undo()
+    expect(store.getState().blocks).toEqual([])
+  })
+
+  it('правки разных полей и дискретный required — отдельные шаги', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().updateBlock(id, { label: 'Вопрос' })
+    store.getState().updateBlock(id, { required: true }) // дискретно — свой шаг
+    store.getState().updateBlock(id, { description: 'Пояснение' })
+
+    store.getState().undo() // снимает description
+    expect(store.getState().blocks[0]!.description).toBe('')
+    expect(store.getState().blocks[0]!.required).toBe(true)
+    store.getState().undo() // снимает required
+    expect(store.getState().blocks[0]!.required).toBe(false)
+    expect(store.getState().blocks[0]!.label).toBe('Вопрос')
+  })
+
+  it('hydrate очищает историю', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().hydrate({ schemaVersion: 1, blocks: [], submitLabel: '' })
+    expect(store.getState().past).toEqual([])
+    store.getState().undo() // нечего откатывать
+    expect(store.getState().blocks).toEqual([])
+  })
+
+  it('undo снимает выделение, если выделенный блок исчез', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // selectedId = этот блок
+    const id = store.getState().blocks[0]!.id
+    expect(store.getState().selectedId).toBe(id)
+
+    store.getState().undo() // блок исчез — выделять нечего
+    expect(store.getState().blocks).toEqual([])
+    expect(store.getState().selectedId).toBeNull()
+  })
+})
