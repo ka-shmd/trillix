@@ -14,28 +14,48 @@ import { gzipSync } from 'node:zlib'
 
 const BUDGET_BYTES = 95 * 1024
 
-const assetsDir = fileURLToPath(new URL('../dist/assets/', import.meta.url))
+// Считаем весь клиентский JS в dist/: стабильный entry `renderer.js` лежит в
+// корне (Go ссылается на него по фиксированному пути, фаза 7), а code-split-чанки
+// (если появятся) — под assets/. Обходим dist/ рекурсивно и берём все .js.
+const distDir = fileURLToPath(new URL('../dist/', import.meta.url))
 
-let jsFiles
-try {
-  jsFiles = readdirSync(assetsDir).filter((f) => f.endsWith('.js'))
-} catch {
-  console.error(`✗ нет собранных ассетов в ${assetsDir} — сначала 'npm run build'`)
+function jsFilesUnder(dir, prefix = '') {
+  let out = []
+  let entries
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      const nested = jsFilesUnder(dir + e.name + '/', prefix + e.name + '/')
+      if (nested) out = out.concat(nested)
+    } else if (e.name.endsWith('.js')) {
+      out.push({ label: prefix + e.name, path: dir + e.name })
+    }
+  }
+  return out
+}
+
+const jsFiles = jsFilesUnder(distDir)
+if (jsFiles === null) {
+  console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
 }
 if (jsFiles.length === 0) {
-  console.error(`✗ в ${assetsDir} нет .js — сборка пуста?`)
+  console.error(`✗ в ${distDir} нет .js — сборка пуста?`)
   process.exit(1)
 }
 
-// Считаем сумму gzip-размеров всех JS-чанков — так же, как их отдаёт браузеру
+// Считаем сумму gzip-размеров всех JS-файлов — так же, как их отдаёт браузеру
 // сервер со сжатием (те же числа, что печатает vite build).
 let total = 0
 const kib = (n) => (n / 1024).toFixed(2) + ' KiB'
 for (const f of jsFiles) {
-  const size = gzipSync(readFileSync(assetsDir + f)).length
+  const size = gzipSync(readFileSync(f.path)).length
   total += size
-  console.log(`  ${f}  ${kib(size)} gzip`)
+  console.log(`  ${f.label}  ${kib(size)} gzip`)
 }
 
 console.log(`\nИтого JS: ${kib(total)} gzip · бюджет ${kib(BUDGET_BYTES)}`)

@@ -1,0 +1,71 @@
+# Caddy прод-контура (Фаза 7, шаг 3). Один файл для prod-local и прода: домены —
+# через env-плейсхолдеры Caddy ({$VAR}), TLS Caddy выбирает по имени сам:
+# *.localhost → внутренний CA (prod-local), реальный домен → Let's Encrypt (прод).
+# Никакого ветвления по контуру внутри файла.
+#
+# Две origin, а не три (ADR §10): кабинет и его API — один origin (same-origin,
+# без CORS); публичный рендерер — отдельный origin как граница безопасности
+# (cookie сессии кабинета туда не попадает). Выделенного API-домена в MVP нет.
+#
+# Статика фронтов раздаётся напрямую (/srv/static/{app,renderer} из volume);
+# в Go проксируется только динамика.
+
+# Заголовки безопасности (шаг 8), общие для обоих сайтов; различие только во
+# фрейминге — аргументы: {args[0]} = X-Frame-Options, {args[1]} = frame-ancestors.
+# CSP: скрипты только со своего origin (собранные бандлы без inline-скриптов —
+# сильная защита от XSS); 'unsafe-inline' у стилей неизбежен (Radix/dnd-kit пишут
+# инлайн-style), но низкориск; всё прочее — 'self'. data: у img/font — иконки/шрифты.
+(secheaders) {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options {args[0]}
+		Referrer-Policy strict-origin-when-cross-origin
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors {args[1]}"
+		-Server
+	}
+}
+
+# --- Кабинет: статика + приватный API того же origin ---
+{$APP_DOMAIN} {
+	encode gzip
+	import secheaders DENY "'none'"
+
+	# Приватный API кабинета — тот же origin, поэтому CORS не нужен, cookie
+	# сессии остаётся host-only на этом домене.
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	# Всё остальное — статика кабинета с SPA-fallback.
+	handle {
+		root * /srv/static/app
+		# Хешированные ассеты Vite неизменяемы — кэшируем навсегда.
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# --- Публичный рендерер: статика + динамика формы из Go (тот же origin) ---
+{$RENDERER_DOMAIN} {
+	encode gzip
+	# Рендерер — SAMEORIGIN: позже формам может понадобиться embed (тогда осознанно
+	# ослабим до нужных origin), пока не даём чужим сайтам встраивать форму.
+	import secheaders SAMEORIGIN "'self'"
+
+	# HTML-документ формы с OG-мета — из Go (краулеры читают <head> без JS).
+	handle /r/* {
+		reverse_proxy api:8080
+	}
+	# Публичный API формы и приём ответа — рендерер зовёт относительным путём,
+	# поэтому проксируем same-origin (CORS не нужен).
+	handle /public/* {
+		reverse_proxy api:8080
+	}
+	# Всё остальное — статика рендерера с SPA-fallback.
+	handle {
+		root * /srv/static/renderer
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+	}
+}

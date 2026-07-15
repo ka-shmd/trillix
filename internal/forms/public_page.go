@@ -33,7 +33,8 @@ var formPageTmpl = template.Must(template.New("formpage").Parse(`<!doctype html>
 {{end}}<meta property="og:image" content="{{.OGImage}}">
 <meta property="og:url" content="{{.URL}}">
 <meta name="twitter:card" content="summary_large_image">
-</head>
+{{if .StyleSrc}}<link rel="stylesheet" href="{{.StyleSrc}}">
+{{end}}</head>
 <body>
 <div id="root"></div>
 <script type="module" src="{{.ScriptSrc}}"></script>
@@ -51,6 +52,9 @@ type formPageData struct {
 	OGImage         string
 	URL             string
 	ScriptSrc       string
+	// StyleSrc — абсолютный URL CSS рендерера; пусто в dev (vite инжектит стили
+	// через JS), тогда <link> не выводится.
+	StyleSrc string
 }
 
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
@@ -82,7 +86,10 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		MetaDescription: metaDesc,
 		OGImage:         h.ogImageURL,
 		URL:             h.publicBaseURL + "/r/" + slug,
-		ScriptSrc:       h.publicBaseURL + "/src/main.tsx",
+		ScriptSrc:       h.publicBaseURL + h.scriptPath,
+	}
+	if h.stylePath != "" {
+		data.StyleSrc = h.publicBaseURL + h.stylePath
 	}
 
 	// Рендерим в буфер: ошибка шаблона (маловероятна — статичный шаблон) не должна

@@ -1,0 +1,68 @@
+name: Release
+
+# По git-тегу v* собираем релизный комплект: Go-образ в GHCR и статику фронтов
+# артефактом к GitHub Release. Деплоя здесь нет (фаза 9) — тег лишь копит готовые
+# к развёртыванию артефакты: деплой потом «скачать готовое», а не «собрать на сервере».
+on:
+  push:
+    tags: ['v*']
+
+# Образ пушится в GHCR (packages), Release создаётся (contents).
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: Go-образ → GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          push: true
+          # Тег образа = git-тег (напр. v0.7.0). compose.prod.yml на VPS подставит
+          # его через ${TAG} и сделает docker compose pull (фаза 9).
+          tags: ghcr.io/${{ github.repository_owner }}/trierra-api:${{ github.ref_name }}
+
+  static:
+    name: Статика фронтов → GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: build static
+        env:
+          # База публичной части печётся в бандл кабинета на этапе сборки. Реальный
+          # домен появится в фазе 9 — тогда выставить repo-переменную
+          # VITE_PUBLIC_BASE_URL. До этого — заглушка (артефакт технически валиден,
+          # но ссылка на форму указывает на example.com).
+          VITE_PUBLIC_BASE_URL: ${{ vars.VITE_PUBLIC_BASE_URL || 'https://f.example.com' }}
+        run: |
+          if [ -z "${{ vars.VITE_PUBLIC_BASE_URL }}" ]; then
+            echo "::warning::vars.VITE_PUBLIC_BASE_URL не задан — статика собрана с заглушкой https://f.example.com (задать в фазе 9)"
+          fi
+          ./scripts/build-static.sh
+      - name: package
+        # Тарболл повторяет раскладку deploy/static/{app,renderer} — её же rsync'ит
+        # на сервер деплой фазы 9.
+        run: tar -czf trierra-static-${{ github.ref_name }}.tar.gz -C deploy/static .
+      - name: attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: trierra-static-${{ github.ref_name }}.tar.gz
+          generate_release_notes: true

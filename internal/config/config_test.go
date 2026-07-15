@@ -13,6 +13,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
 		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
 
 		cfg, err := Load()
 		if err != nil {
@@ -30,6 +32,12 @@ func TestLoad(t *testing.T) {
 		if string(cfg.FormTokenSecret) != "sixteen-bytes-min" {
 			t.Errorf("FormTokenSecret = %q, неожиданное значение", cfg.FormTokenSecret)
 		}
+		if cfg.PublicRendererScriptPath != "/src/main.tsx" {
+			t.Errorf("PublicRendererScriptPath = %q, неожиданное значение", cfg.PublicRendererScriptPath)
+		}
+		if cfg.AppOrigin != "http://localhost:5173" {
+			t.Errorf("AppOrigin = %q, неожиданное значение", cfg.AppOrigin)
+		}
 	})
 
 	t.Run("COOKIE_SECURE=true парсится", func(t *testing.T) {
@@ -39,6 +47,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
 		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
 
 		cfg, err := Load()
 		if err != nil {
@@ -56,6 +66,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
 		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
@@ -70,6 +82,8 @@ func TestLoad(t *testing.T) {
 		t.Setenv("FORM_TOKEN_SECRET", "short")
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
 		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "FORM_TOKEN_SECRET") {
@@ -84,10 +98,44 @@ func TestLoad(t *testing.T) {
 		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "/relative")
 		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "PUBLIC_RENDERER_BASE_URL") {
 			t.Fatalf("ожидалась ошибка про PUBLIC_RENDERER_BASE_URL, получено: %v", err)
+		}
+	})
+
+	t.Run("PUBLIC_RENDERER_SCRIPT_PATH без ведущего слеша — ошибка", func(t *testing.T) {
+		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
+		t.Setenv("COOKIE_SECURE", "false")
+		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("APP_ORIGIN", "http://localhost:5173")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "renderer.js")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "PUBLIC_RENDERER_SCRIPT_PATH") {
+			t.Fatalf("ожидалась ошибка про PUBLIC_RENDERER_SCRIPT_PATH, получено: %v", err)
+		}
+	})
+
+	t.Run("невалидный APP_ORIGIN — ошибка", func(t *testing.T) {
+		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
+		t.Setenv("COOKIE_SECURE", "false")
+		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		t.Setenv("PUBLIC_RENDERER_SCRIPT_PATH", "/src/main.tsx")
+		t.Setenv("APP_ORIGIN", "localhost:5173") // без схемы
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "APP_ORIGIN") {
+			t.Fatalf("ожидалась ошибка про APP_ORIGIN, получено: %v", err)
 		}
 	})
 

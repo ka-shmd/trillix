@@ -11,6 +11,9 @@ node_modules/
 dist/
 .lighthouseci/
 
+# Прод-статика: артефакт сборки фронтов (scripts/build-static.sh → volume Caddy)
+/deploy/static/
+
 # IDE
 .idea/
 .vscode/

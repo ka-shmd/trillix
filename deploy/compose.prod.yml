@@ -1,0 +1,91 @@
+# Прод-контур (Фаза 7). Тот же файл поднимает и prod-local (на *.localhost с
+# локальным CA Caddy), и настоящий прод на VPS (реальные домены + Let's Encrypt) —
+# различия живут только в env-файле, не в этом файле.
+#
+# Запуск: docker compose --env-file .env.prod-local -f deploy/compose.prod.yml up -d
+# (обычно через `make prod-local`). Указанный --env-file — единственный источник:
+# из него идут и подстановки ${...} ниже, и окружение контейнеров api/migrate
+# (через environment-якорь), поэтому dev/prod-local различаются только выбором файла.
+
+# Окружение приложения (api и одноразовый migrate — один бинарник, config.Load()
+# требует полный набор даже для `migrate up`). Значения берутся из --env-file через
+# подстановку — так контейнер получает ровно тот контур, что указан при запуске,
+# без риска подхватить чужой env_file.
+x-app-env: &app-env
+  HTTP_ADDR: ${HTTP_ADDR}
+  DATABASE_URL: ${DATABASE_URL}
+  COOKIE_SECURE: ${COOKIE_SECURE}
+  FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}
+  PUBLIC_RENDERER_BASE_URL: ${PUBLIC_RENDERER_BASE_URL}
+  OG_IMAGE_URL: ${OG_IMAGE_URL}
+  PUBLIC_RENDERER_SCRIPT_PATH: ${PUBLIC_RENDERER_SCRIPT_PATH}
+  PUBLIC_RENDERER_STYLE_PATH: ${PUBLIC_RENDERER_STYLE_PATH:-} # опциональна (пусто в dev)
+  APP_ORIGIN: ${APP_ORIGIN}
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    # Порт наружу НЕ публикуется: база доступна только по внутренней docker-сети
+    # (инвариант харденинга — ARCHITECTURE §6.5).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Одноразовый прогон миграций тем же образом, что и api (миграции встроены в
+  # бинарник через go:embed). Гейт для api: тот стартует только после успешного
+  # завершения этого сервиса, поэтому схема всегда актуальна до первого запроса.
+  migrate:
+    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    command: ["migrate", "up"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # Порт наружу НЕ публикуется: наружу api смотрит только через Caddy.
+    # Healthcheck внутри контейнера не ставим — distroless без shell/curl;
+    # живость проверяет внешний мониторинг по /healthz (фаза 10).
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      # Домены двух сайтов — Caddyfile читает их как {$APP_DOMAIN} и {$RENDERER_DOMAIN}.
+      # prod-local: app.localhost / f.localhost; прод: реальные. API — same-origin
+      # под {$APP_DOMAIN}/api, отдельного домена нет (ADR §10).
+      APP_DOMAIN: ${APP_DOMAIN}
+      RENDERER_DOMAIN: ${RENDERER_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro    # deploy/Caddyfile
+      - ./static:/srv/static:ro                # deploy/static (scripts/build-static.sh)
+      - caddy_data:/data                        # сертификаты локального CA / Let's Encrypt
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pg_data:
+  caddy_data:
+  caddy_config:

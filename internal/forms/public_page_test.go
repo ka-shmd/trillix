@@ -38,9 +38,10 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 		`<meta property="og:title" content="Опрос клиентов">`,
 		`<meta property="og:image" content="http://localhost:5174/og-preview.png">`,
 		`<meta property="og:url" content="http://localhost:5174/r/abc123">`,
-		`<meta property="og:description" content="Ваше имя · Оценка">`, // подзаголовок из блоков
-		`<meta name="description" content="Ваше имя · Оценка">`,        // стандартный SEO-мета
-		`src="http://localhost:5174/src/main.tsx"`,                     // тело грузит SPA
+		`<meta property="og:description" content="Ваше имя · Оценка">`,      // подзаголовок из блоков
+		`<meta name="description" content="Ваше имя · Оценка">`,             // стандартный SEO-мета
+		`src="http://localhost:5174/src/main.tsx"`,                          // тело грузит SPA
+		`<link rel="stylesheet" href="http://localhost:5174/renderer.css">`, // стили формы
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("в HTML нет %q\n---\n%s", want, body)
