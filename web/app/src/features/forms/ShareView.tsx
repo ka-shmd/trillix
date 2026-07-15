@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-// ShareView — страница «Поделиться» (/forms/$formId/share). Открывается после
+// ShareView — страница «Поделиться» (/forms/$slug/share). Открывается после
 // публикации (редирект из шапки редактора) и по кнопке «Поделиться» у уже
 // опубликованной формы. Сверху — название и переход в редактор; ниже — две
 // карточки (ссылка и её превью); внизу — управление жизненным циклом
@@ -35,7 +35,7 @@ export function ShareView({ form }: { form: FormDetail }) {
           <StatusLine form={form} />
         </div>
         <Button asChild variant="outline" className="gap-1.5">
-          <Link to="/forms/$formId/edit" params={{ formId: form.id }}>
+          <Link to="/forms/$slug/edit" params={{ slug: form.slug }}>
             <Pencil className="size-4" /> Редактировать
           </Link>
         </Button>
@@ -48,7 +48,7 @@ export function ShareView({ form }: { form: FormDetail }) {
             Опубликуйте её в редакторе — здесь появятся ссылка и превью.
           </p>
           <Button asChild className="mt-4">
-            <Link to="/forms/$formId/edit" params={{ formId: form.id }}>
+            <Link to="/forms/$slug/edit" params={{ slug: form.slug }}>
               Открыть редактор
             </Link>
           </Button>

@@ -9,7 +9,7 @@ import {
   createForm,
   deleteForm,
   duplicateForm,
-  getForm,
+  getFormBySlug,
   listForms,
   publishForm,
   renameForm,
@@ -27,10 +27,13 @@ export const formsListQueryOptions = infiniteQueryOptions({
   getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
 })
 
-export function formDetailQueryOptions(id: string) {
+// Detail адресуется slug'ом (ключ URL кабинета), а не UUID: кэш detail всюду
+// ключуется slug'ом — мутации патчат его по form.slug, автосейв читает токен по
+// slug. UUID формы (form.id) внутри detail используется для самих API-вызовов.
+export function formDetailQueryOptions(slug: string) {
   return queryOptions({
-    queryKey: formKeys.detail(id),
-    queryFn: () => getForm(id),
+    queryKey: formKeys.detail(slug),
+    queryFn: () => getFormBySlug(slug),
   })
 }
 
@@ -62,7 +65,7 @@ export function useRenameForm() {
     mutationFn: ({ id, title }: { id: string; title: string }) => renameForm(id, title),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.setQueryData<FormDetail>(formKeys.detail(form.id), renameDetailPatch(form))
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), renameDetailPatch(form))
     },
   })
 }
@@ -75,7 +78,7 @@ export function useUpdateFormName() {
     mutationFn: ({ id, name }: { id: string; name: string }) => updateFormName(id, name),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, name: form.name, updatedAt: form.updatedAt } : old,
       )
     },
@@ -110,7 +113,7 @@ export function usePublishForm() {
     mutationFn: (id: string) => publishForm(id),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, ...form } : old,
       )
     },
@@ -123,7 +126,7 @@ export function useUnpublishForm() {
     mutationFn: (id: string) => unpublishForm(id),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.setQueryData<FormDetail>(formKeys.detail(form.id), (old) =>
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, ...form } : old,
       )
     },

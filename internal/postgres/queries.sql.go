@@ -320,6 +320,59 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 	return i, err
 }
 
+const getFormBySlug = `-- name: GetFormBySlug :one
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+    fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1
+`
+
+type GetFormBySlugRow struct {
+	ID                    uuid.UUID
+	WorkspaceID           uuid.UUID
+	Name                  pgtype.Text
+	Title                 string
+	Slug                  string
+	Status                string
+	DraftSchema           []byte
+	PublishedVersionID    pgtype.UUID
+	PublishedVersion      pgtype.Int4
+	HasUnpublishedChanges bool
+	SubmissionCount       int64
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+}
+
+// Та же полная форма, что GetForm, но по slug: приватный резолв формы для кабинета,
+// где URL редактора/ответов/шаринга адресуют форму коротким slug (как публичный
+// рендерер /r/{slug}), а не UUID. slug глобально уникален (UNIQUE) и стабилен
+// (nanoid, задаётся при создании, не меняется). Доступ проверяет service по
+// workspace_id строки (членство), сам slug права не даёт.
+func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getFormBySlug, slug)
+	var i GetFormBySlugRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.DraftSchema,
+		&i.PublishedVersionID,
+		&i.PublishedVersion,
+		&i.HasUnpublishedChanges,
+		&i.SubmissionCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPersonalWorkspace = `-- name: GetPersonalWorkspace :one
 
 SELECT workspace_id

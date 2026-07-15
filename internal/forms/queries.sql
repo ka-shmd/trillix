@@ -55,6 +55,21 @@ FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.id = $1;
 
+-- name: GetFormBySlug :one
+-- Та же полная форма, что GetForm, но по slug: приватный резолв формы для кабинета,
+-- где URL редактора/ответов/шаринга адресуют форму коротким slug (как публичный
+-- рендерер /r/{slug}), а не UUID. slug глобально уникален (UNIQUE) и стабилен
+-- (nanoid, задаётся при создании, не меняется). Доступ проверяет service по
+-- workspace_id строки (членство), сам slug права не даёт.
+SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
+    fv.version AS published_version,
+    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.created_at, f.updated_at
+FROM forms f
+LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1;
+
 -- name: ListFormsFirstPage :many
 -- Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
 -- вызывающий по «лишней» строке понимает, есть ли следующая страница.

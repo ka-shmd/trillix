@@ -30,7 +30,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   })
 
   const headerSlot = useHeaderSlot()
-  const { status, retry } = useAutosave(store, detail.id, detail.updatedAt)
+  const { status, retry } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
 
   // Публиковать можно только когда серверный черновик догнал редактор: нет
@@ -99,7 +99,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 <Redo2 className="size-4" />
               </Button>
               <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
-                <Link to="/forms/$formId/responses" params={{ formId: detail.id }}>
+                <Link to="/forms/$slug/responses" params={{ slug: detail.slug }}>
                   Ответы
                 </Link>
               </Button>

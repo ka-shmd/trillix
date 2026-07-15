@@ -34,6 +34,7 @@ type formsService interface {
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, after *Cursor, limit int) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
+	GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error)
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
@@ -59,6 +60,12 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/forms", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.create))))
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
+	// Резолв формы по slug (кабинет адресует форму slug'ом в URL редактора/ответов/
+	// шаринга, как рендерер — /r/{slug}). slug — в query, а не в пути: путь
+	// /forms/by-slug/{slug} конфликтовал бы в net/http-mux с /forms/{id}/submissions
+	// (оба матчат /forms/by-slug/submissions, ни один не специфичнее). Литеральный
+	// сегмент /forms/lookup специфичнее /forms/{id} — коллизии нет.
+	mux.Handle("GET /api/v1/forms/lookup", h.requireAuth(http.HandlerFunc(h.getBySlug)))
 	mux.Handle("PATCH /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 	mux.Handle("POST /api/v1/forms/{id}/duplicate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.duplicate))))
@@ -197,6 +204,29 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form, err := h.svc.Get(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, formDetailResponse{
+		formResponse: toFormResponse(form),
+		DraftSchema:  form.DraftSchema,
+	})
+}
+
+// getBySlug — тот же ответ, что get, но форма адресована slug'ом (query-параметр
+// ?slug=). Пустой slug трактуем как 404, а не 500.
+func (h *Handler) getBySlug(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	slug := r.URL.Query().Get("slug")
+	if slug == "" {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	form, err := h.svc.GetBySlug(r.Context(), userID, slug)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

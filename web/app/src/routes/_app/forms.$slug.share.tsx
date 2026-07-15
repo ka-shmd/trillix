@@ -5,16 +5,16 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { ShareView } from '../../features/forms/ShareView'
 import { Button } from '@/components/ui/button'
 
-// Страница «Поделиться» (/forms/$formId/share): ссылка на опубликованную форму,
+// Страница «Поделиться» (/forms/$slug/share): ссылка на опубликованную форму,
 // превью карточки и управление публикацией. Данные — та же деталь формы из Query,
 // что и у редактора; здесь нужны только поля карточки (title/slug/status/версия).
-export const Route = createFileRoute('/_app/forms/$formId/share')({
+export const Route = createFileRoute('/_app/forms/$slug/share')({
   component: SharePage,
 })
 
 function SharePage() {
-  const { formId } = Route.useParams()
-  const query = useQuery(formDetailQueryOptions(formId))
+  const { slug } = Route.useParams()
+  const query = useQuery(formDetailQueryOptions(slug))
 
   if (query.isPending) {
     return <p className="p-6 text-sm text-muted-foreground">Загрузка…</p>

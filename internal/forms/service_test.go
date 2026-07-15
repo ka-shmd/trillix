@@ -113,6 +113,15 @@ func (f *fakeStore) GetForm(_ context.Context, _ postgres.DBTX, id uuid.UUID) (F
 	return form, nil
 }
 
+func (f *fakeStore) GetFormBySlug(_ context.Context, _ postgres.DBTX, slug string) (Form, error) {
+	if f.getErr != nil {
+		return Form{}, f.getErr
+	}
+	form := f.form
+	form.Slug = slug
+	return form, nil
+}
+
 func (f *fakeStore) ListForms(_ context.Context, _ postgres.DBTX, _ uuid.UUID, limit int32) ([]Form, error) {
 	f.lastListLimit = limit
 	f.lastListAfter = false
@@ -224,6 +233,43 @@ func TestGet_Member_Success(t *testing.T) {
 	}
 	if form.Title != "My form" {
 		t.Fatalf("title = %q, ожидалось \"My form\"", form.Title)
+	}
+}
+
+func TestGetBySlug_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.GetBySlug(context.Background(), domain.NewID(), "abc123")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не должна раскрываться по slug)", err)
+	}
+}
+
+func TestGetBySlug_FormMissing_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{getErr: pgx.ErrNoRows}
+	svc := newTestService(store)
+
+	_, err := svc.GetBySlug(context.Background(), domain.NewID(), "nope")
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetBySlug_Member_Success(t *testing.T) {
+	wsID := domain.NewID()
+	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}, member: true}
+	svc := newTestService(store)
+
+	form, err := svc.GetBySlug(context.Background(), domain.NewID(), "abc123")
+	if err != nil {
+		t.Fatalf("GetBySlug: %v", err)
+	}
+	if form.Title != "My form" {
+		t.Fatalf("title = %q, ожидалось \"My form\"", form.Title)
+	}
+	if form.Slug != "abc123" {
+		t.Fatalf("slug = %q, ожидалось \"abc123\"", form.Slug)
 	}
 }
 

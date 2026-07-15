@@ -5,16 +5,16 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
 import { Button } from '@/components/ui/button'
 
-// Редактор формы (/forms/$formId/edit): грузит форму через Query и отдаёт билдеру.
-// Вся навигация/публикация — в шапке BuilderScreen; название правится первой
-// строкой полотна. Здесь только загрузка/ошибка и чистое полотно во всю ширину.
-export const Route = createFileRoute('/_app/forms/$formId/edit')({
+// Редактор формы (/forms/$slug/edit): грузит форму по slug через Query и отдаёт
+// билдеру. Вся навигация/публикация — в шапке BuilderScreen; название правится
+// первой строкой полотна. Здесь только загрузка/ошибка и чистое полотно во всю ширину.
+export const Route = createFileRoute('/_app/forms/$slug/edit')({
   component: FormEditor,
 })
 
 function FormEditor() {
-  const { formId } = Route.useParams()
-  const query = useQuery(formDetailQueryOptions(formId))
+  const { slug } = Route.useParams()
+  const query = useQuery(formDetailQueryOptions(slug))
 
   if (query.isPending) {
     return <p className="p-6 text-sm text-muted-foreground">Загрузка…</p>
@@ -30,6 +30,6 @@ function FormEditor() {
     )
   }
 
-  // key={formId} — свежий стор билдера на каждую форму.
-  return <BuilderScreen key={formId} detail={query.data} />
+  // key={slug} — свежий стор билдера на каждую форму.
+  return <BuilderScreen key={slug} detail={query.data} />
 }

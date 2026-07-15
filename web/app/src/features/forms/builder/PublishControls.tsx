@@ -17,7 +17,7 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
   const publish = usePublishForm()
   const navigate = useNavigate()
 
-  const goShare = () => navigate({ to: '/forms/$formId/share', params: { formId: form.id } })
+  const goShare = () => navigate({ to: '/forms/$slug/share', params: { slug: form.slug } })
   const everPublished = form.publishedVersion !== null
 
   if (everPublished) {

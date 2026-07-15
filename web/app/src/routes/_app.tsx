@@ -33,7 +33,7 @@ function AppLayout() {
 
   function handleCreate() {
     create.mutate(undefined, {
-      onSuccess: (form) => navigate({ to: '/forms/$formId/edit', params: { formId: form.id } }),
+      onSuccess: (form) => navigate({ to: '/forms/$slug/edit', params: { slug: form.slug } }),
     })
   }
 

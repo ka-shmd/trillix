@@ -21,6 +21,16 @@ export function getForm(id: string): Promise<FormDetail> {
   return apiRequest(`/forms/${id}`, { schema: formDetailSchema })
 }
 
+// Форма по slug: URL кабинета (редактор/ответы/шаринг) адресует форму коротким
+// slug, как публичный рендерер /r/{slug}, а не UUID. Отдаёт тот же detail, что
+// getForm; UUID для последующих мутаций берётся из ответа (form.id). slug — в
+// query (путь /forms/by-slug/{slug} конфликтовал бы с /forms/{id}/submissions).
+export function getFormBySlug(slug: string): Promise<FormDetail> {
+  return apiRequest(`/forms/lookup?slug=${encodeURIComponent(slug)}`, {
+    schema: formDetailSchema,
+  })
+}
+
 export function createForm(title?: string): Promise<Form> {
   return apiRequest('/forms', {
     method: 'POST',
