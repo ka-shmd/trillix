@@ -14,7 +14,7 @@ import {
   renameForm,
   unpublishForm,
 } from './api'
-import { type FormDetail } from '../../entities/form'
+import { type Form, type FormDetail } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
@@ -42,13 +42,25 @@ export function useCreateForm() {
   })
 }
 
+// Переименование двигает forms.updated_at на сервере. Патчим detail в кэше (title +
+// новый updatedAt), а не инвалидируем: билдер держит updated_at как токен
+// оптимистичной блокировки автосейва (formLockToken) — синхронный патч не даёт
+// следующему PATCH схемы уйти со старым токеном и словить 409. Рефетч тут был бы
+// гонкой с автосейвом. Спредить весь form нельзя: у ответа мутации
+// hasUnpublishedChanges/submissionCount заглушечные (false/0) — берём только title и
+// updatedAt, остальное в detail не меняется переименованием. draftSchema сохраняется.
+export function renameDetailPatch(form: Form) {
+  return (old: FormDetail | undefined): FormDetail | undefined =>
+    old ? { ...old, title: form.title, updatedAt: form.updatedAt } : old
+}
+
 export function useRenameForm() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => renameForm(id, title),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.invalidateQueries({ queryKey: formKeys.detail(form.id) })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.id), renameDetailPatch(form))
     },
   })
 }

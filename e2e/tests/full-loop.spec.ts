@@ -17,6 +17,7 @@ test('регистрация → форма → публикация → отв�
 }) => {
   const uniq = Date.now()
   const email = `e2e-${uniq}@example.com`
+  const formTitle = `Опрос ${uniq}`
   const question = 'Ваше имя'
   const answer = `Иван ${uniq}`
 
@@ -34,10 +35,12 @@ test('регистрация → форма → публикация → отв�
   await expect(page).toHaveURL(/\/forms\/[^/]+\/edit/)
   const formId = page.url().match(/\/forms\/([^/]+)\/edit/)![1]
 
-  // 3. Один вопрос через слэш-редактор (сигнатурный UX). Заголовок формы не
-  // переименовываем: rename двигает updated_at формы, а автосейв схемы держит свой
-  // токен оптимистичной блокировки — быстрый rename+правка ловят 409 (гонка билдера,
-  // вне scope фазы 7). Enter в (пустом) заголовке просто создаёт первую строку-блок.
+  // 3. Переименовываем заголовок и СРАЗУ добавляем вопрос — тот самый сценарий,
+  // что вскрывал гонку оптимистичной блокировки (rename двигал updated_at, автосейв
+  // схемы уходил со старым токеном → 409, «Опубликовать» залипала disabled). После
+  // фикса (единый токен из кэша detail) быстрый rename+правка проходят. Enter в
+  // заголовке уводит на первую строку-блок.
+  await page.getByLabel('Название формы').fill(formTitle)
   await page.getByLabel('Название формы').press('Enter')
   await page.getByPlaceholder('Текст, или «/» для поля').press('/')
   await page.getByRole('option', { name: 'Короткий ответ' }).click()
@@ -81,8 +84,10 @@ test('регистрация → форма → публикация → отв�
   await expect(form.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
   await mobile.close()
 
-  // 7. Ответ виден в таблице кабинета.
+  // 7. Ответ виден в таблице кабинета. Заголовок «Ответы · <name>» подтверждает, что
+  // переименование заголовка долетело до сервера (регресс гонки блокировки из шага 3).
   await page.goto(`/forms/${formId}/responses`)
+  await expect(page.getByRole('heading', { name: `Ответы · ${formTitle}` })).toBeVisible()
   await expect(page.getByText(answer)).toBeVisible()
 
   // 8. Экспорт CSV — обычная навигация на эндпоинт, браузер качает файл.

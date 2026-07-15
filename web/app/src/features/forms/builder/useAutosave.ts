@@ -12,10 +12,24 @@ export type SaveStatus = 'saved' | 'saving' | 'error' | 'conflict'
 
 const DEBOUNCE_MS = 800
 
+// formLockToken — токен оптимистичной блокировки (updated_at формы). Единый
+// источник — кэш detail в Query: его двигают ВСЕ мутации, меняющие форму (автосейв
+// схемы, переименование заголовка, публикация). Читать токен отсюда, а не из
+// приватного ref, — иначе после rename автосейв ушлёт устаревший updatedAt и словит
+// 409 «Форма изменена в другой вкладке», хотя вкладка одна.
+export function formLockToken(
+  qc: ReturnType<typeof useQueryClient>,
+  formId: string,
+  fallback: string,
+): string {
+  return qc.getQueryData<FormDetail>(formKeys.detail(formId))?.updatedAt ?? fallback
+}
+
 // useAutosave связывает стор билдера с бэкендом: правки документа (dirty) через
-// дебаунс уходят в PATCH всей схемы. updatedAt-токен хранится в ref и обновляется
-// ответом каждого сохранения (оптимистичная блокировка). Конфликт (409) переводит
-// в терминальный статус 'conflict' — дальше молчим, пользователь перезагружает.
+// дебаунс уходят в PATCH всей схемы. updatedAt-токен оптимистичной блокировки
+// читается из кэша detail (formLockToken) и обновляется там ответом каждого
+// сохранения. Конфликт (409) переводит в терминальный статус 'conflict' — дальше
+// молчим, пользователь перезагружает.
 //
 // Возвращает статус для индикатора и retry для ручного повтора после ошибки.
 export function useAutosave(
@@ -28,15 +42,12 @@ export function useAutosave(
 
   // Всё «живое» — в ref: колбэки подписки/таймера не пересоздаются и не тянут
   // перезапуск эффекта. runRef держит актуальную функцию сохранения для retry.
-  const updatedAtRef = useRef(initialUpdatedAt)
   const savingRef = useRef(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const conflictRef = useRef(false)
   const runRef = useRef<() => void>(() => {})
 
   useEffect(() => {
-    updatedAtRef.current = initialUpdatedAt
-
     const clearTimer = () => {
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = null
@@ -62,8 +73,13 @@ export function useAutosave(
       const snapshotJson = JSON.stringify(snapshot)
       let ok = false
       try {
-        const form = await saveDraftSchema(formId, snapshot, updatedAtRef.current)
-        updatedAtRef.current = form.updatedAt
+        // Токен блокировки — свежий из кэша: если между дебаунсами прошёл rename
+        // заголовка, он уже подвинул updatedAt в detail, и мы не отправим устаревший.
+        const form = await saveDraftSchema(
+          formId,
+          snapshot,
+          formLockToken(qc, formId, initialUpdatedAt),
+        )
         ok = true
         // Список форм сортируется по updatedAt — он изменился; detail патчим, чтобы
         // повторный вход в форму гидрировал стор сохранённым состоянием и токеном.
