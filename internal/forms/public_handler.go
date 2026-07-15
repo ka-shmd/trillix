@@ -22,30 +22,45 @@ type publicFormService interface {
 type PublicHandler struct {
 	svc           publicFormService
 	tokenSecret   []byte
-	publicBaseURL string           // база рендерера: og:url и src SPA-скрипта на /r/{slug}
-	ogImageURL    string           // абсолютный URL картинки превью (og:image)
-	scriptPath    string           // путь entry-скрипта рендерера (dev: /src/main.tsx, prod: /renderer.js)
-	stylePath     string           // путь CSS рендерера (пусто в dev, /renderer.css в проде)
-	now           func() time.Time // подменяется в тестах
+	publicBaseURL string // база рендерера: og:url на /r/{slug} и ссылка на форму
+	ogImageURL    string // абсолютный URL картинки превью (og:image)
+	// htmlPrefix/htmlSuffix — собранный index.html рендерера, разложенный вокруг
+	// плейсхолдера ogMetaMarker (см. loadIndexHTML). servesHTML — задан ли index:
+	// в проде true (Go отдаёт /r), в dev false (форму отдаёт vite-dev, /r не регится).
+	htmlPrefix []byte
+	htmlSuffix []byte
+	servesHTML bool
+	now        func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, scriptPath, stylePath string) *PublicHandler {
-	return &PublicHandler{
+// NewPublicHandler создаёт публичный транспорт форм. indexHTMLPath — путь к
+// собранному index.html рендерера (прод); пустой в dev — тогда /r не обслуживается
+// Go (форму отдаёт vite-dev). Непустой путь читается сразу: нечитаемый файл или
+// отсутствие плейсхолдера — ошибка старта, а не первого запроса.
+func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, indexHTMLPath string) (*PublicHandler, error) {
+	h := &PublicHandler{
 		svc:           svc,
 		tokenSecret:   tokenSecret,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		ogImageURL:    ogImageURL,
-		scriptPath:    scriptPath,
-		stylePath:     stylePath,
 		now:           time.Now,
 	}
+	if indexHTMLPath != "" {
+		if err := h.loadIndexHTML(indexHTMLPath); err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
 }
 
 // Routes регистрирует публичные эндпоинты форм на общем mux: JSON-ручку рендерера
-// (/public/v1) и HTML-страницу формы с OG-мета (/r/{slug}).
+// (/public/v1) и — только когда задан собранный index.html (прод) — HTML-страницу
+// формы с OG-мета (/r/{slug}). В dev /r отдаёт vite-dev, поэтому Go его не регит.
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
-	mux.HandleFunc("GET /r/{slug}", h.getHTML)
+	if h.servesHTML {
+		mux.HandleFunc("GET /r/{slug}", h.getHTML)
+	}
 }
 
 // publicFormResponse — тело GET /public/v1/forms/{slug}. token — подписанное время

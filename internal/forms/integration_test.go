@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,24 @@ func resetDB(t *testing.T) {
 }
 
 // newStack собирает реальную вертикаль auth+forms поверх контейнерного пула.
+// fixtureIndexPath кладёт минимальный собранный index.html рендерера (с плейсхолдером
+// <!--og-meta-->) во временный файл — так же, как его получит api из смонтированной
+// статики в проде. Нужен, чтобы Go регистрировал и обслуживал /r в этом стеке.
+func fixtureIndexPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "index.html")
+	const html = `<!doctype html><html lang="ru"><head>` +
+		`<link rel="icon" type="image/svg+xml" href="/favicon.svg" />` +
+		`<!--og-meta-->` +
+		`<script type="module" crossorigin src="/assets/index-ByZMBI6C.js"></script>` +
+		`<link rel="stylesheet" crossorigin href="/assets/index-mIztBLt-.css">` +
+		`</head><body><div id="root"></div></body></html>`
+	if err := os.WriteFile(path, []byte(html), 0o600); err != nil {
+		t.Fatalf("запись фикстуры index.html: %v", err)
+	}
+	return path
+}
+
 // Лимитер auth — пермиссивный (инвариант 6).
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -60,8 +79,11 @@ func newStack(t *testing.T) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
-	formsPublic := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
-		"http://localhost:5174", "http://localhost:5174/og-preview.png", "/src/main.tsx", "/renderer.css")
+	formsPublic, err := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
+		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t))
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)

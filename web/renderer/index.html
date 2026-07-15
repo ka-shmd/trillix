@@ -4,8 +4,13 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Онлайн-форма — заполните и отправьте ответ." />
-    <title>trierra</title>
+    <!-- Голова формы (title/description/og:*) — серверная: краулеры читают её без
+         JS, а значения зависят от формы (slug→БД). Прод: Go читает этот собранный
+         index.html и заменяет маркер ниже на OG-мету опубликованной версии (паттерн
+         vite-SSR template-replace). Dev: vite-dev отдаёт файл как есть, маркер
+         инертен (у dev-страницы просто нет title — локально неважно). Ассеты
+         (script/link/preload/favicon) впрыскивает vite — Go их не перечисляет. -->
+    <!--og-meta-->
   </head>
   <body>
     <div id="root"></div>

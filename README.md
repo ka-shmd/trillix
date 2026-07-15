@@ -149,7 +149,7 @@ npm test
 
 Это подмножество для dev. **Полный список с описанием каждой переменной — в
 [`.env.example`](.env.example)** (источник истины): туда входят `COOKIE_SECURE`,
-`FORM_TOKEN_SECRET`, `PUBLIC_RENDERER_BASE_URL`/`_SCRIPT_PATH`/`_STYLE_PATH`, `OG_IMAGE_URL`,
+`FORM_TOKEN_SECRET`, `PUBLIC_RENDERER_BASE_URL`/`_INDEX_PATH`, `OG_IMAGE_URL`,
 `APP_ORIGIN` (CSRF), домены Caddy `APP_DOMAIN`/`RENDERER_DOMAIN` и build-time `VITE_PUBLIC_BASE_URL`.
 Различия контуров живут только в значениях: `.env.dev` (http, localhost) vs `.env.prod-local`
 (https, `*.localhost`, `COOKIE_SECURE=true`) — приложение одно, ветвления по контуру в коде нет.
