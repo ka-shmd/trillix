@@ -19,6 +19,7 @@ import (
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
 	"github.com/ka-shmd/trierra/internal/submissions"
+	"github.com/ka-shmd/trierra/internal/workspaces"
 )
 
 // Жёсткий лимит на POST /auth/login по IP: запас 5 попыток, пополнение ~1 в 12 с.
@@ -104,6 +105,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure, cfg.AppOrigin)
 
+	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
+
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
@@ -117,7 +121,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log,
-		authHandler.Routes, formsHandler.Routes, formsPublic.Routes,
+		authHandler.Routes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
