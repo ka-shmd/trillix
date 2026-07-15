@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useStore } from 'zustand'
-import { Eye, Pencil } from 'lucide-react'
+import { Eye, Pencil, Redo2, Undo2 } from 'lucide-react'
 
 import { type FormDetail } from '../../../entities/form'
 import { useHeaderSlot } from '../../../shared/headerSlot'
@@ -38,6 +38,35 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   const dirty = useStore(store, (s) => s.dirty)
   const canPublish = status === 'saved' && !dirty
 
+  const canUndo = useStore(store, (s) => s.past.length > 0)
+  const canRedo = useStore(store, (s) => s.future.length > 0)
+
+  // Горячие клавиши истории на весь экран билдера: Ctrl/Cmd+Z — отмена,
+  // Ctrl/Cmd+Shift+Z и Ctrl+Y — повтор. Слушатель живёт вместе с экраном; на
+  // документ-уровне перехватываем и внутри textarea (нативный undo поля уступает
+  // отмене всего документа — так ведёт себя Notion/Tally). Пустой стек — no-op.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey)) return
+      // Сверяем физическую клавишу (e.code), а не e.key: при кириллической (и любой
+      // не-латинской) раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался —
+      // срабатывал нативный undo контролируемого textarea (откат по одному символу).
+      if (e.code !== 'KeyZ' && e.code !== 'KeyY') return
+      // Поля со своей историей (название формы — серверный rename вне стора билдера)
+      // откатываются нативным undo браузера: их не перехватываем.
+      if ((e.target as HTMLElement | null)?.closest('[data-undo-native]')) return
+      if (e.code === 'KeyZ' && !e.shiftKey) {
+        e.preventDefault()
+        store.getState().undo()
+      } else {
+        e.preventDefault()
+        store.getState().redo()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [store])
+
   return (
     <BuilderStoreContext.Provider value={store}>
       {/* Кнопки редактора — в верхнюю шапку. Портал сохраняет React-контекст
@@ -47,6 +76,28 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           <div className="flex w-full items-center gap-2">
             <SaveIndicator status={status} onRetry={retry} />
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-muted-foreground"
+                disabled={!canUndo}
+                onClick={() => store.getState().undo()}
+                aria-label="Отменить (Ctrl+Z)"
+                title="Отменить (Ctrl+Z)"
+              >
+                <Undo2 className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="text-muted-foreground"
+                disabled={!canRedo}
+                onClick={() => store.getState().redo()}
+                aria-label="Повторить (Ctrl+Shift+Z)"
+                title="Повторить (Ctrl+Shift+Z)"
+              >
+                <Redo2 className="size-4" />
+              </Button>
               <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
                 <Link to="/forms/$formId/responses" params={{ formId: detail.id }}>
                   Ответы

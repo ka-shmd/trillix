@@ -248,34 +248,42 @@ function FormTitleInput({
   onEnter: () => void
 }) {
   const rename = useRenameForm()
-  // Дефолтное имя показываем пустым полем → виден плейсхолдер.
-  const [title, setTitle] = useState(initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle)
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Дефолтное имя показываем пустым полем → виден плейсхолдер.
+  const initialValue = initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle
 
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), [])
+
+  // Поле НЕконтролируемое (defaultValue, без value): контролируемый React-инпут
+  // переустанавливает .value на каждый ввод и стирает нативный стек undo элемента,
+  // из-за чего Ctrl+Z в названии не работал. Название — серверное состояние вне
+  // стора билдера (rename отдельной колонки), в document-undo его не тащим; отдаём
+  // отмену браузеру, а он ведёт её сам только у неконтролируемого поля.
 
   // Автовысота: заголовок — textarea (а не input), чтобы длинное название
   // переносилось так же, как <h1 rf-title> у респондента (единая line-box, без
   // одностроки-переполнения инпута). Растёт под контент, без скролла.
-  useEffect(() => {
+  function resize() {
     const el = inputRef.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
-  }, [title])
+  }
 
-  // При заходе на форму каретка сразу в начале названия.
+  // При заходе на форму: подогнать высоту под начальное значение и поставить
+  // каретку в начало названия.
   useEffect(() => {
     const el = inputRef.current
     if (!el) return
+    resize()
     el.focus()
     el.setSelectionRange(0, 0)
   }, [])
 
   function onChange(value: string) {
-    setTitle(value)
+    resize()
     if (timer.current) clearTimeout(timer.current)
     const trimmed = value.trim()
     if (!trimmed || trimmed === lastSaved.current) return
@@ -300,11 +308,14 @@ function FormTitleInput({
     <textarea
       ref={inputRef}
       rows={1}
-      value={title}
+      defaultValue={initialValue}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
       placeholder="Название формы"
       aria-label="Название формы"
+      // Название вне стора билдера (серверный rename) — Ctrl+Z здесь нативный,
+      // document-undo билдера его не перехватывает (см. BuilderScreen).
+      data-undo-native
       className="rf-title mb-5 w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
     />
   )
