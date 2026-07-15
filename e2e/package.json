@@ -1,0 +1,13 @@
+{
+  "name": "@trierra/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Сквозной Playwright-тест против prod-local (фаза 7, шаг 7).",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
