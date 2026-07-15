@@ -291,6 +291,7 @@ GET    /auth/me                       текущий пользователь
 GET    /forms                         список форм воркспейса (курсорная пагинация)
 POST   /forms                         создать форму
 GET    /forms/{id}                    форма + draft_schema
+GET    /forms/lookup?slug={slug}      то же по slug (URL кабинета адресует форму slug'ом, как рендерер /r/{slug}; slug в query — путь by-slug/{slug} конфликтует с {id}/submissions)
 PATCH  /forms/{id}                    обновить name / title / draft_schema (ровно одно; автосейв билдера)
 DELETE /forms/{id}
 POST   /forms/{id}/publish            снапшот черновика → новая версия

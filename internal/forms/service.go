@@ -39,6 +39,7 @@ type Store interface {
 	CreateFormWithSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string, name *string, schema json.RawMessage) (Form, error)
 	ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error)
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
+	GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error)
 	ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error)
 	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
@@ -190,6 +191,15 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, after *Cursor, lim
 // Get возвращает форму по id, если пользователь состоит в её воркспейсе.
 func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
 	return s.formForUser(ctx, userID, formID)
+}
+
+// GetBySlug возвращает форму по slug, если пользователь состоит в её воркспейсе.
+// slug адресует форму в URL кабинета (редактор/ответы/шаринг), как публичный
+// рендерер адресует /r/{slug}. Права даёт только членство в воркспейсе, не сам
+// slug: чужая/несуществующая форма — domain.ErrNotFound (404, существование не
+// раскрываем), как и в formForUser.
+func (s *Service) GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error) {
+	return s.formForUserBySlug(ctx, userID, slug)
 }
 
 // UpdateTitle переименовывает форму (после проверки доступа).
@@ -365,6 +375,26 @@ func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID) ([]Ver
 // чужой формы не раскрывается (404, не 403).
 func (s *Service) formForUser(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
 	form, err := s.repo.GetForm(ctx, s.db, formID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	member, err := s.repo.IsWorkspaceMember(ctx, s.db, form.WorkspaceID, userID)
+	if err != nil {
+		return Form{}, err
+	}
+	if !member {
+		return Form{}, domain.ErrNotFound
+	}
+	return form, nil
+}
+
+// formForUserBySlug — как formForUser, но грузит форму по slug. Проверка доступа
+// идентична: и отсутствие формы, и отсутствие членства дают domain.ErrNotFound.
+func (s *Service) formForUserBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error) {
+	form, err := s.repo.GetFormBySlug(ctx, s.db, slug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound

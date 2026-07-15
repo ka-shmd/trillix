@@ -208,6 +208,32 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 	}, nil
 }
 
+// GetFormBySlug возвращает форму по slug (тот же набор полей, что GetForm).
+// Приватный резолв формы для кабинета: URL редактора/ответов/шаринга адресуют
+// форму slug'ом, а не UUID. pgx.ErrNoRows пробрасывается (обёрнутым) — service
+// трактует его как domain.ErrNotFound.
+func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error) {
+	row, err := postgres.New(db).GetFormBySlug(ctx, slug)
+	if err != nil {
+		return Form{}, fmt.Errorf("get form by slug: %w", err)
+	}
+	return Form{
+		ID:                    row.ID,
+		WorkspaceID:           row.WorkspaceID,
+		Name:                  ptrStr(row.Name),
+		Title:                 row.Title,
+		Slug:                  row.Slug,
+		Status:                row.Status,
+		DraftSchema:           json.RawMessage(row.DraftSchema),
+		PublishedVersionID:    ptrUUID(row.PublishedVersionID),
+		PublishedVersion:      ptrInt32(row.PublishedVersion),
+		HasUnpublishedChanges: row.HasUnpublishedChanges,
+		SubmissionCount:       row.SubmissionCount,
+		CreatedAt:             row.CreatedAt.Time,
+		UpdatedAt:             row.UpdatedAt.Time,
+	}, nil
+}
+
 // ListForms — первая страница списка форм воркспейса (свежие правки сверху).
 func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error) {
 	rows, err := postgres.New(db).ListFormsFirstPage(ctx, postgres.ListFormsFirstPageParams{

@@ -31,16 +31,22 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 
-// Таблица ответов формы (/forms/$formId/responses): курсорная подгрузка (новые
+// Таблица ответов формы (/forms/$slug/responses): курсорная подгрузка (новые
 // сверху), клик по строке — панель полного ответа, экспорт в CSV, счётчик.
-export const Route = createFileRoute('/_app/forms/$formId/responses')({
+export const Route = createFileRoute('/_app/forms/$slug/responses')({
   component: ResponsesPage,
 })
 
 function ResponsesPage() {
-  const { formId } = Route.useParams()
-  const form = useQuery(formDetailQueryOptions(formId))
-  const list = useInfiniteQuery(submissionsListQueryOptions(formId))
+  // URL адресует форму slug'ом; UUID (formId) для запросов ответов берём из
+  // загруженной формы. Список ответов ждёт, пока slug зарезолвится в id (enabled).
+  const { slug } = Route.useParams()
+  const form = useQuery(formDetailQueryOptions(slug))
+  const formId = form.data?.id
+  const list = useInfiniteQuery({
+    ...submissionsListQueryOptions(formId ?? ''),
+    enabled: formId !== undefined,
+  })
   const [selected, setSelected] = useState<Submission | null>(null)
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
@@ -68,7 +74,7 @@ function ResponsesPage() {
             </p>
           )}
         </div>
-        {total > 0 && (
+        {total > 0 && formId && (
           // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
           <Button asChild variant="outline">
             <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
@@ -150,7 +156,7 @@ function ResponsesPage() {
 
       <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-md">
-          {selected && (
+          {selected && formId && (
             <SubmissionPanel
               submission={selected}
               blocks={blocks}

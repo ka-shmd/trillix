@@ -74,8 +74,8 @@ export function FormCard({ form }: { form: Form }) {
           <Link
             // Опубликованную форму открываем на «Поделиться» (ссылка, превью,
             // управление); черновик/закрытую — в редактор.
-            to={form.status === 'published' ? '/forms/$formId/share' : '/forms/$formId/edit'}
-            params={{ formId: form.id }}
+            to={form.status === 'published' ? '/forms/$slug/share' : '/forms/$slug/edit'}
+            params={{ slug: form.slug }}
             className={`break-words text-base font-semibold hover:text-primary ${
               isPlaceholder ? 'text-muted-foreground' : ''
             }`}
@@ -91,7 +91,7 @@ export function FormCard({ form }: { form: Form }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
-                <Link to="/forms/$formId/responses" params={{ formId: form.id }}>
+                <Link to="/forms/$slug/responses" params={{ slug: form.slug }}>
                   Ответы ({form.submissionCount})
                 </Link>
               </DropdownMenuItem>

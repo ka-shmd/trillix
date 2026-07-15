@@ -16,13 +16,14 @@ const DEBOUNCE_MS = 800
 // источник — кэш detail в Query: его двигают ВСЕ мутации, меняющие форму (автосейв
 // схемы, переименование заголовка, публикация). Читать токен отсюда, а не из
 // приватного ref, — иначе после rename автосейв ушлёт устаревший updatedAt и словит
-// 409 «Форма изменена в другой вкладке», хотя вкладка одна.
+// 409 «Форма изменена в другой вкладке», хотя вкладка одна. Ключ кэша detail —
+// slug формы (идентификатор URL кабинета), а не UUID.
 export function formLockToken(
   qc: ReturnType<typeof useQueryClient>,
-  formId: string,
+  slug: string,
   fallback: string,
 ): string {
-  return qc.getQueryData<FormDetail>(formKeys.detail(formId))?.updatedAt ?? fallback
+  return qc.getQueryData<FormDetail>(formKeys.detail(slug))?.updatedAt ?? fallback
 }
 
 // useAutosave связывает стор билдера с бэкендом: правки документа (dirty) через
@@ -31,10 +32,12 @@ export function formLockToken(
 // сохранения. Конфликт (409) переводит в терминальный статус 'conflict' — дальше
 // молчим, пользователь перезагружает.
 //
-// Возвращает статус для индикатора и retry для ручного повтора после ошибки.
+// formId (UUID) — цель самого PATCH /forms/{id}; slug — ключ кэша detail (по нему
+// адресована форма в URL кабинета). Возвращает статус для индикатора и retry.
 export function useAutosave(
   store: StoreApi<BuilderStore>,
   formId: string,
+  slug: string,
   initialUpdatedAt: string,
 ) {
   const qc = useQueryClient()
@@ -88,13 +91,13 @@ export function useAutosave(
         const form = await saveDraftSchema(
           formId,
           snapshot,
-          formLockToken(qc, formId, initialUpdatedAtRef.current),
+          formLockToken(qc, slug, initialUpdatedAtRef.current),
         )
         ok = true
         // Список форм сортируется по updatedAt — он изменился; detail патчим, чтобы
         // повторный вход в форму гидрировал стор сохранённым состоянием и токеном.
         qc.invalidateQueries({ queryKey: formKeys.list() })
-        qc.setQueryData<FormDetail>(formKeys.detail(formId), (old) =>
+        qc.setQueryData<FormDetail>(formKeys.detail(slug), (old) =>
           old
             ? {
                 ...old,
@@ -145,7 +148,7 @@ export function useAutosave(
     }
     // initialUpdatedAt намеренно НЕ в зависимостях — см. initialUpdatedAtRef выше:
     // его смена (rename заголовка) не должна пересоздавать эффект и гасить дебаунс.
-  }, [store, formId, qc])
+  }, [store, formId, slug, qc])
 
   // Предупреждение при уходе с несохранёнными правками (в т.ч. пока идёт сохранение).
   useEffect(() => {

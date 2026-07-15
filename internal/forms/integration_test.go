@@ -143,6 +143,29 @@ func TestForms_CRUDFlow(t *testing.T) {
 	getFormDetail(t, c, srv, created.ID, http.StatusNotFound)
 }
 
+// Приватный резолв формы по slug (URL кабинета адресует форму slug'ом, как
+// рендерер /r/{slug}): владелец получает тот же detail, что по id; чужой/
+// несуществующий slug → 404 (не 403, существование не раскрываем).
+func TestForms_GetBySlug(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	form := createForm(t, alice, srv, "Опрос")
+
+	// Владелец по slug получает ту же форму, что по id.
+	d := getFormDetailBySlug(t, alice, srv, form.Slug, http.StatusOK)
+	if d.ID != form.ID || d.Slug != form.Slug || d.Title != "Опрос" {
+		t.Fatalf("by-slug detail = %+v, ожидалась форма %s", d, form.ID)
+	}
+
+	// Чужой видит форму A по slug как отсутствующую (404).
+	getFormDetailBySlug(t, bob, srv, form.Slug, http.StatusNotFound)
+	// Несуществующий slug → 404.
+	getFormDetailBySlug(t, alice, srv, "no-such-slug", http.StatusNotFound)
+}
+
 // Главный тест фазы: изоляция воркспейсов. Пользователь B не имеет доступа к
 // форме A — ни чтения, ни правки, ни удаления; всё → 404 (не 403).
 func TestForms_WorkspaceIsolation(t *testing.T) {
@@ -578,6 +601,21 @@ func getFormDetail(t *testing.T, c *http.Client, srv *httptest.Server, id string
 	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/"+id, "", "")
 	if r.StatusCode != wantStatus {
 		t.Fatalf("GET форма: статус %d, ожидалось %d", r.StatusCode, wantStatus)
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDetailDTO{}
+	}
+	var d formDetailDTO
+	decode(t, r, &d)
+	return d
+}
+
+func getFormDetailBySlug(t *testing.T, c *http.Client, srv *httptest.Server, slug string, wantStatus int) formDetailDTO {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/lookup?slug="+url.QueryEscape(slug), "", "")
+	if r.StatusCode != wantStatus {
+		t.Fatalf("GET форма by-slug: статус %d, ожидалось %d", r.StatusCode, wantStatus)
 	}
 	if wantStatus != http.StatusOK {
 		closeBody(t, r)
