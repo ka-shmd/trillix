@@ -1,0 +1,51 @@
+name: E2E (prod-local)
+
+# Сквозной Playwright-прогон против настоящего prod-local контура. Тяжёлый (поднимает
+# весь стек в Docker + браузер), поэтому НЕ на каждый PR: руками (workflow_dispatch)
+# и ночью (schedule). Функциональный гейт перед релизом — ловит баги «прод-сборка ≠ dev».
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *' # ~03:00 UTC ежедневно
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Только Node: Go собирается внутри Docker (multi-stage), на хосте не нужен.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Поднять прод-контур ровно так же, как локально: образ из deploy/Dockerfile,
+      # прод-статика, compose с .env.prod-local, встроенный smoke. В CI нет .env,
+      # поэтому Makefile берёт окружение только из .env.prod-local (без dev-утечки).
+      - name: prod-local (образ + статика + стек)
+        run: make prod-local
+
+      - name: e2e
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm test
+
+      - name: playwright report (при падении)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          retention-days: 7
+
+      - name: teardown
+        if: always()
+        run: make prod-local-down
