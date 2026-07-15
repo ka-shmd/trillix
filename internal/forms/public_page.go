@@ -6,43 +6,39 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/httpserver"
 )
 
-// formPageTmpl — HTML-оболочка публичной формы для /r/{slug}. «Голова на сервере»:
-// краулеры мессенджеров/соцсетей читают HTML без JS, поэтому OG-мета подставляет Go.
-// «Тело на клиенте»: <div id="root"> + модуль-скрипт грузит React-SPA рендерера.
+// ogMetaMarker — плейсхолдер в собранном index.html рендерера (web/renderer/index.html),
+// на место которого Go подставляет OG-мету формы. Всё вокруг него (ассеты: script,
+// link, preload, favicon) — впрыснуто vite и отдаётся дословно: Go список ассетов
+// не ведёт, поэтому расхождение «Go ≠ сборка» невозможно по построению.
+const ogMetaMarker = "<!--og-meta-->"
+
+// ogMetaTmpl — только «голова формы»: то, что зависит от формы (title/тизер) и
+// потому не может быть в статичном index.html. Подставляется на место ogMetaMarker.
 //
 // html/template автоэкранирует ВСЕ подстановки в их контексте (Title/Description —
 // пользовательский текст, попадает в атрибут content экранированным: инъекция вида
 // "><script> невозможна; URL'ы фильтруются в src/href-контексте). Никакого «сырого»
-// вывода и никакого dangerouslySetInnerHTML (инвариант безопасности 4).
-var formPageTmpl = template.Must(template.New("formpage").Parse(`<!doctype html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}}</title>
-<meta name="description" content="{{.MetaDescription}}">
-<meta property="og:type" content="website">
-<meta property="og:title" content="{{.Title}}">
-{{if .Description}}<meta property="og:description" content="{{.Description}}">
-{{end}}<meta property="og:image" content="{{.OGImage}}">
-<meta property="og:url" content="{{.URL}}">
-<meta name="twitter:card" content="summary_large_image">
-{{if .StyleSrc}}<link rel="stylesheet" href="{{.StyleSrc}}">
-{{end}}</head>
-<body>
-<div id="root"></div>
-<script type="module" src="{{.ScriptSrc}}"></script>
-</body>
-</html>
-`))
+// вывода и никакого dangerouslySetInnerHTML (инвариант безопасности 4). Собранный
+// index.html вокруг — доверенный (наш билд), склеивается как есть.
+var ogMetaTmpl = template.Must(template.New("ogmeta").Parse(
+	`<title>{{.Title}}</title>` +
+		`<meta name="description" content="{{.MetaDescription}}">` +
+		`<meta property="og:type" content="website">` +
+		`<meta property="og:title" content="{{.Title}}">` +
+		`{{if .Description}}<meta property="og:description" content="{{.Description}}">{{end}}` +
+		`<meta property="og:image" content="{{.OGImage}}">` +
+		`<meta property="og:url" content="{{.URL}}">` +
+		`<meta name="twitter:card" content="summary_large_image">`,
+))
 
-type formPageData struct {
+type ogMetaData struct {
 	Title string
 	// Description — тизер для og:description (заголовки блоков); может быть пустым,
 	// тогда og:description опускается. MetaDescription — стандартный <meta
@@ -51,10 +47,6 @@ type formPageData struct {
 	MetaDescription string
 	OGImage         string
 	URL             string
-	ScriptSrc       string
-	// StyleSrc — абсолютный URL CSS рендерера; пусто в dev (vite инжектит стили
-	// через JS), тогда <link> не выводится.
-	StyleSrc string
 }
 
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
@@ -64,7 +56,32 @@ const maxOGDescriptionLen = 200
 // заголовков вопросов (пустой тизер): описание страницы для поисковиков.
 const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
 
-// getHTML отдаёт HTML-документ формы /r/{slug} с OG-мета опубликованной версии.
+// loadIndexHTML читает собранный index.html рендерера и раскладывает его вокруг
+// плейсхолдера ogMetaMarker в prefix/suffix (кэш в памяти — читается один раз при
+// старте, не на каждый запрос). Отсутствие маркера или #root — ошибка старта
+// (fail-fast: «упасть сразу, а не на первом запросе»), а не молчаливо битая форма.
+func (h *PublicHandler) loadIndexHTML(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read renderer index %s: %w", path, err)
+	}
+	html := string(raw)
+	i := strings.Index(html, ogMetaMarker)
+	if i < 0 {
+		return fmt.Errorf("renderer index %s: missing %q placeholder", path, ogMetaMarker)
+	}
+	if !strings.Contains(html, `id="root"`) {
+		return fmt.Errorf("renderer index %s: missing #root mount node", path)
+	}
+	h.htmlPrefix = []byte(html[:i])
+	h.htmlSuffix = []byte(html[i+len(ogMetaMarker):])
+	h.servesHTML = true
+	return nil
+}
+
+// getHTML отдаёт HTML-документ формы /r/{slug}: собранный index.html рендерера с
+// подставленной на место ogMetaMarker OG-метой опубликованной версии. Регистрируется
+// только в прод-контуре (когда index загружен); в dev форму отдаёт vite-dev.
 // Только опубликованная форма; черновик/закрытая/нет формы → 404 (тем же путём,
 // что JSON-ручка: HTML не раскрывает существование приватного).
 func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
@@ -80,25 +97,24 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 	if metaDesc == "" {
 		metaDesc = fallbackMetaDescription
 	}
-	data := formPageData{
+	data := ogMetaData{
 		Title:           pf.Title,
 		Description:     desc,
 		MetaDescription: metaDesc,
 		OGImage:         h.ogImageURL,
 		URL:             h.publicBaseURL + "/r/" + slug,
-		ScriptSrc:       h.publicBaseURL + h.scriptPath,
-	}
-	if h.stylePath != "" {
-		data.StyleSrc = h.publicBaseURL + h.stylePath
 	}
 
-	// Рендерим в буфер: ошибка шаблона (маловероятна — статичный шаблон) не должна
-	// оставить наполовину записанный ответ. Успех → отдаём как HTML.
+	// prefix + <og-мета> + suffix. Рендерим в буфер: ошибка шаблона (маловероятна —
+	// статичный шаблон) не должна оставить наполовину записанный ответ.
 	var buf bytes.Buffer
-	if err := formPageTmpl.Execute(&buf, data); err != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("render form page %s: %w", slug, err))
+	buf.Write(h.htmlPrefix)
+	if err := ogMetaTmpl.Execute(&buf, data); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("render form meta %s: %w", slug, err))
 		return
 	}
+	buf.Write(h.htmlSuffix)
+
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
 }

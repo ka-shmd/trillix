@@ -30,21 +30,18 @@ type Config struct {
 	// OGImageURL — абсолютный URL картинки превью ссылок (og:image). В MVP — общая
 	// брендовая заглушка; своя картинка на форму — пост-MVP (нужна загрузка файлов).
 	OGImageURL string
-	// PublicRendererScriptPath — путь к entry-скрипту рендерера на HTML-странице
-	// формы /r/{slug} (Go подставляет его в <script src>). Различие контуров:
-	// dev — vite-dev отдаёт исходник `/src/main.tsx`; prod-local/prod — собранный
-	// стабильный entry `/renderer.js`. Абсолютный путь от корня (начинается с «/»).
-	PublicRendererScriptPath string
+	// PublicRendererIndexPath — путь в ФС к собранному index.html рендерера. Go
+	// читает его при старте и отдаёт как страницу формы /r/{slug}, подставляя OG-мету
+	// на место плейсхолдера; ссылки на ассеты берёт из этого HTML как есть (vite сам
+	// проставил хеши). ОПЦИОНАЛЬНАЯ: в dev пусто — собранного HTML нет, /r отдаёт
+	// vite-dev, Go его не обслуживает. В prod-local/prod — /srv/renderer/index.html
+	// (renderer-статика смонтирована в api read-only, см. deploy/compose.prod.yml).
+	PublicRendererIndexPath string
 	// AppOrigin — origin кабинета (scheme://host[:port]) для строгой проверки
 	// заголовка Origin в CSRF-защите мутаций (defense-in-depth поверх double-submit).
 	// dev — http://localhost:5173 (vite кабинета); prod-local — https://app.localhost;
 	// прод — https://app.<домен>. Без завершающего слеша (Origin его не несёт).
 	AppOrigin string
-	// PublicRendererStylePath — путь к CSS рендерера на HTML-странице формы /r/{slug}
-	// (Go вставляет <link rel="stylesheet">). ОПЦИОНАЛЬНАЯ: в dev пусто — vite-dev
-	// инжектит стили через JS, отдельного файла нет; в prod-local/prod — собранный
-	// стабильный `/renderer.css`. Если задана — начинается с «/».
-	PublicRendererStylePath string
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -72,10 +69,9 @@ func Load() (Config, error) {
 	formTokenSecret := required("FORM_TOKEN_SECRET")
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
 	cfg.OGImageURL = required("OG_IMAGE_URL")
-	cfg.PublicRendererScriptPath = required("PUBLIC_RENDERER_SCRIPT_PATH")
 	cfg.AppOrigin = strings.TrimRight(required("APP_ORIGIN"), "/")
-	// Опциональная (пустая в dev): os.Getenv напрямую, не через required().
-	cfg.PublicRendererStylePath = os.Getenv("PUBLIC_RENDERER_STYLE_PATH")
+	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
+	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -100,19 +96,13 @@ func Load() (Config, error) {
 	if !isHTTPURL(cfg.OGImageURL) {
 		return Config{}, fmt.Errorf("invalid OG_IMAGE_URL %q: want http(s):// URL", cfg.OGImageURL)
 	}
-	// Путь склеивается с publicBaseURL как base+path; относительный путь дал бы
-	// битую ссылку на скрипт, поэтому требуем ведущий «/».
-	if !strings.HasPrefix(cfg.PublicRendererScriptPath, "/") {
-		return Config{}, fmt.Errorf("invalid PUBLIC_RENDERER_SCRIPT_PATH %q: want leading slash", cfg.PublicRendererScriptPath)
-	}
 	// Origin сравнивается по точному строковому равенству с заголовком Origin,
 	// поэтому должен быть валидным http(s)-origin (без пути и слеша — слеш уже срезан).
 	if !isHTTPURL(cfg.AppOrigin) {
 		return Config{}, fmt.Errorf("invalid APP_ORIGIN %q: want http(s):// origin", cfg.AppOrigin)
 	}
-	if cfg.PublicRendererStylePath != "" && !strings.HasPrefix(cfg.PublicRendererStylePath, "/") {
-		return Config{}, fmt.Errorf("invalid PUBLIC_RENDERER_STYLE_PATH %q: want leading slash", cfg.PublicRendererStylePath)
-	}
+	// PublicRendererIndexPath (опциональный) — путь в ФС; читаемость/наличие
+	// плейсхолдера проверяет forms.NewPublicHandler при старте (fail-fast там же).
 
 	return cfg, nil
 }

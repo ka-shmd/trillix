@@ -106,7 +106,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
-	formsPublic := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererScriptPath, cfg.PublicRendererStylePath)
+	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
+	if err != nil {
+		return fmt.Errorf("init public forms handler: %w", err)
+	}
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, formsSvc, submissions.Repo{})

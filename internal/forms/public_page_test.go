@@ -15,7 +15,7 @@ import (
 func getHTMLPage(t *testing.T, svc publicFormService, slug string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	newPublicMux(svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/"+slug, nil))
+	newPublicHTMLMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/"+slug, nil))
 	return rec
 }
 
@@ -34,17 +34,46 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 	}
 	body := rec.Body.String()
 
+	// OG-мета формы вставлена на место плейсхолдера.
 	for _, want := range []string{
 		`<meta property="og:title" content="Опрос клиентов">`,
 		`<meta property="og:image" content="http://localhost:5174/og-preview.png">`,
 		`<meta property="og:url" content="http://localhost:5174/r/abc123">`,
-		`<meta property="og:description" content="Ваше имя · Оценка">`,      // подзаголовок из блоков
-		`<meta name="description" content="Ваше имя · Оценка">`,             // стандартный SEO-мета
-		`src="http://localhost:5174/src/main.tsx"`,                          // тело грузит SPA
-		`<link rel="stylesheet" href="http://localhost:5174/renderer.css">`, // стили формы
+		`<meta property="og:description" content="Ваше имя · Оценка">`, // подзаголовок из блоков
+		`<meta name="description" content="Ваше имя · Оценка">`,        // стандартный SEO-мета
+		`<title>Опрос клиентов</title>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("в HTML нет %q\n---\n%s", want, body)
+		}
+	}
+
+	// Плейсхолдер заменён (не остался сырым), а не продублирован.
+	if strings.Contains(body, ogMetaMarker) {
+		t.Fatalf("плейсхолдер %q не заменён:\n%s", ogMetaMarker, body)
+	}
+	// Ровно один <title> (статичный из index.html убран, вставлен серверный).
+	if n := strings.Count(body, "<title>"); n != 1 {
+		t.Fatalf("ожидался ровно один <title>, найдено %d:\n%s", n, body)
+	}
+}
+
+// Ассеты из собранного index.html доезжают в ответ ДОСЛОВНО — Go их не перечисляет.
+// Лишний <link rel="preload"> в фикстуре, о котором Go «не знает», обязан присутствовать:
+// это и есть DoD «добавление ассета в сборку не требует правок Go».
+func TestPublicHTML_PreservesBuiltAssetsVerbatim(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{Title: "Форма", Version: 1, Schema: json.RawMessage(`{"blocks":[]}`), VersionID: uuid.New()}}
+	body := getHTMLPage(t, svc, "abc").Body.String()
+
+	for _, want := range []string{
+		`<link rel="icon" type="image/svg+xml" href="/favicon.svg" />`,                // favicon (сейчас в проде сломан — тут чинится)
+		`<script type="module" crossorigin src="/assets/index-ByZMBI6C.js"></script>`, // хешированный entry
+		`<link rel="stylesheet" crossorigin href="/assets/index-mIztBLt-.css">`,       // хешированный CSS
+		`<link rel="preload" href="/assets/font-a1b2c3.woff2"`,                        // ассет, которого Go не знает
+		`<div id="root"></div>`, // точка монтирования SPA
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("в HTML нет ассета %q\n---\n%s", want, body)
 		}
 	}
 }

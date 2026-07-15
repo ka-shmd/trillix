@@ -18,8 +18,7 @@ x-app-env: &app-env
   FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}
   PUBLIC_RENDERER_BASE_URL: ${PUBLIC_RENDERER_BASE_URL}
   OG_IMAGE_URL: ${OG_IMAGE_URL}
-  PUBLIC_RENDERER_SCRIPT_PATH: ${PUBLIC_RENDERER_SCRIPT_PATH}
-  PUBLIC_RENDERER_STYLE_PATH: ${PUBLIC_RENDERER_STYLE_PATH:-} # опциональна (пусто в dev)
+  PUBLIC_RENDERER_INDEX_PATH: ${PUBLIC_RENDERER_INDEX_PATH:-} # опциональна (пусто в dev)
   APP_ORIGIN: ${APP_ORIGIN}
 
 services:
@@ -55,6 +54,12 @@ services:
   api:
     image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
     environment: *app-env
+    volumes:
+      # Собранный index.html рендерера read-only: Go читает его при старте и отдаёт
+      # как страницу формы /r/{slug} (PUBLIC_RENDERER_INDEX_PATH). Тот же том раздаёт
+      # Caddy (renderer-статика), поэтому index.html и ассеты всегда из одной сборки —
+      # рассинхрон невозможен. Статика раскладывается build-static.sh до `up` (Makefile).
+      - ./static/renderer:/srv/renderer:ro
     depends_on:
       postgres:
         condition: service_healthy

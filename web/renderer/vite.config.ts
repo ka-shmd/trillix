@@ -21,26 +21,10 @@ export default defineConfig({
   resolve: {
     alias: { '@entities': entities, '@fields': fields, react: reactPkg, zod: zodPkg },
   },
-  build: {
-    rollupOptions: {
-      output: {
-        // Entry со стабильным именем: HTML-страницу формы /r/{slug} отдаёт Go, и
-        // он должен ссылаться на скрипт по фиксированному пути (PUBLIC_RENDERER_
-        // SCRIPT_PATH=/renderer.js), не зная хеша сборки. Чанки и ассеты остаются
-        // хешированными под /assets/* (immutable-кэш Caddy); ревалидируется только
-        // маленький entry.
-        entryFileNames: 'renderer.js',
-        chunkFileNames: 'assets/[name]-[hash].js',
-        // CSS — стабильным именем /renderer.css: HTML-страницу формы /r/{slug}
-        // отдаёт Go, он ссылается на стили по фиксированному пути (PUBLIC_RENDERER_
-        // STYLE_PATH), не зная хеша. Прочие ассеты остаются хешированными под /assets/.
-        assetFileNames: (info) => {
-          const name = (info.names?.[0] ?? info.name ?? '') as string
-          return name.endsWith('.css') ? 'renderer.css' : 'assets/[name]-[hash][extname]'
-        },
-      },
-    },
-  },
+  // Имена ассетов — дефолтные хешированные (assets/index-[hash].js/css). HTML-страницу
+  // формы /r/{slug} Go отдаёт из собранного index.html, где vite сам проставил эти
+  // хеши, — Go ассеты не перечисляет и не знает их имён, поэтому стабильные имена не
+  // нужны. Всё уезжает под /assets/* → immutable-кэш Caddy (см. deploy/Caddyfile).
   server: {
     port: 5174,
     // /public проксируется на Go-API (:8080), как /api в кабинете — CORS в dev не

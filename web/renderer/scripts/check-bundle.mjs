@@ -14,9 +14,9 @@ import { gzipSync } from 'node:zlib'
 
 const BUDGET_BYTES = 95 * 1024
 
-// Считаем весь клиентский JS в dist/: стабильный entry `renderer.js` лежит в
-// корне (Go ссылается на него по фиксированному пути, фаза 7), а code-split-чанки
-// (если появятся) — под assets/. Обходим dist/ рекурсивно и берём все .js.
+// Считаем весь клиентский JS в dist/: entry и code-split-чанки лежат под assets/
+// с хешированными именами (vite-дефолт). Обходим dist/ рекурсивно и берём все .js —
+// имена не важны, поэтому переход на хеши сборку не ломает.
 const distDir = fileURLToPath(new URL('../dist/', import.meta.url))
 
 function jsFilesUnder(dir, prefix = '') {
