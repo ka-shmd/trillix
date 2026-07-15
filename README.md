@@ -15,12 +15,25 @@ SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first
 
 ## Требования
 
-- Go 1.25+
-- Node.js 20+ и npm (два фронта в `web/app` и `web/renderer`)
-- Docker + Docker Compose (Postgres в dev-контуре)
+- Go 1.26+ (см. `go.mod`)
+- Node.js 20+ и npm (фронты `web/app`, `web/renderer`; e2e — `e2e/`)
+- Docker + Docker Compose (Postgres в dev; весь стек в prod-local)
 - [golangci-lint](https://golangci-lint.run) v2 — для `make lint`
 
 ## Текущий статус
+
+**Фаза 7 «Prod-local: репетиция прода» завершена.** Весь прод-контур собирается и работает
+локально: multi-stage distroless-образ Go (`deploy/Dockerfile`), `deploy/compose.prod.yml`
+(postgres без порта наружу → одноразовые миграции → api → Caddy), `deploy/Caddyfile` с TLS от
+локального CA на `app.localhost`/`f.localhost`. Одна команда `make prod-local` собирает образ и
+статику фронтов и поднимает стек под https; `make prod-local-trust` доверяет локальному CA
+(«замочек»). Прод-сборка фронтов — `scripts/build-static.sh`. Архитектурно: **две origin вместо
+трёх** — кабинет и его API same-origin (без CORS), рендерер отдельным origin как граница
+безопасности (ADR §10); CSRF усилена строгой проверкой `Origin`; заголовки безопасности (CSP,
+nosniff, frame-options) в Caddy. Сквозной **Playwright-e2e** (`e2e/`) гоняет собранный продукт в
+браузере против prod-local; релизный workflow по тегу `v*` кладёт образ в GHCR и статику в GitHub
+Release. **При правке UI см. раздел «Прод-контур» в [web/CLAUDE.md](web/CLAUDE.md)** (dev прячет
+прод-баги; CSP, e2e, Go-страница `/r/{slug}`).
 
 **Фаза 6.5 «Редактор в стиле Tally» завершена.** Кабинет переведён на Tailwind CSS v4 + shadcn/ui:
 сайдбар-навигация, единый вид дашборда, таблицы ответов и экранов auth. Сборка формы — slash-редактор как
@@ -79,8 +92,8 @@ cd web/app      && npm install && npm run dev   # кабинет:  http://localh
 cd web/renderer && npm install && npm run dev   # рендерер: http://localhost:5174
 ```
 
-`web/app` проксирует `/api` на Go-сервер `:8080` (в dev CORS не нужен). Кабинет — вход и дашборд форм;
-рендерер пока рендерит строку текста (наполнится в фазе 4).
+`web/app` проксирует `/api` на Go-сервер `:8080`, `web/renderer` — `/public` (в dev CORS не нужен).
+Кабинет — вход, дашборд и slash-редактор форм; рендерер — публичная форма по `/r/{slug}`.
 
 ## Команды
 
@@ -92,13 +105,37 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make db-up`    | Поднять только Postgres в Docker                       |
 | `make db-down`  | Погасить Postgres (данные остаются в volume `pg_data`) |
 | `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
-| `make test`     | `go test -race ./...`                                  |
-| `make lint`     | `golangci-lint run` (govet, errcheck, staticcheck, gofumpt) |
+| `make test`     | Go (`-race`, вкл. интеграционные в testcontainers) + vitest обоих фронтов |
+| `make lint`     | `golangci-lint run` + eslint/tsc обоих фронтов          |
 | `make seed`     | Демо-данные: пользователь `demo@trierra.local` / `demo-password` + 60 форм |
+| `make prod-local` | Репетиция прода: собрать образ + статику, поднять весь стек под https на `*.localhost`, smoke |
+| `make prod-local-down` | Погасить prod-local (тома с данными остаются)      |
+| `make prod-local-trust` | Доверить локальный CA Caddy — настоящий «замочек» (sudo) |
 
 Раннер миграций встроен в бинарник: `api migrate up` / `api migrate down` (в проде — та же
 init-команда). Остановка сервера — SIGINT/SIGTERM (Ctrl+C): активные запросы дорабатываются
 (потолок 15 с).
+
+### Прод-контур и e2e
+
+Репетиция прода на своей машине (distroless-образ, Caddy, https):
+
+```sh
+cp .env.prod-local .env   # опционально; make prod-local и так берёт .env.prod-local
+make prod-local           # собрать образ + статику, поднять стек; в конце — smoke
+# https://app.localhost (кабинет) · https://f.localhost/r/{slug} (форма)
+make prod-local-trust     # разово: доверить локальный CA Caddy → «замочек» (sudo)
+```
+
+Сквозной Playwright-e2e против поднятого prod-local (единственное, что проверяет **собранный**
+продукт в браузере — ловит баги «прод ≠ dev»):
+
+```sh
+cd e2e && npm ci && npx playwright install chromium   # один раз
+npm test
+```
+
+Подробности — [e2e/README.md](e2e/README.md). Гаси стек: `make prod-local-down`.
 
 ### Переменные окружения
 
@@ -109,3 +146,10 @@ init-команда). Остановка сервера — SIGINT/SIGTERM (Ctrl
 | `POSTGRES_PASSWORD` | да          | Пароль роли Postgres                                            |
 | `POSTGRES_DB`       | да          | Имя базы Postgres                                               |
 | `DATABASE_URL`      | да          | DSN подключения к БД (сервер и раннер миграций)                 |
+
+Это подмножество для dev. **Полный список с описанием каждой переменной — в
+[`.env.example`](.env.example)** (источник истины): туда входят `COOKIE_SECURE`,
+`FORM_TOKEN_SECRET`, `PUBLIC_RENDERER_BASE_URL`/`_SCRIPT_PATH`/`_STYLE_PATH`, `OG_IMAGE_URL`,
+`APP_ORIGIN` (CSRF), домены Caddy `APP_DOMAIN`/`RENDERER_DOMAIN` и build-time `VITE_PUBLIC_BASE_URL`.
+Различия контуров живут только в значениях: `.env.dev` (http, localhost) vs `.env.prod-local`
+(https, `*.localhost`, `COOKIE_SECURE=true`) — приложение одно, ветвления по контуру в коде нет.
