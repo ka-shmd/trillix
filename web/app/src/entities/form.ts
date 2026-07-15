@@ -10,6 +10,9 @@ export const formStatusSchema = z.enum(['draft', 'published', 'closed'])
 // Карточка формы в списке и ответ создания/переименования.
 export const formSchema = z.object({
   id: z.string(),
+  // name — внутреннее имя для дашборда (null = не задано → показываем по title).
+  // title — публичный заголовок формы, его видит респондент (ADR §10).
+  name: z.string().nullable(),
   title: z.string(),
   slug: z.string(),
   status: formStatusSchema,
@@ -39,6 +42,11 @@ export const isUntitled = (title: string): boolean =>
 // Заголовок формы для показа: плейсхолдер для безымянной, иначе сам title.
 export const displayFormTitle = (title: string): string =>
   isUntitled(title) ? 'Без названия' : title
+
+// Отображаемое имя формы в кабинете (дашборд, таблица ответов): внутреннее имя,
+// если задано, иначе — показ по публичному заголовку (фолбэк, ADR §10).
+export const displayFormName = (form: { name: string | null; title: string }): string =>
+  form.name && form.name.trim() !== '' ? form.name : displayFormTitle(form.title)
 
 // GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор).
 export const formDetailSchema = formSchema.extend({

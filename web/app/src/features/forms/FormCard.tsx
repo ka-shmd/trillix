@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { Link } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
-import { type Form, displayFormTitle, isUntitled } from '../../entities/form'
+import { type Form, displayFormName } from '../../entities/form'
 import { formatDate } from '../../shared/format'
-import { useDeleteForm, useRenameForm } from './queries'
+import { useDeleteForm, useDuplicateForm, useUpdateFormName } from './queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -44,18 +44,29 @@ const statusVariants: Record<Form['status'], 'secondary' | 'default' | 'outline'
 export function FormCard({ form }: { form: Form }) {
   const [editing, setEditing] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  const rename = useRenameForm()
+  const rename = useUpdateFormName()
+  const duplicate = useDuplicateForm()
   const remove = useDeleteForm()
 
+  // Подпись карточки — внутреннее имя, если задано, иначе показ по публичному
+  // заголовку (фолбэк). Плейсхолдер «Без названия» приглушаем.
+  const label = displayFormName(form)
+  const isPlaceholder = label === 'Без названия'
+
   return (
-    <Card className="flex min-h-36 flex-col gap-3 p-4" aria-busy={remove.isPending}>
+    <Card
+      className="flex min-h-36 flex-col gap-3 p-4"
+      aria-busy={remove.isPending || duplicate.isPending}
+    >
       {editing ? (
+        // Переименование правит ВНУТРЕННЕЕ имя (name), не публичный заголовок.
+        // Пусто = имя не задано; сохраняем непустым (сброс имени — отдельный кейс).
         <RenameForm
-          initial={isUntitled(form.title) ? '' : form.title}
+          initial={form.name ?? ''}
           pending={rename.isPending}
           onCancel={() => setEditing(false)}
-          onSubmit={(title) =>
-            rename.mutate({ id: form.id, title }, { onSuccess: () => setEditing(false) })
+          onSubmit={(name) =>
+            rename.mutate({ id: form.id, name }, { onSuccess: () => setEditing(false) })
           }
         />
       ) : (
@@ -66,10 +77,10 @@ export function FormCard({ form }: { form: Form }) {
             to={form.status === 'published' ? '/forms/$formId/share' : '/forms/$formId/edit'}
             params={{ formId: form.id }}
             className={`break-words text-base font-semibold hover:text-primary ${
-              isUntitled(form.title) ? 'text-muted-foreground' : ''
+              isPlaceholder ? 'text-muted-foreground' : ''
             }`}
           >
-            {displayFormTitle(form.title)}
+            {label}
           </Link>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -85,6 +96,12 @@ export function FormCard({ form }: { form: Form }) {
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setEditing(true)}>Переименовать</DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => duplicate.mutate(form.id)}
+                disabled={duplicate.isPending}
+              >
+                {duplicate.isPending ? 'Дублируем…' : 'Дублировать'}
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
@@ -106,7 +123,7 @@ export function FormCard({ form }: { form: Form }) {
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Удалить форму «{form.title}»?</AlertDialogTitle>
+            <AlertDialogTitle>Удалить форму «{label}»?</AlertDialogTitle>
             <AlertDialogDescription>
               Это действие необратимо. Все ответы формы также будут удалены.
             </AlertDialogDescription>

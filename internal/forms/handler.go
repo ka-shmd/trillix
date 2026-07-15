@@ -31,9 +31,11 @@ type Middleware = func(http.Handler) http.Handler
 // formsService — интерфейс сервиса, нужный транспорту (реализация — *Service).
 type formsService interface {
 	Create(ctx context.Context, userID uuid.UUID, title string) (Form, error)
+	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, after *Cursor, limit int) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
+	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -59,6 +61,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
 	mux.Handle("PATCH /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
+	mux.Handle("POST /api/v1/forms/{id}/duplicate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.duplicate))))
 	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
 	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
 }
@@ -66,7 +69,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 // --- DTO ---
 
 type formResponse struct {
-	ID        string    `json:"id"`
+	ID string `json:"id"`
+	// name — внутреннее имя для дашборда (null = не задано, кабинет показывает title).
+	// title — публичный заголовок (его видит респондент). См. ADR §10.
+	Name      *string   `json:"name"`
 	Title     string    `json:"title"`
 	Slug      string    `json:"slug"`
 	Status    string    `json:"status"`
@@ -101,10 +107,12 @@ type titleRequest struct {
 }
 
 // patchRequest — тело PATCH /forms/{id}. Указатели различают «поле отсутствует»
-// (nil) от «прислано». За один запрос меняется ровно одно из title/draftSchema:
-// title — переименование с дашборда (без блокировки, как в фазе 2); draftSchema —
+// (nil) от «прислано». За один запрос меняется ровно одно из name/title/draftSchema:
+// name — переименование с дашборда (внутреннее имя, не трогает публичный заголовок);
+// title — публичный заголовок (первая строка билдера, без блокировки); draftSchema —
 // автосейв билдера, требует updatedAt для оптимистичной блокировки.
 type patchRequest struct {
+	Name        *string          `json:"name"`
 	Title       *string          `json:"title"`
 	DraftSchema *json.RawMessage `json:"draftSchema"`
 	UpdatedAt   *time.Time       `json:"updatedAt"`
@@ -113,6 +121,7 @@ type patchRequest struct {
 func toFormResponse(f Form) formResponse {
 	resp := formResponse{
 		ID:                    f.ID.String(),
+		Name:                  f.Name,
 		Title:                 f.Title,
 		Slug:                  f.Slug,
 		Status:                f.Status,
@@ -212,14 +221,23 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ровно одно из name/title/draftSchema за запрос — иначе непонятно, что менять.
+	set := 0
+	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil} {
+		if present {
+			set++
+		}
+	}
+	if set != 1 {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema", domain.ErrValidation))
+		return
+	}
+
 	var (
 		form Form
 		err  error
 	)
 	switch {
-	case req.DraftSchema != nil && req.Title != nil:
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется либо title, либо draftSchema", domain.ErrValidation))
-		return
 	case req.DraftSchema != nil:
 		if req.UpdatedAt == nil {
 			httpserver.WriteError(w, r, fmt.Errorf("%w: updatedAt обязателен при сохранении схемы", domain.ErrValidation))
@@ -228,9 +246,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateDraftSchema(r.Context(), userID, formID, *req.DraftSchema, *req.UpdatedAt)
 	case req.Title != nil:
 		form, err = h.svc.UpdateTitle(r.Context(), userID, formID, *req.Title)
-	default:
-		httpserver.WriteError(w, r, fmt.Errorf("%w: пустой запрос: ожидался title или draftSchema", domain.ErrValidation))
-		return
+	case req.Name != nil:
+		form, err = h.svc.UpdateName(r.Context(), userID, formID, *req.Name)
 	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
@@ -271,6 +288,23 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, toFormResponse(form))
+}
+
+func (h *Handler) duplicate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Duplicate(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
 }
 
 // unpublish закрывает форму (status='closed'). Тела нет.

@@ -26,8 +26,11 @@ import (
 // у результатов мутаций всегда false — для create/publish/unpublish это верно, а
 // rename фронт всё равно тут же перечитывает.
 type Form struct {
-	ID                    uuid.UUID
-	WorkspaceID           uuid.UUID
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	// Name — внутреннее имя формы для дашборда (nil = не задано → кабинет показывает
+	// Title). Публичного заголовка (Title, его видит респондент) не касается.
+	Name                  *string
 	Title                 string
 	Slug                  string
 	Status                string
@@ -81,6 +84,29 @@ func ptrInt32(v pgtype.Int4) *int32 {
 	return &n
 }
 
+// ptrStr переводит nullable text из sqlc (pgtype.Text) в *string: NULL → nil.
+func ptrStr(v pgtype.Text) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
+}
+
+// pgText переводит *string в pgtype.Text для параметров запроса: nil → NULL.
+func pgText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *s, Valid: true}
+}
+
+// FormName — пара (имя, заголовок) формы воркспейса для нумерации копий (ListFormNames).
+type FormName struct {
+	Name  *string
+	Title string
+}
+
 // Repo — доступ к данным forms поверх sqlc-запросов. Методы принимают исполнителя
 // (postgres.DBTX: пул или транзакция); транзакций сам не открывает.
 type Repo struct{}
@@ -119,6 +145,35 @@ func (Repo) CreateForm(ctx context.Context, db postgres.DBTX, id, workspaceID uu
 	return Form{
 		ID:                 row.ID,
 		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// CreateFormWithSchema создаёт форму с заданным именем и черновиком схемы
+// (дубликация): name = «(копия N)», title — публичный заголовок оригинала. Статус —
+// дефолтный draft, поэтому PublishedVersion(ID) в ответе пусты.
+func (Repo) CreateFormWithSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string, name *string, schema json.RawMessage) (Form, error) {
+	row, err := postgres.New(db).CreateFormWithSchema(ctx, postgres.CreateFormWithSchemaParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Title:       title,
+		Slug:        slug,
+		Name:        pgText(name),
+		DraftSchema: schema,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("create form with schema: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
 		Title:              row.Title,
 		Slug:               row.Slug,
 		Status:             row.Status,
@@ -139,6 +194,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 	return Form{
 		ID:                    row.ID,
 		WorkspaceID:           row.WorkspaceID,
+		Name:                  ptrStr(row.Name),
 		Title:                 row.Title,
 		Slug:                  row.Slug,
 		Status:                row.Status,
@@ -166,6 +222,7 @@ func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UU
 		out[i] = Form{
 			ID:                    r.ID,
 			WorkspaceID:           r.WorkspaceID,
+			Name:                  ptrStr(r.Name),
 			Title:                 r.Title,
 			Slug:                  r.Slug,
 			Status:                r.Status,
@@ -196,6 +253,7 @@ func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uu
 		out[i] = Form{
 			ID:                    r.ID,
 			WorkspaceID:           r.WorkspaceID,
+			Name:                  ptrStr(r.Name),
 			Title:                 r.Title,
 			Slug:                  r.Slug,
 			Status:                r.Status,
@@ -224,6 +282,7 @@ func (Repo) UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspace
 	return Form{
 		ID:                 row.ID,
 		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
 		Title:              row.Title,
 		Slug:               row.Slug,
 		Status:             row.Status,
@@ -231,6 +290,44 @@ func (Repo) UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspace
 		CreatedAt:          row.CreatedAt.Time,
 		UpdatedAt:          row.UpdatedAt.Time,
 	}, nil
+}
+
+// UpdateFormName меняет внутреннее имя формы (дашборд) в пределах воркспейса.
+// pgx.ErrNoRows (чужая/нет формы) пробрасывается обёрнутым — service вернёт 404.
+func (Repo) UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error) {
+	row, err := postgres.New(db).UpdateFormName(ctx, postgres.UpdateFormNameParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Name:        pgText(name),
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form name: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// ListFormNames возвращает пары (имя, заголовок) всех форм воркспейса — сервису для
+// нумерации копий (подбор следующего «(копия N)» без коллизий).
+func (Repo) ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error) {
+	rows, err := postgres.New(db).ListFormNames(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list form names: %w", err)
+	}
+	out := make([]FormName, len(rows))
+	for i, r := range rows {
+		out[i] = FormName{Name: ptrStr(r.Name), Title: r.Title}
+	}
+	return out, nil
 }
 
 // UpdateFormDraftSchema сохраняет черновик схемы с оптимистичной блокировкой:
@@ -250,6 +347,7 @@ func (Repo) UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, wor
 	return Form{
 		ID:                 row.ID,
 		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
 		Title:              row.Title,
 		Slug:               row.Slug,
 		Status:             row.Status,
@@ -338,6 +436,7 @@ func (Repo) SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspac
 	return Form{
 		ID:                 row.ID,
 		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
 		Title:              row.Title,
 		Slug:               row.Slug,
 		Status:             row.Status,
@@ -360,6 +459,7 @@ func (Repo) SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID
 	return Form{
 		ID:                 row.ID,
 		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
 		Title:              row.Title,
 		Slug:               row.Slug,
 		Status:             row.Status,

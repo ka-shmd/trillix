@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,10 +36,13 @@ type Store interface {
 	GetPersonalWorkspace(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (uuid.UUID, error)
 	IsWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (bool, error)
 	CreateForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string) (Form, error)
+	CreateFormWithSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string, name *string, schema json.RawMessage) (Form, error)
+	ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error)
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
 	ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error)
 	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
+	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
@@ -99,6 +104,56 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string) (F
 		return Form{}, err
 	}
 	return form, nil
+}
+
+// Duplicate создаёт копию формы в том же воркспейсе: копирует черновик схемы и
+// ПУБЛИЧНЫЙ заголовок (title) как есть, а внутреннему имени (name) даёт «{база}
+// (копия N)» — N подбирается без коллизий по соседям воркспейса (см. nextCopyName).
+// Так суффикс копии виден только в кабинете, публичный заголовок остаётся чистым.
+// Копия всегда draft (публикация не переносится). Доступ проверяется как везде.
+func (s *Service) Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+	src, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	siblings, err := s.repo.ListFormNames(ctx, s.db, src.WorkspaceID)
+	if err != nil {
+		return Form{}, err
+	}
+	name := nextCopyName(displayName(src.Name, src.Title), siblings)
+	form, err := s.repo.CreateFormWithSchema(
+		ctx, s.db, domain.NewID(), src.WorkspaceID, src.Title, domain.NewSlug(), &name, src.DraftSchema,
+	)
+	if err != nil {
+		return Form{}, err
+	}
+	return form, nil
+}
+
+// UpdateName задаёт внутреннее имя формы (переименование на дашборде). Пустая строка
+// после trim → сбрасываем имя в NULL (кабинет вернётся к показу публичного заголовка).
+// Публичного заголовка (title) не касается. Доступ — как везде (инвариант 1).
+func (s *Service) UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error) {
+	name = strings.TrimSpace(name)
+	if err := validateTitleLen(name); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	var namePtr *string
+	if name != "" {
+		namePtr = &name
+	}
+	updated, err := s.repo.UpdateFormName(ctx, s.db, form.ID, form.WorkspaceID, namePtr)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
 }
 
 // List возвращает страницу форм личного воркспейса. after — курсор предыдущей
@@ -332,6 +387,80 @@ func normalizeCreateTitle(title string) string {
 		return defaultFormTitle
 	}
 	return title
+}
+
+// displayName — отображаемое имя формы в кабинете: name, если задано, иначе title
+// (фолбэк, ADR §10). Тем же правилом кабинет выбирает подпись карточки.
+func displayName(name *string, title string) string {
+	if name != nil && strings.TrimSpace(*name) != "" {
+		return *name
+	}
+	return title
+}
+
+// copySuffixRe разбирает хвост «(копия)» / «(копия N)» отображаемого имени: группа 1 —
+// база (имя без суффикса), группа 2 — номер (пусто для «(копия)»).
+var copySuffixRe = regexp.MustCompile(`^(.*?)\s*\(копия(?:\s+(\d+))?\)$`)
+
+// nextCopyName строит имя копии «{база} (копия N)». База — исходное имя без хвоста
+// «(копия…)» (чтобы копия копии не стекала суффиксы). N — минимальный свободный: на
+// 1 больше максимального среди уже существующих в воркспейсе копий той же базы (и
+// самой базы, если она есть) — так дубли не дают одинаковых имён. Длинную базу
+// обрезаем по рунам, чтобы суффикс влез в maxTitleLen.
+func nextCopyName(srcDisplay string, siblings []FormName) string {
+	base := stripCopySuffix(srcDisplay)
+	maxN := 0
+	for _, s := range siblings {
+		if n, ok := copyIndex(base, displayName(s.Name, s.Title)); ok && n > maxN {
+			maxN = n
+		}
+	}
+	return copyName(base, maxN+1)
+}
+
+// stripCopySuffix отрезает хвост «(копия)» / «(копия N)», возвращая базу.
+func stripCopySuffix(s string) string {
+	if m := copySuffixRe.FindStringSubmatch(s); m != nil {
+		return strings.TrimSpace(m[1])
+	}
+	return strings.TrimSpace(s)
+}
+
+// copyIndex возвращает «копийный индекс» имени s относительно base: 0 — само base,
+// 1 — «base (копия)», N — «base (копия N)»; ok=false, если s к base не относится.
+func copyIndex(base, s string) (int, bool) {
+	if strings.TrimSpace(s) == base {
+		return 0, true
+	}
+	m := copySuffixRe.FindStringSubmatch(s)
+	if m == nil || strings.TrimSpace(m[1]) != base {
+		return 0, false
+	}
+	if m[2] == "" {
+		return 1, true
+	}
+	n, err := strconv.Atoi(m[2])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// copyName собирает «{база} (копия)» (n=1) или «{база} (копия N)» (n≥2), обрезая
+// базу по рунам под maxTitleLen (байт — как считает validateTitleLen).
+func copyName(base string, n int) string {
+	suffix := " (копия)"
+	if n >= 2 {
+		suffix = " (копия " + strconv.Itoa(n) + ")"
+	}
+	if len(base)+len(suffix) > maxTitleLen {
+		r := []rune(base)
+		for len(r) > 0 && len(string(r))+len(suffix) > maxTitleLen {
+			r = r[:len(r)-1]
+		}
+		base = string(r)
+	}
+	return base + suffix
 }
 
 func validateTitleLen(title string) error {

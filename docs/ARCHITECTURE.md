@@ -101,7 +101,8 @@ CREATE TABLE workspace_members (
 CREATE TABLE forms (
     id            UUID PRIMARY KEY,
     workspace_id  UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    title         TEXT NOT NULL DEFAULT 'Untitled form',
+    title         TEXT NOT NULL DEFAULT 'Untitled form', -- ПУБЛИЧНЫЙ заголовок (его видит респондент, OG-мета)
+    name          TEXT,                          -- ВНУТРЕННЕЕ имя для дашборда (NULL → показываем title); ADR §10, миграция 0006
     slug          TEXT NOT NULL UNIQUE,          -- короткий id для публичной ссылки, nanoid(10)
     status        TEXT NOT NULL DEFAULT 'draft', -- draft | published | closed
     draft_schema  JSONB NOT NULL DEFAULT '{"blocks": []}',
@@ -290,7 +291,7 @@ GET    /auth/me                       текущий пользователь
 GET    /forms                         список форм воркспейса (курсорная пагинация)
 POST   /forms                         создать форму
 GET    /forms/{id}                    форма + draft_schema
-PATCH  /forms/{id}                    обновить title / draft_schema (автосейв билдера)
+PATCH  /forms/{id}                    обновить name / title / draft_schema (ровно одно; автосейв билдера)
 DELETE /forms/{id}
 POST   /forms/{id}/publish            снапшот черновика → новая версия
 POST   /forms/{id}/unpublish
@@ -468,3 +469,4 @@ GitHub Actions, два пайплайна. **CI на каждый PR:** `go vet`
 | In-memory rate limit | Redis | Один инстанс; интерфейс позволяет заменить позже |
 | shadcn/ui + Tailwind в кабинете (web/app) | Ручной CSS / только Radix-примитивы | Notion/Tally-оболочка и slash-редактор требуют богатого набора доступных примитивов (command-палитра, dropdown, dialog, sidebar); скорость сборки UI перевешивает +6 зависимостей. **Только web/app**: рендерер (web/renderer) остаётся на react+zod под бюджетом 95 КиБ, общие компоненты `@fields` не переводятся на Tailwind |
 | Вид поля — общий `web/shared/fields/fields.css` (`rf-*` + токены `--rf-*`), надевают редактор, превью и рендерер | Дублировать вид в каждой поверхности (Tailwind в редакторе, `rf-*` в `index.css` фронтов) | Форму видят три поверхности (редактор-эталон, превью, респондент); единый визуальный язык в plain-CSS исключает рассинхрон. Редактор надевает `rf-*` поверх Tailwind-layout, рендерер читает тот же CSS без Tailwind → бюджет 95 КиБ не затронут |
+| Внутреннее имя формы (`forms.name`) отдельно от публичного заголовка (`forms.title`) | Один `title` на обе роли | `title` — одно поле было и именем в дашборде, и заголовком для респондента (`rf-title`, OG-мета). Дубликат/организационное переименование меняли и публичный заголовок (например «(копия)» вылезал респонденту). Решение: `name` (NULL=не задано) — внутреннее имя кабинета, `title` остаётся публичным заголовком; дашборд показывает `name ?? title` (фолбэк — нет пустых имён). Дубликат суффиксит только `name`, `PATCH {name}` не трогает `title`. Рендерер/публичный API/OG-мета/схема не затронуты (миграция 0006) |

@@ -77,7 +77,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 |---|---|---|
 | `id` | `UUID` | PK |
 | `workspace_id` | `UUID` | `NOT NULL`, FK → `workspaces(id)` `ON DELETE CASCADE` |
-| `title` | `TEXT` | `NOT NULL DEFAULT 'Untitled form'` |
+| `title` | `TEXT` | `NOT NULL DEFAULT 'Untitled form'` — **публичный** заголовок (его видит респондент, OG-мета) |
+| `name` | `TEXT` | nullable (0006) — **внутреннее** имя для дашборда; `NULL` → кабинет показывает `title` (ADR §10) |
 | `slug` | `TEXT` | `NOT NULL`, `UNIQUE` — публичный id, nanoid(10) |
 | `status` | `TEXT` | `NOT NULL DEFAULT 'draft'` — `draft | published | closed` |
 | `draft_schema` | `JSONB` | `NOT NULL DEFAULT '{"blocks": []}'` |

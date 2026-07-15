@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { type Block, isAnswerableType } from '@entities/formSchema'
 
+import { displayFormName } from '../../entities/form'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import {
   submissionsListQueryOptions,
@@ -59,7 +60,7 @@ function ResponsesPage() {
             <ArrowLeft className="size-4" /> К формам
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight">
-            {form.data ? `Ответы · ${form.data.title}` : 'Ответы'}
+            {form.data ? `Ответы · ${displayFormName(form.data)}` : 'Ответы'}
           </h1>
           {!list.isPending && !list.isError && (
             <p className="mt-1 text-sm text-muted-foreground">

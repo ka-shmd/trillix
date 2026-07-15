@@ -21,6 +21,7 @@ const draftSchema = { blocks: [] } as FormDetail['draftSchema']
 function seedDetail(qc: QueryClient) {
   qc.setQueryData<FormDetail>(formKeys.detail(formId), {
     id: formId,
+    name: null,
     title: 'Старое имя',
     slug: 'old-slug',
     status: 'draft',
@@ -40,6 +41,7 @@ function seedDetail(qc: QueryClient) {
 // hasUnpublishedChanges/submissionCount (у ответов мутаций всегда false/0).
 const renamedForm: Form = {
   id: formId,
+  name: null,
   title: 'Новое имя',
   slug: 'old-slug',
   status: 'draft',
