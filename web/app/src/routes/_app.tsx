@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
 import { useCreateForm } from '../features/forms/queries'
 import { useState } from 'react'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSlotContext } from '../shared/headerSlot'
 
@@ -47,10 +47,11 @@ function AppLayout() {
         loggingOut={logout.isPending}
       />
       <SidebarInset>
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-          <SidebarTrigger />
-          {/* Слот действий страницы (кнопки редактора и т.п.) — в одном баре с
-              кнопкой сворачивания сайдбара. */}
+        {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
+            остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
+            не просвечивал под ней. */}
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
+          {/* Слот действий страницы (крошки, кнопки редактора и т.п.). */}
           <div ref={setHeaderSlot} className="flex flex-1 items-center gap-2" />
         </header>
         {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/

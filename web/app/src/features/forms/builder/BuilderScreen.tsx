@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
-import { Eye, Pencil, Redo2, Undo2 } from 'lucide-react'
+import { ChevronRight, Eye, House, Pencil, Redo2, Undo2 } from 'lucide-react'
 
-import { type FormDetail } from '../../../entities/form'
+import { displayFormName, type FormDetail } from '../../../entities/form'
+import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
@@ -74,8 +76,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {headerSlot &&
         createPortal(
           <div className="flex w-full items-center gap-2">
-            <SaveIndicator status={status} onRetry={retry} />
+            <Breadcrumbs formName={displayFormName(detail)} />
             <div className="ml-auto flex items-center gap-2">
+              <SaveIndicator status={status} onRetry={retry} />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -135,5 +138,39 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
         </section>
       )}
     </BuilderStoreContext.Provider>
+  )
+}
+
+// Breadcrumbs — путь над редактором: Дом (дашборд форм) → пространство → форма.
+// Имя воркспейса — серверный стейт из Query (в MVP один личный); пока не
+// подгрузилось, крошка пространства не рисуется, чтобы не мигать пустотой.
+// Пространство и текущая форма — не ссылки: страницы пространства пока нет, а
+// форма — текущая. Длинные имена усекаются, шапку не распирают.
+function Breadcrumbs({ formName }: { formName: string }) {
+  const { data: workspaces } = useQuery(workspacesQueryOptions)
+  const workspaceName = workspaces?.[0]?.name
+
+  return (
+    <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1 text-sm">
+      <Link
+        to="/forms"
+        aria-label="Дом"
+        className="flex shrink-0 items-center text-muted-foreground hover:text-foreground"
+      >
+        <House className="size-4" />
+      </Link>
+      {workspaceName && (
+        <>
+          <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
+          <span className="max-w-[16ch] shrink-0 truncate text-muted-foreground">
+            {workspaceName}
+          </span>
+        </>
+      )}
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
+      <span className="min-w-0 truncate font-medium" aria-current="page">
+        {formName}
+      </span>
+    </nav>
   )
 }

@@ -6,6 +6,7 @@ sql:
     schema: "migrations"
     queries:
       - "internal/auth/queries.sql"
+      - "internal/workspaces/queries.sql"
       - "internal/forms/queries.sql"
       - "internal/submissions/queries.sql"
     gen:

@@ -1,33 +1,66 @@
+import { CircleCheck, Loader2, TriangleAlert, type LucideIcon } from 'lucide-react'
+
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { type SaveStatus } from './useAutosave'
 
-// Индикатор автосейва в шапке билдера. Конфликт показывает нейтральную строку —
-// подробности и действие несёт ConflictBanner.
+// Индикатор автосейва в шапке билдера — компактная иконка с тултипом (текст
+// статуса раскрывается по наведению/фокусу). Ошибка кликабельна: сама иконка —
+// кнопка «повторить». Конфликт несёт нейтральный статус, подробности и действие —
+// у ConflictBanner. TooltipProvider даёт SidebarProvider выше по дереву.
+const META: Record<SaveStatus, { icon: LucideIcon; className: string; label: string }> = {
+  saving: {
+    icon: Loader2,
+    className: 'text-primary animate-spin',
+    label: 'Сохранение…',
+  },
+  saved: {
+    icon: CircleCheck,
+    className: 'text-emerald-600 dark:text-emerald-500',
+    label: 'Все изменения сохранены',
+  },
+  error: {
+    icon: TriangleAlert,
+    className: 'text-destructive',
+    label: 'Не удалось сохранить. Нажмите, чтобы повторить',
+  },
+  conflict: {
+    icon: TriangleAlert,
+    className: 'text-destructive',
+    label: 'Сохранение приостановлено',
+  },
+}
+
 export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
-  switch (status) {
-    case 'saving':
-      return (
-        <span className="text-sm text-muted-foreground" role="status">
-          Сохранение…
-        </span>
-      )
-    case 'saved':
-      return (
-        <span className="text-sm text-muted-foreground" role="status">
-          Все изменения сохранены
-        </span>
-      )
-    case 'error':
-      return (
-        <span className="text-sm text-destructive" role="status">
-          Не удалось сохранить —{' '}
-          <button type="button" className="underline underline-offset-2" onClick={onRetry}>
-            Повторить
-          </button>
-        </span>
-      )
-    case 'conflict':
-      return <span className="text-sm text-destructive">Сохранение приостановлено</span>
-  }
+  const { icon: Icon, className, label } = META[status]
+
+  // Ошибка — кнопка (повтор автосейва); остальные состояния информационны (span).
+  const trigger =
+    status === 'error' ? (
+      <button
+        type="button"
+        onClick={onRetry}
+        aria-label={label}
+        className="flex size-8 items-center justify-center rounded-md hover:bg-accent"
+      >
+        <Icon className={`size-4 ${className}`} />
+      </button>
+    ) : (
+      <span
+        role="status"
+        aria-label={label}
+        tabIndex={0}
+        className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Icon className={`size-4 ${className}`} />
+      </span>
+    )
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 // ConflictBanner — форму изменили в другой вкладке (409). Оптимистичная блокировка

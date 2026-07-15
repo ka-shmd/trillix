@@ -870,6 +870,41 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
+const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
+
+SELECT w.id, w.name, w.created_at
+FROM workspace_members m
+JOIN workspaces w ON w.id = m.workspace_id
+WHERE m.user_id = $1
+ORDER BY w.created_at ASC
+`
+
+// Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
+// workspace_members). Генерация: `make sqlc`.
+// Воркспейсы, в которых состоит пользователь. JOIN через workspace_members:
+// возвращаются только пространства с членством (инвариант доступа — id из URL
+// права не даёт). В MVP на пользователя ровно один (личный, созданный при
+// регистрации); порядок по created_at (старейший первым) — детерминированно.
+func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
+	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Workspace
+	for rows.Next() {
+		var i Workspace
+		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const nextFormVersion = `-- name: NextFormVersion :one
 SELECT (coalesce(max(version), 0) + 1)::int AS next_version
 FROM form_versions
