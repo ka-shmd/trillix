@@ -24,6 +24,13 @@ const (
 	// пришедший быстрее (возраст токена меньше), — бот. Порог антиспама, одинаковый
 	// во всех контурах (не env: смыслового различия между dev/prod нет).
 	DefaultMinFillTime = 3 * time.Second
+
+	// DefaultMaxTokenAge — максимальный возраст токена формы. Без верхней границы бот
+	// получает форму один раз, ждёт minFillTime и шлёт тем же токеном неограниченно
+	// (TD-6): проверка min-fill-time становится разовым барьером. Правдоподобная сессия
+	// заполнения укладывается в сутки; пришедший позже токен — переиспользование → 422.
+	// Как и min, одинаков во всех контурах (не env).
+	DefaultMaxTokenAge = 24 * time.Hour
 )
 
 // submitService — часть сервиса, нужная публичному транспорту приёма.
@@ -44,16 +51,18 @@ type PublicHandler struct {
 	limiter      RateLimiter
 	tokenSecret  []byte
 	minFillTime  time.Duration
+	maxTokenAge  time.Duration
 	trustedProxy bool             // за доверенным прокси? влияет на извлечение IP клиента
 	now          func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime time.Duration, trustedProxy bool) *PublicHandler {
+func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime, maxTokenAge time.Duration, trustedProxy bool) *PublicHandler {
 	return &PublicHandler{
 		svc:          svc,
 		limiter:      limiter,
 		tokenSecret:  tokenSecret,
 		minFillTime:  minFillTime,
+		maxTokenAge:  maxTokenAge,
 		trustedProxy: trustedProxy,
 		now:          time.Now,
 	}
@@ -100,11 +109,12 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Минимальное время заполнения: подпись токена + его возраст. Битый/поддельный
-	// токен и слишком быстрый ответ неотличимы для клиента (единый 422), чтобы не
-	// подсказывать боту, какой из барьеров он задел.
+	// Возраст токена: подпись + окно [minFillTime, maxTokenAge]. Слишком быстрый ответ
+	// (бот) и переиспользование старого токена (TD-6) отбрасываются; битый/поддельный
+	// токен неотличим для клиента (единый 422), чтобы не подсказывать боту, какой из
+	// барьеров он задел.
 	issuedAt, err := token.IssuedAt(h.tokenSecret, req.Token)
-	if err != nil || h.now().Sub(issuedAt) < h.minFillTime {
+	if age := h.now().Sub(issuedAt); err != nil || age < h.minFillTime || age > h.maxTokenAge {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: форма отправлена слишком быстро", domain.ErrValidation))
 		return
 	}
