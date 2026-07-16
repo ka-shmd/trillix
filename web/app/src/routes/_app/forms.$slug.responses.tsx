@@ -24,15 +24,16 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 // Таблица ответов формы (/forms/$slug/responses): курсорная подгрузка (новые
-// сверху), клик по строке — панель полного ответа, экспорт в CSV, счётчик.
+// сверху). В таблице только версия и дата заполнения; сами ответы — в диалоге,
+// который открывается по строке. Плюс экспорт в CSV и счётчик.
 export const Route = createFileRoute('/_app/forms/$slug/responses')({
   component: ResponsesPage,
 })
@@ -47,7 +48,16 @@ function ResponsesPage() {
     ...submissionsListQueryOptions(formId ?? ''),
     enabled: formId !== undefined,
   })
+  // open управляет видимостью диалога, selected — какой ответ показываем. Не
+  // обнуляем selected при закрытии: иначе содержимое пропадёт раньше, чем диалог
+  // доиграет анимацию ухода. Оно остаётся смонтированным до следующего открытия.
+  const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<Submission | null>(null)
+
+  function openSubmission(s: Submission) {
+    setSelected(s)
+    setOpen(true)
+  }
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
   const total = list.data?.pages[0]?.total ?? 0
@@ -111,11 +121,8 @@ function ResponsesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Отправлен</TableHead>
+                  <TableHead>Заполнен</TableHead>
                   <TableHead>Версия</TableHead>
-                  {blocks.map((b) => (
-                    <TableHead key={b.id}>{blockTitle(b)}</TableHead>
-                  ))}
                   <TableHead>
                     <span className="sr-only">Действия</span>
                   </TableHead>
@@ -123,14 +130,22 @@ function ResponsesPage() {
               </TableHeader>
               <TableBody>
                 {submissions.map((s) => (
-                  <TableRow key={s.id}>
+                  <TableRow
+                    key={s.id}
+                    className="cursor-pointer"
+                    onClick={() => openSubmission(s)}
+                  >
                     <TableCell className="whitespace-nowrap">{formatDate(s.createdAt)}</TableCell>
                     <TableCell>{s.formVersion}</TableCell>
-                    {blocks.map((b) => (
-                      <TableCell key={b.id}>{formatAnswer(b, s.answers[b.id])}</TableCell>
-                    ))}
-                    <TableCell>
-                      <Button variant="ghost" size="sm" onClick={() => setSelected(s)}>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openSubmission(s)
+                        }}
+                      >
                         Открыть
                       </Button>
                     </TableCell>
@@ -154,18 +169,18 @@ function ResponsesPage() {
         </>
       )}
 
-      <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
           {selected && formId && (
             <SubmissionPanel
               submission={selected}
               blocks={blocks}
               formId={formId}
-              onClose={() => setSelected(null)}
+              onClose={() => setOpen(false)}
             />
           )}
-        </SheetContent>
-      </Sheet>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }
@@ -194,12 +209,12 @@ function SubmissionPanel({
 
   return (
     <>
-      <SheetHeader>
-        <SheetTitle>Ответ от {formatDate(submission.createdAt)}</SheetTitle>
-        <SheetDescription>Версия формы: {submission.formVersion}</SheetDescription>
-      </SheetHeader>
+      <DialogHeader>
+        <DialogTitle>Ответ от {formatDate(submission.createdAt)}</DialogTitle>
+        <DialogDescription>Версия формы: {submission.formVersion}</DialogDescription>
+      </DialogHeader>
 
-      <dl className="flex flex-col gap-4 px-4">
+      <dl className="flex flex-col gap-4">
         {blocks.map((b) => (
           <div key={b.id}>
             <dt className="text-sm font-medium">{blockTitle(b)}</dt>
@@ -220,7 +235,7 @@ function SubmissionPanel({
         ))}
       </dl>
 
-      <div className="mt-auto flex flex-col gap-2 px-4 pb-4">
+      <div className="flex flex-col gap-2">
         {remove.isError && (
           <p role="alert" className="text-sm text-destructive">
             Не удалось удалить. Попробуйте ещё раз.
