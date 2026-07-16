@@ -51,18 +51,16 @@ type PublicHandler struct {
 	limiter      RateLimiter
 	tokenSecret  []byte
 	minFillTime  time.Duration
-	maxTokenAge  time.Duration
 	trustedProxy bool             // за доверенным прокси? влияет на извлечение IP клиента
 	now          func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime, maxTokenAge time.Duration, trustedProxy bool) *PublicHandler {
+func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime time.Duration, trustedProxy bool) *PublicHandler {
 	return &PublicHandler{
 		svc:          svc,
 		limiter:      limiter,
 		tokenSecret:  tokenSecret,
 		minFillTime:  minFillTime,
-		maxTokenAge:  maxTokenAge,
 		trustedProxy: trustedProxy,
 		now:          time.Now,
 	}
@@ -109,13 +107,14 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Возраст токена: подпись + окно [minFillTime, maxTokenAge]. Слишком быстрый ответ
-	// (бот) и переиспользование старого токена (TD-6) отбрасываются; битый/поддельный
-	// токен неотличим для клиента (единый 422), чтобы не подсказывать боту, какой из
-	// барьеров он задел.
+	// Возраст токена: подпись + окно [minFillTime, DefaultMaxTokenAge]. Слишком быстрый
+	// ответ (бот) и переиспользование старого токена (TD-6) отбрасываются; битый/
+	// поддельный токен неотличим для клиента (единый 422 с нейтральным текстом), чтобы
+	// не подсказывать боту, какой из барьеров он задел, и не вводить в заблуждение
+	// человека, вернувшегося к форме позже (для него «слишком быстро» — ложь).
 	issuedAt, err := token.IssuedAt(h.tokenSecret, req.Token)
-	if age := h.now().Sub(issuedAt); err != nil || age < h.minFillTime || age > h.maxTokenAge {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: форма отправлена слишком быстро", domain.ErrValidation))
+	if age := h.now().Sub(issuedAt); err != nil || age < h.minFillTime || age > DefaultMaxTokenAge {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: не удалось принять ответ, обновите форму и попробуйте снова", domain.ErrValidation))
 		return
 	}
 
