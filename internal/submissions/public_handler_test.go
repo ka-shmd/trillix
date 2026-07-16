@@ -46,7 +46,7 @@ func (allowLimiter) Allow(string) bool { return true }
 
 // newHandler собирает транспорт с фиксированным now и пермиссивным лимитером.
 func newHandler(svc submitService, limiter RateLimiter) *PublicHandler {
-	h := NewPublicHandler(svc, limiter, testSecret, DefaultMinFillTime, DefaultMaxTokenAge, false)
+	h := NewPublicHandler(svc, limiter, testSecret, DefaultMinFillTime, false)
 	h.now = func() time.Time { return fixedNow }
 	return h
 }
