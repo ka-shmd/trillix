@@ -44,6 +44,11 @@ const (
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
+
+	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ — реальный IP
+	// (после TD-1), поэтому карта иначе растёт неограниченно. Вёдра пополняются до
+	// burst за ~минуту простоя, так что 10 минут держат карту около активного набора.
+	ratelimitGCInterval = 10 * time.Minute
 )
 
 func main() {
@@ -160,6 +165,17 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("expired sessions purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "ratelimit-gc",
+		Interval: ratelimitGCInterval,
+		Run: func(context.Context) error {
+			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC()
+			if removed > 0 {
+				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
 			return nil
 		},
