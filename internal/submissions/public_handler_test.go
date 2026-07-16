@@ -46,7 +46,7 @@ func (allowLimiter) Allow(string) bool { return true }
 
 // newHandler собирает транспорт с фиксированным now и пермиссивным лимитером.
 func newHandler(svc submitService, limiter RateLimiter) *PublicHandler {
-	h := NewPublicHandler(svc, limiter, testSecret, DefaultMinFillTime, false)
+	h := NewPublicHandler(svc, limiter, testSecret, DefaultMinFillTime, DefaultMaxTokenAge, false)
 	h.now = func() time.Time { return fixedNow }
 	return h
 }
@@ -122,6 +122,24 @@ func TestSubmit_TooFast_Returns422(t *testing.T) {
 	}
 	if svc.gotSlug != "" {
 		t.Fatal("слишком быстрый ответ не должен доходить до сервиса")
+	}
+}
+
+func TestSubmit_TokenTooOld_Returns422(t *testing.T) {
+	svc := &fakeSvc{}
+	// Токен старше суток — переиспользование выданного давно токена (TD-6).
+	b, _ := json.Marshal(submitRequest{
+		SubmissionID: uuid.New().String(),
+		Token:        token.Issue(testSecret, fixedNow.Add(-DefaultMaxTokenAge-time.Second)),
+		Answers:      map[string]json.RawMessage{},
+	})
+	rec := do(t, newHandler(svc, allowLimiter{}), string(b))
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422 (токен слишком старый)", rec.Code)
+	}
+	if svc.gotSlug != "" {
+		t.Fatal("ответ по устаревшему токену не должен доходить до сервиса")
 	}
 }
 
