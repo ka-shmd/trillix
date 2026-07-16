@@ -23,8 +23,11 @@ func New(addr string, log *slog.Logger, registrars ...RouteRegistrar) *http.Serv
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// WriteTimeout — страховка от slowloris на обычных ручках. Стриминг-экспорт
+		// CSV переопределяет его для своего соединения через http.ResponseController
+		// (продление дедлайна между чанками), иначе большой файл рвался бы на 10 с (TD-4).
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 }
 

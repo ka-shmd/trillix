@@ -98,6 +98,13 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap отдаёт обёрнутый writer, чтобы http.ResponseController мог спуститься до
+// соединения (напр. SetWriteDeadline при стриминге экспорта, TD-4). Без него
+// ResponseController упёрся бы в statusWriter и вернул ErrNotSupported.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func newRequestID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

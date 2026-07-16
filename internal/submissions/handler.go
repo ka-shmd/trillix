@@ -37,6 +37,13 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // течь клиенту, не дожидаясь всей выборки.
 const csvFlushEvery = 500
 
+// exportWriteChunkTimeout — потолок времени на отправку одного чанка экспорта.
+// Дедлайн записи продлевается на каждом флаше (см. export), поэтому длинный, но
+// прогрессирующий трансфер не рвётся, а полностью зависший клиент отваливается
+// через этот таймаут. Переопределяет общий WriteTimeout сервера (10 с) для этого
+// стрима — иначе большой экспорт на медленном канале обрубается на середине (TD-4).
+const exportWriteChunkTimeout = 30 * time.Second
+
 // Handler — приватный транспорт модуля submissions: автор смотрит и удаляет ответы
 // своей формы. Чтение (GET) — за RequireAuth; удаление (DELETE) — ещё и за RequireCSRF.
 type Handler struct {
@@ -123,6 +130,19 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// rc продлевает write-дедлайн соединения между чанками: общий WriteTimeout
+	// сервера (10 с) обрубил бы длинный экспорт, а тут дедлайн обновляется на каждом
+	// флаше (TD-4). Доходит до соединения через statusWriter.Unwrap.
+	rc := http.NewResponseController(w)
+	deadlineErrLogged := false
+	extendWriteDeadline := func() {
+		if err := rc.SetWriteDeadline(time.Now().Add(exportWriteChunkTimeout)); err != nil && !deadlineErrLogged {
+			deadlineErrLogged = true
+			httpserver.LoggerFrom(r.Context()).Warn("csv export: cannot extend write deadline",
+				slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+		}
+	}
+
 	var (
 		cw      *csv.Writer
 		started bool
@@ -131,6 +151,7 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 	emit := func(record []string) error {
 		if !started {
 			started = true
+			extendWriteDeadline()
 			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 			w.Header().Set("Content-Disposition", csvContentDisposition(formID))
 			w.WriteHeader(http.StatusOK)
@@ -142,7 +163,10 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		}
 		if written++; written%csvFlushEvery == 0 {
 			cw.Flush()
-			return cw.Error()
+			if err := cw.Error(); err != nil {
+				return err
+			}
+			extendWriteDeadline()
 		}
 		return nil
 	}
