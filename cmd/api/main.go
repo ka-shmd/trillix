@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/ka-shmd/trierra/internal/auth"
+	"github.com/ka-shmd/trierra/internal/blob"
 	"github.com/ka-shmd/trierra/internal/config"
 	"github.com/ka-shmd/trierra/internal/forms"
 	"github.com/ka-shmd/trierra/internal/httpserver"
+	"github.com/ka-shmd/trierra/internal/media"
 	"github.com/ka-shmd/trierra/internal/periodic"
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
@@ -115,6 +117,16 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		return fmt.Errorf("init public forms handler: %w", err)
 	}
 
+	blobClient := blob.New(blob.Config{
+		Endpoint:  cfg.S3Endpoint,
+		Region:    cfg.S3Region,
+		AccessKey: cfg.S3AccessKey,
+		SecretKey: cfg.S3SecretKey,
+		PathStyle: cfg.S3PathStyle,
+	})
+	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
+	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, formsSvc, submissions.Repo{})
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime)
@@ -122,7 +134,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	srv := httpserver.New(cfg.HTTPAddr, log,
 		authHandler.Routes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
-		submissionsPublic.Routes, submissionsHandler.Routes)
+		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

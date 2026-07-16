@@ -199,7 +199,7 @@ type blobPutter interface {
 0. **ADR + этот док** — утверждение ADR-строк §11. *Гейт остального.*
 1. **Слой-1 `internal/blob`** ✅ — S3-клиент (Put/Get/Delete/CreateBucket) + sigv4 + хермётичный тест (uriEncode, цепочка ключа) и интеграционный round-trip против MinIO (testcontainers, без нового модуля-зависимости). Presign/Head/List отложены до потребителя. MinIO+mc в compose — на шаге 3/4, когда API реально ходит в хранилище.
 2. **Схема-контракт** ✅ — `image` в Zod+Go, `imageKey`/`alt` (лимиты 200/500), `isContent`; строгий отказ imageKey/alt на не-image; исчерпывающие switch/Record (BlockField, typeIcons) держат tsc; тесты обеих сторон; справочник SCHEMA.md обновлён.
-3. **Слой-2 `MediaStore` + приём** — `POST /api/…/media` (multipart, whitelist, DecodeConfig-гард, ре-энкод, sha256, PUT); конфиг (7 env в 4 файлах одним коммитом).
+3. **Слой-2 `internal/media` + приём** ✅ — `POST /api/v1/forms/{id}/media` (multipart, `MaxBytesReader` 5 МиБ, whitelist PNG/JPEG по сигнатуре, DecodeConfig-гард 24 Мпикс, ре-энкод со сносом EXIF, sha256-ключ, PUT в `app-media`); авторизация членства через `forms.Get`; узкие интерфейсы `Forms`/`blobPutter`; конфиг (6 S3-env в 4 файла); MinIO+`mc`-бутстрап в compose.dev/compose.prod; проводка в main.go; юнит-тесты сервиса + справочник API.md.
 4. **Раздача** — Caddy `/media/*` → бакет на обоих доменах; CSP `img-src`; dev-путь; `MEDIA_BASE_URL`.
 5. **Билдер + единый вид** — `/image` в SlashMenu, загрузка/замена + `alt` в BlockRow (loading/error), `rf-image` в `fields.css` + рендер во всех трёх поверхностях (BlockField/PreviewPane/FormView).
 6. **Проверка** — `make lint && make test`, `make prod-local`, e2e с картинкой, справочники `API.md`/`SCHEMA.md`, README `@fields`.
