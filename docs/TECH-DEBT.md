@@ -84,6 +84,7 @@ _(TD-9 закрыт PR #16 — см. раздел «Закрыто».)_
 - **TD-11.** Cookie `MaxAge` захардкожен на константу `DefaultSessionTTL` (`internal/auth/handler.go:219`), хотя сервис принимает `sessionTTL` параметром — при смене TTL cookie и БД разъедутся. Прокинуть TTL в Handler.
 - **TD-12.** Паника не попадает в request-лог: `withRecover` стоит снаружи `withRequestLog` (`internal/httpserver/server.go:19`), у запроса-паники нет сводной строки (метод/путь/статус/длительность). Поменять порядок middleware.
 - **TD-13.** Нет HSTS в `deploy/Caddyfile` (сниппет secheaders). Добавить `Strict-Transport-Security` в фазе 9, когда домены финальные (на `*.localhost` HSTS мешал бы).
+- **TD-18.** Плейсхолдер/`aria-label` поля заголовка в режиме редактирования — «Название формы» (`web/app/src/features/forms/builder/SlashEditor.tsx:315-316`), хотя после разъезда имя/заголовок (`forms.name`, PR #23–24) в этом поле правится **заголовок** формы, а «название» (`forms.name`) — отдельная сущность. Заменить оба текста на «Заголовок формы».
 
 ---
 
