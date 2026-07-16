@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 
 	"github.com/ka-shmd/trierra/internal/domain"
@@ -55,10 +54,13 @@ type Handler struct {
 	cookieSecure bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
+	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
+	// для rate-limit'а, см. httpserver.ClientIP).
+	trustedProxy bool
 }
 
-func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool, appOrigin string) *Handler {
-	return &Handler{svc: svc, loginLimiter: loginLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin}
+func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
+	return &Handler{svc: svc, loginLimiter: loginLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
 }
 
 // Routes регистрирует эндпоинты auth на общем mux (RouteRegistrar).
@@ -176,7 +178,7 @@ func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 
 func (h *Handler) rateLimitByIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.loginLimiter.Allow(clientIP(r)) {
+		if !h.loginLimiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
 			w.Header().Set("Retry-After", "60")
 			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много попыток входа", domain.ErrRateLimited))
 			return
@@ -238,13 +240,4 @@ func newCSRFToken() string {
 		panic(fmt.Errorf("auth: read csrf token: %w", err))
 	}
 	return base64.RawURLEncoding.EncodeToString(b)
-}
-
-func clientIP(r *http.Request) string {
-	// TODO(фаза 7/9): за Caddy честный IP — из X-Forwarded-For (доверять только прокси).
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

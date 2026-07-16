@@ -105,7 +105,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
-	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure, cfg.AppOrigin)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
 
 	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
@@ -129,7 +129,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, formsSvc, submissions.Repo{})
-	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime)
+	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log,

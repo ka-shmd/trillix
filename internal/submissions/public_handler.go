@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"net/http"
 	"time"
 
@@ -41,20 +40,22 @@ type RateLimiter interface {
 // PublicHandler — публичный транспорт приёма ответов (без авторизации/CSRF). Держит
 // секрет токена (проверка минимального времени заполнения) и лимитер.
 type PublicHandler struct {
-	svc         submitService
-	limiter     RateLimiter
-	tokenSecret []byte
-	minFillTime time.Duration
-	now         func() time.Time // подменяется в тестах
+	svc          submitService
+	limiter      RateLimiter
+	tokenSecret  []byte
+	minFillTime  time.Duration
+	trustedProxy bool             // за доверенным прокси? влияет на извлечение IP клиента
+	now          func() time.Time // подменяется в тестах
 }
 
-func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime time.Duration) *PublicHandler {
+func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte, minFillTime time.Duration, trustedProxy bool) *PublicHandler {
 	return &PublicHandler{
-		svc:         svc,
-		limiter:     limiter,
-		tokenSecret: tokenSecret,
-		minFillTime: minFillTime,
-		now:         time.Now,
+		svc:          svc,
+		limiter:      limiter,
+		tokenSecret:  tokenSecret,
+		minFillTime:  minFillTime,
+		trustedProxy: trustedProxy,
+		now:          time.Now,
 	}
 }
 
@@ -124,21 +125,11 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 
 func (h *PublicHandler) rateLimitByIP(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.limiter.Allow(clientIP(r)) {
+		if !h.limiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
 			w.Header().Set("Retry-After", "60")
 			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много отправок", domain.ErrRateLimited))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// clientIP — IP без порта. TODO(фаза 7/9): за Caddy брать из X-Forwarded-For,
-// доверяя только прокси (то же замечание, что и в auth.clientIP).
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

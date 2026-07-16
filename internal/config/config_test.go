@@ -24,6 +24,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
 	t.Setenv("S3_MEDIA_BUCKET", "app-media")
 	t.Setenv("S3_PATH_STYLE", "true")
+	t.Setenv("TRUSTED_PROXY", "false")
 }
 
 func TestLoad(t *testing.T) {
@@ -57,6 +58,32 @@ func TestLoad(t *testing.T) {
 		}
 		if !cfg.S3PathStyle {
 			t.Errorf("S3PathStyle = false, ожидалось true")
+		}
+		if cfg.TrustedProxy {
+			t.Errorf("TrustedProxy = true, ожидалось false")
+		}
+	})
+
+	t.Run("TRUSTED_PROXY=true парсится", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("TRUSTED_PROXY", "true")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку: %v", err)
+		}
+		if !cfg.TrustedProxy {
+			t.Errorf("TrustedProxy = false, ожидалось true")
+		}
+	})
+
+	t.Run("невалидный TRUSTED_PROXY — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("TRUSTED_PROXY", "maybe")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "TRUSTED_PROXY") {
+			t.Fatalf("ожидалась ошибка про TRUSTED_PROXY, получено: %v", err)
 		}
 	})
 
