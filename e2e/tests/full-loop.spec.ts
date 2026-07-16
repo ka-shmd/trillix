@@ -118,7 +118,12 @@ test('регистрация → форма → публикация → отв�
   // переименование заголовка долетело до сервера (регресс гонки блокировки из шага 3).
   await page.goto(`/forms/${formId}/responses`)
   await expect(page.getByRole('heading', { name: `Ответы · ${formTitle}` })).toBeVisible()
-  await expect(page.getByText(answer)).toBeVisible()
+  // В таблице только версия и дата — сам ответ смотрим в диалоге полного ответа.
+  await page.getByRole('button', { name: 'Открыть' }).first().click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText(answer)).toBeVisible()
+  await page.keyboard.press('Escape') // закрыть диалог: оверлей перекрывает ссылку экспорта
+  await expect(page.getByRole('dialog')).toBeHidden()
 
   // 8. Экспорт CSV — обычная навигация на эндпоинт, браузер качает файл.
   const downloadPromise = page.waitForEvent('download')
