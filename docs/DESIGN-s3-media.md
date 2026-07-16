@@ -140,12 +140,12 @@ type blobPutter interface {
 
 ---
 
-## 8. Раздача
+## 8. Раздача (реализовано, шаг 4)
 
-- **Caddy reverse-proxy `/media/*` → бакет `app-media`** на обоих доменах (`app.localhost` и `f.localhost`). Браузер видит **same-origin** → `img-src 'self'` покрывает и билдер, и рендерер; endpoint бакета остаётся server-side; байты идёт через Caddy, не Go (принцип ARCHITECTURE §сеть соблюдён). Под реальный прод — тот же путь можно смапить на CDN-origin (тогда origin добавляется в CSP).
-- **`MEDIA_BASE_URL`** (env) — база, из которой рендерер/OG собирают URL: `MEDIA_BASE_URL + '/' + imageKey`. dev/prod-local → own-origin `/media`; реальный прод → CDN при желании. Ключ в данных, URL — вычисляемый.
-- **CSP:** `img-src 'self'` (+ CDN-origin в проде, если появится). В dev CSP нет.
-- **dev без Caddy:** `/media/*` в dev проксирует vite на MinIO (или лёгкий Go-file-handler под флагом конфига — **не** по имени окружения). Решается на шаге реализации.
+- **Caddy reverse-proxy `/media/*` → бакет `app-media`** на обоих доменах (`app.localhost` и `f.localhost`, сниппет `(media)` в `deploy/Caddyfile`): `handle_path` срезает `/media`, `rewrite` добавляет префикс бакета (`{$S3_MEDIA_BUCKET}`), upstream — `minio:9000`. Браузер видит **same-origin** → `img-src 'self'` покрывает и билдер, и рендерер; байты идут через Caddy, не Go. Иммутабельный кэш (`Cache-Control immutable`) — ключи контент-адресны.
+- **URL — относительный `/media/<imageKey>`**, одинаковый на обоих origin (решение: не env-переменная, а относительный префикс; браузер резолвит против текущего origin). Ключ в данных, URL — вычисляемый (`'/media/' + imageKey`). Абсолютная база/CDN на реальном проде — будущая замена (тогда origin добавляется в CSP; для og:image формы, которая пост-MVP, понадобится абсолютный URL).
+- **CSP:** `img-src 'self' data: blob:` — `'self'` покрывает раздачу same-origin, `blob:` — оптимистичный локальный превью билдера (`URL.createObjectURL`, шаг 5). В dev CSP нет.
+- **dev без Caddy:** `/media/*` в dev проксирует **vite** на MinIO (`web/{app,renderer}/vite.config.ts`, rewrite → `/app-media/*`).
 
 ---
 
@@ -200,7 +200,7 @@ type blobPutter interface {
 1. **Слой-1 `internal/blob`** ✅ — S3-клиент (Put/Get/Delete/CreateBucket) + sigv4 + хермётичный тест (uriEncode, цепочка ключа) и интеграционный round-trip против MinIO (testcontainers, без нового модуля-зависимости). Presign/Head/List отложены до потребителя. MinIO+mc в compose — на шаге 3/4, когда API реально ходит в хранилище.
 2. **Схема-контракт** ✅ — `image` в Zod+Go, `imageKey`/`alt` (лимиты 200/500), `isContent`; строгий отказ imageKey/alt на не-image; исчерпывающие switch/Record (BlockField, typeIcons) держат tsc; тесты обеих сторон; справочник SCHEMA.md обновлён.
 3. **Слой-2 `internal/media` + приём** ✅ — `POST /api/v1/forms/{id}/media` (multipart, `MaxBytesReader` 5 МиБ, whitelist PNG/JPEG по сигнатуре, DecodeConfig-гард 24 Мпикс, ре-энкод со сносом EXIF, sha256-ключ, PUT в `app-media`); авторизация членства через `forms.Get`; узкие интерфейсы `Forms`/`blobPutter`; конфиг (6 S3-env в 4 файла); MinIO+`mc`-бутстрап в compose.dev/compose.prod; проводка в main.go; юнит-тесты сервиса + справочник API.md.
-4. **Раздача** — Caddy `/media/*` → бакет на обоих доменах; CSP `img-src`; dev-путь; `MEDIA_BASE_URL`.
+4. **Раздача** ✅ — Caddy `/media/*` → MinIO на обоих доменах (сниппет `(media)`, rewrite префикса бакета, иммутабельный кэш); vite-proxy `/media` в обоих фронтах (dev); CSP `img-src 'self' data: blob:`; URL — относительный `/media/<key>` (без env-переменной).
 5. **Билдер + единый вид** — `/image` в SlashMenu, загрузка/замена + `alt` в BlockRow (loading/error), `rf-image` в `fields.css` + рендер во всех трёх поверхностях (BlockField/PreviewPane/FormView).
 6. **Проверка** — `make lint && make test`, `make prod-local`, e2e с картинкой, справочники `API.md`/`SCHEMA.md`, README `@fields`.
 

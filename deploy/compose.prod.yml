@@ -118,6 +118,8 @@ services:
       # под {$APP_DOMAIN}/api, отдельного домена нет (ADR §10).
       APP_DOMAIN: ${APP_DOMAIN}
       RENDERER_DOMAIN: ${RENDERER_DOMAIN}
+      # Бакет картинок — Caddy подставляет в rewrite /media/* → /<bucket>/* к MinIO.
+      S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
     ports:
       - "80:80"
       - "443:443"
