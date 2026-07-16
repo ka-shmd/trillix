@@ -8,7 +8,8 @@ import { uploadImage } from './mediaUpload'
 // ImageField — редактор image-блока: пустой блок показывает зону загрузки, при
 // выборе файла — оптимистичный локальный превью (createObjectURL) с прогресс-баром,
 // на успех пишет settings.imageKey (автосейв сохранит), готовый блок — картинка +
-// поле alt + «заменить»/«удалить». Вид самой картинки — общий rf-image; layout и
+// поле alt; «заменить»/«удалить» — оверлей поверх картинки, виден при наведении.
+// Вид самой картинки — общий rf-image; layout и
 // зона загрузки — Tailwind (editor-only, респондент их не видит).
 export function ImageField({ block, formId }: { block: Block; formId: string }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
@@ -54,9 +55,27 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
       />
 
       {shownSrc ? (
-        <div className="relative w-fit">
+        <div className="group relative w-fit">
           <img className="rf-image" src={shownSrc} alt={alt} />
           {uploading && <ProgressOverlay pct={progress} />}
+          {imageKey && !uploading && (
+            <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-[var(--rf-radius)] bg-black/35 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <button
+                type="button"
+                onClick={pick}
+                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-text))]"
+              >
+                <RefreshCw className="size-3.5" /> Заменить
+              </button>
+              <button
+                type="button"
+                onClick={() => updateBlock(block.id, { settings: {} })}
+                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium text-[var(--rf-danger)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-danger))]"
+              >
+                <Trash2 className="size-3.5" /> Удалить
+              </button>
+            </div>
+          )}
         </div>
       ) : (
         <button
@@ -79,18 +98,6 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
 
       {imageKey && !uploading && (
         <div className="mt-2 flex flex-col gap-2">
-          <div className="flex gap-3 text-sm text-muted-foreground">
-            <button type="button" onClick={pick} className="flex items-center gap-1 hover:text-foreground">
-              <RefreshCw className="size-3.5" /> Заменить
-            </button>
-            <button
-              type="button"
-              onClick={() => updateBlock(block.id, { settings: {} })}
-              className="flex items-center gap-1 hover:text-destructive"
-            >
-              <Trash2 className="size-3.5" /> Удалить
-            </button>
-          </div>
           <input
             value={alt}
             onChange={(e) => updateBlock(block.id, { settings: { ...block.settings, alt: e.target.value } })}
