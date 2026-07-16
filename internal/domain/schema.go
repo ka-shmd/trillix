@@ -30,11 +30,13 @@ const (
 	MaxIDLen          = 64
 	MaxSubmitLabelLen = 100
 	MaxPlaceholderLen = 200
+	MaxImageKeyLen    = 200
+	MaxAltLen         = 500
 )
 
 // BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
-// неотвечаемый «text» — статический абзац на полотне (заголовок/пояснение). text
-// не собирает ответ: исключён из ValidateAnswers и CSV.
+// два неотвечаемых (контентных): «text» — статический абзац, «image» — картинка на
+// полотне. Контентные не собирают ответ: исключены из ValidateAnswers и CSV.
 type BlockType string
 
 const (
@@ -46,12 +48,13 @@ const (
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
 	BlockText         BlockType = "text"
+	BlockImage        BlockType = "image"
 )
 
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockNumber,
-		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText:
+		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText, BlockImage:
 		return true
 	default:
 		return false
@@ -63,10 +66,10 @@ func (t BlockType) isChoice() bool {
 	return t == BlockSingleChoice || t == BlockMultiChoice
 }
 
-// isContent — неотвечаемый блок (пока только text): статический контент на
-// полотне, не собирает ответ. Исключается из валидации ответов и выгрузки.
+// isContent — неотвечаемый блок (text, image): статический контент на полотне, не
+// собирает ответ. Исключается из валидации ответов и выгрузки.
 func (t BlockType) isContent() bool {
-	return t == BlockText
+	return t == BlockText || t == BlockImage
 }
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
@@ -76,11 +79,13 @@ type Option struct {
 	Label string `json:"label"`
 }
 
-// BlockSettings — типоспецифичные настройки блока: options у choice-типов и
-// placeholder у текстовых полей ввода.
+// BlockSettings — типоспецифичные настройки блока: options у choice-типов,
+// placeholder у текстовых полей ввода, imageKey/alt у типа image.
 type BlockSettings struct {
 	Options     []Option `json:"options,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
+	ImageKey    string   `json:"imageKey,omitempty"`
+	Alt         string   `json:"alt,omitempty"`
 }
 
 // Block — один вопрос формы.
@@ -169,6 +174,16 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	}
 	if n := utf8.RuneCountInString(b.Settings.Placeholder); n > MaxPlaceholderLen {
 		return schemaErr("%s: placeholder длиннее %d символов", at, MaxPlaceholderLen)
+	}
+	if n := utf8.RuneCountInString(b.Settings.ImageKey); n > MaxImageKeyLen {
+		return schemaErr("%s: imageKey длиннее %d символов", at, MaxImageKeyLen)
+	}
+	if n := utf8.RuneCountInString(b.Settings.Alt); n > MaxAltLen {
+		return schemaErr("%s: alt длиннее %d символов", at, MaxAltLen)
+	}
+	// imageKey/alt — только у image (как options у choice).
+	if b.Type != BlockImage && (b.Settings.ImageKey != "" || b.Settings.Alt != "") {
+		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
 
 	if !b.Type.isChoice() {

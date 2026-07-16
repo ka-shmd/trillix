@@ -31,6 +31,13 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://127.0.0.1:8080',
+      // Картинки блоков — на локальный MinIO (:9000), путь /media/<key> →
+      // /<bucket>/<key>. Prod-аналог — Caddy /media (deploy/Caddyfile). Бакет dev —
+      // app-media (.env.dev); тот же origin, что кабинет → img-src 'self'.
+      '/media': {
+        target: 'http://127.0.0.1:9000',
+        rewrite: (path) => path.replace(/^\/media/, '/app-media'),
+      },
     },
     fs: {
       allow: ['..'],

@@ -20,13 +20,16 @@ export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
 export const MAX_PLACEHOLDER_LEN = 200
+// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.) и alt-текст.
+export const MAX_IMAGE_KEY_LEN = 200
+export const MAX_ALT_LEN = 500
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
 
-// Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс неотвечаемый
-// 'text' — статический абзац на полотне. text не собирает ответ (исключён из
-// ValidateAnswers/CSV/таблицы), рендерится статикой.
+// Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс два неотвечаемых
+// (контентных): 'text' — статический абзац, 'image' — картинка на полотне. Оба не
+// собирают ответ (исключены из ValidateAnswers/CSV/таблицы), рендерятся статикой.
 export const blockTypeSchema = z.enum([
   'short_text',
   'long_text',
@@ -36,6 +39,7 @@ export const blockTypeSchema = z.enum([
   'multi_choice',
   'date',
   'text',
+  'image',
 ])
 export type BlockType = z.infer<typeof blockTypeSchema>
 
@@ -51,8 +55,9 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
 
-// Неотвечаемый (контентный) блок: пока только 'text'. Зеркалит Go isContent().
-export const isContentType = (t: BlockType): boolean => t === 'text'
+// Неотвечаемые (контентные) блоки: 'text' и 'image'. Зеркалит Go isContent().
+const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['text', 'image'])
+export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
 export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
 // Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
@@ -72,6 +77,10 @@ const settingsSchema = z.strictObject({
   options: z.array(optionSchema).max(MAX_OPTIONS).optional(),
   // Плейсхолдер поля ввода (текстовые типы). У остальных игнорируется.
   placeholder: z.string().max(MAX_PLACEHOLDER_LEN).optional(),
+  // Картинка (тип image): ключ объекта в бакете и alt-текст. У остальных типов —
+  // запрещены (superRefine ниже), как options у не-choice.
+  imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
+  alt: z.string().max(MAX_ALT_LEN).optional(),
 })
 
 // Один вопрос формы. Пустой label и choice без опций допустимы — это нормальное
@@ -88,6 +97,23 @@ export const blockSchema = z
     settings: settingsSchema.optional(),
   })
   .superRefine((b, ctx) => {
+    // imageKey/alt — только у image (как options только у choice).
+    if (b.type !== 'image') {
+      if (b.settings?.imageKey) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `тип ${b.type} не имеет картинки`,
+          path: ['settings', 'imageKey'],
+        })
+      }
+      if (b.settings?.alt) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `тип ${b.type} не имеет alt`,
+          path: ['settings', 'alt'],
+        })
+      }
+    }
     const options = b.settings?.options
     if (!isChoiceType(b.type)) {
       if (options && options.length > 0) {

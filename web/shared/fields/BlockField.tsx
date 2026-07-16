@@ -4,13 +4,15 @@ import { type Block, isContentType } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
+import { mediaSrc } from './media'
 
 // BlockField — как один блок увидит человек, заполняющий форму. Два режима одним
 // кодом (не разъезжаться — web/CLAUDE.md):
 //   • превью билдера — без value/onChange, disabled по умолчанию: контролы видны,
 //     но не редактируются (PreviewPane зовёт <BlockField block={block} />);
 //   • рендерер — disabled={false} + управляемые value/onChange (фаза 4).
-// Диспетчер по block.type; switch исчерпывающий (все семь типов возвращают значение).
+// Диспетчер по block.type; switch исчерпывающий (контентные типы обрабатываются
+// выше, отвечаемые — в FieldControl; все ветки возвращают значение).
 type BlockFieldProps = {
   block: Block
   value?: Answer
@@ -23,9 +25,16 @@ type BlockFieldProps = {
 }
 
 export function BlockField({ block, value, onChange, disabled = true, error, onBlur }: BlockFieldProps) {
-  // Неотвечаемый блок (text) — статический абзац: без подписи-вопроса, звёздочки,
-  // контрола и ошибок. Пустой текст в черновике не показываем.
+  // Неотвечаемый (контентный) блок — статический контент: без подписи-вопроса,
+  // звёздочки, контрола и ошибок.
   if (isContentType(block.type)) {
+    // image: картинка по ключу. Без ключа (недособранный черновик) — не показываем,
+    // как пустой text (респондент/превью пустого image-блока не видят).
+    if (block.type === 'image') {
+      const key = block.settings?.imageKey
+      return key ? <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} /> : null
+    }
+    // text — статический абзац; пустой текст в черновике не показываем.
     return block.label.trim() ? <p className="rf-text">{block.label}</p> : null
   }
 
@@ -146,8 +155,9 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
         <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
       )
     case 'text':
-      // Неотвечаемый блок обрабатывается в BlockField до FieldShell; сюда не
-      // доходит — ветка для исчерпывающести switch по типам.
+    case 'image':
+      // Контентные блоки обрабатываются в BlockField до FieldShell; сюда не
+      // доходят — ветки для исчерпывающести switch по типам.
       return null
   }
 }

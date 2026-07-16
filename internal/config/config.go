@@ -42,6 +42,20 @@ type Config struct {
 	// dev — http://localhost:5173 (vite кабинета); prod-local — https://app.localhost;
 	// прод — https://app.<домен>. Без завершающего слеша (Origin его не несёт).
 	AppOrigin string
+	// S3* — подключение к объектному хранилищу медиа (docs/DESIGN-s3-media.md).
+	// Провайдеро-независимо: dev/prod-local — MinIO-контейнер, прод — арендованное
+	// S3; различие контуров живёт в этих значениях, а не в коде. Приложение не
+	// подключается к хранилищу на старте — недоступный S3 роняет только загрузки,
+	// не процесс.
+	S3Endpoint  string // scheme://host[:port], без пути
+	S3Region    string // регион подписи (MinIO — us-east-1)
+	S3AccessKey string
+	S3SecretKey string // секрет: не логируется
+	// S3MediaBucket — бакет public-read картинок (app-media).
+	S3MediaBucket string
+	// S3PathStyle — path-style адресация (endpoint/bucket/key). MinIO и часть
+	// РФ-провайдеров требуют true; AWS virtual-hosted — false.
+	S3PathStyle bool
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -70,6 +84,12 @@ func Load() (Config, error) {
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
 	cfg.OGImageURL = required("OG_IMAGE_URL")
 	cfg.AppOrigin = strings.TrimRight(required("APP_ORIGIN"), "/")
+	cfg.S3Endpoint = required("S3_ENDPOINT")
+	cfg.S3Region = required("S3_REGION")
+	cfg.S3AccessKey = required("S3_ACCESS_KEY")
+	cfg.S3SecretKey = required("S3_SECRET_KEY")
+	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
+	pathStyleRaw := required("S3_PATH_STYLE")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 
@@ -82,6 +102,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid COOKIE_SECURE %q: want true or false", cookieSecureRaw)
 	}
 	cfg.CookieSecure = cookieSecure
+
+	pathStyle, err := strconv.ParseBool(pathStyleRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid S3_PATH_STYLE %q: want true or false", pathStyleRaw)
+	}
+	cfg.S3PathStyle = pathStyle
 
 	if len(formTokenSecret) < minFormTokenSecretLen {
 		return Config{}, fmt.Errorf("FORM_TOKEN_SECRET too short: want >= %d bytes", minFormTokenSecretLen)
@@ -100,6 +126,10 @@ func Load() (Config, error) {
 	// поэтому должен быть валидным http(s)-origin (без пути и слеша — слеш уже срезан).
 	if !isHTTPURL(cfg.AppOrigin) {
 		return Config{}, fmt.Errorf("invalid APP_ORIGIN %q: want http(s):// origin", cfg.AppOrigin)
+	}
+	// Endpoint S3 — абсолютный http(s)-URL (клиент строит из него адрес объекта).
+	if !isHTTPURL(cfg.S3Endpoint) {
+		return Config{}, fmt.Errorf("invalid S3_ENDPOINT %q: want http(s):// URL", cfg.S3Endpoint)
 	}
 	// PublicRendererIndexPath (опциональный) — путь в ФС; читаемость/наличие
 	// плейсхолдера проверяет forms.NewPublicHandler при старте (fail-fast там же).

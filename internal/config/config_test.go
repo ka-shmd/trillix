@@ -5,16 +5,30 @@ import (
 	"testing"
 )
 
+// setValidEnv выставляет полный набор валидных обязательных переменных. Сабтесты
+// зовут его, затем переопределяют ровно ту переменную, чьё поведение проверяют, —
+// так добавление новой обязательной переменной не требует правки каждого сабтеста.
+func setValidEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+	t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db?sslmode=disable")
+	t.Setenv("COOKIE_SECURE", "false")
+	t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+	t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
+	t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+	t.Setenv("APP_ORIGIN", "http://localhost:5173")
+	t.Setenv("PUBLIC_RENDERER_INDEX_PATH", "/srv/renderer/index.html")
+	t.Setenv("S3_ENDPOINT", "http://localhost:9000")
+	t.Setenv("S3_REGION", "us-east-1")
+	t.Setenv("S3_ACCESS_KEY", "minioadmin")
+	t.Setenv("S3_SECRET_KEY", "minioadmin")
+	t.Setenv("S3_MEDIA_BUCKET", "app-media")
+	t.Setenv("S3_PATH_STYLE", "true")
+}
+
 func TestLoad(t *testing.T) {
 	t.Run("все переменные заданы", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db?sslmode=disable")
-		t.Setenv("COOKIE_SECURE", "false")
-		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
-		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
-		t.Setenv("APP_ORIGIN", "http://localhost:5173")
-		t.Setenv("PUBLIC_RENDERER_INDEX_PATH", "/srv/renderer/index.html")
+		setValidEnv(t)
 
 		cfg, err := Load()
 		if err != nil {
@@ -38,16 +52,17 @@ func TestLoad(t *testing.T) {
 		if cfg.AppOrigin != "http://localhost:5173" {
 			t.Errorf("AppOrigin = %q, неожиданное значение", cfg.AppOrigin)
 		}
+		if cfg.S3Endpoint != "http://localhost:9000" || cfg.S3MediaBucket != "app-media" {
+			t.Errorf("S3 endpoint/bucket = %q/%q, неожиданное значение", cfg.S3Endpoint, cfg.S3MediaBucket)
+		}
+		if !cfg.S3PathStyle {
+			t.Errorf("S3PathStyle = false, ожидалось true")
+		}
 	})
 
 	t.Run("COOKIE_SECURE=true парсится", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
+		setValidEnv(t)
 		t.Setenv("COOKIE_SECURE", "true")
-		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
-		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
-		t.Setenv("APP_ORIGIN", "http://localhost:5173")
 
 		cfg, err := Load()
 		if err != nil {
@@ -59,13 +74,8 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("невалидный COOKIE_SECURE — ошибка", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
+		setValidEnv(t)
 		t.Setenv("COOKIE_SECURE", "yes-please")
-		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
-		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
-		t.Setenv("APP_ORIGIN", "http://localhost:5173")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
@@ -73,14 +83,29 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("невалидный S3_PATH_STYLE — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("S3_PATH_STYLE", "sure")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "S3_PATH_STYLE") {
+			t.Fatalf("ожидалась ошибка про S3_PATH_STYLE, получено: %v", err)
+		}
+	})
+
+	t.Run("невалидный S3_ENDPOINT — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("S3_ENDPOINT", "localhost:9000") // без схемы
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "S3_ENDPOINT") {
+			t.Fatalf("ожидалась ошибка про S3_ENDPOINT, получено: %v", err)
+		}
+	})
+
 	t.Run("слишком короткий FORM_TOKEN_SECRET — ошибка", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
-		t.Setenv("COOKIE_SECURE", "false")
+		setValidEnv(t)
 		t.Setenv("FORM_TOKEN_SECRET", "short")
-		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
-		t.Setenv("APP_ORIGIN", "http://localhost:5173")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "FORM_TOKEN_SECRET") {
@@ -89,13 +114,8 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("относительный PUBLIC_RENDERER_BASE_URL — ошибка", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
-		t.Setenv("COOKIE_SECURE", "false")
-		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
+		setValidEnv(t)
 		t.Setenv("PUBLIC_RENDERER_BASE_URL", "/relative")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
-		t.Setenv("APP_ORIGIN", "http://localhost:5173")
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "PUBLIC_RENDERER_BASE_URL") {
@@ -104,12 +124,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("невалидный APP_ORIGIN — ошибка", func(t *testing.T) {
-		t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
-		t.Setenv("COOKIE_SECURE", "false")
-		t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
-		t.Setenv("PUBLIC_RENDERER_BASE_URL", "http://localhost:5174")
-		t.Setenv("OG_IMAGE_URL", "http://localhost:5174/og.png")
+		setValidEnv(t)
 		t.Setenv("APP_ORIGIN", "localhost:5173") // без схемы
 
 		_, err := Load()
@@ -119,9 +134,8 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("нет обязательной переменной — ошибка называет её", func(t *testing.T) {
+		setValidEnv(t)
 		t.Setenv("HTTP_ADDR", "")
-		t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db")
-		t.Setenv("COOKIE_SECURE", "false")
 
 		_, err := Load()
 		if err == nil {
@@ -133,6 +147,7 @@ func TestLoad(t *testing.T) {
 	})
 
 	t.Run("несколько недостающих переменных перечислены разом", func(t *testing.T) {
+		setValidEnv(t)
 		t.Setenv("HTTP_ADDR", "")
 		t.Setenv("DATABASE_URL", "")
 

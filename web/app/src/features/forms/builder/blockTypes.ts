@@ -70,6 +70,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     group: 'layout',
     description: 'Статический абзац текста — заголовок раздела или пояснение. Не запрашивает ответ.',
   },
+  {
+    type: 'image',
+    label: 'Картинка',
+    group: 'layout',
+    description: 'Изображение на полотне формы (PNG или JPEG). Не запрашивает ответ.',
+  },
 ]
 
 export const blockTypeLabel = (t: BlockType): string =>

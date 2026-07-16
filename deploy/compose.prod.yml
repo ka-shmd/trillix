@@ -20,6 +20,12 @@ x-app-env: &app-env
   OG_IMAGE_URL: ${OG_IMAGE_URL}
   PUBLIC_RENDERER_INDEX_PATH: ${PUBLIC_RENDERER_INDEX_PATH:-} # опциональна (пусто в dev)
   APP_ORIGIN: ${APP_ORIGIN}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_REGION: ${S3_REGION}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+  S3_PATH_STYLE: ${S3_PATH_STYLE}
 
 services:
   postgres:
@@ -51,6 +57,38 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # MinIO — S3-совместимое хранилище медиа. Порт наружу НЕ публикуется: доступен
+  # только по внутренней docker-сети (api ходит на http://minio:9000; раздача
+  # картинок наружу — через Caddy /media, шаг 4). На настоящем проде заменяется
+  # арендованным S3 сменой только S3_* в env (этот сервис тогда не поднимается).
+  minio:
+    image: minio/minio:RELEASE.2024-01-16T16-07-38Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  # Одноразовый бутстрап бакета app-media: public-read БЕЗ листинга (mc anonymous
+  # download = только GetObject). Отрабатывает и выходит.
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY}; do sleep 1; done;
+      mc mb --ignore-existing local/$${S3_MEDIA_BUCKET};
+      mc anonymous set download local/$${S3_MEDIA_BUCKET};
+      "
+    restart: "no"
+
   api:
     image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
     environment: *app-env
@@ -65,6 +103,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      minio:
+        condition: service_started
     # Порт наружу НЕ публикуется: наружу api смотрит только через Caddy.
     # Healthcheck внутри контейнера не ставим — distroless без shell/curl;
     # живость проверяет внешний мониторинг по /healthz (фаза 10).
@@ -78,6 +118,8 @@ services:
       # под {$APP_DOMAIN}/api, отдельного домена нет (ADR §10).
       APP_DOMAIN: ${APP_DOMAIN}
       RENDERER_DOMAIN: ${RENDERER_DOMAIN}
+      # Бакет картинок — Caddy подставляет в rewrite /media/* → /<bucket>/* к MinIO.
+      S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
     ports:
       - "80:80"
       - "443:443"
@@ -92,5 +134,6 @@ services:
 
 volumes:
   pg_data:
+  minio_data:
   caddy_data:
   caddy_config:

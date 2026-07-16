@@ -120,6 +120,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                 <BlockRow
                   key={b.id}
                   block={b}
+                  formId={formId}
                   total={blocks.length}
                   focusMe={focusId === b.id}
                   onFocusHandled={() => setFocusId(null)}

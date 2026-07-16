@@ -32,6 +32,13 @@ export default defineConfig({
     // API, но в dev её открывает vite (index.html), схему тянем через /public.
     proxy: {
       '/public': 'http://localhost:8080',
+      // Картинки блоков — на локальный MinIO (:9000), путь /media/<key> →
+      // /<bucket>/<key>. Prod-аналог — Caddy /media (deploy/Caddyfile). Тот же
+      // origin, что рендерер → img-src 'self'.
+      '/media': {
+        target: 'http://127.0.0.1:9000',
+        rewrite: (path) => path.replace(/^\/media/, '/app-media'),
+      },
     },
     fs: {
       allow: ['..'],

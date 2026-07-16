@@ -8,8 +8,12 @@ cd "$(dirname "$0")/.."
 
 COMPOSE="docker compose --env-file .env -f compose.dev.yml"
 
-echo "dev-all: поднимаю Postgres и жду готовности…"
-$COMPOSE up -d --wait
+echo "dev-all: поднимаю Postgres и MinIO, жду готовности…"
+$COMPOSE up -d --wait postgres minio
+# createbuckets — одноразовый бутстрап бакета (отрабатывает и выходит с 0). Из
+# --wait его исключаем: завершившийся контейнер там считается провалом. Запускаем
+# отдельно без ожидания (свою готовность он обеспечивает сам — ждёт MinIO в цикле).
+$COMPOSE up -d createbuckets
 
 echo "dev-all: применяю миграции…"
 go run ./cmd/api migrate up

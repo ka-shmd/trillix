@@ -68,6 +68,27 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
    `web/app/src/features/submissions/answerFormat.ts`.
 7. `schemaVersion` не трогаем, если новое enum-значение обратно совместимо.
 
+## Картинка (`image`) и медиа
+
+`image` — контентный (неотвечаемый) тип, как `text`, но с бинарным содержимым в
+объектном хранилище (S3; полный дизайн — `docs/DESIGN-s3-media.md`). Что важно для
+полотна:
+
+- **Схема:** `settings.imageKey` (ключ объекта в бакете, не URL) и `settings.alt`.
+  Хранится ключ — URL вычисляется, чтобы данные не привязывались к провайдеру.
+- **URL:** `mediaSrc(key)` (`@fields/media`) → относительный `/media/<key>`, одинаков
+  для кабинета и рендерера (раздаётся same-origin: в проде Caddy, в dev vite-proxy;
+  `docs/DESIGN-s3-media.md` §8). Покрывается CSP `img-src 'self'`.
+- **Рендер (все три поверхности):** `BlockField` рисует `<img class="rf-image">` по
+  `mediaSrc` (пустой ключ → ничего). `rf-image` — в `fields.css`. Превью и рендерер
+  едут автоматически; **редактор** рисует свой `ImageField` (зона загрузки, прогресс,
+  `alt`, замена/удаление) — его editor-only вид на Tailwind, но саму картинку он
+  показывает тем же `rf-image`.
+- **Загрузка:** `mediaUpload.ts` — XHR `POST /api/v1/forms/{id}/media` (multipart,
+  прогресс через `upload.onprogress`, CSRF из cookie); ответ `{ imageKey }` пишется в
+  `settings.imageKey`, автосейв кладёт в схему. Валидация (PNG/JPEG, размер, ре-энкод)
+  — на сервере (`internal/media`).
+
 ## Тонкости (не сломай синхрон)
 
 - **Холст `rf-page`** несёт метрики полотна редактора (десктоп 144/80/96, мобильный

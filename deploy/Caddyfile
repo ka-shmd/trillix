@@ -20,8 +20,21 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options {args[0]}
 		Referrer-Policy strict-origin-when-cross-origin
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors {args[1]}"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors {args[1]}"
 		-Server
+	}
+}
+
+# Картинки блоков форм — public-read из бакета MinIO. Раздаёт Caddy, не Go (байты
+# статики Go не отдаёт); тот же origin на обоих сайтах → img-src 'self' покрывает,
+# CORS не нужен. Ключи контент-адресны (workspaceID/<sha256>.ext) → иммутабельный
+# кэш. handle_path срезает /media, префикс бакета добавляет rewrite. На реальном
+# проде (фаза 9) MinIO не поднимается — upstream меняется на арендованное S3/CDN.
+(media) {
+	handle_path /media/* {
+		rewrite * /{$S3_MEDIA_BUCKET}{uri}
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy minio:9000
 	}
 }
 
@@ -35,6 +48,8 @@
 	handle /api/* {
 		reverse_proxy api:8080
 	}
+	# Картинки блоков (автор видит их в билдере) — same-origin.
+	import media
 	# Всё остальное — статика кабинета с SPA-fallback.
 	handle {
 		root * /srv/static/app
@@ -61,6 +76,8 @@
 	handle /public/* {
 		reverse_proxy api:8080
 	}
+	# Картинки блоков (респондент видит их в форме) — same-origin.
+	import media
 	# Всё остальное — статика рендерера с SPA-fallback.
 	handle {
 		root * /srv/static/renderer

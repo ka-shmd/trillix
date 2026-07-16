@@ -11,6 +11,16 @@ import { test, expect, devices } from '@playwright/test'
 // чтобы тест не был привязан к конкретному хосту.
 const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
 
+// Валидная маленькая PNG (2×2) для загрузки картинки блока — setInputFiles умеет
+// принимать буфер, поэтому фикстура-файл не нужна. Важно: с корректными CRC чанков —
+// сервер делает полный image.Decode (не только заголовок), битый CRC → 422. Байты
+// сгенерированы image/png (Go) и проверены декодом. Сервер её пере-кодирует и кладёт
+// в бакет; форма грузит обратно с /media (Caddy→MinIO) — сквозная проверка медиа.
+const PNG_2x2 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAF0lEQVR4nGI5ERDAwMDAxAAGgAAAAP//EawBb2yaraEAAAAASUVORK5CYII=',
+  'base64',
+)
+
 test('регистрация → форма → публикация → ответ (мобильный) → таблица → CSV', async ({
   page,
   browser,
@@ -46,6 +56,18 @@ test('регистрация → форма → публикация → отв�
   await page.getByRole('option', { name: 'Короткий ответ' }).click()
   await page.getByPlaceholder('Введите текст вопроса').fill(question)
 
+  // 3b. Лейаут-блок «Картинка» через «+ Добавить блок» → диалог типов (единственная
+  // модалка — без гонки слэш-меню). Грузим PNG в скрытый input. После загрузки
+  // локальный превью сменяется реальным src /media/<key> — это подтверждает, что
+  // аплоад дошёл до бакета и билдер получил ключ (который автосейв положит в схему).
+  await page.getByRole('button', { name: '+ Добавить блок' }).click()
+  await page.getByRole('button', { name: 'Картинка', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).click()
+  await page
+    .locator('input[type="file"]')
+    .setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG_2x2 })
+  await expect(page.locator('img.rf-image')).toHaveAttribute('src', /\/media\//, { timeout: 15000 })
+
   // 4. Публикация: кнопка активна, только когда автосейв догнал редактор.
   const publish = page.getByRole('button', { name: 'Опубликовать' })
   await expect(publish).toBeEnabled()
@@ -68,6 +90,14 @@ test('регистрация → форма → публикация → отв�
   // Регресс «пустая форма» (нет entry-скрипта) → поле вопроса не отрендерится.
   const field = form.getByLabel(question)
   await expect(field).toBeVisible()
+
+  // Картинка блока отрендерилась и реально загрузилась с /media (Caddy→бакет):
+  // naturalWidth > 0 значит браузер её получил и декодировал (не битый src).
+  const formImage = form.locator('img.rf-image')
+  await expect(formImage).toBeVisible()
+  await expect
+    .poll(() => formImage.evaluate((img: HTMLImageElement) => img.naturalWidth), { timeout: 10000 })
+    .toBeGreaterThan(0)
 
   // Регресс «форма без стилей» (нет <link> на CSS) → у кнопки не будет фона.
   const submitBg = await form

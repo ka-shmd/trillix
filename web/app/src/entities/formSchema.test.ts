@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   formSchemaSchema,
+  MAX_ALT_LEN,
   MAX_BLOCKS,
+  MAX_IMAGE_KEY_LEN,
   MAX_LABEL_LEN,
   MAX_OPTIONS,
   MAX_PLACEHOLDER_LEN,
@@ -35,6 +37,12 @@ describe('formSchemaSchema — валидные', () => {
     },
     'неотвечаемый text-блок': {
       blocks: [{ id: 'b', type: 'text', label: 'Раздел А', settings: {} }],
+    },
+    'картинка с imageKey и alt': {
+      blocks: [{ id: 'b', type: 'image', label: '', settings: { imageKey: 'ws/deadbeef.png', alt: 'Схема' } }],
+    },
+    'картинка без ключа — черновик': {
+      blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'placeholder у текстового поля': {
@@ -74,6 +82,21 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'non-choice с опциями': {
       blocks: [{ id: 'b', type: 'short_text', label: 'x', settings: { options: [{ id: 'o', label: 'z' }] } }],
+    },
+    'imageKey на не-image': {
+      blocks: [{ id: 'b', type: 'short_text', label: 'x', settings: { imageKey: 'ws/x.png' } }],
+    },
+    'alt на не-image': {
+      blocks: [{ id: 'b', type: 'text', label: 'x', settings: { alt: 'y' } }],
+    },
+    'image с опциями': {
+      blocks: [{ id: 'b', type: 'image', label: '', settings: { options: [{ id: 'o', label: 'z' }] } }],
+    },
+    'слишком длинный imageKey': {
+      blocks: [{ id: 'b', type: 'image', label: '', settings: { imageKey: 'a'.repeat(MAX_IMAGE_KEY_LEN + 1) } }],
+    },
+    'слишком длинный alt': {
+      blocks: [{ id: 'b', type: 'image', label: '', settings: { alt: 'я'.repeat(MAX_ALT_LEN + 1) } }],
     },
     'дубль id опций внутри блока': {
       blocks: [
