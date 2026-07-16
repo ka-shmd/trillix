@@ -1,0 +1,68 @@
+// Загрузка картинки блока с прогрессом. XHR, а не fetch: нужен upload.onprogress
+// для прогресс-бара (fetch прогресс отправки тела надёжно не даёт — docs/
+// DESIGN-s3-media.md §6a). Синхронный HTTP-путь: ответ 201 и есть завершение,
+// статус-поллинга нет.
+
+const CSRF_COOKIE = 'csrf_token'
+const CSRF_HEADER = 'X-CSRF-Token'
+
+// readCookie — зеркало shared/api/client.ts: csrf_token (double-submit) в заголовок
+// мутирующего запроса. Cookie сессии httpOnly, JS её не видит (credentials шлют её сами).
+function readCookie(name: string): string | undefined {
+  const prefix = `${name}=`
+  for (const part of document.cookie.split('; ')) {
+    if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length))
+  }
+  return undefined
+}
+
+export interface UploadHandlers {
+  onProgress?: (pct: number) => void
+}
+
+// uploadImage грузит файл в POST /forms/{formId}/media и резолвит imageKey. Ошибки
+// маппятся в человекочитаемое сообщение по статусу (сервер валидирует независимо).
+export function uploadImage(formId: string, file: File, h: UploadHandlers = {}): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData()
+    body.append('file', file)
+
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/v1/forms/${formId}/media`)
+    xhr.withCredentials = true
+    const csrf = readCookie(CSRF_COOKIE)
+    if (csrf) xhr.setRequestHeader(CSRF_HEADER, csrf)
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) h.onProgress?.(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      if (xhr.status === 201) {
+        try {
+          const key = (JSON.parse(xhr.responseText) as { imageKey?: unknown }).imageKey
+          if (typeof key === 'string' && key) resolve(key)
+          else reject(new Error('Пустой ответ загрузки'))
+        } catch {
+          reject(new Error('Не удалось разобрать ответ'))
+        }
+      } else {
+        reject(new Error(messageForStatus(xhr.status)))
+      }
+    }
+    xhr.onerror = () => reject(new Error('Сеть недоступна'))
+    xhr.send(body)
+  })
+}
+
+function messageForStatus(status: number): string {
+  switch (status) {
+    case 413:
+      return 'Файл больше 5 МБ'
+    case 422:
+      return 'Только PNG или JPEG'
+    case 404:
+      return 'Форма недоступна'
+    default:
+      return 'Не удалось загрузить картинку'
+  }
+}

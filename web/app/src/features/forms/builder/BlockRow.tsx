@@ -11,6 +11,7 @@ import {
 } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
+import { ImageField } from './ImageField'
 
 // Автовысота textarea: строка вопроса растёт под контент, не заводя скролл.
 function autosize(el: HTMLTextAreaElement | null) {
@@ -21,6 +22,8 @@ function autosize(el: HTMLTextAreaElement | null) {
 
 export interface BlockRowProps {
   block: Block
+  // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
+  formId: string
   total: number
   // focusMe — редактор просит поставить фокус на label этой строки (после Enter/
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
@@ -43,6 +46,7 @@ export interface BlockRowProps {
 // Alt+↑/↓ — перемещение.
 export function BlockRow({
   block,
+  formId,
   total,
   focusMe,
   onFocusHandled,
@@ -60,6 +64,7 @@ export function BlockRow({
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
   const isContent = isContentType(block.type)
+  const isImage = block.type === 'image'
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
@@ -174,38 +179,46 @@ export function BlockRow({
           ответов не собирает, required к нему неприменим. */}
       {isContent ? null : <RequiredToggle block={block} />}
 
-      <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
+      {/* Image (неотвечаемый) — загрузка/картинка + alt вместо текстовой строки;
+          менять тип у него нельзя, поэтому без SlashMenu и label-textarea. */}
+      {isImage ? (
         <div className="min-w-0">
-          <textarea
-            ref={labelRef}
-            rows={1}
-            value={block.label}
-            // Плейсхолдер показываем у любого пустого блока (в т.ч. неактивного),
-            // чтобы пустая строка не выглядела «пропавшей». У вопроса «/» уже не
-            // работает (тип выбран) — подсказку про слэш не показываем.
-            placeholder={isContent ? 'Текст, или «/» для поля' : 'Введите текст вопроса'}
-            onChange={(e) => updateBlock(block.id, { label: e.target.value })}
-            onKeyDown={onLabelKeyDown}
-            className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
-              isContent
-                ? 'rf-text placeholder:font-normal'
-                : 'rf-label placeholder:font-semibold'
-            }`}
-          />
-
-          {/* Описание вопроса (block.description) — только у отвечаемых блоков:
-              неотвечаемый text описания не имеет (рендерится статикой). */}
-          {isContent ? null : <DescriptionField block={block} />}
-
-          {/* Text (неотвечаемый) — только абзац. Choice — варианты. Остальные
-              (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
-          {isContent ? null : isChoiceType(block.type) ? (
-            <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
-          ) : (
-            <AnswerField block={block} />
-          )}
+          <ImageField block={block} formId={formId} />
         </div>
-      </SlashMenu>
+      ) : (
+        <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
+          <div className="min-w-0">
+            <textarea
+              ref={labelRef}
+              rows={1}
+              value={block.label}
+              // Плейсхолдер показываем у любого пустого блока (в т.ч. неактивного),
+              // чтобы пустая строка не выглядела «пропавшей». У вопроса «/» уже не
+              // работает (тип выбран) — подсказку про слэш не показываем.
+              placeholder={isContent ? 'Текст, или «/» для поля' : 'Введите текст вопроса'}
+              onChange={(e) => updateBlock(block.id, { label: e.target.value })}
+              onKeyDown={onLabelKeyDown}
+              className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
+                isContent
+                  ? 'rf-text placeholder:font-normal'
+                  : 'rf-label placeholder:font-semibold'
+              }`}
+            />
+
+            {/* Описание вопроса (block.description) — только у отвечаемых блоков:
+                неотвечаемый text описания не имеет (рендерится статикой). */}
+            {isContent ? null : <DescriptionField block={block} />}
+
+            {/* Text (неотвечаемый) — только абзац. Choice — варианты. Остальные
+                (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
+            {isContent ? null : isChoiceType(block.type) ? (
+              <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
+            ) : (
+              <AnswerField block={block} />
+            )}
+          </div>
+        </SlashMenu>
+      )}
     </li>
   )
 }

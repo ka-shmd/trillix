@@ -4,6 +4,7 @@ import { type Block, isContentType } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
+import { mediaSrc } from './media'
 
 // BlockField — как один блок увидит человек, заполняющий форму. Два режима одним
 // кодом (не разъезжаться — web/CLAUDE.md):
@@ -27,8 +28,12 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
   // Неотвечаемый (контентный) блок — статический контент: без подписи-вопроса,
   // звёздочки, контрола и ошибок.
   if (isContentType(block.type)) {
-    // image: полноценный рендер картинки — шаг 5; пока ничего не рисуем.
-    if (block.type === 'image') return null
+    // image: картинка по ключу. Без ключа (недособранный черновик) — не показываем,
+    // как пустой text (респондент/превью пустого image-блока не видят).
+    if (block.type === 'image') {
+      const key = block.settings?.imageKey
+      return key ? <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} /> : null
+    }
     // text — статический абзац; пустой текст в черновике не показываем.
     return block.label.trim() ? <p className="rf-text">{block.label}</p> : null
   }

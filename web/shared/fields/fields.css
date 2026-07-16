@@ -123,6 +123,16 @@
   white-space: pre-wrap;
 }
 
+/* Картинка (image-блок) — контентная, во всю ширину колонки, скруглённая как поля.
+   Общий вид для всех трёх поверхностей; зона загрузки/прогресс редактора —
+   editor-only, живут Tailwind'ом в ImageField (не тут). */
+.rf-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--rf-radius);
+}
+
 .rf-required {
   color: var(--rf-danger);
 }
