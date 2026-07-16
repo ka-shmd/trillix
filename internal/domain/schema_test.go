@@ -24,6 +24,8 @@ func TestValidateSchema_Valid(t *testing.T) {
 			]
 		}`,
 		"неотвечаемый text-блок":               `{"blocks":[{"id":"b","type":"text","label":"Раздел А","required":false,"settings":{}}]}`,
+		"картинка с imageKey и alt":            `{"blocks":[{"id":"b","type":"image","label":"","required":false,"settings":{"imageKey":"ws/deadbeef.png","alt":"Схема"}}]}`,
+		"картинка без ключа — черновик":        `{"blocks":[{"id":"b","type":"image","label":"","required":false,"settings":{}}]}`,
 		"submitLabel задан":                    `{"blocks":[],"submitLabel":"Готово"}`,
 		"placeholder у текстового поля":        `{"blocks":[{"id":"b","type":"short_text","label":"Имя","settings":{"placeholder":"Например, Иван"}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
@@ -58,6 +60,10 @@ func TestValidateSchema_Invalid(t *testing.T) {
 	longSubmit := `{"blocks":[],"submitLabel":"` + strings.Repeat("я", MaxSubmitLabelLen+1) + `"}`
 	longPlaceholder := `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"placeholder":"` +
 		strings.Repeat("я", MaxPlaceholderLen+1) + `"}}]}`
+	longImageKey := `{"blocks":[{"id":"b","type":"image","label":"","settings":{"imageKey":"` +
+		strings.Repeat("a", MaxImageKeyLen+1) + `"}}]}`
+	longAlt := `{"blocks":[{"id":"b","type":"image","label":"","settings":{"alt":"` +
+		strings.Repeat("я", MaxAltLen+1) + `"}}]}`
 
 	cases := map[string]string{
 		"слишком длинный submitLabel": longSubmit,
@@ -72,6 +78,11 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"пустой id блока":             `{"blocks":[{"id":"","type":"short_text","label":"x","settings":{}}]}`,
 		"дубль id блоков":             `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{}},{"id":"b","type":"email","label":"y","settings":{}}]}`,
 		"non-choice с опциями":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
+		"imageKey на не-image":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"imageKey":"ws/x.png"}}]}`,
+		"alt на не-image":             `{"blocks":[{"id":"b","type":"text","label":"x","settings":{"alt":"y"}}]}`,
+		"image с опциями":             `{"blocks":[{"id":"b","type":"image","label":"","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
+		"слишком длинный imageKey":    longImageKey,
+		"слишком длинный alt":         longAlt,
 		"дубль id опций внутри блока": `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"o","label":"a"},{"id":"o","label":"b"}]}}]}`,
 		"пустой id опции":             `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"","label":"a"}]}}]}`,
 		"слишком много блоков":        tooManyBlocks,

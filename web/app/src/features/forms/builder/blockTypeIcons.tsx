@@ -5,6 +5,7 @@ import {
   CheckSquare,
   CircleDot,
   Hash,
+  Image,
   Mail,
   Pilcrow,
   Type,
@@ -23,4 +24,5 @@ export const typeIcons: Record<BlockType, ReactNode> = {
   single_choice: <CircleDot className="size-4" />,
   multi_choice: <CheckSquare className="size-4" />,
   date: <Calendar className="size-4" />,
+  image: <Image className="size-4" />,
 }
