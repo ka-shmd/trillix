@@ -29,6 +29,12 @@ const (
 	loginRatePerSec = 1.0 / 12.0
 	loginBurst      = 5
 
+	// Жёсткий лимит на POST /auth/register по IP (отдельное ведро, жёстче логина):
+	// argon2id — 64 МиБ памяти на вызов, а регистрация — редкое разовое действие.
+	// Запас 3, пополнение ~1 в 30 с — терпимо к паре ретраев, режет ресурсный флуд.
+	registerRatePerSec = 1.0 / 30.0
+	registerBurst      = 3
+
 	// Жёсткий лимит на POST приёма ответа по IP (отдельный от логина): запас 20,
 	// пополнение ~1 в 3 с (устойчиво ~20/мин). Терпимо к киоску, где несколько
 	// человек отвечают с одного IP, но режет автоматический перебор.
@@ -105,7 +111,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
-	authHandler := auth.NewHandler(authSvc, loginLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
+	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
 
 	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
