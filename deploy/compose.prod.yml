@@ -60,7 +60,8 @@ services:
   # MinIO — S3-совместимое хранилище медиа. Порт наружу НЕ публикуется: доступен
   # только по внутренней docker-сети (api ходит на http://minio:9000; раздача
   # картинок наружу — через Caddy /media, шаг 4). На настоящем проде заменяется
-  # арендованным S3 сменой только S3_* в env (этот сервис тогда не поднимается).
+  # арендованным S3 сменой S3_* (доступ приложения) И MEDIA_UPSTREAM/_HOST (раздача
+  # Caddy) в env; этот сервис тогда не поднимается.
   minio:
     image: minio/minio:RELEASE.2024-01-16T16-07-38Z
     command: server /data
@@ -118,8 +119,13 @@ services:
       # под {$APP_DOMAIN}/api, отдельного домена нет (ADR §10).
       APP_DOMAIN: ${APP_DOMAIN}
       RENDERER_DOMAIN: ${RENDERER_DOMAIN}
-      # Бакет картинок — Caddy подставляет в rewrite /media/* → /<bucket>/* к MinIO.
+      # Бакет картинок — Caddy подставляет в rewrite /media/* → /<bucket>/*.
       S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+      # Upstream раздачи /media и Host к нему: prod-local → http://minio:9000,
+      # реальный прод → https://<арендованный-s3> + тот же хост в Host. Без этих
+      # переменных раздача была бы захардкожена на MinIO (см. Caddyfile media).
+      MEDIA_UPSTREAM: ${MEDIA_UPSTREAM}
+      MEDIA_UPSTREAM_HOST: ${MEDIA_UPSTREAM_HOST}
     ports:
       - "80:80"
       - "443:443"
