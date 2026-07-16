@@ -25,16 +25,21 @@
 	}
 }
 
-# Картинки блоков форм — public-read из бакета MinIO. Раздаёт Caddy, не Go (байты
-# статики Go не отдаёт); тот же origin на обоих сайтах → img-src 'self' покрывает,
-# CORS не нужен. Ключи контент-адресны (workspaceID/<sha256>.ext) → иммутабельный
-# кэш. handle_path срезает /media, префикс бакета добавляет rewrite. На реальном
-# проде (фаза 9) MinIO не поднимается — upstream меняется на арендованное S3/CDN.
+# Картинки блоков форм — public-read из бакета. Раздаёт Caddy, не Go (байты статики
+# Go не отдаёт); тот же origin на обоих сайтах → img-src 'self' покрывает, CORS не
+# нужен. Ключи контент-адресны (workspaceID/<sha256>.ext) → иммутабельный кэш.
+# handle_path срезает /media, префикс бакета добавляет rewrite (path-style).
+# Upstream и Host раздачи — из env (MEDIA_UPSTREAM / MEDIA_UPSTREAM_HOST): prod-local
+# → MinIO по внутренней сети, реальный прод (фаза 9) → арендованное S3/CDN (https,
+# свой Host, MinIO тогда не поднимается). Host выставляем на хост апстрима — иначе
+# внешний S3 не сроутит запрос (бакет уже в пути после rewrite).
 (media) {
 	handle_path /media/* {
 		rewrite * /{$S3_MEDIA_BUCKET}{uri}
 		header Cache-Control "public, max-age=31536000, immutable"
-		reverse_proxy minio:9000
+		reverse_proxy {$MEDIA_UPSTREAM} {
+			header_up Host {$MEDIA_UPSTREAM_HOST}
+		}
 	}
 }
 
