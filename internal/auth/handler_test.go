@@ -52,8 +52,16 @@ func (denyLimiter) Allow(string) bool { return false }
 
 const testAppOrigin = "http://localhost:5173"
 
+// newTestHandler — один лимитер и на логин, и на регистрацию (большинству тестов
+// разграничение вёдер не важно).
 func newTestHandler(svc authService, limiter RateLimiter) http.Handler {
-	h := NewHandler(svc, limiter, false, testAppOrigin, false)
+	return newTestHandlerLR(svc, limiter, limiter)
+}
+
+// newTestHandlerLR — раздельные вёдра логина и регистрации (для проверки, что они
+// не общие).
+func newTestHandlerLR(svc authService, loginLimiter, registerLimiter RateLimiter) http.Handler {
+	h := NewHandler(svc, loginLimiter, registerLimiter, false, testAppOrigin, false)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux
@@ -116,6 +124,35 @@ func TestLogin_RateLimited(t *testing.T) {
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("статус = %d, ожидалось 429", rec.Code)
+	}
+}
+
+func TestRegister_RateLimited(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestHandler(svc, denyLimiter{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		strings.NewReader(`{"email":"a@b.com","password":"supersecret"}`))
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("статус = %d, ожидалось 429", rec.Code)
+	}
+}
+
+// Ведро регистрации отдельное от логина: исчерпанный логин не мешает регистрации.
+func TestRegister_BucketSeparateFromLogin(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestHandlerLR(svc, denyLimiter{}, ratelimit.AllowAll{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register",
+		strings.NewReader(`{"email":"a@b.com","password":"supersecret"}`))
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("статус = %d, ожидалось 201 (логин-лимит не должен блокировать регистрацию); тело=%s", rec.Code, rec.Body)
 	}
 }
 

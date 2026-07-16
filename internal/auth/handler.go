@@ -51,7 +51,10 @@ func UserFromContext(ctx context.Context) (User, bool) {
 type Handler struct {
 	svc          authService
 	loginLimiter RateLimiter
-	cookieSecure bool
+	// registerLimiter — отдельное ведро на POST /auth/register (argon2id — 64 МиБ на
+	// вызов; отдельное от логина, чтобы брутфорс логина не съедал бюджет регистрации).
+	registerLimiter RateLimiter
+	cookieSecure    bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
@@ -59,14 +62,14 @@ type Handler struct {
 	trustedProxy bool
 }
 
-func NewHandler(svc authService, loginLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
-	return &Handler{svc: svc, loginLimiter: loginLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
+func NewHandler(svc authService, loginLimiter, registerLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
+	return &Handler{svc: svc, loginLimiter: loginLimiter, registerLimiter: registerLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
 }
 
 // Routes регистрирует эндпоинты auth на общем mux (RouteRegistrar).
 func (h *Handler) Routes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/v1/auth/register", h.register)
-	mux.Handle("POST /api/v1/auth/login", h.rateLimitByIP(http.HandlerFunc(h.login)))
+	mux.Handle("POST /api/v1/auth/register", h.rateLimit(h.registerLimiter, "слишком много регистраций")(http.HandlerFunc(h.register)))
+	mux.Handle("POST /api/v1/auth/login", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
 }
@@ -176,15 +179,20 @@ func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 	})
 }
 
-func (h *Handler) rateLimitByIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.loginLimiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
-			w.Header().Set("Retry-After", "60")
-			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много попыток входа", domain.ErrRateLimited))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// rateLimit — middleware жёсткого лимита по IP заданным ведром. Ключ — честный IP
+// клиента (см. httpserver.ClientIP). msg уходит в тело 429 после стандартного
+// префикса ErrRateLimited.
+func (h *Handler) rateLimit(limiter RateLimiter, msg string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !limiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
+				w.Header().Set("Retry-After", "60")
+				httpserver.WriteError(w, r, fmt.Errorf("%w: %s", domain.ErrRateLimited, msg))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentialsRequest, bool) {
