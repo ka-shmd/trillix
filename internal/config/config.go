@@ -56,6 +56,12 @@ type Config struct {
 	// S3PathStyle — path-style адресация (endpoint/bucket/key). MinIO и часть
 	// РФ-провайдеров требуют true; AWS virtual-hosted — false.
 	S3PathStyle bool
+	// TrustedProxy — стоит ли процесс за доверенным обратным прокси (наш Caddy).
+	// true → IP клиента для rate-limit'а брать из X-Forwarded-For (иначе за прокси
+	// все клиенты видятся одним IP прокси и лимитер держит одно ведро на весь сайт).
+	// dev (Go смотрит в сеть напрямую) — false; prod-local/prod (за Caddy) — true.
+	// Смысловой флаг, а не имя окружения: различие контуров живёт в этом значении.
+	TrustedProxy bool
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -90,6 +96,7 @@ func Load() (Config, error) {
 	cfg.S3SecretKey = required("S3_SECRET_KEY")
 	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
 	pathStyleRaw := required("S3_PATH_STYLE")
+	trustedProxyRaw := required("TRUSTED_PROXY")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 
@@ -108,6 +115,12 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid S3_PATH_STYLE %q: want true or false", pathStyleRaw)
 	}
 	cfg.S3PathStyle = pathStyle
+
+	trustedProxy, err := strconv.ParseBool(trustedProxyRaw)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid TRUSTED_PROXY %q: want true or false", trustedProxyRaw)
+	}
+	cfg.TrustedProxy = trustedProxy
 
 	if len(formTokenSecret) < minFormTokenSecretLen {
 		return Config{}, fmt.Errorf("FORM_TOKEN_SECRET too short: want >= %d bytes", minFormTokenSecretLen)

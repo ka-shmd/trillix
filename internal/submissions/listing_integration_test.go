@@ -31,11 +31,11 @@ import (
 func fullStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
-	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, false, "http://localhost:5173")
+	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	subSvc := submissions.NewService(testPool, formsSvc, submissions.Repo{})
-	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime)
+	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 	subPrivate := submissions.NewHandler(subSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()

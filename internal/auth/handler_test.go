@@ -53,7 +53,7 @@ func (denyLimiter) Allow(string) bool { return false }
 const testAppOrigin = "http://localhost:5173"
 
 func newTestHandler(svc authService, limiter RateLimiter) http.Handler {
-	h := NewHandler(svc, limiter, false, testAppOrigin)
+	h := NewHandler(svc, limiter, false, testAppOrigin, false)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux
