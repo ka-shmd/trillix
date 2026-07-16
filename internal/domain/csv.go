@@ -81,6 +81,11 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 			b.headers = append(b.headers, csvColumnLabel(blk.Label, blk.ID))
 		}
 	}
+	// Заголовки — тоже пользовательский ввод (label'ы): защищаем от formula injection
+	// единообразно с ячейками ответов (мета-константы структурно безопасны — no-op).
+	for i := range b.headers {
+		b.headers[i] = sanitizeCSVField(b.headers[i])
+	}
 	return b
 }
 
@@ -103,6 +108,11 @@ func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers ma
 			continue
 		}
 		row = append(row, formatCell(view, raw))
+	}
+	// Защита от CSV formula injection: ответы респондента недоверенны. Мета-ячейки
+	// (id, время, версия) структурно безопасны — проход по ним no-op.
+	for i := range row {
+		row[i] = sanitizeCSVField(row[i])
 	}
 	return row
 }
@@ -153,4 +163,22 @@ func csvColumnLabel(label, blockID string) string {
 		return label
 	}
 	return "(без названия) " + blockID
+}
+
+// sanitizeCSVField защищает от CSV formula injection: ячейка, начинающаяся с
+// = + - @ \t \r, в Excel/Sheets трактуется как формула, а ответ респондента
+// недоверенный (пишет аноним, открывает автор — BOM кладётся ради Excel). Префикс
+// ' заставляет табличный редактор показать значение как текст. Проверяем первый
+// БАЙТ: все триггеры — ASCII, а первый байт многобайтного UTF-8 всегда >= 0x80,
+// поэтому кириллица и прочий не-ASCII не затрагиваются. Идемпотентно: результат
+// начинается с ', который сам не триггер.
+func sanitizeCSVField(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }

@@ -73,7 +73,9 @@ func TestCSVBuilder_RowRespectsAnswerVersion(t *testing.T) {
 	when := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
 	row := bld.Row("018f", when, 1, ans(map[string]any{"b1": "Анна", "b2": "+7900"}))
 
-	want := []string{"018f", "2026-07-12T10:00:00Z", "1", "Анна", "", "+7900"}
+	// «+7900» начинается с +, поэтому санитизация против formula injection префиксует
+	// его апострофом (осознанный размен: числа/телефоны с ведущим +/- уходят текстом).
+	want := []string{"018f", "2026-07-12T10:00:00Z", "1", "Анна", "", "'+7900"}
 	for i := range want {
 		if row[i] != want[i] {
 			t.Fatalf("ячейка %d = %q, ожидалась %q", i, row[i], want[i])
@@ -112,6 +114,50 @@ func TestCSVBuilder_ChoiceLabelsFromAnswerVersion(t *testing.T) {
 	r2 := bld.Row("id2", when, 2, ans(map[string]any{"s": "o1"}))
 	if r2[3] != "Знакомые" {
 		t.Fatalf("single v2 = %q, ожидалось «Знакомые»", r2[3])
+	}
+}
+
+// Санитизация ячеек против CSV formula injection.
+func TestSanitizeCSVField(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"формула =", "=HYPERLINK(\"http://evil\")", "'=HYPERLINK(\"http://evil\")"},
+		{"плюс", "+1+1", "'+1+1"},
+		{"минус (число)", "-5", "'-5"},
+		{"собака", "@SUM(A1)", "'@SUM(A1)"},
+		{"таб", "\tx", "'\tx"},
+		{"возврат каретки", "\rx", "'\rx"},
+		{"пустая — без изменений", "", ""},
+		{"обычный текст", "Анна", "Анна"},
+		{"ведущая кириллица (не ASCII)", "–тире", "–тире"}, // U+2013, не триггер
+		{"уже с апострофом — идемпотентно", "'=x", "'=x"},
+		{"символ в середине — не трогаем", "a=b", "a=b"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeCSVField(tt.in); got != tt.want {
+				t.Fatalf("sanitizeCSVField(%q) = %q, ожидалось %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// Санитизация реально подключена в выводе Header и Row (а не только в функции):
+// вредоносный label и вредоносный ответ респондента приходят уже обезврежены.
+func TestCSVBuilder_SanitizesHeaderAndRow(t *testing.T) {
+	blk := Block{ID: "b1", Type: BlockShortText, Label: "=cmd|' /C calc'!A1"}
+	bld := NewCSVBuilder([]VersionedSchema{vs(1, blk)})
+
+	if got := bld.Header()[3]; got != "'=cmd|' /C calc'!A1" {
+		t.Fatalf("заголовок = %q, ожидался с префиксом '", got)
+	}
+
+	row := bld.Row("018f", time.Now(), 1, ans(map[string]any{"b1": "=1+1"}))
+	if got := row[3]; got != "'=1+1" {
+		t.Fatalf("ячейка ответа = %q, ожидался с префиксом '", got)
 	}
 }
 
