@@ -1,46 +1,25 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowLeft, Pencil } from 'lucide-react'
 
 import { type Block } from '@entities/formSchema'
 import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
-// ShareView — страница «Поделиться» (/forms/$slug/share). Открывается после
-// публикации (редирект из шапки редактора) и по кнопке «Поделиться» у уже
-// опубликованной формы. Сверху — название и переход в редактор; ниже — две
-// карточки (ссылка и её превью); внизу — управление жизненным циклом
+// ShareView — содержимое таба «Поделиться» (/forms/$slug/share). Открывается после
+// публикации (редирект из шапки редактора) и табом у уже опубликованной формы.
+// Две карточки (ссылка и её превью), внизу — управление жизненным циклом
 // (перепубликация изменений, закрытие, повторная публикация закрытой).
+// Шапка формы (назад, название, статус, «Редактировать») — на оболочке _manage.
 export function ShareView({ form }: { form: FormDetail }) {
   const link = publicFormUrl(form.slug)
   const neverPublished = form.publishedVersion === null
   const isClosed = form.status === 'closed'
 
   return (
-    <section className="mx-auto max-w-4xl p-6">
-      <Link
-        to="/forms"
-        className="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-4" /> К формам
-      </Link>
-
-      <header className="mb-8 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{displayFormTitle(form.title)}</h1>
-          <StatusLine form={form} />
-        </div>
-        <Button asChild variant="outline" className="gap-1.5">
-          <Link to="/forms/$slug/edit" params={{ slug: form.slug }}>
-            <Pencil className="size-4" /> Редактировать
-          </Link>
-        </Button>
-      </header>
-
+    <>
       {neverPublished ? (
         <div className="mx-auto mt-12 max-w-md text-center">
           <h2 className="text-lg font-medium">Форма ещё не опубликована</h2>
@@ -66,23 +45,7 @@ export function ShareView({ form }: { form: FormDetail }) {
           <ManageSection form={form} />
         </>
       )}
-    </section>
-  )
-}
-
-const statusMeta: Record<Form['status'], { label: string; variant: 'secondary' | 'default' | 'outline' }> = {
-  draft: { label: 'Черновик', variant: 'secondary' },
-  published: { label: 'Опубликована', variant: 'default' },
-  closed: { label: 'Закрыта', variant: 'outline' },
-}
-
-function StatusLine({ form }: { form: Form }) {
-  const meta = statusMeta[form.status]
-  return (
-    <div className="mt-1.5 flex items-center gap-2 text-sm text-muted-foreground">
-      <Badge variant={meta.variant}>{meta.label}</Badge>
-      {form.publishedVersion !== null && <span>Версия {form.publishedVersion}</span>}
-    </div>
+    </>
   )
 }
 

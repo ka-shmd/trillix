@@ -1,10 +1,8 @@
 import { useState } from 'react'
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
 import { type Block, isAnswerableType } from '@entities/formSchema'
 
-import { displayFormName } from '../../entities/form'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import {
   submissionsListQueryOptions,
@@ -34,7 +32,7 @@ import {
 // Таблица ответов формы (/forms/$slug/responses): курсорная подгрузка (новые
 // сверху). В таблице только версия и дата заполнения; сами ответы — в диалоге,
 // который открывается по строке. Плюс экспорт в CSV и счётчик.
-export const Route = createFileRoute('/_app/forms/$slug/responses')({
+export const Route = createFileRoute('/_app/forms/$slug/_manage/responses')({
   component: ResponsesPage,
 })
 
@@ -66,47 +64,22 @@ function ResponsesPage() {
   const blocks = (form.data?.draftSchema.blocks ?? []).filter((b) => isAnswerableType(b.type))
 
   return (
-    <section className="mx-auto max-w-6xl p-6">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link
-            to="/forms"
-            className="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-4" /> К формам
-          </Link>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {form.data ? `Ответы · ${displayFormName(form.data)}` : 'Ответы'}
-          </h1>
-          {!list.isPending && !list.isError && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
-            </p>
-          )}
-        </div>
-        {total > 0 && formId && (
-          <div className="flex gap-2">
-            <Button asChild variant="outline">
-              <Link to="/forms/$slug/summary" params={{ slug }}>
-                Сводка
-              </Link>
-            </Button>
-            {/* Обычная навигация: cookie авторизует, браузер качает файл (не fetch). */}
-            <Button asChild variant="outline">
-              <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
-            </Button>
-          </div>
+    <>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+        {!list.isPending && !list.isError && (
+          <p className="text-sm text-muted-foreground">
+            {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
+          </p>
         )}
-      </header>
-
-      {form.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Форма не найдена.</p>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/forms">Вернуться к списку</Link>
+        {total > 0 && formId && (
+          // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
+          <Button asChild variant="outline" size="sm" className="ml-auto">
+            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
           </Button>
-        </div>
-      ) : list.isPending ? (
+        )}
+      </div>
+
+      {list.isPending ? (
         <p className="text-sm text-muted-foreground">Загрузка ответов…</p>
       ) : list.isError ? (
         <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
@@ -188,7 +161,7 @@ function ResponsesPage() {
           )}
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   )
 }
 

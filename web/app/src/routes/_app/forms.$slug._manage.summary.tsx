@@ -1,23 +1,21 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft } from 'lucide-react'
 
-import { displayFormName } from '../../entities/form'
 import { type BlockSummary } from '../../entities/summary'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { pluralAnswers } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 
-// Сводка ответов формы (/forms/$slug/summary): распределения, статистика чисел и доля
-// заполнивших по каждому вопросу. Отдельная страница, а не вкладка внутри ответов
+// Таб «Сводка» (/forms/$slug/summary): распределения, статистика чисел и доля
+// заполнивших по каждому вопросу. Свой маршрут, а не локальный стейт табов
 // (решение владельца): ссылка на сводку сохраняется в закладки, F5 её не сбрасывает,
-// «Назад» браузера работает как ожидается.
+// «Назад» браузера работает как ожидается. Шапка и табы — на оболочке _manage.
 //
 // Агрегат считает сервер — сюда приходят только счётчики (сырые ответы в браузер не
 // выгружаются). Бары — на CSS: графических библиотек в проекте нет, список
 // зависимостей заморожен (web/CLAUDE.md).
-export const Route = createFileRoute('/_app/forms/$slug/summary')({
+export const Route = createFileRoute('/_app/forms/$slug/_manage/summary')({
   component: SummaryPage,
 })
 
@@ -35,39 +33,14 @@ function SummaryPage() {
   const total = summary.data?.total ?? 0
 
   return (
-    <section className="mx-auto max-w-4xl p-6">
-      <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <Link
-            to="/forms"
-            className="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <ArrowLeft className="size-4" /> К формам
-          </Link>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {form.data ? `Сводка · ${displayFormName(form.data)}` : 'Сводка'}
-          </h1>
-          {summary.isSuccess && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
-            </p>
-          )}
-        </div>
-        <Button asChild variant="outline">
-          <Link to="/forms/$slug/responses" params={{ slug }}>
-            Все ответы
-          </Link>
-        </Button>
-      </header>
+    <>
+      {summary.isSuccess && (
+        <p className="mb-6 text-sm text-muted-foreground">
+          {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
+        </p>
+      )}
 
-      {form.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Форма не найдена.</p>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/forms">Вернуться к списку</Link>
-          </Button>
-        </div>
-      ) : summary.isPending ? (
+      {summary.isPending ? (
         <p className="text-sm text-muted-foreground">Считаем сводку…</p>
       ) : summary.isError ? (
         <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
@@ -97,7 +70,7 @@ function SummaryPage() {
           ))}
         </div>
       )}
-    </section>
+    </>
   )
 }
 

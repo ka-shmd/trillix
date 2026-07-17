@@ -15,10 +15,11 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
-import { Route as AppFormsSlugSummaryRouteImport } from './routes/_app/forms.$slug.summary'
-import { Route as AppFormsSlugShareRouteImport } from './routes/_app/forms.$slug.share'
-import { Route as AppFormsSlugResponsesRouteImport } from './routes/_app/forms.$slug.responses'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
+import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
+import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
+import { Route as AppFormsSlugManageShareRouteImport } from './routes/_app/forms.$slug._manage.share'
+import { Route as AppFormsSlugManageResponsesRouteImport } from './routes/_app/forms.$slug._manage.responses'
 
 const AuthRoute = AuthRouteImport.update({
   id: '/_auth',
@@ -48,46 +49,55 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   path: '/forms/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppFormsSlugSummaryRoute = AppFormsSlugSummaryRouteImport.update({
-  id: '/forms/$slug/summary',
-  path: '/forms/$slug/summary',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppFormsSlugShareRoute = AppFormsSlugShareRouteImport.update({
-  id: '/forms/$slug/share',
-  path: '/forms/$slug/share',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppFormsSlugResponsesRoute = AppFormsSlugResponsesRouteImport.update({
-  id: '/forms/$slug/responses',
-  path: '/forms/$slug/responses',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppFormsSlugEditRoute = AppFormsSlugEditRouteImport.update({
   id: '/forms/$slug/edit',
   path: '/forms/$slug/edit',
   getParentRoute: () => AppRoute,
 } as any)
+const AppFormsSlugManageRoute = AppFormsSlugManageRouteImport.update({
+  id: '/forms/$slug/_manage',
+  path: '/forms/$slug',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppFormsSlugManageSummaryRoute =
+  AppFormsSlugManageSummaryRouteImport.update({
+    id: '/summary',
+    path: '/summary',
+    getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
+const AppFormsSlugManageShareRoute = AppFormsSlugManageShareRouteImport.update({
+  id: '/share',
+  path: '/share',
+  getParentRoute: () => AppFormsSlugManageRoute,
+} as any)
+const AppFormsSlugManageResponsesRoute =
+  AppFormsSlugManageResponsesRouteImport.update({
+    id: '/responses',
+    path: '/responses',
+    getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/forms/': typeof AppFormsIndexRoute
+  '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
-  '/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
-  '/forms/$slug/share': typeof AppFormsSlugShareRoute
-  '/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
+  '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
+  '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
+  '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/forms': typeof AppFormsIndexRoute
+  '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
-  '/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
-  '/forms/$slug/share': typeof AppFormsSlugShareRoute
-  '/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
+  '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
+  '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
+  '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -97,10 +107,11 @@ export interface FileRoutesById {
   '/_auth/register': typeof AuthRegisterRoute
   '/_app/': typeof AppIndexRoute
   '/_app/forms/': typeof AppFormsIndexRoute
+  '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
-  '/_app/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
-  '/_app/forms/$slug/share': typeof AppFormsSlugShareRoute
-  '/_app/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
+  '/_app/forms/$slug/_manage/responses': typeof AppFormsSlugManageResponsesRoute
+  '/_app/forms/$slug/_manage/share': typeof AppFormsSlugManageShareRoute
+  '/_app/forms/$slug/_manage/summary': typeof AppFormsSlugManageSummaryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -109,6 +120,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/forms/'
+    | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
@@ -119,6 +131,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/forms'
+    | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
@@ -131,10 +144,11 @@ export interface FileRouteTypes {
     | '/_auth/register'
     | '/_app/'
     | '/_app/forms/'
+    | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
-    | '/_app/forms/$slug/responses'
-    | '/_app/forms/$slug/share'
-    | '/_app/forms/$slug/summary'
+    | '/_app/forms/$slug/_manage/responses'
+    | '/_app/forms/$slug/_manage/share'
+    | '/_app/forms/$slug/_manage/summary'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -186,27 +200,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/forms/$slug/summary': {
-      id: '/_app/forms/$slug/summary'
-      path: '/forms/$slug/summary'
-      fullPath: '/forms/$slug/summary'
-      preLoaderRoute: typeof AppFormsSlugSummaryRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/forms/$slug/share': {
-      id: '/_app/forms/$slug/share'
-      path: '/forms/$slug/share'
-      fullPath: '/forms/$slug/share'
-      preLoaderRoute: typeof AppFormsSlugShareRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/forms/$slug/responses': {
-      id: '/_app/forms/$slug/responses'
-      path: '/forms/$slug/responses'
-      fullPath: '/forms/$slug/responses'
-      preLoaderRoute: typeof AppFormsSlugResponsesRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/forms/$slug/edit': {
       id: '/_app/forms/$slug/edit'
       path: '/forms/$slug/edit'
@@ -214,25 +207,64 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugEditRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/forms/$slug/_manage': {
+      id: '/_app/forms/$slug/_manage'
+      path: '/forms/$slug'
+      fullPath: '/forms/$slug'
+      preLoaderRoute: typeof AppFormsSlugManageRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/forms/$slug/_manage/summary': {
+      id: '/_app/forms/$slug/_manage/summary'
+      path: '/summary'
+      fullPath: '/forms/$slug/summary'
+      preLoaderRoute: typeof AppFormsSlugManageSummaryRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
+    '/_app/forms/$slug/_manage/share': {
+      id: '/_app/forms/$slug/_manage/share'
+      path: '/share'
+      fullPath: '/forms/$slug/share'
+      preLoaderRoute: typeof AppFormsSlugManageShareRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
+    '/_app/forms/$slug/_manage/responses': {
+      id: '/_app/forms/$slug/_manage/responses'
+      path: '/responses'
+      fullPath: '/forms/$slug/responses'
+      preLoaderRoute: typeof AppFormsSlugManageResponsesRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
   }
 }
+
+interface AppFormsSlugManageRouteChildren {
+  AppFormsSlugManageResponsesRoute: typeof AppFormsSlugManageResponsesRoute
+  AppFormsSlugManageShareRoute: typeof AppFormsSlugManageShareRoute
+  AppFormsSlugManageSummaryRoute: typeof AppFormsSlugManageSummaryRoute
+}
+
+const AppFormsSlugManageRouteChildren: AppFormsSlugManageRouteChildren = {
+  AppFormsSlugManageResponsesRoute: AppFormsSlugManageResponsesRoute,
+  AppFormsSlugManageShareRoute: AppFormsSlugManageShareRoute,
+  AppFormsSlugManageSummaryRoute: AppFormsSlugManageSummaryRoute,
+}
+
+const AppFormsSlugManageRouteWithChildren =
+  AppFormsSlugManageRoute._addFileChildren(AppFormsSlugManageRouteChildren)
 
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
+  AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
-  AppFormsSlugResponsesRoute: typeof AppFormsSlugResponsesRoute
-  AppFormsSlugShareRoute: typeof AppFormsSlugShareRoute
-  AppFormsSlugSummaryRoute: typeof AppFormsSlugSummaryRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
+  AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
-  AppFormsSlugResponsesRoute: AppFormsSlugResponsesRoute,
-  AppFormsSlugShareRoute: AppFormsSlugShareRoute,
-  AppFormsSlugSummaryRoute: AppFormsSlugSummaryRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
