@@ -13,7 +13,7 @@ import {
   scaleRange,
   supportsPlaceholder,
 } from '@entities/formSchema'
-import { BlockField } from '@fields/BlockField'
+import { BlockControl } from '@fields/BlockField'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
 import { ImageField } from './ImageField'
@@ -73,6 +73,9 @@ export function BlockRow({
   const [labelFocused, setLabelFocused] = useState(false)
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
+  // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
+  // нет отдельного превью-контрола: галочка стоит слева от самого текста.
+  const isConsent = block.type === 'consent'
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
@@ -115,11 +118,7 @@ export function BlockRow({
       // литеральный «/» в text-абзаце с клавиатуры не ввести (всегда команда).
       e.preventDefault()
       setSlashOpen(true)
-    } else if (
-      e.key === 'Backspace' &&
-      el.selectionStart === 0 &&
-      el.selectionEnd === 0
-    ) {
+    } else if (e.key === 'Backspace' && el.selectionStart === 0 && el.selectionEnd === 0) {
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
@@ -203,47 +202,58 @@ export function BlockRow({
       ) : (
         <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
           <div className="min-w-0">
-            <textarea
-              ref={labelRef}
-              rows={1}
-              value={block.label}
-              // Плейсхолдер показываем только у активной (в фокусе) строки: пустой
-              // неактивный блок ничего не показывает. У вопроса «/» уже не работает
-              // (тип выбран) — подсказку про слэш не показываем.
-              placeholder={
-                labelFocused
-                  ? isContent
-                    ? 'Текст, или «/» для поля'
-                    : 'Введите текст вопроса'
-                  : undefined
-              }
-              onChange={(e) => updateBlock(block.id, { label: e.target.value })}
-              onFocus={() => setLabelFocused(true)}
-              onBlur={() => setLabelFocused(false)}
-              onKeyDown={onLabelKeyDown}
-              className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
-                isContent
-                  ? 'rf-text placeholder:font-normal'
-                  : 'rf-label placeholder:font-semibold'
-              }`}
-            />
+            {/* Согласие: галочка слева от правимого текста — как у респондента.
+                Декоративная (rf-mark, как глифы вариантов в OptionsInline):
+                настоящий <input> тут не нужен, состояние правит респондент. mt-1
+                центрирует size-4 по строке rf-consent (line-height 1.5rem). */}
+            <div className={isConsent ? 'flex items-start gap-2' : undefined}>
+              {isConsent && (
+                <span className="rf-mark rf-mark--check mt-1 shrink-0" aria-hidden="true" />
+              )}
+              <textarea
+                ref={labelRef}
+                rows={1}
+                value={block.label}
+                // Плейсхолдер показываем только у активной (в фокусе) строки: пустой
+                // неактивный блок ничего не показывает. У вопроса «/» уже не работает
+                // (тип выбран) — подсказку про слэш не показываем.
+                placeholder={
+                  labelFocused
+                    ? isContent
+                      ? 'Текст, или «/» для поля'
+                      : isConsent
+                        ? 'Текст согласия'
+                        : 'Введите текст вопроса'
+                    : undefined
+                }
+                onChange={(e) => updateBlock(block.id, { label: e.target.value })}
+                onFocus={() => setLabelFocused(true)}
+                onBlur={() => setLabelFocused(false)}
+                onKeyDown={onLabelKeyDown}
+                className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
+                  isContent
+                    ? 'rf-text placeholder:font-normal'
+                    : isConsent
+                      ? // Текст согласия — обычная фраза рядом с галочкой, не вопрос:
+                        // тот же rf-consent, что у респондента (иначе редактор показывал
+                        // бы юридическую строку крупным полужирным).
+                        'rf-consent placeholder:font-normal'
+                      : 'rf-label placeholder:font-semibold'
+                }`}
+              />
+            </div>
 
             {/* Описание вопроса (block.description) — только у отвечаемых блоков:
                 неотвечаемый text описания не имеет (рендерится статикой). */}
             {isContent ? null : <DescriptionField block={block} />}
 
-            {/* Text (неотвечаемый) — только абзац. Choice — варианты. Остальные
-                (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
-            {isContent ? null : isChoiceType(block.type) ? (
+            {/* Text (неотвечаемый) — только абзац. Choice — варианты. Шкала — деления
+                и диапазон. Согласие — ничего: галочка и текст уже в строке выше.
+                Остальные (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
+            {isContent || isConsent ? null : isChoiceType(block.type) ? (
               <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
             ) : block.type === 'scale' ? (
               <ScaleInline block={block} />
-            ) : block.type === 'consent' ? (
-              // Текст согласия правится в строке заголовка (это label блока),
-              // отдельного поля ответа у галочки нет — показываем её вид.
-              <div className="mt-1.5">
-                <BlockField block={block} />
-              </div>
             ) : (
               <AnswerField block={block} />
             )}
@@ -266,7 +276,9 @@ function RequiredToggle({ block }: { block: Block }) {
   return (
     <div
       className={`absolute left-full top-1.5 ml-1 flex h-8 items-center transition-opacity ${
-        required ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+        required
+          ? 'opacity-100'
+          : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
       }`}
     >
       <button
@@ -358,7 +370,9 @@ function ScaleInline({ block }: { block: Block }) {
 
   return (
     <div className="mt-1.5 flex flex-col gap-2">
-      <BlockField block={block} />
+      {/* Только контрол, без FieldShell: подпись рисует строка заголовка выше —
+          оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой). */}
+      <BlockControl block={block} />
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <label className="flex items-center gap-1.5">
           от

@@ -59,6 +59,15 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
   )
 }
 
+// BlockControl — только контрол поля, без оболочки FieldShell (подпись, звёздочка,
+// описание, ошибка). Нужен редактору: подпись он рисует сам — редактируемой
+// строкой сверху, и оболочка дублировала бы её. Тот же контрол, что видит
+// респондент, поэтому вид не разъезжается (превью и рендерер берут BlockField
+// целиком, с оболочкой).
+export function BlockControl({ block }: { block: Block }) {
+  return <FieldControl block={block} disabled={true} invalid={false} />
+}
+
 type ControlProps = {
   block: Block
   value?: Answer
@@ -180,7 +189,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
             disabled={disabled}
             {...invalidProps}
           />
-          <span>
+          <span className="rf-consent">
             {label}
             {block.required && (
               <span className="rf-required" aria-hidden="true"> *</span>
