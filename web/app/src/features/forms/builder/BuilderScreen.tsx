@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
-import { ChevronRight, Eye, House, Pencil, Redo2, Undo2 } from 'lucide-react'
+import { ChevronRight, Eye, House, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { displayFormName, type FormDetail } from '../../../entities/form'
 import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
+import { FormSettings } from './FormSettings'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
@@ -17,7 +18,11 @@ import { BuilderStoreContext } from './storeContext'
 import { useAutosave } from './useAutosave'
 import { Button } from '@/components/ui/button'
 
-type Mode = 'edit' | 'preview'
+// Что показано вместо полотна. Полотно (edit) — документ из блоков; превью — как
+// увидит респондент; настройки — то, чего на форме не видно (экран после отправки).
+// Режим локальный: F5 возвращает в редактор, ссылки на превью/настройки нет — по
+// тому же принципу, что и превью с самого начала (решение владельца).
+type Mode = 'edit' | 'preview' | 'settings'
 
 // BuilderScreen — редактор в стиле Tally: чистое документное полотно (SlashEditor),
 // а все элементы управления (статус сохранения, просмотр, публикация) порталятся в
@@ -32,7 +37,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   })
 
   const headerSlot = useHeaderSlot()
-  const { status, retry } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
+  const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
 
   // Публиковать можно только когда серверный черновик догнал редактор: нет
@@ -78,7 +83,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           <div className="flex w-full items-center gap-2">
             <Breadcrumbs formName={displayFormName(detail)} />
             <div className="ml-auto flex items-center gap-2">
-              <SaveIndicator status={status} onRetry={retry} />
+              <SaveIndicator status={status} onRetry={saveNow} />
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -110,17 +115,33 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 variant="ghost"
                 size="sm"
                 className="gap-1.5"
-                onClick={() => setMode((m) => (m === 'edit' ? 'preview' : 'edit'))}
+                onClick={() => setMode((m) => (m === 'preview' ? 'edit' : 'preview'))}
               >
-                {mode === 'edit' ? (
-                  <>
-                    <Eye className="size-4" /> Просмотр
-                  </>
-                ) : (
+                {mode === 'preview' ? (
                   <>
                     <Pencil className="size-4" /> Редактор
                   </>
+                ) : (
+                  <>
+                    <Eye className="size-4" /> Просмотр
+                  </>
                 )}
+              </Button>
+              {/* Настройки формы — только вход, не тумблер: назад уводит кнопка на
+                  самой странице. Тумблер здесь был бы вторым выходом мимо диалога
+                  о несохранённых правках — и неочевидным (по иконке не догадаться,
+                  что нажать её надо ещё раз). Иконка, а не текст: место в шапке
+                  кончается, а сама страница подписана заголовком. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className={mode === 'settings' ? '' : 'text-muted-foreground'}
+                aria-pressed={mode === 'settings'}
+                onClick={() => setMode('settings')}
+                aria-label="Настройки формы"
+                title="Настройки формы"
+              >
+                <Settings className="size-4" />
               </Button>
               <PublishControls form={detail} canPublish={canPublish} />
             </div>
@@ -130,13 +151,15 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' ? (
-        <SlashEditor formId={detail.id} initialTitle={detail.title} />
-      ) : (
+      {mode === 'edit' && <SlashEditor formId={detail.id} initialTitle={detail.title} />}
+      {mode === 'preview' && (
         <section aria-label="Просмотр формы">
           <PreviewPane title={detail.title} />
         </section>
       )}
+      {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
+          иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
+      {mode === 'settings' && <FormSettings onBack={() => setMode('edit')} onSaved={saveNow} />}
     </BuilderStoreContext.Provider>
   )
 }

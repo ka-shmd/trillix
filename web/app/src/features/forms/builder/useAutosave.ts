@@ -135,10 +135,21 @@ export function useAutosave(
     }
 
     // Дебаунс на изменения документа: перемещение/правка меняют ссылку blocks,
-    // правка текста кнопки — submitLabel; выбор блока (selectedId) документ не
-    // трогает и сохранение не будит.
+    // правка текста кнопки — submitLabel, настройки экрана «после отправки» —
+    // thankYouText/redirectUrl; выбор блока (selectedId) документ не трогает и
+    // сохранение не будит.
+    //
+    // Сверяются ВСЕ поля документа: поле, забытое здесь, не планирует сохранение —
+    // правка ставит dirty и молча ждёт, пока её унесёт чужой автосейв. Настройки
+    // приходят сюда только кнопкой «Сохранить» (она же сохраняет сразу, без
+    // дебаунса), но через undo/redo они меняются как обычный документ — и тогда
+    // сохранить их должна подписка.
     const unsub = store.subscribe((state, prev) => {
-      const changed = state.blocks !== prev.blocks || state.submitLabel !== prev.submitLabel
+      const changed =
+        state.blocks !== prev.blocks ||
+        state.submitLabel !== prev.submitLabel ||
+        state.thankYouText !== prev.thankYouText ||
+        state.redirectUrl !== prev.redirectUrl
       if (changed && !conflictRef.current) schedule()
     })
 
@@ -159,8 +170,10 @@ export function useAutosave(
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [store])
 
-  // Ручной повтор после статуса 'error' — тот же путь сохранения, без дебаунса.
-  const retry = () => runRef.current()
+  // Сохранить сейчас, без дебаунса. Одна операция на два вызова: повтор после
+  // статуса 'error' и кнопка «Сохранить» на странице настроек (там сохранение
+  // явное — ждать дебаунс после нажатия было бы враньём индикатора).
+  const saveNow = () => runRef.current()
 
-  return { status, retry }
+  return { status, saveNow }
 }
