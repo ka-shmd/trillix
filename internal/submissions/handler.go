@@ -22,10 +22,12 @@ import (
 // submissions не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
 
-// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт + удаление).
+// listService — часть сервиса, нужная приватному транспорту (листинг + экспорт +
+// сводка + удаление).
 type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
+	Summary(ctx context.Context, userID, formID uuid.UUID) (domain.Summary, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 }
 
@@ -59,6 +61,7 @@ func NewHandler(svc listService, requireAuth, requireCSRF Middleware) *Handler {
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/summary", h.requireAuth(http.HandlerFunc(h.summary)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 }
 
@@ -113,6 +116,91 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		resp.NextCursor = &enc
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// Сводка. kind — по нему фронт выбирает вид: distribution → buckets, number →
+// number, fill → только asked/answered. buckets/number приходят лишь там, где
+// осмысленны (omitempty), Zod-схема кабинета это допускает.
+type summaryBucketResponse struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+type numberStatsResponse struct {
+	Avg float64 `json:"avg"`
+	Min float64 `json:"min"`
+	Max float64 `json:"max"`
+}
+
+type blockSummaryResponse struct {
+	BlockID  string                  `json:"blockId"`
+	Label    string                  `json:"label"`
+	Type     string                  `json:"type"`
+	Kind     string                  `json:"kind"`
+	Asked    int                     `json:"asked"`
+	Answered int                     `json:"answered"`
+	Buckets  []summaryBucketResponse `json:"buckets,omitempty"`
+	Number   *numberStatsResponse    `json:"number,omitempty"`
+}
+
+type summaryResponse struct {
+	Total  int                    `json:"total"`
+	Blocks []blockSummaryResponse `json:"blocks"`
+}
+
+// summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые
+// ответы браузер не получает.
+//
+// Логирует строку «сколько ответов свернули и за сколько». Длительность запроса пишет
+// и общий middleware, но без знаменателя она бесполезна: 900 мс на 300 ответах и на
+// 30 000 — разные новости. Это третий слой наблюдаемости из ARCHITECTURE §«Мониторинг»
+// (счётчики в лог, а не Prometheus на одном VPS); содержимое ответов в лог не идёт.
+func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+
+	start := time.Now()
+	sum, err := h.svc.Summary(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.LoggerFrom(r.Context()).Info("submissions summary",
+		slog.String("form_id", formID.String()),
+		slog.Int("submissions", sum.Total),
+		slog.Int("questions", len(sum.Blocks)),
+		slog.Duration("duration", time.Since(start)),
+	)
+
+	blocks := make([]blockSummaryResponse, len(sum.Blocks))
+	for i, b := range sum.Blocks {
+		item := blockSummaryResponse{
+			BlockID:  b.BlockID,
+			Label:    b.Label,
+			Type:     string(b.Type),
+			Kind:     string(b.Kind),
+			Asked:    b.Asked,
+			Answered: b.Answered,
+		}
+		if len(b.Buckets) > 0 {
+			item.Buckets = make([]summaryBucketResponse, len(b.Buckets))
+			for j, bk := range b.Buckets {
+				item.Buckets[j] = summaryBucketResponse{Key: bk.Key, Label: bk.Label, Count: bk.Count}
+			}
+		}
+		if b.Number != nil {
+			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
+		}
+		blocks[i] = item
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks})
 }
 
 // export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).
