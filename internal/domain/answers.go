@@ -122,6 +122,10 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 		if !validEmail(v) {
 			return "некорректный email"
 		}
+	case BlockPhone:
+		if !validPhone(v) {
+			return "некорректный телефон"
+		}
 	case BlockNumber:
 		if !validNumber(v) {
 			return "введите число"
@@ -204,6 +208,34 @@ const msgRequired = "обязательное поле"
 func validEmail(v string) bool {
 	addr, err := mail.ParseAddress(v)
 	return err == nil && addr.Address == v && addr.Name == ""
+}
+
+// Границы числа цифр в телефоне. Зеркалят MIN/MAX_PHONE_DIGITS в
+// web/shared/entities/formSchema.ts.
+const (
+	MinPhoneDigits = 5
+	MaxPhoneDigits = 20
+)
+
+// validPhone — мягкая проверка: допустимые символы и количество цифр, НЕ формат
+// конкретной страны (решение владельца, DEV-PLAN фаза 8.5 шаг 2). Жёсткая маска РФ
+// отсекала бы легальные номера (+380, международные, запись через скобки/дефисы) —
+// для формы ложный отказ дороже, чем принятая нестандартная запись. Зеркалит
+// isValidPhone на фронте.
+func validPhone(v string) bool {
+	digits := 0
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '+' || r == '(' || r == ')' || r == '-' || r == ' ':
+			// Разделители записи — допустимы в любом месте: разбирать их взаимное
+			// расположение значило бы вводить ту самую жёсткую маску.
+		default:
+			return false
+		}
+	}
+	return digits >= MinPhoneDigits && digits <= MaxPhoneDigits
 }
 
 // validNumber — конечное число (NaN/Inf отвергаются, хотя ParseFloat их принимает).

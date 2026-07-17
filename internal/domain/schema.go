@@ -38,8 +38,8 @@ const (
 	MaxRedirectURLLen  = 2000
 )
 
-// BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
-// два неотвечаемых (контентных): «text» — статический абзац, «image» — картинка на
+// BlockType — тип блока формы. Отвечаемые поля (ARCHITECTURE 3.4) плюс два
+// неотвечаемых (контентных): «text» — статический абзац, «image» — картинка на
 // полотне. Контентные не собирают ответ: исключены из ValidateAnswers и CSV.
 type BlockType string
 
@@ -47,6 +47,7 @@ const (
 	BlockShortText    BlockType = "short_text"
 	BlockLongText     BlockType = "long_text"
 	BlockEmail        BlockType = "email"
+	BlockPhone        BlockType = "phone"
 	BlockNumber       BlockType = "number"
 	BlockSingleChoice BlockType = "single_choice"
 	BlockMultiChoice  BlockType = "multi_choice"
@@ -57,7 +58,7 @@ const (
 
 func (t BlockType) valid() bool {
 	switch t {
-	case BlockShortText, BlockLongText, BlockEmail, BlockNumber,
+	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber,
 		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText, BlockImage:
 		return true
 	default:

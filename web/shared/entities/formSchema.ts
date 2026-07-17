@@ -49,13 +49,14 @@ export const isHttpUrl = (raw: string): boolean => {
   return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
 }
 
-// Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс два неотвечаемых
+// Типы блоков: отвечаемые поля (ARCHITECTURE 3.4) плюс два неотвечаемых
 // (контентных): 'text' — статический абзац, 'image' — картинка на полотне. Оба не
 // собирают ответ (исключены из ValidateAnswers/CSV/таблицы), рендерятся статикой.
 export const blockTypeSchema = z.enum([
   'short_text',
   'long_text',
   'email',
+  'phone',
   'number',
   'single_choice',
   'multi_choice',
@@ -73,9 +74,24 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
   'short_text',
   'long_text',
   'email',
+  'phone',
   'number',
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
+
+// Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
+// цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
+// номера (+380, добавочные, международные) — для формы это дороже, чем принять
+// нестандартную запись. Финальная инстанция — сервер (validPhone в answers.go).
+export const MIN_PHONE_DIGITS = 5
+export const MAX_PHONE_DIGITS = 20
+const PHONE_ALLOWED = /^[0-9+()\-\s]+$/
+
+export const isValidPhone = (raw: string): boolean => {
+  if (!PHONE_ALLOWED.test(raw)) return false
+  const digits = raw.replace(/\D/g, '').length
+  return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS
+}
 
 // Неотвечаемые (контентные) блоки: 'text' и 'image'. Зеркалит Go isContent().
 const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['text', 'image'])

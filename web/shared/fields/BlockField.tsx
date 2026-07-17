@@ -126,6 +126,19 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           {...invalidProps}
         />
       )
+    case 'phone':
+      return (
+        <input
+          className="rf-input"
+          type="tel"
+          value={text}
+          onChange={onText}
+          disabled={disabled}
+          aria-label={label}
+          placeholder={ph ?? '+7 900 000-00-00'}
+          {...invalidProps}
+        />
+      )
     case 'number':
       return (
         <input

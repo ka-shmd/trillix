@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formSchemaSchema,
+  isValidPhone,
   MAX_ALT_LEN,
   MAX_BLOCKS,
   MAX_IMAGE_KEY_LEN,
@@ -47,6 +48,9 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'телефон с плейсхолдером': {
+      blocks: [{ id: 'b', type: 'phone', label: 'Телефон', settings: { placeholder: '+7 900' } }],
+    },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
     'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
     'redirectUrl http с портом и query': {
@@ -77,6 +81,24 @@ describe('formSchemaSchema — валидные', () => {
       expect(formSchemaSchema.safeParse(doc).success).toBe(true)
     })
   }
+})
+
+// Зеркало TestValidPhone в Go: проверка мягкая — символы и число цифр, не формат
+// страны (решение владельца, DEV-PLAN фаза 8.5 шаг 2).
+describe('isValidPhone', () => {
+  it.each(['+7 900 123-45-67', '+79001234567', '8(900)123-45-67', '+380 44 123 4567', '12345'])(
+    'валиден: %s',
+    (v) => {
+      expect(isValidPhone(v)).toBe(true)
+    },
+  )
+
+  it.each(['позвоните мне', '1234', '123456789012345678901', '', '+7_900_1234567', 'a@b.co'])(
+    'невалиден: %s',
+    (v) => {
+      expect(isValidPhone(v)).toBe(false)
+    },
+  )
 })
 
 describe('formSchemaSchema — невалидные', () => {

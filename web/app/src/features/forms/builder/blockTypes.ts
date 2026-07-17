@@ -41,6 +41,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     description: 'Адрес электронной почты с проверкой формата.',
   },
   {
+    type: 'phone',
+    label: 'Телефон',
+    group: 'question',
+    description: 'Номер телефона. Проверяется мягко — любой формат записи.',
+  },
+  {
     type: 'number',
     label: 'Число',
     group: 'question',

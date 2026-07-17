@@ -29,8 +29,8 @@ func raws(m map[string]string) map[string]json.RawMessage {
 	return out
 }
 
-// allTypes — форма со всеми семью типами, все необязательные (общий стенд валидных
-// проверок). choice-блоки несут по две опции o1/o2.
+// allTypes — форма со всеми отвечаемыми типами, все необязательные (общий стенд
+// валидных проверок). choice-блоки несут по две опции o1/o2.
 func allTypes(required bool) FormSchema {
 	return FormSchema{
 		SchemaVersion: SchemaVersion,
@@ -38,6 +38,7 @@ func allTypes(required bool) FormSchema {
 			field("short", BlockShortText, required),
 			field("long", BlockLongText, required),
 			field("mail", BlockEmail, required),
+			field("tel", BlockPhone, required),
 			field("num", BlockNumber, required),
 			field("date", BlockDate, required),
 			choice("single", BlockSingleChoice, required, "o1", "o2"),
@@ -57,6 +58,7 @@ func TestValidateAnswers_Valid(t *testing.T) {
 				"short":  `"Иван"`,
 				"long":   `"длинный текст"`,
 				"mail":   `"a@b.co"`,
+				"tel":    `"+7 900 123-45-67"`,
 				"num":    `"42"`,
 				"date":   `"2024-01-02"`,
 				"single": `"o1"`,
@@ -77,8 +79,8 @@ func TestValidateAnswers_Valid(t *testing.T) {
 		"обязательные все заполнены": {
 			allTypes(true),
 			map[string]string{
-				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "num": `"1"`,
-				"date": `"2024-12-31"`, "single": `"o2"`, "multi": `["o1"]`,
+				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "tel": `"+79001234567"`,
+				"num": `"1"`, "date": `"2024-12-31"`, "single": `"o2"`, "multi": `["o1"]`,
 			},
 		},
 	}
@@ -147,6 +149,43 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 			}
 			if _, ok := fields[c.badBlock]; !ok {
 				t.Fatalf("ожидалось сообщение под block_id %q, карта: %v", c.badBlock, fields)
+			}
+		})
+	}
+}
+
+// Телефон проверяется МЯГКО (решение владельца): символы и число цифр, не формат
+// страны. Тест фиксирует именно это: нестандартные, но легальные записи проходят —
+// жёсткая маска РФ отсекала бы их, и это дороже ложного пропуска.
+func TestValidPhone(t *testing.T) {
+	valid := []string{
+		"+7 900 123-45-67",  // РФ с разделителями
+		"+79001234567",      // РФ слитно
+		"8(900)123-45-67",   // городская запись со скобками
+		"+380 44 123 4567",  // не РФ — маска страны отсекла бы
+		"12345",             // минимум цифр
+		"+1 (212) 555-0123", // США
+	}
+	for _, v := range valid {
+		t.Run("валиден: "+v, func(t *testing.T) {
+			if !validPhone(v) {
+				t.Fatalf("ожидался валидный телефон: %q", v)
+			}
+		})
+	}
+
+	invalid := map[string]string{
+		"буквы":                 "позвоните мне",
+		"цифр меньше минимума":  "1234",
+		"цифр больше максимума": "123456789012345678901",
+		"пусто":                 "",
+		"недопустимый символ":   "+7_900_1234567",
+		"email вместо номера":   "a@b.co",
+	}
+	for name, v := range invalid {
+		t.Run("невалиден: "+name, func(t *testing.T) {
+			if validPhone(v) {
+				t.Fatalf("ожидался невалидный телефон: %q", v)
 			}
 		})
 	}

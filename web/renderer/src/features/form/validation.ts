@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { type Block, isContentType } from '@entities/formSchema'
+import { type Block, isContentType, isValidPhone } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 
 import { type Answers } from './answers'
@@ -34,6 +34,9 @@ export function validateBlock(block: Block, value: Answer | undefined): string |
   switch (block.type) {
     case 'email':
       return emailCheck.safeParse(text).success ? null : 'Некорректный email'
+    case 'phone':
+      // Мягко: символы и число цифр, не формат страны (зеркалит validPhone в Go).
+      return isValidPhone(text) ? null : 'Некорректный телефон'
     case 'number':
       return Number.isFinite(Number(text)) ? null : 'Введите число'
     case 'date':
