@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
 import {
   DndContext,
   KeyboardSensor,
@@ -36,9 +36,13 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
+  // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
+  // фокус переносим сюда, а не теряем в body.
+  const titleRef = useRef<HTMLTextAreaElement>(null)
   // Диалог выбора типа (кнопка «+»): открыт ли и после какого блока вставлять
   // (null — в конец).
   const [insertOpen, setInsertOpen] = useState(false)
@@ -83,15 +87,48 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
 
   // Выбор типа в диалоге: создать блок этого типа на нужной позиции.
   function handlePickInsertType(type: BlockType) {
-    setFocusId(addBlockAfter(insertAfterId, type))
+    const id = addBlockAfter(insertAfterId, type)
+    // image без редактируемого заголовка не на что фокусировать — открываем новую
+    // текстовую строку ниже (как в slash-потоке), чтобы каретка не пропала.
+    if (type === 'image') startBlock(id)
+    else setFocusId(id)
     setInsertOpen(false)
   }
 
-  function handleBackspaceEmpty(id: string) {
+  // Backspace в начале блока — как в текстовом документе удаляет то, что перед
+  // кареткой. Предыдущий блок — картинка → удаляем её, а текущий блок с кареткой
+  // остаётся на месте (у image нет textarea, встать каретке некуда). Иначе — пустой
+  // текущий блок схлопываем в предыдущий с переносом фокуса.
+  function handleBackspaceAtStart(id: string) {
     const i = blocks.findIndex((b) => b.id === id)
+    const cur = blocks[i]
+    if (!cur) return
     const prev = blocks[i - 1]
-    removeBlock(id)
-    if (prev) setFocusId(prev.id)
+    if (prev?.type === 'image') {
+      // Картинка перед кареткой — удаляем её. Если текущий блок пуст, сбрасываем его к
+      // обычному тексту: под удалённой картинкой должен остаться чистый текстовый блок,
+      // а не пустое поле-вопрос. Непустой блок сохраняем как есть.
+      removeBlock(prev.id)
+      if (cur.label === '' && cur.type !== 'text') changeBlockType(cur.id, 'text')
+      return
+    }
+    // Пустой блок схлопываем в предыдущий (фокус в его конец). Предыдущего нет —
+    // удаляем последний блок вовсе: форма пустеет, а каретку переносим на заголовок
+    // (иначе фокус потерялся бы в body и печатать было бы некуда).
+    if (cur.label === '') {
+      removeBlock(id)
+      if (prev) setFocusId(prev.id)
+      else {
+        // Заголовок всегда смонтирован (над полотном), поэтому фокусируем его сразу —
+        // ре-рендер пустого полотна его не размонтирует, каретка сохранится. rAF тут
+        // не нужен (нет Radix-возврата фокуса) и в фоновой вкладке не сработал бы.
+        const el = titleRef.current
+        if (el) {
+          el.focus()
+          el.setSelectionRange(el.value.length, el.value.length)
+        }
+      }
+    }
   }
 
   function handleArrow(id: string, dir: 'up' | 'down') {
@@ -105,7 +142,12 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
     <div className="mx-auto max-w-3xl px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-36">
-      <FormTitleInput formId={formId} initialTitle={initialTitle} onEnter={focusFirstOrCreate} />
+      <FormTitleInput
+        formId={formId}
+        initialTitle={initialTitle}
+        onEnter={focusFirstOrCreate}
+        titleRef={titleRef}
+      />
 
       {blocks.length === 0 ? (
         <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
@@ -121,13 +163,12 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   key={b.id}
                   block={b}
                   formId={formId}
-                  total={blocks.length}
                   focusMe={focusId === b.id}
                   onFocusHandled={() => setFocusId(null)}
                   openMenuOnMount={menuForId === b.id}
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
-                  onBackspaceEmpty={handleBackspaceEmpty}
+                  onBackspaceAtStart={handleBackspaceAtStart}
                   onArrow={handleArrow}
                 />
               ))}
@@ -243,10 +284,14 @@ function FormTitleInput({
   formId,
   initialTitle,
   onEnter,
+  titleRef,
 }: {
   formId: string
   initialTitle: string
   onEnter: () => void
+  // Родитель держит ссылку на textarea заголовка, чтобы вернуть сюда фокус после
+  // удаления последнего блока.
+  titleRef: RefObject<HTMLTextAreaElement | null>
 }) {
   const rename = useRenameForm()
   const lastSaved = useRef(initialTitle)
@@ -307,7 +352,10 @@ function FormTitleInput({
 
   return (
     <textarea
-      ref={inputRef}
+      ref={(el) => {
+        inputRef.current = el
+        titleRef.current = el
+      }}
       rows={1}
       defaultValue={initialValue}
       onChange={(e) => onChange(e.target.value)}

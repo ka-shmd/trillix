@@ -24,7 +24,6 @@ export interface BlockRowProps {
   block: Block
   // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
   formId: string
-  total: number
   // focusMe — редактор просит поставить фокус на label этой строки (после Enter/
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
   focusMe: boolean
@@ -35,7 +34,9 @@ export interface BlockRowProps {
   onAddBelow: (id: string) => void
   // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
   onInsertBelow: (id: string) => void
-  onBackspaceEmpty: (id: string) => void
+  // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
+  // схлопнуть пустой блок в предыдущий (решает родитель — знает соседей).
+  onBackspaceAtStart: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
 
@@ -47,13 +48,12 @@ export interface BlockRowProps {
 export function BlockRow({
   block,
   formId,
-  total,
   focusMe,
   onFocusHandled,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
-  onBackspaceEmpty,
+  onBackspaceAtStart,
   onArrow,
 }: BlockRowProps) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
@@ -63,6 +63,9 @@ export function BlockRow({
   const labelRef = useRef<HTMLTextAreaElement>(null)
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
+  // Плейсхолдер заголовка виден только у активной (в фокусе) строки: неактивный
+  // пустой блок ничего не показывает.
+  const [labelFocused, setLabelFocused] = useState(false)
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
 
@@ -109,12 +112,15 @@ export function BlockRow({
       setSlashOpen(true)
     } else if (
       e.key === 'Backspace' &&
-      block.label === '' &&
       el.selectionStart === 0 &&
-      total > 1
+      el.selectionEnd === 0
     ) {
+      // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
+      // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
+      // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
+      // гасим всегда — нативный Backspace в начале блока и так ничего не делает.
       e.preventDefault()
-      onBackspaceEmpty(block.id)
+      onBackspaceAtStart(block.id)
     } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault()
       moveBlock(block.id, e.key === 'ArrowUp' ? 'up' : 'down')
@@ -130,7 +136,11 @@ export function BlockRow({
   function pickType(type: BlockType) {
     changeBlockType(block.id, type)
     setSlashOpen(false)
-    requestAnimationFrame(focusLabelEnd)
+    // У image нет редактируемого заголовка (рендерится ImageField, labelRef=null) —
+    // фокусировать нечего. Продолжаем поток новой текстовой строкой ниже (как Notion):
+    // каретка не пропадает, можно печатать дальше; картинку грузишь кликом по зоне.
+    if (type === 'image') onAddBelow(block.id)
+    else requestAnimationFrame(focusLabelEnd)
   }
 
   const iconBtn =
@@ -192,11 +202,19 @@ export function BlockRow({
               ref={labelRef}
               rows={1}
               value={block.label}
-              // Плейсхолдер показываем у любого пустого блока (в т.ч. неактивного),
-              // чтобы пустая строка не выглядела «пропавшей». У вопроса «/» уже не
-              // работает (тип выбран) — подсказку про слэш не показываем.
-              placeholder={isContent ? 'Текст, или «/» для поля' : 'Введите текст вопроса'}
+              // Плейсхолдер показываем только у активной (в фокусе) строки: пустой
+              // неактивный блок ничего не показывает. У вопроса «/» уже не работает
+              // (тип выбран) — подсказку про слэш не показываем.
+              placeholder={
+                labelFocused
+                  ? isContent
+                    ? 'Текст, или «/» для поля'
+                    : 'Введите текст вопроса'
+                  : undefined
+              }
               onChange={(e) => updateBlock(block.id, { label: e.target.value })}
+              onFocus={() => setLabelFocused(true)}
+              onBlur={() => setLabelFocused(false)}
               onKeyDown={onLabelKeyDown}
               className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
                 isContent

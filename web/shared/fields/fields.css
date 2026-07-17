@@ -133,6 +133,12 @@
   border-radius: var(--rf-radius);
 }
 
+/* Пустой image-блок (без картинки) держит место, чтобы недособранный черновик не
+   схлопывался; высота = зона загрузки редактора (min-h-32 = 8rem). */
+.rf-image-empty {
+  min-height: 8rem;
+}
+
 .rf-required {
   color: var(--rf-danger);
 }
