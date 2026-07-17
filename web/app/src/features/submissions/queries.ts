@@ -1,6 +1,6 @@
-import { infiniteQueryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import { infiniteQueryOptions, queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { submissionKeys } from './keys'
-import { deleteSubmission, listSubmissions } from './api'
+import { deleteSubmission, getSummary, listSubmissions } from './api'
 
 // Ответы формы — серверный стейт с курсорной пагинацией (новые сверху), страницы
 // подгружаются через getNextPageParam; курсор непрозрачен для клиента.
@@ -13,13 +13,26 @@ export function submissionsListQueryOptions(formId: string) {
   })
 }
 
-// Удаление ответа инвалидирует список ответов формы (total и строки пересчитаются).
+// Сводка формы — обычный запрос (не пагинируется: сервер отдаёт готовый итог).
+export function submissionsSummaryQueryOptions(formId: string) {
+  return queryOptions({
+    queryKey: submissionKeys.summary(formId),
+    queryFn: () => getSummary(formId),
+  })
+}
+
+// Удаление ответа инвалидирует список ответов формы (total и строки пересчитаются) и
+// сводку: удалённый ответ обязан исчезнуть из распределений, иначе таблица и сводка
+// расходятся на глазах у владельца.
 // Счётчик на карточке дашборда (formsList) не трогаем отсюда — межфичевый импорт
 // ключей запрещён (web/CLAUDE.md); дашборд перечитает список при возврате (remount).
 export function useDeleteSubmission(formId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (submissionId: string) => deleteSubmission(formId, submissionId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: submissionKeys.list(formId) }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: submissionKeys.list(formId) })
+      void qc.invalidateQueries({ queryKey: submissionKeys.summary(formId) })
+    },
   })
 }

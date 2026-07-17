@@ -4,4 +4,5 @@
 export const submissionKeys = {
   all: () => ['submissions'] as const,
   list: (formId: string) => ['submissions', 'list', formId] as const,
+  summary: (formId: string) => ['submissions', 'summary', formId] as const,
 }

@@ -169,21 +169,18 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 	return page, nil
 }
 
-// exportBatch — размер порции keyset-итерации при экспорте. Память экспорта плоская
-// (одна порция за раз) независимо от общего числа ответов — DoD «10k строк не растит
-// память».
-const exportBatch = 1000
+// streamBatch — размер порции keyset-итерации по всем ответам формы. Память
+// потребителя плоская (одна порция за раз) независимо от общего числа ответов — DoD
+// «10k строк не растит память».
+const streamBatch = 1000
 
-// ExportCSV потоково выгружает все ответы формы в emit (по строке; первая — заголовок).
-// Порядок: авторизация + чтение версий (чужая/нет формы → 404), сборка модели колонок
-// (объединение блоков по версиям), затем keyset-итерация ответов порциями exportBatch —
-// каждая строка эмитится сразу, без накопления всей выборки. Между порциями уважается
-// отмена ctx (клиент закрыл соединение). emit-ошибка (обрыв записи в сеть) прерывает
-// экспорт.
-func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error {
+// versionedSchemas — схемы всех опубликованных версий формы (с авторизацией доступа:
+// чужая/несуществующая → 404). Общее начало выгрузки и сводки: обе строят своё
+// представление по объединению версий (domain/csv.go, domain/summary.go).
+func (s *Service) versionedSchemas(ctx context.Context, userID, formID uuid.UUID) ([]domain.VersionedSchema, error) {
 	versions, err := s.forms.Versions(ctx, userID, formID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	vs := make([]domain.VersionedSchema, 0, len(versions))
@@ -193,26 +190,33 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 			// Опубликованный снапшот обязан быть валиден (проверен при публикации) —
 			// иначе нарушен инвариант иммутабельности версии. %v, а не %w: см. Submit —
 			// сентинел ErrValidation в цепочке дал бы 422 с внутренним текстом вместо 500.
-			return fmt.Errorf("parse version %d schema of form %s: %v", v.Number, formID, e)
+			return nil, fmt.Errorf("parse version %d schema of form %s: %v", v.Number, formID, e)
 		}
 		vs = append(vs, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
 	}
+	return vs, nil
+}
 
-	builder := domain.NewCSVBuilder(vs)
-	if err := emit(builder.Header()); err != nil {
-		return err
-	}
-
+// eachSubmission проходит все ответы формы порциями streamBatch (новые сверху, тем же
+// keyset-курсором, что и листинг) и зовёт fn на каждый с разобранной картой ответов.
+// Поток, а не выборка целиком: в памяти живёт одна порция, а потребитель решает, что
+// с ней делать — выгрузка пишет строку сразу, сводка копит счётчики. Между порциями
+// уважается отмена ctx (клиент закрыл соединение); ошибка fn прерывает обход.
+//
+// Авторизацию НЕ делает: вызывающий обязан сделать её сам (versionedSchemas или
+// forms.Get) — id формы из URL правом доступа не является (инвариант 1).
+func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
 	var after *Cursor
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		var rows []Submission
+		var err error
 		if after == nil {
-			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, exportBatch)
+			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, streamBatch)
 		} else {
-			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, exportBatch)
+			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, streamBatch)
 		}
 		if err != nil {
 			return err
@@ -222,15 +226,57 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 			if e := json.Unmarshal(rows[i].Answers, &answers); e != nil {
 				return fmt.Errorf("unmarshal answers of submission %s: %w", rows[i].ID, e)
 			}
-			if e := emit(builder.Row(rows[i].ID.String(), rows[i].CreatedAt, int(rows[i].FormVersion), answers)); e != nil {
+			if e := fn(rows[i], answers); e != nil {
 				return e
 			}
 		}
-		if len(rows) < exportBatch {
+		if len(rows) < streamBatch {
 			return nil
 		}
 		after = &Cursor{ID: rows[len(rows)-1].ID}
 	}
+}
+
+// ExportCSV потоково выгружает все ответы формы в emit (по строке; первая — заголовок).
+// Порядок: авторизация + чтение версий (чужая/нет формы → 404), сборка модели колонок
+// (объединение блоков по версиям), затем обход ответов — каждая строка эмитится сразу,
+// без накопления всей выборки. emit-ошибка (обрыв записи в сеть) прерывает экспорт.
+func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error {
+	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+
+	builder := domain.NewCSVBuilder(vs)
+	if err := emit(builder.Header()); err != nil {
+		return err
+	}
+	return s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
+		return emit(builder.Row(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers))
+	})
+}
+
+// Summary собирает сводку ответов формы (фаза 8.5 шаг 3): распределения, статистику
+// чисел и доли заполнивших. Тот же путь, что у выгрузки — авторизация и чтение версий,
+// затем обход всех ответов, — но вместо строк файла копятся счётчики, поэтому наружу
+// уходит итог, а не сырые ответы: браузер их целиком не получает.
+//
+// Стоимость линейна по числу ответов формы: см. строку лога в handler.go — по ней
+// видно, во что она обходится на реальных данных.
+func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID) (domain.Summary, error) {
+	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return domain.Summary{}, err
+	}
+
+	builder := domain.NewSummaryBuilder(vs)
+	if err := s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
+		builder.Add(int(sub.FormVersion), answers)
+		return nil
+	}); err != nil {
+		return domain.Summary{}, err
+	}
+	return builder.Result(), nil
 }
 
 // DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация через

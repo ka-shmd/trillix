@@ -1,5 +1,6 @@
 import { apiRequest } from '../../shared/api/client'
 import { submissionsPageSchema, type SubmissionsPage } from '../../entities/submission'
+import { formSummarySchema, type FormSummary } from '../../entities/summary'
 
 // Транспорт submissions: страница ответов парсится Zod-схемой на границе.
 export function listSubmissions(formId: string, cursor?: string): Promise<SubmissionsPage> {
@@ -9,6 +10,11 @@ export function listSubmissions(formId: string, cursor?: string): Promise<Submis
   return apiRequest(`/forms/${formId}/submissions${query ? `?${query}` : ''}`, {
     schema: submissionsPageSchema,
   })
+}
+
+// Сводка ответов: агрегат считает сервер, сюда приходят только счётчики.
+export function getSummary(formId: string): Promise<FormSummary> {
+  return apiRequest(`/forms/${formId}/submissions/summary`, { schema: formSummarySchema })
 }
 
 // URL CSV-экспорта: обычная навигация браузера (cookie авторизует, файл качается) —

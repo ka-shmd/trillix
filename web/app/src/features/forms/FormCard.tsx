@@ -72,9 +72,11 @@ export function FormCard({ form }: { form: Form }) {
       ) : (
         <div className="flex items-start justify-between gap-2">
           <Link
-            // Опубликованную форму открываем на «Поделиться» (ссылка, превью,
-            // управление); черновик/закрытую — в редактор.
-            to={form.status === 'published' ? '/forms/$slug/share' : '/forms/$slug/edit'}
+            // Форму, которую уже публиковали (в т.ч. закрытую), открываем на «Ответы»:
+            // она роздана, и ежедневный вопрос к ней — «что написали?», а не «где
+            // ссылка?» (ссылка и сводка — соседние табы в один клик). Черновик — в
+            // редактор: показывать ему три пустых таба вместо недоделанной формы незачем.
+            to={form.status === 'draft' ? '/forms/$slug/edit' : '/forms/$slug/responses'}
             params={{ slug: form.slug }}
             className={`break-words text-base font-semibold hover:text-primary ${
               isPlaceholder ? 'text-muted-foreground' : ''
