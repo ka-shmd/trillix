@@ -20,6 +20,12 @@ var (
 	// ресурс изменён параллельно (другая вкладка). Маппится в 409 (ARCHITECTURE §5.1).
 	ErrConflict = errors.New("conflict")
 
+	// ErrFormClosed — форма больше не принимает ответы (снята вручную, наступила дата
+	// закрытия или достигнут лимит; фаза 8.5 шаг 4). Маппится в 410 Gone — форма была
+	// публичной, поэтому её существование не скрывается (инвариант 5 распространяется
+	// только на черновик → 404). Рендерер по этому коду показывает «приём закрыт».
+	ErrFormClosed = errors.New("form closed")
+
 	// Аутентификация.
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
