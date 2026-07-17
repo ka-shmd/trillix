@@ -20,6 +20,9 @@ x-app-env: &app-env
   OG_IMAGE_URL: ${OG_IMAGE_URL}
   PUBLIC_RENDERER_INDEX_PATH: ${PUBLIC_RENDERER_INDEX_PATH:-} # опциональна (пусто в dev)
   APP_ORIGIN: ${APP_ORIGIN}
+  # За Caddy честный IP клиента берётся из X-Forwarded-For (TD-1) — в прод-контуре
+  # всегда true. config.Load() требует переменную, поэтому без неё падает и migrate.
+  TRUSTED_PROXY: ${TRUSTED_PROXY}
   S3_ENDPOINT: ${S3_ENDPOINT}
   S3_REGION: ${S3_REGION}
   S3_ACCESS_KEY: ${S3_ACCESS_KEY}
