@@ -83,10 +83,15 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `status` | `TEXT` | `NOT NULL DEFAULT 'draft'` — `draft | published | closed` |
 | `draft_schema` | `JSONB` | `NOT NULL DEFAULT '{"blocks": []}'` |
 | `published_version_id` | `UUID` | FK → `form_versions(id)`; ставится при публикации (фаза 4) |
+| `close_at` | `TIMESTAMPTZ` | nullable (0007) — форма закрывается ПОСЛЕ этого момента; `NULL` = без ограничения по дате |
+| `response_limit` | `INT` | nullable (0007), `CHECK (> 0)` — жёсткий кап принятых ответов; `NULL` = без лимита (ADR §10) |
+| `closed_message` | `TEXT` | nullable (0007) — текст экрана «приём закрыт»; `NULL`/пусто → дефолт рендерера |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` (двигается вручную при update) |
 
 **Индексы:** `idx_forms_workspace (workspace_id, updated_at DESC, id DESC)` — список воркспейса по свежести правки; `id` в хвосте — tie-break составного курсора `(updated_at, id)`.
+
+**Закрытие формы (0007) — живые колонки, не JSONB-схема** (ADR §10): `close_at`/`response_limit`/`closed_message` меняются без перепубликации. **«Фактически закрыта» не хранится, а вычисляется** на чтении: `status = 'closed'` (снята вручную) ИЛИ `status = 'published'` и (`close_at` прошёл ИЛИ `count(submissions) ≥ response_limit`). `status` по дате не флипается — крон не нужен, продление даты переоткрывает мгновенно. Лимит на приёме ответа — жёсткий кап через `pg_advisory_xact_lock` по форме (счётчик+вставка сериализованы); формы без лимита блокировку не берут.
 
 ## `form_versions` (0003)
 
