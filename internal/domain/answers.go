@@ -86,7 +86,87 @@ func validateAnswer(b Block, raw json.RawMessage) string {
 	if b.Type.isChoice() {
 		return validateChoiceAnswer(b, raw)
 	}
+	if b.Type == BlockScale {
+		return validateScaleAnswer(b, raw)
+	}
+	if b.Type == BlockConsent {
+		return validateConsentAnswer(b, raw)
+	}
 	return validateTextAnswer(b, raw)
+}
+
+// ConsentYes — значение отмеченного согласия. Ответ хранится строкой, а не булевым
+// (решение владельца): это конвенция проекта (number/date тоже строки), и пустая
+// строка = «не отмечено» даёт обязательность даром — без спецслучая в required.
+const ConsentYes = "yes"
+
+// validateConsentAnswer — согласие: либо ConsentYes, либо пусто. Обязательность —
+// обычный флаг required (решение владельца): необязательное согласие это реальный
+// случай (подписка на рассылку, маркетинг-opt-in), поэтому спецслучая «consent
+// всегда обязателен» в валидаторе нет. Текст согласия — label блока.
+func validateConsentAnswer(b Block, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "ожидалась строка"
+	}
+	if v == "" {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	if v != ConsentYes {
+		return "недопустимое значение согласия"
+	}
+	return ""
+}
+
+// validateScaleAnswer — шкала: ответ приходит строкой с целым числом (как number и
+// date, конвенция проекта), которое обязано попадать в диапазон блока. Диапазон
+// берётся из ТОЙ ЖЕ версии схемы, против которой валидируется ответ, поэтому смена
+// диапазона владельцем не делает старые ответы невалидными задним числом.
+func validateScaleAnswer(b Block, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "ожидалась строка"
+	}
+	if v == "" {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return "ожидалось целое число"
+	}
+	min, max := scaleRange(b)
+	if n < min || n > max {
+		return fmt.Sprintf("значение вне диапазона %d–%d", min, max)
+	}
+	return ""
+}
+
+// scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт
+// (черновик без диапазона; редактор такой не создаёт). Зеркалит scaleRange на фронте.
+func scaleRange(b Block) (int, int) {
+	min, max := DefaultScaleMin, DefaultScaleMax
+	if b.Settings.ScaleMin != nil && b.Settings.ScaleMax != nil {
+		min, max = *b.Settings.ScaleMin, *b.Settings.ScaleMax
+	}
+	return min, max
 }
 
 // validateTextAnswer — типы, чьё значение приходит JSON-строкой (short_text,
@@ -122,6 +202,10 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 		if !validEmail(v) {
 			return "некорректный email"
 		}
+	case BlockPhone:
+		if !validPhone(v) {
+			return "некорректный телефон"
+		}
 	case BlockNumber:
 		if !validNumber(v) {
 			return "введите число"
@@ -134,14 +218,16 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 	return ""
 }
 
-// validateChoiceAnswer — single_choice (строка-id) и multi_choice (массив id).
+// validateChoiceAnswer — одиночный выбор (single_choice, dropdown — строка-id) и
+// multi_choice (массив id). Ветвление по isSingleChoice(), а не по конкретному
+// типу: новый одиночный choice-тип иначе молча попадёт в ветку multi.
 func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 	opts := make(map[string]struct{}, len(b.Settings.Options))
 	for _, o := range b.Settings.Options {
 		opts[o.ID] = struct{}{}
 	}
 
-	if b.Type == BlockSingleChoice {
+	if b.Type.isSingleChoice() {
 		if len(raw) == 0 {
 			if b.Required {
 				return msgRequired
@@ -204,6 +290,34 @@ const msgRequired = "обязательное поле"
 func validEmail(v string) bool {
 	addr, err := mail.ParseAddress(v)
 	return err == nil && addr.Address == v && addr.Name == ""
+}
+
+// Границы числа цифр в телефоне. Зеркалят MIN/MAX_PHONE_DIGITS в
+// web/shared/entities/formSchema.ts.
+const (
+	MinPhoneDigits = 5
+	MaxPhoneDigits = 20
+)
+
+// validPhone — мягкая проверка: допустимые символы и количество цифр, НЕ формат
+// конкретной страны (решение владельца, DEV-PLAN фаза 8.5 шаг 2). Жёсткая маска РФ
+// отсекала бы легальные номера (+380, международные, запись через скобки/дефисы) —
+// для формы ложный отказ дороже, чем принятая нестандартная запись. Зеркалит
+// isValidPhone на фронте.
+func validPhone(v string) bool {
+	digits := 0
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r == '+' || r == '(' || r == ')' || r == '-' || r == ' ':
+			// Разделители записи — допустимы в любом месте: разбирать их взаимное
+			// расположение значило бы вводить ту самую жёсткую маску.
+		default:
+			return false
+		}
+	}
+	return digits >= MinPhoneDigits && digits <= MaxPhoneDigits
 }
 
 // validNumber — конечное число (NaN/Inf отвергаются, хотя ParseFloat их принимает).

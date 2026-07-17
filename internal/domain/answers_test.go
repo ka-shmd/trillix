@@ -29,8 +29,8 @@ func raws(m map[string]string) map[string]json.RawMessage {
 	return out
 }
 
-// allTypes — форма со всеми семью типами, все необязательные (общий стенд валидных
-// проверок). choice-блоки несут по две опции o1/o2.
+// allTypes — форма со всеми отвечаемыми типами, все необязательные (общий стенд
+// валидных проверок). choice-блоки несут по две опции o1/o2.
 func allTypes(required bool) FormSchema {
 	return FormSchema{
 		SchemaVersion: SchemaVersion,
@@ -38,9 +38,11 @@ func allTypes(required bool) FormSchema {
 			field("short", BlockShortText, required),
 			field("long", BlockLongText, required),
 			field("mail", BlockEmail, required),
+			field("tel", BlockPhone, required),
 			field("num", BlockNumber, required),
 			field("date", BlockDate, required),
 			choice("single", BlockSingleChoice, required, "o1", "o2"),
+			choice("drop", BlockDropdown, required, "o1", "o2"),
 			choice("multi", BlockMultiChoice, required, "o1", "o2"),
 		},
 	}
@@ -57,9 +59,11 @@ func TestValidateAnswers_Valid(t *testing.T) {
 				"short":  `"Иван"`,
 				"long":   `"длинный текст"`,
 				"mail":   `"a@b.co"`,
+				"tel":    `"+7 900 123-45-67"`,
 				"num":    `"42"`,
 				"date":   `"2024-01-02"`,
 				"single": `"o1"`,
+				"drop":   `"o2"`,
 				"multi":  `["o1","o2"]`,
 			},
 		},
@@ -77,8 +81,9 @@ func TestValidateAnswers_Valid(t *testing.T) {
 		"обязательные все заполнены": {
 			allTypes(true),
 			map[string]string{
-				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "num": `"1"`,
-				"date": `"2024-12-31"`, "single": `"o2"`, "multi": `["o1"]`,
+				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "tel": `"+79001234567"`,
+				"num": `"1"`, "date": `"2024-12-31"`, "single": `"o2"`, "drop": `"o1"`,
+				"multi": `["o1"]`,
 			},
 		},
 	}
@@ -113,8 +118,13 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 
 		// Принадлежность опций.
 		"single чужой id": {allTypes(false), map[string]string{"single": `"zzz"`}, "single"},
-		"multi чужой id":  {allTypes(false), map[string]string{"multi": `["o1","zzz"]`}, "multi"},
-		"multi дубли id":  {allTypes(false), map[string]string{"multi": `["o1","o1"]`}, "multi"},
+		// dropdown — одиночный выбор: ждёт строку-id, как single_choice. Массив тут
+		// означал бы, что тип уехал в ветку multi.
+		"dropdown чужой id":        {allTypes(false), map[string]string{"drop": `"zzz"`}, "drop"},
+		"dropdown как массив":      {allTypes(false), map[string]string{"drop": `["o1"]`}, "drop"},
+		"required dropdown пустой": {FormSchema{Blocks: []Block{choice("d", BlockDropdown, true, "o1")}}, map[string]string{"d": `""`}, "d"},
+		"multi чужой id":           {allTypes(false), map[string]string{"multi": `["o1","zzz"]`}, "multi"},
+		"multi дубли id":           {allTypes(false), map[string]string{"multi": `["o1","o1"]`}, "multi"},
 
 		// Неверный JSON-тип значения.
 		"short как число":         {allTypes(false), map[string]string{"short": `42`}, "short"},
@@ -147,6 +157,105 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 			}
 			if _, ok := fields[c.badBlock]; !ok {
 				t.Fatalf("ожидалось сообщение под block_id %q, карта: %v", c.badBlock, fields)
+			}
+		})
+	}
+}
+
+// Согласие: «yes» или пусто. Обязательность — обычный флаг required (решение
+// владельца), а не правило типа: необязательное согласие это маркетинг-opt-in.
+func TestValidateAnswers_Consent(t *testing.T) {
+	req := FormSchema{Blocks: []Block{field("c", BlockConsent, true)}}
+	opt := FormSchema{Blocks: []Block{field("c", BlockConsent, false)}}
+
+	if err := ValidateAnswers(req, raws(map[string]string{"c": `"yes"`})); err != nil {
+		t.Fatalf("отмеченное обязательное согласие валидно: %v", err)
+	}
+	// Ключевой кейс: неотмеченное обязательное согласие обязано падать. Именно ради
+	// него ответ хранится строкой — пустое значение ловится общим required.
+	if err := ValidateAnswers(req, raws(map[string]string{"c": `""`})); err == nil {
+		t.Fatal("неотмеченное обязательное согласие принято")
+	}
+	if err := ValidateAnswers(req, raws(map[string]string{})); err == nil {
+		t.Fatal("пропущенное обязательное согласие принято")
+	}
+	// Необязательное согласие можно не отмечать (opt-in).
+	if err := ValidateAnswers(opt, raws(map[string]string{"c": `""`})); err != nil {
+		t.Fatalf("неотмеченное необязательное согласие валидно: %v", err)
+	}
+	// Чужое значение — не согласие.
+	if err := ValidateAnswers(opt, raws(map[string]string{"c": `"no"`})); err == nil {
+		t.Fatal("произвольное значение согласия принято")
+	}
+}
+
+// Шкала: ответ — строка с целым числом в диапазоне ТОЙ версии схемы, против
+// которой валидируется (смена диапазона не делает старые ответы невалидными).
+func TestValidateAnswers_Scale(t *testing.T) {
+	scale := func(id string, required bool, min, max int) Block {
+		b := Block{ID: id, Type: BlockScale, Required: required}
+		b.Settings.ScaleMin, b.Settings.ScaleMax = &min, &max
+		return b
+	}
+	nps := FormSchema{Blocks: []Block{scale("s", true, 0, 10)}}
+
+	if err := ValidateAnswers(nps, raws(map[string]string{"s": `"0"`})); err != nil {
+		t.Fatalf("ноль — законное значение NPS-шкалы: %v", err)
+	}
+	if err := ValidateAnswers(nps, raws(map[string]string{"s": `"10"`})); err != nil {
+		t.Fatalf("верхняя граница включительна: %v", err)
+	}
+	for name, v := range map[string]string{
+		"выше максимума": `"11"`,
+		"ниже минимума":  `"-1"`,
+		"не целое":       `"3.5"`,
+		"не число":       `"пять"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateAnswers(nps, raws(map[string]string{"s": v})); err == nil {
+				t.Fatalf("ожидалась ошибка для %s", v)
+			}
+		})
+	}
+	// Диапазон блока, а не глобальный: 7 вне 1–5.
+	if err := ValidateAnswers(FormSchema{Blocks: []Block{scale("s", false, 1, 5)}},
+		raws(map[string]string{"s": `"7"`})); err == nil {
+		t.Fatal("значение вне диапазона блока принято")
+	}
+}
+
+// Телефон проверяется МЯГКО (решение владельца): символы и число цифр, не формат
+// страны. Тест фиксирует именно это: нестандартные, но легальные записи проходят —
+// жёсткая маска РФ отсекала бы их, и это дороже ложного пропуска.
+func TestValidPhone(t *testing.T) {
+	valid := []string{
+		"+7 900 123-45-67",  // РФ с разделителями
+		"+79001234567",      // РФ слитно
+		"8(900)123-45-67",   // городская запись со скобками
+		"+380 44 123 4567",  // не РФ — маска страны отсекла бы
+		"12345",             // минимум цифр
+		"+1 (212) 555-0123", // США
+	}
+	for _, v := range valid {
+		t.Run("валиден: "+v, func(t *testing.T) {
+			if !validPhone(v) {
+				t.Fatalf("ожидался валидный телефон: %q", v)
+			}
+		})
+	}
+
+	invalid := map[string]string{
+		"буквы":                 "позвоните мне",
+		"цифр меньше минимума":  "1234",
+		"цифр больше максимума": "123456789012345678901",
+		"пусто":                 "",
+		"недопустимый символ":   "+7_900_1234567",
+		"email вместо номера":   "a@b.co",
+	}
+	for name, v := range invalid {
+		t.Run("невалиден: "+name, func(t *testing.T) {
+			if validPhone(v) {
+				t.Fatalf("ожидался невалидный телефон: %q", v)
 			}
 		})
 	}

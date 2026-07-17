@@ -122,7 +122,8 @@ func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers ma
 // проходили ValidateAnswers при приёме, но версия/тип могли разойтись).
 func formatCell(view blockView, raw json.RawMessage) string {
 	switch view.typ {
-	case BlockSingleChoice:
+	case BlockSingleChoice, BlockDropdown:
+		// Одиночный выбор: dropdown хранит ответ так же, как single_choice.
 		var id string
 		if json.Unmarshal(raw, &id) != nil {
 			return ""
@@ -138,6 +139,17 @@ func formatCell(view blockView, raw json.RawMessage) string {
 			labels[i] = optionLabel(view.options, id)
 		}
 		return strings.Join(labels, "; ")
+	case BlockConsent:
+		// «yes»/пусто — внутренняя кодировка ответа; в выгрузке владельцу нужен
+		// человеческий текст.
+		var v string
+		if json.Unmarshal(raw, &v) != nil {
+			return ""
+		}
+		if v == ConsentYes {
+			return "Да"
+		}
+		return "Нет"
 	default:
 		var v string
 		if json.Unmarshal(raw, &v) != nil {

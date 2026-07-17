@@ -6,6 +6,8 @@ import {
   type FormSchema,
   type Option,
   SCHEMA_VERSION,
+  DEFAULT_SCALE_MAX,
+  DEFAULT_SCALE_MIN,
   isChoiceType,
 } from '@entities/formSchema'
 
@@ -125,7 +127,16 @@ export function newBlock(type: BlockType): Block {
     required: false,
     settings: {},
   }
-  return isChoiceType(type) ? { ...base, settings: { options: [] } } : base
+  if (isChoiceType(type)) return { ...base, settings: { options: [] } }
+  // Согласие создаётся обязательным: это дефолт, а не правило типа (решение
+  // владельца) — владелец может выключить, если это маркетинг-opt-in.
+  if (type === 'consent') return { ...base, required: true }
+  // Шкала создаётся с диапазоном: схема без него валидна (недособранный черновик),
+  // но респонденту нужен готовый ряд делений, а не пустота.
+  if (type === 'scale') {
+    return { ...base, settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } }
+  }
+  return base
 }
 
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного

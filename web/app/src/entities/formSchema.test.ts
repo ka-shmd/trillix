@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   formSchemaSchema,
+  isValidPhone,
   MAX_ALT_LEN,
   MAX_BLOCKS,
   MAX_IMAGE_KEY_LEN,
@@ -19,13 +20,16 @@ import {
 describe('formSchemaSchema — валидные', () => {
   const valid: Record<string, unknown> = {
     'пустой каркас без schemaVersion': { blocks: [] },
-    'все семь типов': {
+    'все отвечаемые типы': {
       schemaVersion: 1,
       blocks: [
         { id: 'blk_1', type: 'short_text', label: 'Имя', description: '', required: true, settings: {} },
         { id: 'blk_2', type: 'long_text', label: 'О себе', required: false, settings: {} },
         { id: 'blk_3', type: 'email', label: 'Почта', required: true, settings: {} },
         { id: 'blk_4', type: 'number', label: 'Возраст', required: false, settings: {} },
+        { id: 'blk_8', type: 'phone', label: 'Телефон', settings: {} },
+        { id: 'blk_9', type: 'scale', label: 'Оценка', settings: { scaleMin: 1, scaleMax: 5 } },
+        { id: 'blk_10', type: 'dropdown', label: 'Город', settings: { options: [{ id: 'o1', label: 'Мск' }] } },
         { id: 'blk_5', type: 'date', label: 'Дата', required: false, settings: {} },
         {
           id: 'blk_6',
@@ -47,6 +51,31 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'согласие с текстом владельца': {
+      blocks: [{ id: 'b', type: 'consent', label: 'Согласен на обработку данных', required: true }],
+    },
+    'шкала NPS 0–10 — ноль законный минимум': {
+      blocks: [{ id: 'b', type: 'scale', label: 'NPS', settings: { scaleMin: 0, scaleMax: 10 } }],
+    },
+    'шкала без диапазона — валидный черновик': {
+      blocks: [{ id: 'b', type: 'scale', label: '', settings: {} }],
+    },
+    'dropdown с опциями — та же модель, что single_choice': {
+      blocks: [
+        {
+          id: 'b',
+          type: 'dropdown',
+          label: 'Город',
+          settings: { options: [{ id: 'o1', label: 'Москва' }] },
+        },
+      ],
+    },
+    'dropdown без опций — валидный черновик': {
+      blocks: [{ id: 'b', type: 'dropdown', label: '', settings: {} }],
+    },
+    'телефон с плейсхолдером': {
+      blocks: [{ id: 'b', type: 'phone', label: 'Телефон', settings: { placeholder: '+7 900' } }],
+    },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
     'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
     'redirectUrl http с портом и query': {
@@ -77,6 +106,24 @@ describe('formSchemaSchema — валидные', () => {
       expect(formSchemaSchema.safeParse(doc).success).toBe(true)
     })
   }
+})
+
+// Зеркало TestValidPhone в Go: проверка мягкая — символы и число цифр, не формат
+// страны (решение владельца, DEV-PLAN фаза 8.5 шаг 2).
+describe('isValidPhone', () => {
+  it.each(['+7 900 123-45-67', '+79001234567', '8(900)123-45-67', '+380 44 123 4567', '12345'])(
+    'валиден: %s',
+    (v) => {
+      expect(isValidPhone(v)).toBe(true)
+    },
+  )
+
+  it.each(['позвоните мне', '1234', '123456789012345678901', '', '+7_900_1234567', 'a@b.co'])(
+    'невалиден: %s',
+    (v) => {
+      expect(isValidPhone(v)).toBe(false)
+    },
+  )
 })
 
 describe('formSchemaSchema — невалидные', () => {
@@ -159,6 +206,24 @@ describe('formSchemaSchema — невалидные', () => {
           settings: { placeholder: 'я'.repeat(MAX_PLACEHOLDER_LEN + 1) },
         },
       ],
+    },
+    'шкала: min больше max': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 5, scaleMax: 2 } }],
+    },
+    'шкала: min равен max': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 3, scaleMax: 3 } }],
+    },
+    'шкала: max выше потолка': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 1, scaleMax: 11 } }],
+    },
+    'шкала: min ниже нуля': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: -1, scaleMax: 5 } }],
+    },
+    'шкала: задан только один конец': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMax: 5 } }],
+    },
+    'шкала у не-scale': {
+      blocks: [{ id: 'b', type: 'short_text', label: 'x', settings: { scaleMin: 1, scaleMax: 5 } }],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
     'redirect javascript:': { blocks: [], redirectUrl: 'javascript:alert(document.cookie)' },

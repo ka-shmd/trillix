@@ -19,17 +19,23 @@ export function FieldShell({
   errorId?: string
 }) {
   const label = block.label.trim() || 'Без названия'
+  // У согласия подпись — это сам текст согласия, и он обязан стоять рядом с
+  // галочкой (иначе непонятно, с чем соглашаешься). Его рисует контрол, а оболочка
+  // подпись не дублирует.
+  const labelInControl = block.type === 'consent'
   return (
     <div className="rf-field">
-      <div className="rf-label">
-        {label}
-        {block.required && (
-          <span className="rf-required" aria-hidden="true">
-            {' '}
-            *
-          </span>
-        )}
-      </div>
+      {!labelInControl && (
+        <div className="rf-label">
+          {label}
+          {block.required && (
+            <span className="rf-required" aria-hidden="true">
+              {' '}
+              *
+            </span>
+          )}
+        </div>
+      )}
       {block.description && <p className="rf-desc">{block.description}</p>}
       {children}
       {error && (

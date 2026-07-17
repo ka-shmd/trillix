@@ -26,6 +26,13 @@ export const MAX_ALT_LEN = 500
 // Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 export const MAX_THANK_YOU_TEXT_LEN = 2000
 export const MAX_REDIRECT_URL_LEN = 2000
+// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода, и на
+// телефоне больше десяти в строку не помещается (нужно число — есть тип number).
+// Низ — 0: NPS считается от нуля. Диапазон новой шкалы — 1–5.
+export const SCALE_LOWER_BOUND = 0
+export const SCALE_UPPER_BOUND = 10
+export const DEFAULT_SCALE_MIN = 1
+export const DEFAULT_SCALE_MAX = 5
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
@@ -49,33 +56,68 @@ export const isHttpUrl = (raw: string): boolean => {
   return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
 }
 
-// Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс два неотвечаемых
+// Типы блоков: отвечаемые поля (ARCHITECTURE 3.4) плюс два неотвечаемых
 // (контентных): 'text' — статический абзац, 'image' — картинка на полотне. Оба не
 // собирают ответ (исключены из ValidateAnswers/CSV/таблицы), рендерятся статикой.
 export const blockTypeSchema = z.enum([
   'short_text',
   'long_text',
   'email',
+  'phone',
   'number',
+  'scale',
   'single_choice',
+  'dropdown',
   'multi_choice',
   'date',
+  'consent',
   'text',
   'image',
 ])
 export type BlockType = z.infer<typeof blockTypeSchema>
 
-const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'multi_choice'])
+// Типы, чьи настройки несут список опций. dropdown отличается от single_choice
+// ТОЛЬКО контролом (список против радиокнопок): та же модель опций, тот же формат
+// ответа — id варианта строкой.
+const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown', 'multi_choice'])
 export const isChoiceType = (t: BlockType): boolean => CHOICE_TYPES.has(t)
+
+// Выбор ровно одного варианта (ответ — строка-id) против множественного (массив).
+// Отдельный предикат, а не сравнение с single_choice: забытый здесь dropdown
+// молча уехал бы в ветку multi и ждал массив.
+const SINGLE_CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown'])
+export const isSingleChoiceType = (t: BlockType): boolean => SINGLE_CHOICE_TYPES.has(t)
 
 // Типы, у которых респондент вводит текст — для них можно задать плейсхолдер.
 const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
   'short_text',
   'long_text',
   'email',
+  'phone',
   'number',
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
+
+// Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
+// цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
+// номера (+380, добавочные, международные) — для формы это дороже, чем принять
+// нестандартную запись. Финальная инстанция — сервер (validPhone в answers.go).
+export const MIN_PHONE_DIGITS = 5
+export const MAX_PHONE_DIGITS = 20
+const PHONE_ALLOWED = /^[0-9+()\-\s]+$/
+
+export const isValidPhone = (raw: string): boolean => {
+  if (!PHONE_ALLOWED.test(raw)) return false
+  const digits = raw.replace(/\D/g, '').length
+  return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS
+}
+
+// Значение отмеченного согласия. Ответ хранится строкой, а не булевым: это
+// конвенция проекта (number и date тоже строки), и главное — пустая строка = «не
+// отмечено» бесплатно ложится на isEmpty в validation.ts, поэтому обязательность
+// работает без спецслучая. Булев false туда не попадал бы (false !== ''), и
+// required у согласия молча перестал бы работать.
+export const CONSENT_YES = 'yes'
 
 // Неотвечаемые (контентные) блоки: 'text' и 'image'. Зеркалит Go isContent().
 const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['text', 'image'])
@@ -103,7 +145,20 @@ const settingsSchema = z.strictObject({
   // запрещены (superRefine ниже), как options у не-choice.
   imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
   alt: z.string().max(MAX_ALT_LEN).optional(),
+  // Диапазон шкалы (тип scale). Оба конца или ни одного (superRefine ниже);
+  // «ни одного» — недособранный черновик, как choice без опций.
+  scaleMin: z.number().int().optional(),
+  scaleMax: z.number().int().optional(),
 })
+
+// scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
+// Зеркалит scaleRange в Go. Общий для контрола поля и валидации.
+export const scaleRange = (block: Block): { min: number; max: number } => {
+  const { scaleMin, scaleMax } = block.settings ?? {}
+  return scaleMin !== undefined && scaleMax !== undefined
+    ? { min: scaleMin, max: scaleMax }
+    : { min: DEFAULT_SCALE_MIN, max: DEFAULT_SCALE_MAX }
+}
 
 // Один вопрос формы. Пустой label и choice без опций допустимы — это нормальное
 // недособранное состояние черновика, которое автосейв обязан хранить (зеркалит
@@ -136,6 +191,26 @@ export const blockSchema = z
         })
       }
     }
+    // Диапазон шкалы — только у scale (как options у choice).
+    const { scaleMin, scaleMax } = b.settings ?? {}
+    if (b.type !== 'scale') {
+      if (scaleMin !== undefined || scaleMax !== undefined) {
+        ctx.addIssue({ code: 'custom', message: `тип ${b.type} не имеет шкалы`, path: ['settings', 'scaleMin'] })
+      }
+    } else if (scaleMin !== undefined || scaleMax !== undefined) {
+      if (scaleMin === undefined || scaleMax === undefined) {
+        ctx.addIssue({ code: 'custom', message: 'шкала: нужны оба конца диапазона', path: ['settings'] })
+      } else if (scaleMin < SCALE_LOWER_BOUND || scaleMax > SCALE_UPPER_BOUND) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `шкала: диапазон вне [${SCALE_LOWER_BOUND}, ${SCALE_UPPER_BOUND}]`,
+          path: ['settings'],
+        })
+      } else if (scaleMin >= scaleMax) {
+        ctx.addIssue({ code: 'custom', message: 'шкала: минимум не меньше максимума', path: ['settings'] })
+      }
+    }
+
     const options = b.settings?.options
     if (!isChoiceType(b.type)) {
       if (options && options.length > 0) {

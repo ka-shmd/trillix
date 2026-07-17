@@ -54,10 +54,11 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
 `[[builder-is-provisional]]` в памяти и коммиты фазы 6.5):
 
 1. **Zod** `web/shared/entities/formSchema.ts` — значение в `blockTypeSchema`; при нужде
-   в наборы `CHOICE_TYPES`/`PLACEHOLDER_TYPES`; хелперы `isChoiceType`/`supportsPlaceholder`/
-   `isContentType`/`isAnswerableType`.
-2. **Go-домен** `internal/domain/schema.go` — константа `Block…`, `isContent()`,
-   `ValidateSchema`. Это контракт → **синхронно** с Zod, в одном PR, с тестами обеих сторон.
+   в наборы `CHOICE_TYPES`/`SINGLE_CHOICE_TYPES`/`PLACEHOLDER_TYPES`; хелперы
+   `isChoiceType`/`isSingleChoiceType`/`supportsPlaceholder`/`isContentType`/`isAnswerableType`.
+2. **Go-домен** `internal/domain/schema.go` — константа `Block…`, `isChoice()`/
+   `isSingleChoice()`/`isContent()`, `ValidateSchema`. Это контракт → **синхронно** с Zod,
+   в одном PR, с тестами обеих сторон.
 3. **Контрол** `web/shared/fields/BlockField.tsx` — ветка в `switch (block.type)`
    (`FieldControl`), при нужде стиль в `fields.css`.
 4. **Редактор** `BlockRow.tsx` — как тип правится автором (поле ответа/варианты/абзац);
@@ -67,6 +68,25 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
 6. **Экспорт/таблица**: Go `internal/domain/csv.go`, кабинет
    `web/app/src/features/submissions/answerFormat.ts`.
 7. `schemaVersion` не трогаем, если новое enum-значение обратно совместимо.
+
+**Три грабли этого среза** (все наступлены в фазе 8.5 шаг 2, все — молчаливые):
+
+- **Ветвись предикатом, а не `type == …`.** Забытая ветка не падает — она трактует новый
+  тип как соседний: `dropdown`, не попавший в `isSingleChoice()`, уезжает в ветку
+  `multi_choice` и начинает ждать массив вместо строки. Места, которые обязаны знать
+  семантику: `ValidateAnswers`, `csv.go` (`formatCell`), `answerFormat.ts` кабинета.
+- **Кодируй ответ строкой.** `Answer` = `string | string[]`; число, дата, шкала, согласие —
+  строки. Булев `false` не равен `''`, не попадёт в `isEmpty` (`renderer/.../validation.ts`),
+  и `required` молча перестанет работать.
+- **Новая настройка со значимым нулём — указатель** (Go) / явная проверка на `undefined`
+  (Zod). `omitempty` у `int` выбрасывает 0 из JSON, и «не задано» становится неотличимо от
+  «задано 0» (`scaleMin: 0` в NPS). А если валидатор строг к настройке — не давай её
+  вводить свободным текстом: `<select>` вместо числового поля, иначе автосейв ловит 422 на
+  каждое нажатие (см. `ScaleInline` и ту же историю с `redirectUrl`).
+
+Не забудь **иконку типа** (`blockTypeIcons.tsx` — `Record<BlockType, …>`, tsc поймает) и
+**редактор**: `AnswerField` рисует `<input type="date">` всем типам без плейсхолдера, так
+что типу со своими настройками нужна своя ветка (образец — `ScaleInline`).
 
 ## Картинка (`image`) и медиа
 

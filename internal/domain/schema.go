@@ -33,13 +33,21 @@ const (
 	MaxPlaceholderLen = 200
 	MaxImageKeyLen    = 200
 	MaxAltLen         = 500
+	// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода;
+	// на телефоне больше десяти в строку не помещается (нужно число — есть number).
+	// Низ — 0: NPS считается от нуля.
+	ScaleLowerBound = 0
+	ScaleUpperBound = 10
+	// Диапазон новой шкалы и фолбэк для схемы без него. Зеркалят DEFAULT_SCALE_*.
+	DefaultScaleMin = 1
+	DefaultScaleMax = 5
 	// Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 	MaxThankYouTextLen = 2000
 	MaxRedirectURLLen  = 2000
 )
 
-// BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
-// два неотвечаемых (контентных): «text» — статический абзац, «image» — картинка на
+// BlockType — тип блока формы. Отвечаемые поля (ARCHITECTURE 3.4) плюс два
+// неотвечаемых (контентных): «text» — статический абзац, «image» — картинка на
 // полотне. Контентные не собирают ответ: исключены из ValidateAnswers и CSV.
 type BlockType string
 
@@ -47,18 +55,23 @@ const (
 	BlockShortText    BlockType = "short_text"
 	BlockLongText     BlockType = "long_text"
 	BlockEmail        BlockType = "email"
+	BlockPhone        BlockType = "phone"
 	BlockNumber       BlockType = "number"
+	BlockScale        BlockType = "scale"
 	BlockSingleChoice BlockType = "single_choice"
+	BlockDropdown     BlockType = "dropdown"
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
+	BlockConsent      BlockType = "consent"
 	BlockText         BlockType = "text"
 	BlockImage        BlockType = "image"
 )
 
 func (t BlockType) valid() bool {
 	switch t {
-	case BlockShortText, BlockLongText, BlockEmail, BlockNumber,
-		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText, BlockImage:
+	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
+		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
+		BlockText, BlockImage:
 		return true
 	default:
 		return false
@@ -66,8 +79,17 @@ func (t BlockType) valid() bool {
 }
 
 // isChoice — у choice-типов настройки несут список опций; у остальных settings пуст.
+// dropdown отличается от single_choice ТОЛЬКО контролом на фронте: та же модель
+// опций, тот же формат ответа.
 func (t BlockType) isChoice() bool {
-	return t == BlockSingleChoice || t == BlockMultiChoice
+	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice
+}
+
+// isSingleChoice — выбор ровно одного варианта (ответ — строка-id), в отличие от
+// multi_choice (массив id). Отдельный предикат, а не сравнение с BlockSingleChoice:
+// забытый здесь dropdown молча уехал бы в ветку multi и ждал массив.
+func (t BlockType) isSingleChoice() bool {
+	return t == BlockSingleChoice || t == BlockDropdown
 }
 
 // isContent — неотвечаемый блок (text, image): статический контент на полотне, не
@@ -84,12 +106,19 @@ type Option struct {
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
-// placeholder у текстовых полей ввода, imageKey/alt у типа image.
+// placeholder у текстовых полей ввода, imageKey/alt у типа image, диапазон у scale.
+//
+// ScaleMin/ScaleMax — указатели, а не int: 0 — законный минимум шкалы (NPS 0–10),
+// и с `omitempty` нулевое значение вылетало бы из JSON, а «не задано» было бы
+// неотличимо от «задано 0». Оба nil — недособранный черновик (допустим, как choice
+// без опций); задан ровно один — ошибка.
 type BlockSettings struct {
 	Options     []Option `json:"options,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 	ImageKey    string   `json:"imageKey,omitempty"`
 	Alt         string   `json:"alt,omitempty"`
+	ScaleMin    *int     `json:"scaleMin,omitempty"`
+	ScaleMax    *int     `json:"scaleMax,omitempty"`
 }
 
 // Block — один вопрос формы.
@@ -209,6 +238,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if b.Type != BlockImage && (b.Settings.ImageKey != "" || b.Settings.Alt != "") {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
+	if err := validateScaleSettings(b); err != nil {
+		return schemaErr("%s: %s", at, err)
+	}
 
 	if !b.Type.isChoice() {
 		if len(b.Settings.Options) > 0 {
@@ -232,6 +264,33 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		if n := utf8.RuneCountInString(o.Label); n > MaxOptionLabelLen {
 			return schemaErr("%s: опция #%d: label длиннее %d символов", at, j, MaxOptionLabelLen)
 		}
+	}
+	return nil
+}
+
+// validateScaleSettings — диапазон шкалы: только у типа scale (как options у choice),
+// оба конца заданы или ни одного (nil/nil — недособранный черновик, редактор его
+// не создаёт), min < max и оба в [ScaleLowerBound, ScaleUpperBound].
+func validateScaleSettings(b Block) error {
+	min, max := b.Settings.ScaleMin, b.Settings.ScaleMax
+
+	if b.Type != BlockScale {
+		if min != nil || max != nil {
+			return fmt.Errorf("тип %q не имеет шкалы", b.Type)
+		}
+		return nil
+	}
+	if min == nil && max == nil {
+		return nil // черновик без диапазона — как choice без опций
+	}
+	if min == nil || max == nil {
+		return fmt.Errorf("шкала: нужны оба конца диапазона")
+	}
+	if *min < ScaleLowerBound || *max > ScaleUpperBound {
+		return fmt.Errorf("шкала: диапазон вне [%d, %d]", ScaleLowerBound, ScaleUpperBound)
+	}
+	if *min >= *max {
+		return fmt.Errorf("шкала: минимум не меньше максимума")
 	}
 	return nil
 }

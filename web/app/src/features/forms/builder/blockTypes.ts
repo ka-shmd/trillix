@@ -41,16 +41,34 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     description: 'Адрес электронной почты с проверкой формата.',
   },
   {
+    type: 'phone',
+    label: 'Телефон',
+    group: 'question',
+    description: 'Номер телефона. Проверяется мягко — любой формат записи.',
+  },
+  {
     type: 'number',
     label: 'Число',
     group: 'question',
     description: 'Числовой ответ — количество, возраст, сумма.',
   },
   {
+    type: 'scale',
+    label: 'Шкала',
+    group: 'question',
+    description: 'Оценка по шкале — от 1 до 5, NPS 0–10 и подобное.',
+  },
+  {
     type: 'single_choice',
     label: 'Один из списка',
     group: 'question',
     description: 'Выбор одного варианта из списка (радиокнопки).',
+  },
+  {
+    type: 'dropdown',
+    label: 'Выпадающий список',
+    group: 'question',
+    description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.',
   },
   {
     type: 'multi_choice',
@@ -63,6 +81,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     label: 'Дата',
     group: 'question',
     description: 'Выбор даты.',
+  },
+  {
+    type: 'consent',
+    label: 'Согласие',
+    group: 'question',
+    description: 'Галочка согласия со своим текстом — обработка данных, оферта, рассылка.',
   },
   {
     type: 'text',

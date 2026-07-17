@@ -113,20 +113,23 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
   "blocks": [
     {
       "id": "blk_9f2k1x",          // стабильный, генерируется клиентом; уникален в форме
-      "type": "short_text",         // short_text | long_text | email | number
-                                    // | single_choice | multi_choice | date
+      "type": "short_text",         // short_text | long_text | email | phone | number
+                                    // | scale | single_choice | dropdown
+                                    // | multi_choice | date | consent
                                     // | text, image (неотвечаемые: без ответа,
                                     //   исключены из ValidateAnswers/CSV/таблицы)
-      "label": "Ваше имя",
+      "label": "Ваше имя",          // у consent — текст согласия (стоит рядом с галочкой)
       "description": "",            // опционально
       "required": true,             // опционально, по умолчанию false
       "settings": {                 // опционально
-        "options": [                // только у single_choice / multi_choice
+        "options": [                // только у single_choice / dropdown / multi_choice
           { "id": "opt_1", "label": "Друзья" }
         ],
         "placeholder": "Например…", // текстовые поля ввода (≤200); подсказка в поле
         "imageKey": "ws/ab12.png",  // только у image: ключ объекта в бакете (≤200)
-        "alt": "Схема процесса"     // только у image: alt-текст картинки (≤500)
+        "alt": "Схема процесса",    // только у image: alt-текст картинки (≤500)
+        "scaleMin": 1,              // только у scale: оба конца или ни одного;
+        "scaleMax": 5               //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
       }
     }
   ],
@@ -140,6 +143,18 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 ```
 
 Валидатор строгий (лишние поля запрещены). Это валидатор **черновика**: пустой `label` и choice без опций допустимы — недособранное состояние, которое автосейв обязан хранить; требование «непустой label, ≥1 опция» — правило момента публикации (фаза 4).
+
+**Кодировка ответа по типам** (зеркалит `Answer` в `web/shared/fields/answer.ts` и `ValidateAnswers` в Go):
+
+| Типы | Значение в JSONB `answers` |
+|---|---|
+| `short_text`, `long_text`, `email`, `phone`, `number`, `date` | строка (как ввёл респондент; формат проверяет сервер) |
+| `scale` | строка с целым числом в диапазоне блока **той версии**, по которой отправлен ответ |
+| `single_choice`, `dropdown` | строка — id варианта |
+| `multi_choice` | массив строк — id вариантов |
+| `consent` | строка `"yes"` (отмечено) или пусто (не отмечено) |
+
+Число, дата, шкала и согласие хранятся **строками**, а не числом/булевым, — это осознанная конвенция: тип `Answer` остаётся `string | string[]`, и «пусто» единообразно означает «не отвечено». У согласия это несущая деталь: булев `false` не равен `''`, не попал бы в `isEmpty` рендерера, и обязательность молча перестала бы работать.
 
 **Исключение из «черновик ленив» — `redirectUrl`:** его схема проверяется строго даже в черновике (не-`http(s)` → 422). Значение уходит в `window.location` рендерера, поэтому `javascript:`/`data:` там — XSS на публичном домене формы (инвариант 4), и пускать их в JSONB нельзя даже временно. Чтобы строгость не ломала автосейв, редактор коммитит поле в стор по `blur`, а не на каждое нажатие — недопечатанный «htt» до сервера не доезжает.
 
@@ -159,6 +174,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `thankYouText` | ≤ 2000 |
 | длина `redirectUrl` | ≤ 2000, абсолютный `http(s)` |
 | длина `settings.placeholder` | ≤ 200 |
+| `settings.scaleMin` / `scaleMax` (scale) | оба или ни одного; 0 ≤ min < max ≤ 10 |
 | длина `settings.imageKey` (image) | ≤ 200 |
 | длина `settings.alt` (image) | ≤ 500 |
 

@@ -1,6 +1,6 @@
 import { type ChangeEvent } from 'react'
 
-import { type Block, isContentType } from '@entities/formSchema'
+import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
@@ -57,6 +57,15 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
       />
     </FieldShell>
   )
+}
+
+// BlockControl — только контрол поля, без оболочки FieldShell (подпись, звёздочка,
+// описание, ошибка). Нужен редактору: подпись он рисует сам — редактируемой
+// строкой сверху, и оболочка дублировала бы её. Тот же контрол, что видит
+// респондент, поэтому вид не разъезжается (превью и рендерер берут BlockField
+// целиком, с оболочкой).
+export function BlockControl({ block }: { block: Block }) {
+  return <FieldControl block={block} disabled={true} invalid={false} />
 }
 
 type ControlProps = {
@@ -126,6 +135,19 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           {...invalidProps}
         />
       )
+    case 'phone':
+      return (
+        <input
+          className="rf-input"
+          type="tel"
+          value={text}
+          onChange={onText}
+          disabled={disabled}
+          aria-label={label}
+          placeholder={ph ?? '+7 900 000-00-00'}
+          {...invalidProps}
+        />
+      )
     case 'number':
       return (
         <input
@@ -151,9 +173,55 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           {...invalidProps}
         />
       )
+    // Согласие: галочка с текстом владельца рядом (текст — label блока; оболочка
+    // FieldShell его не дублирует). Обязательность — обычный флаг required
+    // (решение владельца): необязательное согласие это маркетинг-opt-in.
+    // Значение — CONSENT_YES/пусто, строкой: тип Answer не расширяется, а «пусто»
+    // даёт обязательность даром (см. isEmpty в validation.ts).
+    case 'consent':
+      return (
+        <label className="rf-option">
+          <input
+            className="rf-mark rf-mark--check"
+            type="checkbox"
+            checked={text === CONSENT_YES}
+            onChange={(e) => onChange?.(e.target.checked ? CONSENT_YES : '')}
+            disabled={disabled}
+            {...invalidProps}
+          />
+          <span className="rf-consent">
+            {label}
+            {block.required && (
+              <span className="rf-required" aria-hidden="true"> *</span>
+            )}
+          </span>
+        </label>
+      )
+    case 'scale':
+      return (
+        <ScaleChoice
+          block={block}
+          value={text}
+          onChange={onChange}
+          disabled={disabled}
+          label={label}
+          onBlur={onBlur}
+        />
+      )
     case 'single_choice':
       return (
         <ChoiceList block={block} multiple={false} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
+      )
+    case 'dropdown':
+      return (
+        <DropdownChoice
+          block={block}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          label={label}
+          {...invalidProps}
+        />
       )
     case 'multi_choice':
       return (
@@ -165,6 +233,100 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
       // доходят — ветки для исчерпывающести switch по типам.
       return null
   }
+}
+
+// Шкала: ряд кнопок-делений от min до max (диапазон — из настроек блока). Ответ
+// хранится строкой с целым числом — как number и date (конвенция проекта), поэтому
+// тип Answer не расширяется.
+//
+// Настоящие <button>, а не radio: нажатие сразу даёт значение, а группу радио
+// пришлось бы обходить стрелками. Выбранное деление помечается aria-pressed —
+// скринридер читает состояние.
+function ScaleChoice({
+  block,
+  value,
+  onChange,
+  disabled,
+  label,
+  onBlur,
+}: {
+  block: Block
+  value: string
+  onChange?: (next: Answer) => void
+  disabled: boolean
+  label: string
+  onBlur?: () => void
+}) {
+  const { min, max } = scaleRange(block)
+  const marks = Array.from({ length: max - min + 1 }, (_, i) => min + i)
+  return (
+    <div className="rf-scale" role="group" aria-label={label} onBlur={onBlur}>
+      {marks.map((n) => {
+        const selected = value === String(n)
+        return (
+          <button
+            key={n}
+            type="button"
+            className={`rf-scale-mark${selected ? ' rf-scale-mark--on' : ''}`}
+            aria-pressed={selected}
+            disabled={disabled}
+            // Повторное нажатие снимает выбор: иначе необязательную шкалу нельзя
+            // было бы очистить, промахнувшись.
+            onClick={() => onChange?.(selected ? '' : String(n))}
+          >
+            {n}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// Выпадающий список: та же модель опций и тот же формат ответа, что у
+// single_choice (id варианта строкой) — отличается только контролом. Нативный
+// <select>: на телефоне он открывается системным колесом, а длинный список не
+// распирает форму на пол-экрана (ради этого тип и заведён).
+//
+// Пустой первый пункт — это «не выбрано»: без него select показывал бы первый
+// вариант выбранным, и необязательный вопрос молча получал бы ответ.
+function DropdownChoice({
+  block,
+  value,
+  onChange,
+  disabled,
+  label,
+  ...invalidProps
+}: {
+  block: Block
+  value?: Answer
+  onChange?: (next: Answer) => void
+  disabled: boolean
+  label: string
+  'aria-invalid'?: true
+  'aria-describedby'?: string
+  onBlur?: () => void
+}) {
+  const options = block.settings?.options ?? []
+  if (options.length === 0) {
+    return <p className="rf-empty">Варианты пока не добавлены</p>
+  }
+  return (
+    <select
+      className="rf-input rf-select"
+      value={typeof value === 'string' ? value : ''}
+      onChange={(e) => onChange?.(e.target.value)}
+      disabled={disabled}
+      aria-label={label}
+      {...invalidProps}
+    >
+      <option value="">Выберите вариант</option>
+      {options.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.label.trim() || 'Вариант'}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 // Список вариантов choice-блока: радиокнопки для одиночного выбора, чекбоксы для
