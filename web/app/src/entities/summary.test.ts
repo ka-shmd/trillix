@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { formSummarySchema } from './summary'
+import { formSummarySchema, type BlockSummary, type FormSummary } from './summary'
+
+// Индексация массива под noUncheckedIndexedAccess даёт `T | undefined`: достаём
+// вопрос явно, чтобы падало осмысленным сообщением, а не на первом же обращении.
+function blockAt(summary: FormSummary, i: number): BlockSummary {
+  const block = summary.blocks[i]
+  if (!block) throw new Error(`в сводке нет вопроса #${i}`)
+  return block
+}
 
 // Контракт сводки: Zod-схема обязана принимать то, что реально отдаёт Go
 // (internal/submissions/handler.go). Фикстура ниже — НЕ выдумана: это дословный
@@ -70,8 +78,7 @@ describe('formSummarySchema', () => {
   // дать пустой массив, иначе страница падает на .map() у первого же текстового
   // вопроса.
   it('вопросу без buckets подставляет пустой массив', () => {
-    const parsed = formSummarySchema.parse(realServerPayload)
-    const phone = parsed.blocks[0]
+    const phone = blockAt(formSummarySchema.parse(realServerPayload), 0)
     expect(phone.kind).toBe('fill')
     expect(phone.buckets).toEqual([])
   })
@@ -79,7 +86,7 @@ describe('formSummarySchema', () => {
   // Ноль — законное деление шкалы (NPS 0–10). Проверяем сквозь схему: если бы
   // scaleMin=0 где-то по дороге выпал, деления начинались бы с единицы.
   it('сохраняет нулевое деление шкалы', () => {
-    const nps = formSummarySchema.parse(realServerPayload).blocks[2]
+    const nps = blockAt(formSummarySchema.parse(realServerPayload), 2)
     expect(nps.buckets[0]).toEqual({ key: '0', label: '0', count: 1 })
     expect(nps.buckets).toHaveLength(11)
   })
@@ -101,7 +108,7 @@ describe('formSummarySchema', () => {
         },
       ],
     })
-    expect(withStats.blocks[0].number).toEqual({ avg: 30, min: 20, max: 40 })
+    expect(blockAt(withStats, 0).number).toEqual({ avg: 30, min: 20, max: 40 })
 
     const noStats = formSummarySchema.parse({
       total: 1,
@@ -109,7 +116,7 @@ describe('formSummarySchema', () => {
         { blockId: 'age', label: 'Возраст', type: 'number', kind: 'number', asked: 1, answered: 0 },
       ],
     })
-    expect(noStats.blocks[0].number).toBeFalsy()
+    expect(blockAt(noStats, 0).number).toBeFalsy()
   })
 
   // Неизвестный вид сводки — расхождение контракта: схема обязана падать здесь, на
