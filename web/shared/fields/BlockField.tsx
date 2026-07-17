@@ -28,14 +28,19 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
   // Неотвечаемый (контентный) блок — статический контент: без подписи-вопроса,
   // звёздочки, контрола и ошибок.
   if (isContentType(block.type)) {
-    // image: картинка по ключу. Без ключа (недособранный черновик) — не показываем,
-    // как пустой text (респондент/превью пустого image-блока не видят).
+    // image: картинка по ключу. Без ключа (недособранный черновик) блок не
+    // схлопывается, а держит место высотой с зону загрузки редактора (rf-image-empty).
     if (block.type === 'image') {
       const key = block.settings?.imageKey
-      return key ? <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} /> : null
+      return key ? (
+        <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+      ) : (
+        <div className="rf-image-empty" aria-hidden="true" />
+      )
     }
-    // text — статический абзац; пустой текст в черновике не показываем.
-    return block.label.trim() ? <p className="rf-text">{block.label}</p> : null
+    // text — статический абзац. Пустой блок держит место (одна строка rf-text), а не
+    // схлопывается: недособранный черновик остаётся видимым пустым пространством.
+    return <p className="rf-text">{block.label.trim() ? block.label : ' '}</p>
   }
 
   const errorId = error ? `${block.id}-error` : undefined
