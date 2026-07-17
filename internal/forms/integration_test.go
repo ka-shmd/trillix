@@ -475,9 +475,10 @@ func TestForms_PublicFetch(t *testing.T) {
 	}
 	closeBody(t, r)
 
-	// После снятия с публикации → 404 (закрытая не отдаётся).
+	// После снятия с публикации → 410 «приём закрыт» (не 404): форма была публичной,
+	// существование не скрываем (шаг 4, решение владельца — любую закрытую показываем).
 	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
-	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+	getPublic(t, anon, srv, form.Slug, http.StatusGone)
 }
 
 // HTML-страница формы /r/{slug} (OG-мета от Go): опубликованная → 200 text/html с

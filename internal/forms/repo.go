@@ -64,6 +64,16 @@ type PublicForm struct {
 	Version   int32
 	Schema    json.RawMessage
 	VersionID uuid.UUID
+	// Статус и живые настройки закрытия (фаза 8.5 шаг 4): вызывающий вычисляет
+	// FormClosed(Status, CloseAt, ResponseLimit, SubmissionCount, now) и решает —
+	// отдать форму или показать «приём закрыт». SubmissionCount заполнен только при
+	// заданном ResponseLimit (иначе 0 — ветка лимита не считается). ClosedMessage
+	// nil/пусто → рендерер покажет дефолт.
+	Status          string
+	CloseAt         *time.Time
+	ResponseLimit   *int32
+	ClosedMessage   *string
+	SubmissionCount int64
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -464,20 +474,26 @@ func (Repo) DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uu
 	return n, nil
 }
 
-// GetPublishedFormBySlug возвращает опубликованную форму по slug. pgx.ErrNoRows
-// (черновик/закрытая/нет формы) пробрасывается обёрнутым — service вернёт 404.
-func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error) {
-	row, err := postgres.New(db).GetPublishedFormBySlug(ctx, slug)
+// GetPublicFormBySlug возвращает публичную форму по slug вместе со статусом и
+// настройками закрытия (закрытую тоже — вызывающий решает, что показать). Только
+// черновик/нет формы дают pgx.ErrNoRows (INNER JOIN по версии) → service вернёт 404.
+func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error) {
+	row, err := postgres.New(db).GetPublicFormBySlug(ctx, slug)
 	if err != nil {
-		return PublicForm{}, fmt.Errorf("get published form by slug: %w", err)
+		return PublicForm{}, fmt.Errorf("get public form by slug: %w", err)
 	}
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
-		FormID:    row.FormID,
-		Title:     row.Title,
-		Version:   row.Version,
-		Schema:    json.RawMessage(row.Schema),
-		VersionID: uuid.UUID(row.PublishedVersionID.Bytes),
+		FormID:          row.FormID,
+		Title:           row.Title,
+		Version:         row.Version,
+		Schema:          json.RawMessage(row.Schema),
+		VersionID:       uuid.UUID(row.PublishedVersionID.Bytes),
+		Status:          row.Status,
+		CloseAt:         ptrTime(row.CloseAt),
+		ResponseLimit:   ptrInt32(row.ResponseLimit),
+		ClosedMessage:   ptrStr(row.ClosedMessage),
+		SubmissionCount: row.SubmissionCount,
 	}, nil
 }
 

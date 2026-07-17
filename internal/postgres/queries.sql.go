@@ -413,35 +413,53 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 	return workspace_id, err
 }
 
-const getPublishedFormBySlug = `-- name: GetPublishedFormBySlug :one
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id
+const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
+SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+    f.status, f.close_at, f.response_limit, f.closed_message,
+    CASE WHEN f.response_limit IS NOT NULL
+         THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
+         ELSE 0 END::bigint AS submission_count
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
-WHERE f.slug = $1 AND f.status = 'published'
+WHERE f.slug = $1
 `
 
-type GetPublishedFormBySlugRow struct {
+type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
 	Title              string
 	Version            int32
 	Schema             []byte
 	PublishedVersionID pgtype.UUID
+	Status             string
+	CloseAt            pgtype.Timestamptz
+	ResponseLimit      pgtype.Int4
+	ClosedMessage      pgtype.Text
+	SubmissionCount    int64
 }
 
-// Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
-// status='published' гарантируют, что черновик/закрытая форма не вернут строку
-// (вызывающий → 404, приватное не раскрывается). published_version_id — источник
-// ETag (иммутабелен на версию). f.id (form_id) нужен приёму ответа (фаза 5) для
-// привязки submission к форме и её версии.
-func (q *Queries) GetPublishedFormBySlug(ctx context.Context, slug string) (GetPublishedFormBySlugRow, error) {
-	row := q.db.QueryRow(ctx, getPublishedFormBySlug, slug)
-	var i GetPublishedFormBySlugRow
+// Публичная выдача формы по slug: title + схема последней опубликованной версии +
+// статус и живые настройки закрытия (фаза 8.5 шаг 4). INNER JOIN по
+// published_version_id отсекает черновик (у него версии нет) → 0 строк → 404,
+// существование приватного не раскрывается. Закрытую (снятую вручную ИЛИ по
+// дате/лимиту) строку ОТДАЁМ: вызывающий вычислит FormClosed и покажет «приём
+// закрыт» — форма была публичной (инвариант 5 распространяется только на черновик).
+// submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
+// лишний скан submissions на каждом открытии не нужен. published_version_id —
+// источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
+func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
+	var i GetPublicFormBySlugRow
 	err := row.Scan(
 		&i.FormID,
 		&i.Title,
 		&i.Version,
 		&i.Schema,
 		&i.PublishedVersionID,
+		&i.Status,
+		&i.CloseAt,
+		&i.ResponseLimit,
+		&i.ClosedMessage,
+		&i.SubmissionCount,
 	)
 	return i, err
 }
@@ -917,6 +935,21 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockFormForSubmit = `-- name: LockFormForSubmit :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Транзакционный advisory-lock по форме для жёсткого капа лимита ответов (фаза 8.5
+// шаг 4, ADR §10): сериализует конкурентные приёмы ОДНОЙ формы, поэтому счёт
+// «сколько уже принято» точен и перебор невозможен. Блокировку берёт ТОЛЬКО путь с
+// заданным лимитом; форма без лимита пишется без неё (contention только у формы у
+// предела). Ключ — хеш form_id (коллизия хешей лишь изредка сериализует две разные
+// формы — безвредно). xact-версия сама снимается на commit/rollback.
+func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
+	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
+	return err
 }
 
 const nextFormVersion = `-- name: NextFormVersion :one

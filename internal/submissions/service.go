@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/forms"
@@ -46,6 +48,14 @@ type Store interface {
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
 	DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
+	LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
+}
+
+// Transactor открывает транзакцию (без знания о конкретном пуле). Реализация —
+// postgres.TxRunner; нужен жёсткому капу лимита (advisory-lock + счёт + вставка одной
+// транзакцией). В юнитах без лимита не вызывается.
+type Transactor interface {
+	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
 }
 
 var _ Store = Repo{}
@@ -76,23 +86,33 @@ type Meta struct {
 // submission привязывается к её id — правки схемы после отправки не искажают данные.
 type Service struct {
 	db    postgres.DBTX
+	tx    Transactor // для жёсткого капа лимита ответов (шаг 4)
 	forms Forms
 	repo  Store
+	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, repo Store) *Service {
-	return &Service{db: db, forms: forms, repo: repo}
+func NewService(db postgres.DBTX, tx Transactor, forms Forms, repo Store) *Service {
+	return &Service{db: db, tx: tx, forms: forms, repo: repo, now: time.Now}
 }
 
-// Submit принимает ответ на форму slug. Порядок: резолв опубликованной формы
-// (черновик/закрытая/нет → 404, приватное не раскрывается) → валидация ответа против
-// её схемы (нарушения → domain.AnswerErrors, транспорт кладёт карту полей в 422) →
-// INSERT с привязкой к версии. Идемпотентность: повтор с тем же id (ретрай после
-// сбоя сети) не создаёт второй строки и возвращается как успех.
+// Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
+// приватное не раскрывается) → проверка «форма закрыта» (снята/дата → 410; лимит —
+// транзакционно ниже) → валидация ответа против её схемы (нарушения →
+// domain.AnswerErrors, транспорт кладёт карту полей в 422) → INSERT с привязкой к
+// версии. Идемпотентность: повтор с тем же id (ретрай после сбоя сети) не создаёт
+// второй строки и возвращается как успех — даже у заполненной формы (см. кап ниже).
 func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers map[string]json.RawMessage, meta Meta) error {
 	pf, err := s.forms.PublicForm(ctx, slug)
 	if err != nil {
 		return err
+	}
+
+	// Форма закрыта владельцем (снята вручную или наступила дата) → приём отклонён
+	// (410 «приём закрыт»). Лимит здесь НЕ проверяем: он enforce'ится транзакционно
+	// под advisory-lock (жёсткий кап), иначе гонка пропустила бы лишние ответы.
+	if domain.ClosedByStatusOrDate(pf.Status, pf.CloseAt, s.now().UTC()) {
+		return domain.ErrFormClosed
 	}
 
 	// Опубликованная схема уже канонична и валидна (проверена при публикации);
@@ -125,11 +145,41 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 
-	// n == 0 → конфликт по PK (тот же id уже принят): идемпотентный успех.
-	if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
-		return err
+	// Без лимита — прежний путь, без блокировки. n == 0 → конфликт по PK (тот же id
+	// уже принят): идемпотентный успех.
+	if pf.ResponseLimit == nil {
+		if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
+			return err
+		}
+		return nil
 	}
-	return nil
+
+	// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
+	// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
+	// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
+	// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
+	// только что вставленной строки превышает лимит) — форма как раз заполнилась.
+	limit := int64(*pf.ResponseLimit)
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
+			return err
+		}
+		n, err := s.repo.InsertSubmission(ctx, tx, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return nil // идемпотентный ретрай — ответ уже принят, лимит ни при чём
+		}
+		count, err := s.repo.CountSubmissions(ctx, tx, pf.FormID)
+		if err != nil {
+			return err
+		}
+		if count > limit {
+			return domain.ErrFormClosed // откат вставки: форма только что заполнилась
+		}
+		return nil
+	})
 }
 
 // ListForForm возвращает страницу ответов формы для её автора. Порядок: авторизация

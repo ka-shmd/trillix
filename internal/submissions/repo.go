@@ -103,3 +103,13 @@ func (Repo) CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.
 	}
 	return n, nil
 }
+
+// LockFormForSubmit берёт транзакционный advisory-lock по форме (жёсткий кап лимита,
+// шаг 4): сериализует конкурентные приёмы одной формы, поэтому счёт точен. Должен
+// вызываться внутри транзакции (db — pgx.Tx); блокировка снимается на commit/rollback.
+func (Repo) LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error {
+	if err := postgres.New(db).LockFormForSubmit(ctx, formID.String()); err != nil {
+		return fmt.Errorf("lock form for submit: %w", err)
+	}
+	return nil
+}

@@ -189,7 +189,7 @@ func (f *fakeStore) SetFormClosed(_ context.Context, _ postgres.DBTX, id, worksp
 	return Form{ID: id, WorkspaceID: workspaceID, Status: "closed"}, nil
 }
 
-func (f *fakeStore) GetPublishedFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
+func (f *fakeStore) GetPublicFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
 	if f.publicErr != nil {
 		return PublicForm{}, f.publicErr
 	}

@@ -39,7 +39,9 @@ func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Vers
 // (thankYouText/redirectUrl) — DisallowUnknownFields не разобрал снапшот, и
 // техническая строка доехала до экрана формы.
 func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
-	svc := NewService(nil, fakeForms{pf: forms.PublicForm{
+	svc := NewService(nil, nil, fakeForms{pf: forms.PublicForm{
+		// Опубликованная и открытая (иначе Submit отклонит как закрытую до разбора схемы).
+		Status: domain.FormStatusPublished,
 		// Поле из будущего формата: DisallowUnknownFields такую схему отвергнет.
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[],"fieldFromFuture":"x"}`),
 	}}, nil)

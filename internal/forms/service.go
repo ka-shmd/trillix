@@ -51,7 +51,7 @@ type Store interface {
 	InsertFormVersion(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error)
 	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
 	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
-	GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
+	GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
 }
 
@@ -368,11 +368,14 @@ func (s *Service) Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form
 	return closed, nil
 }
 
-// PublicForm возвращает опубликованную форму по slug для публичного рендерера.
-// Без проверки воркспейса (форма публична), но только опубликованную: черновик,
-// закрытая или несуществующая → domain.ErrNotFound (404, приватное не раскрывается).
+// PublicForm возвращает публичную форму по slug для рендерера и приёма ответа —
+// вместе со статусом и настройками закрытия. Без проверки воркспейса (форма
+// публична). Черновик и несуществующая → domain.ErrNotFound (404, приватное не
+// раскрывается). Закрытую (снятую вручную ИЛИ по дате/лимиту) ОТДАЁТ: вызывающий
+// вычисляет domain.FormClosed и показывает «приём закрыт» вместо 404 — форма была
+// публичной (инвариант 5 распространяется только на черновик; ADR §10, шаг 4).
 func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, error) {
-	pf, err := s.repo.GetPublishedFormBySlug(ctx, s.db, slug)
+	pf, err := s.repo.GetPublicFormBySlug(ctx, s.db, slug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PublicForm{}, domain.ErrNotFound
