@@ -16,11 +16,23 @@ const publicFormSchema = z.object({
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
-// Результат загрузки формы. 'notfound' — единственный «нормальный» отказ: черновик,
-// закрытая и несуществующая форма неотличимы (404, инвариант безопасности 5),
-// поэтому один экран на все три. Прочие сбои (сеть, битое тело) — исключение,
-// хук переведёт их в состояние 'error'.
-export type LoadResult = { status: 'ok'; form: PublicForm } | { status: 'notfound' }
+// Тело закрытой формы (HTTP 410 Gone, фаза 8.5 шаг 4): схемы и токена нет —
+// принимать нельзя. closedMessage уже разрезолвлен сервером (свой текст или дефолт).
+const closedFormSchema = z.object({
+  closed: z.literal(true),
+  title: z.string(),
+  closedMessage: z.string(),
+})
+
+// Результат загрузки формы. 'notfound' — черновик и несуществующая форма (404,
+// инвариант безопасности 5: приватное не раскрывается). 'closed' — форма была
+// публичной, но больше не принимает ответы (410): показываем «приём закрыт» с
+// текстом владельца, а не безликое «недоступна». Прочие сбои (сеть, битое тело) —
+// исключение, хук переведёт их в 'error'.
+export type LoadResult =
+  | { status: 'ok'; form: PublicForm }
+  | { status: 'closed'; title: string; message: string }
+  | { status: 'notfound' }
 
 export async function fetchPublicForm(slug: string): Promise<LoadResult> {
   const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}`, {
@@ -28,6 +40,10 @@ export async function fetchPublicForm(slug: string): Promise<LoadResult> {
   })
   if (res.status === 404) {
     return { status: 'notfound' }
+  }
+  if (res.status === 410) {
+    const body = closedFormSchema.parse(await res.json())
+    return { status: 'closed', title: body.title, message: body.closedMessage }
   }
   if (!res.ok) {
     throw new Error(`форма не загрузилась: HTTP ${res.status}`)
@@ -47,9 +63,10 @@ const errorEnvelopeSchema = z.object({
 })
 
 // Итог отправки. 'ok' — принято (201). 'invalid' — 422 с пофайловыми ошибками
-// (подсветить поля). 'closed' — форма больше не принимает ответы (404). 'rejected' —
-// прочий осмысленный отказ сервера (антиспам-422 без полей, 413, 429): показываем
-// сообщение, но поля ни при чём. Сетевой обрыв — исключение (throw), ретраит вызывающий.
+// (подсветить поля). 'closed' — форма больше не принимает ответы: 410 (закрыта:
+// снята/дата/лимит) или 404 (исчезла). 'rejected' — прочий осмысленный отказ сервера
+// (антиспам-422 без полей, 413, 429): показываем сообщение, но поля ни при чём.
+// Сетевой обрыв — исключение (throw), ретраит вызывающий.
 export type SubmitOutcome =
   | { status: 'ok' }
   | { status: 'invalid'; fields: Record<string, string> }
@@ -74,7 +91,9 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
     }),
   })
   if (res.status === 201) return { status: 'ok' }
-  if (res.status === 404) return { status: 'closed' }
+  // 410 — форма закрылась (снята/дата/лимит); 404 — исчезла. И то, и другое →
+  // принимать больше нельзя, показываем «приём закрыт».
+  if (res.status === 410 || res.status === 404) return { status: 'closed' }
 
   // Прочие не-2xx: разбираем конверт. Не распарсился (не наш формат) — сеть/прокси
   // отдали что-то чужое: это исключение, вызывающий переведёт в состояние ошибки.
