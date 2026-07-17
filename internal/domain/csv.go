@@ -139,6 +139,17 @@ func formatCell(view blockView, raw json.RawMessage) string {
 			labels[i] = optionLabel(view.options, id)
 		}
 		return strings.Join(labels, "; ")
+	case BlockConsent:
+		// «yes»/пусто — внутренняя кодировка ответа; в выгрузке владельцу нужен
+		// человеческий текст.
+		var v string
+		if json.Unmarshal(raw, &v) != nil {
+			return ""
+		}
+		if v == ConsentYes {
+			return "Да"
+		}
+		return "Нет"
 	default:
 		var v string
 		if json.Unmarshal(raw, &v) != nil {

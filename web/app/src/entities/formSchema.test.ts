@@ -51,6 +51,9 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'согласие с текстом владельца': {
+      blocks: [{ id: 'b', type: 'consent', label: 'Согласен на обработку данных', required: true }],
+    },
     'шкала NPS 0–10 — ноль законный минимум': {
       blocks: [{ id: 'b', type: 'scale', label: 'NPS', settings: { scaleMin: 0, scaleMax: 10 } }],
     },

@@ -62,6 +62,7 @@ const (
 	BlockDropdown     BlockType = "dropdown"
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
+	BlockConsent      BlockType = "consent"
 	BlockText         BlockType = "text"
 	BlockImage        BlockType = "image"
 )
@@ -69,7 +70,8 @@ const (
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
-		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockText, BlockImage:
+		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
+		BlockText, BlockImage:
 		return true
 	default:
 		return false

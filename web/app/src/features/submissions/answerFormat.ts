@@ -1,4 +1,4 @@
-import { type Block, isSingleChoiceType } from '@entities/formSchema'
+import { CONSENT_YES, type Block, isSingleChoiceType } from '@entities/formSchema'
 import { type AnswerValue } from '../../entities/submission'
 
 // Форматирование ответа для таблицы/панели кабинета. choice-значения (id опций)
@@ -15,6 +15,11 @@ export function formatAnswer(block: Block | undefined, value: AnswerValue | unde
   if (block?.type === 'multi_choice') {
     const ids = Array.isArray(value) ? value : [value]
     return ids.map((id) => optionLabel(block, id)).join(', ')
+  }
+  // Согласие: «yes»/пусто — внутренняя кодировка, владельцу нужен человеческий
+  // текст (зеркалит ветку BlockConsent в csv.go).
+  if (block?.type === 'consent') {
+    return value === CONSENT_YES ? 'Да' : 'Нет'
   }
   return Array.isArray(value) ? value.join(', ') : value
 }

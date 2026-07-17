@@ -238,6 +238,12 @@ export function BlockRow({
               <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
             ) : block.type === 'scale' ? (
               <ScaleInline block={block} />
+            ) : block.type === 'consent' ? (
+              // Текст согласия правится в строке заголовка (это label блока),
+              // отдельного поля ответа у галочки нет — показываем её вид.
+              <div className="mt-1.5">
+                <BlockField block={block} />
+              </div>
             ) : (
               <AnswerField block={block} />
             )}

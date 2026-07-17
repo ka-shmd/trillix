@@ -83,6 +83,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     description: 'Выбор даты.',
   },
   {
+    type: 'consent',
+    label: 'Согласие',
+    group: 'question',
+    description: 'Галочка согласия со своим текстом — обработка данных, оферта, рассылка.',
+  },
+  {
     type: 'text',
     label: 'Текст',
     group: 'layout',

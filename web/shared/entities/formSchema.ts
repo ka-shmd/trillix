@@ -70,6 +70,7 @@ export const blockTypeSchema = z.enum([
   'dropdown',
   'multi_choice',
   'date',
+  'consent',
   'text',
   'image',
 ])
@@ -110,6 +111,13 @@ export const isValidPhone = (raw: string): boolean => {
   const digits = raw.replace(/\D/g, '').length
   return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS
 }
+
+// Значение отмеченного согласия. Ответ хранится строкой, а не булевым: это
+// конвенция проекта (number и date тоже строки), и главное — пустая строка = «не
+// отмечено» бесплатно ложится на isEmpty в validation.ts, поэтому обязательность
+// работает без спецслучая. Булев false туда не попадал бы (false !== ''), и
+// required у согласия молча перестал бы работать.
+export const CONSENT_YES = 'yes'
 
 // Неотвечаемые (контентные) блоки: 'text' и 'image'. Зеркалит Go isContent().
 const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['text', 'image'])

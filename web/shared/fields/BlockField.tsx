@@ -1,6 +1,6 @@
 import { type ChangeEvent } from 'react'
 
-import { type Block, isContentType, scaleRange } from '@entities/formSchema'
+import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/formSchema'
 
 import { type Answer, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
@@ -163,6 +163,30 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
           aria-label={label}
           {...invalidProps}
         />
+      )
+    // Согласие: галочка с текстом владельца рядом (текст — label блока; оболочка
+    // FieldShell его не дублирует). Обязательность — обычный флаг required
+    // (решение владельца): необязательное согласие это маркетинг-opt-in.
+    // Значение — CONSENT_YES/пусто, строкой: тип Answer не расширяется, а «пусто»
+    // даёт обязательность даром (см. isEmpty в validation.ts).
+    case 'consent':
+      return (
+        <label className="rf-option">
+          <input
+            className="rf-mark rf-mark--check"
+            type="checkbox"
+            checked={text === CONSENT_YES}
+            onChange={(e) => onChange?.(e.target.checked ? CONSENT_YES : '')}
+            disabled={disabled}
+            {...invalidProps}
+          />
+          <span>
+            {label}
+            {block.required && (
+              <span className="rf-required" aria-hidden="true"> *</span>
+            )}
+          </span>
+        </label>
       )
     case 'scale':
       return (

@@ -89,7 +89,42 @@ func validateAnswer(b Block, raw json.RawMessage) string {
 	if b.Type == BlockScale {
 		return validateScaleAnswer(b, raw)
 	}
+	if b.Type == BlockConsent {
+		return validateConsentAnswer(b, raw)
+	}
 	return validateTextAnswer(b, raw)
+}
+
+// ConsentYes — значение отмеченного согласия. Ответ хранится строкой, а не булевым
+// (решение владельца): это конвенция проекта (number/date тоже строки), и пустая
+// строка = «не отмечено» даёт обязательность даром — без спецслучая в required.
+const ConsentYes = "yes"
+
+// validateConsentAnswer — согласие: либо ConsentYes, либо пусто. Обязательность —
+// обычный флаг required (решение владельца): необязательное согласие это реальный
+// случай (подписка на рассылку, маркетинг-opt-in), поэтому спецслучая «consent
+// всегда обязателен» в валидаторе нет. Текст согласия — label блока.
+func validateConsentAnswer(b Block, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "ожидалась строка"
+	}
+	if v == "" {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	if v != ConsentYes {
+		return "недопустимое значение согласия"
+	}
+	return ""
 }
 
 // validateScaleAnswer — шкала: ответ приходит строкой с целым числом (как number и

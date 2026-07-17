@@ -3,6 +3,7 @@ import {
   AlignLeft,
   Calendar,
   CheckSquare,
+  ShieldCheck,
   ChevronDown,
   CircleDot,
   Hash,
@@ -30,5 +31,6 @@ export const typeIcons: Record<BlockType, ReactNode> = {
   dropdown: <ChevronDown className="size-4" />,
   multi_choice: <CheckSquare className="size-4" />,
   date: <Calendar className="size-4" />,
+  consent: <ShieldCheck className="size-4" />,
   image: <Image className="size-4" />,
 }
