@@ -62,6 +62,9 @@ export const formDetailSchema = formSchema.extend({
 
 export type FormDetail = z.infer<typeof formDetailSchema>
 
+// Потолок текста экрана «приём закрыт» (рун) — зеркалит domain.MaxClosedMessageLen.
+export const MAX_CLOSED_MESSAGE_LEN = 2000
+
 // Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
 // отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка
 // (пустая = дефолт), closeAt/responseLimit — null снимает ограничение.

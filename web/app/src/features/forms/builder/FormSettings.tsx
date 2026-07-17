@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
+import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
+import { useUpdateCloseSettings } from '../queries'
 
 import { useBuilderStore } from './storeContext'
 import {
@@ -24,12 +26,21 @@ import { Textarea } from '@/components/ui/textarea'
 // правится она на месте, WYSIWYG). Открывается иконкой в шапке вместо полотна —
 // тем же переключателем Mode, что и превью (BuilderScreen).
 //
-// Сохранение здесь ЯВНОЕ, в отличие от полотна с его автосейвом (решение
-// владельца): настройки везде сохраняют кнопкой, и молчаливый автосейв ломал бы
-// привычный флоу — человек не понимает, сохранилось ли. Поэтому поля живут в
-// локальном черновике, а «Сохранить» разом коммитит их в стор (один шаг undo) и
-// тут же уносит на сервер, без дебаунса.
-export function FormSettings({ onBack, onSaved }: { onBack: () => void; onSaved: () => void }) {
+// Две секции с РАЗНЫМ источником истины: «После отправки» — поля схемы (стор
+// билдера, сохраняется вместе со схемой через saveNow); «Закрытие формы» — живые
+// колонки forms (деталь из Query, сохраняется своей мутацией closeSettings, схемы не
+// касается). Сохранение везде ЯВНОЕ, кнопкой (решение владельца): молчаливый автосейв
+// ломал бы привычный флоу — человек не понимает, сохранилось ли. Уход с
+// несохранёнными правками любой секции стережёт диалог.
+export function FormSettings({
+  detail,
+  onBack,
+  onSaved,
+}: {
+  detail: FormDetail
+  onBack: () => void
+  onSaved: () => void
+}) {
   const thankYouText = useBuilderStore((s) => s.thankYouText)
   const redirectUrl = useBuilderStore((s) => s.redirectUrl)
   const setAfterSubmit = useBuilderStore((s) => s.setAfterSubmit)
@@ -44,18 +55,68 @@ export function FormSettings({ onBack, onSaved }: { onBack: () => void; onSaved:
     setDraft({ thankYouText, redirectUrl })
   }
 
-  // Диалог-страховка: уход с несохранёнными правками должен быть осознанным.
+  // Черновик секции закрытия и его синхронизация с деталью (мутация патчит кэш —
+  // черновик догоняет по тому же приёму сверки-в-рендере, что и «После отправки»).
+  const closeFromDetail = () => ({
+    closeLocal: isoToLocalInput(detail.closeAt),
+    limit: detail.responseLimit === null ? '' : String(detail.responseLimit),
+    message: detail.closedMessage ?? '',
+  })
+  const [closeDraft, setCloseDraft] = useState(closeFromDetail)
+  const [closeSynced, setCloseSynced] = useState({
+    closeAt: detail.closeAt,
+    responseLimit: detail.responseLimit,
+    closedMessage: detail.closedMessage,
+  })
+  if (
+    closeSynced.closeAt !== detail.closeAt ||
+    closeSynced.responseLimit !== detail.responseLimit ||
+    closeSynced.closedMessage !== detail.closedMessage
+  ) {
+    setCloseSynced({
+      closeAt: detail.closeAt,
+      responseLimit: detail.responseLimit,
+      closedMessage: detail.closedMessage,
+    })
+    setCloseDraft(closeFromDetail())
+  }
+
+  const updateClose = useUpdateCloseSettings()
+
+  // Диалог-страховка: уход с несохранёнными правками любой секции — осознанный.
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   const trimmedUrl = draft.redirectUrl.trim()
   const urlInvalid = trimmedUrl !== '' && !isHttpUrl(trimmedUrl)
-  const dirty = draft.thankYouText !== thankYouText || trimmedUrl !== redirectUrl
+  const afterSubmitDirty = draft.thankYouText !== thankYouText || trimmedUrl !== redirectUrl
 
-  function save() {
+  const limitTrimmed = closeDraft.limit.trim()
+  const limitNum = Number(limitTrimmed)
+  const limitInvalid = limitTrimmed !== '' && (!Number.isInteger(limitNum) || limitNum < 1)
+  const closeDirty =
+    closeDraft.closeLocal !== isoToLocalInput(detail.closeAt) ||
+    limitTrimmed !== (detail.responseLimit === null ? '' : String(detail.responseLimit)) ||
+    closeDraft.message !== (detail.closedMessage ?? '')
+
+  const dirty = afterSubmitDirty || closeDirty
+
+  function saveAfterSubmit() {
     if (urlInvalid) return
     // В стор уходит уже подчищенный URL — именно он поедет в схему.
     setAfterSubmit({ thankYouText: draft.thankYouText, redirectUrl: trimmedUrl })
     onSaved()
+  }
+
+  function saveClose() {
+    if (limitInvalid) return
+    updateClose.mutate({
+      id: detail.id,
+      settings: {
+        closeAt: localInputToIso(closeDraft.closeLocal),
+        responseLimit: limitTrimmed === '' ? null : limitNum,
+        closedMessage: closeDraft.message,
+      },
+    })
   }
 
   function back() {
@@ -118,20 +179,97 @@ export function FormSettings({ onBack, onSaved }: { onBack: () => void; onSaved:
               ? 'Оставьте пустым, чтобы респондент остался на экране благодарности.'
               : 'Покажем текст благодарности и через пару секунд переведём по ссылке.'}
         </p>
+
+        <div className="mt-6 flex items-center gap-3">
+          <Button onClick={saveAfterSubmit} disabled={!afterSubmitDirty || urlInvalid}>
+            Сохранить
+          </Button>
+          <span className="text-xs text-muted-foreground" role="status">
+            {urlInvalid
+              ? 'Проверьте ссылку'
+              : afterSubmitDirty
+                ? 'Есть несохранённые изменения'
+                : 'Всё сохранено'}
+          </span>
+        </div>
       </section>
 
-      <div className="mt-8 flex items-center gap-3 border-t pt-6">
-        <Button onClick={save} disabled={!dirty || urlInvalid}>
-          Сохранить
-        </Button>
-        <span className="text-xs text-muted-foreground" role="status">
-          {urlInvalid
-            ? 'Проверьте ссылку'
-            : dirty
-              ? 'Есть несохранённые изменения'
-              : 'Всё сохранено'}
-        </span>
-      </div>
+      <section className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-medium">Закрытие формы</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Когда прекратить приём ответов. Закрытая форма показывает текст ниже вместо вопросов.
+        </p>
+
+        <Label htmlFor="close-at" className="mt-4 block text-sm font-medium">
+          Дата закрытия <span className="text-muted-foreground">(необязательно)</span>
+        </Label>
+        <Input
+          id="close-at"
+          type="datetime-local"
+          value={closeDraft.closeLocal}
+          onChange={(e) => setCloseDraft((d) => ({ ...d, closeLocal: e.target.value }))}
+          className="mt-1.5"
+        />
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          После этого момента форма перестанет принимать ответы. Пусто — без ограничения по дате.
+        </p>
+
+        <Label htmlFor="response-limit" className="mt-4 block text-sm font-medium">
+          Лимит ответов <span className="text-muted-foreground">(необязательно)</span>
+        </Label>
+        <Input
+          id="response-limit"
+          type="number"
+          inputMode="numeric"
+          min={1}
+          step={1}
+          value={closeDraft.limit}
+          placeholder="Например, 100"
+          aria-invalid={limitInvalid}
+          aria-describedby="response-limit-hint"
+          onChange={(e) => setCloseDraft((d) => ({ ...d, limit: e.target.value }))}
+          className="mt-1.5"
+        />
+        <p
+          id="response-limit-hint"
+          className={`mt-1.5 text-xs ${limitInvalid ? 'text-destructive' : 'text-muted-foreground'}`}
+          role={limitInvalid ? 'alert' : undefined}
+        >
+          {limitInvalid
+            ? 'Лимит — целое число больше нуля.'
+            : 'Форма закроется, набрав столько ответов. Пусто — без лимита.'}
+        </p>
+
+        <Label htmlFor="closed-message" className="mt-4 block text-sm font-medium">
+          Текст «приём закрыт» <span className="text-muted-foreground">(необязательно)</span>
+        </Label>
+        <Textarea
+          id="closed-message"
+          value={closeDraft.message}
+          placeholder="Приём ответов на эту форму закрыт."
+          maxLength={MAX_CLOSED_MESSAGE_LEN}
+          onChange={(e) => setCloseDraft((d) => ({ ...d, message: e.target.value }))}
+          className="mt-1.5"
+        />
+
+        <div className="mt-6 flex items-center gap-3">
+          <Button onClick={saveClose} disabled={!closeDirty || limitInvalid || updateClose.isPending}>
+            {updateClose.isPending ? 'Сохраняем…' : 'Сохранить'}
+          </Button>
+          <span
+            className={`text-xs ${updateClose.isError ? 'text-destructive' : 'text-muted-foreground'}`}
+            role="status"
+          >
+            {limitInvalid
+              ? 'Проверьте лимит'
+              : updateClose.isError
+                ? 'Не удалось сохранить'
+                : closeDirty
+                  ? 'Есть несохранённые изменения'
+                  : 'Всё сохранено'}
+          </span>
+        </div>
+      </section>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
@@ -149,4 +287,23 @@ export function FormSettings({ onBack, onSaved }: { onBack: () => void; onSaved:
       </AlertDialog>
     </section>
   )
+}
+
+// isoToLocalInput — ISO-строка (UTC с сервера) → значение <input type="datetime-local">
+// (локальное время, поминутная точность). Пусто/битое → пустая строка.
+function isoToLocalInput(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// localInputToIso — значение datetime-local (локальное время) → ISO (UTC) для сервера.
+// Пусто/битое → null (ограничение по дате снято).
+function localInputToIso(local: string): string | null {
+  if (local.trim() === '') return null
+  const d = new Date(local)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString()
 }

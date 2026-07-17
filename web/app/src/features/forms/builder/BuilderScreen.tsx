@@ -159,7 +159,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       )}
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
           иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
-      {mode === 'settings' && <FormSettings onBack={() => setMode('edit')} onSaved={saveNow} />}
+      {mode === 'settings' && (
+        <FormSettings detail={detail} onBack={() => setMode('edit')} onSaved={saveNow} />
+      )}
     </BuilderStoreContext.Provider>
   )
 }
