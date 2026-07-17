@@ -304,8 +304,8 @@ func (b *SummaryBuilder) Result() Summary {
 
 // buckets — деления распределения по типу вопроса.
 func (a *summaryAcc) buckets() []SummaryBucket {
-	switch {
-	case a.typ == BlockConsent:
+	switch a.typ {
+	case BlockConsent:
 		// Согласие — не «сколько отметили из ответивших», а «сколько согласились из
 		// тех, кого спросили»: неотмеченный чекбокс это осмысленное «нет», а не
 		// пропуск (см. add).
@@ -313,9 +313,10 @@ func (a *summaryAcc) buckets() []SummaryBucket {
 			{Key: ConsentYes, Label: "Да", Count: a.answered},
 			{Key: "", Label: "Нет", Count: a.asked - a.answered},
 		}
-	case a.typ == BlockScale:
+	case BlockScale:
 		return a.scaleBuckets()
 	default:
+		// Остальные распределения — choice-типы: варианты из объединения версий.
 		return a.optionBuckets()
 	}
 }
