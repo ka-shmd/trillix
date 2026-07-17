@@ -28,10 +28,16 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // (на него ссылаются ответы), смена типа — это другой блок, не правка этого.
 export type BlockPatch = Partial<Pick<Block, 'label' | 'description' | 'required' | 'settings'>>
 
-// Snapshot — снимок документа (blocks + submitLabel) для стеков undo/redo. selectedId
-// и dirty — производный UI, в снапшот не входят; при откате selectedId чинится, если
-// выделенный блок исчез.
-export type Snapshot = { blocks: Block[]; submitLabel: string }
+// Snapshot — снимок документа (blocks + поля формы-уровня) для стеков undo/redo.
+// selectedId и dirty — производный UI, в снапшот не входят; при откате selectedId
+// чинится, если выделенный блок исчез. Новое поле документа обязано попасть сюда,
+// иначе undo его молча потеряет.
+export type Snapshot = {
+  blocks: Block[]
+  submitLabel: string
+  thankYouText: string
+  redirectUrl: string
+}
 
 // Потолок глубины истории: длинная сессия не должна расти в памяти без предела.
 const MAX_HISTORY = 100
@@ -40,6 +46,10 @@ export type BuilderState = {
   blocks: Block[]
   // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт дефолт.
   submitLabel: string
+  // Экран «после отправки» (форма-уровень). thankYouText пусто → рендерер берёт
+  // дефолтную благодарность; redirectUrl пусто → перехода нет.
+  thankYouText: string
+  redirectUrl: string
   selectedId: string | null
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
@@ -86,6 +96,11 @@ export type BuilderActions = {
   select: (id: string | null) => void
   // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
   setSubmitLabel: (label: string) => void
+  // setAfterSubmit применяет настройки экрана «после отправки» целиком. Одним
+  // действием, а не полем за полем: страница настроек сохраняется по кнопке, и
+  // нажатие обязано быть одним шагом отмены. Никаких правок — no-op (историю и
+  // dirty не трогает).
+  setAfterSubmit: (settings: { thankYouText: string; redirectUrl: string }) => void
   // undo/redo откатывают и повторяют изменения документа. Пустой стек — no-op.
   undo: () => void
   redo: () => void
@@ -137,8 +152,13 @@ function mutateOptions(
   }
 }
 
-// snapshot снимает документ (только blocks+submitLabel) для стеков истории.
-const snapshot = (s: BuilderState): Snapshot => ({ blocks: s.blocks, submitLabel: s.submitLabel })
+// snapshot снимает документ (blocks + поля формы-уровня) для стеков истории.
+const snapshot = (s: BuilderState): Snapshot => ({
+  blocks: s.blocks,
+  submitLabel: s.submitLabel,
+  thankYouText: s.thankYouText,
+  redirectUrl: s.redirectUrl,
+})
 
 // fixSelection чинит выделение после отката: если выделенный блок в новом наборе
 // исчез, снимаем выделение.
@@ -179,6 +199,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
     return {
       blocks: [],
       submitLabel: '',
+      thankYouText: '',
+      redirectUrl: '',
       selectedId: null,
       dirty: false,
       past: [],
@@ -189,6 +211,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         set({
           blocks: schema.blocks.map(cloneBlock),
           submitLabel: schema.submitLabel ?? '',
+          thankYouText: schema.thankYouText ?? '',
+          redirectUrl: schema.redirectUrl ?? '',
           selectedId: null,
           dirty: false,
           past: [],
@@ -317,13 +341,22 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       setSubmitLabel: (label) => commit('sl', () => ({ submitLabel: label })),
 
+      // Тег null: настройки прилетают готовым набором по кнопке, коалесить нечего.
+      setAfterSubmit: ({ thankYouText, redirectUrl }) =>
+        commit(null, (s) =>
+          s.thankYouText === thankYouText && s.redirectUrl === redirectUrl
+            ? null
+            : { thankYouText, redirectUrl },
+        ),
+
       undo: () =>
         set((s) => {
           const prev = s.past[s.past.length - 1]
           if (!prev) return s
+          // Снапшот разворачивается целиком, а не по полю: перечисление руками —
+          // это ровно тот способ, которым новое поле документа теряется в undo.
           return {
-            blocks: prev.blocks,
-            submitLabel: prev.submitLabel,
+            ...prev,
             selectedId: fixSelection(s.selectedId, prev.blocks),
             past: s.past.slice(0, -1),
             future: [...s.future, snapshot(s)],
@@ -337,8 +370,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const next = s.future[s.future.length - 1]
           if (!next) return s
           return {
-            blocks: next.blocks,
-            submitLabel: next.submitLabel,
+            ...next,
             selectedId: fixSelection(s.selectedId, next.blocks),
             past: [...s.past, snapshot(s)],
             future: s.future.slice(0, -1),
@@ -353,6 +385,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         schemaVersion: SCHEMA_VERSION,
         blocks: get().blocks,
         submitLabel: get().submitLabel,
+        thankYouText: get().thankYouText,
+        redirectUrl: get().redirectUrl,
       }),
     }
   })

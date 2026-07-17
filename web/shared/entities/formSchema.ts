@@ -23,9 +23,31 @@ export const MAX_PLACEHOLDER_LEN = 200
 // Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.) и alt-текст.
 export const MAX_IMAGE_KEY_LEN = 200
 export const MAX_ALT_LEN = 500
+// Экран «после отправки»: текст благодарности владельца и ссылка перехода.
+export const MAX_THANK_YOU_TEXT_LEN = 2000
+export const MAX_REDIRECT_URL_LEN = 2000
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
+
+// Экран «Спасибо» по умолчанию (когда thankYouText в схеме пуст).
+export const DEFAULT_THANK_YOU_TITLE = 'Спасибо!'
+export const DEFAULT_THANK_YOU_TEXT = 'Ваш ответ отправлен.'
+
+// isHttpUrl — единственное правило redirect-ссылки: абсолютный http(s)-URL с хостом.
+// Зеркалит validateRedirectURL в Go. `javascript:`, `data:`, относительные пути
+// отбрасываются: значение уходит в window.location, чужая схема там — это XSS на
+// публичном домене формы (инвариант 4). Рендерер проверяет повторно перед переходом —
+// доверять содержимому схемы на месте использования нельзя.
+export const isHttpUrl = (raw: string): boolean => {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return false
+  }
+  return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
+}
 
 // Типы блоков: семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс два неотвечаемых
 // (контентных): 'text' — статический абзац, 'image' — картинка на полотне. Оба не
@@ -148,8 +170,26 @@ export const formSchemaSchema = z
     blocks: z.array(blockSchema).max(MAX_BLOCKS),
     // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт DEFAULT_SUBMIT_LABEL.
     submitLabel: z.string().max(MAX_SUBMIT_LABEL_LEN).optional(),
+    // Экран «после отправки» (форма-уровень, оба поля необязательны). Живут в схеме,
+    // а не в колонках forms, осознанно: схема снапшотится при публикации, поэтому
+    // респондент видит экран той версии, по которой отправил ответ.
+    // Пусто → рендерер берёт DEFAULT_THANK_YOU_TITLE/TEXT.
+    thankYouText: z.string().max(MAX_THANK_YOU_TEXT_LEN).optional(),
+    // Ссылка перехода после отправки. Пусто → остаёмся на экране благодарности.
+    redirectUrl: z.string().max(MAX_REDIRECT_URL_LEN).optional(),
   })
   .superRefine((s, ctx) => {
+    // Схема redirect проверяется строго даже в черновике (в отличие от пустого label):
+    // билдер коммитит поле в стор только по blur, поэтому недопечатанный URL до
+    // автосейва не доезжает и 422 посреди набора не бывает.
+    if (s.redirectUrl && !isHttpUrl(s.redirectUrl)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'ссылка должна начинаться с http:// или https://',
+        path: ['redirectUrl'],
+      })
+    }
+
     const seen = new Set<string>()
     s.blocks.forEach((b, i) => {
       if (seen.has(b.id)) {
