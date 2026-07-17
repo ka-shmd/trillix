@@ -87,19 +87,45 @@ function ManageLayout() {
 // Свои, а не shadcn Tabs: тот тянет @radix-ui/react-tabs — новая зависимость (список
 // заморожен, web/CLAUDE.md), и рассчитан на локальный стейт, а у нас маршруты.
 function FormTabs({ slug }: { slug: string }) {
-  const base =
-    'border-b-2 px-1 pb-2.5 text-sm font-medium transition-colors border-transparent text-muted-foreground hover:text-foreground'
-  const active = { className: 'border-primary text-foreground' }
+  // Классы вида НЕ смешиваются: активный и неактивный набор взаимоисключающи и едут
+  // через activeProps/inactiveProps. Держать `border-transparent` в базе и
+  // «перебивать» его `border-primary` из activeProps нельзя: у обоих утилит
+  // одинаковая специфичность, и побеждает та, что позже в сгенерированном CSS
+  // Tailwind, — активный таб оказывается прозрачным, хотя класс на нём есть.
+  // Проверять это надо computed-стилем, а не наличием класса в className.
+  const base = 'border-b-2 px-1 pb-2.5 text-sm transition-colors'
+  const active = { className: 'border-primary font-semibold text-foreground' }
+  const inactive = {
+    className: 'border-transparent font-medium text-muted-foreground hover:text-foreground',
+  }
 
   return (
     <nav className="mt-6 mb-6 flex gap-6 border-b" aria-label="Разделы формы">
-      <Link to="/forms/$slug/share" params={{ slug }} className={base} activeProps={active}>
+      <Link
+        to="/forms/$slug/share"
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
         Поделиться
       </Link>
-      <Link to="/forms/$slug/responses" params={{ slug }} className={base} activeProps={active}>
+      <Link
+        to="/forms/$slug/responses"
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
         Ответы
       </Link>
-      <Link to="/forms/$slug/summary" params={{ slug }} className={base} activeProps={active}>
+      <Link
+        to="/forms/$slug/summary"
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
         Сводка
       </Link>
     </nav>
