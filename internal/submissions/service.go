@@ -97,10 +97,17 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 
 	// Опубликованная схема уже канонична и валидна (проверена при публикации);
 	// разбираем её в типы для ValidateAnswers. Сбой здесь означал бы нарушенный
-	// инвариант иммутабельности версии — оборачиваем как внутреннюю ошибку.
+	// инвариант иммутабельности версии — это внутренняя ошибка, а не ошибка ввода
+	// респондента.
+	//
+	// %v, а НЕ %w — намеренно: ValidateSchema возвращает ошибку с сентинелом
+	// domain.ErrValidation, и сохранение его в цепочке уводило бы respond.go в 422 с
+	// внутренним текстом наружу — респондент видел бы «не удалось разобрать схему:
+	// json: unknown field ...». Обрыв цепочки роняет ошибку в default → 500: текст
+	// скрыт от клиента и залогирован с request_id.
 	schema, err := domain.ValidateSchema(pf.Schema)
 	if err != nil {
-		return fmt.Errorf("parse published schema for %s: %w", slug, err)
+		return fmt.Errorf("parse published schema for %s: %v", slug, err)
 	}
 	if err := domain.ValidateAnswers(schema, answers); err != nil {
 		return err
@@ -184,8 +191,9 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 		schema, e := domain.ValidateSchema(v.Schema)
 		if e != nil {
 			// Опубликованный снапшот обязан быть валиден (проверен при публикации) —
-			// иначе нарушен инвариант иммутабельности версии.
-			return fmt.Errorf("parse version %d schema of form %s: %w", v.Number, formID, e)
+			// иначе нарушен инвариант иммутабельности версии. %v, а не %w: см. Submit —
+			// сентинел ErrValidation в цепочке дал бы 422 с внутренним текстом вместо 500.
+			return fmt.Errorf("parse version %d schema of form %s: %v", v.Number, formID, e)
 		}
 		vs = append(vs, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
 	}

@@ -88,5 +88,12 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
   if (res.status === 422 && fields && Object.keys(fields).length > 0) {
     return { status: 'invalid', fields }
   }
+  // 5xx — сбой на нашей стороне, а не осмысленный отказ респонденту: его текст
+  // служебный (respond.go шлёт обезличенное «internal server error», причина уходит
+  // в лог с request_id). Респонденту показываем человеческое — читать внутренности
+  // сервера он не должен. У 4xx текст осмысленный (антиспам, лимит) — он и едет.
+  if (res.status >= 500) {
+    return { status: 'rejected', message: 'Не удалось отправить — попробуйте ещё раз через минуту.' }
+  }
   return { status: 'rejected', message: env.error.message }
 }

@@ -93,6 +93,21 @@ describe('submitAnswers', () => {
     expect((await submitAnswers('abc', body)).status).toBe('rejected')
   })
 
+  it('500 с нашим конвертом → rejected БЕЗ служебного текста сервера', async () => {
+    // Респондент не должен читать внутренности. Живой случай: сервер не смог
+    // разобрать схему версии и слал наружу «json: unknown field ...».
+    stubFetch(
+      new Response('{"error":{"code":"internal","message":"internal server error"}}', {
+        status: 500,
+      }),
+    )
+    const out = await submitAnswers('abc', body)
+    expect(out).toEqual({
+      status: 'rejected',
+      message: 'Не удалось отправить — попробуйте ещё раз через минуту.',
+    })
+  })
+
   it('чужое тело не-2xx → исключение (сеть/прокси, ретраит вызывающий)', async () => {
     stubFetch(new Response('<html>502</html>', { status: 502 }))
     await expect(submitAnswers('abc', body)).rejects.toThrow()
