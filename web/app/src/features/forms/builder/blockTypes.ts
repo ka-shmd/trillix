@@ -53,6 +53,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     description: 'Числовой ответ — количество, возраст, сумма.',
   },
   {
+    type: 'scale',
+    label: 'Шкала',
+    group: 'question',
+    description: 'Оценка по шкале — от 1 до 5, NPS 0–10 и подобное.',
+  },
+  {
     type: 'single_choice',
     label: 'Один из списка',
     group: 'question',

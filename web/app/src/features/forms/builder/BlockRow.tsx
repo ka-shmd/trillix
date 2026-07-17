@@ -8,8 +8,12 @@ import {
   isChoiceType,
   isSingleChoiceType,
   isContentType,
+  SCALE_LOWER_BOUND,
+  SCALE_UPPER_BOUND,
+  scaleRange,
   supportsPlaceholder,
 } from '@entities/formSchema'
+import { BlockField } from '@fields/BlockField'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
 import { ImageField } from './ImageField'
@@ -232,6 +236,8 @@ export function BlockRow({
                 (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
             {isContent ? null : isChoiceType(block.type) ? (
               <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
+            ) : block.type === 'scale' ? (
+              <ScaleInline block={block} />
             ) : (
               <AnswerField block={block} />
             )}
@@ -321,6 +327,66 @@ function DescriptionField({ block }: { block: Block }) {
 // AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
 // автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит
 // респондент. date — статичное превью (в поле даты плейсхолдер не показывается).
+// ScaleInline — редактор шкалы: живое превью делений (тот же rf-scale, что увидит
+// респондент) плюс выбор диапазона.
+//
+// Концы выбираются из <select>, а не вводятся числом, намеренно: ValidateSchema
+// строго требует min < max в пределах [0,10], а свободный ввод даёт невалидные
+// промежуточные состояния (пустое поле, min>max посреди набора) — автосейв ловил бы
+// 422 на каждое нажатие. Список вариантов делает такое состояние невозможным.
+function ScaleInline({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const { min, max } = scaleRange(block)
+
+  const set = (next: { min?: number; max?: number }) => {
+    const m = next.min ?? min
+    const x = next.max ?? max
+    updateBlock(block.id, {
+      // Максимум не может опуститься до минимума: держим его хотя бы на шаг выше.
+      settings: { ...block.settings, scaleMin: m, scaleMax: Math.max(x, m + 1) },
+    })
+  }
+
+  const selectCls =
+    'h-7 rounded border border-muted-foreground/30 bg-transparent px-1.5 text-sm text-foreground'
+
+  return (
+    <div className="mt-1.5 flex flex-col gap-2">
+      <BlockField block={block} />
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <label className="flex items-center gap-1.5">
+          от
+          <select
+            className={selectCls}
+            value={min}
+            onChange={(e) => set({ min: Number(e.target.value) })}
+          >
+            {[SCALE_LOWER_BOUND, SCALE_LOWER_BOUND + 1].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center gap-1.5">
+          до
+          <select
+            className={selectCls}
+            value={max}
+            onChange={(e) => set({ max: Number(e.target.value) })}
+          >
+            {Array.from({ length: SCALE_UPPER_BOUND - min }, (_, i) => min + 1 + i).map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+    </div>
+  )
+}
+
 function AnswerField({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)

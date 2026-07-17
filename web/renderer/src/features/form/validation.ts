@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { type Block, isContentType, isValidPhone } from '@entities/formSchema'
+import { type Block, isContentType, isValidPhone, scaleRange } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 
 import { type Answers } from './answers'
@@ -43,6 +43,13 @@ export function validateBlock(block: Block, value: Answer | undefined): string |
       return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(text))
         ? null
         : 'Некорректная дата'
+    case 'scale': {
+      // Значение приходит только с кнопок деления, поэтому промах возможен лишь у
+      // подделанного тела — но клиент обязан зеркалить сервер (validateScaleAnswer).
+      const { min, max } = scaleRange(block)
+      const n = Number(text)
+      return Number.isInteger(n) && n >= min && n <= max ? null : `Выберите значение ${min}–${max}`
+    }
     default:
       return null
   }

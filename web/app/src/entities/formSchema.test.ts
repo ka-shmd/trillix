@@ -20,13 +20,16 @@ import {
 describe('formSchemaSchema — валидные', () => {
   const valid: Record<string, unknown> = {
     'пустой каркас без schemaVersion': { blocks: [] },
-    'все семь типов': {
+    'все отвечаемые типы': {
       schemaVersion: 1,
       blocks: [
         { id: 'blk_1', type: 'short_text', label: 'Имя', description: '', required: true, settings: {} },
         { id: 'blk_2', type: 'long_text', label: 'О себе', required: false, settings: {} },
         { id: 'blk_3', type: 'email', label: 'Почта', required: true, settings: {} },
         { id: 'blk_4', type: 'number', label: 'Возраст', required: false, settings: {} },
+        { id: 'blk_8', type: 'phone', label: 'Телефон', settings: {} },
+        { id: 'blk_9', type: 'scale', label: 'Оценка', settings: { scaleMin: 1, scaleMax: 5 } },
+        { id: 'blk_10', type: 'dropdown', label: 'Город', settings: { options: [{ id: 'o1', label: 'Мск' }] } },
         { id: 'blk_5', type: 'date', label: 'Дата', required: false, settings: {} },
         {
           id: 'blk_6',
@@ -48,6 +51,12 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'шкала NPS 0–10 — ноль законный минимум': {
+      blocks: [{ id: 'b', type: 'scale', label: 'NPS', settings: { scaleMin: 0, scaleMax: 10 } }],
+    },
+    'шкала без диапазона — валидный черновик': {
+      blocks: [{ id: 'b', type: 'scale', label: '', settings: {} }],
+    },
     'dropdown с опциями — та же модель, что single_choice': {
       blocks: [
         {
@@ -194,6 +203,24 @@ describe('formSchemaSchema — невалидные', () => {
           settings: { placeholder: 'я'.repeat(MAX_PLACEHOLDER_LEN + 1) },
         },
       ],
+    },
+    'шкала: min больше max': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 5, scaleMax: 2 } }],
+    },
+    'шкала: min равен max': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 3, scaleMax: 3 } }],
+    },
+    'шкала: max выше потолка': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: 1, scaleMax: 11 } }],
+    },
+    'шкала: min ниже нуля': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMin: -1, scaleMax: 5 } }],
+    },
+    'шкала: задан только один конец': {
+      blocks: [{ id: 'b', type: 'scale', label: 'x', settings: { scaleMax: 5 } }],
+    },
+    'шкала у не-scale': {
+      blocks: [{ id: 'b', type: 'short_text', label: 'x', settings: { scaleMin: 1, scaleMax: 5 } }],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
     'redirect javascript:': { blocks: [], redirectUrl: 'javascript:alert(document.cookie)' },

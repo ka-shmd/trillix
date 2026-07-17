@@ -162,6 +162,41 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 	}
 }
 
+// Шкала: ответ — строка с целым числом в диапазоне ТОЙ версии схемы, против
+// которой валидируется (смена диапазона не делает старые ответы невалидными).
+func TestValidateAnswers_Scale(t *testing.T) {
+	scale := func(id string, required bool, min, max int) Block {
+		b := Block{ID: id, Type: BlockScale, Required: required}
+		b.Settings.ScaleMin, b.Settings.ScaleMax = &min, &max
+		return b
+	}
+	nps := FormSchema{Blocks: []Block{scale("s", true, 0, 10)}}
+
+	if err := ValidateAnswers(nps, raws(map[string]string{"s": `"0"`})); err != nil {
+		t.Fatalf("ноль — законное значение NPS-шкалы: %v", err)
+	}
+	if err := ValidateAnswers(nps, raws(map[string]string{"s": `"10"`})); err != nil {
+		t.Fatalf("верхняя граница включительна: %v", err)
+	}
+	for name, v := range map[string]string{
+		"выше максимума": `"11"`,
+		"ниже минимума":  `"-1"`,
+		"не целое":       `"3.5"`,
+		"не число":       `"пять"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateAnswers(nps, raws(map[string]string{"s": v})); err == nil {
+				t.Fatalf("ожидалась ошибка для %s", v)
+			}
+		})
+	}
+	// Диапазон блока, а не глобальный: 7 вне 1–5.
+	if err := ValidateAnswers(FormSchema{Blocks: []Block{scale("s", false, 1, 5)}},
+		raws(map[string]string{"s": `"7"`})); err == nil {
+		t.Fatal("значение вне диапазона блока принято")
+	}
+}
+
 // Телефон проверяется МЯГКО (решение владельца): символы и число цифр, не формат
 // страны. Тест фиксирует именно это: нестандартные, но легальные записи проходят —
 // жёсткая маска РФ отсекала бы их, и это дороже ложного пропуска.

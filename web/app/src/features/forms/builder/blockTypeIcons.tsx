@@ -9,6 +9,7 @@ import {
   Image,
   Mail,
   Phone,
+  Ruler,
   Pilcrow,
   Type,
 } from 'lucide-react'
@@ -24,6 +25,7 @@ export const typeIcons: Record<BlockType, ReactNode> = {
   email: <Mail className="size-4" />,
   phone: <Phone className="size-4" />,
   number: <Hash className="size-4" />,
+  scale: <Ruler className="size-4" />,
   single_choice: <CircleDot className="size-4" />,
   dropdown: <ChevronDown className="size-4" />,
   multi_choice: <CheckSquare className="size-4" />,

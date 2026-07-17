@@ -11,13 +11,16 @@ import (
 func TestValidateSchema_Valid(t *testing.T) {
 	cases := map[string]string{
 		"пустой каркас (дефолт БД, без schemaVersion)": `{"blocks":[]}`,
-		"все семь типов": `{
+		"все отвечаемые типы": `{
 			"schemaVersion":1,
 			"blocks":[
 				{"id":"blk_1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}},
 				{"id":"blk_2","type":"long_text","label":"О себе","required":false,"settings":{}},
 				{"id":"blk_3","type":"email","label":"Почта","required":true,"settings":{}},
 				{"id":"blk_4","type":"number","label":"Возраст","required":false,"settings":{}},
+				{"id":"blk_8","type":"phone","label":"Телефон","settings":{}},
+				{"id":"blk_9","type":"scale","label":"Оценка","settings":{"scaleMin":1,"scaleMax":5}},
+				{"id":"blk_10","type":"dropdown","label":"Город","settings":{"options":[{"id":"o1","label":"Мск"}]}},
 				{"id":"blk_5","type":"date","label":"Дата","required":false,"settings":{}},
 				{"id":"blk_6","type":"single_choice","label":"Откуда","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
 				{"id":"blk_7","type":"multi_choice","label":"Языки","required":false,"settings":{"options":[{"id":"o1","label":"Go"}]}}
@@ -112,6 +115,50 @@ func TestValidateSchema_Invalid(t *testing.T) {
 				t.Fatalf("ожидалась ошибка, схема принята")
 			}
 			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("ошибка не обёрнута ErrValidation: %v", err)
+			}
+		})
+	}
+}
+
+// Диапазон шкалы. Ключевой кейс — ноль: ScaleMin/ScaleMax сделаны указателями
+// именно потому, что 0 — законный минимум (NPS 0–10), а с `omitempty` у int он
+// вылетал бы из JSON и «не задано» стало бы неотличимо от «задано 0».
+func TestValidateSchema_Scale(t *testing.T) {
+	valid := map[string]string{
+		"диапазон 1–5":                   `{"blocks":[{"id":"s","type":"scale","label":"Оценка","settings":{"scaleMin":1,"scaleMax":5}}]}`,
+		"NPS 0–10 (ноль не теряется)":    `{"blocks":[{"id":"s","type":"scale","label":"NPS","settings":{"scaleMin":0,"scaleMax":10}}]}`,
+		"шкала без диапазона — черновик": `{"blocks":[{"id":"s","type":"scale","label":"","settings":{}}]}`,
+	}
+	for name, raw := range valid {
+		t.Run("валидна: "+name, func(t *testing.T) {
+			s, err := ValidateSchema(json.RawMessage(raw))
+			if err != nil {
+				t.Fatalf("ожидалась валидная схема: %v", err)
+			}
+			// Ноль обязан доехать до типов, а не превратиться в «не задано».
+			if name == "NPS 0–10 (ноль не теряется)" {
+				min := s.Blocks[0].Settings.ScaleMin
+				if min == nil || *min != 0 {
+					t.Fatalf("scaleMin=0 потерян при разборе: %v", min)
+				}
+			}
+		})
+	}
+
+	invalid := map[string]string{
+		"min больше max":          `{"blocks":[{"id":"s","type":"scale","label":"x","settings":{"scaleMin":5,"scaleMax":2}}]}`,
+		"min равен max":           `{"blocks":[{"id":"s","type":"scale","label":"x","settings":{"scaleMin":3,"scaleMax":3}}]}`,
+		"max выше потолка":        `{"blocks":[{"id":"s","type":"scale","label":"x","settings":{"scaleMin":1,"scaleMax":11}}]}`,
+		"min ниже нуля":           `{"blocks":[{"id":"s","type":"scale","label":"x","settings":{"scaleMin":-1,"scaleMax":5}}]}`,
+		"задан только один конец": `{"blocks":[{"id":"s","type":"scale","label":"x","settings":{"scaleMax":5}}]}`,
+		"шкала у не-scale":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"scaleMin":1,"scaleMax":5}}]}`,
+	}
+	for name, raw := range invalid {
+		t.Run("невалидна: "+name, func(t *testing.T) {
+			if _, err := ValidateSchema(json.RawMessage(raw)); err == nil {
+				t.Fatal("ожидалась ошибка, схема принята")
+			} else if !errors.Is(err, ErrValidation) {
 				t.Fatalf("ошибка не обёрнута ErrValidation: %v", err)
 			}
 		})

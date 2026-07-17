@@ -86,7 +86,52 @@ func validateAnswer(b Block, raw json.RawMessage) string {
 	if b.Type.isChoice() {
 		return validateChoiceAnswer(b, raw)
 	}
+	if b.Type == BlockScale {
+		return validateScaleAnswer(b, raw)
+	}
 	return validateTextAnswer(b, raw)
+}
+
+// validateScaleAnswer — шкала: ответ приходит строкой с целым числом (как number и
+// date, конвенция проекта), которое обязано попадать в диапазон блока. Диапазон
+// берётся из ТОЙ ЖЕ версии схемы, против которой валидируется ответ, поэтому смена
+// диапазона владельцем не делает старые ответы невалидными задним числом.
+func validateScaleAnswer(b Block, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "ожидалась строка"
+	}
+	if v == "" {
+		if b.Required {
+			return msgRequired
+		}
+		return ""
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return "ожидалось целое число"
+	}
+	min, max := scaleRange(b)
+	if n < min || n > max {
+		return fmt.Sprintf("значение вне диапазона %d–%d", min, max)
+	}
+	return ""
+}
+
+// scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт
+// (черновик без диапазона; редактор такой не создаёт). Зеркалит scaleRange на фронте.
+func scaleRange(b Block) (int, int) {
+	min, max := DefaultScaleMin, DefaultScaleMax
+	if b.Settings.ScaleMin != nil && b.Settings.ScaleMax != nil {
+		min, max = *b.Settings.ScaleMin, *b.Settings.ScaleMax
+	}
+	return min, max
 }
 
 // validateTextAnswer — типы, чьё значение приходит JSON-строкой (short_text,
