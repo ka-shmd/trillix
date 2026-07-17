@@ -48,12 +48,28 @@ export const displayFormTitle = (title: string): string =>
 export const displayFormName = (form: { name: string | null; title: string }): string =>
   form.name && form.name.trim() !== '' ? form.name : displayFormTitle(form.title)
 
-// GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор).
+// GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор) +
+// живые настройки закрытия (страница настроек; фаза 8.5 шаг 4).
 export const formDetailSchema = formSchema.extend({
   draftSchema: formSchemaSchema,
+  // null/пусто = ограничение не задано. closeAt — ISO-строка момента закрытия;
+  // responseLimit — жёсткий лимит принятых ответов; closedMessage — текст экрана
+  // «приём закрыт» (null → дефолт рендерера).
+  closeAt: z.string().nullable(),
+  responseLimit: z.number().int().nullable(),
+  closedMessage: z.string().nullable(),
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>
+
+// Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
+// отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка
+// (пустая = дефолт), closeAt/responseLimit — null снимает ограничение.
+export type CloseSettingsInput = {
+  closeAt: string | null
+  responseLimit: number | null
+  closedMessage: string
+}
 
 // GET /forms: страница + непрозрачный курсор на следующую (null — последняя).
 export const formsPageSchema = z.object({

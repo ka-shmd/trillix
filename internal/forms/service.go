@@ -44,6 +44,7 @@ type Store interface {
 	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
+	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
@@ -216,6 +217,28 @@ func (s *Service) UpdateTitle(ctx context.Context, userID, formID uuid.UUID, tit
 		return Form{}, err
 	}
 	updated, err := s.repo.UpdateFormTitle(ctx, s.db, form.ID, form.WorkspaceID, title)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateCloseSettings заменяет настройки закрытия формы (дата/лимит/текст «приём
+// закрыт»). Порядок как у UpdateTitle: валидация ввода (мусор → ErrValidation/422),
+// проверка доступа (чужая/нет формы → 404), затем UPDATE. Настройки — живые колонки
+// (не схема): применяются немедленно, публикации не требуют (ADR §10).
+func (s *Service) UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error) {
+	if err := domain.ValidateCloseSettings(settings); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormCloseSettings(ctx, s.db, form.ID, form.WorkspaceID, settings)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound

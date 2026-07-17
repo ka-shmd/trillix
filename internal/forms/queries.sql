@@ -50,6 +50,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -65,6 +66,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -114,6 +116,17 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
 UPDATE forms
 SET name = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormCloseSettings :one
+-- Живые настройки закрытия формы (фаза 8.5 шаг 4): дата, лимит, текст «приём
+-- закрыт». Заменяют все три колонки разом (страница настроек шлёт полный набор;
+-- NULL = ограничение снято) — колонки, а не JSONB-схема, т.к. настройка живая, а
+-- схема снапшотится при публикации (ADR §10). В пределах воркспейса; 0 строк
+-- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
+UPDATE forms
+SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 

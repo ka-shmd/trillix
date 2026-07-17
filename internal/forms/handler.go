@@ -37,6 +37,7 @@ type formsService interface {
 	GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error)
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
+	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -98,10 +99,23 @@ type formResponse struct {
 	SubmissionCount int64 `json:"submissionCount"`
 }
 
-// formDetailResponse — GET /forms/{id}: метаданные + черновик схемы.
+// formDetailResponse — GET /forms/{id}: метаданные + черновик схемы + живые
+// настройки закрытия (страница настроек кабинета их читает; фаза 8.5 шаг 4).
 type formDetailResponse struct {
 	formResponse
 	DraftSchema json.RawMessage `json:"draftSchema"`
+	// null/пусто = ограничение не задано. Только в детали формы (не в списке/мутациях).
+	CloseAt       *time.Time `json:"closeAt"`
+	ResponseLimit *int32     `json:"responseLimit"`
+	ClosedMessage *string    `json:"closedMessage"`
+}
+
+// closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
+// (отсутствующее поле = снято). Замена всех трёх колонок разом, не частичный патч.
+type closeSettingsBody struct {
+	CloseAt       *time.Time `json:"closeAt"`
+	ResponseLimit *int32     `json:"responseLimit"`
+	ClosedMessage string     `json:"closedMessage"`
 }
 
 type listResponse struct {
@@ -114,15 +128,17 @@ type titleRequest struct {
 }
 
 // patchRequest — тело PATCH /forms/{id}. Указатели различают «поле отсутствует»
-// (nil) от «прислано». За один запрос меняется ровно одно из name/title/draftSchema:
-// name — переименование с дашборда (внутреннее имя, не трогает публичный заголовок);
-// title — публичный заголовок (первая строка билдера, без блокировки); draftSchema —
-// автосейв билдера, требует updatedAt для оптимистичной блокировки.
+// (nil) от «прислано». За один запрос меняется ровно одно из
+// name/title/draftSchema/closeSettings: name — переименование с дашборда (внутреннее
+// имя, не трогает публичный заголовок); title — публичный заголовок (первая строка
+// билдера, без блокировки); draftSchema — автосейв билдера, требует updatedAt для
+// оптимистичной блокировки; closeSettings — настройки закрытия (страница настроек).
 type patchRequest struct {
-	Name        *string          `json:"name"`
-	Title       *string          `json:"title"`
-	DraftSchema *json.RawMessage `json:"draftSchema"`
-	UpdatedAt   *time.Time       `json:"updatedAt"`
+	Name          *string            `json:"name"`
+	Title         *string            `json:"title"`
+	DraftSchema   *json.RawMessage   `json:"draftSchema"`
+	UpdatedAt     *time.Time         `json:"updatedAt"`
+	CloseSettings *closeSettingsBody `json:"closeSettings"`
 }
 
 func toFormResponse(f Form) formResponse {
@@ -143,6 +159,18 @@ func toFormResponse(f Form) formResponse {
 		resp.PublishedVersionID = &id
 	}
 	return resp
+}
+
+// toFormDetailResponse — деталь формы (GET /forms/{id} и /forms/lookup): метаданные,
+// черновик схемы и живые настройки закрытия (их читает страница настроек кабинета).
+func toFormDetailResponse(f Form) formDetailResponse {
+	return formDetailResponse{
+		formResponse:  toFormResponse(f),
+		DraftSchema:   f.DraftSchema,
+		CloseAt:       f.CloseAt,
+		ResponseLimit: f.ResponseLimit,
+		ClosedMessage: f.ClosedMessage,
+	}
 }
 
 // --- Handlers ---
@@ -208,10 +236,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, formDetailResponse{
-		formResponse: toFormResponse(form),
-		DraftSchema:  form.DraftSchema,
-	})
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormDetailResponse(form))
 }
 
 // getBySlug — тот же ответ, что get, но форма адресована slug'ом (query-параметр
@@ -231,10 +256,7 @@ func (h *Handler) getBySlug(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, formDetailResponse{
-		formResponse: toFormResponse(form),
-		DraftSchema:  form.DraftSchema,
-	})
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormDetailResponse(form))
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
@@ -251,15 +273,16 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ровно одно из name/title/draftSchema за запрос — иначе непонятно, что менять.
+	// Ровно одно из name/title/draftSchema/closeSettings за запрос — иначе непонятно,
+	// что менять.
 	set := 0
-	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil} {
+	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil, req.CloseSettings != nil} {
 		if present {
 			set++
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema/closeSettings", domain.ErrValidation))
 		return
 	}
 
@@ -278,6 +301,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateTitle(r.Context(), userID, formID, *req.Title)
 	case req.Name != nil:
 		form, err = h.svc.UpdateName(r.Context(), userID, formID, *req.Name)
+	case req.CloseSettings != nil:
+		cs := *req.CloseSettings
+		form, err = h.svc.UpdateCloseSettings(r.Context(), userID, formID, domain.CloseSettings{
+			CloseAt:       cs.CloseAt,
+			ResponseLimit: cs.ResponseLimit,
+			ClosedMessage: cs.ClosedMessage,
+		})
 	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
