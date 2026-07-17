@@ -7,7 +7,9 @@ import {
   MAX_LABEL_LEN,
   MAX_OPTIONS,
   MAX_PLACEHOLDER_LEN,
+  MAX_REDIRECT_URL_LEN,
   MAX_SUBMIT_LABEL_LEN,
+  MAX_THANK_YOU_TEXT_LEN,
 } from '@entities/formSchema'
 
 // Зеркало internal/domain/schema_test.go: те же валидные/невалидные кейсы, чтобы
@@ -45,6 +47,17 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
+    'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
+    'redirectUrl http с портом и query': {
+      blocks: [],
+      redirectUrl: 'http://example.com:8080/ok?from=form',
+    },
+    'оба поля экрана заданы': {
+      blocks: [],
+      thankYouText: 'Спасибо!',
+      redirectUrl: 'https://example.com',
+    },
     'placeholder у текстового поля': {
       blocks: [{ id: 'b', type: 'short_text', label: 'Имя', settings: { placeholder: 'Иван' } }],
     },
@@ -146,6 +159,21 @@ describe('formSchemaSchema — невалидные', () => {
           settings: { placeholder: 'я'.repeat(MAX_PLACEHOLDER_LEN + 1) },
         },
       ],
+    },
+    // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
+    'redirect javascript:': { blocks: [], redirectUrl: 'javascript:alert(document.cookie)' },
+    'redirect JavaScript: капсом': { blocks: [], redirectUrl: 'JavaScript:alert(1)' },
+    'redirect data:': { blocks: [], redirectUrl: 'data:text/html,<script>alert(1)</script>' },
+    'redirect относительный путь': { blocks: [], redirectUrl: '/thanks' },
+    'redirect без схемы': { blocks: [], redirectUrl: 'example.com' },
+    'redirect http без хоста': { blocks: [], redirectUrl: 'http://' },
+    'слишком длинный thankYouText': {
+      blocks: [],
+      thankYouText: 'я'.repeat(MAX_THANK_YOU_TEXT_LEN + 1),
+    },
+    'слишком длинный redirectUrl': {
+      blocks: [],
+      redirectUrl: `https://example.com/${'a'.repeat(MAX_REDIRECT_URL_LEN)}`,
     },
   }
 

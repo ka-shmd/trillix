@@ -274,6 +274,58 @@ describe('createBuilderStore', () => {
     expect(store.getState().submitLabel).toBe('Отправить ответ')
   })
 
+  it('setAfterSubmit правит экран «после отправки»; toSchema его несёт', () => {
+    const store = createBuilderStore()
+    expect(store.getState().thankYouText).toBe('')
+    expect(store.getState().redirectUrl).toBe('')
+
+    store.getState().setAfterSubmit({
+      thankYouText: 'Ждём вас на встрече!',
+      redirectUrl: 'https://example.com/thanks',
+    })
+
+    const schema = store.getState().toSchema()
+    expect(store.getState().dirty).toBe(true)
+    expect(schema.thankYouText).toBe('Ждём вас на встрече!')
+    expect(schema.redirectUrl).toBe('https://example.com/thanks')
+    // Выход стора обязан проходить ту же Zod-проверку, что и на сервере.
+    expect(formSchemaSchema.safeParse(schema).success).toBe(true)
+  })
+
+  it('setAfterSubmit — один шаг отмены на оба поля', () => {
+    // Кнопка «Сохранить» — одно действие человека, значит и один Ctrl+Z.
+    const store = createBuilderStore()
+    store.getState().setAfterSubmit({ thankYouText: 'Спасибо!', redirectUrl: 'https://a.com' })
+
+    store.getState().undo()
+    expect(store.getState().thankYouText).toBe('')
+    expect(store.getState().redirectUrl).toBe('')
+  })
+
+  it('setAfterSubmit теми же значениями — no-op: историю и dirty не трогает', () => {
+    // «Сохранить» можно нажать и не поменяв ничего: пустой шаг undo не нужен.
+    const store = createBuilderStore()
+    store.getState().setAfterSubmit({ thankYouText: 'Спасибо!', redirectUrl: 'https://a.com' })
+    store.getState().markSaved()
+    const depth = store.getState().past.length
+
+    store.getState().setAfterSubmit({ thankYouText: 'Спасибо!', redirectUrl: 'https://a.com' })
+    expect(store.getState().past).toHaveLength(depth)
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('hydrate загружает поля экрана «после отправки» из схемы', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: 1,
+      blocks: [],
+      thankYouText: 'Спасибо!',
+      redirectUrl: 'https://example.com',
+    })
+    expect(store.getState().thankYouText).toBe('Спасибо!')
+    expect(store.getState().redirectUrl).toBe('https://example.com')
+  })
+
   it('markSaved снимает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
@@ -308,6 +360,24 @@ describe('createBuilderStore — undo/redo', () => {
 
     store.getState().redo()
     expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+  })
+
+  it('undo/redo восстанавливают поля экрана «после отправки»', () => {
+    // Регресс-страховка снапшота: поле документа, забытое в Snapshot, молча
+    // теряется при откате — undo вернул бы старые блоки и новый текст.
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().setAfterSubmit({ thankYouText: 'Ждём вас!', redirectUrl: 'https://a.com' })
+
+    store.getState().undo()
+    expect(store.getState().thankYouText).toBe('')
+    expect(store.getState().redirectUrl).toBe('')
+    // Откат настроек не тронул блоки — снапшот несёт документ целиком.
+    expect(store.getState().blocks).toHaveLength(1)
+
+    store.getState().redo()
+    expect(store.getState().thankYouText).toBe('Ждём вас!')
+    expect(store.getState().redirectUrl).toBe('https://a.com')
   })
 
   it('undo/redo восстанавливают submitLabel и ставят dirty', () => {

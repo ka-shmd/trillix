@@ -54,4 +54,7 @@ body {
 .status-detail {
   margin: 0;
   color: var(--rf-muted, #6b7280);
+  /* Текст благодарности владельца — многострочный (textarea в редакторе):
+     переносы обязаны доехать до респондента как есть. */
+  white-space: pre-wrap;
 }

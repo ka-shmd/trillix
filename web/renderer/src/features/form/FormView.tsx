@@ -7,6 +7,7 @@ import { BlockField } from '@fields/BlockField'
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
 import { uuidv7 } from './submissionId'
+import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
 
 // Задержки перед повторами при обрыве сети (мс). До 3 повторов с нарастающим
@@ -143,10 +144,10 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
 
   if (phase === 'done') {
     return (
-      <main className="status">
-        <h1 className="status-title">Спасибо!</h1>
-        <p className="status-detail">Ваш ответ отправлен.</p>
-      </main>
+      <ThankYou
+        text={form.schema.thankYouText ?? ''}
+        redirectUrl={form.schema.redirectUrl ?? ''}
+      />
     )
   }
 

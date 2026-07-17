@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"unicode/utf8"
 )
 
@@ -32,6 +33,9 @@ const (
 	MaxPlaceholderLen = 200
 	MaxImageKeyLen    = 200
 	MaxAltLen         = 500
+	// Экран «после отправки»: текст благодарности владельца и ссылка перехода.
+	MaxThankYouTextLen = 2000
+	MaxRedirectURLLen  = 2000
 )
 
 // BlockType — тип блока формы. Семь отвечаемых полей MVP (ARCHITECTURE 3.4) плюс
@@ -98,12 +102,20 @@ type Block struct {
 	Settings    BlockSettings `json:"settings"`
 }
 
-// FormSchema — документ черновика формы: версия формата, список блоков и текст
-// кнопки отправки (пусто → рендерер берёт дефолт).
+// FormSchema — документ черновика формы: версия формата, список блоков, текст
+// кнопки отправки и настройки экрана «после отправки» (пусто → рендерер берёт
+// дефолты).
+//
+// Экран «после отправки» живёт в схеме, а не в колонках forms, осознанно: схема
+// снапшотится при публикации, поэтому респондент видит экран той версии, по
+// которой отправил ответ. Настройка, обязанная быть живой (лимит мест, фаза 8.5
+// шаг 4), напротив, в схеме жить не должна.
 type FormSchema struct {
 	SchemaVersion int     `json:"schemaVersion"`
 	Blocks        []Block `json:"blocks"`
 	SubmitLabel   string  `json:"submitLabel"`
+	ThankYouText  string  `json:"thankYouText"`
+	RedirectURL   string  `json:"redirectUrl"`
 }
 
 // ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы.
@@ -141,6 +153,18 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	}
 	if n := utf8.RuneCountInString(s.SubmitLabel); n > MaxSubmitLabelLen {
 		return FormSchema{}, schemaErr("submitLabel длиннее %d символов", MaxSubmitLabelLen)
+	}
+	if n := utf8.RuneCountInString(s.ThankYouText); n > MaxThankYouTextLen {
+		return FormSchema{}, schemaErr("thankYouText длиннее %d символов", MaxThankYouTextLen)
+	}
+	if n := utf8.RuneCountInString(s.RedirectURL); n > MaxRedirectURLLen {
+		return FormSchema{}, schemaErr("redirectUrl длиннее %d символов", MaxRedirectURLLen)
+	}
+	// Схема redirect проверяется строго даже в черновике (в отличие от пустого
+	// label): билдер коммитит поле в стор только по blur, поэтому недопечатанный
+	// URL до автосейва не доезжает и 422 посреди набора не бывает.
+	if s.RedirectURL != "" && !isHTTPURL(s.RedirectURL) {
+		return FormSchema{}, schemaErr("redirectUrl: нужен абсолютный http(s)-адрес")
 	}
 
 	seen := make(map[string]struct{}, len(s.Blocks))
@@ -226,6 +250,20 @@ func validateID(id string) error {
 	default:
 		return nil
 	}
+}
+
+// isHTTPURL — единственное правило redirect-ссылки: абсолютный http(s)-URL с
+// хостом. Зеркалит isHttpUrl в web/shared/entities/formSchema.ts. Значение уходит
+// в window.location рендерера, поэтому чужая схема (`javascript:`, `data:`) — это
+// XSS на публичном домене формы (инвариант 4); относительный путь бессмыслен.
+// Сервер — последняя инстанция: в опубликованную версию попадает только то, что
+// прошло здесь.
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // schemaErr оборачивает нарушение схемы в ErrValidation (единый маппинг на 422).
