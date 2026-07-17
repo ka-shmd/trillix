@@ -168,6 +168,17 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
       return (
         <ChoiceList block={block} multiple={false} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
       )
+    case 'dropdown':
+      return (
+        <DropdownChoice
+          block={block}
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+          label={label}
+          {...invalidProps}
+        />
+      )
     case 'multi_choice':
       return (
         <ChoiceList block={block} multiple={true} value={value} onChange={onChange} disabled={disabled} onBlur={onBlur} />
@@ -178,6 +189,53 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
       // доходят — ветки для исчерпывающести switch по типам.
       return null
   }
+}
+
+// Выпадающий список: та же модель опций и тот же формат ответа, что у
+// single_choice (id варианта строкой) — отличается только контролом. Нативный
+// <select>: на телефоне он открывается системным колесом, а длинный список не
+// распирает форму на пол-экрана (ради этого тип и заведён).
+//
+// Пустой первый пункт — это «не выбрано»: без него select показывал бы первый
+// вариант выбранным, и необязательный вопрос молча получал бы ответ.
+function DropdownChoice({
+  block,
+  value,
+  onChange,
+  disabled,
+  label,
+  ...invalidProps
+}: {
+  block: Block
+  value?: Answer
+  onChange?: (next: Answer) => void
+  disabled: boolean
+  label: string
+  'aria-invalid'?: true
+  'aria-describedby'?: string
+  onBlur?: () => void
+}) {
+  const options = block.settings?.options ?? []
+  if (options.length === 0) {
+    return <p className="rf-empty">Варианты пока не добавлены</p>
+  }
+  return (
+    <select
+      className="rf-input rf-select"
+      value={typeof value === 'string' ? value : ''}
+      onChange={(e) => onChange?.(e.target.value)}
+      disabled={disabled}
+      aria-label={label}
+      {...invalidProps}
+    >
+      <option value="">Выберите вариант</option>
+      {options.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.label.trim() || 'Вариант'}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 // Список вариантов choice-блока: радиокнопки для одиночного выбора, чекбоксы для

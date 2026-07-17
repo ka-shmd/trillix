@@ -59,6 +59,7 @@ export const blockTypeSchema = z.enum([
   'phone',
   'number',
   'single_choice',
+  'dropdown',
   'multi_choice',
   'date',
   'text',
@@ -66,8 +67,17 @@ export const blockTypeSchema = z.enum([
 ])
 export type BlockType = z.infer<typeof blockTypeSchema>
 
-const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'multi_choice'])
+// Типы, чьи настройки несут список опций. dropdown отличается от single_choice
+// ТОЛЬКО контролом (список против радиокнопок): та же модель опций, тот же формат
+// ответа — id варианта строкой.
+const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown', 'multi_choice'])
 export const isChoiceType = (t: BlockType): boolean => CHOICE_TYPES.has(t)
+
+// Выбор ровно одного варианта (ответ — строка-id) против множественного (массив).
+// Отдельный предикат, а не сравнение с single_choice: забытый здесь dropdown
+// молча уехал бы в ветку multi и ждал массив.
+const SINGLE_CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown'])
+export const isSingleChoiceType = (t: BlockType): boolean => SINGLE_CHOICE_TYPES.has(t)
 
 // Типы, у которых респондент вводит текст — для них можно задать плейсхолдер.
 const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([

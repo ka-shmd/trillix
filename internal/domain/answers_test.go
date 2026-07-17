@@ -42,6 +42,7 @@ func allTypes(required bool) FormSchema {
 			field("num", BlockNumber, required),
 			field("date", BlockDate, required),
 			choice("single", BlockSingleChoice, required, "o1", "o2"),
+			choice("drop", BlockDropdown, required, "o1", "o2"),
 			choice("multi", BlockMultiChoice, required, "o1", "o2"),
 		},
 	}
@@ -62,6 +63,7 @@ func TestValidateAnswers_Valid(t *testing.T) {
 				"num":    `"42"`,
 				"date":   `"2024-01-02"`,
 				"single": `"o1"`,
+				"drop":   `"o2"`,
 				"multi":  `["o1","o2"]`,
 			},
 		},
@@ -80,7 +82,8 @@ func TestValidateAnswers_Valid(t *testing.T) {
 			allTypes(true),
 			map[string]string{
 				"short": `"x"`, "long": `"y"`, "mail": `"a@b.co"`, "tel": `"+79001234567"`,
-				"num": `"1"`, "date": `"2024-12-31"`, "single": `"o2"`, "multi": `["o1"]`,
+				"num": `"1"`, "date": `"2024-12-31"`, "single": `"o2"`, "drop": `"o1"`,
+				"multi": `["o1"]`,
 			},
 		},
 	}
@@ -115,8 +118,13 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 
 		// Принадлежность опций.
 		"single чужой id": {allTypes(false), map[string]string{"single": `"zzz"`}, "single"},
-		"multi чужой id":  {allTypes(false), map[string]string{"multi": `["o1","zzz"]`}, "multi"},
-		"multi дубли id":  {allTypes(false), map[string]string{"multi": `["o1","o1"]`}, "multi"},
+		// dropdown — одиночный выбор: ждёт строку-id, как single_choice. Массив тут
+		// означал бы, что тип уехал в ветку multi.
+		"dropdown чужой id":        {allTypes(false), map[string]string{"drop": `"zzz"`}, "drop"},
+		"dropdown как массив":      {allTypes(false), map[string]string{"drop": `["o1"]`}, "drop"},
+		"required dropdown пустой": {FormSchema{Blocks: []Block{choice("d", BlockDropdown, true, "o1")}}, map[string]string{"d": `""`}, "d"},
+		"multi чужой id":           {allTypes(false), map[string]string{"multi": `["o1","zzz"]`}, "multi"},
+		"multi дубли id":           {allTypes(false), map[string]string{"multi": `["o1","o1"]`}, "multi"},
 
 		// Неверный JSON-тип значения.
 		"short как число":         {allTypes(false), map[string]string{"short": `42`}, "short"},

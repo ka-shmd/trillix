@@ -190,6 +190,16 @@
   color: var(--rf-muted);
 }
 
+/* Выпадающий список — тот же rf-input, но нативная стрелка браузера ставит свой
+   правый отступ и высоту; выравниваем под остальные поля. Сам список (options)
+   рисует ОС — стилизовать его нельзя, и это осознанно: на телефоне системное
+   колесо удобнее любой своей реализации. */
+.rf-select {
+  padding-right: 0.5rem;
+  height: 2.25rem;
+  cursor: pointer;
+}
+
 .rf-input:focus-visible {
   outline: 2px solid var(--rf-text);
   outline-offset: -1px;

@@ -59,6 +59,12 @@ export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
     description: 'Выбор одного варианта из списка (радиокнопки).',
   },
   {
+    type: 'dropdown',
+    label: 'Выпадающий список',
+    group: 'question',
+    description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.',
+  },
+  {
     type: 'multi_choice',
     label: 'Несколько из списка',
     group: 'question',

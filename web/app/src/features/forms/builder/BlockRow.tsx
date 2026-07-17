@@ -6,6 +6,7 @@ import {
   type Block,
   type BlockType,
   isChoiceType,
+  isSingleChoiceType,
   isContentType,
   supportsPlaceholder,
 } from '@entities/formSchema'
@@ -401,8 +402,12 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
     <div className="mt-1.5 flex flex-col gap-1.5">
       {options.map((o, i) => (
         <div key={o.id} className="flex items-center gap-2">
+          {/* Глиф в редакторе сообщает «один из» против «несколько из», а не точный
+              контрол: у dropdown респондент видит select, поэтому берём предикат
+              одиночного выбора, а не сравнение с single_choice (иначе dropdown
+              получил бы чекбокс — прямая ложь). Настоящий вид — в превью. */}
           <span
-            className={`rf-mark ${block.type === 'single_choice' ? 'rf-mark--radio' : 'rf-mark--check'}`}
+            className={`rf-mark ${isSingleChoiceType(block.type) ? 'rf-mark--radio' : 'rf-mark--check'}`}
             aria-hidden="true"
           />
           <input

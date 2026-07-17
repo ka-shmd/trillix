@@ -138,14 +138,16 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 	return ""
 }
 
-// validateChoiceAnswer — single_choice (строка-id) и multi_choice (массив id).
+// validateChoiceAnswer — одиночный выбор (single_choice, dropdown — строка-id) и
+// multi_choice (массив id). Ветвление по isSingleChoice(), а не по конкретному
+// типу: новый одиночный choice-тип иначе молча попадёт в ветку multi.
 func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 	opts := make(map[string]struct{}, len(b.Settings.Options))
 	for _, o := range b.Settings.Options {
 		opts[o.ID] = struct{}{}
 	}
 
-	if b.Type == BlockSingleChoice {
+	if b.Type.isSingleChoice() {
 		if len(raw) == 0 {
 			if b.Required {
 				return msgRequired

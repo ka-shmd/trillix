@@ -50,6 +50,7 @@ const (
 	BlockPhone        BlockType = "phone"
 	BlockNumber       BlockType = "number"
 	BlockSingleChoice BlockType = "single_choice"
+	BlockDropdown     BlockType = "dropdown"
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
 	BlockText         BlockType = "text"
@@ -59,7 +60,7 @@ const (
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber,
-		BlockSingleChoice, BlockMultiChoice, BlockDate, BlockText, BlockImage:
+		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockText, BlockImage:
 		return true
 	default:
 		return false
@@ -67,8 +68,17 @@ func (t BlockType) valid() bool {
 }
 
 // isChoice — у choice-типов настройки несут список опций; у остальных settings пуст.
+// dropdown отличается от single_choice ТОЛЬКО контролом на фронте: та же модель
+// опций, тот же формат ответа.
 func (t BlockType) isChoice() bool {
-	return t == BlockSingleChoice || t == BlockMultiChoice
+	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice
+}
+
+// isSingleChoice — выбор ровно одного варианта (ответ — строка-id), в отличие от
+// multi_choice (массив id). Отдельный предикат, а не сравнение с BlockSingleChoice:
+// забытый здесь dropdown молча уехал бы в ветку multi и ждал массив.
+func (t BlockType) isSingleChoice() bool {
+	return t == BlockSingleChoice || t == BlockDropdown
 }
 
 // isContent — неотвечаемый блок (text, image): статический контент на полотне, не

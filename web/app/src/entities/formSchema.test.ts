@@ -48,6 +48,19 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [{ id: 'b', type: 'image', label: '', settings: {} }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
+    'dropdown с опциями — та же модель, что single_choice': {
+      blocks: [
+        {
+          id: 'b',
+          type: 'dropdown',
+          label: 'Город',
+          settings: { options: [{ id: 'o1', label: 'Москва' }] },
+        },
+      ],
+    },
+    'dropdown без опций — валидный черновик': {
+      blocks: [{ id: 'b', type: 'dropdown', label: '', settings: {} }],
+    },
     'телефон с плейсхолдером': {
       blocks: [{ id: 'b', type: 'phone', label: 'Телефон', settings: { placeholder: '+7 900' } }],
     },

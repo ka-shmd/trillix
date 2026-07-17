@@ -1,4 +1,4 @@
-import { type Block } from '@entities/formSchema'
+import { type Block, isSingleChoiceType } from '@entities/formSchema'
 import { type AnswerValue } from '../../entities/submission'
 
 // Форматирование ответа для таблицы/панели кабинета. choice-значения (id опций)
@@ -7,7 +7,9 @@ import { type AnswerValue } from '../../entities/submission'
 // Для точных кросс-версийных подписей есть CSV-экспорт (там резолв по версии ответа).
 export function formatAnswer(block: Block | undefined, value: AnswerValue | undefined): string {
   if (value === undefined) return ''
-  if (block?.type === 'single_choice') {
+  // Одиночный выбор (single_choice, dropdown) — по предикату, а не по типу: новый
+  // choice-тип иначе выгружался бы сырым id вместо подписи варианта.
+  if (block && isSingleChoiceType(block.type)) {
     return optionLabel(block, asString(value))
   }
   if (block?.type === 'multi_choice') {
