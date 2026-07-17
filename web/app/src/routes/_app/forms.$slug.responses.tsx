@@ -12,7 +12,7 @@ import {
 } from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
 import { formatAnswer } from '../../features/submissions/answerFormat'
-import { formatDate } from '../../shared/format'
+import { formatDate, pluralAnswers } from '../../shared/format'
 import { type Submission } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
 import {
@@ -80,15 +80,22 @@ function ResponsesPage() {
           </h1>
           {!list.isPending && !list.isError && (
             <p className="mt-1 text-sm text-muted-foreground">
-              {total === 0 ? 'Пока нет ответов' : `${total} ${plural(total)}`}
+              {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
             </p>
           )}
         </div>
         {total > 0 && formId && (
-          // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
-          <Button asChild variant="outline">
-            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
-          </Button>
+          <div className="flex gap-2">
+            <Button asChild variant="outline">
+              <Link to="/forms/$slug/summary" params={{ slug }}>
+                Сводка
+              </Link>
+            </Button>
+            {/* Обычная навигация: cookie авторизует, браузер качает файл (не fetch). */}
+            <Button asChild variant="outline">
+              <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
+            </Button>
+          </div>
         )}
       </header>
 
@@ -258,10 +265,3 @@ function blockTitle(b: Block): string {
   return b.label.trim() || '(без названия)'
 }
 
-function plural(n: number): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return 'ответ'
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'ответа'
-  return 'ответов'
-}

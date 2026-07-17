@@ -15,6 +15,7 @@ import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
+import { Route as AppFormsSlugSummaryRouteImport } from './routes/_app/forms.$slug.summary'
 import { Route as AppFormsSlugShareRouteImport } from './routes/_app/forms.$slug.share'
 import { Route as AppFormsSlugResponsesRouteImport } from './routes/_app/forms.$slug.responses'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
@@ -47,6 +48,11 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   path: '/forms/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppFormsSlugSummaryRoute = AppFormsSlugSummaryRouteImport.update({
+  id: '/forms/$slug/summary',
+  path: '/forms/$slug/summary',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsSlugShareRoute = AppFormsSlugShareRouteImport.update({
   id: '/forms/$slug/share',
   path: '/forms/$slug/share',
@@ -71,6 +77,7 @@ export interface FileRoutesByFullPath {
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugShareRoute
+  '/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -80,6 +87,7 @@ export interface FileRoutesByTo {
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugShareRoute
+  '/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -92,6 +100,7 @@ export interface FileRoutesById {
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/responses': typeof AppFormsSlugResponsesRoute
   '/_app/forms/$slug/share': typeof AppFormsSlugShareRoute
+  '/_app/forms/$slug/summary': typeof AppFormsSlugSummaryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -103,6 +112,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/edit'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
+    | '/forms/$slug/summary'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -112,6 +122,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/edit'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
+    | '/forms/$slug/summary'
   id:
     | '__root__'
     | '/_app'
@@ -123,6 +134,7 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/responses'
     | '/_app/forms/$slug/share'
+    | '/_app/forms/$slug/summary'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -174,6 +186,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/forms/$slug/summary': {
+      id: '/_app/forms/$slug/summary'
+      path: '/forms/$slug/summary'
+      fullPath: '/forms/$slug/summary'
+      preLoaderRoute: typeof AppFormsSlugSummaryRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/$slug/share': {
       id: '/_app/forms/$slug/share'
       path: '/forms/$slug/share'
@@ -204,6 +223,7 @@ interface AppRouteChildren {
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
   AppFormsSlugResponsesRoute: typeof AppFormsSlugResponsesRoute
   AppFormsSlugShareRoute: typeof AppFormsSlugShareRoute
+  AppFormsSlugSummaryRoute: typeof AppFormsSlugSummaryRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -212,6 +232,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
   AppFormsSlugResponsesRoute: AppFormsSlugResponsesRoute,
   AppFormsSlugShareRoute: AppFormsSlugShareRoute,
+  AppFormsSlugSummaryRoute: AppFormsSlugSummaryRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
