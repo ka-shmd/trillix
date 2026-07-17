@@ -59,7 +59,7 @@ func resetDB(t *testing.T) {
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	subSvc := submissions.NewService(testPool, formsSvc, submissions.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, submissions.Repo{})
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()

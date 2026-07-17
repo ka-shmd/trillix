@@ -7,6 +7,7 @@ import { fetchPublicForm, type PublicForm } from './api'
 export type FormState =
   | { status: 'loading' }
   | { status: 'ok'; form: PublicForm }
+  | { status: 'closed'; title: string; message: string }
   | { status: 'notfound' }
   | { status: 'error'; message: string }
 
@@ -27,7 +28,8 @@ export function usePublicForm(slug: string): FormState {
     fetchPublicForm(slug)
       .then((r) => {
         if (!active) return
-        setState(r.status === 'ok' ? { status: 'ok', form: r.form } : { status: 'notfound' })
+        // fetchPublicForm уже разложил ответ на ok/closed/notfound — переносим как есть.
+        setState(r)
       })
       .catch((e: unknown) => {
         if (!active) return

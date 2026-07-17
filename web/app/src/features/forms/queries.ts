@@ -14,9 +14,10 @@ import {
   publishForm,
   renameForm,
   unpublishForm,
+  updateCloseSettings,
   updateFormName,
 } from './api'
-import { type Form, type FormDetail } from '../../entities/form'
+import { type CloseSettingsInput, type Form, type FormDetail } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
@@ -80,6 +81,34 @@ export function useUpdateFormName() {
       qc.invalidateQueries({ queryKey: formKeys.list() })
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, name: form.name, updatedAt: form.updatedAt } : old,
+      )
+    },
+  })
+}
+
+// Настройки закрытия (фаза 8.5 шаг 4) сохраняются со страницы настроек билдера,
+// поэтому — как rename — двигают forms.updated_at и патчат detail (а не
+// инвалидируют): updated_at служит токеном оптимистичной блокировки автосейва,
+// рефетч дал бы гонку. Ответ мутации — карточка (без close-полей), поэтому close-
+// настройки в detail кладём из отправленного ввода, а updatedAt — из ответа. Пустой
+// текст нормализуем в null (как бэкенд: пусто = дефолт рендерера).
+export function useUpdateCloseSettings() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, settings }: { id: string; settings: CloseSettingsInput }) =>
+      updateCloseSettings(id, settings),
+    onSuccess: (form, { settings }) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old
+          ? {
+              ...old,
+              updatedAt: form.updatedAt,
+              closeAt: settings.closeAt,
+              responseLimit: settings.responseLimit,
+              closedMessage: settings.closedMessage === '' ? null : settings.closedMessage,
+            }
+          : old,
       )
     },
   })

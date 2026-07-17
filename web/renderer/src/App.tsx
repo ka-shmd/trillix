@@ -12,12 +12,16 @@ export function App() {
       return <StatusScreen title="Загрузка формы…" />
     case 'ok':
       return <FormView slug={slug} form={state.form} />
+    case 'closed':
+      // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
+      // название и текст владельца, а не безликое «недоступна» (шаг 4).
+      return <StatusScreen title={state.title} detail={state.message} />
     case 'notfound':
-      // Черновик, закрытая и несуществующая форма неотличимы (404) — один экран.
+      // Черновик и несуществующая форма неотличимы (404, инвариант 5) — один экран.
       return (
         <StatusScreen
           title="Форма недоступна"
-          detail="Ссылка неверна или форма больше не принимает ответы."
+          detail="Ссылка неверна или форма была удалена."
         />
       )
     case 'error':

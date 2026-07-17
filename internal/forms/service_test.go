@@ -55,6 +55,9 @@ type fakeStore struct {
 	lastSchema   json.RawMessage
 	lastExpected time.Time
 
+	// Захват настроек закрытия последнего UpdateCloseSettings.
+	lastCloseSettings domain.CloseSettings
+
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS     uuid.UUID
 	lastCreateTitle  string
@@ -98,6 +101,12 @@ func (f *fakeStore) CreateFormWithSchema(_ context.Context, _ postgres.DBTX, id,
 func (f *fakeStore) UpdateFormName(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error) {
 	f.updated = true
 	return Form{ID: id, WorkspaceID: workspaceID, Name: name}, nil
+}
+
+func (f *fakeStore) UpdateFormCloseSettings(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error) {
+	f.updated = true
+	f.lastCloseSettings = s
+	return Form{ID: id, WorkspaceID: workspaceID, CloseAt: s.CloseAt, ResponseLimit: s.ResponseLimit}, nil
 }
 
 func (f *fakeStore) ListFormNames(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]FormName, error) {
@@ -180,7 +189,7 @@ func (f *fakeStore) SetFormClosed(_ context.Context, _ postgres.DBTX, id, worksp
 	return Form{ID: id, WorkspaceID: workspaceID, Status: "closed"}, nil
 }
 
-func (f *fakeStore) GetPublishedFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
+func (f *fakeStore) GetPublicFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
 	if f.publicErr != nil {
 		return PublicForm{}, f.publicErr
 	}
@@ -283,6 +292,56 @@ func TestUpdateTitle_NotMember_ReturnsNotFound(t *testing.T) {
 	}
 	if store.updated {
 		t.Fatal("чужая форма не должна обновляться")
+	}
+}
+
+// --- Настройки закрытия формы (фаза 8.5 шаг 4) ---
+
+func TestUpdateCloseSettings_NotMember_ReturnsNotFound(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
+	svc := newTestService(store)
+
+	_, err := svc.UpdateCloseSettings(context.Background(), domain.NewID(), domain.NewID(), domain.CloseSettings{})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound (чужая форма не раскрывается)", err)
+	}
+	if store.updated {
+		t.Fatal("чужая форма не должна обновляться")
+	}
+}
+
+func TestUpdateCloseSettings_InvalidLimit_ReturnsValidationBeforeStore(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	svc := newTestService(store)
+
+	bad := int32(0)
+	_, err := svc.UpdateCloseSettings(context.Background(), domain.NewID(), domain.NewID(),
+		domain.CloseSettings{ResponseLimit: &bad})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation (лимит 0)", err)
+	}
+	if store.updated {
+		t.Fatal("невалидные настройки не должны доходить до записи")
+	}
+}
+
+func TestUpdateCloseSettings_Member_PassesSettingsThrough(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	svc := newTestService(store)
+
+	limit := int32(100)
+	if _, err := svc.UpdateCloseSettings(context.Background(), domain.NewID(), domain.NewID(),
+		domain.CloseSettings{ResponseLimit: &limit, ClosedMessage: "Мест больше нет"}); err != nil {
+		t.Fatalf("UpdateCloseSettings: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("настройки должны были записаться")
+	}
+	if store.lastCloseSettings.ResponseLimit == nil || *store.lastCloseSettings.ResponseLimit != 100 {
+		t.Fatalf("лимит не долетел до стора: %+v", store.lastCloseSettings)
+	}
+	if store.lastCloseSettings.ClosedMessage != "Мест больше нет" {
+		t.Fatalf("текст не долетел до стора: %q", store.lastCloseSettings.ClosedMessage)
 	}
 }
 

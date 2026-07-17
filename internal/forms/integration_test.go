@@ -276,6 +276,58 @@ func TestForms_UpdateName(t *testing.T) {
 	patchName(t, bob, srv, form.ID, "взлом", http.StatusNotFound)
 }
 
+// Живые настройки закрытия (PATCH {closeSettings}): фасет доходит до сервиса,
+// GET-деталь их возвращает, набор заменяется целиком (пустое = снято), невалидный
+// лимит → 422, два фасета за раз → 422, чужая форма → 404.
+func TestForms_CloseSettings(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-close@example.com")
+	bob := registerUser(t, srv, "bob-close@example.com")
+
+	form := createForm(t, alice, srv, "Мероприятие")
+
+	// Задаём лимит и текст (даты нет).
+	patchCloseSettings(t, alice, srv, form.ID,
+		`{"closeAt":null,"responseLimit":100,"closedMessage":"Мест больше нет"}`, http.StatusOK)
+
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if d.ResponseLimit == nil || *d.ResponseLimit != 100 {
+		t.Fatalf("responseLimit в детали = %v, ожидалось 100", d.ResponseLimit)
+	}
+	if d.ClosedMessage == nil || *d.ClosedMessage != "Мест больше нет" {
+		t.Fatalf("closedMessage в детали = %v", d.ClosedMessage)
+	}
+	if d.CloseAt != nil {
+		t.Fatalf("closeAt = %v, ожидался null", d.CloseAt)
+	}
+
+	// Невалидный лимит (0) → 422, до записи не доходит.
+	patchCloseSettings(t, alice, srv, form.ID,
+		`{"closeAt":null,"responseLimit":0,"closedMessage":""}`, http.StatusUnprocessableEntity)
+
+	// Набор заменяется целиком: пустой сбрасывает все три настройки.
+	patchCloseSettings(t, alice, srv, form.ID,
+		`{"closeAt":null,"responseLimit":null,"closedMessage":""}`, http.StatusOK)
+	cleared := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if cleared.ResponseLimit != nil || cleared.CloseAt != nil || cleared.ClosedMessage != nil {
+		t.Fatalf("после сброса ожидались все null: limit=%v closeAt=%v msg=%v",
+			cleared.ResponseLimit, cleared.CloseAt, cleared.ClosedMessage)
+	}
+
+	// Два фасета за один PATCH → 422 (меняется ровно одно).
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"title":"Новый","closeSettings":{"closeAt":null,"responseLimit":5,"closedMessage":""}}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+
+	// Чужую форму не настроить (404, существование не раскрывается).
+	patchCloseSettings(t, bob, srv, form.ID,
+		`{"closeAt":null,"responseLimit":5,"closedMessage":""}`, http.StatusNotFound)
+}
+
 // Автосейв билдера: валидная схема сохраняется (канонизированной, updated_at
 // сдвигается), мусор → 422, устаревший updated_at → 409, схема без updated_at → 422.
 func TestForms_DraftSchemaAutosave(t *testing.T) {
@@ -475,9 +527,10 @@ func TestForms_PublicFetch(t *testing.T) {
 	}
 	closeBody(t, r)
 
-	// После снятия с публикации → 404 (закрытая не отдаётся).
+	// После снятия с публикации → 410 «приём закрыт» (не 404): форма была публичной,
+	// существование не скрываем (шаг 4, решение владельца — любую закрытую показываем).
 	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
-	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+	getPublic(t, anon, srv, form.Slug, http.StatusGone)
 }
 
 // HTML-страница формы /r/{slug} (OG-мета от Go): опубликованная → 200 text/html с
@@ -573,7 +626,10 @@ type formDTO struct {
 
 type formDetailDTO struct {
 	formDTO
-	DraftSchema json.RawMessage `json:"draftSchema"`
+	DraftSchema   json.RawMessage `json:"draftSchema"`
+	CloseAt       *string         `json:"closeAt"`
+	ResponseLimit *int            `json:"responseLimit"`
+	ClosedMessage *string         `json:"closedMessage"`
 }
 
 type listDTO struct {
@@ -665,6 +721,22 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
 	if r.StatusCode != wantStatus {
 		t.Fatalf("PATCH схема: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDTO{}
+	}
+	var f formDTO
+	decode(t, r, &f)
+	return f
+}
+
+// patchCloseSettings шлёт PATCH {closeSettings: <objJSON>} — живые настройки закрытия.
+func patchCloseSettings(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) formDTO {
+	t.Helper()
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"closeSettings":`+objJSON+`}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH closeSettings: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
 	}
 	if wantStatus != http.StatusOK {
 		closeBody(t, r)

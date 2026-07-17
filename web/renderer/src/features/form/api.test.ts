@@ -31,9 +31,26 @@ describe('fetchPublicForm', () => {
       expect(r.form.schema.blocks).toHaveLength(1)
     }
   })
-  it('404 → notfound (черновик/закрытая/нет формы неотличимы)', async () => {
+  it('404 → notfound (черновик/несуществующая неотличимы)', async () => {
     stubFetch(new Response(null, { status: 404 }))
     expect((await fetchPublicForm('draft')).status).toBe('notfound')
+  })
+  it('410 → closed + название и текст «приём закрыт» из тела', async () => {
+    stubFetch(
+      new Response('{"closed":true,"title":"Регистрация","closedMessage":"Мест больше нет"}', {
+        status: 410,
+      }),
+    )
+    const r = await fetchPublicForm('full')
+    expect(r.status).toBe('closed')
+    if (r.status === 'closed') {
+      expect(r.title).toBe('Регистрация')
+      expect(r.message).toBe('Мест больше нет')
+    }
+  })
+  it('410 с битым телом → исключение (Zod на границе)', async () => {
+    stubFetch(new Response('{"closed":true}', { status: 410 }))
+    await expect(fetchPublicForm('full')).rejects.toThrow()
   })
   it('прочий не-2xx → исключение (перейдёт в error-экран)', async () => {
     stubFetch(new Response(null, { status: 500 }))
@@ -83,7 +100,12 @@ describe('submitAnswers', () => {
     if (r.status === 'rejected') expect(r.message).toContain('быстро')
   })
 
-  it('404 → closed (форма не принимает ответы)', async () => {
+  it('410 → closed (форма закрылась: снята/дата/лимит)', async () => {
+    stubFetch(new Response('{"error":{"code":"form_closed","message":"приём закрыт"}}', { status: 410 }))
+    expect((await submitAnswers('abc', body)).status).toBe('closed')
+  })
+
+  it('404 → closed (форма исчезла)', async () => {
     stubFetch(new Response(null, { status: 404 }))
     expect((await submitAnswers('abc', body)).status).toBe('closed')
   })

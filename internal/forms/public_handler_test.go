@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -95,6 +96,7 @@ func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 		Version:   2,
 		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
 		VersionID: vid,
+		Status:    domain.FormStatusPublished,
 	}}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
@@ -122,19 +124,79 @@ func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 	}
 }
 
-func TestPublicGet_NotPublished_Returns404(t *testing.T) {
+func TestPublicGet_Draft_Returns404(t *testing.T) {
 	svc := fakePublicSvc{err: domain.ErrNotFound}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/draft", nil))
 
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("статус %d, ожидалось 404 (черновик/закрытая не раскрывается)", rec.Code)
+		t.Fatalf("статус %d, ожидалось 404 (черновик/несуществующая не раскрывается)", rec.Code)
+	}
+}
+
+// Закрытая форма (снята вручную) → 410 «приём закрыт» со своим текстом, без схемы и
+// токена: форма была публичной, существование не скрываем (инвариант 5 — только
+// черновик 404).
+func TestPublicGet_ClosedManually_Returns410WithOwnMessage(t *testing.T) {
+	msg := "Регистрация окончена, до встречи!"
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:         "Опрос",
+		Schema:        json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID:     uuid.New(),
+		Status:        domain.FormStatusClosed,
+		ClosedMessage: &msg,
+	}}
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("статус %d, ожидалось 410", rec.Code)
+	}
+	var body closedFormResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("тело не парсится: %v", err)
+	}
+	if !body.Closed || body.Title != "Опрос" || body.ClosedMessage != msg {
+		t.Fatalf("неожиданное тело закрытой формы: %+v", body)
+	}
+	if strings.Contains(rec.Body.String(), "schema") {
+		t.Fatal("закрытая форма не должна отдавать схему")
+	}
+}
+
+// Опубликованная форма, у которой достигнут лимит → тоже 410 (закрытость
+// вычисляется), с дефолтным текстом (свой не задан).
+func TestPublicGet_LimitReached_Returns410Default(t *testing.T) {
+	limit := int32(100)
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:           "Опрос",
+		Schema:          json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID:       uuid.New(),
+		Status:          domain.FormStatusPublished,
+		ResponseLimit:   &limit,
+		SubmissionCount: 100,
+	}}
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("статус %d, ожидалось 410", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, ожидался no-store (закрытость живая)", cc)
+	}
+	var body closedFormResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("тело не парсится: %v", err)
+	}
+	if body.ClosedMessage != defaultClosedMessage {
+		t.Fatalf("ожидался дефолтный текст, получено %q", body.ClosedMessage)
 	}
 }
 
 func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	vid := uuid.New()
-	svc := fakePublicSvc{pf: PublicForm{Title: "x", Version: 1, Schema: json.RawMessage(`{}`), VersionID: vid}}
+	svc := fakePublicSvc{pf: PublicForm{Title: "x", Version: 1, Schema: json.RawMessage(`{}`), VersionID: vid, Status: domain.FormStatusPublished}}
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil)
 	req.Header.Set("If-None-Match", `"`+vid.String()+`"`)
 

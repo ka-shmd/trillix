@@ -44,13 +44,14 @@ type Store interface {
 	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
+	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
 	InsertFormVersion(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error)
 	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
 	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
-	GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
+	GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
 }
 
@@ -225,6 +226,28 @@ func (s *Service) UpdateTitle(ctx context.Context, userID, formID uuid.UUID, tit
 	return updated, nil
 }
 
+// UpdateCloseSettings заменяет настройки закрытия формы (дата/лимит/текст «приём
+// закрыт»). Порядок как у UpdateTitle: валидация ввода (мусор → ErrValidation/422),
+// проверка доступа (чужая/нет формы → 404), затем UPDATE. Настройки — живые колонки
+// (не схема): применяются немедленно, публикации не требуют (ADR §10).
+func (s *Service) UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error) {
+	if err := domain.ValidateCloseSettings(settings); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormCloseSettings(ctx, s.db, form.ID, form.WorkspaceID, settings)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
 // UpdateDraftSchema сохраняет черновик схемы формы (автосейв билдера). Порядок:
 // строгая валидация документа (мусор → ErrValidation/422), проверка доступа
 // (чужая/нет формы → 404), затем условный UPDATE с оптимистичной блокировкой по
@@ -345,11 +368,14 @@ func (s *Service) Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form
 	return closed, nil
 }
 
-// PublicForm возвращает опубликованную форму по slug для публичного рендерера.
-// Без проверки воркспейса (форма публична), но только опубликованную: черновик,
-// закрытая или несуществующая → domain.ErrNotFound (404, приватное не раскрывается).
+// PublicForm возвращает публичную форму по slug для рендерера и приёма ответа —
+// вместе со статусом и настройками закрытия. Без проверки воркспейса (форма
+// публична). Черновик и несуществующая → domain.ErrNotFound (404, приватное не
+// раскрывается). Закрытую (снятую вручную ИЛИ по дате/лимиту) ОТДАЁТ: вызывающий
+// вычисляет domain.FormClosed и показывает «приём закрыт» вместо 404 — форма была
+// публичной (инвариант 5 распространяется только на черновик; ADR §10, шаг 4).
 func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, error) {
-	pf, err := s.repo.GetPublishedFormBySlug(ctx, s.db, slug)
+	pf, err := s.repo.GetPublicFormBySlug(ctx, s.db, slug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PublicForm{}, domain.ErrNotFound

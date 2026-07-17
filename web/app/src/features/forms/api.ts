@@ -3,6 +3,7 @@ import {
   formSchema,
   formDetailSchema,
   formsPageSchema,
+  type CloseSettingsInput,
   type Form,
   type FormDetail,
   type FormsPage,
@@ -48,6 +49,18 @@ export function renameForm(id: string, title: string): Promise<Form> {
 // строка сбрасывает имя (кабинет снова показывает заголовок). См. ADR §10.
 export function updateFormName(id: string, name: string): Promise<Form> {
   return apiRequest(`/forms/${id}`, { method: 'PATCH', body: { name }, schema: formSchema })
+}
+
+// Настройки закрытия формы (фаза 8.5 шаг 4): дата, лимит, текст «приём закрыт».
+// Фасет closeSettings PATCH заменяет все три колонки разом. Ответ — карточка формы
+// (закрытие живёт в колонках, публикации не требует); свежие настройки берутся
+// перечитыванием детали.
+export function updateCloseSettings(id: string, settings: CloseSettingsInput): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { closeSettings: settings },
+    schema: formSchema,
+  })
 }
 
 // Дубликация: копия формы «{название} (копия)» с тем же черновиком, всегда draft.

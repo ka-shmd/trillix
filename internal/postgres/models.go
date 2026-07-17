@@ -20,6 +20,9 @@ type Form struct {
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
 	Name               pgtype.Text
+	CloseAt            pgtype.Timestamptz
+	ResponseLimit      pgtype.Int4
+	ClosedMessage      pgtype.Text
 }
 
 type FormVersion struct {

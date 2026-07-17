@@ -274,6 +274,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -292,6 +293,9 @@ type GetFormRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	CloseAt               pgtype.Timestamptz
+	ResponseLimit         pgtype.Int4
+	ClosedMessage         pgtype.Text
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -314,6 +318,9 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.CloseAt,
+		&i.ResponseLimit,
+		&i.ClosedMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -325,6 +332,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -343,6 +351,9 @@ type GetFormBySlugRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	CloseAt               pgtype.Timestamptz
+	ResponseLimit         pgtype.Int4
+	ClosedMessage         pgtype.Text
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -367,6 +378,9 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.CloseAt,
+		&i.ResponseLimit,
+		&i.ClosedMessage,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -399,35 +413,53 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 	return workspace_id, err
 }
 
-const getPublishedFormBySlug = `-- name: GetPublishedFormBySlug :one
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id
+const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
+SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+    f.status, f.close_at, f.response_limit, f.closed_message,
+    CASE WHEN f.response_limit IS NOT NULL
+         THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
+         ELSE 0 END::bigint AS submission_count
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
-WHERE f.slug = $1 AND f.status = 'published'
+WHERE f.slug = $1
 `
 
-type GetPublishedFormBySlugRow struct {
+type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
 	Title              string
 	Version            int32
 	Schema             []byte
 	PublishedVersionID pgtype.UUID
+	Status             string
+	CloseAt            pgtype.Timestamptz
+	ResponseLimit      pgtype.Int4
+	ClosedMessage      pgtype.Text
+	SubmissionCount    int64
 }
 
-// Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
-// status='published' гарантируют, что черновик/закрытая форма не вернут строку
-// (вызывающий → 404, приватное не раскрывается). published_version_id — источник
-// ETag (иммутабелен на версию). f.id (form_id) нужен приёму ответа (фаза 5) для
-// привязки submission к форме и её версии.
-func (q *Queries) GetPublishedFormBySlug(ctx context.Context, slug string) (GetPublishedFormBySlugRow, error) {
-	row := q.db.QueryRow(ctx, getPublishedFormBySlug, slug)
-	var i GetPublishedFormBySlugRow
+// Публичная выдача формы по slug: title + схема последней опубликованной версии +
+// статус и живые настройки закрытия (фаза 8.5 шаг 4). INNER JOIN по
+// published_version_id отсекает черновик (у него версии нет) → 0 строк → 404,
+// существование приватного не раскрывается. Закрытую (снятую вручную ИЛИ по
+// дате/лимиту) строку ОТДАЁМ: вызывающий вычислит FormClosed и покажет «приём
+// закрыт» — форма была публичной (инвариант 5 распространяется только на черновик).
+// submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
+// лишний скан submissions на каждом открытии не нужен. published_version_id —
+// источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
+func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
+	var i GetPublicFormBySlugRow
 	err := row.Scan(
 		&i.FormID,
 		&i.Title,
 		&i.Version,
 		&i.Schema,
 		&i.PublishedVersionID,
+		&i.Status,
+		&i.CloseAt,
+		&i.ResponseLimit,
+		&i.ClosedMessage,
+		&i.SubmissionCount,
 	)
 	return i, err
 }
@@ -905,6 +937,21 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 	return items, nil
 }
 
+const lockFormForSubmit = `-- name: LockFormForSubmit :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Транзакционный advisory-lock по форме для жёсткого капа лимита ответов (фаза 8.5
+// шаг 4, ADR §10): сериализует конкурентные приёмы ОДНОЙ формы, поэтому счёт
+// «сколько уже принято» точен и перебор невозможен. Блокировку берёт ТОЛЬКО путь с
+// заданным лимитом; форма без лимита пишется без неё (contention только у формы у
+// предела). Ключ — хеш form_id (коллизия хешей лишь изредка сериализует две разные
+// формы — безвредно). xact-версия сама снимается на commit/rollback.
+func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
+	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
+	return err
+}
+
 const nextFormVersion = `-- name: NextFormVersion :one
 SELECT (coalesce(max(version), 0) + 1)::int AS next_version
 FROM form_versions
@@ -994,6 +1041,61 @@ type SetFormPublishedRow struct {
 func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedParams) (SetFormPublishedRow, error) {
 	row := q.db.QueryRow(ctx, setFormPublished, arg.ID, arg.WorkspaceID, arg.PublishedVersionID)
 	var i SetFormPublishedRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one
+UPDATE forms
+SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormCloseSettingsParams struct {
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	CloseAt       pgtype.Timestamptz
+	ResponseLimit pgtype.Int4
+	ClosedMessage pgtype.Text
+}
+
+type UpdateFormCloseSettingsRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Живые настройки закрытия формы (фаза 8.5 шаг 4): дата, лимит, текст «приём
+// закрыт». Заменяют все три колонки разом (страница настроек шлёт полный набор;
+// NULL = ограничение снято) — колонки, а не JSONB-схема, т.к. настройка живая, а
+// схема снапшотится при публикации (ADR §10). В пределах воркспейса; 0 строк
+// (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
+func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormCloseSettingsParams) (UpdateFormCloseSettingsRow, error) {
+	row := q.db.QueryRow(ctx, updateFormCloseSettings,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CloseAt,
+		arg.ResponseLimit,
+		arg.ClosedMessage,
+	)
+	var i UpdateFormCloseSettingsRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

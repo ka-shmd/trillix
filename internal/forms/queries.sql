@@ -50,6 +50,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -65,6 +66,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -117,6 +119,17 @@ SET name = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormCloseSettings :one
+-- Живые настройки закрытия формы (фаза 8.5 шаг 4): дата, лимит, текст «приём
+-- закрыт». Заменяют все три колонки разом (страница настроек шлёт полный набор;
+-- NULL = ограничение снято) — колонки, а не JSONB-схема, т.к. настройка живая, а
+-- схема снапшотится при публикации (ADR §10). В пределах воркспейса; 0 строк
+-- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
+UPDATE forms
+SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: ListFormNames :many
 -- Имена и заголовки всех форм воркспейса — для нумерации копий: сервис вычисляет
 -- отображаемое имя (name ?? title) каждой формы и подбирает следующий «(копия N)»
@@ -141,16 +154,24 @@ RETURNING id, workspace_id, name, title, slug, status, draft_schema, published_v
 DELETE FROM forms
 WHERE id = $1 AND workspace_id = $2;
 
--- name: GetPublishedFormBySlug :one
--- Публичная выдача формы по slug: title + схема ОПУБЛИКОВАННОЙ версии. INNER JOIN и
--- status='published' гарантируют, что черновик/закрытая форма не вернут строку
--- (вызывающий → 404, приватное не раскрывается). published_version_id — источник
--- ETag (иммутабелен на версию). f.id (form_id) нужен приёму ответа (фаза 5) для
--- привязки submission к форме и её версии.
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id
+-- name: GetPublicFormBySlug :one
+-- Публичная выдача формы по slug: title + схема последней опубликованной версии +
+-- статус и живые настройки закрытия (фаза 8.5 шаг 4). INNER JOIN по
+-- published_version_id отсекает черновик (у него версии нет) → 0 строк → 404,
+-- существование приватного не раскрывается. Закрытую (снятую вручную ИЛИ по
+-- дате/лимиту) строку ОТДАЁМ: вызывающий вычислит FormClosed и покажет «приём
+-- закрыт» — форма была публичной (инвариант 5 распространяется только на черновик).
+-- submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
+-- лишний скан submissions на каждом открытии не нужен. published_version_id —
+-- источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
+SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+    f.status, f.close_at, f.response_limit, f.closed_message,
+    CASE WHEN f.response_limit IS NOT NULL
+         THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
+         ELSE 0 END::bigint AS submission_count
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
-WHERE f.slug = $1 AND f.status = 'published';
+WHERE f.slug = $1;
 
 -- name: ListFormVersions :many
 -- Все опубликованные версии формы (снапшоты схем), по возрастанию номера. Нужен

@@ -34,6 +34,9 @@ function seedDetail(qc: QueryClient) {
     hasUnpublishedChanges: true,
     submissionCount: 3,
     draftSchema,
+    closeAt: null,
+    responseLimit: null,
+    closedMessage: null,
   })
 }
 

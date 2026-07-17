@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
@@ -42,8 +44,14 @@ type Form struct {
 	// таблицы ответов). Считают только читающие запросы (Get/List); у результатов
 	// мутаций 0 (как и PublishedVersion) — фронт берёт актуальное из Get/списка.
 	SubmissionCount int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// Настройки закрытия формы (живые колонки, фаза 8.5 шаг 4; nil/пусто = не задано).
+	// Заполняют только Get/GetBySlug — страница настроек кабинета их читает; у
+	// результатов остальных запросов (список, мутации) nil, как и PublishedVersion.
+	CloseAt       *time.Time
+	ResponseLimit *int32
+	ClosedMessage *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
@@ -56,6 +64,16 @@ type PublicForm struct {
 	Version   int32
 	Schema    json.RawMessage
 	VersionID uuid.UUID
+	// Статус и живые настройки закрытия (фаза 8.5 шаг 4): вызывающий вычисляет
+	// FormClosed(Status, CloseAt, ResponseLimit, SubmissionCount, now) и решает —
+	// отдать форму или показать «приём закрыт». SubmissionCount заполнен только при
+	// заданном ResponseLimit (иначе 0 — ветка лимита не считается). ClosedMessage
+	// nil/пусто → рендерер покажет дефолт.
+	Status          string
+	CloseAt         *time.Time
+	ResponseLimit   *int32
+	ClosedMessage   *string
+	SubmissionCount int64
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -99,6 +117,31 @@ func pgText(s *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *s, Valid: true}
+}
+
+// ptrTime переводит nullable timestamptz из sqlc в *time.Time: NULL → nil.
+func ptrTime(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
+}
+
+// pgTime переводит *time.Time в pgtype.Timestamptz для параметров: nil → NULL.
+func pgTime(t *time.Time) pgtype.Timestamptz {
+	if t == nil {
+		return pgtype.Timestamptz{}
+	}
+	return pgtype.Timestamptz{Time: *t, Valid: true}
+}
+
+// pgInt4 переводит *int32 в pgtype.Int4 для параметров: nil → NULL.
+func pgInt4(n *int32) pgtype.Int4 {
+	if n == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: *n, Valid: true}
 }
 
 // FormName — пара (имя, заголовок) формы воркспейса для нумерации копий (ListFormNames).
@@ -203,6 +246,9 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		CloseAt:               ptrTime(row.CloseAt),
+		ResponseLimit:         ptrInt32(row.ResponseLimit),
+		ClosedMessage:         ptrStr(row.ClosedMessage),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -229,6 +275,9 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		CloseAt:               ptrTime(row.CloseAt),
+		ResponseLimit:         ptrInt32(row.ResponseLimit),
+		ClosedMessage:         ptrStr(row.ClosedMessage),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -342,6 +391,38 @@ func (Repo) UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceI
 	}, nil
 }
 
+// UpdateFormCloseSettings заменяет настройки закрытия формы (дата/лимит/текст) в
+// пределах воркспейса. Пустое сообщение нормализуем в NULL (пусто = дефолт
+// рендерера). pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+func (Repo) UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error) {
+	msg := strings.TrimSpace(s.ClosedMessage)
+	var msgPtr *string
+	if msg != "" {
+		msgPtr = &msg
+	}
+	row, err := postgres.New(db).UpdateFormCloseSettings(ctx, postgres.UpdateFormCloseSettingsParams{
+		ID:            id,
+		WorkspaceID:   workspaceID,
+		CloseAt:       pgTime(s.CloseAt),
+		ResponseLimit: pgInt4(s.ResponseLimit),
+		ClosedMessage: pgText(msgPtr),
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form close settings: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
 // ListFormNames возвращает пары (имя, заголовок) всех форм воркспейса — сервису для
 // нумерации копий (подбор следующего «(копия N)» без коллизий).
 func (Repo) ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error) {
@@ -393,20 +474,26 @@ func (Repo) DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uu
 	return n, nil
 }
 
-// GetPublishedFormBySlug возвращает опубликованную форму по slug. pgx.ErrNoRows
-// (черновик/закрытая/нет формы) пробрасывается обёрнутым — service вернёт 404.
-func (Repo) GetPublishedFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error) {
-	row, err := postgres.New(db).GetPublishedFormBySlug(ctx, slug)
+// GetPublicFormBySlug возвращает публичную форму по slug вместе со статусом и
+// настройками закрытия (закрытую тоже — вызывающий решает, что показать). Только
+// черновик/нет формы дают pgx.ErrNoRows (INNER JOIN по версии) → service вернёт 404.
+func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error) {
+	row, err := postgres.New(db).GetPublicFormBySlug(ctx, slug)
 	if err != nil {
-		return PublicForm{}, fmt.Errorf("get published form by slug: %w", err)
+		return PublicForm{}, fmt.Errorf("get public form by slug: %w", err)
 	}
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
-		FormID:    row.FormID,
-		Title:     row.Title,
-		Version:   row.Version,
-		Schema:    json.RawMessage(row.Schema),
-		VersionID: uuid.UUID(row.PublishedVersionID.Bytes),
+		FormID:          row.FormID,
+		Title:           row.Title,
+		Version:         row.Version,
+		Schema:          json.RawMessage(row.Schema),
+		VersionID:       uuid.UUID(row.PublishedVersionID.Bytes),
+		Status:          row.Status,
+		CloseAt:         ptrTime(row.CloseAt),
+		ResponseLimit:   ptrInt32(row.ResponseLimit),
+		ClosedMessage:   ptrStr(row.ClosedMessage),
+		SubmissionCount: row.SubmissionCount,
 	}, nil
 }
 

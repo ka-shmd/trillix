@@ -7,9 +7,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/httpserver"
 	"github.com/ka-shmd/trierra/internal/token"
 )
+
+// defaultClosedMessage — текст экрана «приём закрыт» для формы без своего текста.
+// Резолвится на сервере (не в рендерере), чтобы JSON-ручка и HTML-страница не
+// разъехались в дефолте. Владелец задаёт свой в настройках (closed_message).
+const defaultClosedMessage = "Приём ответов на эту форму закрыт."
 
 // publicFormService — часть сервиса форм, нужная публичному транспорту.
 type publicFormService interface {
@@ -72,11 +78,33 @@ type publicFormResponse struct {
 	Token   string          `json:"token"`
 }
 
+// closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
+// 410 Gone). Схемы и токена нет — принимать ответ нельзя; рендерер по 410 рисует
+// экран «приём закрыт» из этих полей. closedMessage уже разрезолвлен (свой/дефолт).
+type closedFormResponse struct {
+	Closed        bool   `json:"closed"`
+	Title         string `json:"title"`
+	ClosedMessage string `json:"closedMessage"`
+}
+
 func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	pf, err := h.svc.PublicForm(r.Context(), r.PathValue("slug"))
 	if err != nil {
-		// ErrNotFound → 404 и для черновика/закрытой (приватное не раскрывается).
+		// ErrNotFound → 404 для черновика/несуществующей (приватное не раскрывается).
 		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	// Форма была публичной, но больше не принимает ответы (снята/дата/лимит) → 410
+	// «приём закрыт» вместо 404 (решение владельца, шаг 4). Кэш выключаем: закрытость
+	// живая (продление даты, удаление ответа могут переоткрыть форму).
+	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, h.now().UTC()) {
+		w.Header().Set("Cache-Control", "no-store")
+		httpserver.WriteJSON(w, r, http.StatusGone, closedFormResponse{
+			Closed:        true,
+			Title:         pf.Title,
+			ClosedMessage: closedMessageOrDefault(pf.ClosedMessage),
+		})
 		return
 	}
 
@@ -98,6 +126,16 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		Schema:  pf.Schema,
 		Token:   token.Issue(h.tokenSecret, h.now().UTC()),
 	})
+}
+
+// closedMessageOrDefault — свой текст владельца, если задан, иначе дефолт.
+func closedMessageOrDefault(msg *string) string {
+	if msg != nil {
+		if trimmed := strings.TrimSpace(*msg); trimmed != "" {
+			return trimmed
+		}
+	}
+	return defaultClosedMessage
 }
 
 // etagMatches сверяет заголовок If-None-Match с текущим ETag (список через запятую
