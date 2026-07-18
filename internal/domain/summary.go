@@ -133,29 +133,33 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 		b.byVer[v.Version] = types
 	}
 
-	// От свежей версии к старой: первое появление block_id фиксирует его позицию и
-	// подпись, первое появление опции — её позицию и подпись (правило csv.go).
+	// Вопросы и их порядок — общая модель по всем версиям (questions.go): сводка,
+	// выгрузка и воронка обязаны показывать один и тот же список вопросов.
+	for _, q := range QuestionOrder(versions) {
+		a := &summaryAcc{
+			label:    q.Label,
+			typ:      q.Block.Type,
+			optLabel: make(map[string]string),
+			counts:   make(map[string]int),
+		}
+		if q.Block.Type == BlockScale {
+			// Диапазон — из свежайшей версии с этим блоком (q.Block): деления шкалы
+			// показываем те, что видит сегодняшний респондент.
+			a.scaleMin, a.scaleMax = scaleRange(q.Block)
+		}
+		b.acc[q.ID] = a
+		b.order = append(b.order, q.ID)
+	}
+
+	// Опции собираются ОТДЕЛЬНЫМ обходом всех версий, а не берутся из q.Block:
+	// вариант, удалённый в свежей версии, всё ещё имеет выбравших его по старой, и
+	// без него их ответы стали бы безымянными. Порядок тот же — от свежей к старой,
+	// первое появление опции фиксирует позицию и подпись.
 	for i := len(versions) - 1; i >= 0; i-- {
 		for _, blk := range versions[i].Schema.Blocks {
-			// Неотвечаемые блоки (text, image) ответов не собирают — не в сводке.
-			if blk.Type.isContent() {
-				continue
-			}
 			a, ok := b.acc[blk.ID]
 			if !ok {
-				a = &summaryAcc{
-					// csvColumnLabel, а не своя копия правила: подпись вопроса в сводке
-					// и в выгрузке обязана быть одной и той же.
-					label:    csvColumnLabel(blk.Label, blk.ID),
-					typ:      blk.Type,
-					optLabel: make(map[string]string),
-					counts:   make(map[string]int),
-				}
-				if blk.Type == BlockScale {
-					a.scaleMin, a.scaleMax = scaleRange(blk)
-				}
-				b.acc[blk.ID] = a
-				b.order = append(b.order, blk.ID)
+				continue // неотвечаемый блок: в модель вопросов не входит
 			}
 			for _, o := range blk.Settings.Options {
 				if _, seen := a.optLabel[o.ID]; seen {

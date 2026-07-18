@@ -63,23 +63,12 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 		b.byVer[v.Version] = bv
 	}
 
-	// Колонки — от свежей версии к старой: первое появление block_id фиксирует его
-	// позицию (свежая раскладка слева) и подпись (из свежайшей версии с этим блоком).
-	seen := make(map[string]struct{})
+	// Колонки — общая модель вопросов по всем версиям (questions.go): выгрузка,
+	// сводка и воронка обязаны показывать один и тот же список вопросов.
 	b.headers = append(b.headers, csvMetaHeader...)
-	for i := len(versions) - 1; i >= 0; i-- {
-		for _, blk := range versions[i].Schema.Blocks {
-			// Неотвечаемые блоки (text) — не колонки: у них нет ответов.
-			if blk.Type.isContent() {
-				continue
-			}
-			if _, ok := seen[blk.ID]; ok {
-				continue
-			}
-			seen[blk.ID] = struct{}{}
-			b.columns = append(b.columns, blk.ID)
-			b.headers = append(b.headers, csvColumnLabel(blk.Label, blk.ID))
-		}
+	for _, q := range QuestionOrder(versions) {
+		b.columns = append(b.columns, q.ID)
+		b.headers = append(b.headers, q.Label)
 	}
 	// Заголовки — тоже пользовательский ввод (label'ы): защищаем от formula injection
 	// единообразно с ячейками ответов (мета-константы структурно безопасны — no-op).
@@ -166,15 +155,6 @@ func optionLabel(options map[string]string, id string) string {
 		return label
 	}
 	return id
-}
-
-// csvColumnLabel — подпись колонки вопроса: label, а для безымянного блока —
-// фолбэк по id (пустой заголовок в таблице бесполезен).
-func csvColumnLabel(label, blockID string) string {
-	if strings.TrimSpace(label) != "" {
-		return label
-	}
-	return "(без названия) " + blockID
 }
 
 // sanitizeCSVField защищает от CSV formula injection: ячейка, начинающаяся с
