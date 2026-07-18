@@ -8,6 +8,7 @@ package visits_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,4 +302,116 @@ func countVisits(t *testing.T) int {
 		t.Fatalf("count visits: %v", err)
 	}
 	return n
+}
+
+// --- Воронка (шаг 6б) ---
+
+// formOwner возвращает id формы и её владельца по slug: воронку читает автор, и
+// сервис авторизует доступ по членству в воркспейсе.
+func formOwner(t *testing.T, slug string) (formID, userID uuid.UUID) {
+	t.Helper()
+	err := testPool.QueryRow(context.Background(),
+		`SELECT f.id, m.user_id FROM forms f
+		 JOIN workspace_members m ON m.workspace_id = f.workspace_id
+		 WHERE f.slug = $1`, slug).Scan(&formID, &userID)
+	if err != nil {
+		t.Fatalf("form owner by slug: %v", err)
+	}
+	return formID, userID
+}
+
+func funnelService() *visits.Service {
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	return visits.NewService(testPool, formsSvc, visits.Repo{})
+}
+
+// Сквозная воронка: визиты с разной дальней точкой раскладываются по шагам, а
+// отправивший НЕ считается отвалом на последнем вопросе, которого коснулся.
+func TestFunnel_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	// Трое ушли, не тронув вопросов.
+	for i := 0; i < 3; i++ {
+		beacon(t, srv, slug, domain.NewID().String(), 0, "")
+	}
+	// Двое дошли до вопроса и бросили.
+	for i := 0; i < 2; i++ {
+		id := domain.NewID().String()
+		beacon(t, srv, slug, id, 0, "")
+		beacon(t, srv, slug, id, 1, "b1")
+	}
+	// Один дошёл до того же вопроса и отправил форму.
+	sender := domain.NewID().String()
+	beacon(t, srv, slug, sender, 0, "")
+	beacon(t, srv, slug, sender, 1, "b1")
+	if code := submit(t, srv, slug, sender); code != http.StatusCreated {
+		t.Fatalf("приём ответа: статус %d, ждали 201", code)
+	}
+
+	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	if err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+
+	if f.Visits != 6 || f.Submitted != 1 {
+		t.Errorf("верх воронки = %d визитов / %d отправок, ждали 6/1", f.Visits, f.Submitted)
+	}
+	if f.LeftBeforeFirst != 3 {
+		t.Errorf("LeftBeforeFirst = %d, ждали 3", f.LeftBeforeFirst)
+	}
+	if len(f.Steps) == 0 {
+		t.Fatal("шагов нет — модель вопросов пуста")
+	}
+	step := f.Steps[0]
+	if step.BlockID != "b1" {
+		t.Fatalf("первый шаг = %q, ждали b1", step.BlockID)
+	}
+	if step.Reached != 3 {
+		t.Errorf("Reached = %d, ждали 3 (двое бросили + один отправил)", step.Reached)
+	}
+	// Ядро шага: отправивший коснулся b1 последним, но отвалом не является.
+	if step.DroppedHere != 2 {
+		t.Errorf("DroppedHere = %d, ждали 2: отправивший не отвал", step.DroppedHere)
+	}
+}
+
+// Воронка чужой формы недоступна — 404, существование формы не раскрывается.
+func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, _ := formOwner(t, slug)
+	beacon(t, srv, slug, domain.NewID().String(), 0, "")
+
+	// Владелец другой формы — посторонний для этой.
+	_, strangerID := formOwner(t, publishedForm(t))
+
+	if _, err := funnelService().Funnel(context.Background(), strangerID, formID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
+	}
+}
+
+// Форма без визитов: воронка не падает, шаги известны из схемы и нулевые.
+func TestFunnel_NoVisits(t *testing.T) {
+	resetDB(t)
+	newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	if err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if f.Visits != 0 || f.LeftBeforeFirst != 0 {
+		t.Errorf("ждали нули наверху воронки, получили %+v", f)
+	}
+	if len(f.Steps) == 0 {
+		t.Fatal("шаги обязаны быть известны из схемы даже без визитов")
+	}
+	if f.Steps[0].Reached != 0 || f.Steps[0].DroppedHere != 0 {
+		t.Errorf("шаг не нулевой: %+v", f.Steps[0])
+	}
 }
