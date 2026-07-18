@@ -26,7 +26,7 @@ type fakeStore struct {
 	member    bool
 	memberErr error
 
-	listRows []Form
+	listRows []ListRow
 	listErr  error
 
 	created bool
@@ -66,10 +66,12 @@ type fakeStore struct {
 	lastCreateSchema json.RawMessage
 
 	// Управление нумерацией копий (ListFormNames).
-	formNames     []FormName
-	formNamesErr  error
-	lastListLimit int32
-	lastListAfter bool
+	formNames      []FormName
+	formNamesErr   error
+	lastListLimit  int32
+	lastListAfter  bool
+	lastListSort   string
+	lastListSearch string
 }
 
 func (f *fakeStore) GetPersonalWorkspace(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (uuid.UUID, error) {
@@ -131,15 +133,11 @@ func (f *fakeStore) GetFormBySlug(_ context.Context, _ postgres.DBTX, slug strin
 	return form, nil
 }
 
-func (f *fakeStore) ListForms(_ context.Context, _ postgres.DBTX, _ uuid.UUID, limit int32) ([]Form, error) {
+func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, _ uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
 	f.lastListLimit = limit
-	f.lastListAfter = false
-	return f.listRows, f.listErr
-}
-
-func (f *fakeStore) ListFormsAfter(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ time.Time, _ uuid.UUID, limit int32) ([]Form, error) {
-	f.lastListLimit = limit
-	f.lastListAfter = true
+	f.lastListAfter = after != nil
+	f.lastListSort = sort
+	f.lastListSearch = search
 	return f.listRows, f.listErr
 }
 
@@ -706,15 +704,15 @@ func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
 func TestList_HasNextPage_SetsCursor(t *testing.T) {
 	// Запрошен limit=2, репозиторий вернул 3 (limit+1) → есть следующая страница.
 	base := time.Now()
-	rows := []Form{
-		{ID: domain.NewID(), UpdatedAt: base},
-		{ID: domain.NewID(), UpdatedAt: base.Add(-time.Minute)},
-		{ID: domain.NewID(), UpdatedAt: base.Add(-2 * time.Minute)},
+	rows := []ListRow{
+		{Form: Form{ID: domain.NewID(), UpdatedAt: base}, SortKey: base.UnixNano()},
+		{Form: Form{ID: domain.NewID(), UpdatedAt: base.Add(-time.Minute)}, SortKey: base.Add(-time.Minute).UnixNano()},
+		{Form: Form{ID: domain.NewID(), UpdatedAt: base.Add(-2 * time.Minute)}, SortKey: base.Add(-2 * time.Minute).UnixNano()},
 	}
 	store := &fakeStore{personalWS: domain.NewID(), listRows: rows}
 	svc := newTestService(store)
 
-	page, err := svc.List(context.Background(), domain.NewID(), nil, 2)
+	page, err := svc.List(context.Background(), domain.NewID(), ListOptions{Limit: 2})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -730,14 +728,22 @@ func TestList_HasNextPage_SetsCursor(t *testing.T) {
 	if page.NextCursor.ID != rows[1].ID {
 		t.Fatalf("курсор указывает на %v, ожидалась последняя показанная форма %v", page.NextCursor.ID, rows[1].ID)
 	}
+	// Ключ курсора — тот, что выдала БД, а не пересчитанный сервисом.
+	if page.NextCursor.SortKey != rows[1].SortKey {
+		t.Fatalf("ключ курсора %d, ожидался ключ строки %d", page.NextCursor.SortKey, rows[1].SortKey)
+	}
+	// Порядок запечатан в курсоре: следующая страница обязана прийти в том же.
+	if page.NextCursor.Sort != SortUpdated {
+		t.Fatalf("в курсоре сортировка %q, ожидалась %q", page.NextCursor.Sort, SortUpdated)
+	}
 }
 
 func TestList_LastPage_NoCursor(t *testing.T) {
-	rows := []Form{{ID: domain.NewID(), UpdatedAt: time.Now()}}
+	rows := []ListRow{{Form: Form{ID: domain.NewID(), UpdatedAt: time.Now()}}}
 	store := &fakeStore{personalWS: domain.NewID(), listRows: rows}
 	svc := newTestService(store)
 
-	page, err := svc.List(context.Background(), domain.NewID(), nil, 50)
+	page, err := svc.List(context.Background(), domain.NewID(), ListOptions{Limit: 50})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -749,15 +755,105 @@ func TestList_LastPage_NoCursor(t *testing.T) {
 	}
 }
 
-func TestList_WithCursor_UsesAfterQuery(t *testing.T) {
+func TestList_WithCursor_PassesCursorToStore(t *testing.T) {
 	store := &fakeStore{personalWS: domain.NewID(), listRows: nil}
 	svc := newTestService(store)
 
-	_, err := svc.List(context.Background(), domain.NewID(), &Cursor{UpdatedAt: time.Now(), ID: domain.NewID()}, 50)
+	after := &Cursor{SortKey: time.Now().UnixNano(), ID: domain.NewID(), Sort: SortUpdated}
+	_, err := svc.List(context.Background(), domain.NewID(), ListOptions{After: after, Limit: 50})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if !store.lastListAfter {
-		t.Fatal("с курсором должен вызываться ListFormsAfter")
+		t.Fatal("курсор не доехал до репозитория")
+	}
+}
+
+// --- Сортировка и поиск (фаза 8.5 шаг 8) ---
+
+func TestList_SortDefaultsToUpdated(t *testing.T) {
+	store := &fakeStore{personalWS: domain.NewID()}
+	svc := newTestService(store)
+
+	if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if store.lastListSort != string(SortUpdated) {
+		t.Fatalf("сортировка %q, ожидалась %q", store.lastListSort, SortUpdated)
+	}
+}
+
+// Курсор одного порядка, применённый к другому, — ошибка ввода, а не повод молча
+// выдать перемешанную страницу: ключ у порядков измеряет разные величины.
+func TestList_CursorFromOtherSort_IsValidationError(t *testing.T) {
+	store := &fakeStore{personalWS: domain.NewID()}
+	svc := newTestService(store)
+
+	after := &Cursor{SortKey: 42, ID: domain.NewID(), Sort: SortResponses}
+	_, err := svc.List(context.Background(), domain.NewID(), ListOptions{Sort: SortCreated, After: after, Limit: 50})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась domain.ErrValidation", err)
+	}
+}
+
+func TestParseSortOrder(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    SortOrder
+		wantErr bool
+	}{
+		{"пусто — умолчание", "", SortUpdated, false},
+		{"по правке", "updated", SortUpdated, false},
+		{"по созданию", "created", SortCreated, false},
+		{"по числу ответов", "responses", SortResponses, false},
+		{"опечатка не молчит", "updatd", "", true},
+		{"чужое значение", "'; DROP TABLE forms; --", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseSortOrder(tt.raw)
+			if tt.wantErr {
+				if !errors.Is(err, domain.ErrValidation) {
+					t.Fatalf("ошибка = %v, ожидалась domain.ErrValidation", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseSortOrder(%q): %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseSortOrder(%q) = %q, ожидалось %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+// Спецсимволы LIKE в пользовательском запросе обезвреживаются: иначе «50%» ищет
+// что угодно, а «_» подходит любому символу.
+func TestList_SearchEscapesLikeWildcards(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"обычный текст не трогается", "доставка", "доставка"},
+		{"процент экранируется", "скидка 50%", `скидка 50\%`},
+		{"подчёркивание экранируется", "форма_1", `форма\_1`},
+		{"слэш удваивается один раз", `a\b`, `a\\b`},
+		{"пробелы по краям срезаются", "  анкета  ", "анкета"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{personalWS: domain.NewID()}
+			svc := newTestService(store)
+
+			if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{Search: tt.in}); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if store.lastListSearch != tt.want {
+				t.Fatalf("в репозиторий ушёл поиск %q, ожидался %q", store.lastListSearch, tt.want)
+			}
+		})
 	}
 }

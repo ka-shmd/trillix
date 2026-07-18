@@ -86,48 +86,66 @@ FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1;
 
--- name: ListFormsFirstPage :many
--- Первая страница списка форм воркспейса: свежие правки сверху. limit+1 строк —
--- вызывающий по «лишней» строке понимает, есть ли следующая страница.
-SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
-    fv.version AS published_version,
-    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
-    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
-    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
-    -- Конверсия считается по визитам (submitted/total), а НЕ делением
-    -- submission_count на visit_count: это разные множества (ответ мог прийти без
-    -- визита), и их частное — не конверсия (ADR §10).
-    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
-    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.created_at, f.updated_at
-FROM forms f
-LEFT JOIN form_versions fv ON fv.id = f.published_version_id
-WHERE f.workspace_id = $1
-ORDER BY f.updated_at DESC, f.id DESC
-LIMIT $2;
-
--- name: ListFormsAfter :many
--- Следующая страница составным курсором (updated_at, id): строго «старше» якоря
--- по паре колонок — стабильно даже если форму отредактировали во время листания.
-SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
-    fv.version AS published_version,
-    coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
-    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
-    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
-    -- Конверсия считается по визитам (submitted/total), а НЕ делением
-    -- submission_count на visit_count: это разные множества (ответ мог прийти без
-    -- визита), и их частное — не конверсия (ADR §10).
-    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
-    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.created_at, f.updated_at
-FROM forms f
-LEFT JOIN form_versions fv ON fv.id = f.published_version_id
-WHERE f.workspace_id = $1
-  AND (f.updated_at, f.id) < (sqlc.arg(cursor_updated_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
-ORDER BY f.updated_at DESC, f.id DESC
-LIMIT $2;
+-- name: ListFormsPage :many
+-- Страница списка форм воркспейса: поиск, сортировка и курсор одним запросом
+-- (фаза 8.5 шаг 8). limit+1 строк — вызывающий по «лишней» строке понимает, есть
+-- ли следующая страница.
+--
+-- ОДИН запрос на три порядка вместо шести (первая/следующая × updated/created/
+-- responses) — за счёт нормализации ключа сортировки к bigint: время переводится
+-- в наносекунды эпохи, число ответов уже bigint. Отсюда же неизменный формат
+-- курсора «<int64>:<uuid>»: у всех трёх порядков ключ одного типа, меняется
+-- только его смысл (какой именно порядок — часть курсора, см. handler).
+-- extract(epoch) в PG возвращает numeric, поэтому ×1e9 точен до наносекунды и
+-- совпадает с time.Time.UnixNano() на стороне Go (PG хранит микросекунды).
+--
+-- Цена решения: CASE в ORDER BY не даёт использовать idx_forms_workspace для
+-- сортировки (индекс отбирает строки воркспейса, порядок строит sort-узел).
+-- Осознанно: сортируются десятки строк одного воркспейса, а стоимость запроса и
+-- так определяют счётчики ответов/визитов. Отдельный индекс под created_at по той
+-- же причине не заводится — CASE им всё равно не воспользуется.
+SELECT * FROM (
+    SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
+        fv.version AS published_version,
+        coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
+        c.submission_count,
+        -- Просмотры и конверсия (фаза 8.5 шаг 6). Конверсия считается по визитам
+        -- (submitted/total), а НЕ делением submission_count на visit_count: это
+        -- разные множества (ответ мог прийти без визита), и их частное — не
+        -- конверсия (ADR §10). LATERAL вместо скалярных подзапросов: счётчик
+        -- нужен и в проекции, и в ключе сортировки — считаем один раз.
+        v.visit_count,
+        v.visit_submitted_count,
+        f.created_at, f.updated_at,
+        CASE sqlc.arg(sort)::text
+            WHEN 'created' THEN (extract(epoch FROM f.created_at) * 1000000000)::bigint
+            WHEN 'responses' THEN c.submission_count
+            ELSE (extract(epoch FROM f.updated_at) * 1000000000)::bigint
+        END AS sort_key
+    FROM forms f
+    LEFT JOIN form_versions fv ON fv.id = f.published_version_id
+    LEFT JOIN LATERAL (
+        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id
+    ) c ON true
+    LEFT JOIN LATERAL (
+        SELECT count(*) AS visit_count,
+               count(*) FILTER (WHERE vv.submitted) AS visit_submitted_count
+        FROM form_visits vv WHERE vv.form_id = f.id
+    ) v ON true
+    WHERE f.workspace_id = sqlc.arg(workspace_id)
+      -- Поиск по ОТОБРАЖАЕМОМУ имени: кабинет показывает name, а при пустом —
+      -- title, поэтому ищем ровно по тому, что человек видит на карточке.
+      -- Спецсимволы LIKE экранирует вызывающий (service), иначе «50%» ищет что
+      -- угодно.
+      AND (sqlc.narg(search)::text IS NULL
+           OR coalesce(f.name, f.title) ILIKE '%' || sqlc.narg(search)::text || '%')
+) t
+-- Keyset по паре (ключ сортировки, id): id разводит строки с равным ключом —
+-- у сортировки по числу ответов совпадения массовые (у большинства форм 0).
+WHERE sqlc.narg(cursor_key)::bigint IS NULL
+   OR (t.sort_key, t.id) < (sqlc.narg(cursor_key)::bigint, sqlc.narg(cursor_id)::uuid)
+ORDER BY t.sort_key DESC, t.id DESC
+LIMIT sqlc.arg(page_limit);
 
 -- name: UpdateFormTitle :one
 -- Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк

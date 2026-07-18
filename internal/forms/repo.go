@@ -64,6 +64,16 @@ type Form struct {
 	UpdatedAt     time.Time
 }
 
+// ListRow — строка списка вместе с ключом сортировки, по которому её выдала БД
+// (фаза 8.5 шаг 8). Ключ не часть домена: его смысл зависит от запрошенного
+// порядка (наносекунды правки/создания либо число ответов). В курсор идёт именно
+// значение из БД — пересчитывать его в Go значило бы завести вторую копию правила
+// из queries.sql, которая разошлась бы с первой молча.
+type ListRow struct {
+	Form
+	SortKey int64
+}
+
 // PublicForm — публичная проекция опубликованной формы для рендерера: title и схема
 // опубликованной версии. VersionID (id этой версии) иммутабелен и служит ETag'ом.
 // FormID — id самой формы: рендереру не отдаётся, но нужен приёму ответа (модуль
@@ -297,65 +307,47 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 	}, nil
 }
 
-// ListForms — первая страница списка форм воркспейса (свежие правки сверху).
-func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error) {
-	rows, err := postgres.New(db).ListFormsFirstPage(ctx, postgres.ListFormsFirstPageParams{
+// ListFormsPage — страница списка форм воркспейса: поиск, сортировка и курсор
+// одним запросом (фаза 8.5 шаг 8). Пустой search — без фильтра; nil-курсор —
+// первая страница. Экранирование спецсимволов LIKE — на вызывающем (service).
+func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+	params := postgres.ListFormsPageParams{
 		WorkspaceID: workspaceID,
-		Limit:       limit,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list forms: %w", err)
+		Sort:        sort,
+		PageLimit:   limit,
 	}
-	out := make([]Form, len(rows))
-	for i, r := range rows {
-		out[i] = Form{
-			ID:                    r.ID,
-			WorkspaceID:           r.WorkspaceID,
-			Name:                  ptrStr(r.Name),
-			Title:                 r.Title,
-			Slug:                  r.Slug,
-			Status:                r.Status,
-			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
-			PublishedVersion:      ptrInt32(r.PublishedVersion),
-			HasUnpublishedChanges: r.HasUnpublishedChanges,
-			SubmissionCount:       r.SubmissionCount,
-			VisitCount:            r.VisitCount,
-			VisitSubmittedCount:   r.VisitSubmittedCount,
-			CreatedAt:             r.CreatedAt.Time,
-			UpdatedAt:             r.UpdatedAt.Time,
-		}
+	if search != "" {
+		params.Search = pgtype.Text{String: search, Valid: true}
 	}
-	return out, nil
-}
+	if after != nil {
+		params.CursorKey = pgtype.Int8{Int64: after.SortKey, Valid: true}
+		params.CursorID = pgtype.UUID{Bytes: after.ID, Valid: true}
+	}
 
-// ListFormsAfter — следующая страница составным курсором (updatedAt, id).
-func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error) {
-	rows, err := postgres.New(db).ListFormsAfter(ctx, postgres.ListFormsAfterParams{
-		WorkspaceID:     workspaceID,
-		CursorUpdatedAt: pgtype.Timestamptz{Time: cursorUpdatedAt, Valid: true},
-		CursorID:        cursorID,
-		Limit:           limit,
-	})
+	rows, err := postgres.New(db).ListFormsPage(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("list forms after cursor: %w", err)
+		return nil, fmt.Errorf("list forms page: %w", err)
 	}
-	out := make([]Form, len(rows))
+	out := make([]ListRow, len(rows))
 	for i, r := range rows {
-		out[i] = Form{
-			ID:                    r.ID,
-			WorkspaceID:           r.WorkspaceID,
-			Name:                  ptrStr(r.Name),
-			Title:                 r.Title,
-			Slug:                  r.Slug,
-			Status:                r.Status,
-			PublishedVersionID:    ptrUUID(r.PublishedVersionID),
-			PublishedVersion:      ptrInt32(r.PublishedVersion),
-			HasUnpublishedChanges: r.HasUnpublishedChanges,
-			SubmissionCount:       r.SubmissionCount,
-			VisitCount:            r.VisitCount,
-			VisitSubmittedCount:   r.VisitSubmittedCount,
-			CreatedAt:             r.CreatedAt.Time,
-			UpdatedAt:             r.UpdatedAt.Time,
+		out[i] = ListRow{
+			Form: Form{
+				ID:                    r.ID,
+				WorkspaceID:           r.WorkspaceID,
+				Name:                  ptrStr(r.Name),
+				Title:                 r.Title,
+				Slug:                  r.Slug,
+				Status:                r.Status,
+				PublishedVersionID:    ptrUUID(r.PublishedVersionID),
+				PublishedVersion:      ptrInt32(r.PublishedVersion),
+				HasUnpublishedChanges: r.HasUnpublishedChanges,
+				SubmissionCount:       r.SubmissionCount,
+				VisitCount:            r.VisitCount,
+				VisitSubmittedCount:   r.VisitSubmittedCount,
+				CreatedAt:             r.CreatedAt.Time,
+				UpdatedAt:             r.UpdatedAt.Time,
+			},
+			SortKey: r.SortKey,
 		}
 	}
 	return out, nil

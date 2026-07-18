@@ -63,7 +63,7 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	}
 
 	// Идемпотентность: если формы уже есть — не досыпаем.
-	page, err := formsSvc.List(ctx, user.ID, nil, forms.MaxPageLimit)
+	page, err := formsSvc.List(ctx, user.ID, forms.ListOptions{Limit: forms.MaxPageLimit})
 	if err != nil {
 		return fmt.Errorf("check existing forms: %w", err)
 	}
