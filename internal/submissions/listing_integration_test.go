@@ -24,6 +24,7 @@ import (
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
 	"github.com/ka-shmd/trierra/internal/submissions"
+	"github.com/ka-shmd/trierra/internal/visits"
 )
 
 // fullStack поднимает auth + приватный листинг + публичный приём поверх контейнерного
@@ -34,7 +35,8 @@ func fullStack(t *testing.T) *httptest.Server {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, submissions.Repo{})
+	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, submissions.Repo{})
 	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 	subPrivate := submissions.NewHandler(subSvc, authH.RequireAuth, authH.RequireCSRF)
 

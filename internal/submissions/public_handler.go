@@ -79,6 +79,10 @@ type submitRequest struct {
 	Token        string                     `json:"token"`
 	Answers      map[string]json.RawMessage `json:"answers"`
 	Website      string                     `json:"website"` // honeypot
+	// VisitID — визит, из которого пришёл ответ (фаза 8.5 шаг 6). НЕОБЯЗАТЕЛЬНОЕ:
+	// пусто → ответ принимается как раньше. Иначе страница, отданная из кэша до
+	// выкатки биконов, перестала бы отправляться.
+	VisitID string `json:"visit_id"`
 }
 
 type submitResponse struct {
@@ -126,6 +130,13 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := Meta{UserAgent: r.UserAgent(), Referer: r.Referer()}
+	// Неразбираемый visit_id не отклоняет ответ: аналитика не повод потерять данные
+	// респондента. uuid.Nil = «визита нет», отметка конверсии просто не делается.
+	if req.VisitID != "" {
+		if visitID, err := uuid.Parse(req.VisitID); err == nil {
+			meta.VisitID = visitID
+		}
+	}
 	if err := h.svc.Submit(r.Context(), r.PathValue("slug"), id, req.Answers, meta); err != nil {
 		httpserver.WriteError(w, r, err)
 		return

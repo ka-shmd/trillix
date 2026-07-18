@@ -154,7 +154,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, submissions.Repo{})
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, submissions.Repo{})
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 

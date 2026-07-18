@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/forms"
+	"github.com/ka-shmd/trierra/internal/httpserver"
 	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
@@ -39,6 +41,18 @@ type Forms interface {
 	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
 	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+}
+
+// Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
+// (фаза 8.5 шаг 6). Реализация — *visits.Service; общение через интерфейс сервиса.
+//
+// Метод вызывается ПОСЛЕ коммита приёма и best-effort: аналитика не имеет права ни
+// отклонить принятый ответ, ни усложнить транзакцию с advisory-lock на самом
+// атакуемом эндпоинте. Цена решения — краш в окне между коммитом и отметкой теряет
+// флаг у одного визита (конверсия занизится на единицу); альтернатива «в той же
+// транзакции» потребовала бы протащить postgres.DBTX через межмодульный интерфейс.
+type Visits interface {
+	MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) error
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
@@ -77,23 +91,32 @@ type Page struct {
 var _ Store = Repo{}
 
 // Meta — необязательный контекст ответа (без IP в открытом виде, ARCHITECTURE §3.3).
+//
+// В JSONB submissions.meta уходят только UserAgent и Referer — перечислением, а не
+// маршалингом структуры целиком, поэтому VisitID туда не попадает: он не свойство
+// ответа, а связь с визитом, и живёт в form_visits.submitted.
 type Meta struct {
 	UserAgent string
 	Referer   string
+	// VisitID — визит, из которого пришёл ответ (uuid.Nil = визита нет: бикон не
+	// дошёл или страница из кэша прежней версии рендерера). Отсюда точная конверсия
+	// вместо деления двух независимых счётчиков.
+	VisitID uuid.UUID
 }
 
 // Service — приём ответов. Валидация идёт против ОПУБЛИКОВАННОЙ версии формы, а
 // submission привязывается к её id — правки схемы после отправки не искажают данные.
 type Service struct {
-	db    postgres.DBTX
-	tx    Transactor // для жёсткого капа лимита ответов (шаг 4)
-	forms Forms
-	repo  Store
-	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
+	db     postgres.DBTX
+	tx     Transactor // для жёсткого капа лимита ответов (шаг 4)
+	forms  Forms
+	visits Visits
+	repo   Store
+	now    func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, tx Transactor, forms Forms, repo Store) *Service {
-	return &Service{db: db, tx: tx, forms: forms, repo: repo, now: time.Now}
+func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, repo Store) *Service {
+	return &Service{db: db, tx: tx, forms: forms, visits: visits, repo: repo, now: time.Now}
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -102,6 +125,9 @@ func NewService(db postgres.DBTX, tx Transactor, forms Forms, repo Store) *Servi
 // domain.AnswerErrors, транспорт кладёт карту полей в 422) → INSERT с привязкой к
 // версии. Идемпотентность: повтор с тем же id (ретрай после сбоя сети) не создаёт
 // второй строки и возвращается как успех — даже у заполненной формы (см. кап ниже).
+//
+// meta.VisitID (uuid.Nil = визита нет) отмечает конверсию — после успеха и
+// best-effort, см. интерфейс Visits.
 func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers map[string]json.RawMessage, meta Meta) error {
 	pf, err := s.forms.PublicForm(ctx, slug)
 	if err != nil {
@@ -151,6 +177,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
 			return err
 		}
+		s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 		return nil
 	}
 
@@ -160,7 +187,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
 	// только что вставленной строки превышает лимит) — форма как раз заполнилась.
 	limit := int64(*pf.ResponseLimit)
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
 			return err
 		}
@@ -179,7 +206,30 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 			return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
+	return nil
+}
+
+// markVisitSubmitted отмечает конверсию визита. Вызывается ПОСЛЕ успешного приёма и
+// НЕ возвращает ошибку: ответ уже в базе, и уронить его из-за аналитики нельзя —
+// респондент увидел бы «не удалось отправить» на принятом ответе и отправил бы
+// второй раз. Сбой уходит в лог с request_id, там его и видно.
+//
+// uuid.Nil — штатный случай (бикон не дошёл, старый бандл рендерера не шлёт
+// visit_id), запроса не делаем. Неизвестный или подделанный id даёт 0 строк — это
+// тоже не ошибка (запрос ограничен form_id, чужой визит не пометить).
+func (s *Service) markVisitSubmitted(ctx context.Context, formID, visitID uuid.UUID) {
+	if visitID == uuid.Nil {
+		return
+	}
+	if err := s.visits.MarkSubmitted(ctx, formID, visitID); err != nil {
+		httpserver.LoggerFrom(ctx).Warn("visit not marked submitted",
+			slog.String("form_id", formID.String()),
+			slog.String("error", err.Error()))
+	}
 }
 
 // ListForForm возвращает страницу ответов формы для её автора. Порядок: авторизация
