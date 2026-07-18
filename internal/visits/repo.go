@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ka-shmd/trierra/internal/domain"
 	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
@@ -54,6 +55,24 @@ func (Repo) MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid
 		return 0, fmt.Errorf("mark visit submitted: %w", err)
 	}
 	return n, nil
+}
+
+// CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
+// Пустой BlockID — визиты, не тронувшие ни одного вопроса (last_block_id IS NULL).
+func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error) {
+	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("count visits by last block: %w", err)
+	}
+	out := make([]domain.LastBlockCount, len(rows))
+	for i, r := range rows {
+		out[i] = domain.LastBlockCount{
+			BlockID:   r.LastBlockID.String, // невалидный (NULL) даёт "" — верх воронки
+			Submitted: r.Submitted,
+			Visits:    int(r.Visits),
+		}
+	}
+	return out, nil
 }
 
 // CountVisits — просмотры и конверсия формы (счётчики кабинета).

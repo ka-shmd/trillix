@@ -24,10 +24,15 @@ const maxMetaFieldLen = 512
 // словаря от клиента (раздувание JSONB, мусор в аналитике).
 var utmKeys = [...]string{"utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"}
 
-// Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug.
-// Реализация — *forms.Service; общение через интерфейс сервиса (не чужой repo).
+// Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (запись
+// визита) и авторизует доступ автора к форме (чтение воронки). Реализация —
+// *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// Versions авторизует доступ (чужая/несуществующая → domain.ErrNotFound,
+	// анти-IDOR) и отдаёт опубликованные версии: их схемы дают воронке порядок и
+	// подписи вопросов — тот же список, что у выгрузки и сводки.
+	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
 }
 
 // Store — доступ к данным visits, объявленный на стороне потребителя.
@@ -35,6 +40,7 @@ type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	CountVisits(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Counts, error)
+	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error)
 }
 
 var _ Store = Repo{}
@@ -136,6 +142,45 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 // вызывающий (модуль forms знает про членство в воркспейсе).
 func (s *Service) Counts(ctx context.Context, formID uuid.UUID) (Counts, error) {
 	return s.repo.CountVisits(ctx, s.db, formID)
+}
+
+// Funnel — воронка формы для её автора: на каком вопросе уходят.
+//
+// Порядок: авторизация через forms.Versions (чужая или несуществующая форма → 404,
+// приватное не раскрывается — инвариант 1: id из URL правом доступа не является),
+// затем два счётных запроса и чистая свёртка в домене.
+//
+// Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
+// обязаны показывать один и тот же список вопросов.
+func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.Funnel, error) {
+	versions, err := s.forms.Versions(ctx, userID, formID)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
+
+	schemas := make([]domain.VersionedSchema, 0, len(versions))
+	for _, v := range versions {
+		schema, e := domain.ValidateSchema(v.Schema)
+		if e != nil {
+			// Опубликованный снапшот обязан быть валиден (проверен при публикации) —
+			// сбой здесь означает нарушенный инвариант иммутабельности версии. %v, а
+			// не %w: сентинел ErrValidation в цепочке увёл бы respond.go в 422 с
+			// внутренним текстом наружу вместо 500 (тот же приём, что в submissions).
+			return domain.Funnel{}, fmt.Errorf("parse version %d schema of form %s: %v", v.Number, formID, e)
+		}
+		schemas = append(schemas, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
+	}
+
+	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
+	totals, err := s.repo.CountVisits(ctx, s.db, formID)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
+
+	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts, int(totals.Total), int(totals.Submitted)), nil
 }
 
 // truncate режет строку по границе рун: обрезка по байтам оставила бы хвост битой

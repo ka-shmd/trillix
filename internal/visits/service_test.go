@@ -16,12 +16,17 @@ import (
 )
 
 type fakeForms struct {
-	form forms.PublicForm
-	err  error
+	form     forms.PublicForm
+	err      error
+	versions []forms.Version
 }
 
 func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
 	return f.form, f.err
+}
+
+func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Version, error) {
+	return f.versions, f.err
 }
 
 type upsertCall struct {
@@ -32,10 +37,11 @@ type upsertCall struct {
 }
 
 type fakeStore struct {
-	upserts  []upsertCall
-	marked   []uuid.UUID
-	counts   Counts
-	upsetErr error
+	upserts     []upsertCall
+	marked      []uuid.UUID
+	counts      Counts
+	byLastBlock []domain.LastBlockCount
+	upsetErr    error
 }
 
 func (s *fakeStore) UpsertVisit(_ context.Context, _ postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error {
@@ -50,6 +56,10 @@ func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid
 
 func (s *fakeStore) CountVisits(context.Context, postgres.DBTX, uuid.UUID) (Counts, error) {
 	return s.counts, nil
+}
+
+func (s *fakeStore) CountByLastBlock(context.Context, postgres.DBTX, uuid.UUID) ([]domain.LastBlockCount, error) {
+	return s.byLastBlock, nil
 }
 
 var now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -257,5 +267,45 @@ func TestRecord_TruncatesMetaOnRuneBoundary(t *testing.T) {
 	}
 	if strings.ContainsRune(ua, '�') {
 		t.Error("обрезка разрубила руну — в мете символ замены")
+	}
+}
+
+// Воронка чужой формы недоступна: forms.Versions проверяет членство в воркспейсе и
+// отдаёт ErrNotFound, а сервис обязан пропустить эту ошибку наружу нетронутой —
+// id формы из URL правом доступа не является (инвариант 1).
+func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
+	store := &fakeStore{byLastBlock: []domain.LastBlockCount{{BlockID: "b1", Visits: 5}}}
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, store)
+
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
+	}
+}
+
+// Счётчики верха воронки берутся тем же запросом, что и числа на карточке
+// дашборда: расхождение между двумя экранами читалось бы как баг.
+func TestFunnel_TopCountsComeFromVisitCounters(t *testing.T) {
+	store := &fakeStore{
+		counts:      Counts{Total: 100, Submitted: 12},
+		byLastBlock: []domain.LastBlockCount{{BlockID: "", Visits: 20}},
+	}
+	svc := NewService(nil, fakeForms{versions: []forms.Version{{
+		Number: 1,
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":false,"settings":{}}]}`),
+	}}}, store)
+
+	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	if err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if f.Visits != 100 || f.Submitted != 12 {
+		t.Errorf("верх воронки = %d/%d, ждали 100/12", f.Visits, f.Submitted)
+	}
+	if f.LeftBeforeFirst != 20 {
+		t.Errorf("LeftBeforeFirst = %d, ждали 20", f.LeftBeforeFirst)
+	}
+	if len(f.Steps) != 1 || f.Steps[0].Label != "Имя" {
+		t.Errorf("шаги = %+v, ждали один вопрос «Имя»", f.Steps)
 	}
 }

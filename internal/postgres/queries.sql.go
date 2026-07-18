@@ -45,6 +45,57 @@ func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64
 	return count, err
 }
 
+const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
+SELECT last_block_id, submitted, count(*) AS visits
+FROM form_visits
+WHERE form_id = $1
+GROUP BY last_block_id, submitted
+`
+
+type CountVisitsByLastBlockRow struct {
+	LastBlockID pgtype.Text
+	Submitted   bool
+	Visits      int64
+}
+
+// Раскладка визитов по самой дальней точке — сырьё воронки (фаза 8.5 шаг 6б).
+//
+// Здесь агрегация в SQL — и это НЕ противоречит решению шага 3 («сводку считает Go,
+// а не SQL»), а его обратная сторона. Там на SQL пришлось бы переписать семантику
+// ответа (что значит «yes», что значит массив опций) — третью копию правил после Go
+// и Zod. Здесь семантики нет вообще: это подсчёт строк по одной колонке, а результат
+// размером в число вопросов, а не в число визитов. Порядок и подписи шагов всё равно
+// достраивает Go по модели вопросов (domain.QuestionOrder).
+//
+// NULL last_block_id — законная строка: «открыл и ушёл, не тронув ни одного вопроса».
+// Она не отбрасывается, а становится верхом воронки, поэтому GROUP BY, а не WHERE.
+//
+// Группируем ТАКЖЕ по submitted, и это несущая деталь, а не лишнее измерение:
+// отправивший форму тоже имеет last_block_id — того поля, которого коснулся
+// последним. Без разделения все дошедшие до конца попали бы в «отвалились на
+// последнем вопросе», и воронка обвиняла бы вопрос, который на самом деле работает.
+// «Дошёл до вопроса» считается по всем визитам, «отвалился здесь» — только по
+// неотправившим.
+func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) ([]CountVisitsByLastBlockRow, error) {
+	rows, err := q.db.Query(ctx, countVisitsByLastBlock, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountVisitsByLastBlockRow
+	for rows.Next() {
+		var i CountVisitsByLastBlockRow
+		if err := rows.Scan(&i.LastBlockID, &i.Submitted, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createForm = `-- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
