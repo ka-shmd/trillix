@@ -67,7 +67,8 @@ func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte
 }
 
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
-	mux.Handle("POST /public/v1/forms/{slug}/submissions", h.rateLimitByIP(http.HandlerFunc(h.submit)))
+	limited := httpserver.RateLimitByIP(h.limiter, h.trustedProxy, "слишком много отправок")
+	mux.Handle("POST /public/v1/forms/{slug}/submissions", limited(http.HandlerFunc(h.submit)))
 }
 
 // submitRequest — тело POST. submission_id генерирует клиент (UUIDv7, идемпотентность);
@@ -130,15 +131,4 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, submitResponse{ID: id.String()})
-}
-
-func (h *PublicHandler) rateLimitByIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.limiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
-			w.Header().Set("Retry-After", "60")
-			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много отправок", domain.ErrRateLimited))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

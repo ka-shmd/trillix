@@ -12,6 +12,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countFormVisits = `-- name: CountFormVisits :one
+SELECT count(*) AS total,
+       count(*) FILTER (WHERE submitted) AS submitted
+FROM form_visits
+WHERE form_id = $1
+`
+
+type CountFormVisitsRow struct {
+	Total     int64
+	Submitted int64
+}
+
+// Просмотры и конверсия формы одним сканом по idx_form_visits_form.
+func (q *Queries) CountFormVisits(ctx context.Context, formID uuid.UUID) (CountFormVisitsRow, error) {
+	row := q.db.QueryRow(ctx, countFormVisits, formID)
+	var i CountFormVisitsRow
+	err := row.Scan(&i.Total, &i.Submitted)
+	return i, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -952,6 +972,28 @@ func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error 
 	return err
 }
 
+const markVisitSubmitted = `-- name: MarkVisitSubmitted :execrows
+UPDATE form_visits SET submitted = true
+WHERE id = $1 AND form_id = $2
+`
+
+type MarkVisitSubmittedParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Отметка конверсии при приёме ответа. Ограничено form_id: визит чужой формы по
+// угаданному id не пометить. 0 строк — не ошибка: визита нет (бикон потерялся,
+// страница из кэша старой версии, подделанный visit_id) → ответ всё равно принят,
+// аналитика не имеет права его отклонить.
+func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmittedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markVisitSubmitted, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const nextFormVersion = `-- name: NextFormVersion :one
 SELECT (coalesce(max(version), 0) + 1)::int AS next_version
 FROM form_versions
@@ -1254,4 +1296,56 @@ func (q *Queries) UpdateFormTitle(ctx context.Context, arg UpdateFormTitleParams
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upsertFormVisit = `-- name: UpsertFormVisit :exec
+
+INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE
+SET last_block_id = EXCLUDED.last_block_id,
+    seq           = EXCLUDED.seq
+WHERE form_visits.form_id = EXCLUDED.form_id
+  AND form_visits.seq < EXCLUDED.seq
+`
+
+type UpsertFormVisitParams struct {
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	LastBlockID   pgtype.Text
+	Seq           int16
+	Meta          []byte
+}
+
+// Запросы модуля visits. Схема — migrations/0008_form_visits. Генерация:
+// `make sqlc` (общий пакет internal/postgres).
+// Запись визита биконом рендерера. id генерирует клиент (UUIDv7), поэтому второй
+// бикон того же визита упирается в PK и становится UPDATE'ом.
+//
+// Обновляются РОВНО два поля. Не обновляются намеренно:
+//
+//	submitted       — его ставит только приём ответа; иначе поздний бикон затирал бы
+//	                  уже засчитанную конверсию обратно в false;
+//	form_version_id — визит принадлежит той версии, на которой открыт; переиздание
+//	                  формы посреди сессии не должно переклеивать его на новую;
+//	meta, created_at — контекст первого касания, а не последнего.
+//
+// Два условия в WHERE — не перестраховка, каждое закрывает свой сценарий:
+//
+//	form_id — id визита выбирает клиент, а UUIDv7 угадываем по временно́му префиксу:
+//	          без этого условия ручкой одной формы правится строка другой;
+//	seq     — sendBeacon не гарантирует порядок доставки, а visibilitychange шлёт
+//	          бикон на каждое переключение вкладки, поэтому «поздний» ранний бикон
+//	          без этого условия отбрасывал бы визит назад по воронке.
+func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams) error {
+	_, err := q.db.Exec(ctx, upsertFormVisit,
+		arg.ID,
+		arg.FormID,
+		arg.FormVersionID,
+		arg.LastBlockID,
+		arg.Seq,
+		arg.Meta,
+	)
+	return err
 }

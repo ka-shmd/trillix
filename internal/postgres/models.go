@@ -33,6 +33,17 @@ type FormVersion struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type FormVisit struct {
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	LastBlockID   pgtype.Text
+	Seq           int16
+	Submitted     bool
+	Meta          []byte
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID
