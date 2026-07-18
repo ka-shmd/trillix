@@ -128,6 +128,15 @@ function FormTabs({ slug }: { slug: string }) {
       >
         Сводка
       </Link>
+      <Link
+        to="/forms/$slug/funnel"
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
+        Воронка
+      </Link>
     </nav>
   )
 }
