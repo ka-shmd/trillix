@@ -9,30 +9,87 @@
    Значения = токены/утилиты shadcn-редактора (foreground/muted-foreground и т.д.),
    но выражены в plain-CSS: rf-* и токены --rf-* независимы от Tailwind, поэтому
    рендерер их читает, не таща Tailwind и не ломая бюджет 95 КиБ.
-   Приложение может переопределить --rf-* (напр. кабинет в .dark). */
+   Приложение может переопределить --rf-* (напр. кабинет в .dark).
+
+   ТИПОГРАФИКА — ЗАКРЫТАЯ ШКАЛА ИЗ ПЯТИ РАЗМЕРОВ (по образцу Notion). Иерархию
+   держат ВЕС и ЦВЕТ, а не размер: на странице Notion почти всё тело — 16px, и
+   ровно поэтому она выглядит опрятной. Шкала:
+
+     40px / 700 / 1.2   — заголовок формы (rf-title)
+     20px / 600 / 1.4   — вопрос (rf-label), уровень H3
+     16px / 400 / 1.5   — ВСЁ тело формы: абзац, поле ввода, вариант, согласие,
+                          шкала (rf-text, rf-input, rf-option, rf-consent, rf-scale-mark)
+     14px / 400 / 1.5   — служебное: описание вопроса, заметки, ошибка, кнопка
+                          отправки (rf-desc, rf-empty, rf-error, rf-submit)
+     12px               — подсказки редактора (только Tailwind в кабинете, сюда не едет)
+
+   Шестого размера тут быть не должно. Новому элементу полотна размер НЕ подбирается
+   на глаз — он берётся из этих пяти. Раньше их было девять (48/20/18/16/14.4/14/12
+   плюс rf-input, ужимавшийся с 16 до 14 на десктопе, из-за чего поле ввода и подпись
+   варианта в одной форме были разного размера) — так и выглядит расхождение, если
+   каждый класс заводит свой кегль. */
 :root {
-  --rf-text: oklch(0.129 0.042 264.695); /* shadcn --foreground */
-  --rf-muted: oklch(0.554 0.046 257.417); /* shadcn --muted-foreground */
+  /* Цвет текста полотна — тёплый угольный, а не холодный синеватый foreground
+     кабинета. Замерено на живой форме Tally (getComputedStyle): rgb(55, 53, 47).
+     Полотно тут сознательно расходится с хромом кабинета: форма — отдельная
+     поверхность со своим характером, её видит респондент, а не оператор. */
+  --rf-text: rgb(55, 53, 47);
+  --rf-muted: rgb(119, 118, 114);
   --rf-surface: oklch(1 0 0); /* белый холст/поле (--background/--card) */
   --rf-danger: oklch(0.577 0.245 27.325); /* shadcn --destructive */
   --rf-primary: oklch(0.208 0.042 265.755); /* shadcn --primary (кнопка отправки) */
   --rf-primary-foreground: oklch(0.984 0.003 247.858); /* shadcn --primary-foreground */
   --rf-radius: 8px;
-  /* Рамка поля и глифа — muted-foreground с прозрачностью, как в редакторе
-     (border-muted-foreground/30 и /40). */
-  --rf-field-border: color-mix(in oklab, var(--rf-muted) 30%, transparent);
-  --rf-mark-border: color-mix(in oklab, var(--rf-muted) 40%, transparent);
+  /* Высота контрола — одна на всё полотно: поле ввода, select, деление шкалы,
+     кнопка отправки. Разъезжающиеся высоты — главный источник «неопрятности». */
+  --rf-control-h: 2.25rem; /* 36px — замерено у Tally */
+  /* Потолок однострочного поля = половина колонки (см. .rf-input). Токен, а не
+     число в двух местах: редактор оборачивает поле своим контейнером под глиф
+     типа, и обёртка обязана иметь РОВНО этот потолок — иначе глиф встанет по краю
+     обёртки, а не поля. */
+  --rf-input-max: 350px;
+
+  /* КОНТУР КОНТРОЛА — ТЕНЬ, А НЕ BORDER. Это главное отличие вида Tally от
+     «обычной формы», и подгонкой размеров его не получить. У Tally поле — белая
+     карточка, лежащая на холсте: border нет вовсе (замерено: border-style none),
+     а контур рисует слоёная тень — кольцо в 1px, короткая тень под верхней
+     кромкой и мягкое рассеивание вниз. Отсюда ощущение «поле приподнято над
+     листом», а не «обведено рамкой».
+
+     Почему тень, а не border: кольцо box-shadow не занимает места в коробке
+     (не сдвигает контент на фокусе), кладётся слоями и красится независимо от
+     фона. Значения — с живой формы Tally, getComputedStyle. */
+  --rf-field-shadow:
+    0 1px 1px 0 rgb(0 0 0 / 0.12), 0 0 0 1px rgb(61 59 53 / 0.16), 0 2px 5px 0 rgb(61 59 53 / 0.08);
+  /* Фокус — голубое свечение вокруг кольца (замерено), а не тёмный outline.
+     Кольцо сохраняется, иначе контрол на фокусе теряет контур. */
+  --rf-focus-shadow: 0 0 0 4px rgb(58 152 255 / 0.36), 0 0 0 1px rgb(61 59 53 / 0.16);
+
+  /* Акцент выбора — синий (замер). Отдельный токен от --rf-primary: у Tally
+     кнопка отправки тёмная, а выбранный вариант синий, это два разных цвета. */
+  --rf-accent: rgb(0, 122, 255);
+  --rf-accent-badge: rgb(0, 112, 215);
+  /* Выбранная карточка: синее кольцо 2px, мягкая тень СНИМАЕТСЯ (замер) — карточка
+     «прижимается» к листу, и выбор читается даже без цвета. */
+  --rf-selected-shadow: 0 0 0 2px var(--rf-accent), 0 0 0 1px rgb(61 59 53 / 0.16);
 }
 
 /* Холст формы: заголовок, поля, кнопка отправки. Метрики = полотно редактора
-   (SlashEditor: max-w-3xl, pt-36 px-20 pb-24), вертикальный ритм gap. Надевают
+   (SlashEditor: max-w-3xl, pt-24 px-20 pb-24), вертикальный ритм gap. Надевают
    превью билдера и рендерер; редактор держит те же значения своим Tailwind
    (там контейнер не flex — внутренние отступы на margin). Меняешь эти числа —
-   синхронно правь класс полотна в SlashEditor. */
+   синхронно правь класс полотна в SlashEditor.
+
+   Верхний отступ — 96px (был 144px): столько воздуха над заголовком у страницы
+   Notion. 144px на ноутбуке съедали треть первого экрана — форма открывалась
+   пустотой. */
 .rf-page {
-  max-width: 768px;
+  /* 860 = 700 колонки (замер ширины формы Tally) + 2×80 полей под кластеры
+     значков редактора. Меняешь — правь max-w у полотна в SlashEditor и .rf-form
+     в web/app/src/index.css. */
+  max-width: 860px;
   margin: 0 auto;
-  padding: 9rem 5rem 6rem;
+  padding: 6rem 5rem 6rem;
   display: flex;
   flex-direction: column;
   gap: 2rem;
@@ -46,16 +103,17 @@
   }
 }
 
-/* Заголовок формы — text-5xl/700/tracking-tight редактора. Padding 0, чтобы
+/* Заголовок формы — 40/700/1.2, как title страницы Notion. Padding 0, чтобы
    <textarea> редактора и <h1> рендерера имели одинаковую коробку (у textarea
-   есть UA-паддинг). */
+   есть UA-паддинг). line-height 1.2, а не 1: при 1.0 длинное название в две
+   строки слипается (высота строки = кегль, между строками нет просвета). */
 .rf-title {
   margin: 0;
   padding: 0;
-  font-size: 3rem;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.025em;
+  font-size: 2.5rem;
+  line-height: 3rem; /* 48px — замер */
+  font-weight: 800; /* замер: у Tally заголовок формы тяжелее обычного bold */
+  letter-spacing: normal; /* замер: Tally заголовок не поджимает */
   color: var(--rf-text);
 }
 
@@ -65,7 +123,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 2.5rem;
+  height: var(--rf-control-h);
   padding: 0 1.5rem;
   border: 0;
   border-radius: var(--rf-radius);
@@ -102,26 +160,41 @@
 .rf-field {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem; /* mt-1.5 между вопросом и полем */
+  gap: 0.5rem; /* mt-2 между вопросом и полем — синхронно с BlockRow */
 }
 
-/* Вопрос (answerable) — text-xl/600/leading-8 редактора. */
+/* Вопрос (answerable) — 20/600/1.4, уровень H3 в Notion. Единственное место, где
+   полотно выходит за 16px тела: вопрос — якорь взгляда при прокрутке длинной формы.
+   line-height 1.4 (28px), а не прежние 2rem: 1.6 на полужирном 20px давало вопросу
+   в две строки лишний воздух и рвало ритм «вопрос → поле». */
 .rf-label {
   font-size: 1.25rem;
   font-weight: 600;
-  line-height: 2rem;
+  line-height: 1.75rem; /* 28px — см. «строка и кластер значков» ниже */
   color: var(--rf-text);
 }
 
-/* Неотвечаемый абзац (block text) — text-lg/400 редактора. */
+/* Неотвечаемый абзац (block text) — тело формы, 16/400/1.5 (текстовый блок Notion).
+   Был 18/2rem — крупнее и просторнее поля ввода рядом, хотя это обычный текст. */
 .rf-text {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: 1rem;
   font-weight: 400;
-  line-height: 2rem;
+  line-height: 1.5rem; /* 24px — см. «строка и кластер значков» ниже */
   color: var(--rf-text);
   white-space: pre-wrap;
 }
+
+/* СТРОКА И КЛАСТЕР ЗНАЧКОВ (правило редактора, ломается молча).
+   line-height у rf-label/rf-text/rf-consent — не «воздух», а несущий размер: в
+   редакторе строка блока обрамлена absolute-кластерами значков (слева ручка/«+»/
+   описание, справа «обязательный»), и они центрируются по ПЕРВОЙ СТРОКЕ текста.
+   BlockRow берёт эти же 28px/24px высотой кластера (h-7/h-6 по типу блока).
+   Меняешь line-height здесь — правь высоту кластеров там, иначе значки повиснут
+   выше или ниже текста. Ровно так и вышло, когда 2rem заменили на множитель 1.4:
+   кластер остался h-8 (32px), а текст стал 28px, и значки уехали вниз от строки.
+   Поэтому здесь явные rem, а не безразмерный множитель, — число должно совпадать
+   с Tailwind-классом буквально. */
 
 /* Картинка (image-блок) — контентная, во всю ширину колонки, скруглённая как поля.
    Общий вид для всех трёх поверхностей; зона загрузки/прогресс редактора —
@@ -143,15 +216,19 @@
   color: var(--rf-danger);
 }
 
+/* Служебный ярус — 14/1.5, muted. line-height задан явно: без него браузерный
+   `normal` даёт ~1.2 и описание в две строки слипается сильнее, чем текст рядом. */
 .rf-desc {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.5;
   color: var(--rf-muted);
 }
 
 .rf-empty {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.5;
   color: var(--rf-muted);
   font-style: italic;
 }
@@ -159,31 +236,54 @@
 .rf-error {
   margin: 0;
   font-size: 0.875rem;
+  line-height: 1.5;
   color: var(--rf-danger);
 }
 
-/* Поле ввода — как shadcn Input редактора: h-9, тонкая рамка muted/30, radius,
-   лёгкая тень, прозрачный фон; text-base на мобильном, text-sm с md (как md:text-sm). */
+/* Поле ввода — тело формы: 16/1.5, высота --rf-control-h, тонкая рамка muted/30,
+   radius, лёгкая тень, прозрачный фон.
+
+   Размер НЕ уменьшается на десктопе. Раньше тут стоял @media (min-width: 768px)
+   с font-size 0.875rem (калька с `md:text-sm` у shadcn Input) — и на десктопе,
+   то есть везде, где форму собирают, поле ввода было 14px, а подпись варианта
+   (.rf-option) рядом с ним — 16px. Один и тот же ответ респондента в одной и той
+   же форме отображался двумя кеглями. Правило полотна: то, что читает и заполняет
+   респондент, — всегда 16px; служебное — 14px. Брейкпоинта тут больше нет. */
+/* ОДНОСТРОЧНОЕ ПОЛЕ — ПОЛОВИНА КОЛОНКИ, А НЕ ВСЯ. Замер Tally: поле короткого
+   ответа рисуется шириной 345px в колонке 700, тогда как textarea длинного
+   ответа занимает все 700. 345 = (700 − 10) / 2, где 10 — зазор между парой
+   полей, встающих в одну строку; у нас поля не парные, поэтому половина
+   колонки — ровно 350. Смысл: короткий ответ визуально обещает короткий ввод.
+
+   Потолок — 350, а НЕ 320: в CSS Tally висит max-width: 320px, но фактическая
+   ширина 345 — значит то правило не в силе (мобильная медиа-квери). Взять
+   объявленное значение вместо наблюдаемого = сделать поле заметно уже, чем в
+   оригинале. Здесь и вообще при сверке с чужим сайтом верить нужно
+   отрисованному размеру, а не найденной декларации.
+
+   На узком экране потолок сам перестаёт мешать: width 100% отдаёт полю всю
+   доступную ширину, если она меньше 350. Длинный ответ снимает потолок ниже. */
 .rf-input {
   box-sizing: border-box;
   width: 100%;
-  min-height: 2.25rem;
-  border: 1px solid var(--rf-field-border);
+  max-width: var(--rf-input-max);
+  min-height: var(--rf-control-h);
+  border: 0;
   border-radius: var(--rf-radius);
-  padding: 0.25rem 0.75rem;
+  /* 6px сверху/снизу + строка 24px = 36px (--rf-control-h); 10px по бокам — замер. */
+  padding: 0.375rem 0.625rem;
   font-family: inherit;
   font-size: 1rem;
   line-height: 1.5rem;
   color: var(--rf-text);
-  background: transparent;
-  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  background: var(--rf-surface);
+  box-shadow: var(--rf-field-shadow);
   resize: vertical;
 }
 
-@media (min-width: 768px) {
-  .rf-input {
-    font-size: 0.875rem;
-  }
+/* Длинный ответ — во всю колонку (замер: 700px против 320 у короткого). */
+textarea.rf-input {
+  max-width: 100%;
 }
 
 .rf-input::placeholder {
@@ -211,26 +311,26 @@
 }
 
 .rf-scale-mark {
-  min-width: 2.5rem;
-  min-height: 2.5rem;
-  border: 1px solid var(--rf-field-border);
+  min-width: var(--rf-control-h);
+  min-height: var(--rf-control-h);
+  border: 0;
   border-radius: var(--rf-radius);
   padding: 0 0.5rem;
   font-family: inherit;
   font-size: 1rem;
   color: var(--rf-text);
-  background: transparent;
+  background: var(--rf-surface);
+  box-shadow: var(--rf-field-shadow);
   cursor: pointer;
 }
 
 .rf-scale-mark:focus-visible {
-  outline: 2px solid var(--rf-text);
-  outline-offset: -1px;
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
 }
 
 .rf-scale-mark--on {
   background: var(--rf-primary);
-  border-color: var(--rf-primary);
   color: var(--rf-primary-foreground);
 }
 
@@ -246,13 +346,13 @@
    колесо удобнее любой своей реализации. */
 .rf-select {
   padding-right: 0.5rem;
-  height: 2.25rem;
+  height: var(--rf-control-h);
   cursor: pointer;
 }
 
 .rf-input:focus-visible {
-  outline: 2px solid var(--rf-text);
-  outline-offset: -1px;
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
 }
 
 /* В превью инпуты disabled (неинтерактивны), но выглядят как активные — WYSIWYG. */
@@ -263,40 +363,108 @@
   cursor: default;
 }
 
-/* Список вариантов. */
+/* СПИСОК ВАРИАНТОВ. Вариант — КАРТОЧКА ПО ШИРИНЕ ТЕКСТА, а не строка во всю
+   колонку (замер Tally: карточки 123/195/202/127px в колонке 700px, шаг по
+   вертикали 48 = 36 высота + 12 зазор). align-items: flex-start здесь — не
+   выравнивание, а ИМЕННО ЭТО: без него flex-колонка растянет карточки на всю
+   ширину, и вид сразу перестаёт быть Tally. */
 .rf-options {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
+  align-items: flex-start;
+  gap: 0.75rem;
 }
 
+/* Карточка варианта = тот же язык, что у поля: белая, кольцо-тенью, radius 8.
+   Используется и для согласия (одиночная галочка с текстом). */
 .rf-option {
-  display: flex;
+  box-sizing: border-box;
+  position: relative; /* якорь для спрятанного rf-choice-input (position: absolute) */
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+  min-height: var(--rf-control-h);
+  max-width: 100%;
+  padding: 0.5625rem 0.625rem; /* 9px 10px — замер */
+  border-radius: var(--rf-radius);
+  background: var(--rf-surface);
+  box-shadow: var(--rf-field-shadow);
   font-size: 1rem;
+  line-height: 1.125rem; /* 18px — замер */
   color: var(--rf-text);
+  cursor: pointer;
 }
 
-/* Глиф выбора — size-4, рамка muted/40, кружок (radio) / квадрат (checkbox).
+.rf-option--on {
+  box-shadow: var(--rf-selected-shadow);
+}
+
+.rf-option:focus-within {
+  box-shadow: var(--rf-focus-shadow);
+}
+
+/* Буквенный бейдж (A, B, C…) вместо глифа радио/чекбокса — узнаваемая деталь
+   Tally. Замер: 18×18, radius 3, фон rgb(95,94,90), белый текст 12px/900;
+   у выбранного — синий. Декоративный: горячих клавиш у нас нет (см. optionKey
+   в answer.ts), поэтому в разметке он aria-hidden, а доступность держит
+   настоящий <input>, спрятанный классом rf-choice-input. */
+.rf-option-key {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 3px;
+  background: rgb(95, 94, 90);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.rf-option--on .rf-option-key {
+  background: var(--rf-accent-badge);
+}
+
+/* Настоящий radio/checkbox карточки: невидим, но остаётся в потоке фокуса и
+   доступен скринридеру (не display:none и не visibility:hidden — те выкидывают
+   контрол из Tab-обхода и из дерева доступности, и форма перестаёт заполняться
+   с клавиатуры). Вид карточке даёт rf-option, состояние — rf-option--on. */
+.rf-choice-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Глиф-галочка. Остался ТОЛЬКО у согласия: у вариантов выбора глифа нет вовсе —
+   там карточка с буквенным бейджем (.rf-option-key, замер Tally), поэтому круглый
+   вариант правила (rf-mark--radio) удалён как мёртвый.
    Один вид на двоих: декоративный <span> в редакторе и нативный <input> в
    рендерере (appearance:none делает нативный контрол этим глифом, оставаясь
    рабочим и доступным). */
+/* Глиф — тот же язык, что у поля: белая карточка с кольцом-тенью, без border.
+   ВЫВЕДЕНО, НЕ ЗАМЕРЕНО: в шаблонах Tally, до которых удалось дойти без отправки
+   чужой формы, полей выбора не было. Размер, кольцо и заливка взяты из
+   измеренного языка полей — если поле окажется рядом с настоящим Tally заметно
+   другим, правится здесь. */
 .rf-mark {
   appearance: none;
   -webkit-appearance: none;
   box-sizing: border-box;
   flex: 0 0 auto;
-  width: 1rem;
-  height: 1rem;
+  width: 1.25rem;
+  height: 1.25rem;
   margin: 0;
-  border: 1px solid var(--rf-mark-border);
-  background: transparent;
+  border: 0;
+  background: var(--rf-surface);
+  box-shadow: var(--rf-field-shadow);
   display: inline-block;
-}
-
-.rf-mark--radio {
-  border-radius: 50%;
 }
 
 .rf-mark--check {
@@ -305,21 +473,15 @@
 
 /* Отмеченные состояния — только у рабочих <input> рендерера; span-глифы
    редактора не бывают checked. */
-.rf-mark--radio:checked {
-  border-color: var(--rf-text);
-  background: radial-gradient(circle at center, var(--rf-text) 0 3.5px, transparent 4.5px);
-}
-
 .rf-mark--check:checked {
-  border-color: var(--rf-text);
-  background-color: var(--rf-text);
+  background-color: var(--rf-primary);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3.5 8.5 6.5 11.5 12.5 5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: center;
-  background-size: 12px;
+  background-size: 15px; /* галочка внутри глифа 20px */
 }
 
 .rf-mark:focus-visible {
-  outline: 2px solid var(--rf-text);
-  outline-offset: 2px;
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
 }

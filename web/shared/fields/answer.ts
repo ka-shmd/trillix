@@ -9,3 +9,15 @@ export type Answer = string | string[]
 export function toggleMulti(current: readonly string[], id: string, checked: boolean): string[] {
   return checked ? [...current, id] : current.filter((x) => x !== id)
 }
+
+// Буква варианта («A», «B», …) для бейджа на карточке выбора — как у Tally.
+// Бейдж ДЕКОРАТИВНЫЙ: горячих клавиш выбора у нас нет, это визуальный маркер
+// (aria-hidden в разметке). Заведёшь настоящие шорткаты — буква станет обещанием,
+// и тогда её надо озвучивать скринридеру.
+//
+// Дальше 26-го варианта буквы кончаются, и бейджа просто нет: «AA» читается как
+// опечатка, а цикл с начала («A» второй раз) — прямая ложь про то, какая клавиша
+// что выбирает, если шорткаты однажды появятся.
+export function optionKey(index: number): string | null {
+  return index < 26 ? String.fromCharCode(65 + index) : null
+}

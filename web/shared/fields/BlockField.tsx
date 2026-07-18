@@ -2,7 +2,7 @@ import { type ChangeEvent } from 'react'
 
 import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/formSchema'
 
-import { type Answer, toggleMulti } from './answer'
+import { type Answer, optionKey, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
 import { mediaSrc } from './media'
 
@@ -360,18 +360,26 @@ function ChoiceList({
   }
   return (
     <div className="rf-options" role="group" aria-label={block.label.trim() || 'Без названия'} onBlur={onBlur}>
-      {options.map((o) => {
+      {options.map((o, i) => {
         const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
+        const key = optionKey(i)
         return (
-          <label key={o.id} className="rf-option">
+          // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
+          // класс работает одинаково во всех браузерах и виден в тестах.
+          <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
             <input
-              className={multiple ? 'rf-mark rf-mark--check' : 'rf-mark rf-mark--radio'}
+              className="rf-choice-input"
               type={multiple ? 'checkbox' : 'radio'}
               name={block.id}
               checked={checked}
               onChange={(e) => onToggle(o.id, e.target.checked)}
               disabled={disabled}
             />
+            {key && (
+              <span className="rf-option-key" aria-hidden="true">
+                {key}
+              </span>
+            )}
             <span>{o.label.trim() || 'Вариант'}</span>
           </label>
         )
