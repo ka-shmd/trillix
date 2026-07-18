@@ -51,9 +51,11 @@ type Funnel struct {
 
 // BuildFunnel собирает воронку.
 //
-// visits/submitted приходят отдельными счётчиками, а не выводятся из counts: они
-// считаются тем же запросом, что и на карточке дашборда, и обязаны совпадать с
-// показанными там числами.
+// Visits и Submitted ВЫВОДЯТСЯ из counts, а не приходят отдельными счётчиками:
+// counts — это полная разбивка визитов формы (`GROUP BY last_block_id, submitted`),
+// поэтому сумма всех групп равна общему числу визитов, а сумма групп с Submitted —
+// числу конверсий. Второй запрос за теми же числами был лишним сканом на каждом
+// открытии воронки; заодно ушла возможность рассогласования между двумя выборками.
 //
 // Неизвестный BlockID (блока нет ни в одной версии формы) в шаги не попадает и к
 // соседнему вопросу НЕ приписывается: id визита выбирает клиент, ручка публична на
@@ -61,14 +63,18 @@ type Funnel struct {
 // остаются в Visits (они были), но ни в один Reached не входят — из-за чего
 // Reached первого шага может быть меньше, чем Visits − LeftBeforeFirst. Это
 // честнее, чем тихо прибавить мусор к реальному вопросу.
-func BuildFunnel(questions []Question, counts []LastBlockCount, visits, submitted int) Funnel {
-	f := Funnel{Visits: visits, Submitted: submitted}
+func BuildFunnel(questions []Question, counts []LastBlockCount) Funnel {
+	var f Funnel
 
 	// endedAt — все закончившие на блоке (для Reached), droppedAt — только не
 	// отправившие (для DroppedHere). Разные множества, поэтому две карты.
 	endedAt := make(map[string]int, len(counts))
 	droppedAt := make(map[string]int, len(counts))
 	for _, c := range counts {
+		f.Visits += c.Visits
+		if c.Submitted {
+			f.Submitted += c.Visits
+		}
 		if c.BlockID == "" {
 			// Отправить, не тронув ни одного поля, можно у формы, где все вопросы
 			// необязательны: человек сразу жмёт «Отправить». Это не уход.

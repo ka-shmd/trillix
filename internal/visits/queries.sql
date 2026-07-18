@@ -34,13 +34,6 @@ WHERE form_visits.form_id = EXCLUDED.form_id
 UPDATE form_visits SET submitted = true
 WHERE id = $1 AND form_id = $2;
 
--- name: CountFormVisits :one
--- Просмотры и конверсия формы одним сканом по idx_form_visits_form.
-SELECT count(*) AS total,
-       count(*) FILTER (WHERE submitted) AS submitted
-FROM form_visits
-WHERE form_id = $1;
-
 -- name: CountVisitsByLastBlock :many
 -- Раскладка визитов по самой дальней точке — сырьё воронки (фаза 8.5 шаг 6б).
 --

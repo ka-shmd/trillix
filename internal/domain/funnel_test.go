@@ -22,7 +22,7 @@ func TestBuildFunnel_ReachedAndDropped(t *testing.T) {
 		{BlockID: "b3", Visits: 5},                   // бросили на «Комментарии»
 		{BlockID: "b3", Submitted: true, Visits: 10}, // отправили
 	}
-	f := BuildFunnel(threeQuestions(), counts, 100, 10)
+	f := BuildFunnel(threeQuestions(), counts)
 
 	if f.LeftBeforeFirst != 20 {
 		t.Errorf("LeftBeforeFirst = %d, ждали 20", f.LeftBeforeFirst)
@@ -45,12 +45,34 @@ func TestBuildFunnel_ReachedAndDropped(t *testing.T) {
 	}
 }
 
+// Верх воронки выводится из той же разбивки, что и шаги, а не приходит отдельным
+// счётчиком: сумма всех групп = визиты, сумма групп с submitted = конверсия. Тест
+// падает, если кто-то снова заведёт второй источник этих чисел — он мог бы
+// разойтись с шагами.
+func TestBuildFunnel_TotalsDerivedFromCounts(t *testing.T) {
+	counts := []LastBlockCount{
+		{BlockID: "", Visits: 20},
+		{BlockID: "b1", Visits: 14},
+		{BlockID: "b2", Visits: 51},
+		{BlockID: "b3", Visits: 5},
+		{BlockID: "b3", Submitted: true, Visits: 10},
+	}
+	f := BuildFunnel(threeQuestions(), counts)
+
+	if f.Visits != 100 {
+		t.Errorf("Visits = %d, ждали 100 (сумма всех групп)", f.Visits)
+	}
+	if f.Submitted != 10 {
+		t.Errorf("Submitted = %d, ждали 10 (сумма групп с submitted)", f.Submitted)
+	}
+}
+
 // Главная ловушка воронки: отправивший форму тоже остановился на последнем поле,
 // которого коснулся. Если считать его отвалом, экран обвинит последний вопрос —
 // именно тот, который люди успешно проходят.
 func TestBuildFunnel_SubmittedIsNotADrop(t *testing.T) {
 	counts := []LastBlockCount{{BlockID: "b3", Submitted: true, Visits: 40}}
-	f := BuildFunnel(threeQuestions(), counts, 40, 40)
+	f := BuildFunnel(threeQuestions(), counts)
 
 	if f.Steps[2].DroppedHere != 0 {
 		t.Fatalf("DroppedHere последнего вопроса = %d, ждали 0: все 40 отправили форму, "+
@@ -69,7 +91,7 @@ func TestBuildFunnel_SubmittedWithoutTouchingIsNotLeft(t *testing.T) {
 		{BlockID: "", Submitted: true, Visits: 7},
 		{BlockID: "", Visits: 3},
 	}
-	f := BuildFunnel(threeQuestions(), counts, 10, 7)
+	f := BuildFunnel(threeQuestions(), counts)
 
 	if f.LeftBeforeFirst != 3 {
 		t.Fatalf("LeftBeforeFirst = %d, ждали 3: отправившие без касаний не ушли", f.LeftBeforeFirst)
@@ -83,7 +105,7 @@ func TestBuildFunnel_UnknownBlockIsNotAttributed(t *testing.T) {
 		{BlockID: "b1", Visits: 5},
 		{BlockID: "подделка", Visits: 999},
 	}
-	f := BuildFunnel(threeQuestions(), counts, 1004, 0)
+	f := BuildFunnel(threeQuestions(), counts)
 
 	if f.Steps[0].Reached != 5 || f.Steps[0].DroppedHere != 5 {
 		t.Fatalf("шаг b1: reached=%d dropped=%d, ждали 5/5 — чужой id подмешался",
@@ -102,7 +124,7 @@ func TestBuildFunnel_KeepsStepForRemovedQuestion(t *testing.T) {
 		vs(1, q("b1", "Имя", BlockShortText), q("old", "Паспорт", BlockShortText)),
 		vs(2, q("b1", "Имя", BlockShortText)),
 	})
-	f := BuildFunnel(questions, []LastBlockCount{{BlockID: "old", Visits: 9}}, 9, 0)
+	f := BuildFunnel(questions, []LastBlockCount{{BlockID: "old", Visits: 9}})
 
 	if len(f.Steps) != 2 || f.Steps[1].BlockID != "old" {
 		t.Fatalf("шаги = %+v, ждали сохранённый вопрос old", f.Steps)
@@ -115,7 +137,7 @@ func TestBuildFunnel_KeepsStepForRemovedQuestion(t *testing.T) {
 // Форму открывали, но ни одного визита не записалось (все ушли до бикона ухода):
 // воронка не падает и не делит на ноль.
 func TestBuildFunnel_NoCounts(t *testing.T) {
-	f := BuildFunnel(threeQuestions(), nil, 0, 0)
+	f := BuildFunnel(threeQuestions(), nil)
 
 	if len(f.Steps) != 3 {
 		t.Fatalf("шагов = %d, ждали 3 (вопросы известны и без визитов)", len(f.Steps))
@@ -130,7 +152,7 @@ func TestBuildFunnel_NoCounts(t *testing.T) {
 // У формы без вопросов (все удалены после сбора) воронка пуста, но счётчики верхнего
 // уровня остаются — экран покажет их, а не пустоту.
 func TestBuildFunnel_NoQuestions(t *testing.T) {
-	f := BuildFunnel(nil, []LastBlockCount{{BlockID: "", Visits: 4}}, 4, 0)
+	f := BuildFunnel(nil, []LastBlockCount{{BlockID: "", Visits: 4}})
 
 	if len(f.Steps) != 0 {
 		t.Fatalf("шагов = %d, ждали 0", len(f.Steps))

@@ -12,13 +12,6 @@ import (
 	"github.com/ka-shmd/trierra/internal/postgres"
 )
 
-// Counts — просмотры формы и сколько из них закончились ответом. Конверсию считает
-// потребитель (кабинет): хранить третье производное число незачем.
-type Counts struct {
-	Total     int64
-	Submitted int64
-}
-
 // Repo — доступ к данным form_visits поверх sqlc. Методы принимают исполнителя
 // (postgres.DBTX: пул или транзакция); транзакций сам не открывает.
 type Repo struct{}
@@ -73,13 +66,4 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 		}
 	}
 	return out, nil
-}
-
-// CountVisits — просмотры и конверсия формы (счётчики кабинета).
-func (Repo) CountVisits(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Counts, error) {
-	row, err := postgres.New(db).CountFormVisits(ctx, formID)
-	if err != nil {
-		return Counts{}, fmt.Errorf("count form visits: %w", err)
-	}
-	return Counts{Total: row.Total, Submitted: row.Submitted}, nil
 }

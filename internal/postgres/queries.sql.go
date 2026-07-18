@@ -12,26 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countFormVisits = `-- name: CountFormVisits :one
-SELECT count(*) AS total,
-       count(*) FILTER (WHERE submitted) AS submitted
-FROM form_visits
-WHERE form_id = $1
-`
-
-type CountFormVisitsRow struct {
-	Total     int64
-	Submitted int64
-}
-
-// Просмотры и конверсия формы одним сканом по idx_form_visits_form.
-func (q *Queries) CountFormVisits(ctx context.Context, formID uuid.UUID) (CountFormVisitsRow, error) {
-	row := q.db.QueryRow(ctx, countFormVisits, formID)
-	var i CountFormVisitsRow
-	err := row.Scan(&i.Total, &i.Submitted)
-	return i, err
-}
-
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `

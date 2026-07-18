@@ -153,8 +153,9 @@ CREATE TABLE form_visits (
     meta            JSONB NOT NULL DEFAULT '{}', -- user_agent, referer, utm (без IP)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
--- Просмотры и конверсия формы берутся одним сканом: count(*) и count(*) FILTER (submitted).
-CREATE INDEX idx_form_visits_form ON form_visits (form_id);
+-- Покрывающий: счётчики карточки, конверсия и GROUP BY воронки идут index-only
+-- (замер: 6 буферов против 536 у индекса по одному form_id).
+CREATE INDEX idx_form_visits_form ON form_visits (form_id, last_block_id, submitted);
 
 -- Сессии в БД, а не JWT: мгновенный отзыв, «выйти со всех устройств»,
 -- нет проблемы ротации ключей. Хранится только SHA-256 от токена.

@@ -39,7 +39,6 @@ type upsertCall struct {
 type fakeStore struct {
 	upserts     []upsertCall
 	marked      []uuid.UUID
-	counts      Counts
 	byLastBlock []domain.LastBlockCount
 	upsetErr    error
 }
@@ -52,10 +51,6 @@ func (s *fakeStore) UpsertVisit(_ context.Context, _ postgres.DBTX, id, formID, 
 func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (int64, error) {
 	s.marked = append(s.marked, id)
 	return 0, nil
-}
-
-func (s *fakeStore) CountVisits(context.Context, postgres.DBTX, uuid.UUID) (Counts, error) {
-	return s.counts, nil
 }
 
 func (s *fakeStore) CountByLastBlock(context.Context, postgres.DBTX, uuid.UUID) ([]domain.LastBlockCount, error) {
@@ -283,13 +278,16 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	}
 }
 
-// Счётчики верха воронки берутся тем же запросом, что и числа на карточке
-// дашборда: расхождение между двумя экранами читалось бы как баг.
-func TestFunnel_TopCountsComeFromVisitCounters(t *testing.T) {
-	store := &fakeStore{
-		counts:      Counts{Total: 100, Submitted: 12},
-		byLastBlock: []domain.LastBlockCount{{BlockID: "", Visits: 20}},
-	}
+// Воронка обходится ОДНИМ счётным запросом: верх (визиты и конверсия) выводится из
+// той же разбивки, что и шаги. Тест держит и результат, и это свойство — второй
+// источник тех же чисел мог бы разойтись с шагами, а стоил бы лишний скан на каждом
+// открытии страницы.
+func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
+	store := &fakeStore{byLastBlock: []domain.LastBlockCount{
+		{BlockID: "", Visits: 20},                    // ушли, не начав
+		{BlockID: "b1", Visits: 68},                  // бросили на вопросе
+		{BlockID: "b1", Submitted: true, Visits: 12}, // отправили
+	}}
 	svc := NewService(nil, fakeForms{versions: []forms.Version{{
 		Number: 1,
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":false,"settings":{}}]}`),
@@ -300,12 +298,16 @@ func TestFunnel_TopCountsComeFromVisitCounters(t *testing.T) {
 		t.Fatalf("Funnel: %v", err)
 	}
 	if f.Visits != 100 || f.Submitted != 12 {
-		t.Errorf("верх воронки = %d/%d, ждали 100/12", f.Visits, f.Submitted)
+		t.Errorf("верх воронки = %d/%d, ждали 100/12 (выведено из разбивки)", f.Visits, f.Submitted)
 	}
 	if f.LeftBeforeFirst != 20 {
 		t.Errorf("LeftBeforeFirst = %d, ждали 20", f.LeftBeforeFirst)
 	}
 	if len(f.Steps) != 1 || f.Steps[0].Label != "Имя" {
-		t.Errorf("шаги = %+v, ждали один вопрос «Имя»", f.Steps)
+		t.Fatalf("шаги = %+v, ждали один вопрос «Имя»", f.Steps)
+	}
+	if f.Steps[0].Reached != 80 || f.Steps[0].DroppedHere != 68 {
+		t.Errorf("шаг = %d дошли / %d отвал, ждали 80/68 (отправивший не отвал)",
+			f.Steps[0].Reached, f.Steps[0].DroppedHere)
 	}
 }

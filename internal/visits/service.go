@@ -39,7 +39,6 @@ type Forms interface {
 type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
-	CountVisits(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Counts, error)
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error)
 }
 
@@ -59,7 +58,7 @@ type Visit struct {
 	UTM         map[string]string
 }
 
-// Service — запись визитов и чтение счётчиков.
+// Service — запись визитов и чтение воронки.
 type Service struct {
 	db    postgres.DBTX
 	forms Forms
@@ -138,17 +137,11 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 	return err
 }
 
-// Counts — просмотры и конверсия формы. Авторизацию доступа к форме делает
-// вызывающий (модуль forms знает про членство в воркспейсе).
-func (s *Service) Counts(ctx context.Context, formID uuid.UUID) (Counts, error) {
-	return s.repo.CountVisits(ctx, s.db, formID)
-}
-
 // Funnel — воронка формы для её автора: на каком вопросе уходят.
 //
 // Порядок: авторизация через forms.Versions (чужая или несуществующая форма → 404,
 // приватное не раскрывается — инвариант 1: id из URL правом доступа не является),
-// затем два счётных запроса и чистая свёртка в домене.
+// затем ОДИН счётный запрос и чистая свёртка в домене.
 //
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
@@ -171,16 +164,13 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.
 		schemas = append(schemas, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
 	}
 
+	// Один счётный запрос на всю воронку: верх (визиты и конверсия) выводится из той
+	// же разбивки, что и шаги, — см. BuildFunnel.
 	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID)
 	if err != nil {
 		return domain.Funnel{}, err
 	}
-	totals, err := s.repo.CountVisits(ctx, s.db, formID)
-	if err != nil {
-		return domain.Funnel{}, err
-	}
-
-	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts, int(totals.Total), int(totals.Submitted)), nil
+	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts), nil
 }
 
 // truncate режет строку по границе рун: обрезка по байтам оставила бы хвост битой
