@@ -10,6 +10,7 @@ import {
 } from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
 import { formatAnswer } from '../../features/submissions/answerFormat'
+import { FormStats } from '../../features/forms/FormStats'
 import { formatDate, pluralAnswers } from '../../shared/format'
 import { type Submission } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
@@ -67,9 +68,20 @@ function ResponsesPage() {
     <>
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         {!list.isPending && !list.isError && (
-          <p className="text-sm text-muted-foreground">
-            {total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}
-          </p>
+          <div className="text-sm text-muted-foreground">
+            <p>{total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}</p>
+            {/* Знаменатель к числу ответов: без него «12 ответов» не отличить от
+                «12 из 900 открывших» (фаза 8.5 шаг 6). */}
+            {form.data && form.data.status !== 'draft' && (
+              <p className="mt-0.5 text-xs">
+                <FormStats
+                  visits={form.data.visitCount}
+                  submittedVisits={form.data.visitSubmittedCount}
+                  submissions={total}
+                />
+              </p>
+            )}
+          </div>
         )}
         {total > 0 && formId && (
           // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).

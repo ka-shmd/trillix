@@ -44,6 +44,16 @@ type Form struct {
 	// таблицы ответов). Считают только читающие запросы (Get/List); у результатов
 	// мутаций 0 (как и PublishedVersion) — фронт берёт актуальное из Get/списка.
 	SubmissionCount int64
+	// Просмотры формы и сколько из них закончились ответом (фаза 8.5 шаг 6). Как и
+	// SubmissionCount, заполняют только читающие запросы. Конверсия = Submitted/Visit
+	// и считается на фронте; хранить третье производное число незачем.
+	//
+	// VisitSubmittedCount может расходиться с SubmissionCount: ответ, пришедший без
+	// визита (бикон не дошёл, страница из кэша прежней версии рендерера), попадает во
+	// второй и не попадает в первый. Поэтому «M ответов» на карточке — это
+	// SubmissionCount (то же число, что в таблице ответов), а процент — по визитам.
+	VisitCount          int64
+	VisitSubmittedCount int64
 	// Настройки закрытия формы (живые колонки, фаза 8.5 шаг 4; nil/пусто = не задано).
 	// Заполняют только Get/GetBySlug — страница настроек кабинета их читает; у
 	// результатов остальных запросов (список, мутации) nil, как и PublishedVersion.
@@ -246,6 +256,8 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		VisitCount:            row.VisitCount,
+		VisitSubmittedCount:   row.VisitSubmittedCount,
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
@@ -275,6 +287,8 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		VisitCount:            row.VisitCount,
+		VisitSubmittedCount:   row.VisitSubmittedCount,
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
@@ -305,6 +319,8 @@ func (Repo) ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UU
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
 			SubmissionCount:       r.SubmissionCount,
+			VisitCount:            r.VisitCount,
+			VisitSubmittedCount:   r.VisitSubmittedCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}
@@ -336,6 +352,8 @@ func (Repo) ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uu
 			PublishedVersion:      ptrInt32(r.PublishedVersion),
 			HasUnpublishedChanges: r.HasUnpublishedChanges,
 			SubmissionCount:       r.SubmissionCount,
+			VisitCount:            r.VisitCount,
+			VisitSubmittedCount:   r.VisitSubmittedCount,
 			CreatedAt:             r.CreatedAt.Time,
 			UpdatedAt:             r.UpdatedAt.Time,
 		}

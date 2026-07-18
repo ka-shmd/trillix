@@ -44,7 +44,7 @@ func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
 		Status: domain.FormStatusPublished,
 		// Поле из будущего формата: DisallowUnknownFields такую схему отвергнет.
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[],"fieldFromFuture":"x"}`),
-	}}, nil)
+	}}, nil, nil)
 
 	err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{})
 	if err == nil {

@@ -97,6 +97,12 @@ type formResponse struct {
 	// submissionCount — число ответов формы (счётчик на карточке). Точен на
 	// GET/список; у ответов мутаций всегда 0.
 	SubmissionCount int64 `json:"submissionCount"`
+	// visitCount / visitSubmittedCount — просмотры формы и сколько из них
+	// закончились ответом (фаза 8.5 шаг 6). Конверсию считает фронт по этой паре;
+	// делить submissionCount на visitCount нельзя — это разные множества (ADR §10).
+	// Точны на GET/список; у ответов мутаций всегда 0.
+	VisitCount          int64 `json:"visitCount"`
+	VisitSubmittedCount int64 `json:"visitSubmittedCount"`
 }
 
 // formDetailResponse — GET /forms/{id}: метаданные + черновик схемы + живые
@@ -153,6 +159,8 @@ func toFormResponse(f Form) formResponse {
 		PublishedVersion:      f.PublishedVersion,
 		HasUnpublishedChanges: f.HasUnpublishedChanges,
 		SubmissionCount:       f.SubmissionCount,
+		VisitCount:            f.VisitCount,
+		VisitSubmittedCount:   f.VisitSubmittedCount,
 	}
 	if f.PublishedVersionID != nil {
 		id := f.PublishedVersionID.String()

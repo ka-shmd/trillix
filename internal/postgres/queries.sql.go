@@ -25,6 +25,57 @@ func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64
 	return count, err
 }
 
+const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
+SELECT last_block_id, submitted, count(*) AS visits
+FROM form_visits
+WHERE form_id = $1
+GROUP BY last_block_id, submitted
+`
+
+type CountVisitsByLastBlockRow struct {
+	LastBlockID pgtype.Text
+	Submitted   bool
+	Visits      int64
+}
+
+// Раскладка визитов по самой дальней точке — сырьё воронки (фаза 8.5 шаг 6б).
+//
+// Здесь агрегация в SQL — и это НЕ противоречит решению шага 3 («сводку считает Go,
+// а не SQL»), а его обратная сторона. Там на SQL пришлось бы переписать семантику
+// ответа (что значит «yes», что значит массив опций) — третью копию правил после Go
+// и Zod. Здесь семантики нет вообще: это подсчёт строк по одной колонке, а результат
+// размером в число вопросов, а не в число визитов. Порядок и подписи шагов всё равно
+// достраивает Go по модели вопросов (domain.QuestionOrder).
+//
+// NULL last_block_id — законная строка: «открыл и ушёл, не тронув ни одного вопроса».
+// Она не отбрасывается, а становится верхом воронки, поэтому GROUP BY, а не WHERE.
+//
+// Группируем ТАКЖЕ по submitted, и это несущая деталь, а не лишнее измерение:
+// отправивший форму тоже имеет last_block_id — того поля, которого коснулся
+// последним. Без разделения все дошедшие до конца попали бы в «отвалились на
+// последнем вопросе», и воронка обвиняла бы вопрос, который на самом деле работает.
+// «Дошёл до вопроса» считается по всем визитам, «отвалился здесь» — только по
+// неотправившим.
+func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) ([]CountVisitsByLastBlockRow, error) {
+	rows, err := q.db.Query(ctx, countVisitsByLastBlock, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountVisitsByLastBlockRow
+	for rows.Next() {
+		var i CountVisitsByLastBlockRow
+		if err := rows.Scan(&i.LastBlockID, &i.Submitted, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createForm = `-- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)
 VALUES ($1, $2, $3, $4)
@@ -274,6 +325,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
@@ -293,6 +351,8 @@ type GetFormRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
@@ -318,6 +378,8 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.VisitCount,
+		&i.VisitSubmittedCount,
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
@@ -332,6 +394,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
@@ -351,6 +420,8 @@ type GetFormBySlugRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
@@ -378,6 +449,8 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.VisitCount,
+		&i.VisitSubmittedCount,
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
@@ -662,6 +735,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_vers
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -689,6 +769,8 @@ type ListFormsAfterRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -720,6 +802,8 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
 			&i.SubmissionCount,
+			&i.VisitCount,
+			&i.VisitSubmittedCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -738,6 +822,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_vers
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -762,6 +853,8 @@ type ListFormsFirstPageRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -788,6 +881,8 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
 			&i.SubmissionCount,
+			&i.VisitCount,
+			&i.VisitSubmittedCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -950,6 +1045,28 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
 	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
 	return err
+}
+
+const markVisitSubmitted = `-- name: MarkVisitSubmitted :execrows
+UPDATE form_visits SET submitted = true
+WHERE id = $1 AND form_id = $2
+`
+
+type MarkVisitSubmittedParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Отметка конверсии при приёме ответа. Ограничено form_id: визит чужой формы по
+// угаданному id не пометить. 0 строк — не ошибка: визита нет (бикон потерялся,
+// страница из кэша старой версии, подделанный visit_id) → ответ всё равно принят,
+// аналитика не имеет права его отклонить.
+func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmittedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markVisitSubmitted, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const nextFormVersion = `-- name: NextFormVersion :one
@@ -1254,4 +1371,56 @@ func (q *Queries) UpdateFormTitle(ctx context.Context, arg UpdateFormTitleParams
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const upsertFormVisit = `-- name: UpsertFormVisit :exec
+
+INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (id) DO UPDATE
+SET last_block_id = EXCLUDED.last_block_id,
+    seq           = EXCLUDED.seq
+WHERE form_visits.form_id = EXCLUDED.form_id
+  AND form_visits.seq < EXCLUDED.seq
+`
+
+type UpsertFormVisitParams struct {
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	LastBlockID   pgtype.Text
+	Seq           int16
+	Meta          []byte
+}
+
+// Запросы модуля visits. Схема — migrations/0008_form_visits. Генерация:
+// `make sqlc` (общий пакет internal/postgres).
+// Запись визита биконом рендерера. id генерирует клиент (UUIDv7), поэтому второй
+// бикон того же визита упирается в PK и становится UPDATE'ом.
+//
+// Обновляются РОВНО два поля. Не обновляются намеренно:
+//
+//	submitted       — его ставит только приём ответа; иначе поздний бикон затирал бы
+//	                  уже засчитанную конверсию обратно в false;
+//	form_version_id — визит принадлежит той версии, на которой открыт; переиздание
+//	                  формы посреди сессии не должно переклеивать его на новую;
+//	meta, created_at — контекст первого касания, а не последнего.
+//
+// Два условия в WHERE — не перестраховка, каждое закрывает свой сценарий:
+//
+//	form_id — id визита выбирает клиент, а UUIDv7 угадываем по временно́му префиксу:
+//	          без этого условия ручкой одной формы правится строка другой;
+//	seq     — sendBeacon не гарантирует порядок доставки, а visibilitychange шлёт
+//	          бикон на каждое переключение вкладки, поэтому «поздний» ранний бикон
+//	          без этого условия отбрасывал бы визит назад по воронке.
+func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams) error {
+	_, err := q.db.Exec(ctx, upsertFormVisit,
+		arg.ID,
+		arg.FormID,
+		arg.FormVersionID,
+		arg.LastBlockID,
+		arg.Seq,
+		arg.Meta,
+	)
+	return err
 }

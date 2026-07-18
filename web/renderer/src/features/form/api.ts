@@ -77,6 +77,8 @@ export interface SubmitBody {
   submissionId: string
   token: string
   answers: Answers
+  /** Визит, из которого пришёл ответ (фаза 8.5 шаг 6) — отсюда точная конверсия. */
+  visitId: string
 }
 
 export async function submitAnswers(slug: string, body: SubmitBody): Promise<SubmitOutcome> {
@@ -88,6 +90,7 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
       token: body.token,
       answers: body.answers,
       website: '', // honeypot: у настоящего респондента всегда пусто
+      visit_id: body.visitId,
     }),
   })
   if (res.status === 201) return { status: 'ok' }

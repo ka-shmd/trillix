@@ -28,6 +28,12 @@ export const formSchema = z.object({
   // Число ответов формы (счётчик на карточке). Точен на GET/списке; у ответов
   // мутаций всегда 0 (карточка обновляется из списка).
   submissionCount: z.number().int(),
+  // Просмотры формы и сколько из них закончились ответом (фаза 8.5 шаг 6).
+  // Конверсия = visitSubmittedCount / visitCount; делить submissionCount на
+  // visitCount нельзя — это разные множества (ответ мог прийти без визита, ADR §10).
+  // Точны на GET/списке; у ответов мутаций 0.
+  visitCount: z.number().int(),
+  visitSubmittedCount: z.number().int(),
 })
 
 export type Form = z.infer<typeof formSchema>

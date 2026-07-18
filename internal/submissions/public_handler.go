@@ -67,7 +67,8 @@ func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte
 }
 
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
-	mux.Handle("POST /public/v1/forms/{slug}/submissions", h.rateLimitByIP(http.HandlerFunc(h.submit)))
+	limited := httpserver.RateLimitByIP(h.limiter, h.trustedProxy, "слишком много отправок")
+	mux.Handle("POST /public/v1/forms/{slug}/submissions", limited(http.HandlerFunc(h.submit)))
 }
 
 // submitRequest — тело POST. submission_id генерирует клиент (UUIDv7, идемпотентность);
@@ -78,6 +79,10 @@ type submitRequest struct {
 	Token        string                     `json:"token"`
 	Answers      map[string]json.RawMessage `json:"answers"`
 	Website      string                     `json:"website"` // honeypot
+	// VisitID — визит, из которого пришёл ответ (фаза 8.5 шаг 6). НЕОБЯЗАТЕЛЬНОЕ:
+	// пусто → ответ принимается как раньше. Иначе страница, отданная из кэша до
+	// выкатки биконов, перестала бы отправляться.
+	VisitID string `json:"visit_id"`
 }
 
 type submitResponse struct {
@@ -125,20 +130,16 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := Meta{UserAgent: r.UserAgent(), Referer: r.Referer()}
+	// Неразбираемый visit_id не отклоняет ответ: аналитика не повод потерять данные
+	// респондента. uuid.Nil = «визита нет», отметка конверсии просто не делается.
+	if req.VisitID != "" {
+		if visitID, err := uuid.Parse(req.VisitID); err == nil {
+			meta.VisitID = visitID
+		}
+	}
 	if err := h.svc.Submit(r.Context(), r.PathValue("slug"), id, req.Answers, meta); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, submitResponse{ID: id.String()})
-}
-
-func (h *PublicHandler) rateLimitByIP(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !h.limiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
-			w.Header().Set("Retry-After", "60")
-			httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много отправок", domain.ErrRateLimited))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ka-shmd/trierra/internal/postgres"
 	"github.com/ka-shmd/trierra/internal/ratelimit"
 	"github.com/ka-shmd/trierra/internal/submissions"
+	"github.com/ka-shmd/trierra/internal/visits"
 	"github.com/ka-shmd/trierra/internal/workspaces"
 )
 
@@ -40,6 +41,15 @@ const (
 	// человек отвечают с одного IP, но режет автоматический перебор.
 	submitRatePerSec = 1.0 / 3.0
 	submitBurst      = 20
+
+	// Жёсткий лимит на POST визита по IP (своё ведро, ARCHITECTURE §4.6). Щедрее
+	// приёма ответа: один человек за визит шлёт минимум два бикона, а
+	// visibilitychange добавляет по одному на каждое переключение вкладки — ведро
+	// уровня submit резало бы обычное поведение. Накрутку просмотров это не
+	// исключает (ручка публичная на запись), а ограничивает: ущерб — неверное число
+	// на своём же дашборде, не данные.
+	visitRatePerSec = 1.0
+	visitBurst      = 60
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -139,14 +149,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
+	visitsSvc := visits.NewService(pool, formsSvc, visits.Repo{})
+	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
+	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
+
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, submissions.Repo{})
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, submissions.Repo{})
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log,
 		authHandler.Routes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
-		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes)
+		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
+		visitsPublic.Routes, visitsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

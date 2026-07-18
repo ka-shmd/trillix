@@ -179,20 +179,11 @@ func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 	})
 }
 
-// rateLimit — middleware жёсткого лимита по IP заданным ведром. Ключ — честный IP
-// клиента (см. httpserver.ClientIP). msg уходит в тело 429 после стандартного
-// префикса ErrRateLimited.
+// rateLimit — жёсткий лимит по IP заданным ведром. Обёртка общая
+// (httpserver.RateLimitByIP) — здесь только подстановка trustedProxy, чтобы не
+// таскать его по всем строкам Routes.
 func (h *Handler) rateLimit(limiter RateLimiter, msg string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !limiter.Allow(httpserver.ClientIP(r, h.trustedProxy)) {
-				w.Header().Set("Retry-After", "60")
-				httpserver.WriteError(w, r, fmt.Errorf("%w: %s", domain.ErrRateLimited, msg))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
+	return httpserver.RateLimitByIP(limiter, h.trustedProxy, msg)
 }
 
 func decodeCredentials(w http.ResponseWriter, r *http.Request) (credentialsRequest, bool) {
