@@ -114,10 +114,12 @@ test('регистрация → форма → публикация → отв�
   await expect(form.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
   await mobile.close()
 
-  // 7. Ответ виден в таблице кабинета. Заголовок «Ответы · <name>» подтверждает, что
+  // 7. Ответ виден в таблице кабинета. Название формы в шапке подтверждает, что
   // переименование заголовка долетело до сервера (регресс гонки блокировки из шага 3).
+  // Шапка общая на три экрана формы и живёт в оболочке `_manage` (фаза 8.5, шаг 3):
+  // «Ответы» здесь — таб-ссылка, а не часть заголовка.
   await page.goto(`/forms/${formId}/responses`)
-  await expect(page.getByRole('heading', { name: `Ответы · ${formTitle}` })).toBeVisible()
+  await expect(page.getByRole('heading', { name: formTitle })).toBeVisible()
   // В таблице только версия и дата — сам ответ смотрим в диалоге полного ответа.
   await page.getByRole('button', { name: 'Открыть' }).first().click()
   const dialog = page.getByRole('dialog')
