@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import { FORMS_SORT_LABELS, formsSortSchema, type FormsSort } from '../../entities/form'
 import { Input } from '@/components/ui/input'
@@ -31,11 +31,20 @@ export function FormsToolbar({
     setDraft(q)
   }
 
+  // Колбэк — через ref, а не в зависимостях эффекта: таймер обязан зависеть только
+  // от набранного текста. Стоит вызывающему отдать нестабильную функцию (или
+  // useNavigate однажды перестать быть стабильным), и эффект перезапускался бы на
+  // каждом рендере, сбрасывая отсчёт, — debounce тихо перестал бы работать.
+  const onSearchChangeRef = useRef(onSearchChange)
+  useEffect(() => {
+    onSearchChangeRef.current = onSearchChange
+  })
+
   useEffect(() => {
     if (draft === q) return
-    const timer = setTimeout(() => onSearchChange(draft), 300)
+    const timer = setTimeout(() => onSearchChangeRef.current(draft), 300)
     return () => clearTimeout(timer)
-  }, [draft, q, onSearchChange])
+  }, [draft, q])
 
   return (
     <div className="mb-6 flex flex-wrap items-center gap-3">
@@ -73,7 +82,13 @@ export function FormsToolbar({
         <select
           id="forms-sort"
           value={sort}
-          onChange={(e) => onSortChange(formsSortSchema.parse(e.target.value))}
+          onChange={(e) => {
+            // safeParse, а не parse: значения свои, но бросать исключение из
+            // обработчика события — значит ронять экран целиком там, где
+            // достаточно ничего не делать.
+            const parsed = formsSortSchema.safeParse(e.target.value)
+            if (parsed.success) onSortChange(parsed.data)
+          }}
           className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {formsSortSchema.options.map((value) => (

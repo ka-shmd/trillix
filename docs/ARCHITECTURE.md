@@ -326,7 +326,7 @@ GET    /auth/me                       текущий пользователь
 
 GET    /workspaces                    список воркспейсов текущего пользователя (в MVP — один личный)
 
-GET    /forms                         список форм воркспейса (курсорная пагинация)
+GET    /forms                         список форм воркспейса (курсорная пагинация, поиск q, сортировка sort)
 POST   /forms                         создать форму
 GET    /forms/{id}                    форма + draft_schema
 GET    /forms/lookup?slug={slug}      то же по slug (URL кабинета адресует форму slug'ом, как рендерер /r/{slug}; slug в query — путь by-slug/{slug} конфликтует с {id}/submissions)

@@ -781,6 +781,61 @@ func TestForms_Search(t *testing.T) {
 	}
 }
 
+// Счётчики карточки (ответы, просмотры, конверсия) приезжают из того же запроса
+// списка. Тест заведён задним числом: шаг 8 переписал их вычисление со скалярных
+// подзапросов на LATERAL, и выяснилось, что числа не проверялись ничем — ошибка
+// в них прошла бы молча и осела бы на дашборде владельца.
+func TestForms_ListCounters(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "counters@example.com")
+
+	form := createForm(t, c, srv, "Считаем")
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	insertSubmissions(t, form.ID, 3)
+	// Три визита, из них два закончились ответом.
+	insertVisits(t, form.ID, 3, 2)
+
+	// Вторая форма без активности: нули не должны «протекать» с соседней строки —
+	// именно это ломается, если LATERAL однажды потеряет условие по form_id.
+	quiet := createForm(t, c, srv, "Тихая")
+
+	list := listForms(t, c, srv, "")
+	byID := make(map[string]formDTO, len(list.Forms))
+	for _, f := range list.Forms {
+		byID[f.ID] = f
+	}
+
+	got := byID[form.ID]
+	if got.SubmissionCount != 3 || got.VisitCount != 3 || got.VisitSubmittedCount != 2 {
+		t.Fatalf("счётчики активной формы = ответы %d, визиты %d, из них с ответом %d; ожидалось 3/3/2",
+			got.SubmissionCount, got.VisitCount, got.VisitSubmittedCount)
+	}
+
+	idle := byID[quiet.ID]
+	if idle.SubmissionCount != 0 || idle.VisitCount != 0 || idle.VisitSubmittedCount != 0 {
+		t.Fatalf("у формы без активности счётчики = %d/%d/%d, ожидались нули",
+			idle.SubmissionCount, idle.VisitCount, idle.VisitSubmittedCount)
+	}
+}
+
+// insertVisits кладёт n визитов формы, из них submitted — закончившихся ответом.
+func insertVisits(t *testing.T, formID string, n, submitted int) {
+	t.Helper()
+	var versionID string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT published_version_id::text FROM forms WHERE id = $1`, formID).Scan(&versionID); err != nil {
+		t.Fatalf("published_version_id формы %s: %v", formID, err)
+	}
+	for i := 0; i < n; i++ {
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO form_visits (id, form_id, form_version_id, submitted) VALUES ($1, $2, $3, $4)`,
+			domain.NewID(), formID, versionID, i < submitted); err != nil {
+			t.Fatalf("вставка визита: %v", err)
+		}
+	}
+}
+
 // Анти-IDOR: поиск — новый способ адресовать формы, и чужие через него не видны.
 func TestForms_Search_DoesNotLeakOtherWorkspace(t *testing.T) {
 	resetDB(t)
@@ -829,6 +884,9 @@ type formDTO struct {
 	PublishedVersion      *int    `json:"publishedVersion"`
 	PublishedVersionID    *string `json:"publishedVersionId"`
 	HasUnpublishedChanges bool    `json:"hasUnpublishedChanges"`
+	SubmissionCount       int64   `json:"submissionCount"`
+	VisitCount            int64   `json:"visitCount"`
+	VisitSubmittedCount   int64   `json:"visitSubmittedCount"`
 }
 
 type formDetailDTO struct {

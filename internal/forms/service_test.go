@@ -829,6 +829,25 @@ func TestParseSortOrder(t *testing.T) {
 	}
 }
 
+// Длина строки поиска ограничена на бэке: query-строку не стережёт MaxBytesReader
+// (он про тело запроса), а инвариант 3 требует валидировать любой ввод.
+func TestList_SearchTooLong_IsValidationError(t *testing.T) {
+	store := &fakeStore{personalWS: domain.NewID()}
+	svc := newTestService(store)
+
+	// Ровно на границе — проходит; на символ длиннее — 422.
+	atLimit := strings.Repeat("я", MaxSearchLen)
+	if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{Search: atLimit}); err != nil {
+		t.Fatalf("поиск длиной ровно %d символов должен проходить: %v", MaxSearchLen, err)
+	}
+
+	tooLong := strings.Repeat("я", MaxSearchLen+1)
+	_, err := svc.List(context.Background(), domain.NewID(), ListOptions{Search: tooLong})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась domain.ErrValidation", err)
+	}
+}
+
 // Спецсимволы LIKE в пользовательском запросе обезвреживаются: иначе «50%» ищет
 // что угодно, а «_» подходит любому символу.
 func TestList_SearchEscapesLikeWildcards(t *testing.T) {

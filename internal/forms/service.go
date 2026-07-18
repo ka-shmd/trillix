@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,6 +28,13 @@ const (
 	// клиентом limit зажимается в [1, MaxPageLimit]; пустой → Default.
 	DefaultPageLimit = 50
 	MaxPageLimit     = 100
+
+	// MaxSearchLen — потолок строки поиска. Названия форм ограничены 200 символами
+	// (maxTitleLen), поэтому запрос длиннее не может ничего найти по определению.
+	// Проверка не «на всякий случай»: query-строку не стережёт MaxBytesReader (он
+	// про тело), и без этого лимита в ILIKE уезжал шаблон в десятки килобайт —
+	// инвариант 3 требует валидировать любой пользовательский ввод на бэке.
+	MaxSearchLen = maxTitleLen
 )
 
 // Store — доступ к данным forms, объявленный на стороне потребителя (сервиса).
@@ -212,6 +220,11 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 		return Page{}, fmt.Errorf("%w: курсор выдан для другой сортировки", domain.ErrValidation)
 	}
 
+	search := strings.TrimSpace(opts.Search)
+	if utf8.RuneCountInString(search) > MaxSearchLen {
+		return Page{}, fmt.Errorf("%w: строка поиска длиннее %d символов", domain.ErrValidation, MaxSearchLen)
+	}
+
 	wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
 	if err != nil {
 		return Page{}, fmt.Errorf("resolve workspace: %w", err)
@@ -220,7 +233,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в
 	// ответ не отдаём, а превращаем в курсор.
 	fetch := int32(limit + 1)
-	rows, err := s.repo.ListFormsPage(ctx, s.db, wsID, string(sort), escapeLike(strings.TrimSpace(opts.Search)), opts.After, fetch)
+	rows, err := s.repo.ListFormsPage(ctx, s.db, wsID, string(sort), escapeLike(search), opts.After, fetch)
 	if err != nil {
 		return Page{}, err
 	}

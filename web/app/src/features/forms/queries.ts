@@ -34,9 +34,12 @@ import {
 // что заодно снимает риск уехать курсором прежней сортировки (сервер такой курсор
 // отвергает).
 export function formsListQueryOptions(params: { q: string; sort: FormsSort }) {
+  // Пробелы по краям сервер всё равно срезает, поэтому нормализуем и здесь: иначе
+  // « анкета » и «анкета» — две записи кэша с заведомо одинаковым содержимым.
+  const q = params.q.trim()
   return infiniteQueryOptions({
-    queryKey: formKeys.listWith(params),
-    queryFn: ({ pageParam }) => listForms(pageParam, { q: params.q, sort: params.sort }),
+    queryKey: formKeys.listWith({ q, sort: params.sort }),
+    queryFn: ({ pageParam }) => listForms(pageParam, { q, sort: params.sort }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })
