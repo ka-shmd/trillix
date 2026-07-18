@@ -30,6 +30,9 @@ test('регистрация → форма → публикация → отв�
   const formTitle = `Опрос ${uniq}`
   const question = 'Ваше имя'
   const answer = `Иван ${uniq}`
+  const scaleQuestion = 'Насколько удобно'
+  const scaleAnswer = '4' // деление шкалы: дефолтный диапазон 1–5 (DEFAULT_SCALE_MIN/MAX)
+  const consentText = 'Согласен на обработку данных'
 
   // 1. Регистрация (создаёт сессию, cookie Secure по https). После успеха приложение
   // само уводит на дашборд — дожидаемся навигации, а не гоним goto в гонку с POST.
@@ -67,6 +70,25 @@ test('регистрация → форма → публикация → отв�
     .locator('input[type="file"]')
     .setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG_2x2 })
   await expect(page.locator('img.rf-image')).toHaveAttribute('src', /\/media\//, { timeout: 15000 })
+
+  // 3c. Шкала и согласие (фаза 8.5, шаг 2) — через тот же диалог типов, а не слэш-меню.
+  // ЗАЧЕМ ЗДЕСЬ: DoD фазы требует, чтобы каждый новый тип прошёл полный цикл
+  // (билдер → публикация → ответ → таблица → CSV). Go- и vitest-тесты держат контракт
+  // обеих сторон, но НЕ проверяют, что контрол вообще отрисуется в прод-сборке: у
+  // шкалы это ряд кнопок, у согласия — галочка, и оба берут вид из общего fields.css.
+  // Класс бага «форма без стилей» ловится именно так.
+  await page.getByRole('button', { name: '+ Добавить блок' }).click()
+  await page.getByRole('button', { name: 'Шкала', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).click()
+  // Плейсхолдер вопроса общий с первым блоком — берём последний добавленный.
+  await page.getByPlaceholder('Введите текст вопроса').last().fill(scaleQuestion)
+
+  // У согласия свой плейсхолдер: текст согласия правится строкой заголовка, потому
+  // что он и есть label блока (галочка слева — как у респондента).
+  await page.getByRole('button', { name: '+ Добавить блок' }).click()
+  await page.getByRole('button', { name: 'Согласие', exact: true }).click()
+  await page.getByRole('button', { name: 'Добавить', exact: true }).click()
+  await page.getByPlaceholder('Текст согласия').fill(consentText)
 
   // 4. Публикация: кнопка активна, только когда автосейв догнал редактор.
   const publish = page.getByRole('button', { name: 'Опубликовать' })
@@ -107,6 +129,22 @@ test('регистрация → форма → публикация → отв�
   expect(submitBg).not.toBe('transparent')
 
   await field.fill(answer)
+
+  // Шкала: настоящие <button> с aria-pressed (не radio), сгруппированы role="group"
+  // с aria-label вопроса. Нажатие сразу даёт значение — проверяем, что деление
+  // действительно встало выбранным, иначе в ответ уехала бы пустая строка.
+  const scale = form.getByRole('group', { name: scaleQuestion })
+  await scale.getByRole('button', { name: scaleAnswer, exact: true }).click()
+  await expect(scale.getByRole('button', { name: scaleAnswer, exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+
+  // Согласие обязательно у нового блока (флаг required включён по умолчанию),
+  // поэтому без галочки отправка не прошла бы — это же и проверка, что чекбокс жив.
+  const consent = form.getByRole('checkbox')
+  await consent.check()
+
   // Антиспам (фаза 5): отправка быстрее DefaultMinFillTime (3с) от выдачи формы
   // отклоняется как бот. Настоящий респондент столько и заполняет — выжидаем.
   await form.waitForTimeout(3500)
@@ -124,6 +162,10 @@ test('регистрация → форма → публикация → отв�
   await page.getByRole('button', { name: 'Открыть' }).first().click()
   const dialog = page.getByRole('dialog')
   await expect(dialog.getByText(answer)).toBeVisible()
+  // Значение шкалы в диалоге — точное совпадение: `toContain('4')` по CSV поймал бы
+  // любую четвёрку в дате ответа и ничего бы не доказывал.
+  await expect(dialog.getByText(scaleQuestion)).toBeVisible()
+  await expect(dialog.getByText(scaleAnswer, { exact: true })).toBeVisible()
   await page.keyboard.press('Escape') // закрыть диалог: оверлей перекрывает ссылку экспорта
   await expect(page.getByRole('dialog')).toBeHidden()
 
@@ -134,4 +176,11 @@ test('регистрация → форма → публикация → отв�
   const csv = readFileSync(await download.path(), 'utf8')
   expect(csv).toContain(question) // колонка вопроса
   expect(csv).toContain(answer) // значение ответа
+
+  // Новые типы доехали до выгрузки колонками и значениями (замыкает цикл DoD).
+  // Согласие в CSV — человеческое «Да», а не внутреннее «yes»: внутренняя кодировка
+  // владельцу не показывается (domain/csv.go).
+  expect(csv).toContain(scaleQuestion)
+  expect(csv).toContain(consentText)
+  expect(csv).toContain('Да')
 })
