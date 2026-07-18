@@ -3,6 +3,13 @@ import { Search, X } from 'lucide-react'
 import { FORMS_SORT_LABELS, formsSortSchema, type FormsSort } from '../../entities/form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // Панель дашборда: поиск по названию и порядок списка. Оба значения живут в
 // адресной строке (владеет ими маршрут) — сюда приходят пропсами.
@@ -77,26 +84,29 @@ export function FormsToolbar({
         <Label htmlFor="forms-sort" className="shrink-0 text-sm text-muted-foreground">
           Сортировка
         </Label>
-        {/* Нативный select: shadcn-версия тянет @radix-ui/react-select — новая
-            зависимость, список заморожен (web/CLAUDE.md). */}
-        <select
-          id="forms-sort"
+        {/* shadcn Select поверх примитива из уже установленного зонтичного пакета
+            radix-ui — новой зависимости не требует (там же живут Dialog,
+            DropdownMenu и остальные вендоренные компоненты кабинета). */}
+        <Select
           value={sort}
-          onChange={(e) => {
+          onValueChange={(value) => {
             // safeParse, а не parse: значения свои, но бросать исключение из
-            // обработчика события — значит ронять экран целиком там, где
-            // достаточно ничего не делать.
-            const parsed = formsSortSchema.safeParse(e.target.value)
+            // обработчика — значит ронять экран там, где достаточно ничего не делать.
+            const parsed = formsSortSchema.safeParse(value)
             if (parsed.success) onSortChange(parsed.data)
           }}
-          className="h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          {formsSortSchema.options.map((value) => (
-            <option key={value} value={value}>
-              {FORMS_SORT_LABELS[value]}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger id="forms-sort" className="w-52">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {formsSortSchema.options.map((value) => (
+              <SelectItem key={value} value={value}>
+                {FORMS_SORT_LABELS[value]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </div>
   )
