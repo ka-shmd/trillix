@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
+import { Asterisk, GripVertical, Plus, Text, Trash2, X } from 'lucide-react'
 import {
   type Block,
   type BlockType,
@@ -68,6 +75,10 @@ export function BlockRow({
   const labelRef = useRef<HTMLTextAreaElement>(null)
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
+  // Описание вопроса: раскрыто ли поле. Непустое описание раскрыто с монтирования.
+  // Триггер раскрытия живёт в левом кластере значков (absolute) — см. коммент там.
+  const descRef = useRef<HTMLTextAreaElement>(null)
+  const [descOpen, setDescOpen] = useState((block.description ?? '').trim().length > 0)
   // Плейсхолдер заголовка виден только у активной (в фокусе) строки: неактивный
   // пустой блок ничего не показывает.
   const [labelFocused, setLabelFocused] = useState(false)
@@ -137,6 +148,13 @@ export function BlockRow({
     }
   }
 
+  // Раскрыть поле описания и поставить в него каретку (rAF — textarea появляется
+  // только на следующий рендер). Уже раскрытое просто фокусируем.
+  function openDescription() {
+    setDescOpen(true)
+    requestAnimationFrame(() => descRef.current?.focus())
+  }
+
   function pickType(type: BlockType) {
     changeBlockType(block.id, type)
     setSlashOpen(false)
@@ -159,7 +177,17 @@ export function BlockRow({
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Всегда видимы; h-8 + items-center и
           leading-8 у текста → значки на уровне строки. Порядок: удалить, добавить,
-          перетащить. */}
+          описание, перетащить (ручка последняя = ближайшая к тексту).
+
+          Кластер absolute и проявляется через opacity — высоту строки он не меняет
+          НИКОГДА, и это здесь не косметика, а требование корректности. Контрол,
+          который появляется по hover/фокусу и при этом занимает место в потоке,
+          схлопывается синхронно на mousedown (фокус уходит из блока → блок теряет
+          :focus-within → высота падает): всё, что ниже, уезжает вверх, mouseup
+          приходит уже мимо цели, и браузер диспатчит click на общего предка —
+          обработчик кнопки не срабатывает. Именно так «+ Описание», стоявшее в
+          потоке под заголовком, съедало первый клик по «+ Добавить блок» (TD-22).
+          Любой новый reveal-on-hover контрол блока — только сюда. */}
       <div className="absolute right-full top-1.5 mr-1 flex h-8 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
         <button
           type="button"
@@ -177,6 +205,19 @@ export function BlockRow({
         >
           <Plus className="size-4" />
         </button>
+        {/* Описание — только у отвечаемых блоков (неотвечаемый text рендерится
+            статикой, описания не имеет), как и RequiredToggle справа. */}
+        {isContent ? null : (
+          <button
+            type="button"
+            onClick={openDescription}
+            aria-label="Описание вопроса"
+            title="Описание вопроса"
+            className={iconBtn}
+          >
+            <Text className="size-4" />
+          </button>
+        )}
         <button
           type="button"
           {...attributes}
@@ -246,8 +287,15 @@ export function BlockRow({
             </div>
 
             {/* Описание вопроса (block.description) — только у отвечаемых блоков:
-                неотвечаемый text описания не имеет (рендерится статикой). */}
-            {isContent ? null : <DescriptionField block={block} />}
+                неотвечаемый text описания не имеет (рендерится статикой). Раскрывается
+                значком в левом кластере; пустое при потере фокуса сворачивается. */}
+            {isContent || !descOpen ? null : (
+              <DescriptionField
+                block={block}
+                inputRef={descRef}
+                onEmptyBlur={() => setDescOpen(false)}
+              />
+            )}
 
             {/* Text (неотвечаемый) — только абзац. Choice — варианты. Шкала — деления
                 и диапазон. Согласие — ничего: галочка и текст уже в строке выше.
@@ -301,44 +349,38 @@ function RequiredToggle({ block }: { block: Block }) {
 
 // DescriptionField — редактируемое описание вопроса (block.description). Рендерер
 // показывает его как rf-desc под подписью (FieldShell) — тот же вид и в редакторе
-// (WYSIWYG, класс rf-desc из fields.css). Пустое описание не шумит: показываем
-// кнопку «+ Описание» (на hover/фокусе строки), клик раскрывает поле; с непустым —
-// поле видно всегда. Пустое при потере фокуса сворачивается обратно к кнопке.
-function DescriptionField({ block }: { block: Block }) {
+// (WYSIWYG, класс rf-desc из fields.css).
+//
+// Раскрытием владеет BlockRow, а не это поле: триггер («Описание вопроса») стоит в
+// левом absolute-кластере значков, чтобы появление контрола не двигало высоту
+// строки. Прежняя кнопка «+ Описание» жила прямо здесь, в потоке, и схлопывалась на
+// mousedown — из-за чего терялся клик по элементам ниже (TD-22, разбор — в комменте
+// у кластера). Сюда контролы, зависящие от hover/фокуса, больше не добавляем.
+// Пустое описание при потере фокуса сворачивается обратно (onEmptyBlur).
+function DescriptionField({
+  block,
+  inputRef,
+  onEmptyBlur,
+}: {
+  block: Block
+  inputRef: RefObject<HTMLTextAreaElement | null>
+  onEmptyBlur: () => void
+}) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const ref = useRef<HTMLTextAreaElement>(null)
   const desc = block.description ?? ''
-  const [open, setOpen] = useState(desc.trim().length > 0)
 
   useEffect(() => {
-    if (open) autosize(ref.current)
-  }, [desc, open])
+    autosize(inputRef.current)
+  }, [desc, inputRef])
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          setOpen(true)
-          requestAnimationFrame(() => ref.current?.focus())
-        }}
-        // Не opacity-0, а hidden: прозрачная кнопка продолжала занимать строку, и
-        // под неактивным блоком висел пустой отступ. display:none заодно убирает её
-        // из таб-порядка, пока блок неактивен (при фокусе внутри блока — вернётся).
-        className="mt-1 hidden text-xs text-muted-foreground hover:text-foreground group-hover:block group-focus-within:block"
-      >
-        + Описание
-      </button>
-    )
-  }
   return (
     <textarea
-      ref={ref}
+      ref={inputRef}
       rows={1}
       value={desc}
       onChange={(e) => updateBlock(block.id, { description: e.target.value })}
       onBlur={() => {
-        if (!desc.trim()) setOpen(false)
+        if (!desc.trim()) onEmptyBlur()
       }}
       placeholder="Описание (необязательно)"
       aria-label="Описание вопроса"
