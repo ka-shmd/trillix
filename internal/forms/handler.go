@@ -32,7 +32,7 @@ type Middleware = func(http.Handler) http.Handler
 type formsService interface {
 	Create(ctx context.Context, userID uuid.UUID, title string) (Form, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
-	List(ctx context.Context, userID uuid.UUID, after *Cursor, limit int) (Page, error)
+	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error)
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
@@ -193,9 +193,19 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	sort, err := ParseSortOrder(r.URL.Query().Get("sort"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
 	limit := parseLimit(r.URL.Query().Get("limit"))
 
-	page, err := h.svc.List(r.Context(), userID, after, limit)
+	page, err := h.svc.List(r.Context(), userID, ListOptions{
+		Search: r.URL.Query().Get("q"),
+		Sort:   sort,
+		After:  after,
+		Limit:  limit,
+	})
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -481,7 +491,7 @@ func parseCursor(w http.ResponseWriter, r *http.Request) (*Cursor, bool) {
 
 // Курсор кодируется в непрозрачную для клиента строку "unixNano:uuid" (base64url).
 func encodeCursor(c Cursor) string {
-	raw := fmt.Sprintf("%d:%s", c.UpdatedAt.UnixNano(), c.ID.String())
+	raw := fmt.Sprintf("%d:%s:%s", c.SortKey, c.ID.String(), c.Sort)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
@@ -490,17 +500,27 @@ func decodeCursor(s string) (*Cursor, error) {
 	if err != nil {
 		return nil, err
 	}
-	nanoStr, idStr, ok := strings.Cut(string(raw), ":")
+	keyStr, rest, ok := strings.Cut(string(raw), ":")
 	if !ok {
 		return nil, errors.New("cursor: missing separator")
 	}
-	nano, err := strconv.ParseInt(nanoStr, 10, 64)
+	key, err := strconv.ParseInt(keyStr, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("cursor: parse time: %w", err)
+		return nil, fmt.Errorf("cursor: parse sort key: %w", err)
 	}
+	// Третья часть (порядок) появилась в фазе 8.5 шаг 8. Курсор без неё — выданный
+	// прежней версией и уже открытой у кого-то страницей: читаем как сортировку по
+	// умолчанию, а не роняем листание в 422 из-за момента выкатки.
+	idStr, sortStr, hasSort := strings.Cut(rest, ":")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: parse id: %w", err)
 	}
-	return &Cursor{UpdatedAt: time.Unix(0, nano).UTC(), ID: id}, nil
+	sort := SortUpdated
+	if hasSort {
+		if sort, err = ParseSortOrder(sortStr); err != nil {
+			return nil, fmt.Errorf("cursor: %w", err)
+		}
+	}
+	return &Cursor{SortKey: key, ID: id, Sort: sort}, nil
 }

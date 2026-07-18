@@ -609,6 +609,268 @@ func TestForms_CursorPagination(t *testing.T) {
 	}
 }
 
+// Пагинация обязана сходиться в КАЖДОМ порядке, а не только в умолчании: ключ
+// курсора у них измеряет разные величины (фаза 8.5 шаг 8).
+func TestForms_CursorPagination_EverySortOrder(t *testing.T) {
+	for _, sort := range []string{"updated", "created", "responses"} {
+		t.Run(sort, func(t *testing.T) {
+			resetDB(t)
+			srv := newStack(t)
+			c := registerUser(t, srv, "sorted@example.com")
+
+			const total = 5
+			for i := 0; i < total; i++ {
+				createForm(t, c, srv, "форма")
+			}
+
+			seen := make(map[string]bool, total)
+			cursor := ""
+			pages := 0
+			for {
+				page := listForms(t, c, srv, "?limit=2&sort="+sort+cursorParam(cursor))
+				pages++
+				for _, f := range page.Forms {
+					if seen[f.ID] {
+						t.Fatalf("дубль формы %s между страницами (sort=%s)", f.ID, sort)
+					}
+					seen[f.ID] = true
+				}
+				if page.NextCursor == nil {
+					break
+				}
+				cursor = *page.NextCursor
+				if pages > total+2 {
+					t.Fatalf("пагинация не сходится (sort=%s)", sort)
+				}
+			}
+			if len(seen) != total {
+				t.Fatalf("увидено %d форм из %d (sort=%s)", len(seen), total, sort)
+			}
+		})
+	}
+}
+
+// Сортировки различаются по существу: правка старой формы поднимает её наверх у
+// updated, но не двигает у created.
+func TestForms_SortUpdatedVsCreated(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "order@example.com")
+
+	first := createForm(t, c, srv, "первая")
+	second := createForm(t, c, srv, "вторая")
+	third := createForm(t, c, srv, "третья")
+
+	// Трогаем самую старую — по правке она обязана стать первой.
+	patchName(t, c, srv, first.ID, "первая (правленая)", http.StatusOK)
+
+	byUpdated := listForms(t, c, srv, "?sort=updated")
+	if got := byUpdated.Forms[0].ID; got != first.ID {
+		t.Fatalf("sort=updated: сверху %s, ожидалась только что правленая %s", got, first.ID)
+	}
+
+	byCreated := listForms(t, c, srv, "?sort=created")
+	if got := byCreated.Forms[0].ID; got != third.ID {
+		t.Fatalf("sort=created: сверху %s, ожидалась созданная последней %s", got, third.ID)
+	}
+	if got := byCreated.Forms[1].ID; got != second.ID {
+		t.Fatalf("sort=created: вторая %s, ожидалась %s", got, second.ID)
+	}
+	if got := byCreated.Forms[2].ID; got != first.ID {
+		t.Fatalf("sort=created: снизу %s, ожидалась созданная первой %s", got, first.ID)
+	}
+}
+
+func TestForms_SortByResponses(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "responses@example.com")
+
+	quiet := createForm(t, c, srv, "тихая")
+	popular := createForm(t, c, srv, "популярная")
+	publishForm(t, c, srv, quiet.ID, http.StatusOK)
+	publishForm(t, c, srv, popular.ID, http.StatusOK)
+	insertSubmissions(t, popular.ID, 3)
+	insertSubmissions(t, quiet.ID, 1)
+
+	page := listForms(t, c, srv, "?sort=responses")
+	if got := page.Forms[0].ID; got != popular.ID {
+		t.Fatalf("sort=responses: сверху %s, ожидалась форма с тремя ответами %s", got, popular.ID)
+	}
+}
+
+// Курсор, выданный одним порядком, к другому не применяется: молча перемешанная
+// выдача с пропусками хуже явной ошибки.
+func TestForms_CursorFromOtherSort_Is422(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "mixcursor@example.com")
+	for i := 0; i < 3; i++ {
+		createForm(t, c, srv, "форма")
+	}
+
+	page := listForms(t, c, srv, "?limit=1&sort=created")
+	if page.NextCursor == nil {
+		t.Fatal("курсор не выдан")
+	}
+
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms?limit=1&sort=updated"+cursorParam(*page.NextCursor), "", "")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+func TestForms_UnknownSort_Is422(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "badsort@example.com")
+
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms?sort=updatd", "", "")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+func TestForms_Search(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "search@example.com")
+
+	byTitle := createForm(t, c, srv, "Заявка на доставку")
+	createForm(t, c, srv, "Обратная связь")
+	// Форма с внутренним именем: кабинет показывает name вместо title, поиск
+	// обязан идти по тому же, что видно на карточке.
+	renamed := createForm(t, c, srv, "Untitled form")
+	patchName(t, c, srv, renamed.ID, "Анкета кандидата", http.StatusOK)
+	// Спецсимвол LIKE в названии — проверка экранирования ниже.
+	percent := createForm(t, c, srv, "Скидка 50% на курс")
+
+	tests := []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"по заголовку", "доставку", []string{byTitle.ID}},
+		{"регистр не важен", "ДОСТАВКУ", []string{byTitle.ID}},
+		{"по внутреннему имени", "кандидата", []string{renamed.ID}},
+		{"по старому заголовку переименованной — не находится", "Untitled", nil},
+		{"процент ищется как символ, а не как шаблон", "50%", []string{percent.ID}},
+		// Голый «%» — не «найти всё», а поиск литерального процента: находится
+		// единственная форма, где этот символ есть в названии.
+		{"голый шаблон ищется как символ", "%", []string{percent.ID}},
+		{"ничего не найдено", "зззз", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := listForms(t, c, srv, "?q="+url.QueryEscape(tt.query))
+			got := make([]string, len(page.Forms))
+			for i, f := range page.Forms {
+				got[i] = f.ID
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("найдено %d форм (%v), ожидалось %d (%v)", len(got), got, len(tt.want), tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("найдено %v, ожидалось %v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+// Счётчики карточки (ответы, просмотры, конверсия) приезжают из того же запроса
+// списка. Тест заведён задним числом: шаг 8 переписал их вычисление со скалярных
+// подзапросов на LATERAL, и выяснилось, что числа не проверялись ничем — ошибка
+// в них прошла бы молча и осела бы на дашборде владельца.
+func TestForms_ListCounters(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "counters@example.com")
+
+	form := createForm(t, c, srv, "Считаем")
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	insertSubmissions(t, form.ID, 3)
+	// Три визита, из них два закончились ответом.
+	insertVisits(t, form.ID, 3, 2)
+
+	// Вторая форма без активности: нули не должны «протекать» с соседней строки —
+	// именно это ломается, если LATERAL однажды потеряет условие по form_id.
+	quiet := createForm(t, c, srv, "Тихая")
+
+	list := listForms(t, c, srv, "")
+	byID := make(map[string]formDTO, len(list.Forms))
+	for _, f := range list.Forms {
+		byID[f.ID] = f
+	}
+
+	got := byID[form.ID]
+	if got.SubmissionCount != 3 || got.VisitCount != 3 || got.VisitSubmittedCount != 2 {
+		t.Fatalf("счётчики активной формы = ответы %d, визиты %d, из них с ответом %d; ожидалось 3/3/2",
+			got.SubmissionCount, got.VisitCount, got.VisitSubmittedCount)
+	}
+
+	idle := byID[quiet.ID]
+	if idle.SubmissionCount != 0 || idle.VisitCount != 0 || idle.VisitSubmittedCount != 0 {
+		t.Fatalf("у формы без активности счётчики = %d/%d/%d, ожидались нули",
+			idle.SubmissionCount, idle.VisitCount, idle.VisitSubmittedCount)
+	}
+}
+
+// insertVisits кладёт n визитов формы, из них submitted — закончившихся ответом.
+func insertVisits(t *testing.T, formID string, n, submitted int) {
+	t.Helper()
+	var versionID string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT published_version_id::text FROM forms WHERE id = $1`, formID).Scan(&versionID); err != nil {
+		t.Fatalf("published_version_id формы %s: %v", formID, err)
+	}
+	for i := 0; i < n; i++ {
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO form_visits (id, form_id, form_version_id, submitted) VALUES ($1, $2, $3, $4)`,
+			domain.NewID(), formID, versionID, i < submitted); err != nil {
+			t.Fatalf("вставка визита: %v", err)
+		}
+	}
+}
+
+// Анти-IDOR: поиск — новый способ адресовать формы, и чужие через него не видны.
+func TestForms_Search_DoesNotLeakOtherWorkspace(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+
+	alice := registerUser(t, srv, "alice-search@example.com")
+	createForm(t, alice, srv, "Секретная анкета Алисы")
+
+	bob := registerUser(t, srv, "bob-search@example.com")
+	page := listForms(t, bob, srv, "?q="+url.QueryEscape("Секретная"))
+	if len(page.Forms) != 0 {
+		t.Fatalf("поиск Боба нашёл %d чужих форм, ожидалось 0", len(page.Forms))
+	}
+}
+
+// insertSubmissions кладёт n ответов на опубликованную версию формы напрямую в БД:
+// приём ответа живёт в другом модуле, а тесту нужен только счётчик.
+func insertSubmissions(t *testing.T, formID string, n int) {
+	t.Helper()
+	var versionID string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT published_version_id::text FROM forms WHERE id = $1`, formID).Scan(&versionID)
+	if err != nil {
+		t.Fatalf("published_version_id формы %s: %v", formID, err)
+	}
+	for i := 0; i < n; i++ {
+		_, err := testPool.Exec(context.Background(),
+			`INSERT INTO submissions (id, form_id, form_version_id, answers) VALUES ($1, $2, $3, '{}')`,
+			domain.NewID(), formID, versionID)
+		if err != nil {
+			t.Fatalf("вставка ответа: %v", err)
+		}
+	}
+}
+
 // --- DTO и HTTP-хелперы ---
 
 type formDTO struct {
@@ -622,6 +884,9 @@ type formDTO struct {
 	PublishedVersion      *int    `json:"publishedVersion"`
 	PublishedVersionID    *string `json:"publishedVersionId"`
 	HasUnpublishedChanges bool    `json:"hasUnpublishedChanges"`
+	SubmissionCount       int64   `json:"submissionCount"`
+	VisitCount            int64   `json:"visitCount"`
+	VisitSubmittedCount   int64   `json:"visitSubmittedCount"`
 }
 
 type formDetailDTO struct {

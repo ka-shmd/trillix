@@ -17,16 +17,33 @@ import {
   updateCloseSettings,
   updateFormName,
 } from './api'
-import { type CloseSettingsInput, type Form, type FormDetail } from '../../entities/form'
+import {
+  type CloseSettingsInput,
+  type Form,
+  type FormDetail,
+  type FormsSort,
+} from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
-export const formsListQueryOptions = infiniteQueryOptions({
-  queryKey: formKeys.list(),
-  queryFn: ({ pageParam }) => listForms(pageParam),
-  initialPageParam: undefined as string | undefined,
-  getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-})
+//
+// Поиск и сортировка входят в query-ключ, а не фильтруют уже загруженное:
+// фильтровать на клиенте можно только то, что целиком в кэше, а список
+// постраничный — «поиск» показывал бы совпадения из подгруженных страниц и молча
+// терял остальные. Смена параметров = другой ключ = листание с первой страницы,
+// что заодно снимает риск уехать курсором прежней сортировки (сервер такой курсор
+// отвергает).
+export function formsListQueryOptions(params: { q: string; sort: FormsSort }) {
+  // Пробелы по краям сервер всё равно срезает, поэтому нормализуем и здесь: иначе
+  // « анкета » и «анкета» — две записи кэша с заведомо одинаковым содержимым.
+  const q = params.q.trim()
+  return infiniteQueryOptions({
+    queryKey: formKeys.listWith({ q, sort: params.sort }),
+    queryFn: ({ pageParam }) => listForms(pageParam, { q, sort: params.sort }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  })
+}
 
 // Detail адресуется slug'ом (ключ URL кабинета), а не UUID: кэш detail всюду
 // ключуется slug'ом — мутации патчат его по form.slug, автосейв читает токен по

@@ -87,3 +87,20 @@ export const formsPageSchema = z.object({
 })
 
 export type FormsPage = z.infer<typeof formsPageSchema>
+
+// Порядок списка форм (фаза 8.5 шаг 8). Зеркало белого списка сервера
+// (forms.ParseSortOrder): значение уходит в query-параметр sort, чужое сервер
+// отвергает 422. Схема нужна не только для типа: ею валидируется sort из АДРЕСНОЙ
+// СТРОКИ — её правит человек, и мусор оттуда не должен доезжать до запроса.
+export const formsSortSchema = z.enum(['updated', 'created', 'responses'])
+export type FormsSort = z.infer<typeof formsSortSchema>
+
+export const DEFAULT_FORMS_SORT: FormsSort = 'updated'
+
+// Подписи для селектора — рядом со схемой, чтобы новый порядок нельзя было
+// завести, забыв про его название на экране.
+export const FORMS_SORT_LABELS: Record<FormsSort, string> = {
+  updated: 'По дате изменения',
+  created: 'По дате создания',
+  responses: 'По числу ответов',
+}

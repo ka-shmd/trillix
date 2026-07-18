@@ -7,13 +7,22 @@ import {
   type Form,
   type FormDetail,
   type FormsPage,
+  type FormsSort,
 } from '../../entities/form'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
 
-export function listForms(cursor?: string): Promise<FormsPage> {
+// listForms — страница списка. q — поиск по отображаемому имени (name ?? title),
+// sort — порядок; курсор непрозрачен и несёт в себе порядок, которым выдан,
+// поэтому листать с ним другую сортировку сервер не даст (422).
+export function listForms(
+  cursor?: string,
+  opts?: { q?: string; sort?: FormsSort },
+): Promise<FormsPage> {
   const params = new URLSearchParams()
   if (cursor) params.set('cursor', cursor)
+  if (opts?.q) params.set('q', opts.q)
+  if (opts?.sort && opts.sort !== 'updated') params.set('sort', opts.sort)
   const query = params.toString()
   return apiRequest(`/forms${query ? `?${query}` : ''}`, { schema: formsPageSchema })
 }

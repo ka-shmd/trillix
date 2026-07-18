@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,6 +28,13 @@ const (
 	// клиентом limit зажимается в [1, MaxPageLimit]; пустой → Default.
 	DefaultPageLimit = 50
 	MaxPageLimit     = 100
+
+	// MaxSearchLen — потолок строки поиска. Названия форм ограничены 200 символами
+	// (maxTitleLen), поэтому запрос длиннее не может ничего найти по определению.
+	// Проверка не «на всякий случай»: query-строку не стережёт MaxBytesReader (он
+	// про тело), и без этого лимита в ILIKE уезжал шаблон в десятки килобайт —
+	// инвариант 3 требует валидировать любой пользовательский ввод на бэке.
+	MaxSearchLen = maxTitleLen
 )
 
 // Store — доступ к данным forms, объявленный на стороне потребителя (сервиса).
@@ -40,8 +48,7 @@ type Store interface {
 	ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error)
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
 	GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error)
-	ListForms(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]Form, error)
-	ListFormsAfter(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, cursorUpdatedAt time.Time, cursorID uuid.UUID, limit int32) ([]Form, error)
+	ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error)
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
@@ -65,11 +72,51 @@ type Transactor interface {
 	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
 }
 
-// Cursor — курсор списка форм: пара (updatedAt, id), однозначно указывающая на
-// последнюю показанную форму. Транспорт кодирует его в непрозрачную строку.
+// SortOrder — порядок списка форм (фаза 8.5 шаг 8). Значения совпадают с тем, что
+// приходит в query-параметре sort и уходит в CASE запроса: белый список, чужое
+// значение отвергается транспортом (422), в SQL произвольная строка не попадает.
+type SortOrder string
+
+const (
+	SortUpdated   SortOrder = "updated"   // по последней правке (умолчание)
+	SortCreated   SortOrder = "created"   // по дате создания
+	SortResponses SortOrder = "responses" // по числу ответов
+)
+
+// ParseSortOrder разбирает значение query-параметра. Пусто → умолчание; всё
+// остальное вне белого списка — ошибка (не «молча умолчание»: клиент, приславший
+// sort=updatd, должен узнать об опечатке, а не получить не тот порядок).
+func ParseSortOrder(raw string) (SortOrder, error) {
+	switch SortOrder(raw) {
+	case "":
+		return SortUpdated, nil
+	case SortUpdated, SortCreated, SortResponses:
+		return SortOrder(raw), nil
+	default:
+		return "", fmt.Errorf("%w: неизвестная сортировка", domain.ErrValidation)
+	}
+}
+
+// Cursor — курсор списка форм: пара (ключ сортировки, id), однозначно указывающая
+// на последнюю показанную форму, плюс порядок, в котором курсор выдан. Транспорт
+// кодирует его в непрозрачную строку.
+//
+// Sort входит в курсор, потому что ключ у разных порядков означает разное
+// (наносекунды против числа ответов): курсор, выданный одним порядком и применённый
+// к другому, дал бы не ошибку, а тихо перемешанную выдачу с пропусками.
 type Cursor struct {
-	UpdatedAt time.Time
-	ID        uuid.UUID
+	SortKey int64
+	ID      uuid.UUID
+	Sort    SortOrder
+}
+
+// ListOptions — параметры страницы списка: поиск по отображаемому имени, порядок,
+// курсор и размер страницы.
+type ListOptions struct {
+	Search string
+	Sort   SortOrder
+	After  *Cursor
+	Limit  int
 }
 
 // Page — страница списка форм и курсор на следующую (nil, если страница последняя).
@@ -158,10 +205,26 @@ func (s *Service) UpdateName(ctx context.Context, userID, formID uuid.UUID, name
 	return updated, nil
 }
 
-// List возвращает страницу форм личного воркспейса. after — курсор предыдущей
-// страницы (nil для первой). limit зажимается в допустимые границы.
-func (s *Service) List(ctx context.Context, userID uuid.UUID, after *Cursor, limit int) (Page, error) {
-	limit = clampLimit(limit)
+// List возвращает страницу форм личного воркспейса: поиск по отображаемому имени,
+// порядок и курсор предыдущей страницы (nil для первой). Limit зажимается в
+// допустимые границы, пустой Sort — умолчание.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error) {
+	limit := clampLimit(opts.Limit)
+	sort := opts.Sort
+	if sort == "" {
+		sort = SortUpdated
+	}
+	// Курсор от другого порядка — ошибка ввода, а не повод молча пересортировать:
+	// его ключ измеряет другую величину (см. Cursor).
+	if opts.After != nil && opts.After.Sort != sort {
+		return Page{}, fmt.Errorf("%w: курсор выдан для другой сортировки", domain.ErrValidation)
+	}
+
+	search := strings.TrimSpace(opts.Search)
+	if utf8.RuneCountInString(search) > MaxSearchLen {
+		return Page{}, fmt.Errorf("%w: строка поиска длиннее %d символов", domain.ErrValidation, MaxSearchLen)
+	}
+
 	wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
 	if err != nil {
 		return Page{}, fmt.Errorf("resolve workspace: %w", err)
@@ -170,23 +233,33 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, after *Cursor, lim
 	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в
 	// ответ не отдаём, а превращаем в курсор.
 	fetch := int32(limit + 1)
-	var rows []Form
-	if after == nil {
-		rows, err = s.repo.ListForms(ctx, s.db, wsID, fetch)
-	} else {
-		rows, err = s.repo.ListFormsAfter(ctx, s.db, wsID, after.UpdatedAt, after.ID, fetch)
-	}
+	rows, err := s.repo.ListFormsPage(ctx, s.db, wsID, string(sort), escapeLike(search), opts.After, fetch)
 	if err != nil {
 		return Page{}, err
 	}
 
-	page := Page{Forms: rows}
+	forms := make([]Form, len(rows))
+	for i, r := range rows {
+		forms[i] = r.Form
+	}
+
+	page := Page{Forms: forms}
 	if len(rows) > limit {
 		last := rows[limit-1]
-		page.Forms = rows[:limit]
-		page.NextCursor = &Cursor{UpdatedAt: last.UpdatedAt, ID: last.ID}
+		page.Forms = forms[:limit]
+		page.NextCursor = &Cursor{SortKey: last.SortKey, ID: last.ID, Sort: sort}
 	}
 	return page, nil
+}
+
+// escapeLike обезвреживает спецсимволы шаблона LIKE в пользовательской строке
+// поиска: без этого «50%» находит любую форму, а «_» — любой символ. Экранирующий
+// символ — обратный слэш (умолчание LIKE в Postgres). Replacer идёт по строке
+// одним проходом и не перечитывает то, что сам подставил, — поэтому слэши,
+// добавленные к «%», не удваиваются повторно.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // Get возвращает форму по id, если пользователь состоит в её воркспейсе.
