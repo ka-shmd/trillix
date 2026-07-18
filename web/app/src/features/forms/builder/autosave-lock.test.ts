@@ -33,6 +33,8 @@ function seedDetail(qc: QueryClient) {
     // должен затереть это поле мусором из мутации.
     hasUnpublishedChanges: true,
     submissionCount: 3,
+    visitCount: 0,
+    visitSubmittedCount: 0,
     draftSchema,
     closeAt: null,
     responseLimit: null,
@@ -54,6 +56,8 @@ const renamedForm: Form = {
   publishedVersionId: null,
   hasUnpublishedChanges: false,
   submissionCount: 0,
+  visitCount: 0,
+  visitSubmittedCount: 0,
 }
 
 describe('formLockToken', () => {

@@ -294,6 +294,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
@@ -313,6 +320,8 @@ type GetFormRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
@@ -338,6 +347,8 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.VisitCount,
+		&i.VisitSubmittedCount,
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
@@ -352,6 +363,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message,
     f.created_at, f.updated_at
 FROM forms f
@@ -371,6 +389,8 @@ type GetFormBySlugRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
@@ -398,6 +418,8 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.VisitCount,
+		&i.VisitSubmittedCount,
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
@@ -682,6 +704,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_vers
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -709,6 +738,8 @@ type ListFormsAfterRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -740,6 +771,8 @@ func (q *Queries) ListFormsAfter(ctx context.Context, arg ListFormsAfterParams) 
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
 			&i.SubmissionCount,
+			&i.VisitCount,
+			&i.VisitSubmittedCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -758,6 +791,13 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_vers
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
+    -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
+    -- Конверсия считается по визитам (submitted/total), а НЕ делением
+    -- submission_count на visit_count: это разные множества (ответ мог прийти без
+    -- визита), и их частное — не конверсия (ADR §10).
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
+    (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -782,6 +822,8 @@ type ListFormsFirstPageRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	VisitCount            int64
+	VisitSubmittedCount   int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -808,6 +850,8 @@ func (q *Queries) ListFormsFirstPage(ctx context.Context, arg ListFormsFirstPage
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
 			&i.SubmissionCount,
+			&i.VisitCount,
+			&i.VisitSubmittedCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

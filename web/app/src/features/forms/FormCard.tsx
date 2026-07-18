@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
 import { type Form, displayFormName } from '../../entities/form'
 import { formatDate } from '../../shared/format'
+import { FormStats } from './FormStats'
 import { useDeleteForm, useDuplicateForm, useUpdateFormName } from './queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -117,9 +118,20 @@ export function FormCard({ form }: { form: Form }) {
         </div>
       )}
 
-      <div className="mt-auto flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <Badge variant={statusVariants[form.status]}>{statusLabels[form.status]}</Badge>
-        <span>Изменена {formatDate(form.updatedAt)}</span>
+      <div className="mt-auto flex flex-col gap-1.5 text-xs text-muted-foreground">
+        {/* Черновику счётчик не показываем: его никто не мог открыть, и «Пока нет
+            просмотров» на нём — не новость, а шум. */}
+        {form.status !== 'draft' && (
+          <FormStats
+            visits={form.visitCount}
+            submittedVisits={form.visitSubmittedCount}
+            submissions={form.submissionCount}
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={statusVariants[form.status]}>{statusLabels[form.status]}</Badge>
+          <span>Изменена {formatDate(form.updatedAt)}</span>
+        </div>
       </div>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
