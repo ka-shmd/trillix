@@ -138,10 +138,10 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   return (
-    // Метрики холста = общий .rf-page (fields.css): десктоп 144/80/96, мобильный
+    // Метрики холста = общий .rf-page (fields.css): десктоп 96/80/96, мобильный
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
-    <div className="mx-auto max-w-3xl px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-36">
+    <div className="mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
       <FormTitleInput
         formId={formId}
         initialTitle={initialTitle}
@@ -157,7 +157,12 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
             items={blocks.map((b) => b.id)}
             strategy={verticalListSortingStrategy}
           >
-            <ol className="mt-8 flex flex-col gap-1.5">
+            {/* Отступ заголовок→блоки и шаг между блоками держим равными ритму
+                .rf-page/.rf-form у превью и респондента (32px и 20px). У блока
+                свой py-1.5 (место под hover-контролы), поэтому здесь mt-7+6=34
+                и gap-2+6+6=20, а не «на глаз» mt-8/gap-1.5: те давали 58px под
+                заголовком против 32px в превью — редактор разъезжался с формой. */}
+            <ol className="mt-7 flex flex-col gap-2">
               {blocks.map((b) => (
                 <BlockRow
                   key={b.id}
@@ -257,7 +262,7 @@ function EmptyStarter({
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
-      className="mt-8 cursor-text text-lg leading-relaxed text-muted-foreground/60 outline-none"
+      className="mt-7 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
@@ -365,7 +370,9 @@ function FormTitleInput({
       // Название вне стора билдера (серверный rename) — Ctrl+Z здесь нативный,
       // document-undo билдера его не перехватывает (см. BuilderScreen).
       data-undo-native
-      className="rf-title mb-5 w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
+      // mb-0: отступ заголовок→блоки целиком задаёт mt-7 у списка блоков (см.
+      // коммент там). Прежние mb-5 + mt-8 складывались в 52px против 32px в превью.
+      className="rf-title w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

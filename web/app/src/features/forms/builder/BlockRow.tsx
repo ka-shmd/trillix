@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type ReactNode,
   type RefObject,
 } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
@@ -13,7 +14,6 @@ import {
   type Block,
   type BlockType,
   isChoiceType,
-  isSingleChoiceType,
   isContentType,
   SCALE_LOWER_BOUND,
   SCALE_UPPER_BOUND,
@@ -21,6 +21,8 @@ import {
   supportsPlaceholder,
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
+import { optionKey } from '@fields/answer'
+import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
 import { ImageField } from './ImageField'
@@ -168,6 +170,13 @@ export function BlockRow({
   const iconBtn =
     'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
+  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (fields.css):
+  // вопрос rf-label — 28px (h-7), абзац rf-text и согласие rf-consent — 24px (h-6).
+  // Кластеры absolute и центрируют значок по своей высоте, поэтому только так они
+  // стоят на уровне текста. Жёсткое значение тут — баг: при h-8 (32px) значки висят
+  // ниже строки у всех типов сразу. Меняется вместе с line-height в fields.css.
+  const rowLineH = isContent || isConsent ? 'h-6' : 'h-7'
+
   return (
     <li
       ref={setNodeRef}
@@ -175,8 +184,9 @@ export function BlockRow({
       className={`group relative rounded-md py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
-          сам текст остаётся по центру колонки. Всегда видимы; h-8 + items-center и
-          leading-8 у текста → значки на уровне строки. Порядок: удалить, добавить,
+          сам текст остаётся по центру колонки. Всегда видимы; высота кластера =
+          line-height первой строки блока (rowLineH) + items-center → значки на
+          уровне текста. Порядок: удалить, добавить,
           описание, перетащить (ручка последняя = ближайшая к тексту).
 
           Кластер absolute и проявляется через opacity — высоту строки он не меняет
@@ -188,7 +198,9 @@ export function BlockRow({
           обработчик кнопки не срабатывает. Именно так «+ Описание», стоявшее в
           потоке под заголовком, съедало первый клик по «+ Добавить блок» (TD-22).
           Любой новый reveal-on-hover контрол блока — только сюда. */}
-      <div className="absolute right-full top-1.5 mr-1 flex h-8 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      <div
+        className={`absolute right-full top-1.5 mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+      >
         <button
           type="button"
           onClick={() => removeBlock(block.id)}
@@ -232,7 +244,7 @@ export function BlockRow({
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
           ответов не собирает, required к нему неприменим. */}
-      {isContent ? null : <RequiredToggle block={block} />}
+      {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
 
       {/* Image (неотвечаемый) — загрузка/картинка + alt вместо текстовой строки;
           менять тип у него нельзя, поэтому без SlashMenu и label-textarea. */}
@@ -244,12 +256,14 @@ export function BlockRow({
         <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
           <div className="min-w-0">
             {/* Согласие: галочка слева от правимого текста — как у респондента.
-                Декоративная (rf-mark, как глифы вариантов в OptionsInline):
-                настоящий <input> тут не нужен, состояние правит респондент. mt-1
-                центрирует size-4 по строке rf-consent (line-height 1.5rem). */}
+                Декоративная (rf-mark — единственное место, где глиф ещё нужен:
+                у вариантов выбора вместо него буквенный бейдж):
+                настоящий <input> тут не нужен, состояние правит респондент. mt-0.5
+                центрирует глиф 20px по строке rf-consent (line-height 24px):
+                (24−20)/2 = 2px. Меняется вместе с размером .rf-mark. */}
             <div className={isConsent ? 'flex items-start gap-2' : undefined}>
               {isConsent && (
-                <span className="rf-mark rf-mark--check mt-1 shrink-0" aria-hidden="true" />
+                <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
               )}
               <textarea
                 ref={labelRef}
@@ -320,12 +334,14 @@ export function BlockRow({
 // block.required. Включённым виден всегда и подсвечен (показывает состояние),
 // выключенным — проявляется на hover/фокусе строки. Настоящий <button aria-pressed>
 // в Tab-обходе; текст состояния — в title/aria-label (значок компактен, как слева).
-function RequiredToggle({ block }: { block: Block }) {
+// lineH — высота строки блока (h-6/h-7), приходит из BlockRow: значок обязан стоять
+// на уровне первой строки текста, а она разной высоты у вопроса и у согласия.
+function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const required = block.required
   return (
     <div
-      className={`absolute left-full top-1.5 ml-1 flex h-8 items-center transition-opacity ${
+      className={`absolute left-full top-1.5 ml-1 flex ${lineH} items-center transition-opacity ${
         required
           ? 'opacity-100'
           : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
@@ -384,7 +400,7 @@ function DescriptionField({
       }}
       placeholder="Описание (необязательно)"
       aria-label="Описание вопроса"
-      className="rf-desc mt-1 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/50"
+      className="rf-desc mt-2 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/50"
     />
   )
 }
@@ -416,7 +432,7 @@ function ScaleInline({ block }: { block: Block }) {
     'h-7 rounded border border-muted-foreground/30 bg-transparent px-1.5 text-sm text-foreground'
 
   return (
-    <div className="mt-1.5 flex flex-col gap-2">
+    <div className="mt-2 flex flex-col gap-2">
       {/* Только контрол, без FieldShell: подпись рисует строка заголовка выше —
           оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой). */}
       <BlockControl block={block} />
@@ -462,18 +478,45 @@ function AnswerField({ block }: { block: Block }) {
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
-  // Вид поля — общий rf-input (единый с превью/рендерером); mt-1.5 — layout редактора.
-  const cls = 'rf-input mt-1.5'
+  // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
+  // место под глиф типа справа (см. index.css).
+  const cls = 'rf-input rf-input-typed'
+
+  // Глиф типа поля в правом углу — подсказка автору, ЧТО это за поле, когда
+  // подпись ещё не написана. Только в редакторе: у респондента тип виден по
+  // самому контролу, и в публичной форме Tally такого глифа нет (проверено
+  // замером). Берём typeIcons — тот же словарь, что в slash-меню и диалоге
+  // добавления, чтобы тип выглядел одинаково везде, где о нём говорят.
+  // pointer-events-none обязателен: иначе глиф съедает клик по правому краю поля.
+  const typeGlyph = (
+    <span
+      aria-hidden="true"
+      className={`pointer-events-none absolute right-2 text-muted-foreground/70 ${
+        block.type === 'long_text' ? 'top-2' : 'top-1/2 -translate-y-1/2'
+      }`}
+    >
+      {typeIcons[block.type]}
+    </span>
+  )
+  // Обёртка — только якорь глифа; ширину берёт из .rf-field-wrap (index.css),
+  // где стоит тот же потолок --rf-input-max, что у поля. mt-2 — синхронно с gap
+  // 0.5rem у .rf-field.
+  const wrap = (control: ReactNode, wide = false) => (
+    <div className={`rf-field-wrap mt-2 ${wide ? 'rf-field-wrap--wide' : ''}`}>
+      {control}
+      {typeGlyph}
+    </div>
+  )
 
   if (!supportsPlaceholder(block.type)) {
-    return <input type="date" disabled className={`${cls} max-w-56 pointer-events-none`} />
+    return wrap(<input type="date" disabled className={`${cls} pointer-events-none`} />)
   }
   const focusProps = {
     onFocus: () => setFocused(true),
     onBlur: () => setFocused(false),
   }
   if (block.type === 'long_text') {
-    return (
+    return wrap(
       <textarea
         value={ph}
         onChange={(e) => setPh(e.target.value)}
@@ -481,17 +524,18 @@ function AnswerField({ block }: { block: Block }) {
         placeholder={hint}
         className={cls}
         {...focusProps}
-      />
+      />,
+      true,
     )
   }
-  return (
+  return wrap(
     <input
       value={ph}
       onChange={(e) => setPh(e.target.value)}
       placeholder={hint}
       className={cls}
       {...focusProps}
-    />
+    />,
   )
 }
 
@@ -532,45 +576,65 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
   }
 
   return (
-    <div className="mt-1.5 flex flex-col gap-1.5">
-      {options.map((o, i) => (
-        <div key={o.id} className="flex items-center gap-2">
-          {/* Глиф в редакторе сообщает «один из» против «несколько из», а не точный
-              контрол: у dropdown респондент видит select, поэтому берём предикат
-              одиночного выбора, а не сравнение с single_choice (иначе dropdown
-              получил бы чекбокс — прямая ложь). Настоящий вид — в превью. */}
-          <span
-            className={`rf-mark ${isSingleChoiceType(block.type) ? 'rf-mark--radio' : 'rf-mark--check'}`}
-            aria-hidden="true"
-          />
-          <input
-            ref={(el) => {
-              optionRefs.current.set(o.id, el)
-            }}
-            value={o.label}
-            placeholder={`Вариант ${i + 1}`}
-            aria-label={`Вариант ${i + 1}`}
-            onChange={(e) => updateOption(block.id, o.id, e.target.value)}
-            onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
-            className="min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-muted-foreground"
-          />
-          <button
-            type="button"
-            onClick={() => removeOption(block.id, o.id)}
-            aria-label="Удалить вариант"
-            className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      ))}
+    // items-start — карточки обнимают текст, как .rf-options у респондента;
+    // gap-3 = 0.75rem там же.
+    <div className="mt-2 flex flex-col items-start gap-3">
+      {options.map((o, i) => {
+        const placeholder = `Вариант ${i + 1}`
+        const key = optionKey(i)
+        return (
+          // Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется
+          // только opacity): контрол, появляющийся по hover в потоке, схлопывается
+          // на mousedown и съедает клик — TD-22, разбор у кластера значков выше.
+          <div key={o.id} className="flex items-center gap-1">
+            <span className="rf-option">
+              {/* Буква — та же декоративная подсказка, что видит респондент
+                  (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
+                  тут, ни в форме: «один из» против «несколько из» показывает
+                  превью, где виден настоящий контрол. */}
+              {key && (
+                <span className="rf-option-key" aria-hidden="true">
+                  {key}
+                </span>
+              )}
+              {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
+                  в index.css). Пустой вариант меряется по плейсхолдеру, иначе
+                  карточка схлопнулась бы в точку. */}
+              <span className="rf-option-edit" data-value={o.label || placeholder}>
+                <input
+                  ref={(el) => {
+                    optionRefs.current.set(o.id, el)
+                  }}
+                  value={o.label}
+                  placeholder={placeholder}
+                  aria-label={placeholder}
+                  onChange={(e) => updateOption(block.id, o.id, e.target.value)}
+                  onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
+                  className="bg-transparent outline-none placeholder:text-muted-foreground"
+                />
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => removeOption(block.id, o.id)}
+              aria-label="Удалить вариант"
+              className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )
+      })}
       <button
         type="button"
         onClick={() => {
           pendingFocus.current = 'last'
           addOption(block.id)
         }}
-        className="flex w-fit items-center gap-2 text-base text-muted-foreground hover:text-foreground"
+        // Служебный ярус (14px), а не тело формы: это контрол редактора, которого
+        // респондент не видит — как «+ Добавить блок» ниже по полотну. Был text-base
+        // и читался как ещё один вариант ответа.
+        className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
       >
         <Plus className="size-4" /> Добавить вариант
       </button>
