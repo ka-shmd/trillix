@@ -9,6 +9,7 @@ import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answer
 import { uuidv7 } from './submissionId'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
+import { createVisitTracker, type VisitTracker } from './visits'
 
 // Задержки перед повторами при обрыве сети (мс). До 3 повторов с нарастающим
 // бэкоффом — DEV-PLAN фаза 5, шаг 6. Все повторы шлют один submission_id, поэтому
@@ -19,7 +20,7 @@ const retryBackoffMs = [400, 1200, 3000]
 // Ответ сервера (в т.ч. 4xx/5xx) — это не обрыв: возвращается сразу, ретраить нечего.
 async function submitWithRetry(
   slug: string,
-  body: { submissionId: string; token: string; answers: Record<string, Answer> },
+  body: { submissionId: string; token: string; answers: Record<string, Answer>; visitId: string },
 ): Promise<SubmitOutcome> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -67,6 +68,47 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
 
+  // Визит: «открыли» на монтировании, «дошёл до вопроса» на уходе со страницы.
+  // Трекер создаётся лениво в ref, а не в эффекте: под StrictMode (dev делает
+  // mount→unmount→mount) эффект выполнился бы дважды и дал два визита на одно
+  // открытие. Флаг started намеренно НЕ сбрасывается в cleanup — «этот визит уже
+  // посчитан» переживает повторное монтирование.
+  const visit = useRef<VisitTracker | null>(null)
+  if (visit.current === null) {
+    visit.current = createVisitTracker(slug, form.token, form.version, window.location.search)
+  }
+  const started = useRef(false)
+  // Самая дальняя точка визита: индекс последнего блока, которого коснулись.
+  // Индекс, а не id, — сравнивать «дальше/ближе» можно только по порядку; наружу
+  // всё равно уезжает id блока (переживёт многостраничные формы, ADR §10).
+  const furthest = useRef(-1)
+
+  useEffect(() => {
+    const tracker = visit.current
+    if (tracker === null) return
+    if (!started.current) {
+      started.current = true
+      tracker.start()
+    }
+
+    const leave = () => {
+      const block = furthest.current >= 0 ? blocks[furthest.current] : undefined
+      tracker.leave(block?.id ?? null)
+    }
+    // pagehide ловит закрытие вкладки и переход по ссылке; visibilitychange —
+    // сворачивание и переключение вкладки на мобильных, где pagehide может не
+    // прийти вовсе. Оба шлют свой seq, сервер берёт наибольший.
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') leave()
+    }
+    window.addEventListener('pagehide', leave)
+    document.addEventListener('visibilitychange', onHidden)
+    return () => {
+      window.removeEventListener('pagehide', leave)
+      document.removeEventListener('visibilitychange', onHidden)
+    }
+  }, [blocks])
+
   const setBlockError = (blockId: string, msg: string | null) =>
     setErrors((prev) => {
       if (msg === null) {
@@ -111,6 +153,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         submissionId: submissionId.current,
         token: form.token,
         answers,
+        visitId: visit.current?.id ?? '',
       })
     } catch {
       if (!active.current) return
@@ -157,16 +200,25 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     <main className="rf-page">
       <h1 className="rf-title">{form.title.trim() || 'Форма'}</h1>
       <div className="rf-form">
-        {blocks.map((block) => (
-          <BlockField
+        {blocks.map((block, index) => (
+          // onFocusCapture на обёртке, а не новый проп у BlockField: поля общие с
+          // превью билдера, и заводить в них аналитику публичной страницы нельзя.
+          // Capture — потому что фокус приходит на вложенный input, а не на div.
+          <div
             key={block.id}
-            block={block}
-            value={answers[block.id]}
-            onChange={(value: Answer) => onChange(block.id, value)}
-            onBlur={() => onBlur(block.id)}
-            error={errors[block.id]}
-            disabled={locked}
-          />
+            onFocusCapture={() => {
+              if (index > furthest.current) furthest.current = index
+            }}
+          >
+            <BlockField
+              block={block}
+              value={answers[block.id]}
+              onChange={(value: Answer) => onChange(block.id, value)}
+              onBlur={() => onBlur(block.id)}
+              error={errors[block.id]}
+              disabled={locked}
+            />
+          </div>
         ))}
       </div>
       <button

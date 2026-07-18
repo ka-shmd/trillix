@@ -62,7 +62,7 @@ describe('fetchPublicForm', () => {
   })
 })
 
-const body = { submissionId: '018f-id', token: 'tok', answers: { b1: 'Анна' } }
+const body = { submissionId: '018f-id', token: 'tok', answers: { b1: 'Анна' }, visitId: '018f-visit' }
 
 describe('submitAnswers', () => {
   it('201 → ok, а тело шлёт honeypot пустым и snake_case-поля', async () => {
@@ -76,6 +76,8 @@ describe('submitAnswers', () => {
     const sent = JSON.parse(init!.body as string) as Record<string, unknown>
     expect(sent).toMatchObject({ submission_id: '018f-id', token: 'tok', website: '' })
     expect(sent.answers).toEqual({ b1: 'Анна' })
+    // Визит уезжает вместе с ответом — отсюда точная конверсия (фаза 8.5 шаг 6).
+    expect(sent.visit_id).toBe('018f-visit')
   })
 
   it('422 с fields → invalid + карта полей', async () => {
