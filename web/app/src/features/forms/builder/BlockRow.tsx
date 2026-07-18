@@ -214,17 +214,19 @@ export function BlockRow({
                 ref={labelRef}
                 rows={1}
                 value={block.label}
-                // Плейсхолдер показываем только у активной (в фокусе) строки: пустой
-                // неактивный блок ничего не показывает. У вопроса «/» уже не работает
-                // (тип выбран) — подсказку про слэш не показываем.
+                // Текстовый блок прячет плейсхолдер вне фокуса: пустой абзац — это
+                // осознанный пропуск строки, и подсказка в нём выглядит как мусор.
+                // У остальных блоков пустой заголовок — незаполненный вопрос, поэтому
+                // подсказка видна всегда. У вопроса «/» уже не работает (тип выбран) —
+                // подсказку про слэш не показываем.
                 placeholder={
-                  labelFocused
-                    ? isContent
+                  isContent
+                    ? labelFocused
                       ? 'Текст, или «/» для поля'
-                      : isConsent
-                        ? 'Текст согласия'
-                        : 'Введите текст вопроса'
-                    : undefined
+                      : undefined
+                    : isConsent
+                      ? 'Текст согласия'
+                      : 'Введите текст вопроса'
                 }
                 onChange={(e) => updateBlock(block.id, { label: e.target.value })}
                 onFocus={() => setLabelFocused(true)}
@@ -320,7 +322,10 @@ function DescriptionField({ block }: { block: Block }) {
           setOpen(true)
           requestAnimationFrame(() => ref.current?.focus())
         }}
-        className="mt-1 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 group-focus-within:opacity-100"
+        // Не opacity-0, а hidden: прозрачная кнопка продолжала занимать строку, и
+        // под неактивным блоком висел пустой отступ. display:none заодно убирает её
+        // из таб-порядка, пока блок неактивен (при фокусе внутри блока — вернётся).
+        className="mt-1 hidden text-xs text-muted-foreground hover:text-foreground group-hover:block group-focus-within:block"
       >
         + Описание
       </button>
