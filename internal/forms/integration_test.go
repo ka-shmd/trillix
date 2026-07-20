@@ -121,10 +121,10 @@ func TestForms_CRUDFlow(t *testing.T) {
 		t.Fatalf("неожиданная форма: %+v", created)
 	}
 
-	// GET → отдаёт draft_schema (точка входа заглушки редактора).
+	// GET → отдаёт draft_schema, канонизированный до v2 (CanonicalV2 на отдаче).
 	detail := getFormDetail(t, c, srv, created.ID, http.StatusOK)
-	if string(detail.DraftSchema) != `{"blocks":[]}` {
-		t.Fatalf("draftSchema = %s, ожидался пустой каркас", detail.DraftSchema)
+	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != 2 || len(got.Blocks) != 0 {
+		t.Fatalf("draftSchema = %s, ожидался пустой каркас v2", detail.DraftSchema)
 	}
 
 	// Переименование.
@@ -520,8 +520,9 @@ func TestForms_PublicFetch(t *testing.T) {
 	if pub.Token == "" || etag == "" {
 		t.Fatalf("нет token (%q) или ETag (%q)", pub.Token, etag)
 	}
+	// Наружу уходит v2: welded-вопрос v1 разложен на подпись title + поле b1.
 	got := parseSchema(t, pub.Schema)
-	if len(got.Blocks) != 1 || got.Blocks[0].ID != "b1" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема опубликованной версии неверна: %+v", got)
 	}
 
