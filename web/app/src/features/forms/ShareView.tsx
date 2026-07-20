@@ -98,7 +98,9 @@ function LinkBlock({ link, inactive }: { link: string; inactive: boolean }) {
 function linkTeaser(blocks: Block[]): string {
   const labels: string[] = []
   for (const b of blocks) {
-    const label = b.label.trim()
+    // Тизер — из блоков-подписей (title/label), как og:description на бэке.
+    if (b.type !== 'title' && b.type !== 'label') continue
+    const label = (b.text ?? '').trim()
     if (!label) continue
     labels.push(label)
     if (labels.length === 3) break

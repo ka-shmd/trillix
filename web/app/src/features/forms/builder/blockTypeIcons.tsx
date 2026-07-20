@@ -12,6 +12,8 @@ import {
   Phone,
   Ruler,
   Pilcrow,
+  Heading,
+  Tag,
   Type,
 } from 'lucide-react'
 import { type BlockType } from '@entities/formSchema'
@@ -32,5 +34,8 @@ export const typeIcons: Record<BlockType, ReactNode> = {
   multi_choice: <CheckSquare className="size-4" />,
   date: <Calendar className="size-4" />,
   consent: <ShieldCheck className="size-4" />,
+  title: <Type className="size-4" />,
+  label: <Tag className="size-4" />,
+  heading: <Heading className="size-4" />,
   image: <Image className="size-4" />,
 }

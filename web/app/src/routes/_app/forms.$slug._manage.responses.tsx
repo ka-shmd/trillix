@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { type Block, isAnswerableType } from '@entities/formSchema'
+import { groupMeta } from '@fields/groups'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import {
@@ -60,9 +61,13 @@ function ResponsesPage() {
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
   const total = list.data?.pages[0]?.total ?? 0
-  // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (text) ответов
-  // не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
-  const blocks = (form.data?.draftSchema.blocks ?? []).filter((b) => isAnswerableType(b.type))
+  // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (подписи/контент)
+  // ответов не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
+  // Подпись колонки берётся из группы блока (title/label), поэтому считаем meta по
+  // всем блокам, а колонки — по отвечаемым.
+  const allBlocks = form.data?.draftSchema.blocks ?? []
+  const groups = groupMeta(allBlocks)
+  const blocks = allBlocks.filter((b) => isAnswerableType(b.type))
 
   return (
     <>
@@ -167,6 +172,7 @@ function ResponsesPage() {
             <SubmissionPanel
               submission={selected}
               blocks={blocks}
+              groups={groups}
               formId={formId}
               onClose={() => setOpen(false)}
             />
@@ -182,11 +188,13 @@ function ResponsesPage() {
 function SubmissionPanel({
   submission,
   blocks,
+  groups,
   formId,
   onClose,
 }: {
   submission: Submission
   blocks: Block[]
+  groups: ReturnType<typeof groupMeta>
   formId: string
   onClose: () => void
 }) {
@@ -209,7 +217,7 @@ function SubmissionPanel({
       <dl className="flex flex-col gap-4">
         {blocks.map((b) => (
           <div key={b.id}>
-            <dt className="text-sm font-medium">{blockTitle(b)}</dt>
+            <dt className="text-sm font-medium">{blockTitle(b, groups.get(b.groupId)?.caption)}</dt>
             <dd className="mt-0.5 text-sm text-muted-foreground">
               {formatAnswer(b, submission.answers[b.id]) || '—'}
             </dd>
@@ -246,7 +254,7 @@ function SubmissionPanel({
   )
 }
 
-function blockTitle(b: Block): string {
-  return b.label.trim() || '(без названия)'
+function blockTitle(b: Block, caption?: string): string {
+  return (caption ?? '').trim() || (b.settings?.placeholder ?? '').trim() || '(без названия)'
 }
 

@@ -1,106 +1,93 @@
 import { type BlockType } from '@entities/formSchema'
 
-// Группа блока в диалоге добавления: «Вопросы» (отвечаемые поля) и «Лэйаут»
-// (неотвечаемые блоки оформления — пока только текст).
-export type BlockGroup = 'question' | 'layout'
+// Разделы меню добавления блока (v2, фаза 8.7):
+//   • «Вопросы» — бандл: подпись (title) + поле. Выбор создаёт озаглавленный вопрос
+//     (дефолт Tally: заголовок стоит).
+//   • «Отдельные поля» — голое поле без заголовка (регистрация: несколько полей с
+//     плейсхолдерами, подпись в аналитике генерится).
+//   • «Лэйаут» — подписи и контент (title/label/heading/text/image) по отдельности.
+export type BlockGroup = 'question' | 'field' | 'layout'
 
 export const BLOCK_GROUP_LABELS: Record<BlockGroup, string> = {
   question: 'Вопросы',
-  layout: 'Лэйаут блоки',
+  field: 'Отдельные поля',
+  layout: 'Лэйаут',
 }
 
-// Порядок групп в диалоге.
-export const BLOCK_GROUP_ORDER: BlockGroup[] = ['question', 'layout']
+export const BLOCK_GROUP_ORDER: BlockGroup[] = ['question', 'field', 'layout']
 
-export interface BlockTypeMeta {
-  type: BlockType
-  label: string
+// MenuItem — пункт меню. bundle=true (раздел «Вопросы») создаёт title + поле; иначе
+// один блок типа type. key уникален (тип может стоять и в «Вопросах», и в «Полях»).
+export interface MenuItem {
+  key: string
   group: BlockGroup
+  type: BlockType
+  bundle: boolean
+  label: string
   description: string
 }
 
-// Метаданные типов блоков: подпись, группа, описание. Единственное место
-// соответствия type → подпись/описание; slash-меню и диалог берут отсюда.
-export const BLOCK_TYPES: ReadonlyArray<BlockTypeMeta> = [
-  {
-    type: 'short_text',
-    label: 'Короткий ответ',
-    group: 'question',
-    description: 'Однострочный ответ — имя, короткая фраза, ссылка.',
-  },
-  {
-    type: 'long_text',
-    label: 'Длинный ответ',
-    group: 'question',
-    description: 'Многострочный развёрнутый ответ.',
-  },
-  {
-    type: 'email',
-    label: 'Email',
-    group: 'question',
-    description: 'Адрес электронной почты с проверкой формата.',
-  },
-  {
-    type: 'phone',
-    label: 'Телефон',
-    group: 'question',
-    description: 'Номер телефона. Проверяется мягко — любой формат записи.',
-  },
-  {
-    type: 'number',
-    label: 'Число',
-    group: 'question',
-    description: 'Числовой ответ — количество, возраст, сумма.',
-  },
-  {
-    type: 'scale',
-    label: 'Шкала',
-    group: 'question',
-    description: 'Оценка по шкале — от 1 до 5, NPS 0–10 и подобное.',
-  },
-  {
-    type: 'single_choice',
-    label: 'Один из списка',
-    group: 'question',
-    description: 'Выбор одного варианта из списка (радиокнопки).',
-  },
-  {
-    type: 'dropdown',
-    label: 'Выпадающий список',
-    group: 'question',
-    description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.',
-  },
-  {
-    type: 'multi_choice',
-    label: 'Несколько из списка',
-    group: 'question',
-    description: 'Выбор нескольких вариантов из списка (флажки).',
-  },
-  {
-    type: 'date',
-    label: 'Дата',
-    group: 'question',
-    description: 'Выбор даты.',
-  },
-  {
-    type: 'consent',
-    label: 'Согласие',
-    group: 'question',
-    description: 'Галочка согласия со своим текстом — обработка данных, оферта, рассылка.',
-  },
-  {
-    type: 'text',
-    label: 'Текст',
-    group: 'layout',
-    description: 'Статический абзац текста — заголовок раздела или пояснение. Не запрашивает ответ.',
-  },
-  {
-    type: 'image',
-    label: 'Картинка',
-    group: 'layout',
-    description: 'Изображение на полотне формы (PNG или JPEG). Не запрашивает ответ.',
-  },
+// Отвечаемые типы — их подписи/описания (единый источник). Стоят и в «Вопросах»
+// (бандлом), и в «Отдельных полях» (голыми).
+const FIELD_TYPES: { type: BlockType; label: string; description: string }[] = [
+  { type: 'short_text', label: 'Короткий ответ', description: 'Однострочный ответ — имя, короткая фраза, ссылка.' },
+  { type: 'long_text', label: 'Длинный ответ', description: 'Многострочный развёрнутый ответ.' },
+  { type: 'email', label: 'Email', description: 'Адрес электронной почты с проверкой формата.' },
+  { type: 'phone', label: 'Телефон', description: 'Номер телефона. Проверяется мягко — любой формат записи.' },
+  { type: 'number', label: 'Число', description: 'Числовой ответ — количество, возраст, сумма.' },
+  { type: 'scale', label: 'Шкала', description: 'Оценка по шкале — от 1 до 5, NPS 0–10 и подобное.' },
+  { type: 'single_choice', label: 'Один из списка', description: 'Выбор одного варианта из списка (радиокнопки).' },
+  { type: 'dropdown', label: 'Выпадающий список', description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.' },
+  { type: 'multi_choice', label: 'Несколько из списка', description: 'Выбор нескольких вариантов из списка (флажки).' },
+  { type: 'date', label: 'Дата', description: 'Выбор даты.' },
+  { type: 'consent', label: 'Согласие', description: 'Галочка согласия со своим текстом — обработка данных, оферта, рассылка.' },
 ]
 
-export const blockTypeLabel = (t: BlockType): string =>
-  BLOCK_TYPES.find((b) => b.type === t)?.label ?? t
+// Лэйаут-типы (подписи и контент) — по одному пункту.
+const LAYOUT_TYPES: { type: BlockType; label: string; description: string }[] = [
+  { type: 'title', label: 'Заголовок вопроса', description: 'Крупная подпись вопроса. Аналитика берёт из неё имя вопроса.' },
+  { type: 'label', label: 'Подпись', description: 'Мелкая подпись поля — для компактных вопросов и полей регистрации.' },
+  { type: 'heading', label: 'Заголовок раздела', description: 'Крупный заголовок секции формы. Не запрашивает ответ.' },
+  { type: 'text', label: 'Текст', description: 'Статический абзац — пояснение или инструкция. Не запрашивает ответ.' },
+  { type: 'image', label: 'Картинка', description: 'Изображение на полотне формы (PNG или JPEG). Не запрашивает ответ.' },
+]
+
+export const MENU_ITEMS: ReadonlyArray<MenuItem> = [
+  ...FIELD_TYPES.map(
+    (f): MenuItem => ({
+      key: `q_${f.type}`,
+      group: 'question',
+      type: f.type,
+      bundle: true,
+      label: f.label,
+      description: `${f.description} С заголовком.`,
+    }),
+  ),
+  ...FIELD_TYPES.map(
+    (f): MenuItem => ({
+      key: `f_${f.type}`,
+      group: 'field',
+      type: f.type,
+      bundle: false,
+      label: f.label,
+      description: `${f.description} Без заголовка — подпись сгенерируется из плейсхолдера.`,
+    }),
+  ),
+  ...LAYOUT_TYPES.map(
+    (l): MenuItem => ({
+      key: `l_${l.type}`,
+      group: 'layout',
+      type: l.type,
+      bundle: false,
+      label: l.label,
+      description: l.description,
+    }),
+  ),
+]
+
+// blockTypeLabel — человеческая подпись типа блока (единая с меню). Тип встречается
+// в нескольких пунктах, но подпись у него одна.
+const TYPE_LABELS = new Map<BlockType, string>(
+  [...FIELD_TYPES, ...LAYOUT_TYPES].map((t) => [t.type, t.label]),
+)
+export const blockTypeLabel = (t: BlockType): string => TYPE_LABELS.get(t) ?? t

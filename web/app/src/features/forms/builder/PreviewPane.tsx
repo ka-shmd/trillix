@@ -1,5 +1,6 @@
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
+import { groupMeta } from '@fields/groups'
 
 import { useBuilderStore } from './storeContext'
 
@@ -10,6 +11,7 @@ export function PreviewPane({ title }: { title: string }) {
   const blocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
+  const groups = groupMeta(blocks)
 
   return (
     <div className="rf-page">
@@ -19,7 +21,12 @@ export function PreviewPane({ title }: { title: string }) {
       ) : (
         <div className="rf-form">
           {blocks.map((block) => (
-            <BlockField key={block.id} block={block} />
+            <BlockField
+              key={block.id}
+              block={block}
+              captionText={groups.get(block.groupId)?.caption}
+              captionRequired={groups.get(block.groupId)?.required}
+            />
           ))}
         </div>
       )}

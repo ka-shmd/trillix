@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { ArrowRight, Search } from 'lucide-react'
-import { type Block, type BlockType, isChoiceType } from '@entities/formSchema'
+import { type Block, type BlockType, carriesText, isChoiceType } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
-import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, BLOCK_TYPES } from './blockTypes'
+import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
 import { typeIcons } from './blockTypeIcons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -18,7 +18,7 @@ export function BlockTypeDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onPick: (type: BlockType) => void
+  onPick: (item: MenuItem) => void
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -33,20 +33,20 @@ export function BlockTypeDialog({
   )
 }
 
-function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
+function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState<BlockType>(BLOCK_TYPES[0]!.type)
+  const [activeKey, setActiveKey] = useState<string>(MENU_ITEMS[0]!.key)
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return q ? BLOCK_TYPES.filter((b) => b.label.toLowerCase().includes(q)) : BLOCK_TYPES
+    return q ? MENU_ITEMS.filter((b) => b.label.toLowerCase().includes(q)) : MENU_ITEMS
   }, [query])
 
-  // Показываемый тип: активный, если он в отфильтрованном списке, иначе первый
+  // Показываемый пункт: активный, если он в отфильтрованном списке, иначе первый
   // видимый. Производное значение — без синхронизации через эффект (setState в
   // эффекте под запретом линта).
-  const shown = filtered.some((b) => b.type === active) ? active : filtered[0]?.type
-  const activeMeta = BLOCK_TYPES.find((b) => b.type === shown)
+  const shown = filtered.some((b) => b.key === activeKey) ? activeKey : filtered[0]?.key
+  const activeMeta = MENU_ITEMS.find((b) => b.key === shown)
 
   return (
     <>
@@ -58,7 +58,7 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && shown) onPick(shown)
+              if (e.key === 'Enter' && activeMeta) onPick(activeMeta)
             }}
             placeholder="Поиск по названию…"
             className="pl-8"
@@ -66,8 +66,8 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
         </div>
         <Button
           type="button"
-          onClick={() => shown && onPick(shown)}
-          disabled={!shown}
+          onClick={() => activeMeta && onPick(activeMeta)}
+          disabled={!activeMeta}
           className="shrink-0 gap-1.5"
         >
           Добавить <ArrowRight className="size-4" />
@@ -87,13 +87,13 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
                 </div>
                 {items.map((b) => (
                   <button
-                    key={b.type}
+                    key={b.key}
                     type="button"
-                    onClick={() => setActive(b.type)}
-                    onDoubleClick={() => onPick(b.type)}
-                    onFocus={() => setActive(b.type)}
+                    onClick={() => setActiveKey(b.key)}
+                    onDoubleClick={() => onPick(b)}
+                    onFocus={() => setActiveKey(b.key)}
                     className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm ${
-                      shown === b.type ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
+                      shown === b.key ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                     }`}
                   >
                     <span className="text-muted-foreground">{typeIcons[b.type]}</span>
@@ -124,7 +124,7 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
                 <div className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Пример
                 </div>
-                <BlockField block={sampleBlock(activeMeta.type)} />
+                <BlockField block={sampleBlock(activeMeta.type)} captionText="Ваш вопрос" />
               </div>
             </>
           )}
@@ -137,10 +137,20 @@ function DialogBody({ onPick }: { onPick: (type: BlockType) => void }) {
 // sampleBlock — образец блока для превью: реальный @fields/BlockField рисует его
 // как увидит респондент. choice получает пару вариантов, text — абзац-пример.
 function sampleBlock(type: BlockType): Block {
+  const text = carriesText(type)
+    ? type === 'text'
+      ? 'Пример пояснительного текста для респондента.'
+      : type === 'heading'
+        ? 'Заголовок раздела'
+        : type === 'consent'
+          ? 'Соглашаюсь с условиями'
+          : 'Ваш вопрос'
+    : ''
   const base: Block = {
     id: 'sample',
+    groupId: 'sample',
     type,
-    label: type === 'text' ? 'Пример пояснительного текста для респондента.' : 'Ваш вопрос',
+    text,
   }
   if (isChoiceType(type)) {
     return {
