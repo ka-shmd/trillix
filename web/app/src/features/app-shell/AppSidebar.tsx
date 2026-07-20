@@ -45,7 +45,7 @@ export function AppSidebar({
     <Sidebar>
       <SidebarHeader>
         <div className="flex items-center px-2 py-1.5">
-          <span className="text-lg font-bold tracking-tight">Trierra</span>
+          <span className="text-lg font-bold tracking-tight">Trillix</span>
         </div>
       </SidebarHeader>
 

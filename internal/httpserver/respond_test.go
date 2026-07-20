@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ka-shmd/trierra/internal/domain"
+	"github.com/ka-shmd/trillix/internal/domain"
 )
 
 func TestWriteError_Mapping(t *testing.T) {

@@ -13,9 +13,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
 // Middleware — HTTP-обёртка (RequireAuth из auth), инжектируемая в composition root:

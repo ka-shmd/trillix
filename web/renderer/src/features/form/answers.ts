@@ -17,7 +17,7 @@ export function answersReducer(state: Answers, action: AnswersAction): Answers {
 // Черновик ответов переживает F5, но не закрытие вкладки — sessionStorage. Ключ
 // включает slug и версию: публикация новой версии обнуляет чужой черновик, а не
 // подставляет старые ответы в изменившуюся форму.
-const storageKey = (slug: string, version: number) => `trierra:answers:${slug}:${version}`
+const storageKey = (slug: string, version: number) => `trillix:answers:${slug}:${version}`
 
 // sessionStorage мог быть подпорчен (другая вкладка, ручная правка) — читаем через
 // Zod и при любом сбое возвращаем пустой черновик, а не роняем форму.

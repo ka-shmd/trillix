@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // Submission — ответ в проекции листинга кабинета: id, номер версии формы, по

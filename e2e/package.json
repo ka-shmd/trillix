@@ -1,5 +1,5 @@
 {
-  "name": "@trierra/e2e",
+  "name": "@trillix/e2e",
   "version": "0.0.0",
   "private": true,
   "description": "Сквозной Playwright-тест против prod-local (фаза 7, шаг 7).",

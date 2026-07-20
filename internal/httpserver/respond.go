@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/ka-shmd/trierra/internal/domain"
+	"github.com/ka-shmd/trillix/internal/domain"
 )
 
 // errorEnvelope — единый формат ошибок API (ARCHITECTURE §4.4):

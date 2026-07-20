@@ -4,10 +4,10 @@
 # и CSRF в настоящей схеме за Caddy. Полный функциональный прогон (форма от и до) —
 # это e2e шага 7, не здесь.
 #
-# Аргумент: имя compose-проекта (для имени docker-сети). По умолчанию — trierra-prod-local.
+# Аргумент: имя compose-проекта (для имени docker-сети). По умолчанию — trillix-prod-local.
 set -euo pipefail
 
-project="${1:-trierra-prod-local}"
+project="${1:-trillix-prod-local}"
 net="${project}_default"
 APP=app.localhost
 REND=f.localhost

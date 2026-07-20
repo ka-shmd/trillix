@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // fakeStore — герметичная подмена репозитория (без БД, инвариант тестов).

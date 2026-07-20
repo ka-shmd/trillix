@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/ka-shmd/trierra/internal/domain"
+	"github.com/ka-shmd/trillix/internal/domain"
 )
 
 // RateLimiter — ведро лимитера, каким его видит транспорт. Реализация —

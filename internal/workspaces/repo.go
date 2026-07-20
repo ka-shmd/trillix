@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // Workspace — воркспейс пользователя (доменное представление, без утечки

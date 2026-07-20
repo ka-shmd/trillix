@@ -24,13 +24,13 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/blob"
-	"github.com/ka-shmd/trierra/internal/forms"
-	"github.com/ka-shmd/trierra/internal/media"
-	"github.com/ka-shmd/trierra/internal/pgtest"
-	"github.com/ka-shmd/trierra/internal/postgres"
-	"github.com/ka-shmd/trierra/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/blob"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/media"
+	"github.com/ka-shmd/trillix/internal/pgtest"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
 
 const testBucket = "app-media"

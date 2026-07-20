@@ -3,8 +3,8 @@
 COMPOSE := docker compose --env-file .env -f compose.dev.yml
 
 # prod-local контур: тот же образ/compose, что уедет на прод, но на *.localhost.
-API_IMAGE    := ghcr.io/ka-shmd/trierra-api:latest
-PROD_PROJECT := trierra-prod-local
+API_IMAGE    := ghcr.io/ka-shmd/trillix-api:latest
+PROD_PROJECT := trillix-prod-local
 PROD_COMPOSE := docker compose -p $(PROD_PROJECT) --env-file .env.prod-local -f deploy/compose.prod.yml
 
 # Явный список Go-пакетов: `./...` заполз бы в web/**/node_modules, где npm-пакеты
@@ -48,9 +48,9 @@ migrate-up: ## Применить все миграции
 migrate-down: ## Откатить последнюю миграцию
 	go run ./cmd/api migrate down
 
-seed: ## Наполнить БД демо-данными (demo@trierra.local / demo-password + 60 форм + CSV-демо с 2 версиями и 10k ответов)
+seed: ## Наполнить БД демо-данными (demo@trillix.local / demo-password + 60 форм + CSV-демо с 2 версиями и 10k ответов)
 	go run ./cmd/api seed
-	@echo "seed готов: вход demo@trierra.local / demo-password"
+	@echo "seed готов: вход demo@trillix.local / demo-password"
 
 sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
 	go tool sqlc generate

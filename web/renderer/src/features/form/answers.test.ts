@@ -54,9 +54,9 @@ describe('sessionStorage черновика', () => {
     expect(loadAnswers('slug2', 1)).toEqual({}) // другой slug — пусто
   })
   it('битые данные в хранилище → пустой черновик, без падения', () => {
-    sessionStorage.setItem('trierra:answers:slug1:1', '{не json')
+    sessionStorage.setItem('trillix:answers:slug1:1', '{не json')
     expect(loadAnswers('slug1', 1)).toEqual({})
-    sessionStorage.setItem('trierra:answers:slug1:1', '{"b1": 42}') // число — не Answer
+    sessionStorage.setItem('trillix:answers:slug1:1', '{"b1": 42}') // число — не Answer
     expect(loadAnswers('slug1', 1)).toEqual({})
   })
 })

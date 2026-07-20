@@ -52,7 +52,7 @@ services:
   # бинарник через go:embed). Гейт для api: тот стартует только после успешного
   # завершения этого сервиса, поэтому схема всегда актуальна до первого запроса.
   migrate:
-    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    image: ghcr.io/ka-shmd/trillix-api:${TAG:-latest}
     command: ["migrate", "up"]
     environment: *app-env
     depends_on:
@@ -94,7 +94,7 @@ services:
     restart: "no"
 
   api:
-    image: ghcr.io/ka-shmd/trierra-api:${TAG:-latest}
+    image: ghcr.io/ka-shmd/trillix-api:${TAG:-latest}
     environment: *app-env
     volumes:
       # Собранный index.html рендерера read-only: Go читает его при старте и отдаёт

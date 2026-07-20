@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
 // ogMetaMarker — плейсхолдер в собранном index.html рендерера (web/renderer/index.html),

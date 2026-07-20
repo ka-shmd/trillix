@@ -20,10 +20,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/pgtest"
-	"github.com/ka-shmd/trierra/internal/postgres"
-	"github.com/ka-shmd/trierra/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/pgtest"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
 
 var testPool *pgxpool.Pool

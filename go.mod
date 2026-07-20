@@ -1,4 +1,4 @@
-module github.com/ka-shmd/trierra
+module github.com/ka-shmd/trillix
 
 go 1.26.0
 

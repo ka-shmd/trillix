@@ -18,13 +18,13 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/forms"
-	"github.com/ka-shmd/trierra/internal/postgres"
-	"github.com/ka-shmd/trierra/internal/ratelimit"
-	"github.com/ka-shmd/trierra/internal/submissions"
-	"github.com/ka-shmd/trierra/internal/visits"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/visits"
 )
 
 // fullStack поднимает auth + приватный листинг + публичный приём поверх контейнерного

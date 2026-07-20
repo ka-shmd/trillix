@@ -12,19 +12,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/config"
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/forms"
-	"github.com/ka-shmd/trierra/internal/postgres"
-	"github.com/ka-shmd/trierra/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/config"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/submissions"
 )
 
 // Демо-пользователь и объём сидирования. Учётка чисто dev-фикстура (пароль —
 // известная константа в Makefile-подсказке, не секрет). 60 форм > одной страницы
 // (DefaultPageLimit=50) — ровно чтобы проверять курсорную пагинацию глазами.
 const (
-	seedEmail    = "demo@trierra.local"
+	seedEmail    = "demo@trillix.local"
 	seedPassword = "demo-password"
 	seedFormsN   = 60
 

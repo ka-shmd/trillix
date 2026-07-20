@@ -14,7 +14,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // Start запускает контейнер Postgres 16, прогоняет миграции и возвращает пул к
@@ -22,7 +22,7 @@ import (
 // один контейнер на пакет, тесты изолируются очисткой данных между собой.
 func Start(ctx context.Context) (pool *pgxpool.Pool, stop func(), err error) {
 	container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
-		tcpostgres.WithDatabase("trierra"),
+		tcpostgres.WithDatabase("trillix"),
 		tcpostgres.WithUsername("test"),
 		tcpostgres.WithPassword("test"),
 		testcontainers.WithWaitStrategy(
