@@ -118,18 +118,22 @@ func TestPublicHTML_NotPublished_Returns404(t *testing.T) {
 }
 
 func TestOGDescriptionFromSchema(t *testing.T) {
-	// Берёт до трёх непустых label, пропускает пустые, режет по рунам.
+	// Берёт текст до трёх непустых блоков-подписей (title/label, v2), пропускает
+	// пустые, режет по рунам. Схема валидируется (апгрейд v1→v2 на лету).
 	long := strings.Repeat("я", 250)
+	title := func(id, text string) string {
+		return `{"id":"` + id + `","groupId":"g_` + id + `","type":"title","text":"` + text + `"}`
+	}
 	cases := []struct {
 		name   string
 		schema string
 		want   string
 	}{
-		{"три блока", `{"blocks":[{"label":"A"},{"label":"B"},{"label":"C"},{"label":"D"}]}`, "A · B · C"},
-		{"пустые пропускаются", `{"blocks":[{"label":"  "},{"label":"X"}]}`, "X"},
+		{"три блока", `{"schemaVersion":2,"blocks":[` + title("a", "A") + `,` + title("b", "B") + `,` + title("c", "C") + `,` + title("d", "D") + `]}`, "A · B · C"},
+		{"пустые пропускаются", `{"schemaVersion":2,"blocks":[` + title("a", "  ") + `,` + title("b", "X") + `]}`, "X"},
 		{"нет блоков", `{"blocks":[]}`, ""},
 		{"битая схема", `{oops`, ""},
-		{"обрезка по рунам", `{"blocks":[{"label":"` + long + `"}]}`, string([]rune(long)[:200]) + "…"},
+		{"обрезка по рунам", `{"schemaVersion":2,"blocks":[` + title("a", long) + `]}`, string([]rune(long)[:200]) + "…"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

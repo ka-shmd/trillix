@@ -224,9 +224,10 @@ func TestForms_Duplicate(t *testing.T) {
 		t.Fatalf("копия должна иметь новые id/slug: %+v (оригинал %s/%s)", dup, form.ID, form.Slug)
 	}
 
-	// Черновик копии = черновик оригинала (канонизированный).
+	// Черновик копии = черновик оригинала (канонизированный, апгрейд v1→v2:
+	// вопрос разложен на подпись title + поле b1).
 	got := parseSchema(t, getFormDetail(t, alice, srv, dup.ID, http.StatusOK).DraftSchema)
-	if len(got.Blocks) != 1 || got.Blocks[0].ID != "b1" || got.Blocks[0].Label != "Имя" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема копии не совпадает с оригиналом: %+v", got)
 	}
 
@@ -344,14 +345,18 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 		t.Fatalf("updated_at не сдвинулся после сохранения: %s", saved.UpdatedAt)
 	}
 
-	// GET отдаёт канонизированный документ: schemaVersion проставлен (=1), блок цел.
-	// Порядок ключей задаёт JSONB (не Go-маршалинг), поэтому сверяем разбором.
+	// GET отдаёт канонизированный документ: schemaVersion проставлен (=2, апгрейд
+	// v1→v2), вопрос разложен на подпись + поле. Порядок ключей задаёт JSONB (не
+	// Go-маршалинг), поэтому сверяем разбором.
 	got := parseSchema(t, getFormDetail(t, c, srv, form.ID, http.StatusOK).DraftSchema)
-	if got.SchemaVersion != 1 || len(got.Blocks) != 1 {
-		t.Fatalf("канонизация не проставила schemaVersion/блок: %+v", got)
+	if got.SchemaVersion != 2 || len(got.Blocks) != 2 {
+		t.Fatalf("канонизация не проставила schemaVersion/группу: %+v", got)
 	}
-	if b := got.Blocks[0]; b.ID != "b1" || b.Type != "short_text" || b.Label != "Имя" || !b.Required {
-		t.Fatalf("блок сохранён неверно: %+v", b)
+	if got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" {
+		t.Fatalf("подпись сохранена неверно: %+v", got.Blocks[0])
+	}
+	if b := got.Blocks[1]; b.ID != "b1" || b.Type != "short_text" || !b.Required {
+		t.Fatalf("поле сохранено неверно: %+v", b)
 	}
 
 	// Мусор (неизвестный тип блока) с актуальным updated_at → 422.

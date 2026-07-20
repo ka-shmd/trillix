@@ -120,22 +120,26 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
 }
 
-// ogDescriptionFromSchema собирает подзаголовок превью из формы: заголовки первых
-// блоков-вопросов через « · ». Отдельного поля описания у формы нет, поэтому берём
-// осмысленный тизер из её содержимого. Схема уже валидна (проверена при публикации);
-// разбор на всякий случай отказоустойчив — сбой даёт пустое описание, а не 500.
+// ogDescriptionFromSchema собирает подзаголовок превью из формы: тексты первых
+// блоков-подписей (title/label) через « · ». Отдельного поля описания у формы нет,
+// поэтому берём осмысленный тизер из её содержимого. ValidateSchema приводит v1→v2
+// на лету (подпись переехала из поля в отдельный блок); разбор отказоустойчив —
+// сбой даёт пустое описание, а не 500.
 func ogDescriptionFromSchema(schema json.RawMessage) string {
-	var s domain.FormSchema
-	if err := json.Unmarshal(schema, &s); err != nil {
+	s, err := domain.ValidateSchema(schema)
+	if err != nil {
 		return ""
 	}
 	labels := make([]string, 0, 3)
 	for _, b := range s.Blocks {
-		label := strings.TrimSpace(b.Label)
-		if label == "" {
+		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
 			continue
 		}
-		labels = append(labels, label)
+		text := strings.TrimSpace(b.Text)
+		if text == "" {
+			continue
+		}
+		labels = append(labels, text)
 		if len(labels) == 3 {
 			break
 		}

@@ -1,43 +1,55 @@
 package domain
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Модель вопросов формы «по всем версиям» — одно правило на три экрана: выгрузку
 // CSV (csv.go), сводку (summary.go) и воронку (funnel.go).
 //
 // Правило: форма живёт версиями, и вопрос, удалённый в v3, всё ещё имеет ответы,
 // собранные по v1. Показывать только вопросы свежей версии значило бы прятать уже
-// собранные данные, поэтому берётся ОБЪЕДИНЕНИЕ блоков по всем версиям. Обход идёт
-// от свежей версии к старой: первое появление block_id фиксирует и его позицию
-// (свежая раскладка — главная), и подпись (из свежайшей версии, где блок есть).
+// собранные данные, поэтому берётся ОБЪЕДИНЕНИЕ отвечаемых блоков по всем версиям.
+// Обход идёт от свежей версии к старой: первое появление block_id фиксирует и его
+// позицию (свежая раскладка — главная), и подпись (из свежайшей версии, где блок
+// есть).
+//
+// Подпись (v2, фаза 8.7) берётся НЕ из самого поля, а из его ГРУППЫ: блок title
+// (или label) той же группы. Связь по groupId, а не по позиции — перетаскивание
+// не переклеивает подпись на чужой инпут. Нет подписи — генерируется осмысленное
+// имя (плейсхолдер, иначе тип+номер), чтобы колонка/шаг не остались безымянными.
 //
 // Вынесено сюда на третьем потребителе: до воронки правило существовало двумя
 // копиями (в NewCSVBuilder и NewSummaryBuilder). Копии правила «что считать
 // вопросом» опасны тем, что расхождение не падает, а молча показывает владельцу
-// РАЗНЫЕ формы на соседних экранах — тот же класс ошибок, что описан в «трёх
-// граблях» web/shared/fields/README.md.
+// РАЗНЫЕ формы на соседних экранах.
 
 // Question — вопрос формы в модели по всем версиям.
 type Question struct {
-	// ID — стабильный id блока (он же ключ в answers и в form_visits.last_block_id).
+	// ID — стабильный id отвечаемого блока (он же ключ в answers и в
+	// form_visits.last_block_id).
 	ID string
-	// Label — подпись вопроса: label блока, а у безымянного — фолбэк с id.
+	// Label — подпись вопроса: текст title/label его группы, а у безымянного —
+	// сгенерированный фолбэк (плейсхолдер/тип+номер).
 	Label string
-	// Block — блок ИЗ СВЕЖАЙШЕЙ версии, где он встречается. Нужен потребителям,
-	// которым мало id и подписи: сводке — тип и диапазон шкалы.
+	// Block — отвечаемый блок ИЗ СВЕЖАЙШЕЙ версии, где он встречается. Нужен
+	// потребителям, которым мало id и подписи: сводке — тип и диапазон шкалы.
 	Block Block
 }
 
-// QuestionOrder — вопросы формы в порядке показа. Неотвечаемые блоки (text, image)
-// в модель не входят: у них нет ответов, и ни в колонке CSV, ни в шаге воронки им
-// делать нечего.
+// QuestionOrder — вопросы формы в порядке показа. Неотвечаемые блоки (подписи и
+// контент) в модель не входят: у них нет ответов, и ни в колонке CSV, ни в шаге
+// воронки им делать нечего.
 //
 // versions ожидаются по возрастанию номера (как их отдаёт forms.Versions).
 func QuestionOrder(versions []VersionedSchema) []Question {
 	seen := make(map[string]struct{})
 	var out []Question
 	for i := len(versions) - 1; i >= 0; i-- {
-		for _, blk := range versions[i].Schema.Blocks {
+		blocks := versions[i].Schema.Blocks
+		caps := groupCaptions(blocks)
+		for _, blk := range blocks {
 			if blk.Type.isContent() {
 				continue
 			}
@@ -45,18 +57,76 @@ func QuestionOrder(versions []VersionedSchema) []Question {
 				continue
 			}
 			seen[blk.ID] = struct{}{}
-			out = append(out, Question{ID: blk.ID, Label: questionLabel(blk.Label, blk.ID), Block: blk})
+			out = append(out, Question{
+				ID:    blk.ID,
+				Label: questionLabel(blk, caps[blk.GroupID], len(out)),
+				Block: blk,
+			})
 		}
 	}
 	return out
 }
 
-// questionLabel — подпись вопроса: label, а для безымянного блока — узнаваемый
-// фолбэк с id (пустая колонка/шаг в отчёте хуже некрасивой). Имя без префикса csv:
-// правило общее для выгрузки, сводки и воронки, а не свойство формата CSV.
-func questionLabel(label, blockID string) string {
-	if strings.TrimSpace(label) != "" {
-		return label
+// groupCaptions — подпись каждой группы: текст блока title, а при его отсутствии —
+// label. title перебивает label независимо от порядка блоков в группе; пустой
+// текст подписи не в счёт (не должен глушить осмысленный label или фолбэк). В
+// карте — только непустые подписи.
+func groupCaptions(blocks []Block) map[string]string {
+	caps := make(map[string]string)
+	hasTitle := make(map[string]bool)
+	for _, b := range blocks {
+		switch b.Type {
+		case BlockTitle:
+			if strings.TrimSpace(b.Text) != "" && !hasTitle[b.GroupID] {
+				caps[b.GroupID] = b.Text
+				hasTitle[b.GroupID] = true
+			}
+		case BlockLabel:
+			if !hasTitle[b.GroupID] {
+				if _, ok := caps[b.GroupID]; !ok && strings.TrimSpace(b.Text) != "" {
+					caps[b.GroupID] = b.Text
+				}
+			}
+		}
 	}
-	return "(без названия) " + blockID
+	return caps
+}
+
+// blockTypeNames — человеческие имена отвечаемых типов для генерации подписи
+// безымянного вопроса. Дублирует подписи BLOCK_TYPES фронта, но только для
+// фолбэка: забытый тип падает не крашем, а на строковое имя типа.
+var blockTypeNames = map[BlockType]string{
+	BlockShortText:    "Короткий ответ",
+	BlockLongText:     "Длинный ответ",
+	BlockEmail:        "Email",
+	BlockPhone:        "Телефон",
+	BlockNumber:       "Число",
+	BlockScale:        "Шкала",
+	BlockSingleChoice: "Один из списка",
+	BlockDropdown:     "Выпадающий список",
+	BlockMultiChoice:  "Несколько из списка",
+	BlockDate:         "Дата",
+	BlockConsent:      "Согласие",
+}
+
+// questionLabel — подпись вопроса по убыванию приоритета: подпись группы
+// (title/label) → собственный текст блока (у consent — текст согласия) →
+// плейсхолдер → «Тип N». Пустая колонка/шаг в отчёте хуже сгенерированного имени,
+// поэтому безымянного вопроса на экране не бывает. ordinal — 0-based позиция
+// вопроса в порядке показа (для «Тип N» человекочитаемо +1).
+func questionLabel(blk Block, groupCaption string, ordinal int) string {
+	if strings.TrimSpace(groupCaption) != "" {
+		return groupCaption
+	}
+	if strings.TrimSpace(blk.Text) != "" {
+		return blk.Text
+	}
+	if strings.TrimSpace(blk.Settings.Placeholder) != "" {
+		return blk.Settings.Placeholder
+	}
+	name := blockTypeNames[blk.Type]
+	if name == "" {
+		name = string(blk.Type)
+	}
+	return fmt.Sprintf("%s %d", name, ordinal+1)
 }

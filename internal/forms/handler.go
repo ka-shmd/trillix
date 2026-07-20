@@ -172,9 +172,16 @@ func toFormResponse(f Form) formResponse {
 // toFormDetailResponse — деталь формы (GET /forms/{id} и /forms/lookup): метаданные,
 // черновик схемы и живые настройки закрытия (их читает страница настроек кабинета).
 func toFormDetailResponse(f Form) formDetailResponse {
+	// Редактор кабинета знает только текущий формат — старый черновик апгрейдится
+	// до v2 на отдаче. Ошибка невозможна на валидных данных БД; на всякий случай
+	// отдаём сырьё, а не пустоту (лучше отладить, чем потерять черновик).
+	schema := f.DraftSchema
+	if up, err := domain.CanonicalV2(schema); err == nil {
+		schema = up
+	}
 	return formDetailResponse{
 		formResponse:  toFormResponse(f),
-		DraftSchema:   f.DraftSchema,
+		DraftSchema:   schema,
 		CloseAt:       f.CloseAt,
 		ResponseLimit: f.ResponseLimit,
 		ClosedMessage: f.ClosedMessage,

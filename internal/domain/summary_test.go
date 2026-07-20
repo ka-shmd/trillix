@@ -8,13 +8,13 @@ import (
 // собираются из одних и тех же версий, помощники общие намеренно.
 
 func scaleBlock(id, label string, min, max int) Block {
-	b := Block{ID: id, Type: BlockScale, Label: label}
+	b := Block{ID: id, Type: BlockScale}
 	b.Settings.ScaleMin, b.Settings.ScaleMax = &min, &max
 	return b
 }
 
 func choiceBlock(id, label string, typ BlockType, opts ...Option) Block {
-	b := Block{ID: id, Type: typ, Label: label}
+	b := Block{ID: id, Type: typ}
 	b.Settings.Options = opts
 	return b
 }
@@ -145,7 +145,7 @@ func TestSummary_ScaleBucketsCoverRange(t *testing.T) {
 // пустую строку. Неотмеченный чекбокс приходит и пустым значением, и вовсе без
 // ключа — обе формы обязаны попасть в «Нет» одинаково.
 func TestSummary_ConsentNoCountsUnchecked(t *testing.T) {
-	src := Block{ID: "c", Type: BlockConsent, Label: "Согласен на рассылку"}
+	src := Block{ID: "c", Type: BlockConsent}
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
 	b.Add(1, ans(map[string]any{"c": ConsentYes}))
 	b.Add(1, ans(map[string]any{"c": ""})) // снял галочку
@@ -165,7 +165,7 @@ func TestSummary_ConsentNoCountsUnchecked(t *testing.T) {
 
 // Числа: среднее/мин/макс по ответившим, а не по всем ответам формы.
 func TestSummary_NumberStats(t *testing.T) {
-	src := Block{ID: "n", Type: BlockNumber, Label: "Возраст"}
+	src := Block{ID: "n", Type: BlockNumber}
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
 	b.Add(1, ans(map[string]any{"n": "10"}))
 	b.Add(1, ans(map[string]any{"n": "20"}))
@@ -187,7 +187,7 @@ func TestSummary_NumberStats(t *testing.T) {
 // Числовой вопрос без единого ответа: статистики нет (а не среднее 0 — это разные
 // утверждения, и ноль на экране владельца был бы враньём).
 func TestSummary_NumberWithoutAnswersHasNoStats(t *testing.T) {
-	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "n", Type: BlockNumber, Label: "Возраст"})})
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "n", Type: BlockNumber})})
 	b.Add(1, ans(map[string]any{}))
 
 	bs, _ := bucketsOf(t, b.Result(), "n")
@@ -198,7 +198,7 @@ func TestSummary_NumberWithoutAnswersHasNoStats(t *testing.T) {
 
 // Свободный текст: только доля заполнивших; пробельный ответ — не ответ.
 func TestSummary_TextIsFillRate(t *testing.T) {
-	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "t", Type: BlockLongText, Label: "Комментарий"})})
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "t", Type: BlockLongText})})
 	b.Add(1, ans(map[string]any{"t": "всё понравилось"}))
 	b.Add(1, ans(map[string]any{"t": "   "}))
 	b.Add(1, ans(map[string]any{}))
@@ -215,8 +215,8 @@ func TestSummary_TextIsFillRate(t *testing.T) {
 // Знаменатель — по версиям, где вопрос БЫЛ: добавленный в v2 не выглядит
 // пропущенным у всех, кто отвечал по v1.
 func TestSummary_AskedCountsOnlyVersionsWithBlock(t *testing.T) {
-	old := Block{ID: "a", Type: BlockShortText, Label: "Имя"}
-	added := Block{ID: "b", Type: BlockShortText, Label: "Город"}
+	old := Block{ID: "a", Type: BlockShortText}
+	added := Block{ID: "b", Type: BlockShortText}
 
 	bld := NewSummaryBuilder([]VersionedSchema{vs(1, old), vs(2, old, added)})
 	bld.Add(1, ans(map[string]any{"a": "Аня"}))
@@ -238,12 +238,10 @@ func TestSummary_AskedCountsOnlyVersionsWithBlock(t *testing.T) {
 // ответы по нему собраны и прятать их нельзя. Порядок — свежая версия слева,
 // выбывшие следом.
 func TestSummary_KeepsBlocksOfOldVersions(t *testing.T) {
-	v1a := Block{ID: "a", Type: BlockShortText, Label: "Имя v1"}
-	gone := Block{ID: "g", Type: BlockShortText, Label: "Телефон"}
-	v2a := Block{ID: "a", Type: BlockShortText, Label: "Имя v2"}
-	added := Block{ID: "n", Type: BlockShortText, Label: "Город"}
-
-	bld := NewSummaryBuilder([]VersionedSchema{vs(1, v1a, gone), vs(2, v2a, added)})
+	bld := NewSummaryBuilder([]VersionedSchema{
+		vsg(1, grp("Имя v1", Block{ID: "a", Type: BlockShortText}), grp("Телефон", Block{ID: "g", Type: BlockShortText})),
+		vsg(2, grp("Имя v2", Block{ID: "a", Type: BlockShortText}), grp("Город", Block{ID: "n", Type: BlockShortText})),
+	})
 	bld.Add(1, ans(map[string]any{"g": "+79990000000"}))
 
 	sum := bld.Result()
@@ -273,9 +271,9 @@ func TestSummary_KeepsBlocksOfOldVersions(t *testing.T) {
 
 // Неотвечаемые блоки (text, image) в сводку не попадают — у них нет ответов.
 func TestSummary_ExcludesContentBlocks(t *testing.T) {
-	intro := Block{ID: "i", Type: BlockText, Label: "Раздел А"}
-	pic := Block{ID: "p", Type: BlockImage, Label: ""}
-	name := Block{ID: "n", Type: BlockShortText, Label: "Имя"}
+	intro := Block{ID: "i", Type: BlockText}
+	pic := Block{ID: "p", Type: BlockImage}
+	name := Block{ID: "n", Type: BlockShortText}
 
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, intro, pic, name)})
 	b.Add(1, ans(map[string]any{"n": "Аня"}))
@@ -317,8 +315,8 @@ func TestSummary_UnknownOptionSurvives(t *testing.T) {
 // запрос), в сводку не идёт — иначе распределение считало бы то, чего человек не
 // видел. Зеркалит пустую ячейку CSV в той же ситуации.
 func TestSummary_IgnoresAnswerAbsentFromItsVersion(t *testing.T) {
-	old := Block{ID: "a", Type: BlockShortText, Label: "Имя"}
-	added := Block{ID: "b", Type: BlockShortText, Label: "Город"}
+	old := Block{ID: "a", Type: BlockShortText}
+	added := Block{ID: "b", Type: BlockShortText}
 
 	bld := NewSummaryBuilder([]VersionedSchema{vs(1, old), vs(2, old, added)})
 	bld.Add(1, ans(map[string]any{"a": "Аня", "b": "Тверь"})) // b в v1 не было

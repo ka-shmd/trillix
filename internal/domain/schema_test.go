@@ -38,6 +38,16 @@ func TestValidateSchema_Valid(t *testing.T) {
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
 		"пустой label — валидный черновик":     `{"blocks":[{"id":"b","type":"short_text","label":"","required":false,"settings":{}}]}`,
 		"settings опущен":                      `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,
+		// v2: вопрос как группа блоков (фаза 8.7).
+		"v2: группа title+поле":       `{"schemaVersion":2,"blocks":[{"id":"t1","groupId":"g1","type":"title","text":"Имя"},{"id":"b1","groupId":"g1","type":"short_text","settings":{}}]}`,
+		"v2: голое поле без подписи":  `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"placeholder":"you@ex.com"}}]}`,
+		"v2: consent несёт свой text": `{"schemaVersion":2,"blocks":[{"id":"c1","groupId":"g1","type":"consent","text":"Соглашаюсь","required":true,"settings":{}}]}`,
+		"v2: контент между подписью и полем": `{"schemaVersion":2,"blocks":[
+			{"id":"l1","groupId":"g1","type":"label","text":"Логотип"},
+			{"id":"im","groupId":"g1","type":"image","settings":{"imageKey":"ws/x.png","alt":"пример"}},
+			{"id":"b1","groupId":"g1","type":"short_text","settings":{}}
+		]}`,
+		"v2: секционный heading своей группой": `{"schemaVersion":2,"blocks":[{"id":"h1","groupId":"g1","type":"heading","text":"О компании"},{"id":"b1","groupId":"g2","type":"short_text","settings":{}}]}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -63,7 +73,7 @@ func TestValidateSchema_Invalid(t *testing.T) {
 	tooManyOpts := `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[` +
 		strings.Join(manyOpts, ",") + `]}}]}`
 
-	longLabel := `{"blocks":[{"id":"b","type":"short_text","label":"` + strings.Repeat("я", MaxLabelLen+1) + `","settings":{}}]}`
+	longLabel := `{"blocks":[{"id":"b","type":"short_text","label":"` + strings.Repeat("я", MaxTextLen+1) + `","settings":{}}]}`
 	longSubmit := `{"blocks":[],"submitLabel":"` + strings.Repeat("я", MaxSubmitLabelLen+1) + `"}`
 	longPlaceholder := `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"placeholder":"` +
 		strings.Repeat("я", MaxPlaceholderLen+1) + `"}}]}`
@@ -78,35 +88,41 @@ func TestValidateSchema_Invalid(t *testing.T) {
 	cases := map[string]string{
 		"слишком длинный submitLabel": longSubmit,
 		// Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
-		"redirect javascript:":         `{"blocks":[],"redirectUrl":"javascript:alert(document.cookie)"}`,
-		"redirect JavaScript: капсом":  `{"blocks":[],"redirectUrl":"JavaScript:alert(1)"}`,
-		"redirect data:":               `{"blocks":[],"redirectUrl":"data:text/html,<script>alert(1)</script>"}`,
-		"redirect относительный путь":  `{"blocks":[],"redirectUrl":"/thanks"}`,
-		"redirect без схемы":           `{"blocks":[],"redirectUrl":"example.com"}`,
-		"redirect http без хоста":      `{"blocks":[],"redirectUrl":"http://"}`,
-		"слишком длинный thankYouText": longThankYou,
-		"слишком длинный redirectUrl":  longRedirect,
-		"слишком длинный placeholder":  longPlaceholder,
-		"битый JSON":                   `{"blocks":`,
-		"хвост после документа":        `{"blocks":[]}{}`,
-		"неизвестная schemaVersion":    `{"schemaVersion":2,"blocks":[]}`,
-		"лишнее поле верхнего уровня":  `{"blocks":[],"extra":1}`,
-		"лишнее поле блока":            `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{},"foo":1}]}`,
-		"лишнее поле в settings":       `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"foo":1}}]}`,
-		"неизвестный тип блока":        `{"blocks":[{"id":"b","type":"slider","label":"x","settings":{}}]}`,
-		"пустой id блока":              `{"blocks":[{"id":"","type":"short_text","label":"x","settings":{}}]}`,
-		"дубль id блоков":              `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{}},{"id":"b","type":"email","label":"y","settings":{}}]}`,
-		"non-choice с опциями":         `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
-		"imageKey на не-image":         `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"imageKey":"ws/x.png"}}]}`,
-		"alt на не-image":              `{"blocks":[{"id":"b","type":"text","label":"x","settings":{"alt":"y"}}]}`,
-		"image с опциями":              `{"blocks":[{"id":"b","type":"image","label":"","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
-		"слишком длинный imageKey":     longImageKey,
-		"слишком длинный alt":          longAlt,
-		"дубль id опций внутри блока":  `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"o","label":"a"},{"id":"o","label":"b"}]}}]}`,
-		"пустой id опции":              `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"","label":"a"}]}}]}`,
-		"слишком много блоков":         tooManyBlocks,
-		"слишком много опций":          tooManyOpts,
-		"слишком длинный label":        longLabel,
+		"redirect javascript:":          `{"blocks":[],"redirectUrl":"javascript:alert(document.cookie)"}`,
+		"redirect JavaScript: капсом":   `{"blocks":[],"redirectUrl":"JavaScript:alert(1)"}`,
+		"redirect data:":                `{"blocks":[],"redirectUrl":"data:text/html,<script>alert(1)</script>"}`,
+		"redirect относительный путь":   `{"blocks":[],"redirectUrl":"/thanks"}`,
+		"redirect без схемы":            `{"blocks":[],"redirectUrl":"example.com"}`,
+		"redirect http без хоста":       `{"blocks":[],"redirectUrl":"http://"}`,
+		"слишком длинный thankYouText":  longThankYou,
+		"слишком длинный redirectUrl":   longRedirect,
+		"слишком длинный placeholder":   longPlaceholder,
+		"битый JSON":                    `{"blocks":`,
+		"хвост после документа":         `{"blocks":[]}{}`,
+		"неизвестная schemaVersion":     `{"schemaVersion":99,"blocks":[]}`,
+		"лишнее поле верхнего уровня":   `{"blocks":[],"extra":1}`,
+		"лишнее поле блока":             `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{},"foo":1}]}`,
+		"лишнее поле в settings":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"foo":1}}]}`,
+		"неизвестный тип блока":         `{"blocks":[{"id":"b","type":"slider","label":"x","settings":{}}]}`,
+		"пустой id блока":               `{"blocks":[{"id":"","type":"short_text","label":"x","settings":{}}]}`,
+		"дубль id блоков":               `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{}},{"id":"b","type":"email","label":"y","settings":{}}]}`,
+		"non-choice с опциями":          `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
+		"imageKey на не-image":          `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"imageKey":"ws/x.png"}}]}`,
+		"alt на не-image":               `{"blocks":[{"id":"b","type":"text","label":"x","settings":{"alt":"y"}}]}`,
+		"image с опциями":               `{"blocks":[{"id":"b","type":"image","label":"","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
+		"слишком длинный imageKey":      longImageKey,
+		"слишком длинный alt":           longAlt,
+		"дубль id опций внутри блока":   `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"o","label":"a"},{"id":"o","label":"b"}]}}]}`,
+		"пустой id опции":               `{"blocks":[{"id":"b","type":"single_choice","label":"x","settings":{"options":[{"id":"","label":"a"}]}}]}`,
+		"слишком много блоков":          tooManyBlocks,
+		"слишком много опций":           tooManyOpts,
+		"слишком длинный текст подписи": longLabel,
+		// v2: правила групп и собственного текста (фаза 8.7).
+		"v2: text у отвечаемого не-consent": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","text":"нельзя","settings":{}}]}`,
+		"v2: text у image":   `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"image","text":"нельзя","settings":{}}]}`,
+		"v2: пустой groupId": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"","type":"short_text","settings":{}}]}`,
+		"v2: группа разорвана чужим блоком": `{"schemaVersion":2,"blocks":[{"id":"a","groupId":"g1","type":"title","text":"A"},{"id":"b","groupId":"g2","type":"short_text","settings":{}},{"id":"c","groupId":"g1","type":"email","settings":{}}]}`,
+		"v2: два отвечаемых в одной группе": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{}},{"id":"b2","groupId":"g1","type":"email","settings":{}}]}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -137,8 +153,14 @@ func TestValidateSchema_Scale(t *testing.T) {
 				t.Fatalf("ожидалась валидная схема: %v", err)
 			}
 			// Ноль обязан доехать до типов, а не превратиться в «не задано».
+			// После апгрейда v1→v2 шкала — уже не Blocks[0] (перед ней блок-подпись).
 			if name == "NPS 0–10 (ноль не теряется)" {
-				min := s.Blocks[0].Settings.ScaleMin
+				var min *int
+				for _, b := range s.Blocks {
+					if b.Type == BlockScale {
+						min = b.Settings.ScaleMin
+					}
+				}
 				if min == nil || *min != 0 {
 					t.Fatalf("scaleMin=0 потерян при разборе: %v", min)
 				}

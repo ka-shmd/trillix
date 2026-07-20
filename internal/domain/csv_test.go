@@ -6,9 +6,35 @@ import (
 	"time"
 )
 
-// vs — короткий помощник: собрать VersionedSchema из блоков.
+// vs — короткий помощник: собрать VersionedSchema из плоского списка блоков.
 func vs(version int, blocks ...Block) VersionedSchema {
 	return VersionedSchema{Version: version, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: blocks}}
+}
+
+// grp — вопрос как группа v2 (фаза 8.7): подпись title (если caption != "") +
+// отвечаемый блок, общий groupId, id блока сохраняется. Так подпись живёт
+// отдельным блоком, как в реальной схеме.
+func grp(caption string, b Block) []Block {
+	g := "g_" + b.ID
+	b.GroupID = g
+	if caption == "" {
+		return []Block{b}
+	}
+	return []Block{{ID: "t_" + b.ID, GroupID: g, Type: BlockTitle, Text: caption}, b}
+}
+
+// content — самостоятельный контентный блок (heading/text) своей группой.
+func content(id string, t BlockType, text string) []Block {
+	return []Block{{ID: id, GroupID: "g_" + id, Type: t, Text: text}}
+}
+
+// vsg — VersionedSchema из групп: склеивает их в плоский список блоков.
+func vsg(version int, groups ...[]Block) VersionedSchema {
+	var blocks []Block
+	for _, g := range groups {
+		blocks = append(blocks, g...)
+	}
+	return vs(version, blocks...)
 }
 
 func ans(pairs map[string]any) map[string]json.RawMessage {
@@ -23,12 +49,15 @@ func ans(pairs map[string]any) map[string]json.RawMessage {
 // Объединение версий: вопрос b2, удалённый в v2, остаётся колонкой; свежая версия
 // слева; подпись — из свежайшей версии, где блок есть.
 func TestCSVBuilder_UnionColumnsAcrossVersions(t *testing.T) {
-	b1 := Block{ID: "b1", Type: BlockShortText, Label: "Имя v1"}
-	b2 := Block{ID: "b2", Type: BlockShortText, Label: "Телефон"}  // только в v1
-	b1v2 := Block{ID: "b1", Type: BlockShortText, Label: "Имя v2"} // переименован
-	b3 := Block{ID: "b3", Type: BlockShortText, Label: "Город"}    // добавлен в v2
+	b1 := Block{ID: "b1", Type: BlockShortText}
+	b2 := Block{ID: "b2", Type: BlockShortText}   // только в v1
+	b1v2 := Block{ID: "b1", Type: BlockShortText} // переименован
+	b3 := Block{ID: "b3", Type: BlockShortText}   // добавлен в v2
 
-	bld := NewCSVBuilder([]VersionedSchema{vs(1, b1, b2), vs(2, b1v2, b3)})
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, grp("Имя v1", b1), grp("Телефон", b2)),
+		vsg(2, grp("Имя v2", b1v2), grp("Город", b3)),
+	})
 
 	got := bld.Header()
 	want := []string{"ID ответа", "Отправлен", "Версия формы", "Имя v2", "Город", "Телефон"}
@@ -44,10 +73,9 @@ func TestCSVBuilder_UnionColumnsAcrossVersions(t *testing.T) {
 
 // Неотвечаемый блок (text) не становится колонкой CSV — у него нет ответов.
 func TestCSVBuilder_ExcludesTextBlocks(t *testing.T) {
-	intro := Block{ID: "intro", Type: BlockText, Label: "Раздел А"}
-	name := Block{ID: "name", Type: BlockShortText, Label: "Имя"}
-
-	bld := NewCSVBuilder([]VersionedSchema{vs(1, intro, name)})
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, content("intro", BlockText, "Раздел А"), grp("Имя", Block{ID: "name", Type: BlockShortText})),
+	})
 
 	got := bld.Header()
 	want := []string{"ID ответа", "Отправлен", "Версия формы", "Имя"}
@@ -64,10 +92,13 @@ func TestCSVBuilder_ExcludesTextBlocks(t *testing.T) {
 // Ответ v1 попадает в колонку выбывшего вопроса; блок, которого нет в версии ответа,
 // даёт пустую ячейку.
 func TestCSVBuilder_RowRespectsAnswerVersion(t *testing.T) {
-	b1 := Block{ID: "b1", Type: BlockShortText, Label: "Имя"}
-	b2 := Block{ID: "b2", Type: BlockShortText, Label: "Телефон"}
-	b3 := Block{ID: "b3", Type: BlockShortText, Label: "Город"}
-	bld := NewCSVBuilder([]VersionedSchema{vs(1, b1, b2), vs(2, b1, b3)})
+	b1 := Block{ID: "b1", Type: BlockShortText}
+	b2 := Block{ID: "b2", Type: BlockShortText}
+	b3 := Block{ID: "b3", Type: BlockShortText}
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, grp("Имя", b1), grp("Телефон", b2)),
+		vsg(2, grp("Имя", b1), grp("Город", b3)),
+	})
 	// колонки вопросов: [b1 "Имя", b3 "Город", b2 "Телефон"]
 
 	when := time.Date(2026, 7, 12, 10, 0, 0, 0, time.UTC)
@@ -86,18 +117,18 @@ func TestCSVBuilder_RowRespectsAnswerVersion(t *testing.T) {
 // Choice выгружается подписями опций (не id), причём из версии ответа: переименование
 // опции в v2 не искажает ответ v1. multi_choice — подписи через «; ».
 func TestCSVBuilder_ChoiceLabelsFromAnswerVersion(t *testing.T) {
-	single := func(label1 string) Block {
-		return Block{ID: "s", Type: BlockSingleChoice, Label: "Источник", Settings: BlockSettings{
+	single := func(label1 string) []Block {
+		return grp("Источник", Block{ID: "s", Type: BlockSingleChoice, Settings: BlockSettings{
 			Options: []Option{{ID: "o1", Label: label1}, {ID: "o2", Label: "Поиск"}},
-		}}
+		}})
 	}
-	multi := Block{ID: "m", Type: BlockMultiChoice, Label: "Интересы", Settings: BlockSettings{
+	multi := grp("Интересы", Block{ID: "m", Type: BlockMultiChoice, Settings: BlockSettings{
 		Options: []Option{{ID: "a", Label: "Go"}, {ID: "b", Label: "SQL"}},
-	}}
+	}})
 
 	bld := NewCSVBuilder([]VersionedSchema{
-		vs(1, single("Друзья"), multi),
-		vs(2, single("Знакомые"), multi), // o1 переименован в v2
+		vsg(1, single("Друзья"), multi),
+		vsg(2, single("Знакомые"), multi), // o1 переименован в v2
 	})
 	when := time.Now()
 
@@ -146,10 +177,11 @@ func TestSanitizeCSVField(t *testing.T) {
 }
 
 // Санитизация реально подключена в выводе Header и Row (а не только в функции):
-// вредоносный label и вредоносный ответ респондента приходят уже обезврежены.
+// вредоносная подпись и вредоносный ответ респондента приходят уже обезврежены.
 func TestCSVBuilder_SanitizesHeaderAndRow(t *testing.T) {
-	blk := Block{ID: "b1", Type: BlockShortText, Label: "=cmd|' /C calc'!A1"}
-	bld := NewCSVBuilder([]VersionedSchema{vs(1, blk)})
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, grp("=cmd|' /C calc'!A1", Block{ID: "b1", Type: BlockShortText})),
+	})
 
 	if got := bld.Header()[3]; got != "'=cmd|' /C calc'!A1" {
 		t.Fatalf("заголовок = %q, ожидался с префиксом '", got)
@@ -163,10 +195,11 @@ func TestCSVBuilder_SanitizesHeaderAndRow(t *testing.T) {
 
 // Неизвестный id опции (рассинхрон) выгружается как есть — факт ответа не теряется.
 func TestCSVBuilder_UnknownOptionIDFallsBackToID(t *testing.T) {
-	blk := Block{ID: "s", Type: BlockSingleChoice, Label: "Q", Settings: BlockSettings{
-		Options: []Option{{ID: "o1", Label: "A"}},
-	}}
-	bld := NewCSVBuilder([]VersionedSchema{vs(1, blk)})
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, grp("Q", Block{ID: "s", Type: BlockSingleChoice, Settings: BlockSettings{
+			Options: []Option{{ID: "o1", Label: "A"}},
+		}})),
+	})
 	row := bld.Row("id", time.Now(), 1, ans(map[string]any{"s": "ghost"}))
 	if row[3] != "ghost" {
 		t.Fatalf("неизвестная опция = %q, ожидался фолбэк «ghost»", row[3])

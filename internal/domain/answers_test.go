@@ -266,7 +266,7 @@ func TestValidPhone(t *testing.T) {
 // «несуществующий вопрос», как и для любого чужого id.
 func TestValidateAnswers_TextBlockNonAnswerable(t *testing.T) {
 	schema := FormSchema{Blocks: []Block{
-		{ID: "intro", Type: BlockText, Label: "Добро пожаловать", Required: true},
+		{ID: "intro", Type: BlockText, Text: "Добро пожаловать", Required: true},
 		field("name", BlockShortText, true),
 	}}
 

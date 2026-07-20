@@ -3,6 +3,7 @@ package forms
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -118,12 +119,20 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Рендерер знает только текущий формат — старая опубликованная версия
+	// апгрейдится до v2 на отдаче (иммутабельный снапшот в БД не трогаем).
+	schema, err := domain.CanonicalV2(pf.Schema)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), err))
+		return
+	}
+
 	// Токен выдаётся на каждый ответ; при кэшировании его возраст растёт, но это
 	// только усиливает проверку «не раньше 3 с» (свежий мгновенный токен — бот).
 	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
 		Title:   pf.Title,
 		Version: pf.Version,
-		Schema:  pf.Schema,
+		Schema:  schema,
 		Token:   token.Issue(h.tokenSecret, h.now().UTC()),
 	})
 }
