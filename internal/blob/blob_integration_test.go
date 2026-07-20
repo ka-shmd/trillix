@@ -13,7 +13,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/ka-shmd/trierra/internal/blob"
+	"github.com/ka-shmd/trillix/internal/blob"
 )
 
 // Интеграционный тест против настоящего MinIO (S3-совместимый) — единственная

@@ -16,10 +16,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/auth"
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/forms"
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // closableForm публикует форму с обязательным полем b1 и возвращает slug, id формы,

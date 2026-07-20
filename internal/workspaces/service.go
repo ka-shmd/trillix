@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // Store — доступ к данным workspaces, объявленный на стороне потребителя

@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 
-	"github.com/ka-shmd/trierra/migrations"
+	"github.com/ka-shmd/trillix/migrations"
 )
 
 // newMigrator строит migrate.Migrate поверх встроенных .sql-файлов и pgx.
@@ -29,7 +29,7 @@ func newMigrator(dsn string) (*migrate.Migrate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init migrate driver: %w", err)
 	}
-	m, err := migrate.NewWithInstance("iofs", src, "trierra", drv)
+	m, err := migrate.NewWithInstance("iofs", src, "trillix", drv)
 	if err != nil {
 		return nil, fmt.Errorf("init migrator: %w", err)
 	}

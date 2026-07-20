@@ -1,12 +1,12 @@
-# trierra
+# trillix
 
-[![CI](https://github.com/ka-shmd/trierra/actions/workflows/ci.yml/badge.svg)](https://github.com/ka-shmd/trierra/actions/workflows/ci.yml)
+[![CI](https://github.com/ka-shmd/trillix/actions/workflows/ci.yml/badge.svg)](https://github.com/ka-shmd/trillix/actions/workflows/ci.yml)
 
 SaaS-конструктор форм (аналог Tally), MVP. Go (stdlib-first) + PostgreSQL 16 + React/TypeScript.
 Монорепозиторий: Go-API в `cmd/` и `internal/`, кабинет в `web/app`, публичный рендерер в
 `web/renderer`, миграции в `migrations/`, инфраструктура в `deploy/`.
 
-Репозиторий: `github.com/ka-shmd/trierra` (он же module path).
+Репозиторий: `github.com/ka-shmd/trillix` (он же module path).
 
 Документация — в `docs/`: [ARCHITECTURE](docs/ARCHITECTURE.md) (как устроено и почему),
 [DEV-PLAN](docs/DEV-PLAN.md) (что делаем и когда), [PROCESS](docs/PROCESS.md) (как работаем).
@@ -139,7 +139,7 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
 | `make test`     | Go (`-race`, вкл. интеграционные в testcontainers) + vitest обоих фронтов |
 | `make lint`     | `golangci-lint run` + eslint/tsc обоих фронтов          |
-| `make seed`     | Демо-данные: пользователь `demo@trierra.local` / `demo-password` + 60 форм |
+| `make seed`     | Демо-данные: пользователь `demo@trillix.local` / `demo-password` + 60 форм |
 | `make prod-local` | Репетиция прода: собрать образ + статику, поднять весь стек под https на `*.localhost`, smoke |
 | `make prod-local-down` | Погасить prod-local (тома с данными остаются)      |
 | `make prod-local-trust` | Доверить локальный CA Caddy — настоящий «замочек» (sudo) |

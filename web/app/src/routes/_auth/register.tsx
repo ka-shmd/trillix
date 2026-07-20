@@ -22,7 +22,7 @@ function RegisterPage() {
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Регистрация</CardTitle>
-        <CardDescription>Создайте аккаунт Trierra</CardDescription>
+        <CardDescription>Создайте аккаунт Trillix</CardDescription>
       </CardHeader>
       <CardContent>
         <CredentialsForm

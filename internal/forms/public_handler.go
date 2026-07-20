@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/httpserver"
-	"github.com/ka-shmd/trierra/internal/token"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/token"
 )
 
 // defaultClosedMessage — текст экрана «приём закрыт» для формы без своего текста.

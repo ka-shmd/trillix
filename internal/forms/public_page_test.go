@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/domain"
+	"github.com/ka-shmd/trillix/internal/domain"
 )
 
 func getHTMLPage(t *testing.T, svc publicFormService, slug string) *httptest.ResponseRecorder {

@@ -22,7 +22,7 @@ function LoginPage() {
     <Card className="w-full max-w-sm">
       <CardHeader>
         <CardTitle className="text-xl">Вход</CardTitle>
-        <CardDescription>Войдите в свой аккаунт Trierra</CardDescription>
+        <CardDescription>Войдите в свой аккаунт Trillix</CardDescription>
       </CardHeader>
       <CardContent>
         <CredentialsForm

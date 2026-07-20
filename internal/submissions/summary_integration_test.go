@@ -14,8 +14,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/forms"
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 const summarySchemaV1 = `{"blocks":[

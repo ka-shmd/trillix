@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/forms"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 )
 
 const (

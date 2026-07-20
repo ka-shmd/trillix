@@ -35,7 +35,7 @@ jobs:
           push: true
           # Тег образа = git-тег (напр. v0.7.0). compose.prod.yml на VPS подставит
           # его через ${TAG} и сделает docker compose pull (фаза 9).
-          tags: ghcr.io/${{ github.repository_owner }}/trierra-api:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository_owner }}/trillix-api:${{ github.ref_name }}
 
   static:
     name: Статика фронтов → GitHub Release
@@ -60,9 +60,9 @@ jobs:
       - name: package
         # Тарболл повторяет раскладку deploy/static/{app,renderer} — её же rsync'ит
         # на сервер деплой фазы 9.
-        run: tar -czf trierra-static-${{ github.ref_name }}.tar.gz -C deploy/static .
+        run: tar -czf trillix-static-${{ github.ref_name }}.tar.gz -C deploy/static .
       - name: attach to release
         uses: softprops/action-gh-release@v2
         with:
-          files: trierra-static-${{ github.ref_name }}.tar.gz
+          files: trillix-static-${{ github.ref_name }}.tar.gz
           generate_release_notes: true

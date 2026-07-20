@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/ka-shmd/trierra/internal/domain"
-	"github.com/ka-shmd/trierra/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // fakeStore — управляемая реализация Store для юнитов сервиса (без БД).
