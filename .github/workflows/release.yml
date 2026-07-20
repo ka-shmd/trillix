@@ -1,8 +1,8 @@
 name: Release
 
 # По git-тегу v* собираем релизный комплект: Go-образ в GHCR и статику фронтов
-# артефактом к GitHub Release. Деплоя здесь нет (фаза 9) — тег лишь копит готовые
-# к развёртыванию артефакты: деплой потом «скачать готовое», а не «собрать на сервере».
+# артефактом к GitHub Release, затем автодеплоим на прод по SSH (job deploy, фаза 9
+# шаг 5). Сервер тянет готовое сам («скачать готовое», а не «собрать на сервере»).
 on:
   push:
     tags: ['v*']
@@ -66,3 +66,25 @@ jobs:
         with:
           files: trillix-static-${{ github.ref_name }}.tar.gz
           generate_release_notes: true
+
+  # Автодеплой на прод по SSH (фаза 9, шаг 5). Ждёт готовый образ (GHCR) и статику
+  # (Release), затем заходит на сервер и запускает обновление до этого тега. Деплой
+  # делает сам сервер (тянет образ/статику своими кредами) — CI только его триггерит.
+  deploy:
+    name: Деплой на прод по SSH
+    needs: [image, static]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH-ключ и known_hosts
+        # Приватный ключ деплой-пользователя — из секрета; хост доверяем по ssh-keyscan.
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ vars.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Обновить прод до ${{ github.ref_name }}
+        # Прокидываем скрипт обновления на сервер; TAG — в окружении удалённого bash.
+        run: |
+          ssh -i ~/.ssh/id_ed25519 "${{ vars.DEPLOY_USER }}@${{ vars.DEPLOY_HOST }}" \
+            "TAG='${{ github.ref_name }}' bash -s" < deploy/remote-update.sh

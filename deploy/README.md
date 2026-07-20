@@ -267,16 +267,35 @@ docker compose --env-file .env -f deploy/compose.prod.yml up -d
 
 ---
 
+## Автодеплой (CD, шаг 5)
+
+После первого ручного деплоя выкладка автоматизирована: релизный workflow
+(`.github/workflows/release.yml`, job `deploy`) по тегу `v*` собирает образ+статику,
+затем заходит на сервер по SSH и запускает `deploy/remote-update.sh`. Сервер сам тянет
+готовое (образ из GHCR, статику из Release своими кредами) и перезапускает стек. Итог:
+**`git tag vX.Y.Z && git push origin vX.Y.Z` → прод обновлён через пару минут**, без
+ручного захода на сервер.
+
+Настройка (один раз):
+
+1. **Отдельный SSH-ключ для CI** (не личный): `ssh-keygen -t ed25519 -f ~/.ssh/trillix_ci_deploy -N ""`.
+2. **Публичную часть — на сервер:** `ssh-copy-id -i ~/.ssh/trillix_ci_deploy.pub deploy@<VPS_IP>`
+   (допишет ключ в `~deploy/.ssh/authorized_keys`).
+3. **Приватную часть — в GitHub Secrets:** `gh secret set DEPLOY_SSH_KEY < ~/.ssh/trillix_ci_deploy`.
+4. **Адрес и пользователь — в repo-переменные:** `gh variable set DEPLOY_HOST --body <VPS_IP>` и
+   `gh variable set DEPLOY_USER --body deploy`.
+
+Откат — тем же тегом: `git push origin` на предыдущий тег переустанавливает его на проде
+(или вручную по разделу «Откат» выше).
+
 ## Оставшееся по фазе 9 (следующие срезы)
 
-Сделано этим срезом: чек-лист харденинга + runbook (шаги 1–4), HSTS в Caddyfile (TD-13).
+Сделано: чек-лист харденинга + runbook (шаги 1–4), HSTS (TD-13), автодеплой по SSH (шаг 5).
 Ещё предстоит (каждое — свой PR/срез):
 
 - **Профиль compose для MinIO** — вынести `minio`/`createbuckets` в профиль `local-media`,
-  снять `api → minio` из `depends_on`, обновить `make prod-local`. Мелко, но нужно до
-  первого прод-`up` с внешним S3.
-- **Шаг 5 — CD-пайплайн:** расширить `release.yml` шагом деплоя по SSH (rsync статики +
-  `pull && up`) на выкладку по тегу; прогнать дважды, второй раз — откат на прошлый тег.
+  снять `api → minio` из `depends_on`, обновить `make prod-local`. Мелко, но нужно, чтобы
+  с внешним S3 не поднимался лишний MinIO.
 - **Шаг 6 — нет 502 при деплое:** скрипт долбит `/healthz` во время выкатки; graceful
   shutdown уже написан — здесь подтверждается.
 - **Шаг 7 — внешняя проверка безопасности:** `nmap` с другой машины (открыты только
