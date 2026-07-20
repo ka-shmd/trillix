@@ -11,11 +11,11 @@ import { z } from 'zod'
 // Лимиты — те же числа, что в Go. Длины строк на фронте считаются в UTF-16
 // code units (JS), в Go — в рунах; для ASCII-id и обычного текста расхождение
 // несущественно, а серверная проверка в любом случае финальна.
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 export const MAX_BLOCKS = 200
 export const MAX_OPTIONS = 100
-export const MAX_LABEL_LEN = 1000
-export const MAX_DESCRIPTION_LEN = 2000
+// Текст подписи/контента (title/label/heading/text/consent). Зеркалит MaxTextLen в Go.
+export const MAX_TEXT_LEN = 2000
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
@@ -56,10 +56,13 @@ export const isHttpUrl = (raw: string): boolean => {
   return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
 }
 
-// Типы блоков: отвечаемые поля (ARCHITECTURE 3.4) плюс два неотвечаемых
-// (контентных): 'text' — статический абзац, 'image' — картинка на полотне. Оба не
-// собирают ответ (исключены из ValidateAnswers/CSV/таблицы), рендерятся статикой.
+// Типы блоков (ARCHITECTURE 3.4, модель v2). Три семьи: отвечаемые поля (собирают
+// ответ), подписи ('title'/'label' — текст вопроса в группе) и контент
+// ('heading'/'text'/'image' — оформление). Подписи и контент неотвечаемы
+// (исключены из ValidateAnswers/CSV/таблицы). 'consent' — отвечаемый, но несёт
+// собственный текст согласия рядом с галочкой.
 export const blockTypeSchema = z.enum([
+  // отвечаемые
   'short_text',
   'long_text',
   'email',
@@ -71,6 +74,11 @@ export const blockTypeSchema = z.enum([
   'multi_choice',
   'date',
   'consent',
+  // подписи
+  'title',
+  'label',
+  // контент
+  'heading',
   'text',
   'image',
 ])
@@ -119,10 +127,28 @@ export const isValidPhone = (raw: string): boolean => {
 // required у согласия молча перестал бы работать.
 export const CONSENT_YES = 'yes'
 
-// Неотвечаемые (контентные) блоки: 'text' и 'image'. Зеркалит Go isContent().
-const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['text', 'image'])
+// Блоки-подписи группы ('title'/'label'): их text — подпись вопроса. title
+// крупная, label мелкая — только вид. Зеркалит Go isCaption().
+const CAPTION_TYPES: ReadonlySet<BlockType> = new Set(['title', 'label'])
+export const isCaptionType = (t: BlockType): boolean => CAPTION_TYPES.has(t)
+
+// Неотвечаемые (контентные) блоки: подписи ('title'/'label') и оформление
+// ('heading'/'text'/'image'). Зеркалит Go isContent().
+const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['title', 'label', 'heading', 'text', 'image'])
 export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
 export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
+
+// Типы с собственным полем text: подписи, контентные абзацы/заголовки и consent
+// (текст согласия рядом с галочкой). У прочих отвечаемых и у image (текст в
+// settings.alt) поле text обязано быть пустым. Зеркалит Go carriesText().
+const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
+  'title',
+  'label',
+  'heading',
+  'text',
+  'consent',
+])
+export const carriesText = (t: BlockType): boolean => CARRIES_TEXT_TYPES.has(t)
 
 // Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
 // навязываем — id генерируется клиентом, важны непустота и уникальность.
@@ -160,20 +186,28 @@ export const scaleRange = (block: Block): { min: number; max: number } => {
     : { min: DEFAULT_SCALE_MIN, max: DEFAULT_SCALE_MAX }
 }
 
-// Один вопрос формы. Пустой label и choice без опций допустимы — это нормальное
-// недособранное состояние черновика, которое автосейв обязан хранить (зеркалит
-// комментарий ValidateSchema в Go). Требование «непустой label, ≥1 опция» —
-// правило момента публикации (фаза 4), не хранения.
+// Один блок формы (v2). groupId связывает блоки одного вопроса. Пустой text и
+// choice без опций допустимы — нормальное недособранное состояние черновика,
+// которое автосейв обязан хранить (зеркалит комментарий ValidateSchema в Go).
+// Требование «непустая подпись, ≥1 опция» — правило момента публикации, не хранения.
 export const blockSchema = z
   .strictObject({
     id: idSchema,
+    groupId: idSchema,
     type: blockTypeSchema,
-    label: z.string().max(MAX_LABEL_LEN),
-    description: z.string().max(MAX_DESCRIPTION_LEN).optional(),
+    text: z.string().max(MAX_TEXT_LEN).optional(),
     required: z.boolean().optional(),
     settings: settingsSchema.optional(),
   })
   .superRefine((b, ctx) => {
+    // Собственный text — только у carriesText-типов (подписи, контент, consent).
+    if (b.text && !carriesText(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не несёт собственного текста`,
+        path: ['text'],
+      })
+    }
     // imageKey/alt — только у image (как options только у choice).
     if (b.type !== 'image') {
       if (b.settings?.imageKey) {
@@ -241,6 +275,8 @@ export type Block = z.infer<typeof blockSchema>
 // Отсутствующая schemaVersion трактуется как текущая (дефолт БД '{"blocks":[]}').
 export const formSchemaSchema = z
   .strictObject({
+    // Опционально: пустой дефолт БД без версии трактуется как текущая; сервер при
+    // сохранении канонизирует. Стор билдера всегда шлёт SCHEMA_VERSION явно.
     schemaVersion: z.literal(SCHEMA_VERSION).optional(),
     blocks: z.array(blockSchema).max(MAX_BLOCKS),
     // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт DEFAULT_SUBMIT_LABEL.
@@ -266,6 +302,12 @@ export const formSchemaSchema = z
     }
 
     const seen = new Set<string>()
+    // Группы (v2, зеркалит Go validateGroups): блоки одной группы идут подряд, в
+    // группе не более одного отвечаемого блока. Связь подписи с полем — по groupId,
+    // не по позиции.
+    const answerablePerGroup = new Map<string, number>()
+    const endedRun = new Set<string>()
+    let prevGroup = ''
     s.blocks.forEach((b, i) => {
       if (seen.has(b.id)) {
         ctx.addIssue({
@@ -275,6 +317,29 @@ export const formSchemaSchema = z
         })
       }
       seen.add(b.id)
+
+      if (b.groupId !== prevGroup) {
+        if (endedRun.has(b.groupId)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `группа ${b.groupId} не смежна (блоки группы разорваны)`,
+            path: ['blocks', i, 'groupId'],
+          })
+        }
+        if (prevGroup !== '') endedRun.add(prevGroup)
+        prevGroup = b.groupId
+      }
+      if (isAnswerableType(b.type)) {
+        const n = (answerablePerGroup.get(b.groupId) ?? 0) + 1
+        answerablePerGroup.set(b.groupId, n)
+        if (n > 1) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `в группе ${b.groupId} больше одного отвечаемого блока`,
+            path: ['blocks', i, 'type'],
+          })
+        }
+      }
     })
   })
 export type FormSchema = z.infer<typeof formSchemaSchema>

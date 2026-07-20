@@ -3,6 +3,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
+import { groupMeta } from '@fields/groups'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
@@ -65,6 +66,9 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   }, [slug, form.version, answers])
 
   const blocks = form.schema.blocks
+  // Подпись и обязательность на группу (v2): подпись → aria поля, обязательность →
+  // звёздочка у блока-подписи.
+  const groups = groupMeta(blocks)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
 
@@ -212,6 +216,8 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
           >
             <BlockField
               block={block}
+              captionText={groups.get(block.groupId)?.caption}
+              captionRequired={groups.get(block.groupId)?.required}
               value={answers[block.id]}
               onChange={(value: Answer) => onChange(block.id, value)}
               onBlur={() => onBlur(block.id)}
