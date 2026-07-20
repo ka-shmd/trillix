@@ -5,14 +5,14 @@ import {
   useState,
   type KeyboardEvent,
   type ReactNode,
-  type RefObject,
 } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Text, Trash2, X } from 'lucide-react'
+import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
 import {
   type Block,
-  type BlockType,
+  carriesText,
+  isCaptionType,
   isChoiceType,
   isContentType,
   SCALE_LOWER_BOUND,
@@ -22,6 +22,8 @@ import {
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
+import { type MenuItem } from './blockTypes'
+import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
@@ -38,6 +40,11 @@ export interface BlockRowProps {
   block: Block
   // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
   formId: string
+  // groupHandle — attributes+listeners sortable-элемента ГРУППЫ (внешний уровень
+  // dnd): грип этой строки тащит всю группу, а не сам блок. Ставится родителем
+  // только на подпись мульти-группы («подпись владеет группой»). null/undefined —
+  // грип тащит блок (блочный слой dnd: одиночки и внутренние строки).
+  groupHandle?: Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners'> | null
   // focusMe — редактор просит поставить фокус на label этой строки (после Enter/
   // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
   focusMe: boolean
@@ -62,6 +69,7 @@ export interface BlockRowProps {
 export function BlockRow({
   block,
   formId,
+  groupHandle,
   focusMe,
   onFocusHandled,
   openMenuOnMount,
@@ -73,25 +81,54 @@ export function BlockRow({
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
+  const makeQuestion = useBuilderStore((s) => s.makeQuestion)
+  const makeField = useBuilderStore((s) => s.makeField)
   const labelRef = useRef<HTMLTextAreaElement>(null)
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
   // Описание вопроса: раскрыто ли поле. Непустое описание раскрыто с монтирования.
   // Триггер раскрытия живёт в левом кластере значков (absolute) — см. коммент там.
-  const descRef = useRef<HTMLTextAreaElement>(null)
-  const [descOpen, setDescOpen] = useState((block.description ?? '').trim().length > 0)
   // Плейсхолдер заголовка виден только у активной (в фокусе) строки: неактивный
   // пустой блок ничего не показывает.
   const [labelFocused, setLabelFocused] = useState(false)
+  const captionPh =
+    block.type === 'title'
+      ? 'Заголовок вопроса'
+      : block.type === 'label'
+        ? 'Подпись поля'
+        : block.type === 'heading'
+          ? 'Заголовок раздела'
+          : block.type === 'consent'
+            ? 'Текст согласия'
+            : labelFocused
+              ? 'Текст, или «/» для поля'
+              : undefined
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
   // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
   // нет отдельного превью-контрола: галочка стоит слева от самого текста.
   const isConsent = block.type === 'consent'
+  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и
+  // consent. Поля ввода строки не несут — их подпись живёт отдельным блоком.
+  const hasTextLine = carriesText(block.type)
+  const captionCls =
+    block.type === 'title'
+      ? 'rf-label placeholder:font-semibold'
+      : block.type === 'label'
+        ? 'rf-label rf-label--sm placeholder:font-medium'
+        : block.type === 'heading'
+          ? 'rf-heading placeholder:font-semibold'
+          : block.type === 'consent'
+            ? 'rf-consent placeholder:font-normal'
+            : 'rf-text placeholder:font-normal'
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
+    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
+    // У строк артефакт проявлялся при переносе ВНУТРИ группы (без ремаунта).
+    animateLayoutChanges: noLayoutAnimation,
   })
   // Translate, а не Transform: блоки разной высоты, и dnd-kit кладёт в transform
   // scaleY, чтобы переносимый блок «подгонялся» под высоту соседнего слота — из-за
@@ -108,7 +145,7 @@ export function BlockRow({
 
   useEffect(() => {
     autosize(labelRef.current)
-  }, [block.label])
+  }, [block.text])
 
   function focusLabelEnd() {
     const el = labelRef.current
@@ -152,18 +189,19 @@ export function BlockRow({
 
   // Раскрыть поле описания и поставить в него каретку (rAF — textarea появляется
   // только на следующий рендер). Уже раскрытое просто фокусируем.
-  function openDescription() {
-    setDescOpen(true)
-    requestAnimationFrame(() => descRef.current?.focus())
-  }
 
-  function pickType(type: BlockType) {
-    changeBlockType(block.id, type)
+  function pickType(item: MenuItem) {
+    // «Вопросы» → бандл подпись+поле; «Отдельные поля» → голое поле; и то, и другое
+    // одиночный блок конвертирует на месте, а внутри группы — новой группой ниже
+    // (инпут не встраивается между подписью и контролом). «Лэйаут» → тип на месте.
+    if (item.group === 'question') makeQuestion(block.id, item.type)
+    else if (item.group === 'field') makeField(block.id, item.type)
+    else changeBlockType(block.id, item.type)
     setSlashOpen(false)
-    // У image нет редактируемого заголовка (рендерится ImageField, labelRef=null) —
-    // фокусировать нечего. Продолжаем поток новой текстовой строкой ниже (как Notion):
-    // каретка не пропадает, можно печатать дальше; картинку грузишь кликом по зоне.
-    if (type === 'image') onAddBelow(block.id)
+    // У image нет редактируемого заголовка (ImageField, labelRef=null) — фокусировать
+    // нечего; продолжаем поток текстовой строкой ниже. У бандла/подписи фокус на
+    // текущий блок (стал title); у голого поля textarea нет — focusLabelEnd no-op.
+    if (item.type === 'image') onAddBelow(block.id)
     else requestAnimationFrame(focusLabelEnd)
   }
 
@@ -175,10 +213,10 @@ export function BlockRow({
   // Кластеры absolute и центрируют значок по своей высоте, поэтому только так они
   // стоят на уровне текста. Жёсткое значение тут — баг: при h-8 (32px) значки висят
   // ниже строки у всех типов сразу. Меняется вместе с line-height в fields.css.
-  const rowLineH = isContent || isConsent ? 'h-6' : 'h-7'
+  const rowLineH = block.type === 'title' || block.type === 'heading' ? 'h-7' : 'h-6'
 
   return (
-    <li
+    <div
       ref={setNodeRef}
       style={style}
       className={`group relative rounded-md py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
@@ -203,8 +241,8 @@ export function BlockRow({
       >
         <button
           type="button"
-          onClick={() => removeBlock(block.id)}
-          aria-label="Удалить блок"
+          onClick={() => (isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id))}
+          aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
           className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
         >
           <Trash2 className="size-4" />
@@ -219,22 +257,16 @@ export function BlockRow({
         </button>
         {/* Описание — только у отвечаемых блоков (неотвечаемый text рендерится
             статикой, описания не имеет), как и RequiredToggle справа. */}
-        {isContent ? null : (
-          <button
-            type="button"
-            onClick={openDescription}
-            aria-label="Описание вопроса"
-            title="Описание вопроса"
-            className={iconBtn}
-          >
-            <Text className="size-4" />
-          </button>
-        )}
+
         <button
           type="button"
-          {...attributes}
-          {...listeners}
-          aria-label="Перетащить блок"
+          {...(groupHandle ? groupHandle.attributes : attributes)}
+          {...(groupHandle ? groupHandle.listeners : listeners)}
+          aria-label={
+            groupHandle && isCaptionType(block.type)
+              ? 'Перетащить вопрос (группу)'
+              : 'Перетащить блок'
+          }
           className={`${iconBtn} cursor-grab active:cursor-grabbing`}
         >
           <GripVertical className="size-4" />
@@ -252,15 +284,9 @@ export function BlockRow({
         <div className="min-w-0">
           <ImageField block={block} formId={formId} />
         </div>
-      ) : (
+      ) : hasTextLine ? (
         <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
           <div className="min-w-0">
-            {/* Согласие: галочка слева от правимого текста — как у респондента.
-                Декоративная (rf-mark — единственное место, где глиф ещё нужен:
-                у вариантов выбора вместо него буквенный бейдж):
-                настоящий <input> тут не нужен, состояние правит респондент. mt-0.5
-                центрирует глиф 20px по строке rf-consent (line-height 24px):
-                (24−20)/2 = 2px. Меняется вместе с размером .rf-mark. */}
             <div className={isConsent ? 'flex items-start gap-2' : undefined}>
               {isConsent && (
                 <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
@@ -268,63 +294,29 @@ export function BlockRow({
               <textarea
                 ref={labelRef}
                 rows={1}
-                value={block.label}
-                // Текстовый блок прячет плейсхолдер вне фокуса: пустой абзац — это
-                // осознанный пропуск строки, и подсказка в нём выглядит как мусор.
-                // У остальных блоков пустой заголовок — незаполненный вопрос, поэтому
-                // подсказка видна всегда. У вопроса «/» уже не работает (тип выбран) —
-                // подсказку про слэш не показываем.
-                placeholder={
-                  isContent
-                    ? labelFocused
-                      ? 'Текст, или «/» для поля'
-                      : undefined
-                    : isConsent
-                      ? 'Текст согласия'
-                      : 'Введите текст вопроса'
-                }
-                onChange={(e) => updateBlock(block.id, { label: e.target.value })}
+                value={block.text ?? ''}
+                placeholder={captionPh}
+                onChange={(e) => updateBlock(block.id, { text: e.target.value })}
                 onFocus={() => setLabelFocused(true)}
                 onBlur={() => setLabelFocused(false)}
                 onKeyDown={onLabelKeyDown}
-                className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${
-                  isContent
-                    ? 'rf-text placeholder:font-normal'
-                    : isConsent
-                      ? // Текст согласия — обычная фраза рядом с галочкой, не вопрос:
-                        // тот же rf-consent, что у респондента (иначе редактор показывал
-                        // бы юридическую строку крупным полужирным).
-                        'rf-consent placeholder:font-normal'
-                      : 'rf-label placeholder:font-semibold'
-                }`}
+                className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${captionCls}`}
               />
             </div>
-
-            {/* Описание вопроса (block.description) — только у отвечаемых блоков:
-                неотвечаемый text описания не имеет (рендерится статикой). Раскрывается
-                значком в левом кластере; пустое при потере фокуса сворачивается. */}
-            {isContent || !descOpen ? null : (
-              <DescriptionField
-                block={block}
-                inputRef={descRef}
-                onEmptyBlur={() => setDescOpen(false)}
-              />
-            )}
-
-            {/* Text (неотвечаемый) — только абзац. Choice — варианты. Шкала — деления
-                и диапазон. Согласие — ничего: галочка и текст уже в строке выше.
-                Остальные (поля ввода) — редактируемое поле ответа с плейсхолдером. */}
-            {isContent || isConsent ? null : isChoiceType(block.type) ? (
-              <OptionsInline block={block} onLeaveTop={focusLabelEnd} />
-            ) : block.type === 'scale' ? (
-              <ScaleInline block={block} />
-            ) : (
-              <AnswerField block={block} />
-            )}
           </div>
         </SlashMenu>
+      ) : (
+        <div className="min-w-0">
+          {isChoiceType(block.type) ? (
+            <OptionsInline block={block} onLeaveTop={() => {}} />
+          ) : block.type === 'scale' ? (
+            <ScaleInline block={block} />
+          ) : (
+            <AnswerField block={block} />
+          )}
+        </div>
       )}
-    </li>
+    </div>
   )
 }
 
@@ -363,47 +355,6 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
   )
 }
 
-// DescriptionField — редактируемое описание вопроса (block.description). Рендерер
-// показывает его как rf-desc под подписью (FieldShell) — тот же вид и в редакторе
-// (WYSIWYG, класс rf-desc из fields.css).
-//
-// Раскрытием владеет BlockRow, а не это поле: триггер («Описание вопроса») стоит в
-// левом absolute-кластере значков, чтобы появление контрола не двигало высоту
-// строки. Прежняя кнопка «+ Описание» жила прямо здесь, в потоке, и схлопывалась на
-// mousedown — из-за чего терялся клик по элементам ниже (TD-22, разбор — в комменте
-// у кластера). Сюда контролы, зависящие от hover/фокуса, больше не добавляем.
-// Пустое описание при потере фокуса сворачивается обратно (onEmptyBlur).
-function DescriptionField({
-  block,
-  inputRef,
-  onEmptyBlur,
-}: {
-  block: Block
-  inputRef: RefObject<HTMLTextAreaElement | null>
-  onEmptyBlur: () => void
-}) {
-  const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const desc = block.description ?? ''
-
-  useEffect(() => {
-    autosize(inputRef.current)
-  }, [desc, inputRef])
-
-  return (
-    <textarea
-      ref={inputRef}
-      rows={1}
-      value={desc}
-      onChange={(e) => updateBlock(block.id, { description: e.target.value })}
-      onBlur={() => {
-        if (!desc.trim()) onEmptyBlur()
-      }}
-      placeholder="Описание (необязательно)"
-      aria-label="Описание вопроса"
-      className="rf-desc mt-2 w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/50"
-    />
-  )
-}
 
 // AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
 // автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит

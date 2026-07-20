@@ -92,21 +92,27 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 // колонкой для ответов v1), подписи опций из версии ответа и пустые ячейки.
 func exportSchemaV1() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "b_name", Type: domain.BlockShortText, Label: "Ваше имя", Required: true},
-		{ID: "b_src", Type: domain.BlockSingleChoice, Label: "Как вы о нас узнали?", Settings: domain.BlockSettings{
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: "Ваше имя"},
+		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: "Как вы о нас узнали?"},
+		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "b_phone", Type: domain.BlockShortText, Label: "Телефон"},
+		{ID: "t_phone", GroupID: "g_phone", Type: domain.BlockTitle, Text: "Телефон"},
+		{ID: "b_phone", GroupID: "g_phone", Type: domain.BlockShortText},
 	}}
 }
 
 func exportSchemaV2() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "b_name", Type: domain.BlockShortText, Label: "Ваше имя", Required: true},
-		{ID: "b_src", Type: domain.BlockSingleChoice, Label: "Как вы о нас узнали?", Settings: domain.BlockSettings{
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: "Ваше имя"},
+		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: "Как вы о нас узнали?"},
+		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья (реф.)"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "b_city", Type: domain.BlockShortText, Label: "Город"},
+		{ID: "t_city", GroupID: "g_city", Type: domain.BlockTitle, Text: "Город"},
+		{ID: "b_city", GroupID: "g_city", Type: domain.BlockShortText},
 	}}
 }
 

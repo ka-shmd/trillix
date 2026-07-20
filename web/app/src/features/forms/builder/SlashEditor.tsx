@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import {
   DndContext,
   KeyboardSensor,
@@ -6,15 +14,20 @@ import {
   closestCenter,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext,
   sortableKeyboardCoordinates,
+  useSortable,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { type BlockType, DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
+import { CSS } from '@dnd-kit/utilities'
+import { type Block, DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
+import { type MenuItem } from './blockTypes'
+import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
@@ -34,11 +47,19 @@ const DEFAULT_BLOCK_TYPE = 'text' as const
 export function SlashEditor({ formId, initialTitle }: { formId: string; initialTitle: string }) {
   const blocks = useBuilderStore((s) => s.blocks)
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
+  const addQuestionAfter = useBuilderStore((s) => s.addQuestionAfter)
+  const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
+  const reorderGroups = useBuilderStore((s) => s.reorderGroups)
   const [focusId, setFocusId] = useState<string | null>(null)
+  // dragBlockId/overBlockId — активный БЛОК (не группа) и строка под ним: для
+  // подсветки целевой группы и линии вставки при блочном драге. У группового драга
+  // отклик нативный (sortable двигает группы сам), эти состояния не участвуют.
+  const [dragBlockId, setDragBlockId] = useState<string | null>(null)
+  const [overBlockId, setOverBlockId] = useState<string | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
   // фокус переносим сюда, а не теряем в body.
@@ -55,16 +76,73 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 
+  // Два уровня dnd. МУЛЬТИ-ГРУППА (подпись…поле) — единица перетаскивания за грип
+  // подписи: внешний sortable по groupId (группа — один <li>, двигается нативно
+  // целиком: родные сдвиги соседей, зазор высотой с группу, drop-анимация). Всё
+  // остальное — БЛОЧНЫЙ слой: внутренние строки группы (контент/поле) и одиночки
+  // (standalone-контент, голые поля, сироты-подписи) тащатся строкой и роняются в
+  // ЛЮБУЮ позицию — внутрь группы, между группами, из группы наружу. Блочный слой —
+  // ОДНА сортируемая вселенная: каждый GroupRow оборачивает свои строки в
+  // SortableContext с ОБЩИМ списком всех block-id (blockIds), поэтому индексы
+  // глобальны и анимация полностью родная — активная строка следует за курсором,
+  // строки всех групп расступаются. Нарезка items по группам ломала драг: over в
+  // чужом контексте → overIndex −1 → dnd-kit гасит все трансформы (элемент замирал
+  // под мышкой). Слои НЕ конкурируют за коллизии: collisionDetection фильтрует
+  // droppable'ы по слою активного элемента — тащат группу → только группы, тащат
+  // блок → только строки. Без фильтра closestCenter метался между контейнером
+  // группы и её строками (джиттер).
+  const groups = useMemo(() => {
+    const out: { id: string; blocks: Block[] }[] = []
+    for (const b of blocks) {
+      const last = out[out.length - 1]
+      if (last && last.id === b.groupId) last.blocks.push(b)
+      else out.push({ id: b.groupId, blocks: [b] })
+    }
+    return out
+  }, [blocks])
+  const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups])
+  const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
+
+  const collisionDetection: CollisionDetection = (args) => {
+    const isGroupDrag = groupIds.has(String(args.active.id))
+    return closestCenter({
+      ...args,
+      droppableContainers: args.droppableContainers.filter(
+        (c) => groupIds.has(String(c.id)) === isGroupDrag,
+      ),
+    })
+  }
+
+  // Отклик блочного драга над ЧУЖОЙ мульти-группой: ring подсвечивает её границы —
+  // видно, какой вопрос примет блок. Позицию вставки показывает сама нативная
+  // анимация (строки расступаются), линия не нужна. Одиночки не подсвечиваем
+  // (ring вокруг одной строки — шум без информации).
+  let highlightGroupId: string | null = null
+  if (dragBlockId && overBlockId) {
+    const activeBlk = blocks.find((b) => b.id === dragBlockId)
+    const overBlk = blocks.find((b) => b.id === overBlockId)
+    if (activeBlk && overBlk && activeBlk.groupId !== overBlk.groupId) {
+      const g = groups.find((x) => x.id === overBlk.groupId)
+      if (g && g.blocks.length > 1) highlightGroupId = g.id
+    }
+  }
+
+  // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
+    setDragBlockId(null)
+    setOverBlockId(null)
     const { active, over } = e
-    if (over && active.id !== over.id) reorderBlocks(String(active.id), String(over.id))
+    if (!over || active.id === over.id) return
+    const activeId = String(active.id)
+    if (groupIds.has(activeId)) reorderGroups(activeId, String(over.id))
+    else reorderBlocks(activeId, String(over.id))
   }
 
   // Создаёт новую строку (тип text): опционально засевает первый символ и просит
   // открыть меню типов. Возвращает фокус на неё.
   function startBlock(afterId: string | null, opts: { openMenu?: boolean; seed?: string } = {}) {
     const id = addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
-    if (opts.seed) updateBlock(id, { label: opts.seed })
+    if (opts.seed) updateBlock(id, { text: opts.seed })
     if (opts.openMenu) setMenuForId(id)
     setFocusId(id)
   }
@@ -85,12 +163,18 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     setInsertOpen(true)
   }
 
-  // Выбор типа в диалоге: создать блок этого типа на нужной позиции.
-  function handlePickInsertType(type: BlockType) {
-    const id = addBlockAfter(insertAfterId, type)
+  // Выбор пункта в диалоге: «Вопросы» → подпись+поле новой группой; «Отдельные поля»
+  // → голое поле новой группой; «Лэйаут» → один блок после текущего.
+  function handlePickInsertType(item: MenuItem) {
+    const id =
+      item.group === 'question'
+        ? addQuestionAfter(insertAfterId, item.type)
+        : item.group === 'field'
+          ? addFieldAfter(insertAfterId, item.type)
+          : addBlockAfter(insertAfterId, item.type)
     // image без редактируемого заголовка не на что фокусировать — открываем новую
     // текстовую строку ниже (как в slash-потоке), чтобы каретка не пропала.
-    if (type === 'image') startBlock(id)
+    if (item.type === 'image') startBlock(id)
     else setFocusId(id)
     setInsertOpen(false)
   }
@@ -109,13 +193,13 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
       // обычному тексту: под удалённой картинкой должен остаться чистый текстовый блок,
       // а не пустое поле-вопрос. Непустой блок сохраняем как есть.
       removeBlock(prev.id)
-      if (cur.label === '' && cur.type !== 'text') changeBlockType(cur.id, 'text')
+      if ((cur.text ?? '') === '' && cur.type !== 'text') changeBlockType(cur.id, 'text')
       return
     }
     // Пустой блок схлопываем в предыдущий (фокус в его конец). Предыдущего нет —
     // удаляем последний блок вовсе: форма пустеет, а каретку переносим на заголовок
     // (иначе фокус потерялся бы в body и печатать было бы некуда).
-    if (cur.label === '') {
+    if ((cur.text ?? '') === '') {
       removeBlock(id)
       if (prev) setFocusId(prev.id)
       else {
@@ -152,25 +236,40 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
       {blocks.length === 0 ? (
         <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
       ) : (
-        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-          <SortableContext
-            items={blocks.map((b) => b.id)}
-            strategy={verticalListSortingStrategy}
-          >
+        <DndContext
+          sensors={sensors}
+          collisionDetection={collisionDetection}
+          onDragStart={(e) => {
+            const id = String(e.active.id)
+            setDragBlockId(groupIds.has(id) ? null : id)
+          }}
+          onDragOver={(e) => {
+            const id = e.over ? String(e.over.id) : null
+            setOverBlockId(id && !groupIds.has(id) ? id : null)
+          }}
+          onDragEnd={onDragEnd}
+          onDragCancel={() => {
+            setDragBlockId(null)
+            setOverBlockId(null)
+          }}
+        >
+          <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
             {/* Отступ заголовок→блоки и шаг между блоками держим равными ритму
                 .rf-page/.rf-form у превью и респондента (32px и 20px). У блока
                 свой py-1.5 (место под hover-контролы), поэтому здесь mt-7+6=34
                 и gap-2+6+6=20, а не «на глаз» mt-8/gap-1.5: те давали 58px под
                 заголовком против 32px в превью — редактор разъезжался с формой. */}
             <ol className="mt-7 flex flex-col gap-2">
-              {blocks.map((b) => (
-                <BlockRow
-                  key={b.id}
-                  block={b}
+              {groups.map((g) => (
+                <GroupRow
+                  key={g.id}
+                  group={g}
                   formId={formId}
-                  focusMe={focusId === b.id}
+                  blockIds={blockIds}
+                  highlight={g.id === highlightGroupId}
+                  focusId={focusId}
+                  menuForId={menuForId}
                   onFocusHandled={() => setFocusId(null)}
-                  openMenuOnMount={menuForId === b.id}
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
@@ -196,6 +295,85 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
 
       <SubmitButtonEditor />
     </div>
+  )
+}
+
+// GroupRow — группа как ЕДИНИЦА перетаскивания: один sortable-элемент внешнего
+// уровня (li c useSortable по groupId) со всеми строками группы внутри. Драг группы
+// полностью нативный: li целиком едет за курсором, соседние группы раздвигаются
+// родной анимацией sortable, дроп — родная settle-анимация. Групповую ручку несёт
+// только МУЛЬТИ-группа — грип её первой строки (подписи: «подпись владеет группой»)
+// получает listeners группы через groupHandle. Одиночки (standalone-контент, голое
+// поле, сирота-подпись) тащатся БЛОКОМ — их можно уронить в любую позицию, включая
+// середину чужой группы; групповой драг туда не умеет (только границы групп).
+// blockIds — ОБЩИЙ список всех block-id полотна: items вложенного SortableContext
+// одинаковы у всех групп, чтобы блочный слой был одной сортируемой вселенной
+// (глобальные индексы → родная анимация через границы групп; см. коммент у blockIds
+// в SlashEditor). highlight — над группой тащат блок: ring показывает её границы.
+function GroupRow({
+  group,
+  formId,
+  blockIds,
+  highlight,
+  focusId,
+  menuForId,
+  onFocusHandled,
+  onAddBelow,
+  onInsertBelow,
+  onBackspaceAtStart,
+  onArrow,
+}: {
+  group: { id: string; blocks: Block[] }
+  formId: string
+  blockIds: string[]
+  highlight: boolean
+  focusId: string | null
+  menuForId: string | null
+  onFocusHandled: () => void
+  onAddBelow: (id: string) => void
+  onInsertBelow: (id: string) => void
+  onBackspaceAtStart: (id: string) => void
+  onArrow: (id: string, dir: 'up' | 'down') => void
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: group.id,
+    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
+    animateLayoutChanges: noLayoutAnimation,
+  })
+  // Translate-only (как у BlockRow): сдвиг без scaleY, чтобы группа не сжималась
+  // под высоту соседнего слота при перетаскивании.
+  const style = { transform: CSS.Translate.toString(transform), transition }
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-md ${isDragging ? 'relative z-10 opacity-70' : ''} ${
+        highlight ? 'ring-2 ring-primary/40' : ''
+      }`}
+    >
+      <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
+        <div className="flex flex-col gap-2">
+          {group.blocks.map((b, i) => (
+            <BlockRow
+              key={b.id}
+              block={b}
+              formId={formId}
+              groupHandle={
+                group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
+              }
+              focusMe={focusId === b.id}
+              onFocusHandled={onFocusHandled}
+              openMenuOnMount={menuForId === b.id}
+              onAddBelow={onAddBelow}
+              onInsertBelow={onInsertBelow}
+              onBackspaceAtStart={onBackspaceAtStart}
+              onArrow={onArrow}
+            />
+          ))}
+        </div>
+      </SortableContext>
+    </li>
   )
 }
 

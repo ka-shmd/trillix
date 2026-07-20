@@ -15,6 +15,10 @@ import { mediaSrc } from './media'
 // выше, отвечаемые — в FieldControl; все ветки возвращают значение).
 type BlockFieldProps = {
   block: Block
+  // Контекст группы (v2): подпись группы — для aria поля; обязательность — для
+  // звёздочки у блока-подписи. Передаёт раскладчик групп (FormView/PreviewPane).
+  captionText?: string
+  captionRequired?: boolean
   value?: Answer
   onChange?: (next: Answer) => void
   disabled?: boolean
@@ -24,7 +28,16 @@ type BlockFieldProps = {
   onBlur?: () => void
 }
 
-export function BlockField({ block, value, onChange, disabled = true, error, onBlur }: BlockFieldProps) {
+export function BlockField({
+  block,
+  captionText,
+  captionRequired,
+  value,
+  onChange,
+  disabled = true,
+  error,
+  onBlur,
+}: BlockFieldProps) {
   // Неотвечаемый (контентный) блок — статический контент: без подписи-вопроса,
   // звёздочки, контрола и ошибок.
   if (isContentType(block.type)) {
@@ -40,14 +53,17 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
     }
     // text — статический абзац. Пустой блок держит место (одна строка rf-text), а не
     // схлопывается: недособранный черновик остаётся видимым пустым пространством.
-    return <p className="rf-text">{block.label.trim() ? block.label : ' '}</p>
+    return <ContentBlock block={block} required={captionRequired} />
   }
 
   const errorId = error ? `${block.id}-error` : undefined
+  // aria отвечаемого поля: подпись группы, иначе плейсхолдер, иначе фолбэк.
+  const aria = captionText?.trim() || block.settings?.placeholder?.trim() || 'Поле'
   return (
-    <FieldShell block={block} error={error} errorId={errorId}>
+    <FieldShell error={error} errorId={errorId}>
       <FieldControl
         block={block}
+        label={aria}
         value={value}
         onChange={onChange}
         disabled={disabled}
@@ -65,11 +81,45 @@ export function BlockField({ block, value, onChange, disabled = true, error, onB
 // респондент, поэтому вид не разъезжается (превью и рендерер берут BlockField
 // целиком, с оболочкой).
 export function BlockControl({ block }: { block: Block }) {
-  return <FieldControl block={block} disabled={true} invalid={false} />
+  const aria = block.settings?.placeholder?.trim() || 'Поле'
+  return <FieldControl block={block} label={aria} disabled={true} invalid={false} />
+}
+
+// ContentBlock — неотвечаемый блок: подпись группы (title крупная / label мелкая),
+// заголовок раздела (heading), абзац (text) или картинка (image). Звёздочку
+// обязательности несёт подпись, если у поля группы стоит required.
+function ContentBlock({ block, required }: { block: Block; required?: boolean }) {
+  if (block.type === 'image') {
+    const key = block.settings?.imageKey
+    return key ? (
+      <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+    ) : (
+      <div className="rf-image-empty" aria-hidden="true" />
+    )
+  }
+  const text = (block.text ?? '').trim()
+  if (block.type === 'title' || block.type === 'label') {
+    return (
+      <div className={block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label'}>
+        {text || 'Без названия'}
+        {required && (
+          <span className="rf-required" aria-hidden="true">
+            {' '}
+            *
+          </span>
+        )}
+      </div>
+    )
+  }
+  if (block.type === 'heading') {
+    return <div className="rf-heading">{text || 'Заголовок раздела'}</div>
+  }
+  return <p className="rf-text">{text || ' '}</p>
 }
 
 type ControlProps = {
   block: Block
+  label: string
   value?: Answer
   onChange?: (next: Answer) => void
   disabled: boolean
@@ -78,8 +128,7 @@ type ControlProps = {
   onBlur?: () => void
 }
 
-function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBlur }: ControlProps) {
-  const label = block.label.trim() || 'Без названия'
+function FieldControl({ block, label, value, onChange, disabled, invalid, errorId, onBlur }: ControlProps) {
   // Текстовые контролы управляемые: пустая строка вместо undefined, чтобы React
   // не переключал input между controlled/uncontrolled. onChange присутствует
   // всегда (иначе React ругается на value без onChange); в превью не срабатывает.
@@ -190,7 +239,7 @@ function FieldControl({ block, value, onChange, disabled, invalid, errorId, onBl
             {...invalidProps}
           />
           <span className="rf-consent">
-            {label}
+            {(block.text ?? '').trim() || 'Текст согласия'}
             {block.required && (
               <span className="rf-required" aria-hidden="true"> *</span>
             )}
@@ -359,7 +408,7 @@ function ChoiceList({
     onChange(multiple ? toggleMulti(selectedMany, id, checked) : id)
   }
   return (
-    <div className="rf-options" role="group" aria-label={block.label.trim() || 'Без названия'} onBlur={onBlur}>
+    <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
       {options.map((o, i) => {
         const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
         const key = optionKey(i)

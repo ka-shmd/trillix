@@ -4,10 +4,10 @@ import "testing"
 
 func threeQuestions() []Question {
 	return QuestionOrder([]VersionedSchema{
-		vs(1,
-			q("b1", "Имя", BlockShortText),
-			q("b2", "ИНН", BlockShortText),
-			q("b3", "Комментарий", BlockLongText),
+		vsg(1,
+			grp("Имя", Block{ID: "b1", Type: BlockShortText}),
+			grp("ИНН", Block{ID: "b2", Type: BlockShortText}),
+			grp("Комментарий", Block{ID: "b3", Type: BlockLongText}),
 		),
 	})
 }
@@ -121,8 +121,8 @@ func TestBuildFunnel_UnknownBlockIsNotAttributed(t *testing.T) {
 // и прятать его значит прятать причину.
 func TestBuildFunnel_KeepsStepForRemovedQuestion(t *testing.T) {
 	questions := QuestionOrder([]VersionedSchema{
-		vs(1, q("b1", "Имя", BlockShortText), q("old", "Паспорт", BlockShortText)),
-		vs(2, q("b1", "Имя", BlockShortText)),
+		vsg(1, grp("Имя", Block{ID: "b1", Type: BlockShortText}), grp("Паспорт", Block{ID: "old", Type: BlockShortText})),
+		vsg(2, grp("Имя", Block{ID: "b1", Type: BlockShortText})),
 	})
 	f := BuildFunnel(questions, []LastBlockCount{{BlockID: "old", Visits: 9}})
 
