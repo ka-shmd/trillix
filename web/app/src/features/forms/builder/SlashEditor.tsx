@@ -27,6 +27,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { type Block, DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { type MenuItem } from './blockTypes'
+import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
@@ -336,6 +337,8 @@ function GroupRow({
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: group.id,
+    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
+    animateLayoutChanges: noLayoutAnimation,
   })
   // Translate-only (как у BlockRow): сдвиг без scaleY, чтобы группа не сжималась
   // под высоту соседнего слота при перетаскивании.

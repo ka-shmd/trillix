@@ -23,6 +23,7 @@ import {
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
 import { type MenuItem } from './blockTypes'
+import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import { SlashMenu } from './SlashMenu'
@@ -125,6 +126,9 @@ export function BlockRow({
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
+    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
+    // У строк артефакт проявлялся при переносе ВНУТРИ группы (без ремаунта).
+    animateLayoutChanges: noLayoutAnimation,
   })
   // Translate, а не Transform: блоки разной высоты, и dnd-kit кладёт в transform
   // scaleY, чтобы переносимый блок «подгонялся» под высоту соседнего слота — из-за
