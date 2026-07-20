@@ -15,11 +15,18 @@
 # CSP: скрипты только со своего origin (собранные бандлы без inline-скриптов —
 # сильная защита от XSS); 'unsafe-inline' у стилей неизбежен (Radix/dnd-kit пишут
 # инлайн-style), но низкориск; всё прочее — 'self'. data: у img/font — иконки/шрифты.
+#
+# HSTS (TD-13): срок берётся из env {$HSTS_MAX_AGE}, а не хардкодится — иначе
+# prod-local на *.localhost запирал бы браузер на https для всего localhost и мешал
+# другим локальным проектам. prod-local → HSTS_MAX_AGE=0 (max-age=0 = «забыть HSTS»,
+# безвредно на *.localhost); реальный прод → 31536000 (год). Различие живёт в env,
+# не в ветвлении по контуру внутри файла.
 (secheaders) {
 	header {
 		X-Content-Type-Options nosniff
 		X-Frame-Options {args[0]}
 		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE}; includeSubDomains"
 		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors {args[1]}"
 		-Server
 	}

@@ -129,6 +129,8 @@ services:
       # переменных раздача была бы захардкожена на MinIO (см. Caddyfile media).
       MEDIA_UPSTREAM: ${MEDIA_UPSTREAM}
       MEDIA_UPSTREAM_HOST: ${MEDIA_UPSTREAM_HOST}
+      # Срок HSTS (TD-13): prod-local → 0 (безвредно на *.localhost), прод → 31536000.
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE}
     ports:
       - "80:80"
       - "443:443"
