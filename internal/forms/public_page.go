@@ -161,6 +161,15 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 	// prefix + <og-мета> + suffix. Рендерим в буфер: ошибка шаблона (маловероятна —
 	// статичный шаблон) не должна оставить наполовину записанный ответ.
 	doc := h.currentIndex(r)
+	if doc == nil {
+		// Недостижимо сегодня: Routes регистрирует /r только когда документ загружен
+		// при старте, а currentIndex при сбое возвращает последний удачный разбор.
+		// Но инвариант держится в ДРУГОМ файле, и его правка не должна оборачиваться
+		// разыменованием nil (паника → 500 без объяснения). Явная ветка дешевле
+		// молчаливого падения и оставляет причину в логе.
+		httpserver.WriteError(w, r, fmt.Errorf("renderer index unavailable for %s", slug))
+		return
+	}
 	var buf bytes.Buffer
 	buf.Write(doc.prefix)
 	if err := ogMetaTmpl.Execute(&buf, data); err != nil {
