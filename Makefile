@@ -19,7 +19,7 @@ include .env
 export
 endif
 
-.PHONY: help dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down prod-local-trust
+.PHONY: help check-docs dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down prod-local-trust
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -96,7 +96,10 @@ test-web: ## Фронтовые тесты (vitest в web/app и web/renderer)
 	cd web/app && npm test
 	cd web/renderer && npm test
 
-lint: lint-go lint-web ## Все статические проверки: Go + оба фронта
+lint: lint-go lint-web check-docs ## Все статические проверки: Go + оба фронта + документы
+
+check-docs: ## Расхождения документов с кодом и структурные инварианты
+	./scripts/check-docs.sh
 
 lint-go: ## Go: golangci-lint (govet, errcheck, staticcheck, gofumpt)
 	golangci-lint run $(GO_PKGS)

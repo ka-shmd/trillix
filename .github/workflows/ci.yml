@@ -14,6 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Расхождения документов с кодом раньше регистрировались в TECH-DEBT §4 вместо
+  # того, чтобы чиниться, — и реестр сам протух. Джоба лёгкая (секунды, без
+  # тулчейнов), поэтому стоит первой и даёт быструю обратную связь.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check-docs
+        run: ./scripts/check-docs.sh
+
   go:
     runs-on: ubuntu-latest
     steps:

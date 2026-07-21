@@ -24,5 +24,43 @@
     "deny": [
       "Read(./.env)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/session-status.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/guard-migration.sh",
+            "timeout": 10,
+            "statusMessage": "Проверяю, не смержена ли миграция"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/hooks/after-edit.sh",
+            "timeout": 20
+          }
+        ]
+      }
+    ]
   }
 }
