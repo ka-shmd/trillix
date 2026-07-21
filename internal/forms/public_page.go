@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
@@ -56,27 +58,77 @@ const maxOGDescriptionLen = 200
 // заголовков вопросов (пустой тизер): описание страницы для поисковиков.
 const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
 
-// loadIndexHTML читает собранный index.html рендерера и раскладывает его вокруг
-// плейсхолдера ogMetaMarker в prefix/suffix (кэш в памяти — читается один раз при
-// старте, не на каждый запрос). Отсутствие маркера или #root — ошибка старта
-// (fail-fast: «упасть сразу, а не на первом запросе»), а не молчаливо битая форма.
-func (h *PublicHandler) loadIndexHTML(path string) error {
+// indexDoc — собранный index.html, разложенный вокруг плейсхолдера ogMetaMarker,
+// вместе с приметами файла на диске (mtime+размер), по которым замечаем подмену.
+type indexDoc struct {
+	prefix  []byte
+	suffix  []byte
+	modTime time.Time
+	size    int64
+}
+
+// parseIndexHTML читает собранный index.html рендерера и раскладывает его вокруг
+// плейсхолдера ogMetaMarker. Отсутствие маркера или #root — ошибка (на старте это
+// fail-fast «упасть сразу, а не на первом запросе», а не молчаливо битая форма).
+func parseIndexHTML(path string) (*indexDoc, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("stat renderer index %s: %w", path, err)
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read renderer index %s: %w", path, err)
+		return nil, fmt.Errorf("read renderer index %s: %w", path, err)
 	}
 	html := string(raw)
 	i := strings.Index(html, ogMetaMarker)
 	if i < 0 {
-		return fmt.Errorf("renderer index %s: missing %q placeholder", path, ogMetaMarker)
+		return nil, fmt.Errorf("renderer index %s: missing %q placeholder", path, ogMetaMarker)
 	}
 	if !strings.Contains(html, `id="root"`) {
-		return fmt.Errorf("renderer index %s: missing #root mount node", path)
+		return nil, fmt.Errorf("renderer index %s: missing #root mount node", path)
 	}
-	h.htmlPrefix = []byte(html[:i])
-	h.htmlSuffix = []byte(html[i+len(ogMetaMarker):])
-	h.servesHTML = true
-	return nil
+	return &indexDoc{
+		prefix:  []byte(html[:i]),
+		suffix:  []byte(html[i+len(ogMetaMarker):]),
+		modTime: fi.ModTime(),
+		size:    fi.Size(),
+	}, nil
+}
+
+// currentIndex возвращает актуальный разбор index.html, перечитывая файл, если тот
+// изменился на диске (сверка по mtime+размеру — один stat, микросекунды).
+//
+// Зачем перечитывать, а не оставить разбор со старта: выкатка может обновить ТОЛЬКО
+// статику — тег образа тот же, значит `docker compose up -d` контейнер api не
+// пересоздаёт, и разобранный при старте документ остался бы старым НАВСЕГДА. Форма
+// отдавала бы прошлый HTML (ссылки на несуществующие ассеты → белый экран), причём
+// молча, при зелёном деплое. Тот же класс, что TD-27, только на стороне приложения.
+//
+// Сбой перечитывания не ломает выдачу: остаётся последний удачный разбор, а причина
+// уходит в лог с request_id. Битый или наполовину записанный файл (rsync в процессе)
+// не должен превращать публичную страницу формы в 500.
+func (h *PublicHandler) currentIndex(r *http.Request) *indexDoc {
+	cur := h.index.Load()
+	fi, err := os.Stat(h.indexPath)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("stat renderer index",
+			slog.String("path", h.indexPath), slog.String("error", err.Error()))
+		return cur
+	}
+	if cur != nil && fi.ModTime().Equal(cur.modTime) && fi.Size() == cur.size {
+		return cur
+	}
+
+	doc, err := parseIndexHTML(h.indexPath)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("reload renderer index (оставлен прежний)",
+			slog.String("path", h.indexPath), slog.String("error", err.Error()))
+		return cur
+	}
+	h.index.Store(doc)
+	httpserver.LoggerFrom(r.Context()).Info("renderer index reloaded",
+		slog.String("path", h.indexPath), slog.Int64("size", doc.size))
+	return doc
 }
 
 // getHTML отдаёт HTML-документ формы /r/{slug}: собранный index.html рендерера с
@@ -108,13 +160,14 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 
 	// prefix + <og-мета> + suffix. Рендерим в буфер: ошибка шаблона (маловероятна —
 	// статичный шаблон) не должна оставить наполовину записанный ответ.
+	doc := h.currentIndex(r)
 	var buf bytes.Buffer
-	buf.Write(h.htmlPrefix)
+	buf.Write(doc.prefix)
 	if err := ogMetaTmpl.Execute(&buf, data); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("render form meta %s: %w", slug, err))
 		return
 	}
-	buf.Write(h.htmlSuffix)
+	buf.Write(doc.suffix)
 
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
