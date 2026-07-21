@@ -159,7 +159,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	srv := httpserver.New(cfg.HTTPAddr, log,
+	srv := httpserver.New(cfg.HTTPAddr, log, pool,
 		authHandler.Routes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes)
