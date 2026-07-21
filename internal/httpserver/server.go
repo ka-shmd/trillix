@@ -58,6 +58,9 @@ func handleHealthz(db Pinger) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		// Живость нельзя кэшировать: закэшированный "ok" — это тот же зелёный
+		// мониторинг на мёртвом сервисе, только со стороны посредника.
+		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(status)
 		if _, err := w.Write([]byte(body)); err != nil {
 			loggerFrom(r.Context()).Warn("write healthz response",
