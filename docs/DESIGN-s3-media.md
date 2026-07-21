@@ -142,7 +142,7 @@ type blobPutter interface {
 
 ## 8. Раздача (реализовано, шаг 4)
 
-- **Caddy reverse-proxy `/media/*` → бакет `app-media`** на обоих доменах (`app.localhost` и `f.localhost`, сниппет `(media)` в `deploy/Caddyfile`): `handle_path` срезает `/media`, `rewrite` добавляет префикс бакета (`{$S3_MEDIA_BUCKET}`), upstream — `minio:9000`. Браузер видит **same-origin** → `img-src 'self'` покрывает и билдер, и рендерер; байты идут через Caddy, не Go. Иммутабельный кэш (`Cache-Control immutable`) — ключи контент-адресны.
+- **Caddy reverse-proxy `/media/*` → бакет `app-media`** на обоих доменах (`app.localhost` и `f.localhost`, сниппет `(media)` в `deploy/caddy/Caddyfile`): `handle_path` срезает `/media`, `rewrite` добавляет префикс бакета (`{$S3_MEDIA_BUCKET}`), upstream — `minio:9000`. Браузер видит **same-origin** → `img-src 'self'` покрывает и билдер, и рендерер; байты идут через Caddy, не Go. Иммутабельный кэш (`Cache-Control immutable`) — ключи контент-адресны.
 - **URL — относительный `/media/<imageKey>`**, одинаковый на обоих origin (решение: не env-переменная, а относительный префикс; браузер резолвит против текущего origin). Ключ в данных, URL — вычисляемый (`'/media/' + imageKey`). Абсолютная база/CDN на реальном проде — будущая замена (тогда origin добавляется в CSP; для og:image формы, которая пост-MVP, понадобится абсолютный URL).
 - **CSP:** `img-src 'self' data: blob:` — `'self'` покрывает раздачу same-origin, `blob:` — оптимистичный локальный превью билдера (`URL.createObjectURL`, шаг 5). В dev CSP нет.
 - **dev без Caddy:** `/media/*` в dev проксирует **vite** на MinIO (`web/{app,renderer}/vite.config.ts`, rewrite → `/app-media/*`).
