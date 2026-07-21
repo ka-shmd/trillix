@@ -154,8 +154,12 @@ func TestOGDescriptionFromSchema(t *testing.T) {
 
 func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 	path := writeFixtureIndex(t)
-	svc := fakePublicSvc{pf: PublicForm{Title: "Форма", Version: 1,
-		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`), VersionID: uuid.New()}}
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Форма",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID: uuid.New(),
+	}}
 
 	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
 	if err != nil {
@@ -197,8 +201,12 @@ func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 
 func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
 	path := writeFixtureIndex(t)
-	svc := fakePublicSvc{pf: PublicForm{Title: "Форма", Version: 1,
-		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`), VersionID: uuid.New()}}
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Форма",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID: uuid.New(),
+	}}
 
 	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
 	if err != nil {
