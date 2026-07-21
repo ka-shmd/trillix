@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -228,5 +230,26 @@ func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "index-ByZMBI6C.js") {
 		t.Fatalf("не сохранён последний удачный разбор:\n%s", rec.Body.String())
+	}
+}
+
+// Инвариант «документ всегда загружен» живёт в Routes (другой файл): /r
+// регистрируется только когда index прочитан при старте. Если его когда-нибудь
+// нарушат, getHTML не должен разыменовывать nil — паника даёт 500 без объяснения.
+func TestPublicHTML_NoIndexLoaded_Returns500NotPanic(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Форма",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID: uuid.New(),
+	}}
+	// Собираем «невозможное» состояние руками: путь задан, документ не загружен.
+	h := &PublicHandler{svc: svc, indexPath: filepath.Join(t.TempDir(), "нет-такого.html"), now: time.Now}
+
+	rec := httptest.NewRecorder()
+	h.getHTML(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("статус %d, ожидалось 500", rec.Code)
 	}
 }
