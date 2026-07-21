@@ -30,6 +30,20 @@ hz=$(docker run --rm --network "$net" curlimages/curl:latest -s http://api:8080/
 echo "$hz" | grep -q '"status":"ok"' || fail "healthz вернул: $hz"
 echo "    ok"
 
+echo "==> 1b) /healthz СНАРУЖИ, через Caddy (не по внутренней сети!)"
+# Пункт 1 ходит внутрь compose-сети и потому проходил всегда — даже когда снаружи
+# /healthz не был проксирован в Go вовсе и уезжал в SPA-fallback, отдавая index.html
+# со статусом 200 (TD-28). Мониторинг фазы 10 смотрит именно снаружи, поэтому
+# проверяем тот же путь, что и он: должен прийти JSON приложения, а не HTML.
+hz_ct=$(capp /healthz -o /dev/null -w '%{content_type}')
+case "$hz_ct" in
+	application/json*) ;;
+	*) fail "/healthz снаружи отдал content-type '$hz_ct' (ожидался application/json — путь не проксируется в Go?)" ;;
+esac
+hz_out=$(capp /healthz)
+echo "$hz_out" | grep -q '"status":"ok"' || fail "/healthz снаружи вернул: $hz_out"
+echo "    application/json + status ok ✓"
+
 echo "==> 2) app.localhost/ (статика кабинета)"
 code=$(capp / -o /dev/null -w '%{http_code}'); [ "$code" = 200 ] || fail "app / = $code"
 echo "    200"

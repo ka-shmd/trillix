@@ -53,6 +53,10 @@ func TestHealthz_DBUp_Returns200(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
 		t.Errorf("Content-Type = %q, ожидалось application/json", ct)
 	}
+	// Закэшированный посредником "ok" вернул бы ту же ложь о живости.
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("Cache-Control = %q, ожидалось no-store", cc)
+	}
 
 	var body struct {
 		Status string `json:"status"`

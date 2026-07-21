@@ -65,6 +65,13 @@ prod-local: ## Репетиция прода: собрать образ+стат
 	docker build -f deploy/Dockerfile -t $(API_IMAGE) .
 	set -a && . ./.env.prod-local && set +a && \
 		./scripts/build-static.sh && $(PROD_COMPOSE) up -d
+	# Перечитать конфиг Caddy — ровно то же делает deploy/remote-update.sh на проде.
+	# Без этой строки контуры расходятся: `up -d` не пересоздаёт контейнер caddy при
+	# правке Caddyfile, и повторный `make prod-local` гонял бы смоук против конфига,
+	# загруженного при первом старте. То есть репетиция не воспроизводила бы прод
+	# именно в том месте, где живёт TD-27. На свежем стеке reload — безобидный no-op.
+	set -a && . ./.env.prod-local && set +a && \
+		$(PROD_COMPOSE) exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 	./scripts/prod-local-smoke.sh $(PROD_PROJECT)
 
 prod-local-down: ## Погасить prod-local (тома с данными сохраняются; -v сотрёт БД)
