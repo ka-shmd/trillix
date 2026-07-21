@@ -60,12 +60,14 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # MinIO — S3-совместимое хранилище медиа. Порт наружу НЕ публикуется: доступен
-  # только по внутренней docker-сети (api ходит на http://minio:9000; раздача
-  # картинок наружу — через Caddy /media, шаг 4). На настоящем проде заменяется
-  # арендованным S3 сменой S3_* (доступ приложения) И MEDIA_UPSTREAM/_HOST (раздача
-  # Caddy) в env; этот сервис тогда не поднимается.
+  # MinIO — S3-совместимое хранилище медиа ТОЛЬКО для prod-local. Порт наружу НЕ
+  # публикуется: доступен лишь по внутренней docker-сети (api ходит на
+  # http://minio:9000; раздача картинок наружу — через Caddy /media, шаг 4).
+  # На настоящем проде хранилище арендованное: меняются S3_* (доступ приложения) и
+  # MEDIA_UPSTREAM/_HOST (раздача Caddy), а этот сервис не поднимается вовсе —
+  # он за профилем `local-media`, который включает только `make prod-local`.
   minio:
+    profiles: ["local-media"]
     image: minio/minio:RELEASE.2024-01-16T16-07-38Z
     command: server /data
     environment:
@@ -76,8 +78,11 @@ services:
     restart: unless-stopped
 
   # Одноразовый бутстрап бакета app-media: public-read БЕЗ листинга (mc anonymous
-  # download = только GetObject). Отрабатывает и выходит.
+  # download = только GetObject). Отрабатывает и выходит. Только prod-local (профиль
+  # `local-media`): на проде бакет заводится и открывается на чтение в панели
+  # S3-провайдера, а не этим сервисом.
   createbuckets:
+    profiles: ["local-media"]
     image: minio/mc:latest
     depends_on:
       - minio
@@ -102,13 +107,15 @@ services:
       # Caddy (renderer-статика), поэтому index.html и ассеты всегда из одной сборки —
       # рассинхрон невозможен. Статика раскладывается build-static.sh до `up` (Makefile).
       - ./static/renderer:/srv/renderer:ro
+    # Зависимости только от того, без чего api не может стартовать. Хранилища
+    # медиа среди них нет намеренно: приложение не подключается к S3 на старте
+    # (недоступное хранилище роняет только загрузку картинок), а на проде MinIO
+    # не существует вовсе — жёсткая зависимость мешала бы старту.
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      minio:
-        condition: service_started
     # Порт наружу НЕ публикуется: наружу api смотрит только через Caddy.
     # Healthcheck внутри контейнера не ставим — distroless без shell/curl;
     # живость проверяет внешний мониторинг по /healthz (фаза 10).

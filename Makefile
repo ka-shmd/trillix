@@ -5,7 +5,9 @@ COMPOSE := docker compose --env-file .env -f compose.dev.yml
 # prod-local контур: тот же образ/compose, что уедет на прод, но на *.localhost.
 API_IMAGE    := ghcr.io/ka-shmd/trillix-api:latest
 PROD_PROJECT := trillix-prod-local
-PROD_COMPOSE := docker compose -p $(PROD_PROJECT) --env-file .env.prod-local -f deploy/compose.prod.yml
+# Профиль local-media поднимает MinIO+бутстрап бакета — они нужны только здесь:
+# на проде хранилище арендованное, и эти сервисы не запускаются (deploy/compose.prod.yml).
+PROD_COMPOSE := docker compose -p $(PROD_PROJECT) --profile local-media --env-file .env.prod-local -f deploy/compose.prod.yml
 
 # Явный список Go-пакетов: `./...` заполз бы в web/**/node_modules, где npm-пакеты
 # приносят посторонние .go-файлы (напр. flatted). Go не умеет игнорировать node_modules.
