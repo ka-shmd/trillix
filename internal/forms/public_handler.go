@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
@@ -31,13 +32,14 @@ type PublicHandler struct {
 	tokenSecret   []byte
 	publicBaseURL string // база рендерера: og:url на /r/{slug} и ссылка на форму
 	ogImageURL    string // абсолютный URL картинки превью (og:image)
-	// htmlPrefix/htmlSuffix — собранный index.html рендерера, разложенный вокруг
-	// плейсхолдера ogMetaMarker (см. loadIndexHTML). servesHTML — задан ли index:
-	// в проде true (Go отдаёт /r), в dev false (форму отдаёт vite-dev, /r не регится).
-	htmlPrefix []byte
-	htmlSuffix []byte
-	servesHTML bool
-	now        func() time.Time // подменяется в тестах
+	// indexPath — путь к собранному index.html рендерера. Пустой в dev: тогда /r не
+	// обслуживается Go (форму отдаёт vite-dev), и index не читается вовсе.
+	indexPath string
+	// index — разобранный документ (см. indexDoc). Атомарный указатель, потому что
+	// файл перечитывается на лету при подмене на диске: читатели идут без блокировки,
+	// подмена — одной записью указателя.
+	index atomic.Pointer[indexDoc]
+	now   func() time.Time // подменяется в тестах
 }
 
 // NewPublicHandler создаёт публичный транспорт форм. indexHTMLPath — путь к
@@ -53,9 +55,12 @@ func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, 
 		now:           time.Now,
 	}
 	if indexHTMLPath != "" {
-		if err := h.loadIndexHTML(indexHTMLPath); err != nil {
+		doc, err := parseIndexHTML(indexHTMLPath)
+		if err != nil {
 			return nil, err
 		}
+		h.indexPath = indexHTMLPath
+		h.index.Store(doc)
 	}
 	return h, nil
 }
@@ -65,7 +70,7 @@ func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, 
 // формы с OG-мета (/r/{slug}). В dev /r отдаёт vite-dev, поэтому Go его не регит.
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
-	if h.servesHTML {
+	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
 	}
 }

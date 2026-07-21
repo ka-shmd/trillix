@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -141,5 +142,91 @@ func TestOGDescriptionFromSchema(t *testing.T) {
 				t.Fatalf("got %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+// --- Перечитывание собранного index.html (TD-29) ---
+//
+// Выкатка может обновить ТОЛЬКО статику: тег образа тот же → compose не пересоздаёт
+// контейнер api → разобранный при старте документ остался бы старым навсегда, и
+// форма отдавала бы прошлый HTML со ссылками на несуществующие ассеты. Молча, при
+// зелёном деплое. Эти тесты сторожат перечитывание и его отказоустойчивость.
+
+func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
+	path := writeFixtureIndex(t)
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Форма",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID: uuid.New(),
+	}}
+
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	get := func() string {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("статус %d, ожидалось 200", rec.Code)
+		}
+		return rec.Body.String()
+	}
+
+	if body := get(); !strings.Contains(body, "index-ByZMBI6C.js") {
+		t.Fatalf("до подмены в HTML нет ассета сборки:\n%s", body)
+	}
+
+	// Имитируем выкатку только статики: файл на диске заменён новой сборкой.
+	updated := strings.Replace(builtIndexFixture, "index-ByZMBI6C.js", "index-Zq9NEW42.js", 1)
+	if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
+		t.Fatalf("подмена index.html: %v", err)
+	}
+
+	body := get()
+	if !strings.Contains(body, "index-Zq9NEW42.js") {
+		t.Fatalf("после подмены отдан СТАРЫЙ HTML (перечитывания нет):\n%s", body)
+	}
+	if strings.Contains(body, "index-ByZMBI6C.js") {
+		t.Fatalf("в HTML остался ассет старой сборки:\n%s", body)
+	}
+	// OG-мета продолжает подставляться после перечитывания.
+	if !strings.Contains(body, `<meta property="og:title" content="Форма">`) {
+		t.Fatalf("после перечитывания пропала OG-мета:\n%s", body)
+	}
+}
+
+func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
+	path := writeFixtureIndex(t)
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Форма",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		VersionID: uuid.New(),
+	}}
+
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+
+	// Файл испорчен уже после старта: rsync в процессе, обрезанная запись и т.п.
+	// Публичная страница формы не имеет права превратиться в 500 из-за этого.
+	if err := os.WriteFile(path, []byte("<html>без плейсхолдера и root</html>"), 0o600); err != nil {
+		t.Fatalf("порча index.html: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200 (должен остаться последний удачный разбор)", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "index-ByZMBI6C.js") {
+		t.Fatalf("не сохранён последний удачный разбор:\n%s", rec.Body.String())
 	}
 }
