@@ -111,7 +111,13 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro    # deploy/Caddyfile
+      # Монтируем КАТАЛОГ, а не файл. Одиночный bind-mount файла привязан к иноде,
+      # а `git checkout` тега пишет новый файл и переименовывает — инода меняется,
+      # и контейнер продолжает видеть старое содержимое. Из-за этого любая правка
+      # Caddyfile молча не доезжала до прода: `caddy reload` честно перечитывал
+      # устаревший файл и возвращал успех. Каталог резолвится при каждом обращении,
+      # поэтому подмена файла внутри него видна (deploy/caddy/Caddyfile).
+      - ./caddy:/etc/caddy:ro
       - ./static:/srv/static:ro                # deploy/static (scripts/build-static.sh)
       - caddy_data:/data                        # сертификаты локального CA / Let's Encrypt
       - caddy_config:/config

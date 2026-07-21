@@ -422,7 +422,7 @@ services:
   caddy:
     image: caddy:2
     ports: ["80:80", "443:443"]
-    volumes: [caddy_data:/data, ./Caddyfile:/etc/caddy/Caddyfile,
+    volumes: [caddy_data:/data, ./caddy:/etc/caddy,
               ./static:/srv/static]
   api:
     image: ghcr.io/you/forms-api:${TAG}

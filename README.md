@@ -56,7 +56,7 @@ SPA-fallback, настоящий 404 — на публичной `/r/{slug}`), �
 
 **Фаза 7 «Prod-local: репетиция прода» завершена.** Весь прод-контур собирается и работает
 локально: multi-stage distroless-образ Go (`deploy/Dockerfile`), `deploy/compose.prod.yml`
-(postgres без порта наружу → одноразовые миграции → api → Caddy), `deploy/Caddyfile` с TLS от
+(postgres без порта наружу → одноразовые миграции → api → Caddy), `deploy/caddy/Caddyfile` с TLS от
 локального CA на `app.localhost`/`f.localhost`. Одна команда `make prod-local` собирает образ и
 статику фронтов и поднимает стек под https; `make prod-local-trust` доверяет локальному CA
 («замочек»). Прод-сборка фронтов — `scripts/build-static.sh`. Архитектурно: **две origin вместо
