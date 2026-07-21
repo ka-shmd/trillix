@@ -27,6 +27,16 @@ sed -i "s|^TAG=.*|TAG=$TAG|" .env
 echo "== образ + перезапуск =="
 docker compose --env-file .env -f deploy/compose.prod.yml pull
 docker compose --env-file .env -f deploy/compose.prod.yml up -d --remove-orphans
+
+# Caddyfile примонтирован в контейнер bind-mount'ом, а определение сервиса caddy при
+# правке файла не меняется — значит `up -d` контейнер НЕ пересоздаёт, и новый конфиг
+# так и остался бы лежать на диске, не применившись. Без этой строки любая правка
+# Caddyfile (заголовки, маршруты, lb_try_duration) молча не доезжала бы до прода.
+# `caddy reload` перечитывает конфиг на живую, без разрыва соединений.
+echo "== перечитать конфиг Caddy =="
+docker compose --env-file .env -f deploy/compose.prod.yml exec -T caddy \
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+
 docker image prune -f
 
 echo "== деплой $TAG завершён =="
