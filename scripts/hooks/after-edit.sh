@@ -8,6 +8,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
+command -v jq >/dev/null || {
+	echo "after-edit: jq не найден, напоминания о контракте не работают" >&2
+	exit 2
+}
+
 payload=$(cat)
 file=$(printf '%s' "$payload" | jq -r '.tool_response.filePath // .tool_input.file_path // empty')
 [ -n "$file" ] || exit 0
@@ -16,7 +21,10 @@ case "$file" in
 *.go) gofmt -w "$file" 2>/dev/null || true ;;
 esac
 
-rel=${file#"$PWD"/}
+# Нормализуем путь: ./internal/... не срезался вычитанием $PWD и не матчился case.
+root=$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+abs=$(realpath -m "$file" 2>/dev/null || echo "$file")
+rel=${abs#"$root"/}
 msg=""
 case "$rel" in
 internal/domain/schema.go)
@@ -34,4 +42,9 @@ deploy/caddy/Caddyfile | deploy/compose.prod.yml)
 *) exit 0 ;;
 esac
 
-jq -n --arg m "$msg" '{systemMessage: $m}'
+# additionalContext, а не systemMessage: напоминание адресовано модели (она правит
+# вторую сторону контракта), а systemMessage харнесс показывает человеку.
+jq -n --arg m "$msg" '{
+  systemMessage: $m,
+  hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $m}
+}'

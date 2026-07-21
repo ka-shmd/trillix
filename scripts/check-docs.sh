@@ -32,7 +32,7 @@ real=$(find internal -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 # без вырезания секции сюда попадали api, app и renderer. Диапазоном sed, а не
 # смещениями awk: рамка дерева — многобайтовая, substr считает байты и промахивается.
 doc=$(sed -n '/^├── internal\//,/^├── migrations\//p' docs/ARCHITECTURE.md |
-	grep -oP '^│\s+[├└]── \K[a-z]+(?=/)' | sort -u)
+	grep -oP '^│\s+[├└]── \K[a-z][a-z0-9_]*(?=/)' | sort -u)
 missing=$(comm -23 <(echo "$real") <(echo "$doc") | tr '\n' ' ' | xargs)
 extra=$(comm -13 <(echo "$real") <(echo "$doc") | tr '\n' ' ' | xargs)
 if [ -n "$missing" ] || [ -n "$extra" ]; then
@@ -46,7 +46,7 @@ fi
 # Мутация: завести миграцию 0009 без правки SCHEMA.md → краснеет.
 for m in migrations/*.up.sql; do
 	num=$(basename "$m" | cut -d_ -f1)
-	if ! grep -q "$num" docs/SCHEMA.md; then
+	if ! grep -qE "(^|[^0-9])${num}([^0-9]|$)" docs/SCHEMA.md; then
 		err "SCHEMA.md не упоминает миграцию $num" "файл: $m"
 	fi
 done
@@ -64,15 +64,24 @@ done
 #
 # Мутация: добавить os.Getenv("FOO") в internal/config → краснеет;
 #          добавить FOO= в .env.dev → краснеет.
-documented=$(grep -hoP '^\s*#?\s*\K[A-Z][A-Z0-9_]+(?==)' .env.example | sort -u)
-readvars=$(grep -ohP '"\K[A-Z][A-Z0-9_]{3,}(?=")' internal/config/config.go | sort -u)
+documented=$(grep -hoP '^\s*(export\s+)?#?\s*\K[A-Z][A-Z0-9_]*(?=\s*=)' .env.example | sort -u)
+# Грепаем по всему ./cmd и ./internal, а не по одному config.go: пакет config
+# растёт файлами (s3.go, smtp.go), и проверка, смотрящая в один файл, молча
+# пропускала бы новый. Заодно ловится нарушение «os.Getenv вне пакета config».
+readvars=$(grep -rhoP 'os\.(Getenv|LookupEnv)\("\K[A-Z][A-Z0-9_]*(?=")' cmd internal | sort -u)
 for v in $readvars; do
 	echo "$documented" | grep -qx "$v" ||
-		err "internal/config читает $v, но .env.example его не описывает" \
+		err "код читает $v, но .env.example его не описывает" \
 			"DoD: config + .env.example + оба контура — в одном коммите"
 done
 for f in .env.dev .env.prod-local; do
-	for v in $(grep -hoP '^\s*\K[A-Z][A-Z0-9_]+(?==)' "$f" | sort -u); do
+	# Пропавший файл — дефект, а не «в нём нет лишних переменных»: без явной
+	# ветки переименование контура делало бы проверку декоративной при зелёном выводе.
+	[ -f "$f" ] || {
+		err "нет файла $f" "проверка env-переменных контура не выполнена"
+		continue
+	}
+	for v in $(grep -hoP '^\s*(export\s+)?\K[A-Z][A-Z0-9_]*(?=\s*=)' "$f" | sort -u); do
 		echo "$documented" | grep -qx "$v" ||
 			err "$f задаёт $v, но .env.example его не описывает" \
 				"каждая переменная контура обязана быть задокументирована"
@@ -83,8 +92,14 @@ done
 # Ловит ровно ту гниль, что нашлась в TD-14: документ ссылается на пункт как на
 # открытый, а он давно закрыт (или его вовсе нет).
 # Мутация: сослаться на TD-999 из STATUS.md → краснеет.
-closed=$(awk '/^## Закрыто/,0' docs/TECH-DEBT.md | grep -oP '\*\*TD-\K[0-9]+' | sort -un)
-known=$(grep -oP 'TD-\K[0-9]+' docs/TECH-DEBT.md | sort -un)
+# Номера берутся из ПОЗИЦИЙ ОБЪЯВЛЕНИЯ (`### TD-N` / `- **TD-N`), а не грепом по
+# всему файлу: иначе номер, упомянутый в прозе чужого пункта, считается
+# существующим, и удалённый TD молча проходит проверку.
+grep -q '^## Закрыто' docs/TECH-DEBT.md ||
+	err "в TECH-DEBT.md нет раздела «## Закрыто»" \
+		"проверка закрытых пунктов не может выполниться — это дефект скрипта, а не факт о мире"
+closed=$(awk '/^## Закрыто/,0' docs/TECH-DEBT.md | grep -oP '^-\s+\*\*TD-\K[0-9]+' | sort -un)
+known=$(grep -oP '^(###\s+|-\s+\*\*)TD-\K[0-9]+' docs/TECH-DEBT.md | sort -un)
 for f in docs/STATUS.md docs/DEV-PLAN.md README.md; do
 	[ -f "$f" ] || continue
 	for td in $(grep -oP '\bTD-\K[0-9]+' "$f" | sort -un); do
@@ -104,10 +119,20 @@ done
 # Мутация: вписать dangerouslySetInnerHTML в любой .tsx → краснеет.
 # Комментарии исключаются: в ThankYou.tsx упоминание живёт в пояснении «текст
 # владельца рендерится как текст», и запрещать разговор о запрете — абсурд.
-hits=$(grep -rn --include='*.ts' --include='*.tsx' \
-	-e 'dangerouslySetInnerHTML' -e '\.innerHTML\s*=' -e '\.outerHTML\s*=' \
+# Паттерны шире, чем кажется нужным, потому что дыры здесь молчаливые:
+# `+=` не матчился простым `=`, доступ по строковому ключу и insertAdjacentHTML
+# обходили проверку вовсе, а `--include` без .js пропускал целый класс файлов.
+# Артефакты сборки исключены: в собранном React innerHTML есть штатно, и без
+# --exclude-dir проверка краснела бы от чужого кода после каждого `npm run build`.
+hits=$(grep -rn --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+	--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build \
+	--exclude-dir=coverage --exclude='eslint.config.js' \
+	-e 'dangerouslySetInnerHTML' \
+	-e '\.\(inner\|outer\)HTML\s*[+|&^]\?=' \
+	-e '\["\(inner\|outer\)HTML"\]' \
+	-e "\\['\\(inner\\|outer\\)HTML'\\]" \
+	-e 'insertAdjacentHTML' \
 	web 2>/dev/null |
-	grep -v node_modules |
 	grep -vP ':\s*\d+:\s*(//|\*|/\*)' || true)
 if [ -n "$hits" ]; then
 	err "Инвариант 4 нарушен: пользовательский контент обязан рендериться как текст" "$hits"

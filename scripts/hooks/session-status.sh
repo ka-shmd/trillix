@@ -8,6 +8,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
+command -v jq >/dev/null || {
+	echo "session-status: jq не найден, STATUS.md не впрыснут" >&2
+	exit 2
+}
+
 [ -f docs/STATUS.md ] || exit 0
 
 jq -Rs --arg hdr "Актуальное состояние проекта (docs/STATUS.md, впрыснуто автоматически):" \

@@ -11,6 +11,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
+# Отказ инструмента — fail-closed: без jq хук молча пропускал бы ВСЁ, то есть
+# защита исчезала бы, ничем этого не обозначив.
+command -v jq >/dev/null || {
+	echo "guard-migration: jq не найден, защита миграций не работает" >&2
+	exit 2
+}
+
 payload=$(cat)
 file=$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty')
 
@@ -19,7 +26,20 @@ case "$file" in
 *) exit 0 ;;
 esac
 
-rel=${file#"$PWD"/}
+# Путь приводим к репо-относительному через git, а не вычитанием $PWD: файл может
+# прийти из другого чекаута (.claude/worktrees/…), и тогда `git log -- <путь>`
+# пуст, а смерженная миграция выглядит новой и правится.
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+abs=$(realpath -m "$file" 2>/dev/null || echo "$file")
+rel=${abs#"$root"/}
+# Воркдри лежит ВНУТРИ репозитория (.claude/worktrees/<имя>/migrations/…), поэтому
+# одного вычитания корня мало: путь остаётся «своим», но `git log -- <он>` пуст, и
+# смерженная миграция выглядит новой. Сводим любой путь к хвосту от migrations/.
+case "$rel" in
+migrations/*) ;;
+*/migrations/*) rel=${rel##*/migrations/}; rel="migrations/$rel" ;;
+esac
+
 # Пусто = миграция ещё не на main, значит своя и правится.
 git log --oneline origin/main -- "$rel" 2>/dev/null | grep -q . ||
 	git log --oneline main -- "$rel" 2>/dev/null | grep -q . || exit 0
