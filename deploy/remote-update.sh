@@ -11,6 +11,19 @@ set -euo pipefail
 : "${TAG:?TAG не задан (ожидается из окружения)}"
 cd /opt/trillix
 
+# Функцией, а не переменной с командой: `$VAR arg` разбивается на слова в bash, но
+# НЕ в zsh — такой приём молча ломается при запуске из другой оболочки. Функция
+# ведёт себя одинаково везде.
+#
+# `< /dev/null` — обязателен, а не гигиена. Этот скрипт подаётся на сервер ЧЕРЕЗ
+# STDIN (`ssh … bash -s < deploy/remote-update.sh`), а `docker … exec` без явного
+# перенаправления забирает тот же stdin себе и съедает ОСТАТОК СКРИПТА. Команды
+# ниже по файлу тогда просто не выполняются, а деплой остаётся зелёным — то есть
+# любая проверка после первого exec превращалась бы в декорацию.
+caddy_exec() {
+  docker compose --env-file .env -f deploy/compose.prod.yml exec -T caddy "$@" < /dev/null
+}
+
 echo "== git → $TAG =="
 git fetch --tags --force origin
 git checkout -f "$TAG"
@@ -34,8 +47,50 @@ docker compose --env-file .env -f deploy/compose.prod.yml up -d --remove-orphans
 # Caddyfile (заголовки, маршруты, lb_try_duration) молча не доезжала бы до прода.
 # `caddy reload` перечитывает конфиг на живую, без разрыва соединений.
 echo "== перечитать конфиг Caddy =="
-docker compose --env-file .env -f deploy/compose.prod.yml exec -T caddy \
-  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+caddy_exec caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+
+# Сверка, что Caddy исполняет ИМЕННО тот конфиг, который лежит в репозитории.
+# Появилась после TD-27: там правки не доезжали до контейнера, а деплой был зелёный,
+# потому что reload честно перечитывал устаревший файл и возвращал 0. Код возврата
+# reload'а доказывает «конфиг валиден», но не «конфиг тот самый».
+#
+# Проверка A (обязательная): файл в контейнере == файл в репозитории. Ловит ровно
+# класс TD-27 — устаревший bind-mount, недокопированную статику, не тот путь.
+# Успешный reload поверх совпавшего файла уже означает, что живое соответствует репо.
+echo "== сверка конфига Caddy: репозиторий → контейнер =="
+host_sum=$(sha256sum deploy/caddy/Caddyfile | awk '{print $1}')
+cont_sum=$(caddy_exec sha256sum /etc/caddy/Caddyfile | awk '{print $1}')
+if [ "$host_sum" != "$cont_sum" ]; then
+  echo "ОШИБКА: Caddyfile в контейнере не совпадает с репозиторием." >&2
+  echo "  репозиторий: $host_sum" >&2
+  echo "  контейнер:   $cont_sum" >&2
+  echo "  Это класс TD-27: контейнер видит устаревший файл. Конфиг НЕ применён." >&2
+  exit 1
+fi
+echo "   совпадает ($host_sum)"
+
+# Проверка B (по возможности): живой конфиг процесса == конфиг, порождаемый файлом.
+# Требует нормализации JSON (порядок ключей у adapt и admin API различается), а jq
+# внутри контейнера нет — поэтому нормализуем на хосте python'ом, если он есть.
+# Не обязательна: без неё гарантию даёт A + успешный reload. Молча не пропускаем —
+# если нормализатора нет, честно печатаем, что глубокая сверка не выполнялась.
+if command -v python3 >/dev/null 2>&1; then
+  echo "== сверка конфига Caddy: файл → живой процесс =="
+  caddy_exec caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null > /tmp/caddy-adapted.json
+  caddy_exec wget -qO- http://127.0.0.1:2019/config/ > /tmp/caddy-live.json
+  if ! python3 -c '
+import json,sys
+a=json.load(open("/tmp/caddy-adapted.json")); l=json.load(open("/tmp/caddy-live.json"))
+sys.exit(0 if json.dumps(a,sort_keys=True)==json.dumps(l,sort_keys=True) else 1)'; then
+    echo "ОШИБКА: живой конфиг Caddy не совпадает с тем, что порождает файл." >&2
+    echo "  reload вернул успех, но процесс исполняет другое. Деплой остановлен." >&2
+    exit 1
+  fi
+  echo "   живой конфиг соответствует файлу"
+  rm -f /tmp/caddy-adapted.json /tmp/caddy-live.json
+else
+  echo "== глубокая сверка живого конфига пропущена (нет python3 для нормализации JSON) =="
+fi
 
 docker image prune -f
 
