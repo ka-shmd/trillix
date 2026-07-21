@@ -14,19 +14,30 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# fail — итог всего прогона (код возврата), errs — счётчик ТЕКУЩЕЙ проверки.
+# Раздельно, потому что «✓» обязана означать «эта проверка прошла», а не «пока
+# никто не падал»: на общем счётчике падение первой проверки гасило галочки всех
+# следующих, и вывод выглядел так, будто они не отработали.
 fail=0
+errs=0
 err() {
 	echo "::error::$1"
 	echo "   $2"
 	fail=1
+	errs=$((errs + 1))
 }
 ok() { echo "  ✓ $1"; }
+# Сбросить счётчик перед очередной проверкой.
+begin() { errs=0; }
+# Напечатать «✓», только если эта проверка не дала ошибок.
+ok_if_clean() { [ $errs -eq 0 ] && ok "$1"; }
 
 echo "Проверка документов и структурных инвариантов"
 echo
 
 # --- 1. Дерево модулей в ARCHITECTURE §4.2 ↔ ls internal/ --------------------
 # Мутация: `mkdir internal/foo && touch internal/foo/x.go` → краснеет.
+begin
 real=$(find internal -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 # Только ветка internal/: у cmd/ и web/ в дереве та же глубина отступа, поэтому
 # без вырезания секции сюда попадали api, app и renderer. Диапазоном sed, а не
@@ -44,13 +55,14 @@ fi
 
 # --- 2. Миграции ↔ SCHEMA.md -------------------------------------------------
 # Мутация: завести миграцию 0009 без правки SCHEMA.md → краснеет.
+begin
 for m in migrations/*.up.sql; do
 	num=$(basename "$m" | cut -d_ -f1)
 	if ! grep -qE "(^|[^0-9])${num}([^0-9]|$)" docs/SCHEMA.md; then
 		err "SCHEMA.md не упоминает миграцию $num" "файл: $m"
 	fi
 done
-[ $fail -eq 0 ] && ok "все миграции ($(ls migrations/*.up.sql | wc -l)) упомянуты в SCHEMA.md"
+ok_if_clean "все миграции ($(ls migrations/*.up.sql | wc -l)) упомянуты в SCHEMA.md"
 
 # --- 3. env-переменные: всё читаемое и задаваемое задокументировано ----------
 # Пункт Definition of Done «новые env-переменные в четырёх местах» до сих пор
@@ -64,11 +76,29 @@ done
 #
 # Мутация: добавить os.Getenv("FOO") в internal/config → краснеет;
 #          добавить FOO= в .env.dev → краснеет.
+begin
 documented=$(grep -hoP '^\s*(export\s+)?#?\s*\K[A-Z][A-Z0-9_]*(?=\s*=)' .env.example | sort -u)
 # Грепаем по всему ./cmd и ./internal, а не по одному config.go: пакет config
 # растёт файлами (s3.go, smtp.go), и проверка, смотрящая в один файл, молча
 # пропускала бы новый. Заодно ловится нарушение «os.Getenv вне пакета config».
-readvars=$(grep -rhoP 'os\.(Getenv|LookupEnv)\("\K[A-Z][A-Z0-9_]*(?=")' cmd internal | sort -u)
+#
+# Два прохода, потому что переменные читаются НЕ через os.Getenv: в этом проекте
+# есть хелпер `required("HTTP_ADDR")`, и регулярка по одному os.Getenv видела
+# 1 имя из 15 — проверка была почти декоративной.
+#
+#   в internal/config — любой вызов f("ИМЯ"): хелперов может стать больше;
+#   вне config       — только os.Getenv/LookupEnv (он там и так запрещён).
+#
+# Скоуп по каталогу, а не широкий шаблон по всему коду: последний ловил "IHDR"
+# из PNG-декодера (internal/media) и требовал внести чанк формата в .env.example.
+#
+# Мутация: добавить required("FOO") в internal/config → краснеет;
+#          добавить os.Getenv("FOO") в cmd/api → краснеет;
+#          добавить FOO= в .env.dev → краснеет.
+readvars=$( {
+	grep -rhoP '\b[a-zA-Z_]+\("\K[A-Z][A-Z0-9_]{2,}(?="\))' internal/config --include='*.go'
+	grep -rhoP 'os\.(Getenv|LookupEnv)\("\K[A-Z][A-Z0-9_]{2,}(?=")' cmd internal --include='*.go'
+} | sort -u)
 for v in $readvars; do
 	echo "$documented" | grep -qx "$v" ||
 		err "код читает $v, но .env.example его не описывает" \
@@ -87,6 +117,7 @@ for f in .env.dev .env.prod-local; do
 				"каждая переменная контура обязана быть задокументирована"
 	done
 done
+ok_if_clean "env-переменные описаны в .env.example ($(echo "$readvars" | wc -w) читаемых кодом)"
 
 # --- 4. Ссылки на техдолг ---------------------------------------------------
 # Ловит ровно ту гниль, что нашлась в TD-14: документ ссылается на пункт как на
@@ -95,6 +126,7 @@ done
 # Номера берутся из ПОЗИЦИЙ ОБЪЯВЛЕНИЯ (`### TD-N` / `- **TD-N`), а не грепом по
 # всему файлу: иначе номер, упомянутый в прозе чужого пункта, считается
 # существующим, и удалённый TD молча проходит проверку.
+begin
 grep -q '^## Закрыто' docs/TECH-DEBT.md ||
 	err "в TECH-DEBT.md нет раздела «## Закрыто»" \
 		"проверка закрытых пунктов не может выполниться — это дефект скрипта, а не факт о мире"
@@ -111,7 +143,7 @@ for f in docs/STATUS.md docs/DEV-PLAN.md README.md; do
 		fi
 	done
 done
-[ $fail -eq 0 ] && ok "ссылки на техдолг ведут в существующие открытые пункты"
+ok_if_clean "ссылки на техдолг ведут в существующие открытые пункты"
 
 # --- 5. Инвариант 4: пользовательский контент рендерится как текст -----------
 # Дубль eslint-правила: eslint из web/app и web/renderer не видит web/shared,
@@ -124,6 +156,7 @@ done
 # обходили проверку вовсе, а `--include` без .js пропускал целый класс файлов.
 # Артефакты сборки исключены: в собранном React innerHTML есть штатно, и без
 # --exclude-dir проверка краснела бы от чужого кода после каждого `npm run build`.
+begin
 hits=$(grep -rn --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
 	--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build \
 	--exclude-dir=coverage --exclude='eslint.config.js' \
