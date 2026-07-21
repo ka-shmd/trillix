@@ -22,6 +22,23 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // Инвариант 4 (CLAUDE.md): пользовательский контент рендерится как текст.
+      // Через no-restricted-syntax, а не react/no-danger: eslint-plugin-react не
+      // установлен, а список зависимостей заморожен — селектор дешевле пакета.
+      // Репозиторный дубль этой проверки (включая web/shared, который eslint
+      // отсюда не видит) — в scripts/check-docs.sh.
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'JSXAttribute[name.name="dangerouslySetInnerHTML"]',
+          message:
+            'Инвариант 4: dangerouslySetInnerHTML запрещён во всём репозитории. Рендери как текст.',
+        },
+        {
+          selector: 'AssignmentExpression > MemberExpression[property.name=/^(inner|outer)HTML$/]',
+          message: 'Инвариант 4: присваивание innerHTML/outerHTML запрещено. Рендери как текст.',
+        },
+      ],
     },
   },
   // Файловые маршруты TanStack Router обязаны экспортировать `Route` рядом с
