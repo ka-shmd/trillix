@@ -81,7 +81,12 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
             const items = filtered.filter((b) => b.group === g)
             if (items.length === 0) return null
             return (
-              <div key={g} className="mb-2">
+              // role+aria-label: группа была только визуальной (заголовок текстом),
+              // программно список выглядел россыпью кнопок без деления — скринридер
+              // не отличал «Шкалу с заголовком» от «голой Шкалы». Тот же тип поля
+              // намеренно присутствует в двух группах, поэтому имя группы — часть
+              // смысла пункта, а не оформление.
+              <div key={g} className="mb-2" role="group" aria-label={BLOCK_GROUP_LABELS[g]}>
                 <div className="px-2 py-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {BLOCK_GROUP_LABELS[g]}
                 </div>

@@ -38,6 +38,21 @@ jobs:
           npx playwright install --with-deps chromium
           npm test
 
+      # Выкатка не должна быть видна пользователю (фаза 9, шаг 6). Проверяется здесь,
+      # а не отдельным ручным прогоном: скрипт без потребителя гниёт, а регресс тихий —
+      # уберут `lb_try_duration` из Caddyfile, и 502 вернутся молча.
+      # Проба долбит путь Caddy→Go→Postgres, посреди пересоздаём api; любой 5xx валит job.
+      - name: выкатка без 502
+        run: |
+          INSECURE=1 ./scripts/deploy-no-502.sh https://f.localhost/r/deploy-probe-nonexistent 45 &
+          probe=$!
+          sleep 5
+          set -a && . ./.env.prod-local && set +a && \
+            docker compose -p trillix-prod-local --env-file .env.prod-local \
+              -f deploy/compose.prod.yml -f deploy/compose.local-media.yml \
+              up -d --force-recreate api
+          wait $probe
+
       - name: playwright report (при падении)
         if: failure()
         uses: actions/upload-artifact@v4

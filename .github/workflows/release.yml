@@ -74,6 +74,14 @@ jobs:
     name: Деплой на прод по SSH
     needs: [image, static]
     runs-on: ubuntu-latest
+    # Своя группа, НЕ зависящая от тега: workflow-level concurrency выше ключуется
+    # на github.ref, поэтому два разных тега (v0.9.5 и v0.9.6) попадали бы в разные
+    # группы и могли выполнять remote-update.sh на ОДНОМ сервере параллельно —
+    # конкурирующие git checkout в одном каталоге и одновременный compose up.
+    # Сборкам параллелиться можно (они независимы), деплою — нет.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: SSH-ключ и known_hosts

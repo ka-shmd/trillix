@@ -11,6 +11,17 @@ set -euo pipefail
 : "${TAG:?TAG не задан (ожидается из окружения)}"
 cd /opt/trillix
 
+# Блокировка на весь деплой. CI сериализует свои прогоны (job-level concurrency
+# `deploy-prod`), но это не защищает от ручного запуска скрипта параллельно с
+# автодеплоем: два `git checkout` в одном каталоге и два `compose up` одновременно
+# оставили бы сервер в неопределённом состоянии. Ждём, а не падаем сразу, — второй
+# релиз должен выкатиться следом, а не потеряться.
+exec 9>/tmp/trillix-deploy.lock
+if ! flock -w 600 9; then
+  echo "ОШИБКА: другой деплой держит блокировку дольше 10 минут — выходим." >&2
+  exit 1
+fi
+
 # Функцией, а не переменной с командой: `$VAR arg` разбивается на слова в bash, но
 # НЕ в zsh — такой приём молча ломается при запуске из другой оболочки. Функция
 # ведёт себя одинаково везде.
@@ -76,18 +87,20 @@ echo "   совпадает ($host_sum)"
 # если нормализатора нет, честно печатаем, что глубокая сверка не выполнялась.
 if command -v python3 >/dev/null 2>&1; then
   echo "== сверка конфига Caddy: файл → живой процесс =="
-  caddy_exec caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null > /tmp/caddy-adapted.json
-  caddy_exec wget -qO- http://127.0.0.1:2019/config/ > /tmp/caddy-live.json
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+  caddy_exec caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null > "$tmpdir/adapted.json"
+  caddy_exec wget -qO- http://127.0.0.1:2019/config/ > "$tmpdir/live.json"
   if ! python3 -c '
 import json,sys
-a=json.load(open("/tmp/caddy-adapted.json")); l=json.load(open("/tmp/caddy-live.json"))
-sys.exit(0 if json.dumps(a,sort_keys=True)==json.dumps(l,sort_keys=True) else 1)'; then
+d=sys.argv[1]
+a=json.load(open(d+"/adapted.json")); l=json.load(open(d+"/live.json"))
+sys.exit(0 if json.dumps(a,sort_keys=True)==json.dumps(l,sort_keys=True) else 1)' "$tmpdir"; then
     echo "ОШИБКА: живой конфиг Caddy не совпадает с тем, что порождает файл." >&2
     echo "  reload вернул успех, но процесс исполняет другое. Деплой остановлен." >&2
     exit 1
   fi
   echo "   живой конфиг соответствует файлу"
-  rm -f /tmp/caddy-adapted.json /tmp/caddy-live.json
 else
   echo "== глубокая сверка живого конфига пропущена (нет python3 для нормализации JSON) =="
 fi
