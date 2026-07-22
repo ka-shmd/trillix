@@ -69,7 +69,8 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 ```
 
 `web/app` проксирует `/api` на Go-сервер `:8080`, `web/renderer` — `/public` (в dev CORS не нужен).
-Кабинет — вход, дашборд и slash-редактор форм; рендерер — публичная форма по `/r/{slug}`.
+Кабинет — вход (по паролю или через Яндекс ID), дашборд и slash-редактор форм; рендерер —
+публичная форма по `/r/{slug}`.
 
 ## Команды
 
@@ -126,6 +127,8 @@ npm test
 Это подмножество для dev. **Полный список с описанием каждой переменной — в
 [`.env.example`](.env.example)** (источник истины): туда входят `COOKIE_SECURE`,
 `FORM_TOKEN_SECRET`, `PUBLIC_RENDERER_BASE_URL`/`_INDEX_PATH`, `OG_IMAGE_URL`,
-`APP_ORIGIN` (CSRF), домены Caddy `APP_DOMAIN`/`RENDERER_DOMAIN` и build-time `VITE_PUBLIC_BASE_URL`.
+`APP_ORIGIN` (CSRF), домены Caddy `APP_DOMAIN`/`RENDERER_DOMAIN`, build-time `VITE_PUBLIC_BASE_URL`
+и опциональные `YANDEX_OAUTH_CLIENT_ID`/`_SECRET` (вход через Яндекс ID; не заданы — провайдер
+выключен, кнопка не рисуется).
 Различия контуров живут только в значениях: `.env.dev` (http, localhost) vs `.env.prod-local`
 (https, `*.localhost`, `COOKIE_SECURE=true`) — приложение одно, ветвления по контуру в коде нет.
