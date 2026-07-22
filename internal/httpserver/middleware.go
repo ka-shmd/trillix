@@ -77,6 +77,12 @@ func withRequestLog(next http.Handler) http.Handler {
 		loggerFrom(r.Context()).Info("request",
 			slog.String("method", r.Method),
 			slog.String("path", r.URL.Path),
+			// pattern — шаблон маршрута ("GET /api/v1/forms/{id}"), а не конкретный
+			// путь: по нему запросы группируются в агрегатах, иначе каждый id/slug —
+			// отдельная строка. Доступен, потому что withRequestLog — самый внутренний
+			// middleware (оборачивает mux напрямую), и mux проставляет r.Pattern на том
+			// же запросе до возврата из ServeHTTP. Для несопоставленного пути — пусто.
+			slog.String("pattern", r.Pattern),
 			slog.Int("status", sw.status),
 			slog.Duration("duration", time.Since(start)),
 		)

@@ -443,3 +443,37 @@ email:
 
 Апгрейд — платный тариф UptimeRobot (60-сек проверки + Telegram) или self-hosted Uptime Kuma
 на второй машине.
+
+---
+
+## Логи (фаза 10, шаг 4)
+
+Приложение пишет структурный JSON в stdout (`slog`), docker складывает его в `json-file`
+**с ротацией** (`x-logging` в `compose.prod.yml`: до 5 файлов × 10 МиБ на контейнер — без
+неё логи растут безгранично и однажды забивают диск, а с ним и Postgres). Ротация
+применяется при **пересоздании** контейнера (`up -d` на деплое), не на лету — проверить
+живой лимит: `docker inspect trillix-api-1 --format '{{json .HostConfig.LogConfig}}'`.
+
+Каждый HTTP-запрос даёт одну сводную строку:
+`{"msg":"request", method, path, pattern, status, duration, request_id}`. `pattern` —
+шаблон маршрута (`GET /api/v1/forms/{id}`), по нему запросы группируются; `duration` —
+в **наносекундах**; `request_id` связывает все строки одного запроса (он же в заголовке
+ответа `X-Request-Id`).
+
+Шпаргалка (на сервере, из `/opt/trillix`; `--no-log-prefix` убирает префикс `имя | `,
+чтобы вывод был чистым JSON для `jq`):
+
+```bash
+# все 5xx за последний час
+docker compose --env-file .env -f deploy/compose.prod.yml logs --since 1h --no-log-prefix api \
+  | jq -c 'select(.msg=="request" and .status>=500)'
+
+# запросы медленнее 1 с (duration в нс → 1000000000), с длительностью в мс
+docker compose --env-file .env -f deploy/compose.prod.yml logs --no-log-prefix api \
+  | jq -c 'select(.msg=="request" and .duration>1000000000)
+           | {method, pattern, status, ms:(.duration/1000000)}'
+
+# трейс одного запроса по request_id (взять из заголовка X-Request-Id или из строки ошибки)
+docker compose --env-file .env -f deploy/compose.prod.yml logs --no-log-prefix api \
+  | jq -c 'select(.request_id=="ВСТАВЬ_ID")'
+```
