@@ -29,6 +29,15 @@ function describeError(error: unknown): { formError?: string; fieldErrors: Field
     case 'validation_failed':
       if (error.fields) return { fieldErrors: error.fields }
       return { formError: error.message, fieldErrors: {} }
+    // Ниже — экран привязки провайдера: cookie с подтверждённой личностью живёт
+    // 15 минут, и её протухание нужно объяснить, а не показать «unauthorized».
+    case 'unauthorized':
+      return {
+        formError: 'Привязка не начата или истекла. Вернитесь и войдите через провайдера заново.',
+        fieldErrors: {},
+      }
+    case 'conflict':
+      return { formError: 'Этот аккаунт провайдера уже привязан к другому пользователю.', fieldErrors: {} }
     default:
       return { formError: error.message, fieldErrors: {} }
   }

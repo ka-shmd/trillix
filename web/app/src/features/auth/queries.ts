@@ -1,6 +1,6 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
-import { authKeys } from './keys'
-import { getMe, login, logout, register } from './api'
+import { authKeys, oauthKeys } from './keys'
+import { getMe, getProviders, linkProvider, login, logout, register } from './api'
 import type { User } from '../../entities/user'
 
 // Профиль текущего пользователя — серверный стейт, живёт только в Query.
@@ -35,5 +35,23 @@ export function useLogout() {
     mutationFn: logout,
     // Сессия мертва — убираем me из кэша, чтобы гард не пустил в приложение.
     onSuccess: () => qc.removeQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Включённые провайдеры — серверный стейт: список задаётся окружением бэка и
+// между перезагрузками не меняется, поэтому длинный staleTime.
+export const providersQueryOptions = queryOptions({
+  queryKey: oauthKeys.providers(),
+  queryFn: getProviders,
+  retry: false,
+  staleTime: 30 * 60 * 1000,
+})
+
+export function useLinkProvider() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: linkProvider,
+    // После привязки открыта полноценная сессия — кэш me патчим, как в логине.
+    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
   })
 }

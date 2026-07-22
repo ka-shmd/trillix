@@ -63,8 +63,15 @@ type Submission struct {
 type User struct {
 	ID           uuid.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	CreatedAt    pgtype.Timestamptz
+}
+
+type UserIdentity struct {
+	Provider       string
+	ProviderUserID string
+	UserID         uuid.UUID
+	CreatedAt      pgtype.Timestamptz
 }
 
 type Workspace struct {

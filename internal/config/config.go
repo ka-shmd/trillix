@@ -62,6 +62,23 @@ type Config struct {
 	// dev (Go смотрит в сеть напрямую) — false; prod-local/prod (за Caddy) — true.
 	// Смысловой флаг, а не имя окружения: различие контуров живёт в этом значении.
 	TrustedProxy bool
+	// YandexOAuth* — приложение Яндекс ID для входа через провайдера (фаза 11).
+	// ОПЦИОНАЛЬНЫЕ и парные: заданы обе — кнопка «Войти через Яндекс» живёт,
+	// не заданы — провайдер выключен целиком (эндпоинты отдают 404, фронт кнопку
+	// не рисует). Так контур без своего приложения — чужая машина, CI, прогон
+	// тестов — поднимается без фиктивных ключей.
+	// Секрет: не логируется. В .env.dev лежит пустым — боевое значение живёт
+	// только в локальном .env (он в .gitignore) и в серверном .env прода.
+	// redirect_uri отдельной переменной нет: он собирается из AppOrigin, и это
+	// не экономия, а гарантия — адрес в запросе совпадает с origin кабинета,
+	// с которого пришёл человек.
+	YandexOAuthClientID     string
+	YandexOAuthClientSecret string
+}
+
+// YandexOAuthEnabled — заданы ли обе половины приложения Яндекс ID.
+func (c Config) YandexOAuthEnabled() bool {
+	return c.YandexOAuthClientID != "" && c.YandexOAuthClientSecret != ""
 }
 
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
@@ -99,6 +116,9 @@ func Load() (Config, error) {
 	trustedProxyRaw := required("TRUSTED_PROXY")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
+	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
+	cfg.YandexOAuthClientID = os.Getenv("YANDEX_OAUTH_CLIENT_ID")
+	cfg.YandexOAuthClientSecret = os.Getenv("YANDEX_OAUTH_CLIENT_SECRET")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -146,6 +166,13 @@ func Load() (Config, error) {
 	}
 	// PublicRendererIndexPath (опциональный) — путь в ФС; читаемость/наличие
 	// плейсхолдера проверяет forms.NewPublicHandler при старте (fail-fast там же).
+
+	// Половина приложения Яндекс ID — почти наверняка опечатка или недозаполненный
+	// .env, а не намерение. Молча выключить провайдера здесь хуже, чем упасть:
+	// кнопка входа просто исчезла бы с экрана без единой строки в логе.
+	if (cfg.YandexOAuthClientID == "") != (cfg.YandexOAuthClientSecret == "") {
+		return Config{}, fmt.Errorf("YANDEX_OAUTH_CLIENT_ID and YANDEX_OAUTH_CLIENT_SECRET: set both or neither")
+	}
 
 	return cfg, nil
 }

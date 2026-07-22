@@ -12,11 +12,13 @@ import (
 )
 
 // User — представление пользователя внутри модуля auth (без утечки sqlc-типов
-// в service/handler). PasswordHash нужен service'у для Login и наружу не отдаётся.
+// в service/handler). PasswordHash нужен service'у для Login и наружу не отдаётся;
+// nil — у аккаунта нет пароля (заведён через провайдера, миграция 0009), войти
+// паролем в него нельзя.
 type User struct {
 	ID           uuid.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash *string
 	CreatedAt    time.Time
 }
 
@@ -32,11 +34,13 @@ type Workspace struct {
 // postgres.WithTx, сам repo их не заводит.
 type Repo struct{}
 
-func (Repo) CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email, passwordHash string) (User, error) {
+// CreateUser заводит пользователя. passwordHash == nil — аккаунт без пароля
+// (вход только через провайдера).
+func (Repo) CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error) {
 	row, err := postgres.New(db).CreateUser(ctx, postgres.CreateUserParams{
 		ID:           id,
 		Email:        email,
-		PasswordHash: passwordHash,
+		PasswordHash: pgText(passwordHash),
 	})
 	if err != nil {
 		return User{}, fmt.Errorf("create user: %w", err)
@@ -108,11 +112,53 @@ func (Repo) DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64,
 	return n, nil
 }
 
+// GetUserByIdentity — пользователь по привязке к провайдеру.
+func (Repo) GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error) {
+	row, err := postgres.New(db).GetUserByIdentity(ctx, postgres.GetUserByIdentityParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("get user by identity: %w", err)
+	}
+	return User{ID: row.ID, Email: row.Email, PasswordHash: ptrStr(row.PasswordHash), CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// CreateIdentity привязывает аккаунт провайдера к пользователю.
+func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error {
+	err := postgres.New(db).CreateIdentity(ctx, postgres.CreateIdentityParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+		UserID:         userID,
+	})
+	if err != nil {
+		return fmt.Errorf("create identity: %w", err)
+	}
+	return nil
+}
+
 func userFromRow(u postgres.User) User {
 	return User{
 		ID:           u.ID,
 		Email:        u.Email,
-		PasswordHash: u.PasswordHash,
+		PasswordHash: ptrStr(u.PasswordHash),
 		CreatedAt:    u.CreatedAt.Time,
 	}
+}
+
+// ptrStr переводит nullable text из sqlc (pgtype.Text) в *string: NULL → nil.
+func ptrStr(v pgtype.Text) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
+}
+
+// pgText переводит *string в pgtype.Text для параметров запроса: nil → NULL.
+func pgText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *s, Valid: true}
 }

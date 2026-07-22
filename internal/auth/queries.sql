@@ -35,3 +35,16 @@ DELETE FROM sessions WHERE token_hash = $1;
 
 -- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at <= now();
+
+-- name: GetUserByIdentity :one
+-- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
+-- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
+-- сменить можно, идентификатор — нет.
+SELECT u.id, u.email, u.password_hash, u.created_at
+FROM user_identities i
+JOIN users u ON u.id = i.user_id
+WHERE i.provider = $1 AND i.provider_user_id = $2;
+
+-- name: CreateIdentity :exec
+INSERT INTO user_identities (provider, provider_user_id, user_id)
+VALUES ($1, $2, $3);
