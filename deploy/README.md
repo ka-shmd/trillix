@@ -188,6 +188,14 @@ S3_MEDIA_BUCKET=app-media
 S3_PATH_STYLE=true    # true у path-style провайдеров (Selectel/Yandex/MinIO), false у AWS virtual-hosted
 MEDIA_UPSTREAM=https://<s3-host>
 MEDIA_UPSTREAM_HOST=<s3-host>
+
+# --- бэкапы БД: S3 ДРУГОГО провайдера, чем медиа (Yandex Object Storage; см. «Бэкапы») ---
+BACKUP_S3_ENDPOINT=https://storage.yandexcloud.net
+BACKUP_S3_REGION=ru-central1
+BACKUP_S3_ACCESS_KEY=__YANDEX_SA_ACCESS_KEY__
+BACKUP_S3_SECRET_KEY=__YANDEX_SA_SECRET_KEY__
+BACKUP_S3_BUCKET=trillix-backups
+BACKUP_AGE_RECIPIENT=age1__PASTE_PUBLIC_KEY__
 EOF
 chmod 600 .env
 ```
@@ -369,6 +377,48 @@ Caddy → Go → Postgres (`200` доказывал бы меньше — его
 > docker compose --env-file .env -f deploy/compose.prod.yml exec -T caddy \
 >   wget -qO- http://127.0.0.1:2019/config/ | grep -o 'try_duration' | wc -l   # ждём 3
 > ```
+
+## Бэкапы (фаза 10, шаг 1)
+
+`deploy/backup.sh` снимает `pg_dump -Fc`, шифрует его `age` и льёт в S3 **другого
+провайдера**, чем медиа (Yandex Object Storage): отказ или компрометация reg.ru Cloud
+не должны уносить сразу и данные, и бэкапы. Восстановление — [`RESTORE.md`](RESTORE.md).
+
+### Однократный провижининг
+
+1. **Инструменты на сервере:**
+   ```bash
+   sudo apt-get update && sudo apt-get install -y age awscli
+   ```
+2. **Пара ключей age.** Генерируется **не на сервере** (приватный ключ на прод не
+   попадает — сервер только шифрует). На рабочей машине владельца:
+   ```bash
+   age-keygen -o trillix-backup-identity.txt   # приватный — в офлайн/менеджер паролей
+   # строка «public key: age1...» → это BACKUP_AGE_RECIPIENT
+   ```
+   Приватный `identity` нужен только для восстановления; на сервере его быть не должно.
+3. **Бакет и сервис-аккаунт в Yandex Object Storage.** Бакет `trillix-backups` —
+   **приватный** (не public-read, в отличие от медиа). Сервис-аккаунт с правами на
+   этот бакет → его ключ/секрет в `BACKUP_S3_*` (шаг 3 выше).
+4. **Cron** (пользователь `deploy`, не root):
+   ```bash
+   ( crontab -l 2>/dev/null; \
+     echo '0 */6 * * * cd /opt/trillix && ./deploy/backup.sh >> /var/log/trillix-backup.log 2>&1' \
+   ) | crontab -
+   sudo install -o deploy -g deploy /dev/null /var/log/trillix-backup.log
+   ```
+
+### Проверка
+
+```bash
+cd /opt/trillix && ./deploy/backup.sh          # прогнать вручную
+aws --endpoint-url https://storage.yandexcloud.net s3 ls s3://trillix-backups/daily/
+```
+
+Учебное восстановление (обязательно, «не подглядывая») — по [`RESTORE.md`](RESTORE.md).
+Непроверенный бэкап равен отсутствующему.
+
+---
 
 ## Оставшееся по фазе 9 (следующие срезы)
 
