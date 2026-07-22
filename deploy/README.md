@@ -196,6 +196,18 @@ BACKUP_S3_ACCESS_KEY=__YANDEX_SA_ACCESS_KEY__
 BACKUP_S3_SECRET_KEY=__YANDEX_SA_SECRET_KEY__
 BACKUP_S3_BUCKET=trillix-backups
 BACKUP_AGE_RECIPIENT=age1__PASTE_PUBLIC_KEY__
+
+# --- вход через Яндекс ID (фаза 11) ---
+# ОПЦИОНАЛЬНЫЕ и парные: обе заданы — кнопка «Войти через Яндекс» работает; обе
+# пусты — провайдер выключен, кабинет работает как раньше; заполнена ровно одна —
+# api падает при старте (это опечатка, а не намерение).
+# Приложение ПРОДА — отдельное от dev-приложения: dev-ключ живёт на машине
+# разработчика и в истории команд, его утечка не должна касаться прода.
+# Redirect URI в консоли oauth.yandex.ru обязан совпасть байт в байт:
+#   https://app.trillix.ru/api/v1/auth/oauth/yandex/callback
+# Из доступов нужен только «Адрес электронной почты».
+YANDEX_OAUTH_CLIENT_ID=__YANDEX_PROD_CLIENT_ID__
+YANDEX_OAUTH_CLIENT_SECRET=__YANDEX_PROD_CLIENT_SECRET__
 EOF
 chmod 600 .env
 ```
