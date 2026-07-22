@@ -100,22 +100,28 @@ if [ "$(date -u +%u)" = "1" ]; then
 fi
 
 # --- Ротация ---------------------------------------------------------------------
-# По дате, вшитой в ключ (устойчиво к смене таймзоны сервера и к порядку в листинге).
+# По дате, вшитой в имя (устойчиво к смене таймзоны сервера и к порядку в листинге).
 # Ошибка чистки не роняет бэкап: свежий дамп уже залит — это важнее удаления старых.
+#
+# Листинг через `aws s3 ls`, а НЕ `s3api list-objects-v2`: у awscli v1 (ставится из
+# apt на сервере) s3api-путь падает «badly formed help string», а высокоуровневый
+# s3 ls на том же сервере работает. `|| true` глотает код 1 на пустом префиксе
+# (напр. weekly/ до первого понедельника), иначе pipefail поднял бы ложную тревогу.
+# `aws s3 ls <prefix>/` печатает ИМЕНА объектов без префикса — ключ для rm собираем сами.
 prune() {
-	local prefix="$1" keep_days="$2" cutoff key d ts
+	local prefix="$1" keep_days="$2" cutoff fname d ts
 	cutoff="$(date -u -d "${keep_days} days ago" +%s)"
-	aws_s3 s3api list-objects-v2 --bucket "$BACKUP_S3_BUCKET" --prefix "$prefix" \
-		--query 'Contents[].Key' --output text 2>/dev/null |
-		tr '\t' '\n' | while read -r key; do
-		[ -n "$key" ] || continue
-		d="$(echo "$key" | grep -oP '\d{4}-\d{2}-\d{2}' | head -1)" || continue
-		[ -n "$d" ] || continue
-		ts="$(date -u -d "$d" +%s 2>/dev/null || echo 0)"
-		if [ "$ts" -gt 0 ] && [ "$ts" -lt "$cutoff" ]; then
-			aws_s3 s3 rm "s3://${BACKUP_S3_BUCKET}/${key}" --only-show-errors && log "ротация: удалён $key"
-		fi
-	done
+	{ aws_s3 s3 ls "s3://${BACKUP_S3_BUCKET}/${prefix}" 2>/dev/null || true; } |
+		while read -r _ _ _ fname; do
+			[ -n "$fname" ] || continue   # пропускаем PRE-строки (подпрефиксы) и пустые
+			d="$(echo "$fname" | grep -oP '\d{4}-\d{2}-\d{2}' | head -1)" || continue
+			[ -n "$d" ] || continue
+			ts="$(date -u -d "$d" +%s 2>/dev/null || echo 0)"
+			if [ "$ts" -gt 0 ] && [ "$ts" -lt "$cutoff" ]; then
+				aws_s3 s3 rm "s3://${BACKUP_S3_BUCKET}/${prefix}${fname}" --only-show-errors &&
+					log "ротация: удалён ${prefix}${fname}"
+			fi
+		done
 }
 prune "daily/"  14 || log "предупреждение: ротация daily/ не завершилась"
 prune "weekly/" 56 || log "предупреждение: ротация weekly/ не завершилась"
