@@ -3,3 +3,7 @@
 export const authKeys = {
   me: () => ['auth', 'me'] as const,
 }
+
+export const oauthKeys = {
+  providers: () => ['auth', 'oauth', 'providers'] as const,
+}

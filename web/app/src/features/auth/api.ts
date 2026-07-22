@@ -1,6 +1,11 @@
+import { z } from 'zod'
 import { apiRequest } from '../../shared/api/client'
 import { userSchema, type User } from '../../entities/user'
 import type { Credentials } from './validation'
+
+// Ответ /auth/providers. Схема на границе: неизвестное имя провайдера не должно
+// молча превратиться в кнопку, ведущую в 404.
+const providersSchema = z.object({ providers: z.array(z.string()) })
 
 // Транспорт auth: каждый ответ парсится userSchema на границе, logout тела не
 // возвращает (204).
@@ -18,4 +23,22 @@ export function login(body: Credentials): Promise<User> {
 
 export function logout(): Promise<void> {
   return apiRequest('/auth/logout', { method: 'POST' })
+}
+
+// Список включённых провайдеров. Пустой — ключей нет в окружении бэка,
+// кнопки не рисуем (мёртвая кнопка хуже отсутствующей).
+export function getProviders(): Promise<string[]> {
+  return apiRequest('/auth/providers', { schema: providersSchema }).then((r) => r.providers)
+}
+
+// Второй шаг привязки: адрес занят, доказываем владение паролем. Cookie
+// oauth_pending ставит бэк на колбэке, JS её не видит и не шлёт руками.
+export function linkProvider(body: Credentials): Promise<User> {
+  return apiRequest('/auth/oauth/link', { method: 'POST', body, schema: userSchema })
+}
+
+// Ссылка ухода к провайдеру. Именно href, а не fetch: нужен полноценный переход
+// браузера, XHR за редиректом на чужой домен не пойдёт.
+export function providerStartUrl(provider: string): string {
+  return `/api/v1/auth/oauth/${provider}/start`
 }

@@ -1,5 +1,6 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { CredentialsForm } from '../../features/auth/CredentialsForm'
+import { ProviderButtons } from '../../features/auth/ProviderButtons'
 import { useRegister } from '../../features/auth/queries'
 import {
   Card,
@@ -24,7 +25,10 @@ function RegisterPage() {
         <CardTitle className="text-xl">Регистрация</CardTitle>
         <CardDescription>Создайте аккаунт Trillix</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col gap-4">
+        {/* Через провайдера регистрация и вход — одно действие: отдельной
+            кнопки «зарегистрироваться» у провайдера не бывает. */}
+        <ProviderButtons />
         <CredentialsForm
           submitLabel="Создать аккаунт"
           pending={mutation.isPending}
