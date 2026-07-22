@@ -39,7 +39,7 @@ const (
 // (сервиса). Реализация — Repo; в тестах подменяется фейком. Методы принимают
 // исполнителя (postgres.DBTX: пул или транзакция).
 type Store interface {
-	CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email, passwordHash string) (User, error)
+	CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
@@ -88,7 +88,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 
 	var user User
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		u, e := s.repo.CreateUser(ctx, tx, userID, email, hash)
+		u, e := s.repo.CreateUser(ctx, tx, userID, email, &hash)
 		if e != nil {
 			if isUniqueViolation(e) {
 				return domain.ErrEmailTaken
@@ -127,7 +127,16 @@ func (s *Service) Login(ctx context.Context, email, password string) (User, stri
 		return User{}, "", err
 	}
 
-	ok, err := VerifyPassword(user.PasswordHash, password)
+	// Аккаунт без пароля (заведён через провайдера, миграция 0009): войти
+	// паролем в него нельзя. Отвечаем как на неверный пароль — и по тексту,
+	// и по времени: иначе «этот email заведён через Яндекс» становится
+	// наблюдаемым снаружи, а вместе с ним и способ входа в чужой аккаунт.
+	if user.PasswordHash == nil {
+		equalizeTiming(password)
+		return User{}, "", domain.ErrInvalidCredentials
+	}
+
+	ok, err := VerifyPassword(*user.PasswordHash, password)
 	if err != nil {
 		return User{}, "", err
 	}

@@ -79,8 +79,20 @@
 CREATE TABLE users (
     id            UUID PRIMARY KEY,
     email         TEXT NOT NULL UNIQUE CHECK (email = lower(email)),
-    password_hash TEXT NOT NULL,               -- argon2id
+    password_hash TEXT,                        -- argon2id; NULL — вход только через провайдера (0009)
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Способы входа через внешних провайдеров (0009). Отдельной таблицей, а не
+-- колонками в users: к аккаунту привязываются оба провайдера сразу, а третий
+-- не требует миграции users. Аккаунт на адрес один (email остаётся UNIQUE),
+-- способов входа в него несколько.
+CREATE TABLE user_identities (
+    provider         TEXT NOT NULL,   -- yandex | vk
+    provider_user_id TEXT NOT NULL,
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (provider, provider_user_id)
 );
 
 -- Воркспейс закладываем сразу: перевести single-user SaaS на команды задним

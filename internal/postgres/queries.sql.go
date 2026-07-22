@@ -204,7 +204,7 @@ RETURNING id, email, password_hash, created_at
 type CreateUserParams struct {
 	ID           uuid.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 }
 
 // Запросы модуля auth. Схема — migrations/0002_auth. Генерация: `make sqlc`.

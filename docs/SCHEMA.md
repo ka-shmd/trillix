@@ -33,8 +33,20 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 |---|---|---|
 | `id` | `UUID` | PK |
 | `email` | `TEXT` | `NOT NULL`, `UNIQUE`, `CHECK (email = lower(email))` |
-| `password_hash` | `TEXT` | `NOT NULL` — argon2id (не логируется) |
+| `password_hash` | `TEXT` | argon2id (не логируется); `NULL` с `0009` — аккаунт заведён через провайдера, войти паролем нельзя |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+## `user_identities` (0009)
+
+Способы входа через внешних провайдеров. Аккаунт на адрес один (`users.email` остаётся `UNIQUE`), способов входа в него несколько: пароль и/или провайдеры.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `provider` | `TEXT` | `yandex` \| `vk` |
+| `provider_user_id` | `TEXT` | идентификатор аккаунта у провайдера |
+| `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+| | | PK — `(provider, provider_user_id)`; индекс `idx_user_identities_user` по `user_id` |
 
 ## `workspaces` (0002)
 

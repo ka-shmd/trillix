@@ -37,7 +37,7 @@ type fakeStore struct {
 	deleteExpiredErr error
 }
 
-func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email, passwordHash string) (User, error) {
+func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error) {
 	if f.createUserErr != nil {
 		return User{}, f.createUserErr
 	}
@@ -144,7 +144,7 @@ func TestLogin_Success(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: hash}}
+	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: &hash}}
 	svc := newService(store)
 
 	user, token, err := svc.Login(context.Background(), "a@b.com", "correct-password")
@@ -161,7 +161,7 @@ func TestLogin_Success(t *testing.T) {
 
 func TestLogin_WrongPassword(t *testing.T) {
 	hash, _ := HashPassword("correct-password")
-	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: hash}}
+	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: &hash}}
 	svc := newService(store)
 
 	_, _, err := svc.Login(context.Background(), "a@b.com", "wrong-password")
@@ -180,12 +180,37 @@ func TestLogin_UnknownEmail(t *testing.T) {
 	}
 }
 
+// Аккаунт, заведённый через провайдера (password_hash IS NULL, миграция 0009),
+// не пускает по паролю — и не отличается снаружи от «неверный пароль»: иначе
+// «этот адрес заведён через Яндекс» становится наблюдаемым, а вместе с ним и
+// способ входа в чужой аккаунт.
+func TestLogin_PasswordlessAccount(t *testing.T) {
+	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "oauth@b.com", PasswordHash: nil}}
+	svc := newService(store)
+
+	start := time.Now()
+	_, _, err := svc.Login(context.Background(), "oauth@b.com", "any-password")
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+	}
+	if store.createdSession {
+		t.Fatal("сессия выдана аккаунту без пароля")
+	}
+	// Без equalizeTiming ветка вернулась бы мгновенно (без argon2) и выдала бы
+	// наличие OAuth-аккаунта по времени ответа.
+	if elapsed < time.Millisecond {
+		t.Fatalf("ответ за %v — время не выровнено, ветка наблюдаема снаружи", elapsed)
+	}
+}
+
 // Ответ на несуществующий email не должен быть заметно быстрее, чем на неверный
 // пароль: без выравнивания разница ~1000x (argon2 ~десятки мс против ~мкс),
 // поэтому порог «не быстрее чем в 5 раз» надёжен и не флейки.
 func TestLogin_TimingEqualized(t *testing.T) {
 	hash, _ := HashPassword("correct-password")
-	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: hash}}
+	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: &hash}}
 	svc := newService(store)
 
 	start := time.Now()
