@@ -40,6 +40,8 @@ const (
 // исполнителя (postgres.DBTX: пул или транзакция).
 type Store interface {
 	CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error)
+	GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error)
+	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error

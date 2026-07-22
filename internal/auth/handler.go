@@ -11,6 +11,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/oauth"
 )
 
 const (
@@ -60,10 +61,30 @@ type Handler struct {
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
 	// для rate-limit'а, см. httpserver.ClientIP).
 	trustedProxy bool
+
+	// Вход через провайдеров (фаза 11). Реестр пуст — эндпоинты отдают 404.
+	oauthSvc       oauthService
+	oauthProviders oauthProviders
+	// oauthLimiter — своё ведро на колбэк: он ходит во внешний сервис, и
+	// долбить его чужими кодами не должно быть дешевле, чем логиниться.
+	oauthLimiter RateLimiter
+	// pendingSecret — ключ HMAC для подписи незавершённой привязки.
+	pendingSecret []byte
 }
 
 func NewHandler(svc authService, loginLimiter, registerLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
 	return &Handler{svc: svc, loginLimiter: loginLimiter, registerLimiter: registerLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
+}
+
+// WithOAuth включает вход через провайдеров. Отдельный конструктор, а не восемь
+// аргументов в NewHandler: без ключей в окружении провайдеров нет вовсе, и
+// парольный контур не должен об этом знать.
+func (h *Handler) WithOAuth(svc oauthService, providers map[string]oauth.Provider, limiter RateLimiter, pendingSecret []byte) *Handler {
+	h.oauthSvc = svc
+	h.oauthProviders = providers
+	h.oauthLimiter = limiter
+	h.pendingSecret = pendingSecret
+	return h
 }
 
 // Routes регистрирует эндпоинты auth на общем mux (RouteRegistrar).

@@ -178,6 +178,22 @@ func (q *Queries) CreateFormWithSchema(ctx context.Context, arg CreateFormWithSc
 	return i, err
 }
 
+const createIdentity = `-- name: CreateIdentity :exec
+INSERT INTO user_identities (provider, provider_user_id, user_id)
+VALUES ($1, $2, $3)
+`
+
+type CreateIdentityParams struct {
+	Provider       string
+	ProviderUserID string
+	UserID         uuid.UUID
+}
+
+func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) error {
+	_, err := q.db.Exec(ctx, createIdentity, arg.Provider, arg.ProviderUserID, arg.UserID)
+	return err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -565,6 +581,33 @@ WHERE email = $1
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getUserByIdentity = `-- name: GetUserByIdentity :one
+SELECT u.id, u.email, u.password_hash, u.created_at
+FROM user_identities i
+JOIN users u ON u.id = i.user_id
+WHERE i.provider = $1 AND i.provider_user_id = $2
+`
+
+type GetUserByIdentityParams struct {
+	Provider       string
+	ProviderUserID string
+}
+
+// Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
+// (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
+// сменить можно, идентификатор — нет.
+func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityParams) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByIdentity, arg.Provider, arg.ProviderUserID)
 	var i User
 	err := row.Scan(
 		&i.ID,

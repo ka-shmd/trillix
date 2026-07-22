@@ -352,6 +352,10 @@ POST   /auth/register                 регистрация (создаёт use
 POST   /auth/login                    вход
 POST   /auth/logout                   выход
 GET    /auth/me                       текущий пользователь
+GET    /auth/providers                включённые провайдеры входа (пусто → кнопок нет)
+GET    /auth/oauth/{provider}/start   уход к провайдеру (302; ставит state+verifier cookie)
+GET    /auth/oauth/{provider}/callback возврат от провайдера (302 в кабинет; email занят → экран привязки, сессии нет)
+POST   /auth/oauth/link               привязка провайдера к существующему аккаунту по паролю
 
 GET    /workspaces                    список воркспейсов текущего пользователя (в MVP — один личный)
 

@@ -35,6 +35,35 @@ type fakeStore struct {
 
 	deleteExpiredN   int64
 	deleteExpiredErr error
+
+	// Привязки к провайдерам (фаза 11).
+	identityUser      User
+	identityExists    bool
+	createdIdentity   bool
+	createIdentityErr error
+	// identityAfterRetry — привязка, «созданная соседней транзакцией»: первый
+	// поиск её не находит, повторный (после гонки) находит.
+	identityAfterRetry *User
+	identityLookups    int
+}
+
+func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {
+	f.identityLookups++
+	if f.identityAfterRetry != nil && f.identityLookups > 1 {
+		return *f.identityAfterRetry, nil
+	}
+	if !f.identityExists {
+		return User{}, pgx.ErrNoRows
+	}
+	return f.identityUser, nil
+}
+
+func (f *fakeStore) CreateIdentity(_ context.Context, _ postgres.DBTX, _, _ string, _ uuid.UUID) error {
+	if f.createIdentityErr != nil {
+		return f.createIdentityErr
+	}
+	f.createdIdentity = true
+	return nil
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error) {

@@ -1,0 +1,190 @@
+package auth
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ka-shmd/trillix/internal/domain"
+)
+
+// ErrPasswordLinkRequired — вход через провайдера пришёлся на email, под которым
+// уже есть аккаунт, а привязки к провайдеру нет. Сессия не выдаётся: провайдеры
+// не сообщают, подтверждён ли адрес (DEV-PLAN фаза 11 шаг 1), поэтому совпадение
+// email доказательством владения аккаунтом не является. Доступ получает только
+// тот, кто введёт пароль, — ADR §10.
+//
+// Не доменная ошибка: наружу она едет не HTTP-статусом, а редиректом на экран
+// привязки, и маппинга в respond.go у неё нет.
+var ErrPasswordLinkRequired = errors.New("auth: требуется вход паролем для привязки провайдера")
+
+// ErrProviderOnlyAccount — адрес занят аккаунтом без пароля, а пришли мы с
+// другой личностью у провайдера (например, аккаунт у провайдера удалён и заведён
+// заново — идентификатор новый, адрес прежний). Просить пароль нельзя: его нет.
+// Автоматически привязать новую личность тоже нельзя — это ровно то
+// автосвязывание по email, которое запрещено ADR §10.
+//
+// Выход появится со сбросом пароля по почте (следующая фаза): человек, владеющий
+// адресом, задаст пароль и привяжет новую личность сам. До тех пор случай
+// разбирается руками — TD-34.
+var ErrProviderOnlyAccount = errors.New("auth: аккаунт доступен только через прежнего провайдера")
+
+// LoginWithIdentity — вход через внешнего провайдера.
+//
+// Три исхода: привязка найдена — вход; аккаунта с таким email нет — заводим
+// новый без пароля; аккаунт есть, привязки нет — ErrPasswordLinkRequired.
+// Автосвязывания нет ни при каких условиях.
+func (s *Service) LoginWithIdentity(ctx context.Context, provider, providerUserID, email string) (User, string, error) {
+	email = normalizeEmail(email)
+
+	user, err := s.repo.GetUserByIdentity(ctx, s.db, provider, providerUserID)
+	switch {
+	case err == nil:
+		token, err := s.createSession(ctx, user.ID)
+		if err != nil {
+			return User{}, "", err
+		}
+		return user, token, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return User{}, "", err
+	}
+
+	// Привязки нет. Занят ли адрес?
+	switch existing, err := s.repo.GetUserByEmail(ctx, s.db, email); {
+	case err == nil:
+		// Пароля у занявшего адрес аккаунта нет — на экране привязки доказывать
+		// владение будет нечем, туда его вести нельзя.
+		if existing.PasswordHash == nil {
+			return User{}, "", ErrProviderOnlyAccount
+		}
+		return User{}, "", ErrPasswordLinkRequired
+	case !errors.Is(err, pgx.ErrNoRows):
+		return User{}, "", err
+	}
+
+	user, err = s.createUserWithIdentity(ctx, email, provider, providerUserID)
+	if err != nil {
+		if errors.Is(err, errConcurrentSignup) {
+			// Тот же адрес завели параллельно — почти всегда это тот же человек
+			// в двух вкладках. Соседняя транзакция уже создала и аккаунт, и
+			// привязку, поэтому повторный поиск даёт вход, а не тупик.
+			return s.resolveAfterRace(ctx, provider, providerUserID, email)
+		}
+		return User{}, "", err
+	}
+	token, err := s.createSession(ctx, user.ID)
+	if err != nil {
+		return User{}, "", err
+	}
+	return user, token, nil
+}
+
+// errConcurrentSignup — внутренний маркер гонки при создании аккаунта.
+var errConcurrentSignup = errors.New("auth: аккаунт с этим email создан параллельно")
+
+// resolveAfterRace разбирает исход гонки: привязка соседней транзакции — вход;
+// иначе адрес занят кем-то ещё, и работают обычные правила.
+func (s *Service) resolveAfterRace(ctx context.Context, provider, providerUserID, email string) (User, string, error) {
+	user, err := s.repo.GetUserByIdentity(ctx, s.db, provider, providerUserID)
+	if err == nil {
+		token, err := s.createSession(ctx, user.ID)
+		if err != nil {
+			return User{}, "", err
+		}
+		return user, token, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return User{}, "", err
+	}
+
+	existing, err := s.repo.GetUserByEmail(ctx, s.db, email)
+	if err != nil {
+		return User{}, "", err
+	}
+	if existing.PasswordHash == nil {
+		return User{}, "", ErrProviderOnlyAccount
+	}
+	return User{}, "", ErrPasswordLinkRequired
+}
+
+// LinkIdentityWithPassword привязывает провайдера к существующему аккаунту после
+// проверки пароля — второй шаг сценария ErrPasswordLinkRequired.
+//
+// Пароль здесь проверяется ровно как в Login, включая выравнивание времени:
+// эндпоинт принимает пароль, значит он ещё одна дверь для перебора и обязан
+// вести себя как основная.
+func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error) {
+	email = normalizeEmail(email)
+
+	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			equalizeTiming(password)
+			return User{}, "", domain.ErrInvalidCredentials
+		}
+		return User{}, "", err
+	}
+	// Аккаунт без пароля привязать паролем нельзя: доказывать нечем.
+	if user.PasswordHash == nil {
+		equalizeTiming(password)
+		return User{}, "", domain.ErrInvalidCredentials
+	}
+	ok, err := VerifyPassword(*user.PasswordHash, password)
+	if err != nil {
+		return User{}, "", err
+	}
+	if !ok {
+		return User{}, "", domain.ErrInvalidCredentials
+	}
+
+	if err := s.repo.CreateIdentity(ctx, s.db, provider, providerUserID, user.ID); err != nil {
+		// Тот же аккаунт провайдера уже привязан (к этому пользователю или к
+		// другому) — повторный клик по «привязать» не должен выглядеть аварией.
+		if isUniqueViolation(err) {
+			return User{}, "", fmt.Errorf("%w: этот аккаунт провайдера уже привязан", domain.ErrConflict)
+		}
+		return User{}, "", err
+	}
+
+	token, err := s.createSession(ctx, user.ID)
+	if err != nil {
+		return User{}, "", err
+	}
+	return user, token, nil
+}
+
+// createUserWithIdentity заводит пользователя без пароля вместе с личным
+// воркспейсом и привязкой — одной транзакцией. Инвариант «регистрация = user +
+// workspace + membership» (internal/CLAUDE.md) распространяется и на этот путь:
+// аккаунт без воркспейса нерабочий, а привязка без аккаунта — мусор.
+func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, providerUserID string) (User, error) {
+	userID := domain.NewID()
+	wsID := domain.NewID()
+
+	var user User
+	err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		u, e := s.repo.CreateUser(ctx, tx, userID, email, nil)
+		if e != nil {
+			if isUniqueViolation(e) {
+				// Гонка: тот же email завели между нашей проверкой и вставкой.
+				// Разбирает её вызывающий — здесь только маркер.
+				return errConcurrentSignup
+			}
+			return e
+		}
+		user = u
+		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName); e != nil {
+			return e
+		}
+		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
+			return e
+		}
+		return s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID)
+	})
+	if err != nil {
+		return User{}, err
+	}
+	return user, nil
+}

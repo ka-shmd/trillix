@@ -17,6 +17,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/media"
+	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -50,6 +51,13 @@ const (
 	// на своём же дашборде, не данные.
 	visitRatePerSec = 1.0
 	visitBurst      = 60
+
+	// Колбэк входа через провайдера: ходит во внешний сервис, поэтому долбить
+	// его чужими кодами не должно быть дешевле, чем логиниться. Чуть щедрее
+	// логина: человек может честно промахнуться (отклонил согласие, вернулся,
+	// попробовал снова), а цена ошибки здесь — не подбор пароля.
+	oauthRatePerSec = 1.0 / 6.0
+	oauthBurst      = 10
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -129,6 +137,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
 	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
 
+	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
+	// эндпоинты отдают 404, кабинет работает как раньше.
+	oauthProviders := map[string]oauth.Provider{}
+	oauthLimiter := ratelimit.NewTokenBucket(oauthRatePerSec, oauthBurst)
+	if cfg.YandexOAuthEnabled() {
+		oauthProviders["yandex"] = oauth.NewYandex(
+			cfg.YandexOAuthClientID,
+			cfg.YandexOAuthClientSecret,
+			cfg.AppOrigin+"/api/v1/auth/oauth/yandex/callback",
+		)
+	}
+	authHandler = authHandler.WithOAuth(authSvc, oauthProviders, oauthLimiter, cfg.FormTokenSecret)
+	log.Info("oauth providers configured", slog.Int("count", len(oauthProviders)))
+
 	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
 
@@ -160,7 +182,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log, pool,
-		authHandler.Routes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
+		authHandler.Routes, authHandler.OAuthRoutes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes)
 
@@ -189,7 +211,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		Name:     "ratelimit-gc",
 		Interval: ratelimitGCInterval,
 		Run: func(context.Context) error {
-			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC()
+			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

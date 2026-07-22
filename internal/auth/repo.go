@@ -112,6 +112,31 @@ func (Repo) DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64,
 	return n, nil
 }
 
+// GetUserByIdentity — пользователь по привязке к провайдеру.
+func (Repo) GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error) {
+	row, err := postgres.New(db).GetUserByIdentity(ctx, postgres.GetUserByIdentityParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("get user by identity: %w", err)
+	}
+	return User{ID: row.ID, Email: row.Email, PasswordHash: ptrStr(row.PasswordHash), CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// CreateIdentity привязывает аккаунт провайдера к пользователю.
+func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error {
+	err := postgres.New(db).CreateIdentity(ctx, postgres.CreateIdentityParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+		UserID:         userID,
+	})
+	if err != nil {
+		return fmt.Errorf("create identity: %w", err)
+	}
+	return nil
+}
+
 func userFromRow(u postgres.User) User {
 	return User{
 		ID:           u.ID,
