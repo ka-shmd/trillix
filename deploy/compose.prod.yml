@@ -37,9 +37,20 @@ x-app-env: &app-env
   S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
   S3_PATH_STYLE: ${S3_PATH_STYLE}
 
+# Ротация docker-логов (фаза 10, шаг 4). Без неё json-file-логи растут безгранично и
+# со временем забивают диск VPS — Postgres перестаёт писать, прод ложится, причём
+# молча. Потолок на контейнер — max-file × max-size = 50 МиБ, старое вытесняется.
+# Применяется при ПЕРЕСОЗДАНИИ контейнера (`up -d` на деплое), не на лету.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -60,6 +71,7 @@ services:
   # завершения этого сервиса, поэтому схема всегда актуальна до первого запроса.
   migrate:
     image: ghcr.io/ka-shmd/trillix-api:${TAG:-latest}
+    logging: *logging
     command: ["migrate", "up"]
     environment: *app-env
     depends_on:
@@ -69,6 +81,7 @@ services:
 
   api:
     image: ghcr.io/ka-shmd/trillix-api:${TAG:-latest}
+    logging: *logging
     environment: *app-env
     volumes:
       # Собранный index.html рендерера read-only: Go читает его при старте и отдаёт
@@ -92,6 +105,7 @@ services:
 
   caddy:
     image: caddy:2
+    logging: *logging
     environment:
       # Домены двух сайтов — Caddyfile читает их как {$APP_DOMAIN} и {$RENDERER_DOMAIN}.
       # prod-local: app.localhost / f.localhost; прод: реальные. API — same-origin
