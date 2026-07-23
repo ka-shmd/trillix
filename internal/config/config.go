@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,12 @@ import (
 type Config struct {
 	// HTTPAddr — адрес HTTP-сервера, например "127.0.0.1:8080".
 	HTTPAddr string
+	// LogLevel — минимальный уровень логирования. Смысловой флаг контура (не имя
+	// окружения): dev — debug (в LogMailer тело dev-письма, включая ссылку сброса,
+	// пишется ТОЛЬКО на debug — это dev-почтовый ящик); prod и prod-local — info,
+	// поэтому тело письма с токеном туда не попадает никогда, даже при ошибочно
+	// выбранном транспорте log (тогда письмо просто не уходит — сбой заметен, не тих).
+	LogLevel slog.Level
 	// DatabaseURL — DSN подключения к Postgres.
 	DatabaseURL string
 	// CookieSecure — ставить ли флаг Secure на cookie сессии. В dev по http —
@@ -74,6 +81,24 @@ type Config struct {
 	// с которого пришёл человек.
 	YandexOAuthClientID     string
 	YandexOAuthClientSecret string
+
+	// Mail* — исходящая транзакционная почта (почтовая фаза). Транспорт — смысловой
+	// флаг контура (не имя окружения): dev/prod-local пишут письма в лог (провайдер
+	// не нужен), прод отдаёт их провайдеру. MailFrom — адрес отправителя в письмах;
+	// различие контуров живёт в этих значениях.
+	MailTransport string // log | smtp (провайдерский транспорт — слайс E почтовой фазы)
+	MailFrom      string // адрес/имя отправителя, напр. "Trillix <no-reply@trillix.ru>"
+	// MailSMTP* — параметры SMTP-транспорта (MAIL_TRANSPORT=smtp). Один транспорт на
+	// оба боевых контура, различие живёт только в этих значениях: прод шлёт через
+	// Yandex Postbox (STARTTLS, аутентификация), prod-local — в локальный Mailpit
+	// (без TLS, без аутентификации). Обязательны только при transport=smtp.
+	// Username/Password пусты = без SMTP AUTH (Mailpit); заполнены оба = PLAIN
+	// (Postbox). Password — секрет: живёт в .env, не логируется (инвариант 7).
+	MailSMTPHost     string
+	MailSMTPPort     int
+	MailSMTPUsername string
+	MailSMTPPassword string
+	MailSMTPTLS      string // starttls | implicit | none (см. MailSMTPTLS* ниже)
 }
 
 // YandexOAuthEnabled — заданы ли обе половины приложения Яндекс ID.
@@ -84,6 +109,24 @@ func (c Config) YandexOAuthEnabled() bool {
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
 // подделывается перебором. 16 байт — разумный минимум для dev; прод длиннее.
 const minFormTokenSecretLen = 16
+
+// MailTransportLog — транспорт почты, «доставляющий» письмо записью в лог (dev:
+// провайдер не нужен, письмо читается из debug-лога). MailTransportSMTP — боевой
+// транспорт: один SMTP-клиент, которым прод бьёт в Yandex Postbox, а prod-local — в
+// Mailpit; различие контуров — в значениях MailSMTP*, а не в отдельных транспортах.
+const (
+	MailTransportLog  = "log"
+	MailTransportSMTP = "smtp"
+)
+
+// Режимы TLS для SMTP-транспорта. starttls — открытое соединение с апгрейдом до TLS
+// (Postbox, порт 587); implicit — TLS с первого байта (порт 465); none — без
+// шифрования (локальный Mailpit, где трафик не покидает машину).
+const (
+	MailSMTPTLSStartTLS = "starttls"
+	MailSMTPTLSImplicit = "implicit"
+	MailSMTPTLSNone     = "none"
+)
 
 // Load читает конфигурацию из env и валидирует её. Отсутствие обязательной
 // переменной — ошибка старта процесса, а не первого запроса; в сообщении
@@ -102,6 +145,7 @@ func Load() (Config, error) {
 		HTTPAddr:    required("HTTP_ADDR"),
 		DatabaseURL: required("DATABASE_URL"),
 	}
+	logLevelRaw := required("LOG_LEVEL")
 	cookieSecureRaw := required("COOKIE_SECURE")
 	formTokenSecret := required("FORM_TOKEN_SECRET")
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
@@ -114,6 +158,15 @@ func Load() (Config, error) {
 	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
 	pathStyleRaw := required("S3_PATH_STYLE")
 	trustedProxyRaw := required("TRUSTED_PROXY")
+	cfg.MailTransport = required("MAIL_TRANSPORT")
+	cfg.MailFrom = required("MAIL_FROM")
+	// SMTP-параметры опциональны на этом шаге: обязательны они только при
+	// MAIL_TRANSPORT=smtp — это проверяется ниже, после общего блока missing.
+	cfg.MailSMTPHost = os.Getenv("MAIL_SMTP_HOST")
+	mailSMTPPortRaw := os.Getenv("MAIL_SMTP_PORT")
+	cfg.MailSMTPUsername = os.Getenv("MAIL_SMTP_USERNAME")
+	cfg.MailSMTPPassword = os.Getenv("MAIL_SMTP_PASSWORD")
+	cfg.MailSMTPTLS = os.Getenv("MAIL_SMTP_TLS")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
@@ -174,10 +227,69 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("YANDEX_OAUTH_CLIENT_ID and YANDEX_OAUTH_CLIENT_SECRET: set both or neither")
 	}
 
+	// Транспорт почты валидируется по явному списку: неизвестное значение — почти
+	// наверняка опечатка. У smtp дополнительно проверяются его параметры, чтобы
+	// кривой .env падал при старте, а не при первой отправке письма.
+	switch cfg.MailTransport {
+	case MailTransportLog:
+		// dev: письмо в лог, SMTP-параметры не нужны — не проверяем.
+	case MailTransportSMTP:
+		if cfg.MailSMTPHost == "" {
+			return Config{}, fmt.Errorf("MAIL_SMTP_HOST required when MAIL_TRANSPORT=smtp")
+		}
+		port, err := strconv.Atoi(mailSMTPPortRaw)
+		if err != nil || port < 1 || port > 65535 {
+			return Config{}, fmt.Errorf("invalid MAIL_SMTP_PORT %q: want 1..65535", mailSMTPPortRaw)
+		}
+		cfg.MailSMTPPort = port
+		switch cfg.MailSMTPTLS {
+		case MailSMTPTLSStartTLS, MailSMTPTLSImplicit, MailSMTPTLSNone:
+		default:
+			return Config{}, fmt.Errorf("invalid MAIL_SMTP_TLS %q: want %q, %q or %q",
+				cfg.MailSMTPTLS, MailSMTPTLSStartTLS, MailSMTPTLSImplicit, MailSMTPTLSNone)
+		}
+		// Половина учётки — почти наверняка опечатка. Пусты оба = без AUTH (Mailpit),
+		// заданы оба = PLAIN (Postbox); ровно одно — ошибка (как у Яндекс ID выше).
+		if (cfg.MailSMTPUsername == "") != (cfg.MailSMTPPassword == "") {
+			return Config{}, fmt.Errorf("MAIL_SMTP_USERNAME and MAIL_SMTP_PASSWORD: set both or neither")
+		}
+		// PLAIN-аутентификация по открытому каналу невозможна: net/smtp её отвергает
+		// к удалённому хосту, и письма молча не уходили бы (вечный ретрай). Ловим
+		// связку на старте, а не при первой отправке — учётка требует TLS.
+		if cfg.MailSMTPUsername != "" && cfg.MailSMTPTLS == MailSMTPTLSNone {
+			return Config{}, fmt.Errorf("MAIL_SMTP_TLS=none несовместим с учёткой: SMTP AUTH требует TLS (starttls|implicit)")
+		}
+	default:
+		return Config{}, fmt.Errorf("invalid MAIL_TRANSPORT %q: want %q or %q",
+			cfg.MailTransport, MailTransportLog, MailTransportSMTP)
+	}
+
+	level, err := parseLogLevel(logLevelRaw)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LogLevel = level
+
 	return cfg, nil
 }
 
 // isHTTPURL — грубая проверка, что значение похоже на абсолютный http(s)-URL.
 func isHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// parseLogLevel переводит имя уровня в slog.Level (валидация по явному списку).
+func parseLogLevel(s string) (slog.Level, error) {
+	switch s {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid LOG_LEVEL %q: want debug|info|warn|error", s)
+	}
 }

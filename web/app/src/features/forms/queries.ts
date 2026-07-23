@@ -16,6 +16,7 @@ import {
   unpublishForm,
   updateCloseSettings,
   updateFormName,
+  updateNotifyOnSubmission,
 } from './api'
 import {
   type CloseSettingsInput,
@@ -126,6 +127,22 @@ export function useUpdateCloseSettings() {
               closedMessage: settings.closedMessage === '' ? null : settings.closedMessage,
             }
           : old,
+      )
+    },
+  })
+}
+
+// Тумблер уведомлений (слайс D). Ответ мутации — карточка (без notify-поля),
+// поэтому свежее значение в detail кладём из отправленного ввода, updatedAt — из
+// ответа (как useUpdateCloseSettings).
+export function useUpdateNotifyOnSubmission() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; slug: string; enabled: boolean }) =>
+      updateNotifyOnSubmission(id, enabled),
+    onSuccess: (form, { enabled }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, notifyOnSubmission: enabled } : old,
       )
     },
   })

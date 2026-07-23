@@ -61,6 +61,12 @@ function LoginPage() {
           serverError={mutation.error}
           onSubmit={(creds) => mutation.mutate(creds, { onSuccess: () => navigate({ to: '/' }) })}
         />
+        <Link
+          to="/forgot-password"
+          className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+        >
+          Забыли пароль?
+        </Link>
       </CardContent>
       <CardFooter>
         <p className="text-sm text-muted-foreground">

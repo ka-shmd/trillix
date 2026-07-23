@@ -20,6 +20,7 @@
 # без риска подхватить чужой env_file.
 x-app-env: &app-env
   HTTP_ADDR: ${HTTP_ADDR}
+  LOG_LEVEL: ${LOG_LEVEL}
   DATABASE_URL: ${DATABASE_URL}
   COOKIE_SECURE: ${COOKIE_SECURE}
   FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}
@@ -36,6 +37,17 @@ x-app-env: &app-env
   S3_SECRET_KEY: ${S3_SECRET_KEY}
   S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
   S3_PATH_STYLE: ${S3_PATH_STYLE}
+  # Исходящая почта (почтовая фаза). Обязательные: config.Load() без них падает.
+  MAIL_TRANSPORT: ${MAIL_TRANSPORT}
+  MAIL_FROM: ${MAIL_FROM}
+  # Параметры SMTP-транспорта (слайс E). ОПЦИОНАЛЬНЫЕ на уровне якоря (`:-`): нужны
+  # только при MAIL_TRANSPORT=smtp — тогда их требует config.Load(). prod-local → Mailpit,
+  # прод → Postbox. Пароль — секрет, живёт только в env-файле контура (инвариант 7).
+  MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-}
+  MAIL_SMTP_PORT: ${MAIL_SMTP_PORT:-}
+  MAIL_SMTP_TLS: ${MAIL_SMTP_TLS:-}
+  MAIL_SMTP_USERNAME: ${MAIL_SMTP_USERNAME:-}
+  MAIL_SMTP_PASSWORD: ${MAIL_SMTP_PASSWORD:-}
   # Вход через Яндекс ID (фаза 11). ОПЦИОНАЛЬНЫЕ, поэтому с `:-`: контур без
   # своего приложения провайдера поднимается без них, кнопка просто не рисуется.
   # Список выше — поимённый (см. комментарий к якорю), поэтому переменная, не

@@ -9,6 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type EmailVerificationToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type Form struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
@@ -23,6 +31,7 @@ type Form struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	NotifyOnSubmission bool
 }
 
 type FormVersion struct {
@@ -44,6 +53,26 @@ type FormVisit struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Outbox struct {
+	ID            uuid.UUID
+	Channel       string
+	Payload       []byte
+	Attempts      int32
+	NextAttemptAt pgtype.Timestamptz
+	LastError     pgtype.Text
+	SentAt        pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	CoalesceKey   pgtype.Text
+}
+
+type PasswordResetToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID
@@ -61,10 +90,11 @@ type Submission struct {
 }
 
 type User struct {
-	ID           uuid.UUID
-	Email        string
-	PasswordHash pgtype.Text
-	CreatedAt    pgtype.Timestamptz
+	ID              uuid.UUID
+	Email           string
+	PasswordHash    pgtype.Text
+	CreatedAt       pgtype.Timestamptz
+	EmailVerifiedAt pgtype.Timestamptz
 }
 
 type UserIdentity struct {

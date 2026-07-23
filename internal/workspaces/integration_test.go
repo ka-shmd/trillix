@@ -54,7 +54,7 @@ func resetDB(t *testing.T) {
 // Лимитер auth — пермиссивный (инвариант 6).
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	wsSvc := workspaces.NewService(testPool, workspaces.Repo{})

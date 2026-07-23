@@ -16,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
@@ -59,9 +60,46 @@ const (
 	oauthRatePerSec = 1.0 / 6.0
 	oauthBurst      = 10
 
+	// Сброс пароля (слайс B). Три ведра. forgot по IP: действие редкое (как
+	// регистрация) — запас 5, ~1 в 30 с. forgot по email: чтобы нельзя было
+	// завалить чужой ящик письмами с разных IP — запас 3, медленное пополнение
+	// ~1 в 5 мин. reset по IP: перебор токенов + argon2 на каждый вызов, ведро
+	// уровня логина — запас 5, ~1 в 12 с.
+	forgotIPRatePerSec    = 1.0 / 30.0
+	forgotIPBurst         = 5
+	forgotEmailRatePerSec = 1.0 / 300.0
+	forgotEmailBurst      = 3
+	resetRatePerSec       = 1.0 / 12.0
+	resetBurst            = 5
+
+	// Подтверждение email (слайс C). verify по IP: перебор токенов — ведро уровня
+	// сброса, запас 5, ~1 в 12 с. resend по пользователю: кнопка «отправить ещё
+	// раз» — редкое действие, запас 3, медленное пополнение ~1 в 5 мин (не даём
+	// слать письма пачками на свой же ящик).
+	verifyRatePerSec = 1.0 / 12.0
+	verifyBurst      = 5
+	resendRatePerSec = 1.0 / 300.0
+	resendBurst      = 3
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
+
+	// Чистка истёкших токенов сброса пароля (живут 30 мин; часового прогона хватает).
+	resetTokenCleanupTimeout = 30 * time.Second
+
+	// Чистка истёкших токенов подтверждения email (живут 24 ч; тот же прогон).
+	verificationTokenCleanupTimeout = 30 * time.Second
+
+	// Диспетчер outbox (почтовая фаза): раз в интервал отправляет пачку готовых
+	// писем. Интервал — компромисс «сброс пароля не должен ощутимо ждать» против
+	// «не долбить провайдера вхолостую»; пачка ограничивает работу одного прогона.
+	outboxDispatchInterval = 15 * time.Second
+	outboxDispatchTimeout  = 30 * time.Second
+	outboxBatch            = 50
+	// Бэкофф ретраев доставки: первая неудача — 1 мин, дальше удвоение до потолка 1 ч.
+	outboxBackoffBase = time.Minute
+	outboxBackoffMax  = time.Hour
 
 	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ — реальный IP
 	// (после TD-1), поэтому карта иначе растёт неограниченно. Вёдра пополняются до
@@ -70,13 +108,14 @@ const (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-
 	cfg, err := config.Load()
 	if err != nil {
-		log.Error("load config", slog.String("error", err.Error()))
+		// До загрузки конфига уровень неизвестен — ошибку старта пишем временным
+		// логгером на stderr (её видно всегда).
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel}))
 
 	if len(os.Args) > 1 {
 		if err := runCommand(os.Args[1:], cfg, log); err != nil {
@@ -132,10 +171,45 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
+	// Исходящая почта (почтовая фаза): транспорт выбирается по смысловому флагу
+	// MAIL_TRANSPORT, а не по имени окружения. log — письмо «доставляется» записью в
+	// лог (dev); smtp — один SMTP-клиент на прод (Postbox) и prod-local (Mailpit),
+	// различие лишь в MAIL_SMTP*. Строится раньше authSvc: сброс пароля кладёт письмо
+	// через этот сервис.
+	var mailer mail.Mailer
+	switch cfg.MailTransport {
+	case config.MailTransportLog:
+		mailer = mail.LogMailer{Log: log, From: cfg.MailFrom}
+	case config.MailTransportSMTP:
+		mailer = mail.SMTPMailer{
+			Host:     cfg.MailSMTPHost,
+			Port:     cfg.MailSMTPPort,
+			Username: cfg.MailSMTPUsername,
+			Password: cfg.MailSMTPPassword,
+			TLS:      smtpTLSMode(cfg.MailSMTPTLS),
+			From:     cfg.MailFrom,
+			Log:      log,
+		}
+	default:
+		// config.Load уже отвалидировал список — сюда не дойдём; страховка на будущее.
+		return fmt.Errorf("unsupported MAIL_TRANSPORT %q", cfg.MailTransport)
+	}
+	mailSvc := mail.NewService(pool, mail.Repo{}, mailer, log, outboxBatch,
+		mail.Backoff{Base: outboxBackoffBase, Max: outboxBackoffMax})
+
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
 	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
+
+	// Сброс пароля (слайс B): три ведра — forgot по IP и по email, reset по IP.
+	forgotIPLimiter := ratelimit.NewTokenBucket(forgotIPRatePerSec, forgotIPBurst)
+	forgotEmailLimiter := ratelimit.NewTokenBucket(forgotEmailRatePerSec, forgotEmailBurst)
+	resetLimiter := ratelimit.NewTokenBucket(resetRatePerSec, resetBurst)
+	authHandler = authHandler.WithPasswordReset(forgotIPLimiter, forgotEmailLimiter, resetLimiter)
+	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
+	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
+	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.
@@ -177,7 +251,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, submissions.Repo{})
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, submissions.Repo{}, cfg.AppOrigin)
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -208,10 +282,60 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
+		Name:     "reset-token-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredPasswordResetTokens(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired password reset tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "verification-token-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, verificationTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredEmailVerificationTokens(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired email verification tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "outbox-dispatch",
+		Interval: outboxDispatchInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, outboxDispatchTimeout)
+			defer cancel()
+			n, err := mailSvc.Dispatch(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("outbox messages delivered", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
 		Name:     "ratelimit-gc",
 		Interval: ratelimitGCInterval,
 		Run: func(context.Context) error {
-			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC()
+			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
+				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
+				verifyLimiter.GC() + resendLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
@@ -242,4 +366,18 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	tasks.Wait()
 	log.Info("http server stopped")
 	return nil
+}
+
+// smtpTLSMode переводит валидированный конфиг MAIL_SMTP_TLS в режим транспорта.
+// config уже отверг чужие значения при старте, поэтому default недостижим —
+// оставлен страховкой (пусть безопасный: без шифрования наружу не пойдём молча).
+func smtpTLSMode(v string) mail.TLSMode {
+	switch v {
+	case config.MailSMTPTLSStartTLS:
+		return mail.TLSStartTLS
+	case config.MailSMTPTLSImplicit:
+		return mail.TLSImplicit
+	default:
+		return mail.TLSNone
+	}
 }

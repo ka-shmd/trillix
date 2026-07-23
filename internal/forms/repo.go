@@ -60,8 +60,12 @@ type Form struct {
 	CloseAt       *time.Time
 	ResponseLimit *int32
 	ClosedMessage *string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// NotifyOnSubmission — слать ли владельцу письмо о новом ответе (слайс D; живая
+	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
+	// у результатов мутаций false, как и прочие read-only поля выше.
+	NotifyOnSubmission bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // ListRow — строка списка вместе с ключом сортировки, по которому её выдала БД
@@ -94,6 +98,11 @@ type PublicForm struct {
 	ResponseLimit   *int32
 	ClosedMessage   *string
 	SubmissionCount int64
+	// NotifyOnSubmission — гейт письма владельцу о новом ответе (слайс D): приём
+	// ответа читает его отсюда (уже загруженной формы), чтобы не делать лишний запрос
+	// на выключенных уведомлениях. Рендереру не отдаётся (не свойство формы для
+	// респондента).
+	NotifyOnSubmission bool
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -271,6 +280,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -302,6 +312,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -433,6 +444,48 @@ func (Repo) UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, w
 	}, nil
 }
 
+// UpdateFormNotifyOnSubmission переключает тумблер уведомлений в пределах воркспейса
+// (слайс D). pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+func (Repo) UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormNotifyOnSubmission(ctx, postgres.UpdateFormNotifyOnSubmissionParams{
+		ID:                 id,
+		WorkspaceID:        workspaceID,
+		NotifyOnSubmission: enabled,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form notify_on_submission: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// Owner — адресат уведомления о новом ответе: email владельца формы и её
+// отображаемое имя (name ?? title) для темы/тела письма.
+type Owner struct {
+	Email string
+	Title string
+}
+
+// GetSubmissionOwner отдаёт владельца формы и её имя для письма-уведомления (слайс
+// D). Не проверяет членство: это адресат уведомления, а не доступ пользователя;
+// форма уже резолвнута приёмом ответа. pgx.ErrNoRows пробрасывается обёрнутым.
+func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error) {
+	row, err := postgres.New(db).GetSubmissionOwner(ctx, formID)
+	if err != nil {
+		return Owner{}, fmt.Errorf("get submission owner: %w", err)
+	}
+	return Owner{Email: row.Email, Title: row.Title}, nil
+}
+
 // ListFormNames возвращает пары (имя, заголовок) всех форм воркспейса — сервису для
 // нумерации копий (подбор следующего «(копия N)» без коллизий).
 func (Repo) ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error) {
@@ -494,16 +547,17 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 	}
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
-		FormID:          row.FormID,
-		Title:           row.Title,
-		Version:         row.Version,
-		Schema:          json.RawMessage(row.Schema),
-		VersionID:       uuid.UUID(row.PublishedVersionID.Bytes),
-		Status:          row.Status,
-		CloseAt:         ptrTime(row.CloseAt),
-		ResponseLimit:   ptrInt32(row.ResponseLimit),
-		ClosedMessage:   ptrStr(row.ClosedMessage),
-		SubmissionCount: row.SubmissionCount,
+		FormID:             row.FormID,
+		Title:              row.Title,
+		Version:            row.Version,
+		Schema:             json.RawMessage(row.Schema),
+		VersionID:          uuid.UUID(row.PublishedVersionID.Bytes),
+		Status:             row.Status,
+		CloseAt:            ptrTime(row.CloseAt),
+		ResponseLimit:      ptrInt32(row.ResponseLimit),
+		ClosedMessage:      ptrStr(row.ClosedMessage),
+		SubmissionCount:    row.SubmissionCount,
+		NotifyOnSubmission: row.NotifyOnSubmission,
 	}, nil
 }
 

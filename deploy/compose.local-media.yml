@@ -44,5 +44,20 @@ services:
       "
     restart: "no"
 
+  # Mailpit — локальный SMTP-ящик для prod-local: принимает письма боевым транспортом
+  # (тем же net/smtp, что уедет на прод к Postbox) и показывает их в веб-интерфейсе.
+  # Так контур репетирует настоящую отправку, а не суррогат log-транспорта. Аналог на
+  # проде — Yandex Postbox (арендованный сервис), поэтому Mailpit живёт в этом
+  # локальном оверлее и в прод-файле не существует.
+  #
+  # SMTP :1025 наружу НЕ публикуется — только по внутренней docker-сети (api ходит на
+  # mailpit:1025, см. MAIL_SMTP_* в .env.prod-local: без TLS, без AUTH). Наружу торчит
+  # лишь веб-ящик :8025 на localhost — открыть письмо глазами.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025" # веб-ящик: http://localhost:8025
+
 volumes:
   minio_data:

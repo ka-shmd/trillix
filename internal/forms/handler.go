@@ -38,6 +38,7 @@ type formsService interface {
 	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
+	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -114,6 +115,8 @@ type formDetailResponse struct {
 	CloseAt       *time.Time `json:"closeAt"`
 	ResponseLimit *int32     `json:"responseLimit"`
 	ClosedMessage *string    `json:"closedMessage"`
+	// Тумблер уведомления владельцу о новом ответе (слайс D). Только в детали формы.
+	NotifyOnSubmission bool `json:"notifyOnSubmission"`
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
@@ -140,11 +143,12 @@ type titleRequest struct {
 // билдера, без блокировки); draftSchema — автосейв билдера, требует updatedAt для
 // оптимистичной блокировки; closeSettings — настройки закрытия (страница настроек).
 type patchRequest struct {
-	Name          *string            `json:"name"`
-	Title         *string            `json:"title"`
-	DraftSchema   *json.RawMessage   `json:"draftSchema"`
-	UpdatedAt     *time.Time         `json:"updatedAt"`
-	CloseSettings *closeSettingsBody `json:"closeSettings"`
+	Name               *string            `json:"name"`
+	Title              *string            `json:"title"`
+	DraftSchema        *json.RawMessage   `json:"draftSchema"`
+	UpdatedAt          *time.Time         `json:"updatedAt"`
+	CloseSettings      *closeSettingsBody `json:"closeSettings"`
+	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
 }
 
 func toFormResponse(f Form) formResponse {
@@ -180,11 +184,12 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		schema = up
 	}
 	return formDetailResponse{
-		formResponse:  toFormResponse(f),
-		DraftSchema:   schema,
-		CloseAt:       f.CloseAt,
-		ResponseLimit: f.ResponseLimit,
-		ClosedMessage: f.ClosedMessage,
+		formResponse:       toFormResponse(f),
+		DraftSchema:        schema,
+		CloseAt:            f.CloseAt,
+		ResponseLimit:      f.ResponseLimit,
+		ClosedMessage:      f.ClosedMessage,
+		NotifyOnSubmission: f.NotifyOnSubmission,
 	}
 }
 
@@ -301,13 +306,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// Ровно одно из name/title/draftSchema/closeSettings за запрос — иначе непонятно,
 	// что менять.
 	set := 0
-	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil, req.CloseSettings != nil} {
+	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil, req.CloseSettings != nil, req.NotifyOnSubmission != nil} {
 		if present {
 			set++
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema/closeSettings", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema/closeSettings/notifyOnSubmission", domain.ErrValidation))
 		return
 	}
 
@@ -333,6 +338,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			ResponseLimit: cs.ResponseLimit,
 			ClosedMessage: cs.ClosedMessage,
 		})
+	case req.NotifyOnSubmission != nil:
+		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
 	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)

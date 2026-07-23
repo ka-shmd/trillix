@@ -3,7 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
-import { useUpdateCloseSettings } from '../queries'
+import { useUpdateCloseSettings, useUpdateNotifyOnSubmission } from '../queries'
 
 import { useBuilderStore } from './storeContext'
 import {
@@ -19,6 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 // FormSettings — страница настроек формы: то, чего на полотне не видно. Полотно
@@ -82,6 +83,7 @@ export function FormSettings({
   }
 
   const updateClose = useUpdateCloseSettings()
+  const updateNotify = useUpdateNotifyOnSubmission()
 
   // Диалог-страховка: уход с несохранёнными правками любой секции — осознанный.
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -268,6 +270,36 @@ export function FormSettings({
                   ? 'Есть несохранённые изменения'
                   : 'Всё сохранено'}
           </span>
+        </div>
+      </section>
+
+      <section className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-medium">Уведомления</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Письмо на вашу почту, когда на форму приходит новый ответ.
+        </p>
+
+        {/* Одиночный тумблер сохраняется сразу по переключению (не кнопкой, как секции
+            выше): его состояние и есть сохранённое значение, «сохранилось ли» не
+            двусмысленно. Поэтому в dirty-страховку ухода он не входит. Частые ответы
+            склеиваются в одно письмо — троттлинг на бэкенде. */}
+        <div className="mt-4 flex items-center gap-3">
+          <Switch
+            id="notify-on-submission"
+            checked={detail.notifyOnSubmission}
+            disabled={updateNotify.isPending}
+            onCheckedChange={(enabled) =>
+              updateNotify.mutate({ id: detail.id, slug: detail.slug, enabled })
+            }
+          />
+          <Label htmlFor="notify-on-submission" className="text-sm font-normal">
+            Присылать письмо о новом ответе
+          </Label>
+          {updateNotify.isError && (
+            <span className="text-xs text-destructive" role="status">
+              Не удалось сохранить
+            </span>
+          )}
         </div>
       </section>
 

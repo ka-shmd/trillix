@@ -12,6 +12,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeEmailVerificationToken = `-- name: ConsumeEmailVerificationToken :one
+UPDATE email_verification_tokens
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id
+`
+
+// Атомарно потребляет токен подтверждения (по образцу ConsumePasswordResetToken):
+// помечает использованным и возвращает user_id при «не использован и не истёк».
+func (q *Queries) ConsumeEmailVerificationToken(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, consumeEmailVerificationToken, tokenHash)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
+const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id
+`
+
+// Атомарно потребляет токен: помечает использованным и возвращает user_id ровно
+// при условии «не использован и не истёк». Одним UPDATE, а не SELECT+UPDATE, —
+// второе использование той же ссылки (гонка, двойной клик) получает 0 строк.
+func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, consumePasswordResetToken, tokenHash)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -74,6 +107,23 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const createEmailVerificationToken = `-- name: CreateEmailVerificationToken :exec
+INSERT INTO email_verification_tokens (token_hash, user_id, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreateEmailVerificationTokenParams struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Кладёт одноразовый токен подтверждения email (в БД — только SHA-256).
+func (q *Queries) CreateEmailVerificationToken(ctx context.Context, arg CreateEmailVerificationTokenParams) error {
+	_, err := q.db.Exec(ctx, createEmailVerificationToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	return err
 }
 
 const createForm = `-- name: CreateForm :one
@@ -194,6 +244,23 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return err
 }
 
+const createPasswordResetToken = `-- name: CreatePasswordResetToken :exec
+INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreatePasswordResetTokenParams struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Кладёт одноразовый токен сброса (в БД — только SHA-256 сырого токена).
+func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) error {
+	_, err := q.db.Exec(ctx, createPasswordResetToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	return err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -214,7 +281,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at
+RETURNING id, email, password_hash, created_at, email_verified_at
 `
 
 type CreateUserParams struct {
@@ -232,6 +299,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
@@ -268,6 +336,32 @@ type CreateWorkspaceMemberParams struct {
 func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspaceMemberParams) error {
 	_, err := q.db.Exec(ctx, createWorkspaceMember, arg.WorkspaceID, arg.UserID, arg.Role)
 	return err
+}
+
+const deleteExpiredEmailVerificationTokens = `-- name: DeleteExpiredEmailVerificationTokens :execrows
+DELETE FROM email_verification_tokens WHERE expires_at <= now()
+`
+
+// Фоновая чистка истёкших токенов подтверждения (использованные истекают за 24 часа).
+func (q *Queries) DeleteExpiredEmailVerificationTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredEmailVerificationTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredPasswordResetTokens = `-- name: DeleteExpiredPasswordResetTokens :execrows
+DELETE FROM password_reset_tokens WHERE expires_at <= now()
+`
+
+// Фоновая чистка истёкших токенов (использованные тоже истекают за 30 минут).
+func (q *Queries) DeleteExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredPasswordResetTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
@@ -311,6 +405,17 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	return err
 }
 
+const deleteSessionsByUser = `-- name: DeleteSessionsByUser :exec
+DELETE FROM sessions WHERE user_id = $1
+`
+
+// Рвёт все сессии пользователя — обязательный шаг сброса пароля (кто угодно,
+// знавший старый пароль или укравший сессию, разлогинивается).
+func (q *Queries) DeleteSessionsByUser(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSessionsByUser, userID)
+	return err
+}
+
 const deleteSubmission = `-- name: DeleteSubmission :execrows
 DELETE FROM submissions
 WHERE id = $1 AND form_id = $2
@@ -332,6 +437,62 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 	return result.RowsAffected(), nil
 }
 
+const enqueueCoalescedOutbox = `-- name: EnqueueCoalescedOutbox :exec
+INSERT INTO outbox (id, channel, payload, coalesce_key, next_attempt_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coalesce_key) WHERE sent_at IS NULL
+DO UPDATE SET payload = jsonb_set(
+    outbox.payload,
+    '{data,count}',
+    to_jsonb(COALESCE((outbox.payload #>> '{data,count}')::int, 0) + 1)
+)
+`
+
+type EnqueueCoalescedOutboxParams struct {
+	ID            uuid.UUID
+	Channel       string
+	Payload       []byte
+	CoalesceKey   pgtype.Text
+	NextAttemptAt pgtype.Timestamptz
+}
+
+// Коалесцирующая постановка (слайс D): пока письмо с этим coalesce_key не
+// отправлено, повторный вызов не плодит строку, а инкрементит payload.data.count
+// (столько событий склеилось в один дайджест). next_attempt_at задаёт окно
+// троттлинга — ставится при первой вставке и на инкременте НЕ сдвигается (окно
+// считается от первого события, иначе поток ответов бесконечно отодвигал бы отправку).
+func (q *Queries) EnqueueCoalescedOutbox(ctx context.Context, arg EnqueueCoalescedOutboxParams) error {
+	_, err := q.db.Exec(ctx, enqueueCoalescedOutbox,
+		arg.ID,
+		arg.Channel,
+		arg.Payload,
+		arg.CoalesceKey,
+		arg.NextAttemptAt,
+	)
+	return err
+}
+
+const enqueueOutbox = `-- name: EnqueueOutbox :exec
+
+INSERT INTO outbox (id, channel, payload)
+VALUES ($1, $2, $3)
+`
+
+type EnqueueOutboxParams struct {
+	ID      uuid.UUID
+	Channel string
+	Payload []byte
+}
+
+// Запросы модуля mail. Схема — migrations/0010_outbox. Генерация: `make sqlc`.
+// Пишет намерение доставки. Вызывается продюсером в его транзакции (transactional
+// outbox): исполнитель приходит извне. attempts/next_attempt_at/sent_at — по
+// умолчанию (0 / now / NULL), то есть строка сразу готова к первой попытке.
+func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) error {
+	_, err := q.db.Exec(ctx, enqueueOutbox, arg.ID, arg.Channel, arg.Payload)
+	return err
+}
+
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
@@ -348,7 +509,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -372,6 +533,7 @@ type GetFormRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	NotifyOnSubmission    bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -399,6 +561,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -417,7 +580,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -441,6 +604,7 @@ type GetFormBySlugRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	NotifyOnSubmission    bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -470,6 +634,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -504,7 +669,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -523,6 +688,7 @@ type GetPublicFormBySlugRow struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	NotifyOnSubmission bool
 	SubmissionCount    int64
 }
 
@@ -548,13 +714,14 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.SubmissionCount,
 	)
 	return i, err
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
@@ -569,12 +736,38 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
+const getSubmissionOwner = `-- name: GetSubmissionOwner :one
+SELECT u.email, coalesce(f.name, f.title) AS title
+FROM forms f
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id
+WHERE f.id = $1
+`
+
+type GetSubmissionOwnerRow struct {
+	Email string
+	Title string
+}
+
+// Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
+// (слайс D). Джойн forms → workspace_members(owner) → users. Название берём
+// внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
+// Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
+// проверяется — это не доступ пользователя, а адресат уведомления.
+func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
+	var i GetSubmissionOwnerRow
+	err := row.Scan(&i.Email, &i.Title)
+	return i, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at
+SELECT id, email, password_hash, created_at, email_verified_at
 FROM users
 WHERE email = $1
 `
@@ -587,12 +780,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2
@@ -614,6 +808,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
@@ -905,6 +1100,51 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 	return items, nil
 }
 
+const listPendingOutbox = `-- name: ListPendingOutbox :many
+SELECT id, channel, payload, attempts
+FROM outbox
+WHERE sent_at IS NULL AND next_attempt_at <= now()
+ORDER BY next_attempt_at
+LIMIT $1
+`
+
+type ListPendingOutboxRow struct {
+	ID       uuid.UUID
+	Channel  string
+	Payload  []byte
+	Attempts int32
+}
+
+// Готовые к отправке: не доставленные, чей next_attempt_at наступил. По
+// next_attempt_at (старейшая задолженность первой), потолок пачки — $1. Один
+// диспетчер на один инстанс (как in-memory rate limit, ADR §10), запускается
+// periodic-задачей последовательно — конкурентной выборки нет, блокировка строк
+// не нужна; многоинстансный апгрейд — FOR UPDATE SKIP LOCKED.
+func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPendingOutboxRow, error) {
+	rows, err := q.db.Query(ctx, listPendingOutbox, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPendingOutboxRow
+	for rows.Next() {
+		var i ListPendingOutboxRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Channel,
+			&i.Payload,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
@@ -1056,6 +1296,54 @@ func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error 
 	return err
 }
 
+const markEmailVerified = `-- name: MarkEmailVerified :exec
+UPDATE users SET email_verified_at = now() WHERE id = $1
+`
+
+// Проставляет отметку подтверждения. Идемпотентно по смыслу: повторное
+// подтверждение просто переставит время (но токен одноразовый — не дойдёт).
+func (q *Queries) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markEmailVerified, id)
+	return err
+}
+
+const markOutboxFailed = `-- name: MarkOutboxFailed :exec
+UPDATE outbox
+SET attempts = $2, next_attempt_at = $3, last_error = $4
+WHERE id = $1
+`
+
+type MarkOutboxFailedParams struct {
+	ID            uuid.UUID
+	Attempts      int32
+	NextAttemptAt pgtype.Timestamptz
+	LastError     pgtype.Text
+}
+
+// Неудача: растим счётчик, откладываем следующую попытку (бэкофф считает сервис),
+// сохраняем текст ошибки для диагностики. sent_at не трогаем — строка остаётся в выборке.
+func (q *Queries) MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error {
+	_, err := q.db.Exec(ctx, markOutboxFailed,
+		arg.ID,
+		arg.Attempts,
+		arg.NextAttemptAt,
+		arg.LastError,
+	)
+	return err
+}
+
+const markOutboxSent = `-- name: MarkOutboxSent :exec
+UPDATE outbox
+SET sent_at = now(), last_error = NULL
+WHERE id = $1
+`
+
+// Успех — терминальное состояние: проставляем sent_at, гасим прошлую ошибку.
+func (q *Queries) MarkOutboxSent(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markOutboxSent, id)
+	return err
+}
+
 const markVisitSubmitted = `-- name: MarkVisitSubmitted :execrows
 UPDATE form_visits SET submitted = true
 WHERE id = $1 AND form_id = $2
@@ -1179,6 +1467,23 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $2 WHERE id = $1
+`
+
+type SetUserPasswordParams struct {
+	ID           uuid.UUID
+	PasswordHash pgtype.Text
+}
+
+// Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
+// password_hash из NULL в значение — так закрывается TD-34 (аккаунт становится
+// достижим паролем, вход через провайдера при этом сохраняется).
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	return err
 }
 
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one
@@ -1323,6 +1628,52 @@ type UpdateFormNameRow struct {
 func (q *Queries) UpdateFormName(ctx context.Context, arg UpdateFormNameParams) (UpdateFormNameRow, error) {
 	row := q.db.QueryRow(ctx, updateFormName, arg.ID, arg.WorkspaceID, arg.Name)
 	var i UpdateFormNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormNotifyOnSubmission = `-- name: UpdateFormNotifyOnSubmission :one
+UPDATE forms
+SET notify_on_submission = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNotifyOnSubmissionParams struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	NotifyOnSubmission bool
+}
+
+type UpdateFormNotifyOnSubmissionRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер уведомлений владельцу о новом ответе (слайс D) — живая колонка. В пределах
+// воркспейса (анти-IDOR); 0 строк (чужая/нет формы) → service трактует как 404.
+// updated_at двигаем вручную. RETURNING — стандартный набор карточки: хендлер отдаёт
+// базовый formResponse, а свежее значение тумблера фронт берёт рефетчем детали.
+func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFormNotifyOnSubmissionParams) (UpdateFormNotifyOnSubmissionRow, error) {
+	row := q.db.QueryRow(ctx, updateFormNotifyOnSubmission, arg.ID, arg.WorkspaceID, arg.NotifyOnSubmission)
+	var i UpdateFormNotifyOnSubmissionRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

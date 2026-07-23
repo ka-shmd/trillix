@@ -6,16 +6,21 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/mail"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
-// fakeForms — коллаборатор forms с подставной опубликованной формой.
+// fakeForms — коллаборатор forms с подставной опубликованной формой и владельцем.
 type fakeForms struct {
-	pf forms.PublicForm
+	pf    forms.PublicForm
+	owner forms.Owner
 }
 
 func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
@@ -28,6 +33,42 @@ func (f fakeForms) Get(context.Context, uuid.UUID, uuid.UUID) (forms.Form, error
 
 func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Version, error) {
 	return nil, domain.ErrNotFound
+}
+
+func (f fakeForms) SubmissionOwner(context.Context, uuid.UUID) (forms.Owner, error) {
+	return f.owner, nil
+}
+
+// fakeTx выполняет тело транзакции без БД (fn получает nil pgx.Tx; фейки-репо и
+// mailer исполнителя игнорируют).
+type fakeTx struct{}
+
+func (fakeTx) WithTx(ctx context.Context, fn func(pgx.Tx) error) error { return fn(nil) }
+
+// fakeSubStore — submissions.Store: InsertSubmission отдаёт заданное число строк
+// (0 = идемпотентный ретрай).
+type fakeSubStore struct {
+	Store
+	insertN int64
+}
+
+func (f fakeSubStore) InsertSubmission(context.Context, postgres.DBTX, uuid.UUID, uuid.UUID, uuid.UUID, json.RawMessage, json.RawMessage) (int64, error) {
+	return f.insertN, nil
+}
+
+// fakeMailer записывает коалесцирующие постановки для проверок.
+type fakeMailer struct {
+	calls []coalescedCall
+}
+
+type coalescedCall struct {
+	key string
+	msg mail.EmailMessage
+}
+
+func (m *fakeMailer) EnqueueCoalesced(_ context.Context, _ postgres.DBTX, key string, msg mail.EmailMessage, _ time.Duration) error {
+	m.calls = append(m.calls, coalescedCall{key: key, msg: msg})
+	return nil
 }
 
 // Неразбираемая опубликованная схема — это нарушенный инвариант версии (её
@@ -44,7 +85,7 @@ func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
 		Status: domain.FormStatusPublished,
 		// Поле из будущего формата: DisallowUnknownFields такую схему отвергнет.
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[],"fieldFromFuture":"x"}`),
-	}}, nil, nil)
+	}}, nil, nil, nil, "")
 
 	err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{})
 	if err == nil {
@@ -57,5 +98,73 @@ func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
 	// Контекст для лога сохраняется — скрывается он уже в respond.go (5xx).
 	if !strings.Contains(err.Error(), "slug1") {
 		t.Fatalf("ошибка потеряла контекст для лога: %v", err)
+	}
+}
+
+// validPublishedForm — опубликованная открытая форма без полей (пустые ответы
+// валидны), с заданным тумблером уведомлений. Для проверок гейта уведомления.
+func validPublishedForm(notify bool) forms.PublicForm {
+	return forms.PublicForm{
+		FormID:             uuid.New(),
+		Status:             domain.FormStatusPublished,
+		Schema:             json.RawMessage(`{"schemaVersion":2,"blocks":[]}`),
+		NotifyOnSubmission: notify,
+	}
+}
+
+func TestSubmit_NotifyOn_EnqueuesOwnerDigest(t *testing.T) {
+	pf := validPublishedForm(true)
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{},
+		fakeForms{pf: pf, owner: forms.Owner{Email: "owner@example.com", Title: "Моя форма"}},
+		nil, mailer, fakeSubStore{insertN: 1}, "https://app.test")
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("поставлено уведомлений: %d, ожидалось 1", len(mailer.calls))
+	}
+	c := mailer.calls[0]
+	if c.key != "submission:"+pf.FormID.String() {
+		t.Errorf("ключ коалесинга = %q, ожидался submission:%s", c.key, pf.FormID)
+	}
+	if c.msg.To != "owner@example.com" || c.msg.Template != mail.TemplateSubmissionDigest {
+		t.Errorf("письмо адресовано неверно: to=%q template=%q", c.msg.To, c.msg.Template)
+	}
+	if c.msg.Data["count"] != 1 {
+		t.Errorf("стартовый count = %v, ожидался 1", c.msg.Data["count"])
+	}
+	if link, _ := c.msg.Data["link"].(string); link != "https://app.test/forms/slug1/responses" {
+		t.Errorf("ссылка = %q, ожидалась таблица ответов кабинета", link)
+	}
+}
+
+func TestSubmit_NotifyOff_NoEnqueue(t *testing.T) {
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: validPublishedForm(false)},
+		nil, mailer, fakeSubStore{insertN: 1}, "https://app.test")
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 0 {
+		t.Errorf("при выключенном тумблере письмо не ставится, а поставлено %d", len(mailer.calls))
+	}
+}
+
+// Идемпотентный ретрай (тот же id, вставка вернула 0 строк) не должен слать
+// повторное письмо.
+func TestSubmit_NotifyOn_IdempotentRetry_NoEnqueue(t *testing.T) {
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{},
+		fakeForms{pf: validPublishedForm(true), owner: forms.Owner{Email: "o@e.com"}},
+		nil, mailer, fakeSubStore{insertN: 0}, "https://app.test")
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 0 {
+		t.Errorf("повтор того же ответа письмо не ставит, а поставлено %d", len(mailer.calls))
 	}
 }

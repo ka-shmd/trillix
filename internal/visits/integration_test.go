@@ -64,7 +64,7 @@ func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, submissions.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), submissions.Repo{}, "http://app.test")
 
 	mux := http.NewServeMux()
 	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, false).Routes(mux)
@@ -81,7 +81,7 @@ const oneQuestionSchema = `{"blocks":[{"id":"b1","type":"short_text","label":"И
 func publishedForm(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "vis-"+uuid.NewString()[:8]+"@example.com", "supersecret1")

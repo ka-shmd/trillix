@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, forms, form_versions, submissions CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, forms, form_versions, submissions, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -61,7 +61,7 @@ func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, submissions.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), submissions.Repo{}, "http://app.test")
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()
@@ -76,7 +76,7 @@ func newServer(t *testing.T) *httptest.Server {
 func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
@@ -168,6 +168,102 @@ func TestSubmit_Idempotent_NoDuplicate(t *testing.T) {
 	}
 	if n := countSubmissions(t); n != 1 {
 		t.Fatalf("в БД %d строк, ожидалась ровно одна (идемпотентность)", n)
+	}
+}
+
+// Троттлинг (DoD слайса D): шквал ответов не даёт шквала писем. M ответов на форму
+// с включённым уведомлением (по умолчанию) → в outbox ОДНА неотправленная строка с
+// count = M, а не M писем. Коалесинг по ключу формы при enqueue.
+func TestSubmit_NotifyThrottling_CoalescesIntoOneDigest(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema) // notify_on_submission = true (DEFAULT)
+
+	const M = 5
+	for i := 0; i < M; i++ {
+		body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Имя"}}`
+		if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("ответ #%d: статус %d, ожидалось 201", i+1, resp.StatusCode)
+		}
+	}
+
+	var rows, count int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
+		 FROM outbox WHERE sent_at IS NULL AND coalesce_key IS NOT NULL`).Scan(&rows, &count)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if rows != 1 {
+		t.Fatalf("в outbox %d коалесцируемых строк, ожидалась 1 (шквал → одно письмо)", rows)
+	}
+	if count != M {
+		t.Fatalf("счётчик дайджеста = %d, ожидался %d (по числу ответов)", count, M)
+	}
+}
+
+// Отклонённый по лимиту ответ не шлёт уведомления: у формы с лимитом 1 первый ответ
+// принят (дайджест count=1), второй отклонён (410) — счётчик не растёт, второй строки нет.
+func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET response_limit = 1 WHERE slug = $1`, slug); err != nil {
+		t.Fatalf("set limit: %v", err)
+	}
+
+	first := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"A"}}`
+	if resp := postSubmission(t, srv, slug, first); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("первый ответ: статус %d, ожидалось 201", resp.StatusCode)
+	}
+	second := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"B"}}`
+	if resp := postSubmission(t, srv, slug, second); resp.StatusCode != http.StatusGone {
+		t.Fatalf("второй ответ (сверх лимита): статус %d, ожидалось 410", resp.StatusCode)
+	}
+
+	var rows, count int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
+		 FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&rows, &count)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if rows != 1 || count != 1 {
+		t.Fatalf("дайджестов=%d count=%d, ожидалось 1 и 1 (отклонённый ответ не уведомляет)", rows, count)
+	}
+}
+
+// Выключенный тумблер: ответ принимается, но письма в outbox нет.
+func TestSubmit_NotifyOff_NoOutboxRow(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	turnOffNotify(t, slug)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Имя"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+	// Считаем только дайджесты ответов (coalesce_key задан): письмо подтверждения
+	// email от регистрации владельца в publishedForm тоже лежит в outbox, но с NULL.
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&n); err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("при выключенном тумблере писем-дайджестов быть не должно, в outbox %d", n)
+	}
+}
+
+// turnOffNotify выключает уведомления формы прямо в БД (тумблер отдельно тестируется
+// на уровне forms; здесь нужен лишь эффект).
+func turnOffNotify(t *testing.T, slug string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET notify_on_submission = false WHERE slug = $1`, slug); err != nil {
+		t.Fatalf("turn off notify: %v", err)
 	}
 }
 

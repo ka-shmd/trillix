@@ -10,11 +10,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/oauth"
-	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
 
@@ -35,7 +33,7 @@ const appOrigin = "http://localhost:5173"
 // newOAuthStack — реальная вертикаль с включённым провайдером.
 func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	t.Helper()
-	svc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false).
 		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret"))
 	mux := http.NewServeMux()

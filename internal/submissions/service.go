@@ -13,6 +13,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -27,6 +28,12 @@ const (
 	// forms по значениям, но свой — модули не делят константы пагинации.
 	DefaultPageLimit = 50
 	MaxPageLimit     = 100
+
+	// notifyDigestWindow — окно троттлинга уведомлений владельцу (слайс D): все
+	// ответы, пришедшие за это окно после первого, склеиваются в одно письмо «N
+	// ответов». Ограничивает поток до ≤1 письма на форму за окно даже у вирусной
+	// формы; цена — одиночный ответ владелец увидит с задержкой в это окно.
+	notifyDigestWindow = 5 * time.Minute
 )
 
 // Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (приём
@@ -41,6 +48,17 @@ type Forms interface {
 	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
 	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+	// SubmissionOwner — адресат уведомления о новом ответе (email владельца + имя
+	// формы). Форма уже резолвнута по slug, членство не проверяется (это адресат, а
+	// не доступ пользователя). Слайс D.
+	SubmissionOwner(ctx context.Context, formID uuid.UUID) (forms.Owner, error)
+}
+
+// Mailer — коллаборатор из модуля mail: ставит письмо-уведомление в outbox с
+// коалесингом (троттлинг-дайджест «N ответов»). Пишется в транзакции приёма ответа
+// (transactional outbox). Реализация — *mail.Service. Слайс D.
+type Mailer interface {
+	EnqueueCoalesced(ctx context.Context, db postgres.DBTX, key string, msg mail.EmailMessage, delay time.Duration) error
 }
 
 // Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
@@ -108,15 +126,19 @@ type Meta struct {
 // submission привязывается к её id — правки схемы после отправки не искажают данные.
 type Service struct {
 	db     postgres.DBTX
-	tx     Transactor // для жёсткого капа лимита ответов (шаг 4)
+	tx     Transactor // для жёсткого капа лимита ответов (шаг 4) и enqueue уведомления
 	forms  Forms
 	visits Visits
+	mail   Mailer
 	repo   Store
-	now    func() time.Time // подменяется в тестах (проверка даты закрытия)
+	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
+	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
+	appBaseURL string
+	now        func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, repo Store) *Service {
-	return &Service{db: db, tx: tx, forms: forms, visits: visits, repo: repo, now: time.Now}
+func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, repo Store, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, repo: repo, appBaseURL: appBaseURL, now: time.Now}
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -171,46 +193,89 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 
-	// Без лимита — прежний путь, без блокировки. n == 0 → конфликт по PK (тот же id
-	// уже принят): идемпотентный успех.
+	// inserted — была ли вставлена НОВАЯ строка (n > 0). false = идемпотентный ретрай
+	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
+	var inserted bool
+
+	// Без лимита — прежний путь без блокировки: одна вставка на пуле.
 	if pf.ResponseLimit == nil {
-		if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
+		n, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+		if err != nil {
 			return err
 		}
-		s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
-		return nil
+		inserted = n > 0
+	} else {
+		// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
+		// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
+		// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
+		// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
+		// только что вставленной строки превышает лимит) — форма как раз заполнилась.
+		limit := int64(*pf.ResponseLimit)
+		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+			if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
+				return err
+			}
+			n, err := s.repo.InsertSubmission(ctx, tx, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return nil // идемпотентный ретрай — ответ уже принят, лимит ни при чём
+			}
+			count, err := s.repo.CountSubmissions(ctx, tx, pf.FormID)
+			if err != nil {
+				return err
+			}
+			if count > limit {
+				return domain.ErrFormClosed // откат вставки: форма только что заполнилась
+			}
+			inserted = true
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 
-	// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
-	// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
-	// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
-	// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
-	// только что вставленной строки превышает лимит) — форма как раз заполнилась.
-	limit := int64(*pf.ResponseLimit)
-	if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
-			return err
-		}
-		n, err := s.repo.InsertSubmission(ctx, tx, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return nil // идемпотентный ретрай — ответ уже принят, лимит ни при чём
-		}
-		count, err := s.repo.CountSubmissions(ctx, tx, pf.FormID)
-		if err != nil {
-			return err
-		}
-		if count > limit {
-			return domain.ErrFormClosed // откат вставки: форма только что заполнилась
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
+	// Побочные эффекты — ПОСЛЕ приёма и best-effort (ни один не имеет права уронить
+	// принятый ответ): конверсия визита и уведомление владельцу. Только для новой
+	// строки (не для идемпотентного ретрая).
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
+	if inserted && pf.NotifyOnSubmission {
+		s.notifyOwner(ctx, pf.FormID, slug)
+	}
 	return nil
+}
+
+// notifyOwner ставит владельцу письмо-дайджест о новом ответе — коалесцирующим
+// enqueue по ключу формы (ответы за окно склеиваются в одно письмо «N ответов»,
+// шквал ответов не даёт шквала писем). Ссылка ведёт в таблицу ответов кабинета.
+//
+// Вызывается ПОСЛЕ приёма и best-effort, как markVisitSubmitted: уведомление —
+// вторичный эффект, и уронить из-за него принятый ответ нельзя (респондент увидел
+// бы «не удалось отправить» на записанном ответе). Поэтому НЕ в транзакции приёма:
+// это размен строгой атомарности «ответ+письмо» на неприкосновенность hot-path и
+// принятого ответа. Цена — краш в узком окне между коммитом ответа и enqueue теряет
+// одно уведомление; данные целы (владелец видит ответ в таблице), а следующий ответ
+// открывает/наращивает дайджест заново. Сбой (нет владельца, пустой email, недоступна
+// БД) уходит в лог с request_id — ответ уже принят. Слайс D. Гонка диспетчера с
+// инкрементом во время отправки — TD-36. Слайс D.
+func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string) {
+	owner, err := s.forms.SubmissionOwner(ctx, formID)
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("submission owner not resolved for notification",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+		return
+	}
+	link := s.appBaseURL + "/forms/" + slug + "/responses"
+	err = s.mail.EnqueueCoalesced(ctx, s.db, "submission:"+formID.String(), mail.EmailMessage{
+		To:       owner.Email,
+		Template: mail.TemplateSubmissionDigest,
+		Data:     map[string]any{"form_title": owner.Title, "link": link, "count": 1},
+	}, notifyDigestWindow)
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("owner notification not enqueued",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
 }
 
 // markVisitSubmitted отмечает конверсию визита. Вызывается ПОСЛЕ успешного приёма и

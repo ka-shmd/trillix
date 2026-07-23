@@ -197,6 +197,21 @@ BACKUP_S3_SECRET_KEY=__YANDEX_SA_SECRET_KEY__
 BACKUP_S3_BUCKET=trillix-backups
 BACKUP_AGE_RECIPIENT=age1__PASTE_PUBLIC_KEY__
 
+# --- исходящая почта: Yandex Postbox (почтовая фаза) ---
+# MAIL_TRANSPORT=smtp — прод шлёт письма настоящим SMTP (тот же транспорт, что
+# репетирует prod-local в Mailpit). MAIL_FROM — адрес на подтверждённом в Postbox
+# домене (иначе DKIM не подпишет и письма уйдут в спам). MAIL_SMTP_* — параметры
+# Postbox: см. раздел «Почта (Yandex Postbox)» ниже (создание отправителя, DNS, ключ).
+# Учётка — API-ключ сервисного аккаунта (простой путь, без конвертации): username =
+# идентификатор API-ключа, password = его секрет как есть. Секрет — только здесь.
+MAIL_TRANSPORT=smtp
+MAIL_FROM=Trillix <no-reply@trillix.ru>
+MAIL_SMTP_HOST=postbox.cloud.yandex.net
+MAIL_SMTP_PORT=587
+MAIL_SMTP_TLS=starttls
+MAIL_SMTP_USERNAME=__POSTBOX_API_KEY_ID__
+MAIL_SMTP_PASSWORD=__POSTBOX_API_KEY_SECRET__
+
 # --- вход через Яндекс ID (фаза 11) ---
 # ОПЦИОНАЛЬНЫЕ и парные: обе заданы — кнопка «Войти через Яндекс» работает; обе
 # пусты — провайдер выключен, кабинет работает как раньше; заполнена ровно одна —
@@ -389,6 +404,48 @@ Caddy → Go → Postgres (`200` доказывал бы меньше — его
 > docker compose --env-file .env -f deploy/compose.prod.yml exec -T caddy \
 >   wget -qO- http://127.0.0.1:2019/config/ | grep -o 'try_duration' | wc -l   # ждём 3
 > ```
+
+## Почта (Yandex Postbox)
+
+Транзакционные письма (подтверждение почты, сброс пароля, уведомление владельцу о
+новом ответе) прод шлёт через **Yandex Cloud Postbox** — тот же аккаунт Облака, где
+лежат бэкапы. prod-local репетирует ту же отправку в Mailpit тем же SMTP-транспортом;
+различие контуров — только в значениях `MAIL_SMTP_*`. Выбор провайдера и «один
+транспорт на оба контура» — ADR §10.
+
+Бесплатно первые 2000 писем/месяц — на объёме MVP хватает с запасом.
+
+### Однократный провижининг
+
+1. **Создать отправителя.** Консоль Яндекс.Облака → сервис **Cloud Postbox** →
+   **Создать адрес** → тип «Домен», `trillix.ru`, блок «Настройка подписи писем
+   (DKIM)» → **Простая** → **Создать адрес**. Postbox покажет **две CNAME**-записи DKIM.
+2. **Прописать DNS** (у регистратора `trillix.ru` — там же, где A-записи `app`/`f`;
+   значения из консоли Postbox дословно):
+   - **DKIM** — **две CNAME** из блока «Настройка подписи писем (DKIM)». Это и есть
+     механизм подтверждения домена (отдельной «проверочной» записи нет).
+   - **DMARC** — TXT на `_dmarc.trillix.ru`, значение `"v=DMARC1; p=none"` (в кавычках);
+     ужесточить до `p=quarantine` после того, как mail-tester покажет прохождение.
+   SPF отдельно не нужен: DMARC проходит по DKIM-выравниванию (домен подписи = домен
+   `From`). Дождаться у адреса статуса **`Success`** в консоли (DNS — до 24 ч).
+3. **Ключ для отправки** (простой путь — API-ключ, без конвертации). IAM →
+   сервисный аккаунт (напр. `postbox-sender`) с ролью **`postbox.sender`** → создать
+   ему **API-ключ** с областью действия (scope) **`yc.postbox.send`**. `username` =
+   идентификатор API-ключа, `password` = его секрет **как есть**. (Статический ключ со
+   скриптом `generate.py` нужен только для AWS-CLI-совместимости — нам не требуется.)
+4. **В серверный `.env`** (права 600, значения — из шага 3):
+   `MAIL_SMTP_USERNAME` = идентификатор API-ключа, `MAIL_SMTP_PASSWORD` = секрет,
+   `MAIL_SMTP_HOST=postbox.cloud.yandex.net`, `MAIL_SMTP_PORT=587`,
+   `MAIL_SMTP_TLS=starttls`, `MAIL_FROM` — адрес на подтверждённом домене
+   (`no-reply@trillix.ru`). Передеплой (`remote-update.sh` или `up -d` с пересозданием
+   api), чтобы контейнер перечитал env.
+
+### Проверка
+
+Отправить письмо на адрес [mail-tester.com](https://www.mail-tester.com) (напр.
+запросить сброс пароля на выданный им ящик) и открыть отчёт — **цель ≥ 9/10**. Низкий
+балл почти всегда = недоехавший DKIM/DMARC (шаг 2): проверить, что адрес получил
+статус `Success` в консоли Postbox.
 
 ## Бэкапы (фаза 10, шаг 1)
 

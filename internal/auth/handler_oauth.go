@@ -204,7 +204,7 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 
 	h.expireCookie(w, oauthPendingCookie, true)
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusOK, userResponse{ID: user.ID.String(), Email: user.Email})
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
 }
 
 // redirectToApp уводит браузер на экран кабинета. Путь — всегда наш литерал,

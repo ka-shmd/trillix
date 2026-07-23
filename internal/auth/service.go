@@ -7,7 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/mail"
+	netmail "net/mail"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -33,6 +35,15 @@ const (
 	// DefaultSessionTTL — время жизни сессии (и cookie). Пока константа; станет
 	// конфигом при появлении .env.prod-local (фаза 7).
 	DefaultSessionTTL = 30 * 24 * time.Hour
+
+	// passwordResetTTL — время жизни ссылки сброса пароля. Короткое: ссылка даёт
+	// смену пароля, дольше жить ей незачем.
+	passwordResetTTL = 30 * time.Minute
+	// resetTokenBytes — энтропия сырого токена сброса (256 бит, как у сессии).
+	resetTokenBytes = 32
+	// emailVerificationTTL — окно жизни ссылки подтверждения email. Длиннее
+	// сброса: подтверждение не срочно, письмо могут открыть не сразу.
+	emailVerificationTTL = 24 * time.Hour
 )
 
 // Store — интерфейс доступа к данным auth, объявленный на стороне потребителя
@@ -48,10 +59,27 @@ type Store interface {
 	CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	GetSessionUser(ctx context.Context, db postgres.DBTX, tokenHash []byte) (User, error)
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
+	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
+	SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error
+	CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
+	ConsumePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)
+	DeleteExpiredPasswordResetTokens(ctx context.Context, db postgres.DBTX) (int64, error)
+	CreateEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
+	ConsumeEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)
+	MarkEmailVerified(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgres.DBTX) (int64, error)
 }
 
 var _ Store = Repo{}
+
+// mailEnqueuer — узкая зависимость от почтового модуля: положить письмо в outbox
+// (объявлена на стороне потребителя; реализация — *mail.Service). Принимает
+// исполнителя, чтобы письмо писалось в той же транзакции, что и токен сброса
+// (transactional outbox).
+type mailEnqueuer interface {
+	EnqueueEmail(ctx context.Context, db postgres.DBTX, msg mail.EmailMessage) error
+}
 
 // Transactor открывает транзакцию (без знания о конкретном пуле). Реализация —
 // postgres.TxRunner; в тестах — фейк, выполняющий fn без реальной БД.
@@ -64,15 +92,20 @@ type Service struct {
 	db         postgres.DBTX // пул: для нетранзакционных операций (чтение, сессии)
 	tx         Transactor    // для атомарных многошаговых операций (регистрация)
 	repo       Store
+	mail       mailEnqueuer
 	sessionTTL time.Duration
+	// appBaseURL — origin кабинета, из которого строится ссылка сброса в письме
+	// (${appBaseURL}/reset-password?token=…). Совпадает с cfg.AppOrigin.
+	appBaseURL string
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store, sessionTTL time.Duration) *Service {
-	return &Service{db: db, tx: tx, repo: repo, sessionTTL: sessionTTL}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, mailer mailEnqueuer, sessionTTL time.Duration, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, repo: repo, mail: mailer, sessionTTL: sessionTTL, appBaseURL: appBaseURL}
 }
 
 // Register создаёт пользователя, его личный воркспейс и членство одной
-// транзакцией (инвариант ARCHITECTURE §3.3), затем открывает сессию. Возвращает
+// транзакцией (инвариант ARCHITECTURE §3.3), в ней же ставит в очередь письмо
+// подтверждения email (transactional outbox), затем открывает сессию. Возвращает
 // пользователя и сырой токен сессии (в БД лёг только его SHA-256).
 func (s *Service) Register(ctx context.Context, email, password string) (User, string, error) {
 	email = normalizeEmail(email)
@@ -101,7 +134,10 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName); e != nil {
 			return e
 		}
-		return s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner)
+		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
+			return e
+		}
+		return s.enqueueVerificationEmail(ctx, tx, user)
 	})
 	if err != nil {
 		return User{}, "", err
@@ -198,6 +234,158 @@ func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// RequestPasswordReset выдаёт ссылку сброса на email, если такой аккаунт есть.
+// Существование аккаунта наружу не раскрывается по ТЕЛУ и КОДУ ответа: нет
+// пользователя → тихо выходим, хендлер отвечает тем же 204.
+//
+// По времени неотличимость неполная (TD-35): главный сток — синхронная отправка
+// письма только существующему адресу — устранён (письмо уходит асинхронно через
+// outbox), но остаточная разница есть: для существующего адреса синхронно
+// выполняются генерация токена и две вставки в транзакции, для несуществующего —
+// один SELECT. Разница порядка долей мс, дополнительно размазана rate-limit'ом по
+// email и по IP; замер и решение (эквалайзер времени либо принять) — в TD-35.
+//
+// provider-only аккаунт (password_hash IS NULL) письмо тоже получает: это и есть
+// починка TD-34 — владелец адреса задаёт пароль и делает аккаунт достижимым, не
+// теряя вход через провайдера.
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	email = normalizeEmail(email)
+
+	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("request password reset: %w", err)
+	}
+
+	rawToken, err := newToken()
+	if err != nil {
+		return err
+	}
+	link := s.appBaseURL + "/reset-password?token=" + url.QueryEscape(rawToken)
+
+	// Токен и письмо — одной транзакцией (transactional outbox): либо и ссылка
+	// существует, и письмо поставлено в очередь, либо ничего.
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if e := s.repo.CreatePasswordResetToken(ctx, tx, hashToken(rawToken), user.ID, time.Now().Add(passwordResetTTL)); e != nil {
+			return e
+		}
+		return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+			To:       user.Email,
+			Template: mail.TemplatePasswordReset,
+			Data:     map[string]any{"link": link},
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("request password reset: %w", err)
+	}
+	return nil
+}
+
+// ResetPassword по одноразовому токену ставит новый пароль и рвёт все сессии
+// пользователя. Невалидный/использованный/истёкший токен → ErrValidation (единый
+// текст, без различения причин). Одноразовость гарантируется атомарным
+// потреблением токена (ConsumePasswordResetToken): повтор получает ErrNoRows.
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		userID, e := s.repo.ConsumePasswordResetToken(ctx, tx, hashToken(rawToken))
+		if e != nil {
+			if errors.Is(e, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: ссылка недействительна или устарела", domain.ErrValidation)
+			}
+			return e
+		}
+		if e := s.repo.SetUserPassword(ctx, tx, userID, hash); e != nil {
+			return e
+		}
+		return s.repo.DeleteSessionsByUser(ctx, tx, userID)
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// PurgeExpiredPasswordResetTokens удаляет истёкшие токены сброса; возвращает число
+// удалённых строк. Вызывается фоновой периодической задачей.
+func (s *Service) PurgeExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	n, err := s.repo.DeleteExpiredPasswordResetTokens(ctx, s.db)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired password reset tokens: %w", err)
+	}
+	return n, nil
+}
+
+// enqueueVerificationEmail генерирует одноразовый токен подтверждения и кладёт его
+// вместе с письмом-ссылкой в одну транзакцию (transactional outbox) — общий код
+// регистрации и повторной отправки. tx — исполнитель вызывающей транзакции.
+func (s *Service) enqueueVerificationEmail(ctx context.Context, tx postgres.DBTX, user User) error {
+	rawToken, err := newToken()
+	if err != nil {
+		return err
+	}
+	link := s.appBaseURL + "/verify-email?token=" + url.QueryEscape(rawToken)
+	if err := s.repo.CreateEmailVerificationToken(ctx, tx, hashToken(rawToken), user.ID, time.Now().Add(emailVerificationTTL)); err != nil {
+		return err
+	}
+	return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+		To:       user.Email,
+		Template: mail.TemplateEmailVerification,
+		Data:     map[string]any{"link": link},
+	})
+}
+
+// VerifyEmail по одноразовому токену помечает email пользователя подтверждённым.
+// Невалидный/использованный/истёкший токен → ErrValidation (единый текст).
+// Одноразовость — атомарным потреблением токена (повтор получает ErrNoRows).
+func (s *Service) VerifyEmail(ctx context.Context, rawToken string) error {
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		userID, e := s.repo.ConsumeEmailVerificationToken(ctx, tx, hashToken(rawToken))
+		if e != nil {
+			if errors.Is(e, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: ссылка недействительна или устарела", domain.ErrValidation)
+			}
+			return e
+		}
+		return s.repo.MarkEmailVerified(ctx, tx, userID)
+	})
+}
+
+// ResendVerification повторно отправляет письмо подтверждения текущему
+// пользователю. Уже подтверждённому — тихий no-op (без письма и без ошибки), чтобы
+// кнопка «отправить ещё раз» не плодила писем после подтверждения.
+func (s *Service) ResendVerification(ctx context.Context, user User) error {
+	if user.EmailVerifiedAt != nil {
+		return nil
+	}
+	err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		return s.enqueueVerificationEmail(ctx, tx, user)
+	})
+	if err != nil {
+		return fmt.Errorf("resend verification: %w", err)
+	}
+	return nil
+}
+
+// PurgeExpiredEmailVerificationTokens удаляет истёкшие токены подтверждения;
+// возвращает число удалённых строк. Вызывается фоновой периодической задачей.
+func (s *Service) PurgeExpiredEmailVerificationTokens(ctx context.Context) (int64, error) {
+	n, err := s.repo.DeleteExpiredEmailVerificationTokens(ctx, s.db)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired email verification tokens: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Service) createSession(ctx context.Context, userID uuid.UUID) (string, error) {
 	token, err := newSessionToken()
 	if err != nil {
@@ -214,9 +402,13 @@ func normalizeEmail(email string) string {
 }
 
 func validateCredentials(email, password string) error {
-	if _, err := mail.ParseAddress(email); err != nil {
+	if _, err := netmail.ParseAddress(email); err != nil {
 		return fmt.Errorf("%w: некорректный email", domain.ErrValidation)
 	}
+	return validatePassword(password)
+}
+
+func validatePassword(password string) error {
 	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
 		return fmt.Errorf("%w: длина пароля должна быть %d–%d символов", domain.ErrValidation, minPasswordLen, maxPasswordLen)
 	}
@@ -228,6 +420,16 @@ func newSessionToken() (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("auth: read session token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// newToken — 256-битный случайный токен в base64url (в БД лёг только его SHA-256,
+// как у сессии). Канало-независим: сброс пароля и подтверждение email.
+func newToken() (string, error) {
+	b := make([]byte, resetTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("auth: read token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }

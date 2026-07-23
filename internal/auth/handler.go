@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
@@ -30,6 +31,10 @@ type authService interface {
 	Login(ctx context.Context, email, password string) (User, string, error)
 	Logout(ctx context.Context, token string) error
 	UserByToken(ctx context.Context, token string) (User, error)
+	RequestPasswordReset(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token, password string) error
+	VerifyEmail(ctx context.Context, token string) error
+	ResendVerification(ctx context.Context, user User) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -55,7 +60,19 @@ type Handler struct {
 	// registerLimiter — отдельное ведро на POST /auth/register (argon2id — 64 МиБ на
 	// вызов; отдельное от логина, чтобы брутфорс логина не съедал бюджет регистрации).
 	registerLimiter RateLimiter
-	cookieSecure    bool
+	// Сброс пароля (слайс B). forgotIPLimiter/forgotEmailLimiter — два ведра на
+	// /forgot-password: по IP (флуд с одного адреса) и по email (нельзя завалить
+	// один почтовый ящик письмами, перебирая с разных IP). resetLimiter — по IP
+	// на /reset-password (перебор токенов; заодно щит для argon2 на каждом вызове).
+	forgotIPLimiter    RateLimiter
+	forgotEmailLimiter RateLimiter
+	resetLimiter       RateLimiter
+	// Подтверждение email (слайс C). verifyLimiter — по IP на /verify-email (перебор
+	// токенов). resendLimiter — по пользователю на /resend-verification (кнопка в
+	// баннере не должна слать письма пачками).
+	verifyLimiter RateLimiter
+	resendLimiter RateLimiter
+	cookieSecure  bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
@@ -76,6 +93,24 @@ func NewHandler(svc authService, loginLimiter, registerLimiter RateLimiter, cook
 	return &Handler{svc: svc, loginLimiter: loginLimiter, registerLimiter: registerLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
 }
 
+// WithPasswordReset подключает эндпоинты сброса пароля с их вёдрами лимита.
+// Отдельный метод, а не ещё три аргумента в NewHandler: ведра параметризуют один
+// узел, а не всю сборку хендлера.
+func (h *Handler) WithPasswordReset(forgotIP, forgotEmail, reset RateLimiter) *Handler {
+	h.forgotIPLimiter = forgotIP
+	h.forgotEmailLimiter = forgotEmail
+	h.resetLimiter = reset
+	return h
+}
+
+// WithEmailVerification подключает эндпоинты подтверждения email с их вёдрами
+// лимита (по образцу WithPasswordReset).
+func (h *Handler) WithEmailVerification(verify, resend RateLimiter) *Handler {
+	h.verifyLimiter = verify
+	h.resendLimiter = resend
+	return h
+}
+
 // WithOAuth включает вход через провайдеров. Отдельный конструктор, а не восемь
 // аргументов в NewHandler: без ключей в окружении провайдеров нет вовсе, и
 // парольный контур не должен об этом знать.
@@ -93,6 +128,16 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/login", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.login)))
 	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
+	// Сброс пароля — публичные (сессии ещё/уже нет): CSRF не нужен (как login/
+	// register), аутентификация самим одноразовым токеном. Защита — rate-limit.
+	mux.Handle("POST /api/v1/auth/forgot-password", h.rateLimit(h.forgotIPLimiter, "слишком много запросов сброса")(http.HandlerFunc(h.forgotPassword)))
+	mux.Handle("POST /api/v1/auth/reset-password", h.rateLimit(h.resetLimiter, "слишком много попыток сброса")(http.HandlerFunc(h.resetPassword)))
+	// Подтверждение email (слайс C). verify-email — публичный (ссылку открывают и
+	// без сессии): аутентификация одноразовым токеном, CSRF не нужен, щит —
+	// rate-limit по IP. resend-verification — за сессией и CSRF (действие текущего
+	// пользователя), лимит по пользователю проверяется внутри хендлера.
+	mux.Handle("POST /api/v1/auth/verify-email", h.rateLimit(h.verifyLimiter, "слишком много попыток подтверждения")(http.HandlerFunc(h.verifyEmail)))
+	mux.Handle("POST /api/v1/auth/resend-verification", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.resendVerification))))
 }
 
 type credentialsRequest struct {
@@ -103,6 +148,13 @@ type credentialsRequest struct {
 type userResponse struct {
 	ID    string `json:"id"`
 	Email string `json:"email"`
+	// EmailVerified — подтверждён ли адрес (слайс C). Кабинет по нему рисует баннер
+	// «подтвердите email». Выводится из nullable users.email_verified_at.
+	EmailVerified bool `json:"emailVerified"`
+}
+
+func toUserResponse(u User) userResponse {
+	return userResponse{ID: u.ID.String(), Email: u.Email, EmailVerified: u.EmailVerifiedAt != nil}
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +168,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusCreated, userResponse{ID: user.ID.String(), Email: user.Email})
+	httpserver.WriteJSON(w, r, http.StatusCreated, toUserResponse(user))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +182,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusOK, userResponse{ID: user.ID.String(), Email: user.Email})
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +202,101 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, userResponse{ID: user.ID.String(), Email: user.Email})
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
+}
+
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req forgotPasswordRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	// Второе ведро — по email (первое, по IP, сработало в middleware): нельзя
+	// завалить один ящик письмами, перебирая с разных адресов. Ключ нормализован
+	// так же, как в сервисе, чтобы «A@x» и «a@x » считались одним адресатом.
+	emailKey := strings.ToLower(strings.TrimSpace(req.Email))
+	if !h.forgotEmailLimiter.Allow(emailKey) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много запросов на этот адрес", domain.ErrRateLimited))
+		return
+	}
+	// Ответ одинаков, есть аккаунт или нет (существование не раскрываем): «нет
+	// пользователя» сервис возвращает как nil. Ненулевая ошибка — инфраструктурная
+	// (БД недоступна); молчать о ней хуже, чем ответить 500.
+	if err := h.svc.RequestPasswordReset(r.Context(), req.Email); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type resetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req resetPasswordRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	if err := h.svc.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Автологина нет: сессии после сброса мертвы, отправляем пользователя на вход.
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type verifyEmailRequest struct {
+	Token string `json:"token"`
+}
+
+func (h *Handler) verifyEmail(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req verifyEmailRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	if err := h.svc.VerifyEmail(r.Context(), req.Token); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	// Лимит по пользователю (не по IP): ключ есть только после RequireAuth, а
+	// защищаем мы почтовый ящик пользователя от шквала писем по кнопке.
+	if !h.resendLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много запросов подтверждения", domain.ErrRateLimited))
+		return
+	}
+	// Уже подтверждённому сервис вернёт nil без письма — ответ одинаков (204),
+	// клиенту незачем знать, ушло письмо или нет.
+	if err := h.svc.ResendVerification(r.Context(), user); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // RequireAuth пропускает запрос только с живой сессией, кладя пользователя в

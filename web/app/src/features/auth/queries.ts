@@ -1,6 +1,17 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { authKeys, oauthKeys } from './keys'
-import { getMe, getProviders, linkProvider, login, logout, register } from './api'
+import {
+  forgotPassword,
+  getMe,
+  getProviders,
+  linkProvider,
+  login,
+  logout,
+  register,
+  resendVerification,
+  resetPassword,
+  verifyEmail,
+} from './api'
 import type { User } from '../../entities/user'
 
 // Профиль текущего пользователя — серверный стейт, живёт только в Query.
@@ -46,6 +57,32 @@ export const providersQueryOptions = queryOptions({
   retry: false,
   staleTime: 30 * 60 * 1000,
 })
+
+// Сброс пароля — стейта в кэше не трогает: пользователь не залогинен, а reset
+// на бэке рвёт все сессии. Экраны сами показывают исход по состоянию мутации.
+export function useForgotPassword() {
+  return useMutation({ mutationFn: forgotPassword })
+}
+
+export function useResetPassword() {
+  return useMutation({ mutationFn: resetPassword })
+}
+
+// Подтверждение email по токену из письма. После успеха инвалидируем me: если
+// пользователь залогинен, баннер «подтвердите почту» должен пропасть сразу.
+export function useVerifyEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: verifyEmail,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Повторная отправка письма подтверждения (кнопка в баннере). Кэш не трогает —
+// подтверждение придёт переходом по ссылке из письма, не этим запросом.
+export function useResendVerification() {
+  return useMutation({ mutationFn: resendVerification })
+}
 
 export function useLinkProvider() {
   const qc = useQueryClient()

@@ -57,7 +57,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -80,7 +80,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -176,6 +176,28 @@ SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormNotifyOnSubmission :one
+-- Тумблер уведомлений владельцу о новом ответе (слайс D) — живая колонка. В пределах
+-- воркспейса (анти-IDOR); 0 строк (чужая/нет формы) → service трактует как 404.
+-- updated_at двигаем вручную. RETURNING — стандартный набор карточки: хендлер отдаёт
+-- базовый formResponse, а свежее значение тумблера фронт берёт рефетчем детали.
+UPDATE forms
+SET notify_on_submission = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: GetSubmissionOwner :one
+-- Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
+-- (слайс D). Джойн forms → workspace_members(owner) → users. Название берём
+-- внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
+-- Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
+-- проверяется — это не доступ пользователя, а адресат уведомления.
+SELECT u.email, coalesce(f.name, f.title) AS title
+FROM forms f
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id
+WHERE f.id = $1;
+
 -- name: ListFormNames :many
 -- Имена и заголовки всех форм воркспейса — для нумерации копий: сервис вычисляет
 -- отображаемое имя (name ?? title) каждой формы и подбирает следующий «(копия N)»
@@ -211,7 +233,7 @@ WHERE id = $1 AND workspace_id = $2;
 -- лишний скан submissions на каждом открытии не нужен. published_version_id —
 -- источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
 SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

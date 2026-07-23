@@ -52,6 +52,13 @@ func TestLoginWithIdentity_NewUser(t *testing.T) {
 	if !store.createdUser || !store.createdWorkspace || !store.createdMember || !store.createdIdentity {
 		t.Fatalf("не все шаги регистрации выполнены: %+v", store)
 	}
+	// Вход через провайдера считается подтверждением email (баннер не показываем).
+	if !store.markVerifiedCalled || store.markVerifiedUser != user.ID {
+		t.Errorf("OAuth-аккаунт не помечен подтверждённым (called=%v user=%v)", store.markVerifiedCalled, store.markVerifiedUser)
+	}
+	if user.EmailVerifiedAt == nil {
+		t.Error("в возвращённой структуре не проставлен email_verified_at")
+	}
 }
 
 // Главный тест фазы: совпадение email не отдаёт чужой аккаунт. Провайдеры не

@@ -45,7 +45,9 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, auth.DefaultSessionTTL)
+	// Сидер только регистрирует демо-пользователя — сброс пароля не вызывает,
+	// поэтому почтовый сервис и базовый URL кабинета ему не нужны (nil / "").
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, nil, auth.DefaultSessionTTL, "")
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 
 	// Создать демо-пользователя или найти уже существующего.
