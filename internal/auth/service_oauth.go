@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -181,10 +182,23 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, p
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
 			return e
 		}
-		return s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID)
+		if e := s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID); e != nil {
+			return e
+		}
+		// Вход через провайдера считаем подтверждением email: чтобы завести аккаунт
+		// у провайдера, надо владеть его почтой, а аутентификация доказывает контроль
+		// над этим аккаунтом. Флаг гасит баннер «подтвердите почту» — он остаётся
+		// только парольным регистрациям, где адрес вводят руками (и можно опечататься).
+		// Это не противоречит запрету автосвязывания по email (ADR §10): там речь про
+		// слияние с чужим паролным аккаунтом, здесь — про собственный адрес.
+		return s.repo.MarkEmailVerified(ctx, tx, userID)
 	})
 	if err != nil {
 		return User{}, err
 	}
+	// Отражаем отметку в возвращаемой структуре (в БД её проставил MarkEmailVerified
+	// через now()): первый же ответ /auth/* после входа несёт emailVerified=true.
+	verifiedAt := time.Now()
+	user.EmailVerifiedAt = &verifiedAt
 	return user, nil
 }

@@ -35,7 +35,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `email` | `TEXT` | `NOT NULL`, `UNIQUE`, `CHECK (email = lower(email))` |
 | `password_hash` | `TEXT` | argon2id (не логируется); `NULL` с `0009` — аккаунт заведён через провайдера, войти паролем нельзя |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
-| `email_verified_at` | `TIMESTAMPTZ` | nullable (`0012`); `NULL` = email не подтверждён (кабинет рисует баннер). Мягкое подтверждение: аккаунт работает и без него |
+| `email_verified_at` | `TIMESTAMPTZ` | nullable (`0012`); `NULL` = email не подтверждён (кабинет рисует баннер). Мягкое подтверждение: аккаунт работает и без него. Аккаунты без пароля (вход через провайдера) считаются подтверждёнными — проставляется при OAuth-регистрации и разово бэкфиллом в `0012` |
 
 ## `user_identities` (0009)
 
