@@ -172,13 +172,24 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	// Исходящая почта (почтовая фаза): транспорт выбирается по смысловому флагу
-	// MAIL_TRANSPORT, а не по имени окружения. Пока единственный — log (письмо
-	// «доставляется» записью в лог); провайдерский транспорт добавит ветку здесь.
-	// Строится раньше authSvc: сброс пароля кладёт письмо через этот сервис.
+	// MAIL_TRANSPORT, а не по имени окружения. log — письмо «доставляется» записью в
+	// лог (dev); smtp — один SMTP-клиент на прод (Postbox) и prod-local (Mailpit),
+	// различие лишь в MAIL_SMTP*. Строится раньше authSvc: сброс пароля кладёт письмо
+	// через этот сервис.
 	var mailer mail.Mailer
 	switch cfg.MailTransport {
 	case config.MailTransportLog:
 		mailer = mail.LogMailer{Log: log, From: cfg.MailFrom}
+	case config.MailTransportSMTP:
+		mailer = mail.SMTPMailer{
+			Host:     cfg.MailSMTPHost,
+			Port:     cfg.MailSMTPPort,
+			Username: cfg.MailSMTPUsername,
+			Password: cfg.MailSMTPPassword,
+			TLS:      smtpTLSMode(cfg.MailSMTPTLS),
+			From:     cfg.MailFrom,
+			Log:      log,
+		}
 	default:
 		// config.Load уже отвалидировал список — сюда не дойдём; страховка на будущее.
 		return fmt.Errorf("unsupported MAIL_TRANSPORT %q", cfg.MailTransport)
@@ -355,4 +366,18 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	tasks.Wait()
 	log.Info("http server stopped")
 	return nil
+}
+
+// smtpTLSMode переводит валидированный конфиг MAIL_SMTP_TLS в режим транспорта.
+// config уже отверг чужие значения при старте, поэтому default недостижим —
+// оставлен страховкой (пусть безопасный: без шифрования наружу не пойдём молча).
+func smtpTLSMode(v string) mail.TLSMode {
+	switch v {
+	case config.MailSMTPTLSStartTLS:
+		return mail.TLSStartTLS
+	case config.MailSMTPTLSImplicit:
+		return mail.TLSImplicit
+	default:
+		return mail.TLSNone
+	}
 }
