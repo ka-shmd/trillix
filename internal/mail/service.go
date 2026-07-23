@@ -84,8 +84,9 @@ func (s *Service) EnqueueEmail(ctx context.Context, db postgres.DBTX, msg EmailM
 // тем же key ещё не отправлено, вызовы сворачиваются в одну строку с растущим
 // data.count, а не плодят письма (троттлинг «N событий — одно письмо»). delay —
 // окно троттлинга: next_attempt_at = now+delay от ПЕРВОГО события, на склейке не
-// сдвигается. Пишется в транзакции продюсера (как EnqueueEmail). msg.Data должна
-// нести стартовый count (обычно 1) — SQL инкрементит именно его.
+// сдвигается. db — исполнитель продюсера (транзакция или пул): уведомление о новом
+// ответе ставится best-effort на пуле после приёма. msg.Data должна нести стартовый
+// count (обычно 1) — SQL инкрементит именно его.
 func (s *Service) EnqueueCoalesced(ctx context.Context, db postgres.DBTX, key string, msg EmailMessage, delay time.Duration) error {
 	if msg.To == "" {
 		return fmt.Errorf("enqueue coalesced email: empty recipient")

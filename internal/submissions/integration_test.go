@@ -202,6 +202,38 @@ func TestSubmit_NotifyThrottling_CoalescesIntoOneDigest(t *testing.T) {
 	}
 }
 
+// Отклонённый по лимиту ответ не шлёт уведомления: у формы с лимитом 1 первый ответ
+// принят (дайджест count=1), второй отклонён (410) — счётчик не растёт, второй строки нет.
+func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET response_limit = 1 WHERE slug = $1`, slug); err != nil {
+		t.Fatalf("set limit: %v", err)
+	}
+
+	first := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"A"}}`
+	if resp := postSubmission(t, srv, slug, first); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("первый ответ: статус %d, ожидалось 201", resp.StatusCode)
+	}
+	second := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"B"}}`
+	if resp := postSubmission(t, srv, slug, second); resp.StatusCode != http.StatusGone {
+		t.Fatalf("второй ответ (сверх лимита): статус %d, ожидалось 410", resp.StatusCode)
+	}
+
+	var rows, count int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
+		 FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&rows, &count)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if rows != 1 || count != 1 {
+		t.Fatalf("дайджестов=%d count=%d, ожидалось 1 и 1 (отклонённый ответ не уведомляет)", rows, count)
+	}
+}
+
 // Выключенный тумблер: ответ принимается, но письма в outbox нет.
 func TestSubmit_NotifyOff_NoOutboxRow(t *testing.T) {
 	resetDB(t)
