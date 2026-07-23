@@ -40,6 +40,14 @@ x-app-env: &app-env
   # Исходящая почта (почтовая фаза). Обязательные: config.Load() без них падает.
   MAIL_TRANSPORT: ${MAIL_TRANSPORT}
   MAIL_FROM: ${MAIL_FROM}
+  # Параметры SMTP-транспорта (слайс E). ОПЦИОНАЛЬНЫЕ на уровне якоря (`:-`): нужны
+  # только при MAIL_TRANSPORT=smtp — тогда их требует config.Load(). prod-local → Mailpit,
+  # прод → Postbox. Пароль — секрет, живёт только в env-файле контура (инвариант 7).
+  MAIL_SMTP_HOST: ${MAIL_SMTP_HOST:-}
+  MAIL_SMTP_PORT: ${MAIL_SMTP_PORT:-}
+  MAIL_SMTP_TLS: ${MAIL_SMTP_TLS:-}
+  MAIL_SMTP_USERNAME: ${MAIL_SMTP_USERNAME:-}
+  MAIL_SMTP_PASSWORD: ${MAIL_SMTP_PASSWORD:-}
   # Вход через Яндекс ID (фаза 11). ОПЦИОНАЛЬНЫЕ, поэтому с `:-`: контур без
   # своего приложения провайдера поднимается без них, кнопка просто не рисуется.
   # Список выше — поимённый (см. комментарий к якорю), поэтому переменная, не
