@@ -22,6 +22,24 @@ func TestRenderPasswordReset(t *testing.T) {
 	}
 }
 
+func TestRenderSubmissionDigest(t *testing.T) {
+	subject, body, err := Render(EmailMessage{
+		Template: TemplateSubmissionDigest,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://app/forms/s/responses", "count": 5},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if subject == "" {
+		t.Error("пустая тема письма")
+	}
+	for _, want := range []string{"Анкета", "5", "https://app/forms/s/responses"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("тело дайджеста не содержит %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestRenderUnknownTemplate(t *testing.T) {
 	_, _, err := Render(EmailMessage{Template: "no-such-template"})
 	if err == nil {

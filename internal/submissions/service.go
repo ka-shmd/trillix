@@ -13,6 +13,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -27,6 +28,12 @@ const (
 	// forms по значениям, но свой — модули не делят константы пагинации.
 	DefaultPageLimit = 50
 	MaxPageLimit     = 100
+
+	// notifyDigestWindow — окно троттлинга уведомлений владельцу (слайс D): все
+	// ответы, пришедшие за это окно после первого, склеиваются в одно письмо «N
+	// ответов». Ограничивает поток до ≤1 письма на форму за окно даже у вирусной
+	// формы; цена — одиночный ответ владелец увидит с задержкой в это окно.
+	notifyDigestWindow = 5 * time.Minute
 )
 
 // Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (приём
@@ -41,6 +48,17 @@ type Forms interface {
 	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
 	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+	// SubmissionOwner — адресат уведомления о новом ответе (email владельца + имя
+	// формы). Форма уже резолвнута по slug, членство не проверяется (это адресат, а
+	// не доступ пользователя). Слайс D.
+	SubmissionOwner(ctx context.Context, formID uuid.UUID) (forms.Owner, error)
+}
+
+// Mailer — коллаборатор из модуля mail: ставит письмо-уведомление в outbox с
+// коалесингом (троттлинг-дайджест «N ответов»). Пишется в транзакции приёма ответа
+// (transactional outbox). Реализация — *mail.Service. Слайс D.
+type Mailer interface {
+	EnqueueCoalesced(ctx context.Context, db postgres.DBTX, key string, msg mail.EmailMessage, delay time.Duration) error
 }
 
 // Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
@@ -108,15 +126,19 @@ type Meta struct {
 // submission привязывается к её id — правки схемы после отправки не искажают данные.
 type Service struct {
 	db     postgres.DBTX
-	tx     Transactor // для жёсткого капа лимита ответов (шаг 4)
+	tx     Transactor // для жёсткого капа лимита ответов (шаг 4) и enqueue уведомления
 	forms  Forms
 	visits Visits
+	mail   Mailer
 	repo   Store
-	now    func() time.Time // подменяется в тестах (проверка даты закрытия)
+	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
+	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
+	appBaseURL string
+	now        func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, repo Store) *Service {
-	return &Service{db: db, tx: tx, forms: forms, visits: visits, repo: repo, now: time.Now}
+func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, repo Store, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, repo: repo, appBaseURL: appBaseURL, now: time.Now}
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -171,10 +193,35 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 
-	// Без лимита — прежний путь, без блокировки. n == 0 → конфликт по PK (тот же id
-	// уже принят): идемпотентный успех.
+	// Уведомление владельцу (слайс D): гейт читаем из уже загруженной формы, адресата
+	// (email + имя) достаём заранее одним чтением — стабильные данные, в транзакцию их
+	// тащить незачем; в транзакции остаётся только enqueue (атомарно с вставкой).
+	notify := pf.NotifyOnSubmission
+	var owner forms.Owner
+	if notify {
+		if owner, err = s.forms.SubmissionOwner(ctx, pf.FormID); err != nil {
+			return err
+		}
+	}
+
+	// Без лимита. n == 0 → конфликт по PK (тот же id уже принят): идемпотентный успех.
+	// При выключенном уведомлении — прежний путь без транзакции; при включённом
+	// вставка и enqueue письма идут одной транзакцией (transactional outbox).
 	if pf.ResponseLimit == nil {
-		if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
+		if !notify {
+			if _, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON); err != nil {
+				return err
+			}
+		} else if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+			n, err := s.repo.InsertSubmission(ctx, tx, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return nil // идемпотентный ретрай — письмо не шлём повторно
+			}
+			return s.enqueueOwnerNotify(ctx, tx, pf.FormID, slug, owner)
+		}); err != nil {
 			return err
 		}
 		s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
@@ -205,12 +252,29 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		if count > limit {
 			return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 		}
+		if notify {
+			return s.enqueueOwnerNotify(ctx, tx, pf.FormID, slug, owner)
+		}
 		return nil
 	}); err != nil {
 		return err
 	}
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 	return nil
+}
+
+// enqueueOwnerNotify ставит владельцу письмо-дайджест о новом ответе в очередь —
+// коалесцирующим enqueue в транзакции приёма (transactional outbox). Ключ коалесинга
+// = форма: ответы, пришедшие за окно, склеиваются в одно письмо «N ответов» с
+// растущим счётчиком (шквал ответов не даёт шквала писем). Ссылка ведёт в таблицу
+// ответов кабинета. Слайс D.
+func (s *Service) enqueueOwnerNotify(ctx context.Context, exec postgres.DBTX, formID uuid.UUID, slug string, owner forms.Owner) error {
+	link := s.appBaseURL + "/forms/" + slug + "/responses"
+	return s.mail.EnqueueCoalesced(ctx, exec, "submission:"+formID.String(), mail.EmailMessage{
+		To:       owner.Email,
+		Template: mail.TemplateSubmissionDigest,
+		Data:     map[string]any{"form_title": owner.Title, "link": link, "count": 1},
+	}, notifyDigestWindow)
 }
 
 // markVisitSubmitted отмечает конверсию визита. Вызывается ПОСЛЕ успешного приёма и

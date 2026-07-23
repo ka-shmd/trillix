@@ -58,6 +58,11 @@ type fakeStore struct {
 	// Захват настроек закрытия последнего UpdateCloseSettings.
 	lastCloseSettings domain.CloseSettings
 
+	// Тумблер уведомлений (слайс D) и адресат уведомления.
+	lastNotifyEnabled bool
+	owner             Owner
+	ownerErr          error
+
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS     uuid.UUID
 	lastCreateTitle  string
@@ -109,6 +114,16 @@ func (f *fakeStore) UpdateFormCloseSettings(_ context.Context, _ postgres.DBTX, 
 	f.updated = true
 	f.lastCloseSettings = s
 	return Form{ID: id, WorkspaceID: workspaceID, CloseAt: s.CloseAt, ResponseLimit: s.ResponseLimit}, nil
+}
+
+func (f *fakeStore) UpdateFormNotifyOnSubmission(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	f.updated = true
+	f.lastNotifyEnabled = enabled
+	return Form{ID: id, WorkspaceID: workspaceID, NotifyOnSubmission: enabled}, nil
+}
+
+func (f *fakeStore) GetSubmissionOwner(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (Owner, error) {
+	return f.owner, f.ownerErr
 }
 
 func (f *fakeStore) ListFormNames(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]FormName, error) {

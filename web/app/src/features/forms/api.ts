@@ -72,6 +72,16 @@ export function updateCloseSettings(id: string, settings: CloseSettingsInput): P
   })
 }
 
+// Тумблер уведомлений владельцу о новом ответе (слайс D). Как closeSettings: ответ —
+// карточка формы, свежее значение фронт берёт перечитыванием детали.
+export function updateNotifyOnSubmission(id: string, enabled: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { notifyOnSubmission: enabled },
+    schema: formSchema,
+  })
+}
+
 // Дубликация: копия формы «{название} (копия)» с тем же черновиком, всегда draft.
 export function duplicateForm(id: string): Promise<Form> {
   return apiRequest(`/forms/${id}/duplicate`, { method: 'POST', schema: formSchema })

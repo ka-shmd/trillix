@@ -31,6 +31,7 @@ type Form struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	NotifyOnSubmission bool
 }
 
 type FormVersion struct {
@@ -61,6 +62,7 @@ type Outbox struct {
 	LastError     pgtype.Text
 	SentAt        pgtype.Timestamptz
 	CreatedAt     pgtype.Timestamptz
+	CoalesceKey   pgtype.Text
 }
 
 type PasswordResetToken struct {

@@ -64,6 +64,8 @@ export const formDetailSchema = formSchema.extend({
   closeAt: z.string().nullable(),
   responseLimit: z.number().int().nullable(),
   closedMessage: z.string().nullable(),
+  // Слать ли владельцу письмо о новом ответе (слайс D). Новые формы — true.
+  notifyOnSubmission: z.boolean(),
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>

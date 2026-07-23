@@ -437,6 +437,41 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 	return result.RowsAffected(), nil
 }
 
+const enqueueCoalescedOutbox = `-- name: EnqueueCoalescedOutbox :exec
+INSERT INTO outbox (id, channel, payload, coalesce_key, next_attempt_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coalesce_key) WHERE sent_at IS NULL
+DO UPDATE SET payload = jsonb_set(
+    outbox.payload,
+    '{data,count}',
+    to_jsonb(COALESCE((outbox.payload #>> '{data,count}')::int, 0) + 1)
+)
+`
+
+type EnqueueCoalescedOutboxParams struct {
+	ID            uuid.UUID
+	Channel       string
+	Payload       []byte
+	CoalesceKey   pgtype.Text
+	NextAttemptAt pgtype.Timestamptz
+}
+
+// Коалесцирующая постановка (слайс D): пока письмо с этим coalesce_key не
+// отправлено, повторный вызов не плодит строку, а инкрементит payload.data.count
+// (столько событий склеилось в один дайджест). next_attempt_at задаёт окно
+// троттлинга — ставится при первой вставке и на инкременте НЕ сдвигается (окно
+// считается от первого события, иначе поток ответов бесконечно отодвигал бы отправку).
+func (q *Queries) EnqueueCoalescedOutbox(ctx context.Context, arg EnqueueCoalescedOutboxParams) error {
+	_, err := q.db.Exec(ctx, enqueueCoalescedOutbox,
+		arg.ID,
+		arg.Channel,
+		arg.Payload,
+		arg.CoalesceKey,
+		arg.NextAttemptAt,
+	)
+	return err
+}
+
 const enqueueOutbox = `-- name: EnqueueOutbox :exec
 
 INSERT INTO outbox (id, channel, payload)
@@ -474,7 +509,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -498,6 +533,7 @@ type GetFormRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	NotifyOnSubmission    bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -525,6 +561,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -543,7 +580,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -567,6 +604,7 @@ type GetFormBySlugRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	NotifyOnSubmission    bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -596,6 +634,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -630,7 +669,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -649,6 +688,7 @@ type GetPublicFormBySlugRow struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	NotifyOnSubmission bool
 	SubmissionCount    int64
 }
 
@@ -674,6 +714,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.NotifyOnSubmission,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -697,6 +738,31 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
 	)
+	return i, err
+}
+
+const getSubmissionOwner = `-- name: GetSubmissionOwner :one
+SELECT u.email, coalesce(f.name, f.title) AS title
+FROM forms f
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id
+WHERE f.id = $1
+`
+
+type GetSubmissionOwnerRow struct {
+	Email string
+	Title string
+}
+
+// Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
+// (слайс D). Джойн forms → workspace_members(owner) → users. Название берём
+// внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
+// Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
+// проверяется — это не доступ пользователя, а адресат уведомления.
+func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
+	var i GetSubmissionOwnerRow
+	err := row.Scan(&i.Email, &i.Title)
 	return i, err
 }
 
@@ -1562,6 +1628,52 @@ type UpdateFormNameRow struct {
 func (q *Queries) UpdateFormName(ctx context.Context, arg UpdateFormNameParams) (UpdateFormNameRow, error) {
 	row := q.db.QueryRow(ctx, updateFormName, arg.ID, arg.WorkspaceID, arg.Name)
 	var i UpdateFormNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormNotifyOnSubmission = `-- name: UpdateFormNotifyOnSubmission :one
+UPDATE forms
+SET notify_on_submission = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNotifyOnSubmissionParams struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	NotifyOnSubmission bool
+}
+
+type UpdateFormNotifyOnSubmissionRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер уведомлений владельцу о новом ответе (слайс D) — живая колонка. В пределах
+// воркспейса (анти-IDOR); 0 строк (чужая/нет формы) → service трактует как 404.
+// updated_at двигаем вручную. RETURNING — стандартный набор карточки: хендлер отдаёт
+// базовый formResponse, а свежее значение тумблера фронт берёт рефетчем детали.
+func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFormNotifyOnSubmissionParams) (UpdateFormNotifyOnSubmissionRow, error) {
+	row := q.db.QueryRow(ctx, updateFormNotifyOnSubmission, arg.ID, arg.WorkspaceID, arg.NotifyOnSubmission)
+	var i UpdateFormNotifyOnSubmissionRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

@@ -7,6 +7,21 @@
 INSERT INTO outbox (id, channel, payload)
 VALUES ($1, $2, $3);
 
+-- name: EnqueueCoalescedOutbox :exec
+-- Коалесцирующая постановка (слайс D): пока письмо с этим coalesce_key не
+-- отправлено, повторный вызов не плодит строку, а инкрементит payload.data.count
+-- (столько событий склеилось в один дайджест). next_attempt_at задаёт окно
+-- троттлинга — ставится при первой вставке и на инкременте НЕ сдвигается (окно
+-- считается от первого события, иначе поток ответов бесконечно отодвигал бы отправку).
+INSERT INTO outbox (id, channel, payload, coalesce_key, next_attempt_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coalesce_key) WHERE sent_at IS NULL
+DO UPDATE SET payload = jsonb_set(
+    outbox.payload,
+    '{data,count}',
+    to_jsonb(COALESCE((outbox.payload #>> '{data,count}')::int, 0) + 1)
+);
+
 -- name: ListPendingOutbox :many
 -- Готовые к отправке: не доставленные, чей next_attempt_at наступил. По
 -- next_attempt_at (старейшая задолженность первой), потолок пачки — $1. Один

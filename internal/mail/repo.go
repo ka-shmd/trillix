@@ -38,6 +38,22 @@ func (Repo) Enqueue(ctx context.Context, db postgres.DBTX, id uuid.UUID, channel
 	return nil
 }
 
+// EnqueueCoalesced пишет коалесцируемое намерение доставки: пока строка с тем же
+// coalesceKey не отправлена, вставка сворачивается в инкремент payload.data.count
+// (ON CONFLICT в запросе). db — исполнитель продюсера (его транзакция).
+func (Repo) EnqueueCoalesced(ctx context.Context, db postgres.DBTX, id uuid.UUID, channel, coalesceKey string, payload []byte, nextAttemptAt time.Time) error {
+	if err := postgres.New(db).EnqueueCoalescedOutbox(ctx, postgres.EnqueueCoalescedOutboxParams{
+		ID:            id,
+		Channel:       channel,
+		Payload:       payload,
+		CoalesceKey:   pgtype.Text{String: coalesceKey, Valid: true},
+		NextAttemptAt: pgtype.Timestamptz{Time: nextAttemptAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("enqueue coalesced outbox: %w", err)
+	}
+	return nil
+}
+
 // ListPending возвращает до limit готовых к отправке строк (недоставленные,
 // next_attempt_at наступил), старейшая задолженность первой.
 func (Repo) ListPending(ctx context.Context, db postgres.DBTX, limit int32) ([]Pending, error) {

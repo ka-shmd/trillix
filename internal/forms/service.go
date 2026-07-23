@@ -52,6 +52,8 @@ type Store interface {
 	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
+	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
+	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
@@ -319,6 +321,31 @@ func (s *Service) UpdateCloseSettings(ctx context.Context, userID, formID uuid.U
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// UpdateNotifyOnSubmission переключает уведомление владельцу о новом ответе (слайс
+// D). Порядок как у UpdateCloseSettings: проверка доступа (чужая/нет формы → 404),
+// затем UPDATE. Живая колонка — применяется немедленно, публикации не требует.
+func (s *Service) UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormNotifyOnSubmission(ctx, s.db, form.ID, form.WorkspaceID, enabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// SubmissionOwner отдаёт адресата уведомления о новом ответе (email владельца +
+// имя формы). Вызывается модулем submissions в приёме ответа — форма уже резолвнута
+// по slug, поэтому проверки членства нет (это адресат, а не доступ пользователя).
+func (s *Service) SubmissionOwner(ctx context.Context, formID uuid.UUID) (Owner, error) {
+	return s.repo.GetSubmissionOwner(ctx, s.db, formID)
 }
 
 // UpdateDraftSchema сохраняет черновик схемы формы (автосейв билдера). Порядок:

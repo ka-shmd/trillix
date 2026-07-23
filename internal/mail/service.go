@@ -17,6 +17,7 @@ import (
 // реализация — Repo, в тестах подменяется фейком.
 type Store interface {
 	Enqueue(ctx context.Context, db postgres.DBTX, id uuid.UUID, channel string, payload []byte) error
+	EnqueueCoalesced(ctx context.Context, db postgres.DBTX, id uuid.UUID, channel, coalesceKey string, payload []byte, nextAttemptAt time.Time) error
 	ListPending(ctx context.Context, db postgres.DBTX, limit int32) ([]Pending, error)
 	MarkSent(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, attempts int32, nextAttemptAt time.Time, lastError string) error
@@ -77,6 +78,26 @@ func (s *Service) EnqueueEmail(ctx context.Context, db postgres.DBTX, msg EmailM
 		return fmt.Errorf("marshal email payload: %w", err)
 	}
 	return s.repo.Enqueue(ctx, db, domain.NewID(), ChannelEmail, payload)
+}
+
+// EnqueueCoalesced ставит письмо-дайджест с ключом коалесинга: пока предыдущее с
+// тем же key ещё не отправлено, вызовы сворачиваются в одну строку с растущим
+// data.count, а не плодят письма (троттлинг «N событий — одно письмо»). delay —
+// окно троттлинга: next_attempt_at = now+delay от ПЕРВОГО события, на склейке не
+// сдвигается. Пишется в транзакции продюсера (как EnqueueEmail). msg.Data должна
+// нести стартовый count (обычно 1) — SQL инкрементит именно его.
+func (s *Service) EnqueueCoalesced(ctx context.Context, db postgres.DBTX, key string, msg EmailMessage, delay time.Duration) error {
+	if msg.To == "" {
+		return fmt.Errorf("enqueue coalesced email: empty recipient")
+	}
+	if key == "" {
+		return fmt.Errorf("enqueue coalesced email: empty coalesce key")
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal email payload: %w", err)
+	}
+	return s.repo.EnqueueCoalesced(ctx, db, domain.NewID(), ChannelEmail, key, payload, s.now().Add(delay))
 }
 
 // Dispatch отправляет одну пачку готовых писем; возвращает число доставленных.

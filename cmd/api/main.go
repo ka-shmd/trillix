@@ -240,7 +240,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, submissions.Repo{})
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, submissions.Repo{}, cfg.AppOrigin)
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 

@@ -17,8 +17,10 @@ import (
 // --- фейки -------------------------------------------------------------------
 
 type enqueued struct {
-	channel string
-	payload []byte
+	channel     string
+	payload     []byte
+	coalesceKey string // "" — обычная постановка; иначе коалесцирующая
+	nextAt      time.Time
 }
 
 type failed struct {
@@ -38,6 +40,11 @@ type fakeStore struct {
 
 func (f *fakeStore) Enqueue(_ context.Context, _ postgres.DBTX, _ uuid.UUID, channel string, payload []byte) error {
 	f.enqueued = append(f.enqueued, enqueued{channel: channel, payload: payload})
+	return nil
+}
+
+func (f *fakeStore) EnqueueCoalesced(_ context.Context, _ postgres.DBTX, _ uuid.UUID, channel, coalesceKey string, payload []byte, nextAttemptAt time.Time) error {
+	f.enqueued = append(f.enqueued, enqueued{channel: channel, payload: payload, coalesceKey: coalesceKey, nextAt: nextAttemptAt})
 	return nil
 }
 
@@ -195,6 +202,37 @@ func TestEnqueueEmail(t *testing.T) {
 	}
 	if back.To != msg.To || back.Template != msg.Template || back.Data["link"] != "https://x/y" {
 		t.Errorf("payload = %+v, want %+v", back, msg)
+	}
+}
+
+func TestEnqueueCoalesced(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(store, &fakeMailer{})
+	msg := EmailMessage{To: "owner@example.com", Template: TemplateSubmissionDigest, Data: map[string]any{"count": 1}}
+
+	if err := svc.EnqueueCoalesced(context.Background(), nil, "submission:abc", msg, time.Hour); err != nil {
+		t.Fatalf("EnqueueCoalesced: %v", err)
+	}
+	if len(store.enqueued) != 1 {
+		t.Fatalf("store.enqueued = %d rows, want 1", len(store.enqueued))
+	}
+	e := store.enqueued[0]
+	if e.coalesceKey != "submission:abc" {
+		t.Errorf("coalesceKey = %q, want submission:abc", e.coalesceKey)
+	}
+	if e.nextAt.IsZero() {
+		t.Error("next_attempt_at не задан — окно троттлинга не установлено")
+	}
+}
+
+func TestEnqueueCoalescedRejectsEmptyKey(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(store, &fakeMailer{})
+	if err := svc.EnqueueCoalesced(context.Background(), nil, "", EmailMessage{To: "o@e.com"}, time.Hour); err == nil {
+		t.Error("EnqueueCoalesced без ключа обязан вернуть ошибку")
+	}
+	if len(store.enqueued) != 0 {
+		t.Error("при пустом ключе строка не ставится")
 	}
 }
 

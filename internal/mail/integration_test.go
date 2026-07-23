@@ -135,6 +135,54 @@ func TestOutboxDeliversAndMarksSent(t *testing.T) {
 	}
 }
 
+// Коалесинг (слайс D): пока письмо с ключом не отправлено, повторные постановки
+// инкрементят один счётчик; после отправки новое событие открывает новое окно
+// (новая строка), а не воскрешает отправленную — частичный индекс её не видит.
+func TestOutboxCoalescesWhilePendingAndOpensNewWindowAfterSent(t *testing.T) {
+	resetDB(t)
+	ctx := context.Background()
+	svc := newSvc(&spyMailer{})
+
+	digest := func() mail.EmailMessage {
+		return mail.EmailMessage{
+			To:       "owner@example.com",
+			Template: mail.TemplateSubmissionDigest,
+			Data:     map[string]any{"form_title": "F", "link": "u", "count": 1},
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if err := svc.EnqueueCoalesced(ctx, testPool, "submission:x", digest(), 0); err != nil {
+			t.Fatalf("EnqueueCoalesced #%d: %v", i, err)
+		}
+	}
+	var rows, maxCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
+		 FROM outbox WHERE coalesce_key = 'submission:x' AND sent_at IS NULL`).Scan(&rows, &maxCount); err != nil {
+		t.Fatalf("coalesce state: %v", err)
+	}
+	if rows != 1 || maxCount != 2 {
+		t.Fatalf("во время окна: строк=%d count=%d, ожидалось 1 и 2", rows, maxCount)
+	}
+
+	if _, err := svc.Dispatch(ctx); err != nil { // delay 0 → готово сразу, метится sent
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	if err := svc.EnqueueCoalesced(ctx, testPool, "submission:x", digest(), 0); err != nil {
+		t.Fatalf("EnqueueCoalesced after sent: %v", err)
+	}
+	var total, pending int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE sent_at IS NULL)
+		 FROM outbox WHERE coalesce_key = 'submission:x'`).Scan(&total, &pending); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if total != 2 || pending != 1 {
+		t.Fatalf("после отправки: всего=%d неотправленных=%d, ожидалось 2 и 1 (новое окно)", total, pending)
+	}
+}
+
 func TestOutboxRetriesOnFailureAndSurvives(t *testing.T) {
 	resetDB(t)
 	ctx := context.Background()

@@ -15,6 +15,9 @@ const (
 	TemplatePasswordReset Template = "password_reset"
 	// TemplateEmailVerification — письмо со ссылкой подтверждения email. Data: {"link": "<url>"}.
 	TemplateEmailVerification Template = "email_verification"
+	// TemplateSubmissionDigest — дайджест новых ответов владельцу. Data:
+	// {"form_title": "<название>", "link": "<url таблицы>", "count": <N>}.
+	TemplateSubmissionDigest Template = "submission_digest"
 )
 
 type mailTemplate struct {
@@ -47,6 +50,17 @@ var templates = map[Template]mailTemplate{
 				"{{.link}}\n\n" +
 				"Если вы не регистрировались в Trillix — просто не переходите по " +
 				"ссылке, письмо можно удалить.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateSubmissionDigest: {
+		subject: "Новые ответы в Trillix",
+		body: template.Must(template.New("submission_digest").Parse(
+			"Здравствуйте!\n\n" +
+				"На форму «{{.form_title}}» пришло новых ответов: {{.count}}.\n\n" +
+				"Открыть таблицу ответов:\n\n" +
+				"{{.link}}\n\n" +
+				"Уведомления можно отключить в настройках формы.\n\n" +
 				"— Trillix",
 		)),
 	},

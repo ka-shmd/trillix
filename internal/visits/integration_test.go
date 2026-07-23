@@ -64,7 +64,7 @@ func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, submissions.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), submissions.Repo{}, "http://app.test")
 
 	mux := http.NewServeMux()
 	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, false).Routes(mux)
