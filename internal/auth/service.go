@@ -7,7 +7,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net/mail"
+	netmail "net/mail"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -33,6 +35,12 @@ const (
 	// DefaultSessionTTL — время жизни сессии (и cookie). Пока константа; станет
 	// конфигом при появлении .env.prod-local (фаза 7).
 	DefaultSessionTTL = 30 * 24 * time.Hour
+
+	// passwordResetTTL — время жизни ссылки сброса пароля. Короткое: ссылка даёт
+	// смену пароля, дольше жить ей незачем.
+	passwordResetTTL = 30 * time.Minute
+	// resetTokenBytes — энтропия сырого токена сброса (256 бит, как у сессии).
+	resetTokenBytes = 32
 )
 
 // Store — интерфейс доступа к данным auth, объявленный на стороне потребителя
@@ -48,10 +56,23 @@ type Store interface {
 	CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	GetSessionUser(ctx context.Context, db postgres.DBTX, tokenHash []byte) (User, error)
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
+	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
+	SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error
+	CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
+	ConsumePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)
+	DeleteExpiredPasswordResetTokens(ctx context.Context, db postgres.DBTX) (int64, error)
 }
 
 var _ Store = Repo{}
+
+// mailEnqueuer — узкая зависимость от почтового модуля: положить письмо в outbox
+// (объявлена на стороне потребителя; реализация — *mail.Service). Принимает
+// исполнителя, чтобы письмо писалось в той же транзакции, что и токен сброса
+// (transactional outbox).
+type mailEnqueuer interface {
+	EnqueueEmail(ctx context.Context, db postgres.DBTX, msg mail.EmailMessage) error
+}
 
 // Transactor открывает транзакцию (без знания о конкретном пуле). Реализация —
 // postgres.TxRunner; в тестах — фейк, выполняющий fn без реальной БД.
@@ -64,11 +85,15 @@ type Service struct {
 	db         postgres.DBTX // пул: для нетранзакционных операций (чтение, сессии)
 	tx         Transactor    // для атомарных многошаговых операций (регистрация)
 	repo       Store
+	mail       mailEnqueuer
 	sessionTTL time.Duration
+	// appBaseURL — origin кабинета, из которого строится ссылка сброса в письме
+	// (${appBaseURL}/reset-password?token=…). Совпадает с cfg.AppOrigin.
+	appBaseURL string
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store, sessionTTL time.Duration) *Service {
-	return &Service{db: db, tx: tx, repo: repo, sessionTTL: sessionTTL}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, mailer mailEnqueuer, sessionTTL time.Duration, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, repo: repo, mail: mailer, sessionTTL: sessionTTL, appBaseURL: appBaseURL}
 }
 
 // Register создаёт пользователя, его личный воркспейс и членство одной
@@ -198,6 +223,97 @@ func (s *Service) PurgeExpiredSessions(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+// RequestPasswordReset выдаёт ссылку сброса на email, если такой аккаунт есть.
+// Существование аккаунта наружу не раскрывается по ТЕЛУ и КОДУ ответа: нет
+// пользователя → тихо выходим, хендлер отвечает тем же 204.
+//
+// По времени неотличимость неполная (TD-35): главный сток — синхронная отправка
+// письма только существующему адресу — устранён (письмо уходит асинхронно через
+// outbox), но остаточная разница есть: для существующего адреса синхронно
+// выполняются генерация токена и две вставки в транзакции, для несуществующего —
+// один SELECT. Разница порядка долей мс, дополнительно размазана rate-limit'ом по
+// email и по IP; замер и решение (эквалайзер времени либо принять) — в TD-35.
+//
+// provider-only аккаунт (password_hash IS NULL) письмо тоже получает: это и есть
+// починка TD-34 — владелец адреса задаёт пароль и делает аккаунт достижимым, не
+// теряя вход через провайдера.
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	email = normalizeEmail(email)
+
+	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("request password reset: %w", err)
+	}
+
+	rawToken, err := newResetToken()
+	if err != nil {
+		return err
+	}
+	link := s.appBaseURL + "/reset-password?token=" + url.QueryEscape(rawToken)
+
+	// Токен и письмо — одной транзакцией (transactional outbox): либо и ссылка
+	// существует, и письмо поставлено в очередь, либо ничего.
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if e := s.repo.CreatePasswordResetToken(ctx, tx, hashToken(rawToken), user.ID, time.Now().Add(passwordResetTTL)); e != nil {
+			return e
+		}
+		return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+			To:       user.Email,
+			Template: mail.TemplatePasswordReset,
+			Data:     map[string]any{"link": link},
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("request password reset: %w", err)
+	}
+	return nil
+}
+
+// ResetPassword по одноразовому токену ставит новый пароль и рвёт все сессии
+// пользователя. Невалидный/использованный/истёкший токен → ErrValidation (единый
+// текст, без различения причин). Одноразовость гарантируется атомарным
+// потреблением токена (ConsumePasswordResetToken): повтор получает ErrNoRows.
+func (s *Service) ResetPassword(ctx context.Context, rawToken, newPassword string) error {
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		userID, e := s.repo.ConsumePasswordResetToken(ctx, tx, hashToken(rawToken))
+		if e != nil {
+			if errors.Is(e, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: ссылка недействительна или устарела", domain.ErrValidation)
+			}
+			return e
+		}
+		if e := s.repo.SetUserPassword(ctx, tx, userID, hash); e != nil {
+			return e
+		}
+		return s.repo.DeleteSessionsByUser(ctx, tx, userID)
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// PurgeExpiredPasswordResetTokens удаляет истёкшие токены сброса; возвращает число
+// удалённых строк. Вызывается фоновой периодической задачей.
+func (s *Service) PurgeExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	n, err := s.repo.DeleteExpiredPasswordResetTokens(ctx, s.db)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired password reset tokens: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Service) createSession(ctx context.Context, userID uuid.UUID) (string, error) {
 	token, err := newSessionToken()
 	if err != nil {
@@ -214,9 +330,13 @@ func normalizeEmail(email string) string {
 }
 
 func validateCredentials(email, password string) error {
-	if _, err := mail.ParseAddress(email); err != nil {
+	if _, err := netmail.ParseAddress(email); err != nil {
 		return fmt.Errorf("%w: некорректный email", domain.ErrValidation)
 	}
+	return validatePassword(password)
+}
+
+func validatePassword(password string) error {
 	if len(password) < minPasswordLen || len(password) > maxPasswordLen {
 		return fmt.Errorf("%w: длина пароля должна быть %d–%d символов", domain.ErrValidation, minPasswordLen, maxPasswordLen)
 	}
@@ -228,6 +348,16 @@ func newSessionToken() (string, error) {
 	b := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("auth: read session token: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// newResetToken — 256-битный случайный токен сброса в base64url (в БД лёг только
+// его SHA-256, как у сессии).
+func newResetToken() (string, error) {
+	b := make([]byte, resetTokenBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("auth: read reset token: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }

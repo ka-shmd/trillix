@@ -48,3 +48,32 @@ WHERE i.provider = $1 AND i.provider_user_id = $2;
 -- name: CreateIdentity :exec
 INSERT INTO user_identities (provider, provider_user_id, user_id)
 VALUES ($1, $2, $3);
+
+-- name: SetUserPassword :exec
+-- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
+-- password_hash из NULL в значение — так закрывается TD-34 (аккаунт становится
+-- достижим паролем, вход через провайдера при этом сохраняется).
+UPDATE users SET password_hash = $2 WHERE id = $1;
+
+-- name: DeleteSessionsByUser :exec
+-- Рвёт все сессии пользователя — обязательный шаг сброса пароля (кто угодно,
+-- знавший старый пароль или укравший сессию, разлогинивается).
+DELETE FROM sessions WHERE user_id = $1;
+
+-- name: CreatePasswordResetToken :exec
+-- Кладёт одноразовый токен сброса (в БД — только SHA-256 сырого токена).
+INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+VALUES ($1, $2, $3);
+
+-- name: ConsumePasswordResetToken :one
+-- Атомарно потребляет токен: помечает использованным и возвращает user_id ровно
+-- при условии «не использован и не истёк». Одним UPDATE, а не SELECT+UPDATE, —
+-- второе использование той же ссылки (гонка, двойной клик) получает 0 строк.
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id;
+
+-- name: DeleteExpiredPasswordResetTokens :execrows
+-- Фоновая чистка истёкших токенов (использованные тоже истекают за 30 минут).
+DELETE FROM password_reset_tokens WHERE expires_at <= now();

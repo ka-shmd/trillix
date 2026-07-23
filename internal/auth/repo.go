@@ -137,6 +137,57 @@ func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, prov
 	return nil
 }
 
+// SetUserPassword ставит новый хеш пароля (сброс). hash непустой — nil-семантики
+// «убрать пароль» тут нет.
+func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error {
+	if err := postgres.New(db).SetUserPassword(ctx, postgres.SetUserPasswordParams{
+		ID:           userID,
+		PasswordHash: pgtype.Text{String: hash, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("set user password: %w", err)
+	}
+	return nil
+}
+
+// DeleteSessionsByUser рвёт все сессии пользователя (шаг сброса пароля).
+func (Repo) DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteSessionsByUser(ctx, userID); err != nil {
+		return fmt.Errorf("delete sessions by user: %w", err)
+	}
+	return nil
+}
+
+// CreatePasswordResetToken кладёт одноразовый токен сброса.
+func (Repo) CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
+	if err := postgres.New(db).CreatePasswordResetToken(ctx, postgres.CreatePasswordResetTokenParams{
+		TokenHash: tokenHash,
+		UserID:    userID,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create password reset token: %w", err)
+	}
+	return nil
+}
+
+// ConsumePasswordResetToken атомарно потребляет токен и возвращает user_id.
+// Токен не найден / использован / истёк → pgx.ErrNoRows (сервис маппит в ошибку).
+func (Repo) ConsumePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error) {
+	userID, err := postgres.New(db).ConsumePasswordResetToken(ctx, tokenHash)
+	if err != nil {
+		return uuid.Nil, err // включая pgx.ErrNoRows — различает вызывающий
+	}
+	return userID, nil
+}
+
+// DeleteExpiredPasswordResetTokens удаляет истёкшие токены; возвращает число строк.
+func (Repo) DeleteExpiredPasswordResetTokens(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredPasswordResetTokens(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired password reset tokens: %w", err)
+	}
+	return n, nil
+}
+
 func userFromRow(u postgres.User) User {
 	return User{
 		ID:           u.ID,

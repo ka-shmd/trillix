@@ -25,6 +25,16 @@ export function logout(): Promise<void> {
   return apiRequest('/auth/logout', { method: 'POST' })
 }
 
+// Сброс пароля. Обе ручки отвечают 204 без тела: forgot — одинаково для любого
+// адреса (существование аккаунта не раскрывается), reset — после смены пароля.
+export function forgotPassword(body: { email: string }): Promise<void> {
+  return apiRequest('/auth/forgot-password', { method: 'POST', body })
+}
+
+export function resetPassword(body: { token: string; password: string }): Promise<void> {
+  return apiRequest('/auth/reset-password', { method: 'POST', body })
+}
+
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,
 // кнопки не рисуем (мёртвая кнопка хуже отсутствующей).
 export function getProviders(): Promise<string[]> {

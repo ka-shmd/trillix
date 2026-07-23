@@ -1,6 +1,15 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { authKeys, oauthKeys } from './keys'
-import { getMe, getProviders, linkProvider, login, logout, register } from './api'
+import {
+  forgotPassword,
+  getMe,
+  getProviders,
+  linkProvider,
+  login,
+  logout,
+  register,
+  resetPassword,
+} from './api'
 import type { User } from '../../entities/user'
 
 // Профиль текущего пользователя — серверный стейт, живёт только в Query.
@@ -46,6 +55,16 @@ export const providersQueryOptions = queryOptions({
   retry: false,
   staleTime: 30 * 60 * 1000,
 })
+
+// Сброс пароля — стейта в кэше не трогает: пользователь не залогинен, а reset
+// на бэке рвёт все сессии. Экраны сами показывают исход по состоянию мутации.
+export function useForgotPassword() {
+  return useMutation({ mutationFn: forgotPassword })
+}
+
+export function useResetPassword() {
+  return useMutation({ mutationFn: resetPassword })
+}
 
 export function useLinkProvider() {
   const qc = useQueryClient()

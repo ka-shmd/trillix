@@ -55,6 +55,14 @@ type Outbox struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type PasswordResetToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID

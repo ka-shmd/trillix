@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -12,6 +13,12 @@ import (
 type Config struct {
 	// HTTPAddr — адрес HTTP-сервера, например "127.0.0.1:8080".
 	HTTPAddr string
+	// LogLevel — минимальный уровень логирования. Смысловой флаг контура (не имя
+	// окружения): dev — debug (в LogMailer тело dev-письма, включая ссылку сброса,
+	// пишется ТОЛЬКО на debug — это dev-почтовый ящик); prod и prod-local — info,
+	// поэтому тело письма с токеном туда не попадает никогда, даже при ошибочно
+	// выбранном транспорте log (тогда письмо просто не уходит — сбой заметен, не тих).
+	LogLevel slog.Level
 	// DatabaseURL — DSN подключения к Postgres.
 	DatabaseURL string
 	// CookieSecure — ставить ли флаг Secure на cookie сессии. В dev по http —
@@ -114,6 +121,7 @@ func Load() (Config, error) {
 		HTTPAddr:    required("HTTP_ADDR"),
 		DatabaseURL: required("DATABASE_URL"),
 	}
+	logLevelRaw := required("LOG_LEVEL")
 	cookieSecureRaw := required("COOKIE_SECURE")
 	formTokenSecret := required("FORM_TOKEN_SECRET")
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
@@ -195,10 +203,32 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("invalid MAIL_TRANSPORT %q: want %q", cfg.MailTransport, MailTransportLog)
 	}
 
+	level, err := parseLogLevel(logLevelRaw)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.LogLevel = level
+
 	return cfg, nil
 }
 
 // isHTTPURL — грубая проверка, что значение похоже на абсолютный http(s)-URL.
 func isHTTPURL(s string) bool {
 	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
+// parseLogLevel переводит имя уровня в slog.Level (валидация по явному списку).
+func parseLogLevel(s string) (slog.Level, error) {
+	switch s {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid LOG_LEVEL %q: want debug|info|warn|error", s)
+	}
 }

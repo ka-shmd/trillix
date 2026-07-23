@@ -76,7 +76,7 @@ func newServer(t *testing.T) *httptest.Server {
 func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUID) {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, nil, time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")

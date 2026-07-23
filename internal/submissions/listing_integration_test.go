@@ -31,7 +31,7 @@ import (
 // пула. Лимитеры пермиссивные (инвариант 6).
 func fullStack(t *testing.T) *httptest.Server {
 	t.Helper()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, nil, time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})

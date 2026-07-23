@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,7 @@ import (
 func setValidEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("HTTP_ADDR", "127.0.0.1:8080")
+	t.Setenv("LOG_LEVEL", "info")
 	t.Setenv("DATABASE_URL", "postgres://u:p@127.0.0.1:5432/db?sslmode=disable")
 	t.Setenv("COOKIE_SECURE", "false")
 	t.Setenv("FORM_TOKEN_SECRET", "sixteen-bytes-min")
@@ -159,6 +161,27 @@ func TestLoad(t *testing.T) {
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "APP_ORIGIN") {
 			t.Fatalf("ожидалась ошибка про APP_ORIGIN, получено: %v", err)
+		}
+	})
+
+	t.Run("LOG_LEVEL парсится в slog.Level", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("LOG_LEVEL", "debug")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку: %v", err)
+		}
+		if cfg.LogLevel != slog.LevelDebug {
+			t.Errorf("LogLevel = %v, ожидался Debug", cfg.LogLevel)
+		}
+	})
+
+	t.Run("невалидный LOG_LEVEL — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("LOG_LEVEL", "verbose")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
+			t.Fatalf("ожидалась ошибка про LOG_LEVEL, получено: %v", err)
 		}
 	})
 

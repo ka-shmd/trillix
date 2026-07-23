@@ -12,6 +12,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id
+`
+
+// Атомарно потребляет токен: помечает использованным и возвращает user_id ровно
+// при условии «не использован и не истёк». Одним UPDATE, а не SELECT+UPDATE, —
+// второе использование той же ссылки (гонка, двойной клик) получает 0 строк.
+func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, consumePasswordResetToken, tokenHash)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -194,6 +211,23 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return err
 }
 
+const createPasswordResetToken = `-- name: CreatePasswordResetToken :exec
+INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreatePasswordResetTokenParams struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Кладёт одноразовый токен сброса (в БД — только SHA-256 сырого токена).
+func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) error {
+	_, err := q.db.Exec(ctx, createPasswordResetToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	return err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -270,6 +304,19 @@ func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspace
 	return err
 }
 
+const deleteExpiredPasswordResetTokens = `-- name: DeleteExpiredPasswordResetTokens :execrows
+DELETE FROM password_reset_tokens WHERE expires_at <= now()
+`
+
+// Фоновая чистка истёкших токенов (использованные тоже истекают за 30 минут).
+func (q *Queries) DeleteExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredPasswordResetTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at <= now()
 `
@@ -308,6 +355,17 @@ DELETE FROM sessions WHERE token_hash = $1
 
 func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	_, err := q.db.Exec(ctx, deleteSession, tokenHash)
+	return err
+}
+
+const deleteSessionsByUser = `-- name: DeleteSessionsByUser :exec
+DELETE FROM sessions WHERE user_id = $1
+`
+
+// Рвёт все сессии пользователя — обязательный шаг сброса пароля (кто угодно,
+// знавший старый пароль или укравший сессию, разлогинивается).
+func (q *Queries) DeleteSessionsByUser(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSessionsByUser, userID)
 	return err
 }
 
@@ -1282,6 +1340,23 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $2 WHERE id = $1
+`
+
+type SetUserPasswordParams struct {
+	ID           uuid.UUID
+	PasswordHash pgtype.Text
+}
+
+// Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
+// password_hash из NULL в значение — так закрывается TD-34 (аккаунт становится
+// достижим паролем, вход через провайдера при этом сохраняется).
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	return err
 }
 
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one

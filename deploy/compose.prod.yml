@@ -20,6 +20,7 @@
 # без риска подхватить чужой env_file.
 x-app-env: &app-env
   HTTP_ADDR: ${HTTP_ADDR}
+  LOG_LEVEL: ${LOG_LEVEL}
   DATABASE_URL: ${DATABASE_URL}
   COOKIE_SECURE: ${COOKIE_SECURE}
   FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}

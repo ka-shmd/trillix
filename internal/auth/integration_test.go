@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -21,10 +22,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
+
+const testAppOrigin = "http://localhost:5173"
+
+// newMailSvc — реальный почтовый сервис поверх контейнерного пула с dev-транспортом
+// (LogMailer в /dev/null): письма реально пишутся в outbox, доставка их логирует.
+func newMailSvc() *mail.Service {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return mail.NewService(testPool, mail.Repo{}, mail.LogMailer{Log: discard, From: "test@localhost"},
+		discard, 50, mail.Backoff{Base: time.Minute, Max: time.Hour})
+}
+
+// newAuthService — реальный сервис auth с подключённой почтой (для сброса пароля).
+func newAuthService() *auth.Service {
+	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, newMailSvc(), time.Hour, testAppOrigin)
+}
 
 var testPool *pgxpool.Pool
 
@@ -44,7 +61,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, password_reset_tokens, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -55,8 +72,9 @@ func resetDB(t *testing.T) {
 // ослабляется, а подменяется всё-пропускающей реализацией).
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
-	svc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
-	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
+	svc := newAuthService()
+	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
+		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	srv := httptest.NewServer(mux)

@@ -81,7 +81,7 @@ const oneQuestionSchema = `{"blocks":[{"id":"b1","type":"short_text","label":"И
 func publishedForm(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, nil, time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "vis-"+uuid.NewString()[:8]+"@example.com", "supersecret1")

@@ -12,9 +12,11 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthLinkAccountRouteImport } from './routes/_auth/link-account'
+import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
@@ -36,6 +38,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => AuthRoute,
+} as any)
 const AuthRegisterRoute = AuthRegisterRouteImport.update({
   id: '/register',
   path: '/register',
@@ -49,6 +56,11 @@ const AuthLoginRoute = AuthLoginRouteImport.update({
 const AuthLinkAccountRoute = AuthLinkAccountRouteImport.update({
   id: '/link-account',
   path: '/link-account',
+  getParentRoute: () => AuthRoute,
+} as any)
+const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
   getParentRoute: () => AuthRoute,
 } as any)
 const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
@@ -92,9 +104,11 @@ const AppFormsSlugManageFunnelRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
+  '/reset-password': typeof AuthResetPasswordRoute
   '/forms/': typeof AppFormsIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
@@ -105,9 +119,11 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
+  '/reset-password': typeof AuthResetPasswordRoute
   '/forms': typeof AppFormsIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
@@ -120,9 +136,11 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
+  '/_auth/forgot-password': typeof AuthForgotPasswordRoute
   '/_auth/link-account': typeof AuthLinkAccountRoute
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/register': typeof AuthRegisterRoute
+  '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_app/': typeof AppIndexRoute
   '/_app/forms/': typeof AppFormsIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
@@ -136,9 +154,11 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/forgot-password'
     | '/link-account'
     | '/login'
     | '/register'
+    | '/reset-password'
     | '/forms/'
     | '/forms/$slug'
     | '/forms/$slug/edit'
@@ -149,9 +169,11 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/forgot-password'
     | '/link-account'
     | '/login'
     | '/register'
+    | '/reset-password'
     | '/forms'
     | '/forms/$slug'
     | '/forms/$slug/edit'
@@ -163,9 +185,11 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_auth'
+    | '/_auth/forgot-password'
     | '/_auth/link-account'
     | '/_auth/login'
     | '/_auth/register'
+    | '/_auth/reset-password'
     | '/_app/'
     | '/_app/forms/'
     | '/_app/forms/$slug/_manage'
@@ -204,6 +228,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_auth/reset-password': {
+      id: '/_auth/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof AuthRoute
+    }
     '/_auth/register': {
       id: '/_auth/register'
       path: '/register'
@@ -223,6 +254,13 @@ declare module '@tanstack/react-router' {
       path: '/link-account'
       fullPath: '/link-account'
       preLoaderRoute: typeof AuthLinkAccountRouteImport
+      parentRoute: typeof AuthRoute
+    }
+    '/_auth/forgot-password': {
+      id: '/_auth/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
     }
     '/_app/forms/': {
@@ -311,15 +349,19 @@ const AppRouteChildren: AppRouteChildren = {
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 interface AuthRouteChildren {
+  AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
   AuthLinkAccountRoute: typeof AuthLinkAccountRoute
   AuthLoginRoute: typeof AuthLoginRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
+  AuthResetPasswordRoute: typeof AuthResetPasswordRoute
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
+  AuthForgotPasswordRoute: AuthForgotPasswordRoute,
   AuthLinkAccountRoute: AuthLinkAccountRoute,
   AuthLoginRoute: AuthLoginRoute,
   AuthRegisterRoute: AuthRegisterRoute,
+  AuthResetPasswordRoute: AuthResetPasswordRoute,
 }
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)

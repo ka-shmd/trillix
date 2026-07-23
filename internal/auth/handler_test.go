@@ -18,6 +18,10 @@ type fakeAuthService struct {
 	loginErr       error
 	userByTokenErr error
 	loggedOut      bool
+	forgotErr      error
+	resetErr       error
+	forgotEmail    string // последний email, дошедший до сервиса
+	resetCalled    bool
 }
 
 func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string, error) {
@@ -46,6 +50,16 @@ func (f *fakeAuthService) UserByToken(_ context.Context, _ string) (User, error)
 	return f.user, nil
 }
 
+func (f *fakeAuthService) RequestPasswordReset(_ context.Context, email string) error {
+	f.forgotEmail = email
+	return f.forgotErr
+}
+
+func (f *fakeAuthService) ResetPassword(_ context.Context, _, _ string) error {
+	f.resetCalled = true
+	return f.resetErr
+}
+
 type denyLimiter struct{}
 
 func (denyLimiter) Allow(string) bool { return false }
@@ -62,6 +76,18 @@ func newTestHandler(svc authService, limiter RateLimiter) http.Handler {
 // не общие).
 func newTestHandlerLR(svc authService, loginLimiter, registerLimiter RateLimiter) http.Handler {
 	h := NewHandler(svc, loginLimiter, registerLimiter, false, testAppOrigin, false)
+	// Ведра сброса по умолчанию пермиссивны (инвариант 6): тесты, проверяющие
+	// именно лимит сброса, подставляют своё ведро через newTestHandlerReset.
+	h = h.WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	return mux
+}
+
+// newTestHandlerReset — раздельные вёдра сброса (для проверки лимита по email/IP).
+func newTestHandlerReset(svc authService, forgotIP, forgotEmail, reset RateLimiter) http.Handler {
+	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false)
+	h = h.WithPasswordReset(forgotIP, forgotEmail, reset)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux

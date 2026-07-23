@@ -16,8 +16,8 @@ type Template string
 
 // EmailMessage — намерение доставки одного письма: кому, по какому шаблону, с
 // какими данными. Это и есть payload строки outbox канала email (сериализуется в
-// JSONB). Рендер шаблона в тему/тело — забота реализации Mailer: провайдер рендерит
-// и шлёт, dev-LogMailer в слайсе A не рендерит (шаблонов ещё нет) и логирует факт.
+// JSONB). Рендер шаблона в тему/тело — общий (Render), реализация Mailer его
+// вызывает (dev-LogMailer) либо игнорирует, если провайдер рендерит у себя.
 type EmailMessage struct {
 	To       string         `json:"to"`
 	Template Template       `json:"template"`
@@ -33,23 +33,32 @@ type Mailer interface {
 	Send(ctx context.Context, msg EmailMessage) error
 }
 
-// LogMailer — транспорт dev-контура: «доставляет» письмо, записывая факт в лог.
-// Позволяет гонять весь цикл сброса пароля локально без почтового провайдера.
+// LogMailer — транспорт dev-контура: «доставляет» письмо, печатая его в лог. Это
+// способ прочитать письмо локально без провайдера — почтовый ящик dev (POST-MVP
+// шаг 8: «реализация Mailer, пишущая письма в лог/файл»).
 //
-// Логируем получателя и шаблон, но НЕ Data: данные шаблона могут нести токен
-// (ссылка сброса) — а токены в лог не пишутся (инвариант 2). Когда появятся
-// шаблоны с телом (следующий слайс), тело письма для глазной проверки в dev
-// смотрится в Mailpit (prod-local), не в логах приложения.
+// Тело письма содержит ссылку сброса с токеном, поэтому пишется ТОЛЬКО на уровне
+// Debug: dev работает на debug и письмо видит, а prod/prod-local — на info, куда
+// тело с токеном не попадает никогда (инвариант 2/7 не нарушается). На info
+// остаётся лишь факт «письмо доставлено» без чувствительных данных. Транспорт log
+// — для dev; прод обязан выбрать провайдерский транспорт (иначе письмо не уходит:
+// LogMailer наружу ничего не шлёт — сбой заметен, не тих).
 type LogMailer struct {
 	Log  *slog.Logger
 	From string
 }
 
 func (m LogMailer) Send(_ context.Context, msg EmailMessage) error {
-	m.Log.Info("email delivered via log transport (dev)",
+	subject, body, err := Render(msg)
+	if err != nil {
+		return err
+	}
+	m.Log.Info("email delivered (dev log transport)",
 		slog.String("from", m.From),
 		slog.String("to", msg.To),
-		slog.String("template", string(msg.Template)))
+		slog.String("subject", subject))
+	// Тело с токеном — только на debug (в проде уровень info, сюда не дойдёт).
+	m.Log.Debug("email body (dev log transport)", slog.String("body", body))
 	return nil
 }
 

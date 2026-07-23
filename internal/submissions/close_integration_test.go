@@ -27,7 +27,7 @@ import (
 func closableForm(t *testing.T) (slug string, userID, formID uuid.UUID, formsSvc *forms.Service) {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, time.Hour)
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, nil, time.Hour, "")
 	formsSvc = forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "own-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
