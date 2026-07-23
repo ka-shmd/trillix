@@ -122,7 +122,7 @@ func (s *fakeSMTP) serve() {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	r := bufio.NewReader(conn)
 	write := func(line string) { _, _ = conn.Write([]byte(line)) }
 

@@ -73,7 +73,7 @@ func (m SMTPMailer) Send(ctx context.Context, msg EmailMessage) error {
 	if err != nil {
 		return fmt.Errorf("smtp dial %s: %w", m.Host, err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// AUTH только при заданной учётке (Mailpit её не требует). PlainAuth пойдёт
 	// поверх TLS (starttls/implicit) — net/smtp отвергает PLAIN по открытому каналу.
@@ -134,12 +134,12 @@ func (m SMTPMailer) dial(ctx context.Context) (*smtp.Client, error) {
 
 	client, err := smtp.NewClient(conn, m.Host)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 	if m.TLS == TLSStartTLS {
 		if err := client.StartTLS(&tls.Config{ServerName: m.Host}); err != nil {
-			client.Close()
+			_ = client.Close()
 			return nil, fmt.Errorf("starttls: %w", err)
 		}
 	}
