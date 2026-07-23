@@ -332,6 +332,27 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 	return result.RowsAffected(), nil
 }
 
+const enqueueOutbox = `-- name: EnqueueOutbox :exec
+
+INSERT INTO outbox (id, channel, payload)
+VALUES ($1, $2, $3)
+`
+
+type EnqueueOutboxParams struct {
+	ID      uuid.UUID
+	Channel string
+	Payload []byte
+}
+
+// Запросы модуля mail. Схема — migrations/0010_outbox. Генерация: `make sqlc`.
+// Пишет намерение доставки. Вызывается продюсером в его транзакции (transactional
+// outbox): исполнитель приходит извне. attempts/next_attempt_at/sent_at — по
+// умолчанию (0 / now / NULL), то есть строка сразу готова к первой попытке.
+func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) error {
+	_, err := q.db.Exec(ctx, enqueueOutbox, arg.ID, arg.Channel, arg.Payload)
+	return err
+}
+
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
@@ -905,6 +926,51 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 	return items, nil
 }
 
+const listPendingOutbox = `-- name: ListPendingOutbox :many
+SELECT id, channel, payload, attempts
+FROM outbox
+WHERE sent_at IS NULL AND next_attempt_at <= now()
+ORDER BY next_attempt_at
+LIMIT $1
+`
+
+type ListPendingOutboxRow struct {
+	ID       uuid.UUID
+	Channel  string
+	Payload  []byte
+	Attempts int32
+}
+
+// Готовые к отправке: не доставленные, чей next_attempt_at наступил. По
+// next_attempt_at (старейшая задолженность первой), потолок пачки — $1. Один
+// диспетчер на один инстанс (как in-memory rate limit, ADR §10), запускается
+// periodic-задачей последовательно — конкурентной выборки нет, блокировка строк
+// не нужна; многоинстансный апгрейд — FOR UPDATE SKIP LOCKED.
+func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPendingOutboxRow, error) {
+	rows, err := q.db.Query(ctx, listPendingOutbox, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPendingOutboxRow
+	for rows.Next() {
+		var i ListPendingOutboxRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Channel,
+			&i.Payload,
+			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
@@ -1053,6 +1119,43 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 // формы — безвредно). xact-версия сама снимается на commit/rollback.
 func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
 	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
+	return err
+}
+
+const markOutboxFailed = `-- name: MarkOutboxFailed :exec
+UPDATE outbox
+SET attempts = $2, next_attempt_at = $3, last_error = $4
+WHERE id = $1
+`
+
+type MarkOutboxFailedParams struct {
+	ID            uuid.UUID
+	Attempts      int32
+	NextAttemptAt pgtype.Timestamptz
+	LastError     pgtype.Text
+}
+
+// Неудача: растим счётчик, откладываем следующую попытку (бэкофф считает сервис),
+// сохраняем текст ошибки для диагностики. sent_at не трогаем — строка остаётся в выборке.
+func (q *Queries) MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error {
+	_, err := q.db.Exec(ctx, markOutboxFailed,
+		arg.ID,
+		arg.Attempts,
+		arg.NextAttemptAt,
+		arg.LastError,
+	)
+	return err
+}
+
+const markOutboxSent = `-- name: MarkOutboxSent :exec
+UPDATE outbox
+SET sent_at = now(), last_error = NULL
+WHERE id = $1
+`
+
+// Успех — терминальное состояние: проставляем sent_at, гасим прошлую ошибку.
+func (q *Queries) MarkOutboxSent(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markOutboxSent, id)
 	return err
 }
 

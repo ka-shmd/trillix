@@ -25,6 +25,8 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("S3_MEDIA_BUCKET", "app-media")
 	t.Setenv("S3_PATH_STYLE", "true")
 	t.Setenv("TRUSTED_PROXY", "false")
+	t.Setenv("MAIL_TRANSPORT", "log")
+	t.Setenv("MAIL_FROM", "Trillix <no-reply@localhost>")
 }
 
 func TestLoad(t *testing.T) {
@@ -157,6 +159,16 @@ func TestLoad(t *testing.T) {
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "APP_ORIGIN") {
 			t.Fatalf("ожидалась ошибка про APP_ORIGIN, получено: %v", err)
+		}
+	})
+
+	t.Run("невалидный MAIL_TRANSPORT — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp") // ещё не поддержан
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_TRANSPORT") {
+			t.Fatalf("ожидалась ошибка про MAIL_TRANSPORT, получено: %v", err)
 		}
 	})
 

@@ -74,6 +74,13 @@ type Config struct {
 	// с которого пришёл человек.
 	YandexOAuthClientID     string
 	YandexOAuthClientSecret string
+
+	// Mail* — исходящая транзакционная почта (почтовая фаза). Транспорт — смысловой
+	// флаг контура (не имя окружения): dev/prod-local пишут письма в лог (провайдер
+	// не нужен), прод отдаёт их провайдеру. MailFrom — адрес отправителя в письмах;
+	// различие контуров живёт в этих значениях.
+	MailTransport string // log (пока единственный; провайдер — слайс E почтовой фазы)
+	MailFrom      string // адрес/имя отправителя, напр. "Trillix <no-reply@trillix.ru>"
 }
 
 // YandexOAuthEnabled — заданы ли обе половины приложения Яндекс ID.
@@ -84,6 +91,11 @@ func (c Config) YandexOAuthEnabled() bool {
 // minFormTokenSecretLen — нижняя граница длины ключа HMAC: слишком короткий ключ
 // подделывается перебором. 16 байт — разумный минимум для dev; прод длиннее.
 const minFormTokenSecretLen = 16
+
+// MailTransportLog — транспорт почты, «доставляющий» письмо записью в лог (dev/
+// prod-local: провайдер не нужен). Провайдерские транспорты добавятся значениями
+// сюда же в слайсе E почтовой фазы.
+const MailTransportLog = "log"
 
 // Load читает конфигурацию из env и валидирует её. Отсутствие обязательной
 // переменной — ошибка старта процесса, а не первого запроса; в сообщении
@@ -114,6 +126,8 @@ func Load() (Config, error) {
 	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
 	pathStyleRaw := required("S3_PATH_STYLE")
 	trustedProxyRaw := required("TRUSTED_PROXY")
+	cfg.MailTransport = required("MAIL_TRANSPORT")
+	cfg.MailFrom = required("MAIL_FROM")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
@@ -172,6 +186,13 @@ func Load() (Config, error) {
 	// кнопка входа просто исчезла бы с экрана без единой строки в логе.
 	if (cfg.YandexOAuthClientID == "") != (cfg.YandexOAuthClientSecret == "") {
 		return Config{}, fmt.Errorf("YANDEX_OAUTH_CLIENT_ID and YANDEX_OAUTH_CLIENT_SECRET: set both or neither")
+	}
+
+	// Транспорт почты валидируется по явному списку: неизвестное значение — почти
+	// наверняка опечатка. Пока поддержан один (log); провайдерский транспорт
+	// расширит список в слайсе E, тогда же прибавится ветка выбора в composition root.
+	if cfg.MailTransport != MailTransportLog {
+		return Config{}, fmt.Errorf("invalid MAIL_TRANSPORT %q: want %q", cfg.MailTransport, MailTransportLog)
 	}
 
 	return cfg, nil

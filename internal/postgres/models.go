@@ -44,6 +44,17 @@ type FormVisit struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Outbox struct {
+	ID            uuid.UUID
+	Channel       string
+	Payload       []byte
+	Attempts      int32
+	NextAttemptAt pgtype.Timestamptz
+	LastError     pgtype.Text
+	SentAt        pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID

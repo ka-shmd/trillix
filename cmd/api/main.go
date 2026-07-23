@@ -16,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
@@ -62,6 +63,16 @@ const (
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
+
+	// Диспетчер outbox (почтовая фаза): раз в интервал отправляет пачку готовых
+	// писем. Интервал — компромисс «сброс пароля не должен ощутимо ждать» против
+	// «не долбить провайдера вхолостую»; пачка ограничивает работу одного прогона.
+	outboxDispatchInterval = 15 * time.Second
+	outboxDispatchTimeout  = 30 * time.Second
+	outboxBatch            = 50
+	// Бэкофф ретраев доставки: первая неудача — 1 мин, дальше удвоение до потолка 1 ч.
+	outboxBackoffBase = time.Minute
+	outboxBackoffMax  = time.Hour
 
 	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ — реальный IP
 	// (после TD-1), поэтому карта иначе растёт неограниченно. Вёдра пополняются до
@@ -186,6 +197,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes)
 
+	// Исходящая почта (почтовая фаза): транспорт выбирается по смысловому флагу
+	// MAIL_TRANSPORT, а не по имени окружения. Пока единственный — log (письмо
+	// «доставляется» записью в лог); провайдерский транспорт добавит ветку здесь.
+	var mailer mail.Mailer
+	switch cfg.MailTransport {
+	case config.MailTransportLog:
+		mailer = mail.LogMailer{Log: log, From: cfg.MailFrom}
+	default:
+		// config.Load уже отвалидировал список — сюда не дойдём; страховка на будущее.
+		return fmt.Errorf("unsupported MAIL_TRANSPORT %q", cfg.MailTransport)
+	}
+	mailSvc := mail.NewService(pool, mail.Repo{}, mailer, log, outboxBatch,
+		mail.Backoff{Base: outboxBackoffBase, Max: outboxBackoffMax})
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -203,6 +228,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("expired sessions purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "outbox-dispatch",
+		Interval: outboxDispatchInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, outboxDispatchTimeout)
+			defer cancel()
+			n, err := mailSvc.Dispatch(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("outbox messages delivered", slog.Int("count", n))
 			}
 			return nil
 		},
