@@ -5,6 +5,7 @@ import { useCreateForm } from '../features/forms/queries'
 import { useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
+import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
 import { HeaderSlotContext } from '../shared/headerSlot'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
@@ -57,6 +58,7 @@ function AppLayout() {
         {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
             ответам — обычные поля. */}
         <main className="flex-1 overflow-auto">
+          {!user.emailVerified && <VerifyEmailBanner />}
           <HeaderSlotContext.Provider value={headerSlot}>
             <Outlet />
           </HeaderSlotContext.Provider>

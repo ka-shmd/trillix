@@ -9,6 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type EmailVerificationToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type Form struct {
 	ID                 uuid.UUID
 	WorkspaceID        uuid.UUID
@@ -80,10 +88,11 @@ type Submission struct {
 }
 
 type User struct {
-	ID           uuid.UUID
-	Email        string
-	PasswordHash pgtype.Text
-	CreatedAt    pgtype.Timestamptz
+	ID              uuid.UUID
+	Email           string
+	PasswordHash    pgtype.Text
+	CreatedAt       pgtype.Timestamptz
+	EmailVerifiedAt pgtype.Timestamptz
 }
 
 type UserIdentity struct {

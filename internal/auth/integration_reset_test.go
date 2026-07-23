@@ -44,6 +44,16 @@ func outboxCount(t *testing.T) int {
 	return n
 }
 
+// clearOutbox опорожняет очередь писем. Регистрация теперь ставит письмо
+// подтверждения email (слайс C), поэтому тесты про другие письма чистят outbox
+// после регистрации, чтобы считать именно своё письмо.
+func clearOutbox(t *testing.T) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `TRUNCATE outbox`); err != nil {
+		t.Fatalf("truncate outbox: %v", err)
+	}
+}
+
 func TestPasswordResetFlow(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -58,6 +68,9 @@ func TestPasswordResetFlow(t *testing.T) {
 		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d; %s", r.StatusCode, body(t, r))
 	}
+	// Регистрация ставит письмо подтверждения — убираем его, чтобы ниже считать
+	// именно письмо сброса.
+	clearOutbox(t)
 
 	// «Забыли пароль» → 204, письмо и токен появились.
 	if r := post(t, c, srv.URL+"/api/v1/auth/forgot-password", `{"email":"`+email+`"}`, ""); r.StatusCode != http.StatusNoContent {

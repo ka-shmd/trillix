@@ -19,6 +19,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -27,7 +28,7 @@ import (
 func closableForm(t *testing.T) (slug string, userID, formID uuid.UUID, formsSvc *forms.Service) {
 	t.Helper()
 	ctx := context.Background()
-	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, nil, time.Hour, "")
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	formsSvc = forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 
 	user, _, err := authSvc.Register(ctx, "own-"+uuid.NewString()[:8]+"@example.com", "supersecret1")

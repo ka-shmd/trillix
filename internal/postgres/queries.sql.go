@@ -12,6 +12,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeEmailVerificationToken = `-- name: ConsumeEmailVerificationToken :one
+UPDATE email_verification_tokens
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id
+`
+
+// Атомарно потребляет токен подтверждения (по образцу ConsumePasswordResetToken):
+// помечает использованным и возвращает user_id при «не использован и не истёк».
+func (q *Queries) ConsumeEmailVerificationToken(ctx context.Context, tokenHash []byte) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, consumeEmailVerificationToken, tokenHash)
+	var user_id uuid.UUID
+	err := row.Scan(&user_id)
+	return user_id, err
+}
+
 const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -91,6 +107,23 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const createEmailVerificationToken = `-- name: CreateEmailVerificationToken :exec
+INSERT INTO email_verification_tokens (token_hash, user_id, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreateEmailVerificationTokenParams struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Кладёт одноразовый токен подтверждения email (в БД — только SHA-256).
+func (q *Queries) CreateEmailVerificationToken(ctx context.Context, arg CreateEmailVerificationTokenParams) error {
+	_, err := q.db.Exec(ctx, createEmailVerificationToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	return err
 }
 
 const createForm = `-- name: CreateForm :one
@@ -248,7 +281,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at
+RETURNING id, email, password_hash, created_at, email_verified_at
 `
 
 type CreateUserParams struct {
@@ -266,6 +299,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
@@ -302,6 +336,19 @@ type CreateWorkspaceMemberParams struct {
 func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspaceMemberParams) error {
 	_, err := q.db.Exec(ctx, createWorkspaceMember, arg.WorkspaceID, arg.UserID, arg.Role)
 	return err
+}
+
+const deleteExpiredEmailVerificationTokens = `-- name: DeleteExpiredEmailVerificationTokens :execrows
+DELETE FROM email_verification_tokens WHERE expires_at <= now()
+`
+
+// Фоновая чистка истёкших токенов подтверждения (использованные истекают за 24 часа).
+func (q *Queries) DeleteExpiredEmailVerificationTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredEmailVerificationTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteExpiredPasswordResetTokens = `-- name: DeleteExpiredPasswordResetTokens :execrows
@@ -633,7 +680,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
@@ -648,12 +695,13 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at
+SELECT id, email, password_hash, created_at, email_verified_at
 FROM users
 WHERE email = $1
 `
@@ -666,12 +714,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2
@@ -693,6 +742,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.Email,
 		&i.PasswordHash,
 		&i.CreatedAt,
+		&i.EmailVerifiedAt,
 	)
 	return i, err
 }
@@ -1177,6 +1227,17 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 // формы — безвредно). xact-версия сама снимается на commit/rollback.
 func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
 	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
+	return err
+}
+
+const markEmailVerified = `-- name: MarkEmailVerified :exec
+UPDATE users SET email_verified_at = now() WHERE id = $1
+`
+
+// Проставляет отметку подтверждения. Идемпотентно по смыслу: повторное
+// подтверждение просто переставит время (но токен одноразовый — не дойдёт).
+func (q *Queries) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markEmailVerified, id)
 	return err
 }
 

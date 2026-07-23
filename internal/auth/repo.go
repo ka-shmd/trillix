@@ -16,10 +16,11 @@ import (
 // nil — у аккаунта нет пароля (заведён через провайдера, миграция 0009), войти
 // паролем в него нельзя.
 type User struct {
-	ID           uuid.UUID
-	Email        string
-	PasswordHash *string
-	CreatedAt    time.Time
+	ID              uuid.UUID
+	Email           string
+	PasswordHash    *string
+	CreatedAt       time.Time
+	EmailVerifiedAt *time.Time // nil = email не подтверждён (баннер в кабинете)
 }
 
 // Workspace — личный воркспейс пользователя.
@@ -121,7 +122,7 @@ func (Repo) GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, p
 	if err != nil {
 		return User{}, fmt.Errorf("get user by identity: %w", err)
 	}
-	return User{ID: row.ID, Email: row.Email, PasswordHash: ptrStr(row.PasswordHash), CreatedAt: row.CreatedAt.Time}, nil
+	return userFromRow(row), nil
 }
 
 // CreateIdentity привязывает аккаунт провайдера к пользователю.
@@ -188,13 +189,62 @@ func (Repo) DeleteExpiredPasswordResetTokens(ctx context.Context, db postgres.DB
 	return n, nil
 }
 
+// CreateEmailVerificationToken кладёт одноразовый токен подтверждения email.
+func (Repo) CreateEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
+	if err := postgres.New(db).CreateEmailVerificationToken(ctx, postgres.CreateEmailVerificationTokenParams{
+		TokenHash: tokenHash,
+		UserID:    userID,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create email verification token: %w", err)
+	}
+	return nil
+}
+
+// ConsumeEmailVerificationToken атомарно потребляет токен и возвращает user_id.
+// Токен не найден / использован / истёк → pgx.ErrNoRows (сервис маппит в ошибку).
+func (Repo) ConsumeEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error) {
+	userID, err := postgres.New(db).ConsumeEmailVerificationToken(ctx, tokenHash)
+	if err != nil {
+		return uuid.Nil, err // включая pgx.ErrNoRows — различает вызывающий
+	}
+	return userID, nil
+}
+
+// MarkEmailVerified проставляет отметку подтверждения email пользователю.
+func (Repo) MarkEmailVerified(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).MarkEmailVerified(ctx, userID); err != nil {
+		return fmt.Errorf("mark email verified: %w", err)
+	}
+	return nil
+}
+
+// DeleteExpiredEmailVerificationTokens удаляет истёкшие токены; возвращает число строк.
+func (Repo) DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredEmailVerificationTokens(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired email verification tokens: %w", err)
+	}
+	return n, nil
+}
+
 func userFromRow(u postgres.User) User {
 	return User{
-		ID:           u.ID,
-		Email:        u.Email,
-		PasswordHash: ptrStr(u.PasswordHash),
-		CreatedAt:    u.CreatedAt.Time,
+		ID:              u.ID,
+		Email:           u.Email,
+		PasswordHash:    ptrStr(u.PasswordHash),
+		CreatedAt:       u.CreatedAt.Time,
+		EmailVerifiedAt: ptrTime(u.EmailVerifiedAt),
 	}
+}
+
+// ptrTime переводит nullable timestamptz из sqlc в *time.Time: NULL → nil.
+func ptrTime(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
 }
 
 // ptrStr переводит nullable text из sqlc (pgtype.Text) в *string: NULL → nil.

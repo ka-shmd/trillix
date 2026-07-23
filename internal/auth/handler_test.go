@@ -22,6 +22,11 @@ type fakeAuthService struct {
 	resetErr       error
 	forgotEmail    string // последний email, дошедший до сервиса
 	resetCalled    bool
+	verifyErr      error
+	verifyToken    string // последний токен, дошедший до VerifyEmail
+	resendErr      error
+	resendCalled   bool
+	resendUser     User // пользователь, дошедший до ResendVerification
 }
 
 func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string, error) {
@@ -60,6 +65,17 @@ func (f *fakeAuthService) ResetPassword(_ context.Context, _, _ string) error {
 	return f.resetErr
 }
 
+func (f *fakeAuthService) VerifyEmail(_ context.Context, token string) error {
+	f.verifyToken = token
+	return f.verifyErr
+}
+
+func (f *fakeAuthService) ResendVerification(_ context.Context, user User) error {
+	f.resendCalled = true
+	f.resendUser = user
+	return f.resendErr
+}
+
 type denyLimiter struct{}
 
 func (denyLimiter) Allow(string) bool { return false }
@@ -79,6 +95,7 @@ func newTestHandlerLR(svc authService, loginLimiter, registerLimiter RateLimiter
 	// Ведра сброса по умолчанию пермиссивны (инвариант 6): тесты, проверяющие
 	// именно лимит сброса, подставляют своё ведро через newTestHandlerReset.
 	h = h.WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
+	h = h.WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux
@@ -88,6 +105,18 @@ func newTestHandlerLR(svc authService, loginLimiter, registerLimiter RateLimiter
 func newTestHandlerReset(svc authService, forgotIP, forgotEmail, reset RateLimiter) http.Handler {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false)
 	h = h.WithPasswordReset(forgotIP, forgotEmail, reset)
+	h = h.WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{})
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	return mux
+}
+
+// newTestHandlerVerify — раздельные вёдра подтверждения (для проверки лимита
+// verify по IP и resend по пользователю).
+func newTestHandlerVerify(svc authService, verify, resend RateLimiter) http.Handler {
+	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false)
+	h = h.WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
+	h = h.WithEmailVerification(verify, resend)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return mux

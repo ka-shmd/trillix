@@ -1,6 +1,6 @@
 # Справочник схемы БД
 
-Производная справка по таблицам, существующим на текущий момент (миграции `0001`–`0011`). **Источник истины и обоснование — `docs/ARCHITECTURE.md` §3**; при расхождении побеждает он, а эта справка правится в том же PR, что и миграция. Реальная схема всегда в `migrations/*.up.sql` (единый источник для sqlc).
+Производная справка по таблицам, существующим на текущий момент (миграции `0001`–`0012`). **Источник истины и обоснование — `docs/ARCHITECTURE.md` §3**; при расхождении побеждает он, а эта справка правится в том же PR, что и миграция. Реальная схема всегда в `migrations/*.up.sql` (единый источник для sqlc).
 
 ## Общие принципы
 
@@ -35,6 +35,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `email` | `TEXT` | `NOT NULL`, `UNIQUE`, `CHECK (email = lower(email))` |
 | `password_hash` | `TEXT` | argon2id (не логируется); `NULL` с `0009` — аккаунт заведён через провайдера, войти паролем нельзя |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+| `email_verified_at` | `TIMESTAMPTZ` | nullable (`0012`); `NULL` = email не подтверждён (кабинет рисует баннер). Мягкое подтверждение: аккаунт работает и без него |
 
 ## `user_identities` (0009)
 
@@ -293,3 +294,22 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 - `idx_password_reset_tokens_expires (expires_at)` (0011) — для фоновой чистки истёкших токенов (periodic-задача `reset-token-cleanup`, аналог `idx_sessions_expires`).
 
 **Связь с почтой.** Токен создаётся и письмо кладётся в `outbox` **одной транзакцией** (transactional outbox): либо есть и ссылка, и письмо в очереди, либо ничего. Provider-only аккаунт (`users.password_hash IS NULL`) через сброс задаёт пароль и становится достижим (закрывает TD-34).
+
+---
+
+## `email_verification_tokens` (0012)
+
+Одноразовые токены подтверждения email (почтовая фаза, слайс C). Устроены точно как `password_reset_tokens`: в БД лежит только **SHA-256** сырого токена (сам токен — ссылкой в письме), одноразовость и срок колонками, потребление атомарным `UPDATE … SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING user_id`.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `token_hash` | `BYTEA` | PK — SHA-256 сырого токена (не логируется) |
+| `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` |
+| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` — 24 часа от выдачи (подтверждение не так срочно, как сброс) |
+| `used_at` | `TIMESTAMPTZ` | nullable — `NULL` = не использован; ставится при подтверждении (одноразовость) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**Индексы:**
+- `idx_email_verification_tokens_expires (expires_at)` (0012) — для фоновой чистки истёкших токенов (periodic-задача `verification-token-cleanup`, аналог `idx_sessions_expires`).
+
+**Связь с почтой.** Токен создаётся и письмо кладётся в `outbox` **одной транзакцией** (transactional outbox). Письмо ставится при регистрации по паролю; повторно — по кнопке в баннере (`POST /auth/resend-verification`). Подтверждение (`POST /auth/verify-email`) проставляет `users.email_verified_at`.

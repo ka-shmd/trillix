@@ -72,12 +72,24 @@ const (
 	resetRatePerSec       = 1.0 / 12.0
 	resetBurst            = 5
 
+	// Подтверждение email (слайс C). verify по IP: перебор токенов — ведро уровня
+	// сброса, запас 5, ~1 в 12 с. resend по пользователю: кнопка «отправить ещё
+	// раз» — редкое действие, запас 3, медленное пополнение ~1 в 5 мин (не даём
+	// слать письма пачками на свой же ящик).
+	verifyRatePerSec = 1.0 / 12.0
+	verifyBurst      = 5
+	resendRatePerSec = 1.0 / 300.0
+	resendBurst      = 3
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
 
 	// Чистка истёкших токенов сброса пароля (живут 30 мин; часового прогона хватает).
 	resetTokenCleanupTimeout = 30 * time.Second
+
+	// Чистка истёкших токенов подтверждения email (живут 24 ч; тот же прогон).
+	verificationTokenCleanupTimeout = 30 * time.Second
 
 	// Диспетчер outbox (почтовая фаза): раз в интервал отправляет пачку готовых
 	// писем. Интервал — компромисс «сброс пароля не должен ощутимо ждать» против
@@ -184,6 +196,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	forgotEmailLimiter := ratelimit.NewTokenBucket(forgotEmailRatePerSec, forgotEmailBurst)
 	resetLimiter := ratelimit.NewTokenBucket(resetRatePerSec, resetBurst)
 	authHandler = authHandler.WithPasswordReset(forgotIPLimiter, forgotEmailLimiter, resetLimiter)
+	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
+	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
+	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.
@@ -272,6 +287,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
+		Name:     "verification-token-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, verificationTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredEmailVerificationTokens(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired email verification tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
 		Name:     "outbox-dispatch",
 		Interval: outboxDispatchInterval,
 		Run: func(ctx context.Context) error {
@@ -292,7 +323,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		Interval: ratelimitGCInterval,
 		Run: func(context.Context) error {
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
-				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC()
+				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
+				verifyLimiter.GC() + resendLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

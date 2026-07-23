@@ -8,7 +8,9 @@ import {
   login,
   logout,
   register,
+  resendVerification,
   resetPassword,
+  verifyEmail,
 } from './api'
 import type { User } from '../../entities/user'
 
@@ -64,6 +66,22 @@ export function useForgotPassword() {
 
 export function useResetPassword() {
   return useMutation({ mutationFn: resetPassword })
+}
+
+// Подтверждение email по токену из письма. После успеха инвалидируем me: если
+// пользователь залогинен, баннер «подтвердите почту» должен пропасть сразу.
+export function useVerifyEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: verifyEmail,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Повторная отправка письма подтверждения (кнопка в баннере). Кэш не трогает —
+// подтверждение придёт переходом по ссылке из письма, не этим запросом.
+export function useResendVerification() {
+  return useMutation({ mutationFn: resendVerification })
 }
 
 export function useLinkProvider() {

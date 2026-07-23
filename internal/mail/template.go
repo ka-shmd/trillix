@@ -13,6 +13,8 @@ import (
 const (
 	// TemplatePasswordReset — письмо со ссылкой сброса пароля. Data: {"link": "<url>"}.
 	TemplatePasswordReset Template = "password_reset"
+	// TemplateEmailVerification — письмо со ссылкой подтверждения email. Data: {"link": "<url>"}.
+	TemplateEmailVerification Template = "email_verification"
 )
 
 type mailTemplate struct {
@@ -33,6 +35,18 @@ var templates = map[Template]mailTemplate{
 				"{{.link}}\n\n" +
 				"Если сброс запрашивали не вы — просто не переходите по ссылке, " +
 				"пароль останется прежним.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateEmailVerification: {
+		subject: "Подтверждение почты в Trillix",
+		body: template.Must(template.New("email_verification").Parse(
+			"Здравствуйте!\n\n" +
+				"Вы зарегистрировались в Trillix. Чтобы подтвердить, что этот адрес " +
+				"ваш, перейдите по ссылке (она действует 24 часа):\n\n" +
+				"{{.link}}\n\n" +
+				"Если вы не регистрировались в Trillix — просто не переходите по " +
+				"ссылке, письмо можно удалить.\n\n" +
 				"— Trillix",
 		)),
 	},

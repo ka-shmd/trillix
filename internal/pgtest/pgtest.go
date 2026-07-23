@@ -7,6 +7,8 @@ package pgtest
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -14,8 +16,20 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
+
+// MailService собирает почтовый сервис на dev-транспорте (LogMailer, логи в
+// io.Discard) поверх пула. Нужен интеграционным тестам, где регистрация ставит
+// письмо подтверждения email в outbox (auth.Service.Register без рабочего мейлера
+// паникует), но сами письма тест не проверяет. Прод собирает сервис сам
+// (cmd/api/main.go) — транспорт и From там из конфига.
+func MailService(pool postgres.DBTX) *mail.Service {
+	discard := slog.New(slog.NewTextHandler(io.Discard, nil))
+	return mail.NewService(pool, mail.Repo{}, mail.LogMailer{Log: discard, From: "test@localhost"},
+		discard, 50, mail.Backoff{Base: time.Minute, Max: time.Hour})
+}
 
 // Start запускает контейнер Postgres 16, прогоняет миграции и возвращает пул к
 // свежей базе вместе с функцией остановки. Предназначен для вызова из TestMain:

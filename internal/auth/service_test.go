@@ -60,6 +60,16 @@ type fakeStore struct {
 	consumeErr            error
 	consumeCalled         bool // потреблялся ли токен (проверка «валидация до потребления»)
 	resetTokensPurged     int64
+
+	// Подтверждение email (слайс C).
+	createdVerifyToken     bool
+	createdVerifyTokenUser uuid.UUID
+	verifyConsumeExists    bool // false → ErrNoRows (нет/использован/истёк)
+	verifyConsumeUserID    uuid.UUID
+	verifyConsumeCalled    bool
+	markVerifiedCalled     bool
+	markVerifiedUser       uuid.UUID
+	verifyTokensPurged     int64
 }
 
 func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {
@@ -161,6 +171,30 @@ func (f *fakeStore) DeleteExpiredPasswordResetTokens(_ context.Context, _ postgr
 	return f.resetTokensPurged, nil
 }
 
+func (f *fakeStore) CreateEmailVerificationToken(_ context.Context, _ postgres.DBTX, _ []byte, userID uuid.UUID, _ time.Time) error {
+	f.createdVerifyToken = true
+	f.createdVerifyTokenUser = userID
+	return nil
+}
+
+func (f *fakeStore) ConsumeEmailVerificationToken(_ context.Context, _ postgres.DBTX, _ []byte) (uuid.UUID, error) {
+	f.verifyConsumeCalled = true
+	if !f.verifyConsumeExists {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	return f.verifyConsumeUserID, nil
+}
+
+func (f *fakeStore) MarkEmailVerified(_ context.Context, _ postgres.DBTX, userID uuid.UUID) error {
+	f.markVerifiedCalled = true
+	f.markVerifiedUser = userID
+	return nil
+}
+
+func (f *fakeStore) DeleteExpiredEmailVerificationTokens(_ context.Context, _ postgres.DBTX) (int64, error) {
+	return f.verifyTokensPurged, nil
+}
+
 // fakeEnqueuer — записывает поставленные в очередь письма для проверок.
 type fakeEnqueuer struct {
 	msgs []mail.EmailMessage
@@ -199,6 +233,9 @@ func TestRegister_Success(t *testing.T) {
 	}
 	if !store.createdUser || !store.createdWorkspace || !store.createdMember || !store.createdSession {
 		t.Fatalf("не все шаги регистрации выполнены: %+v", store)
+	}
+	if !store.createdVerifyToken {
+		t.Error("при регистрации не создан токен подтверждения email")
 	}
 }
 
