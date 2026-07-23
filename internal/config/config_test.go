@@ -187,11 +187,93 @@ func TestLoad(t *testing.T) {
 
 	t.Run("невалидный MAIL_TRANSPORT — ошибка", func(t *testing.T) {
 		setValidEnv(t)
-		t.Setenv("MAIL_TRANSPORT", "smtp") // ещё не поддержан
+		t.Setenv("MAIL_TRANSPORT", "carrier-pigeon") // не из списка
 
 		_, err := Load()
 		if err == nil || !strings.Contains(err.Error(), "MAIL_TRANSPORT") {
 			t.Fatalf("ожидалась ошибка про MAIL_TRANSPORT, получено: %v", err)
+		}
+	})
+
+	t.Run("smtp с полными параметрами — успех (Postbox-подобный)", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "postbox.example.net")
+		t.Setenv("MAIL_SMTP_PORT", "587")
+		t.Setenv("MAIL_SMTP_TLS", "starttls")
+		t.Setenv("MAIL_SMTP_USERNAME", "key-id")
+		t.Setenv("MAIL_SMTP_PASSWORD", "smtp-secret")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("ожидался успех, получено: %v", err)
+		}
+		if cfg.MailSMTPPort != 587 || cfg.MailSMTPTLS != MailSMTPTLSStartTLS {
+			t.Fatalf("параметры SMTP не разобраны: %+v", cfg)
+		}
+	})
+
+	t.Run("smtp без учётки — успех (Mailpit-подобный)", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "mailpit")
+		t.Setenv("MAIL_SMTP_PORT", "1025")
+		t.Setenv("MAIL_SMTP_TLS", "none")
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("ожидался успех без AUTH, получено: %v", err)
+		}
+	})
+
+	t.Run("smtp без host — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_PORT", "587")
+		t.Setenv("MAIL_SMTP_TLS", "starttls")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_SMTP_HOST") {
+			t.Fatalf("ожидалась ошибка про MAIL_SMTP_HOST, получено: %v", err)
+		}
+	})
+
+	t.Run("smtp с нечисловым портом — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "mailpit")
+		t.Setenv("MAIL_SMTP_PORT", "not-a-port")
+		t.Setenv("MAIL_SMTP_TLS", "none")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_SMTP_PORT") {
+			t.Fatalf("ожидалась ошибка про MAIL_SMTP_PORT, получено: %v", err)
+		}
+	})
+
+	t.Run("smtp с неизвестным TLS — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "mailpit")
+		t.Setenv("MAIL_SMTP_PORT", "1025")
+		t.Setenv("MAIL_SMTP_TLS", "sorta-secure")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_SMTP_TLS") {
+			t.Fatalf("ожидалась ошибка про MAIL_SMTP_TLS, получено: %v", err)
+		}
+	})
+
+	t.Run("smtp с половиной учётки — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "postbox.example.net")
+		t.Setenv("MAIL_SMTP_PORT", "587")
+		t.Setenv("MAIL_SMTP_TLS", "starttls")
+		t.Setenv("MAIL_SMTP_USERNAME", "key-id") // пароль не задан
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_SMTP_PASSWORD") {
+			t.Fatalf("ожидалась ошибка про парную учётку, получено: %v", err)
 		}
 	})
 
