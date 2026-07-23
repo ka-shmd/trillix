@@ -253,6 +253,12 @@ func Load() (Config, error) {
 		if (cfg.MailSMTPUsername == "") != (cfg.MailSMTPPassword == "") {
 			return Config{}, fmt.Errorf("MAIL_SMTP_USERNAME and MAIL_SMTP_PASSWORD: set both or neither")
 		}
+		// PLAIN-аутентификация по открытому каналу невозможна: net/smtp её отвергает
+		// к удалённому хосту, и письма молча не уходили бы (вечный ретрай). Ловим
+		// связку на старте, а не при первой отправке — учётка требует TLS.
+		if cfg.MailSMTPUsername != "" && cfg.MailSMTPTLS == MailSMTPTLSNone {
+			return Config{}, fmt.Errorf("MAIL_SMTP_TLS=none несовместим с учёткой: SMTP AUTH требует TLS (starttls|implicit)")
+		}
 	default:
 		return Config{}, fmt.Errorf("invalid MAIL_TRANSPORT %q: want %q or %q",
 			cfg.MailTransport, MailTransportLog, MailTransportSMTP)

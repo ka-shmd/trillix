@@ -263,6 +263,21 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("smtp с учёткой, но TLS=none — ошибка (AUTH требует TLS)", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("MAIL_TRANSPORT", "smtp")
+		t.Setenv("MAIL_SMTP_HOST", "postbox.example.net")
+		t.Setenv("MAIL_SMTP_PORT", "25")
+		t.Setenv("MAIL_SMTP_TLS", "none")
+		t.Setenv("MAIL_SMTP_USERNAME", "key-id")
+		t.Setenv("MAIL_SMTP_PASSWORD", "smtp-secret")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "MAIL_SMTP_TLS=none") {
+			t.Fatalf("ожидалась ошибка про TLS=none с учёткой, получено: %v", err)
+		}
+	})
+
 	t.Run("smtp с половиной учётки — ошибка", func(t *testing.T) {
 		setValidEnv(t)
 		t.Setenv("MAIL_TRANSPORT", "smtp")
