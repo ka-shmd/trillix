@@ -1,4 +1,4 @@
-name: CI
+name: CI (docs)
 
 on:
   push:
@@ -10,85 +10,19 @@ permissions:
 
 # Отменять устаревшие прогоны на том же ref, чтобы не жечь минуты.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-docs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # Расхождения документов с кодом раньше регистрировались в TECH-DEBT §4 вместо
   # того, чтобы чиниться, — и реестр сам протух. Джоба лёгкая (секунды, без
-  # тулчейнов), поэтому стоит первой и даёт быструю обратную связь.
+  # тулчейнов) и гоняется на ЛЮБОЕ изменение, включая docs-only: она ловит и
+  # правки-под-код (дерево модулей, миграции, env), и битые ссылки на техдолг в
+  # самих доках. Тяжёлые проверки (Go, фронты, Lighthouse) — в ci-code.yml, и на
+  # docs-only изменениях НЕ запускаются (там path-фильтр).
   docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: check-docs
         run: ./scripts/check-docs.sh
-
-  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.12.2
-          # ./... заполз бы в web/**/node_modules с посторонними .go-файлами.
-          args: ./cmd/... ./internal/... ./migrations/...
-      - name: sqlc drift check
-        run: |
-          go tool sqlc generate
-          git diff --exit-code internal/postgres \
-            || { echo "::error::internal/postgres устарел — запусти 'make sqlc' и закоммить"; exit 1; }
-      - name: test
-        # Тег integration включает интеграционные тесты против Postgres в
-        # testcontainers; Docker на ubuntu-раннерах доступен из коробки.
-        run: go test -race -tags=integration ./cmd/... ./internal/... ./migrations/...
-
-  web:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        project: [app, renderer]
-    defaults:
-      run:
-        working-directory: web/${{ matrix.project }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: web/${{ matrix.project }}/package-lock.json
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-        # Дальше — проверки только рендерера (публичная форма грузится на телефоне):
-        # бюджет веса и Lighthouse. LHCI поднимает сервер над собранным dist/ и
-        # гоняет lighthouse (mobile) — тестируется прод-статика, не dev-сервер.
-        # Chrome предустановлен на ubuntu-раннере.
-      - name: bundle budget
-        if: matrix.project == 'renderer'
-        run: npm run check:bundle
-      - name: Lighthouse (mobile) — Performance ≥ 90
-        if: matrix.project == 'renderer'
-        run: npx --yes @lhci/cli@0.14.x autorun
-      - name: Lighthouse score (медиана прогонов)
-        # !cancelled() — показать баллы даже если гейт выше упал (collect уже
-        # записал manifest.json до ассертов).
-        if: ${{ !cancelled() && matrix.project == 'renderer' }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const m = JSON.parse(fs.readFileSync(".lighthouseci/manifest.json", "utf8"));
-            const r = m.find((x) => x.isRepresentativeRun) || m[0];
-            console.log("Lighthouse (mobile), медиана:");
-            for (const [k, v] of Object.entries(r.summary)) {
-              console.log(`  ${k}: ${Math.round(v * 100)}`);
-            }
-          '
