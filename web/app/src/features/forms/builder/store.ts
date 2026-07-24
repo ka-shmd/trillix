@@ -147,9 +147,11 @@ export type BuilderActions = {
   // нажатие обязано быть одним шагом отмены. Никаких правок — no-op (историю и
   // dirty не трогает).
   setAfterSubmit: (settings: { thankYouText: string; redirectUrl: string }) => void
-  // undo/redo откатывают и повторяют изменения документа. Пустой стек — no-op.
-  undo: () => void
-  redo: () => void
+  // undo/redo откатывают и повторяют изменения документа. Возвращают id блока для
+  // каретки после отката (§2.4, firstDiffFocus) — фокус-движок его потребляет; пустой
+  // стек / нечего фокусировать — null (no-op / каретка на заголовок).
+  undo: () => string | null
+  redo: () => string | null
   // markSaved снимает dirty после успешного PATCH (автосейв — шаг 6).
   markSaved: () => void
   // toSchema сериализует документ для отправки на бэкенд.
@@ -284,6 +286,21 @@ function mutateOptions(
       b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b,
     ),
   }
+}
+
+// firstDiffFocus — id блока, на который встаёт каретка после undo/redo (§2.4:
+// «первый блок, которого коснулся откат; блок исчез → его сосед»). Сравниваем
+// раскладку ДО и ПОСЛЕ отката по позициям: первое расхождение — по id (структурная
+// правка) или по идентичности объекта (правка текста создаёт новый объект блока в
+// commit). Если расхождение за концом восстановленного списка (откат удаления в
+// хвосте) — последний блок как сосед; список пуст — null (каретка уйдёт на заголовок).
+function firstDiffFocus(before: Block[], after: Block[]): string | null {
+  const n = Math.min(before.length, after.length)
+  let i = 0
+  while (i < n && before[i]!.id === after[i]!.id && before[i] === after[i]) i++
+  if (i < after.length) return after[i]!.id
+  if (after.length > 0) return after[after.length - 1]!.id
+  return null
 }
 
 // snapshot снимает документ (blocks + поля формы-уровня) для стеков истории.
@@ -641,10 +658,12 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             : { thankYouText, redirectUrl },
         ),
 
-      undo: () =>
+      undo: () => {
+        let focus: string | null = null
         set((s) => {
           const prev = s.past[s.past.length - 1]
           if (!prev) return s
+          focus = firstDiffFocus(s.blocks, prev.blocks)
           // Снапшот разворачивается целиком, а не по полю: перечисление руками —
           // это ровно тот способ, которым новое поле документа теряется в undo.
           return {
@@ -654,12 +673,16 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             lastTag: null,
             dirty: true,
           }
-        }),
+        })
+        return focus
+      },
 
-      redo: () =>
+      redo: () => {
+        let focus: string | null = null
         set((s) => {
           const next = s.future[s.future.length - 1]
           if (!next) return s
+          focus = firstDiffFocus(s.blocks, next.blocks)
           return {
             ...next,
             past: [...s.past, snapshot(s)],
@@ -667,7 +690,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             lastTag: null,
             dirty: true,
           }
-        }),
+        })
+        return focus
+      },
 
       markSaved: () => set({ dirty: false }),
 

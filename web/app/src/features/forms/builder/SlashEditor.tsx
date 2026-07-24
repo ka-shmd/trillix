@@ -37,7 +37,7 @@ import { useBuilderStore } from './storeContext'
 import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
-import { createFocusEngine, FocusEngineProvider } from './focusEngine'
+import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
@@ -54,7 +54,17 @@ const DEFAULT_BLOCK_TYPE = 'text' as const
 // строки регистрируют цели, обработчики зовут engine.focusBlock(id). menuForId
 // просит свежесозданную строку открыть меню типов (вставка блока по «/»). Стор,
 // автосейв и превью — прежние; переписана только поверхность ввода.
-export function SlashEditor({ formId, initialTitle }: { formId: string; initialTitle: string }) {
+export function SlashEditor({
+  formId,
+  initialTitle,
+  engine,
+}: {
+  formId: string
+  initialTitle: string
+  // Фокус-движок создаётся в BuilderScreen (переживает смену режима и нужен undo/redo,
+  // §2.4) и раздаётся полотну через контекст.
+  engine: FocusEngine
+}) {
   const blocks = useBuilderStore((s) => s.blocks)
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
   const addBlockAfterGroup = useBuilderStore((s) => s.addBlockAfterGroup)
@@ -67,8 +77,6 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
-  // Фокус-движок полотна: один на инстанс (useMemo), строки берут его из контекста.
-  const engine = useMemo(() => createFocusEngine(), [])
   // dragBlockId/overBlockId — активный БЛОК (не группа) и строка под ним: для
   // подсветки целевой группы и линии вставки при блочном драге. У группового драга
   // отклик нативный (sortable двигает группы сам), эти состояния не участвуют.

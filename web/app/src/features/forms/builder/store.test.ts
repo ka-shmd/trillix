@@ -820,4 +820,38 @@ describe('createBuilderStore — undo/redo', () => {
     store.getState().moveGroup(topId, 'up') // верхняя группа вверх — некуда
     expect(store.getState().dirty).toBe(false)
   })
+
+  it('undo возвращает id блока, которого коснулся откат текста (§2.4)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    store.getState().addBlock('short_text')
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(titleId, { text: 'Имя' })
+
+    const focus = store.getState().undo() // откат правки текста подписи
+    expect(focus).toBe(titleId)
+    expect(store.getState().blocks[0]?.text).toBe('')
+  })
+
+  it('undo удаления в хвосте фокусирует соседа; undo единственной вставки → null', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // единственная вставка
+    // Откат вставки: список пустеет → фокусировать нечего (каретка уйдёт на заголовок).
+    expect(store.getState().undo()).toBeNull()
+
+    // Две строки + третья; откат третьей → сосед (последняя оставшаяся).
+    store.getState().redo() // вернуть short_text
+    store.getState().addBlock('email')
+    const emailId = store.getState().blocks[1]!.id
+    store.getState().addBlock('number') // третья, в хвосте
+    expect(store.getState().undo()).toBe(emailId) // сосед — предыдущий хвост
+  })
+
+  it('redo возвращает id восстановленного блока', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    const id = store.getState().blocks[0]!.id
+    store.getState().undo() // убрали
+    expect(store.getState().redo()).toBe(id) // вернули — каретка на него
+  })
 })

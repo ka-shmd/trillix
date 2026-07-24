@@ -13,6 +13,7 @@ import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SlashEditor } from './SlashEditor'
+import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { useAutosave } from './useAutosave'
@@ -36,9 +37,27 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
     return s
   })
 
+  // Фокус-движок полотна живёт здесь (а не в SlashEditor): он обязан пережить
+  // переключение режима edit↔preview (SlashEditor размонтируется) и, главное, дать
+  // undo/redo поставить каретку на затронутый блок (§2.4) — отмену дёргает этот
+  // экран (клавиатура + кнопки), а не полотно. SlashEditor раздаёт его через контекст.
+  const [engine] = useState(() => createFocusEngine())
+
   const headerSlot = useHeaderSlot()
   const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+
+  // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
+  // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
+  // фокус, как только строка зарегистрирует цель (pending в focusEngine).
+  const undo = () => {
+    const id = store.getState().undo()
+    if (id) engine.focusBlock(id)
+  }
+  const redo = () => {
+    const id = store.getState().redo()
+    if (id) engine.focusBlock(id)
+  }
 
   // Публиковать можно только когда серверный черновик догнал редактор: нет
   // несохранённых правок и последний автосейв успешен (иначе снапшот будет старым).
@@ -64,15 +83,16 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       if ((e.target as HTMLElement | null)?.closest('[data-undo-native]')) return
       if (e.code === 'KeyZ' && !e.shiftKey) {
         e.preventDefault()
-        store.getState().undo()
+        undo()
       } else {
         e.preventDefault()
-        store.getState().redo()
+        redo()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [store])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store, engine])
 
   return (
     <BuilderStoreContext.Provider value={store}>
@@ -89,7 +109,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 size="icon-sm"
                 className="text-muted-foreground"
                 disabled={!canUndo}
-                onClick={() => store.getState().undo()}
+                onClick={undo}
                 aria-label="Отменить (Ctrl+Z)"
                 title="Отменить (Ctrl+Z)"
               >
@@ -100,7 +120,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 size="icon-sm"
                 className="text-muted-foreground"
                 disabled={!canRedo}
-                onClick={() => store.getState().redo()}
+                onClick={redo}
                 aria-label="Повторить (Ctrl+Shift+Z)"
                 title="Повторить (Ctrl+Shift+Z)"
               >
@@ -151,7 +171,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' && <SlashEditor formId={detail.id} initialTitle={detail.title} />}
+      {mode === 'edit' && (
+        <SlashEditor formId={detail.id} initialTitle={detail.title} engine={engine} />
+      )}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
           <PreviewPane title={detail.title} />
