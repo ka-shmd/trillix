@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -26,15 +27,10 @@ import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
+import { useFocusEngine } from './focusEngine'
+import { textareaCaret } from './caret'
 import { SlashMenu } from './SlashMenu'
 import { ImageField } from './ImageField'
-
-// Автовысота textarea: строка вопроса растёт под контент, не заводя скролл.
-function autosize(el: HTMLTextAreaElement | null) {
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = `${el.scrollHeight}px`
-}
 
 export interface BlockRowProps {
   block: Block
@@ -45,10 +41,6 @@ export interface BlockRowProps {
   // только на подпись мульти-группы («подпись владеет группой»). null/undefined —
   // грип тащит блок (блочный слой dnd: одиночки и внутренние строки).
   groupHandle?: Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners'> | null
-  // focusMe — редактор просит поставить фокус на label этой строки (после Enter/
-  // удаления соседа/навигации стрелками). onFocusHandled сбрасывает запрос.
-  focusMe: boolean
-  onFocusHandled: () => void
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
   // onAddBelow — Enter: новая текстовая строка без меню (продолжаем писать).
@@ -70,14 +62,13 @@ export function BlockRow({
   block,
   formId,
   groupHandle,
-  focusMe,
-  onFocusHandled,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
   onArrow,
 }: BlockRowProps) {
+  const engine = useFocusEngine()
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
@@ -137,26 +128,30 @@ export function BlockRow({
   // свою высоту. Смещение соседей (scale=1) от этого не страдает.
   const style = { transform: CSS.Translate.toString(transform), transition }
 
-  useEffect(() => {
-    if (!focusMe) return
-    focusLabelEnd()
-    onFocusHandled()
-  }, [focusMe, onFocusHandled])
-
-  useEffect(() => {
-    autosize(labelRef.current)
-  }, [block.text])
-
-  function focusLabelEnd() {
+  // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
+  // textarea: image/поля/варианты). Строится от АКТУАЛЬНОГО элемента: identity
+  // textarea могла смениться при ре-рендере, поэтому не кэшируем сам адаптер.
+  const caret = useCallback(() => {
     const el = labelRef.current
-    if (!el) return
-    el.focus()
-    const len = el.value.length
-    el.setSelectionRange(len, len)
-  }
+    return el ? textareaCaret(el) : null
+  }, [])
+
+  // Регистрация фокус-цели строки в фокус-движке (§2.5): текстовые строки дают цель
+  // каретки, и движок ставит на них фокус по focusBlock(id). Строки без textarea
+  // цель пока не регистрируют — их фокус-цели (объектная остановка, инпуты полей и
+  // вариантов) добавляет срез §2.1; до тех пор поведение прежнее (фокус на них не
+  // встаёт). Прежде это делали проп focusMe + эффект + onFocusHandled.
+  useEffect(() => {
+    if (!hasTextLine) return
+    return engine.register(block.id, { focus: (edge) => caret()?.focus(edge) })
+  }, [engine, block.id, hasTextLine, caret])
+
+  useEffect(() => {
+    caret()?.autosize()
+  }, [caret, block.text])
 
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    const el = e.currentTarget
+    const c = textareaCaret(e.currentTarget)
     if (e.key === 'Enter') {
       e.preventDefault()
       onAddBelow(block.id)
@@ -168,7 +163,7 @@ export function BlockRow({
       // литеральный «/» в text-абзаце с клавиатуры не ввести (всегда команда).
       e.preventDefault()
       setSlashOpen(true)
-    } else if (e.key === 'Backspace' && el.selectionStart === 0 && el.selectionEnd === 0) {
+    } else if (e.key === 'Backspace' && c.caretAtStart()) {
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
@@ -178,10 +173,10 @@ export function BlockRow({
     } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault()
       moveBlock(block.id, e.key === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.key === 'ArrowUp' && el.selectionStart === 0) {
+    } else if (e.key === 'ArrowUp' && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.key === 'ArrowDown' && el.selectionStart === el.value.length) {
+    } else if (e.key === 'ArrowDown' && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
     }
@@ -200,9 +195,9 @@ export function BlockRow({
     setSlashOpen(false)
     // У image нет редактируемого заголовка (ImageField, labelRef=null) — фокусировать
     // нечего; продолжаем поток текстовой строкой ниже. У бандла/подписи фокус на
-    // текущий блок (стал title); у голого поля textarea нет — focusLabelEnd no-op.
+    // текущий блок (стал title); у голого поля textarea нет — caret() no-op.
     if (item.type === 'image') onAddBelow(block.id)
-    else requestAnimationFrame(focusLabelEnd)
+    else requestAnimationFrame(() => caret()?.focus('end'))
   }
 
   const iconBtn =

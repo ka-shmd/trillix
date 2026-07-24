@@ -29,6 +29,7 @@ import { useBuilderStore } from './storeContext'
 import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
+import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
@@ -41,9 +42,10 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const DEFAULT_BLOCK_TYPE = 'text' as const
 
 // SlashEditor — полотно редактора: название формы первой строкой, ниже блоки как
-// редактируемые строки. Фокусом между строками управляет focusId; menuForId просит
-// свежесозданную строку открыть меню типов (вставка блока по «/»). Стор, автосейв
-// и превью — прежние; переписана только поверхность ввода.
+// редактируемые строки. Фокусом между строками управляет фокус-движок (§2.5):
+// строки регистрируют цели, обработчики зовут engine.focusBlock(id). menuForId
+// просит свежесозданную строку открыть меню типов (вставка блока по «/»). Стор,
+// автосейв и превью — прежние; переписана только поверхность ввода.
 export function SlashEditor({ formId, initialTitle }: { formId: string; initialTitle: string }) {
   const blocks = useBuilderStore((s) => s.blocks)
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
@@ -54,7 +56,8 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
-  const [focusId, setFocusId] = useState<string | null>(null)
+  // Фокус-движок полотна: один на инстанс (useMemo), строки берут его из контекста.
+  const engine = useMemo(() => createFocusEngine(), [])
   // dragBlockId/overBlockId — активный БЛОК (не группа) и строка под ним: для
   // подсветки целевой группы и линии вставки при блочном драге. У группового драга
   // отклик нативный (sortable двигает группы сам), эти состояния не участвуют.
@@ -144,12 +147,12 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     const id = addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
     if (opts.seed) updateBlock(id, { text: opts.seed })
     if (opts.openMenu) setMenuForId(id)
-    setFocusId(id)
+    engine.focusBlock(id)
   }
 
   function focusFirstOrCreate() {
     const first = blocks[0]
-    if (first) setFocusId(first.id)
+    if (first) engine.focusBlock(first.id)
     else startBlock(null)
   }
 
@@ -175,7 +178,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     // image без редактируемого заголовка не на что фокусировать — открываем новую
     // текстовую строку ниже (как в slash-потоке), чтобы каретка не пропала.
     if (item.type === 'image') startBlock(id)
-    else setFocusId(id)
+    else engine.focusBlock(id)
     setInsertOpen(false)
   }
 
@@ -201,7 +204,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     // (иначе фокус потерялся бы в body и печатать было бы некуда).
     if ((cur.text ?? '') === '') {
       removeBlock(id)
-      if (prev) setFocusId(prev.id)
+      if (prev) engine.focusBlock(prev.id)
       else {
         // Заголовок всегда смонтирован (над полотном), поэтому фокусируем его сразу —
         // ре-рендер пустого полотна его не размонтирует, каретка сохранится. rAF тут
@@ -218,13 +221,14 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   function handleArrow(id: string, dir: 'up' | 'down') {
     const i = blocks.findIndex((b) => b.id === id)
     const neighbor = dir === 'up' ? blocks[i - 1] : blocks[i + 1]
-    if (neighbor) setFocusId(neighbor.id)
+    if (neighbor) engine.focusBlock(neighbor.id)
   }
 
   return (
     // Метрики холста = общий .rf-page (fields.css): десктоп 96/80/96, мобильный
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
+    <FocusEngineProvider value={engine}>
     <div className="mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
       <FormTitleInput
         formId={formId}
@@ -267,9 +271,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   formId={formId}
                   blockIds={blockIds}
                   highlight={g.id === highlightGroupId}
-                  focusId={focusId}
                   menuForId={menuForId}
-                  onFocusHandled={() => setFocusId(null)}
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
@@ -295,6 +297,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
 
       <SubmitButtonEditor />
     </div>
+    </FocusEngineProvider>
   )
 }
 
@@ -315,9 +318,7 @@ function GroupRow({
   formId,
   blockIds,
   highlight,
-  focusId,
   menuForId,
-  onFocusHandled,
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
@@ -327,9 +328,7 @@ function GroupRow({
   formId: string
   blockIds: string[]
   highlight: boolean
-  focusId: string | null
   menuForId: string | null
-  onFocusHandled: () => void
   onAddBelow: (id: string) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
@@ -362,8 +361,6 @@ function GroupRow({
               groupHandle={
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
-              focusMe={focusId === b.id}
-              onFocusHandled={onFocusHandled}
               openMenuOnMount={menuForId === b.id}
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}
