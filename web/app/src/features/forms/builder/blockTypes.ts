@@ -85,6 +85,15 @@ export const MENU_ITEMS: ReadonlyArray<MenuItem> = [
   ),
 ]
 
+// filterMenuItems — пункты меню типов, отфильтрованные подстрокой по названию
+// (единый фильтр для инлайн-слеша и «+»-диалога). Пустой запрос → весь список.
+// Порядок MENU_ITEMS (вопросы → поля → лэйаут) сохраняется — на нём строится
+// плоский индекс клавиатурной навигации инлайн-меню.
+export function filterMenuItems(query: string): MenuItem[] {
+  const q = query.trim().toLowerCase()
+  return q ? MENU_ITEMS.filter((b) => b.label.toLowerCase().includes(q)) : [...MENU_ITEMS]
+}
+
 // blockTypeLabel — человеческая подпись типа блока (единая с меню). Тип встречается
 // в нескольких пунктах, но подпись у него одна.
 const TYPE_LABELS = new Map<BlockType, string>(

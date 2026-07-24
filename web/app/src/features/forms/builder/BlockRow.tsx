@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -24,7 +25,7 @@ import {
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
-import { type MenuItem } from './blockTypes'
+import { filterMenuItems, type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
@@ -107,8 +108,17 @@ export function BlockRow({
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
   const labelRef = useRef<HTMLTextAreaElement>(null)
-  // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
-  const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
+  // Инлайн-слеш (§3.5): «/» остаётся литералом в тексте, меню открывается поверх и
+  // фильтруется продолжением набора. slash — null (закрыто) либо {start, query}:
+  // start — индекс «/» в тексте, query — набранное после него (до каретки). Строку,
+  // рождённую по «/» (openMenuOnMount), стор засевает текстом «/», поэтому меню
+  // открыто с монтирования на позиции 0. slashActive — подсвеченный пункт (индекс в
+  // отфильтрованном списке).
+  const [slash, setSlash] = useState<{ start: number; query: string } | null>(
+    openMenuOnMount ? { start: 0, query: '' } : null,
+  )
+  const [slashActive, setSlashActive] = useState(0)
+  const slashList = slash ? filterMenuItems(slash.query) : []
   // Меню действий блока (Cmd+. §3.3): открыто ли.
   const [actionOpen, setActionOpen] = useState(false)
   // Описание вопроса: раскрыто ли поле. Непустое описание раскрыто с монтирования.
@@ -177,11 +187,37 @@ export function BlockRow({
     caret()?.autosize()
   }, [caret, block.text])
 
-  // Биндинги по e.code (§3.1): физическая клавиша не зависит от раскладки. «/» —
-  // единственное исключение (нужен именно символ, а не клавиша Slash), и он будет
-  // переписан инлайн-фильтрацией слеш-меню (13.2 §3.5).
+  // Биндинги по e.code (§3.1): физическая клавиша не зависит от раскладки. «/» не
+  // перехватывается — уходит в текст литералом (§3.5), меню ведёт onLabelChange.
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
+    // Открытый инлайн-слеш забирает навигацию: ↑/↓ — по пунктам, Enter — выбор,
+    // Esc — закрыть (текст остаётся). Backspace отдаём нативному вводу (удаляет символ,
+    // onLabelChange пересчитает/закроет фильтр) — иначе на «/» в начале строки
+    // сработало бы схлопывание блока. Печать проваливается в текст и фильтрует.
+    if (slash) {
+      if (e.code === 'ArrowDown') {
+        e.preventDefault()
+        return setSlashActive((i) => (slashList.length ? (i + 1) % slashList.length : 0))
+      }
+      if (e.code === 'ArrowUp') {
+        e.preventDefault()
+        return setSlashActive((i) =>
+          slashList.length ? (i - 1 + slashList.length) % slashList.length : 0,
+        )
+      }
+      if (e.code === 'Enter') {
+        e.preventDefault()
+        const item = slashList[slashActive]
+        if (item) pickSlash(item)
+        return
+      }
+      if (e.code === 'Escape') {
+        e.preventDefault()
+        return closeSlash()
+      }
+      if (e.code === 'Backspace') return
+    }
     if (actionChord(e)) {
       e.preventDefault()
       setActionOpen(true)
@@ -202,14 +238,6 @@ export function BlockRow({
       // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
       e.preventDefault()
       onAddBelow(block.id, { inside: e.shiftKey })
-    } else if (e.key === '/' && isContent) {
-      // «/» открывает меню типов у неотвечаемого (text) блока — в т.ч. когда текст
-      // уже набран: он станет подписью выбранного поля (changeBlockType сохраняет
-      // label), как «напиши вопрос → «/» → выбери тип» в Tally. У блока с уже
-      // выбранным типом «/» не работает — смена типа запрещена. Компромисс:
-      // литеральный «/» в text-абзаце с клавиатуры не ввести (всегда команда).
-      e.preventDefault()
-      setSlashOpen(true)
     } else if (e.code === 'Backspace' && c.caretAtStart()) {
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
@@ -246,8 +274,44 @@ export function BlockRow({
         : item.group === 'field'
           ? makeField(block.id, item.type)
           : changeBlockType(block.id, item.type)
-    setSlashOpen(false)
+    setSlash(null)
     engine.focusBlock(focusId, 'end')
+  }
+
+  const closeSlash = () => setSlash(null)
+
+  // Выбор типа из инлайн-слеша: сначала вырезаем из текста «/» и набранный фильтр
+  // (§3.5), затем применяем тип. Обе правки — updateBlock({text}), они коалесятся с
+  // предыдущим набором в один шаг истории (тег ub:id:text), поэтому лишнего шага
+  // undo вырезание не добавляет. changeBlockType/makeQuestion читают уже очищенный
+  // текст из стора (подпись поля = то, что осталось), см. pickType.
+  function pickSlash(item: MenuItem) {
+    if (slash) {
+      const value = block.text ?? ''
+      const end = slash.start + 1 + slash.query.length
+      updateBlock(block.id, { text: value.slice(0, slash.start) + value.slice(end) })
+    }
+    pickType(item)
+  }
+
+  // onChange текстовой строки: ведёт инлайн-слеш (§3.5). Открытое меню — пересчитываем
+  // фильтр от каретки; каретка ушла за «/», там пробел/перенос, или ни один тип не
+  // совпал — закрываем, текст (включая «/») остаётся. Меню закрыто — «/» прямо перед
+  // кареткой у неотвечаемого (text) блока открывает его. Печать всегда идёт в текст.
+  function onLabelChange(e: ChangeEvent<HTMLTextAreaElement>) {
+    const value = e.target.value
+    const caret = e.target.selectionStart ?? value.length
+    updateBlock(block.id, { text: value })
+    if (slash) {
+      if (caret <= slash.start || value[slash.start] !== '/') return closeSlash()
+      const query = value.slice(slash.start + 1, caret)
+      if (/\s/.test(query) || filterMenuItems(query).length === 0) return closeSlash()
+      setSlash({ start: slash.start, query })
+      setSlashActive(0)
+    } else if (isContent && caret > 0 && value[caret - 1] === '/') {
+      setSlash({ start: caret - 1, query: '' })
+      setSlashActive(0)
+    }
   }
 
   const iconBtn =
@@ -350,7 +414,14 @@ export function BlockRow({
           инпут плейсхолдера; image/date/scale — объектная остановка (§2.2).
           Каждая ветка регистрирует свою фокус-цель в движке. */}
       {hasTextLine ? (
-        <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
+        <SlashMenu
+          open={slash !== null}
+          items={slashList}
+          activeIndex={slashActive}
+          onActiveChange={setSlashActive}
+          onPick={pickSlash}
+          onClose={closeSlash}
+        >
           <div className="min-w-0">
             <div className={isConsent ? 'flex items-start gap-2' : undefined}>
               {isConsent && (
@@ -361,7 +432,7 @@ export function BlockRow({
                 rows={1}
                 value={block.text ?? ''}
                 placeholder={captionPh}
-                onChange={(e) => updateBlock(block.id, { text: e.target.value })}
+                onChange={onLabelChange}
                 onFocus={() => setLabelFocused(true)}
                 onBlur={() => setLabelFocused(false)}
                 onKeyDown={onLabelKeyDown}

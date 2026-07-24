@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
+import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
@@ -345,6 +346,120 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
     expect(click).toHaveBeenCalled()
     // Объект не должен трактовать это как обычный Enter (строка ниже).
     expect(handlers.onAddBelow).not.toHaveBeenCalled()
+  })
+})
+
+// Инлайн-слеш (§3.5, TD-33): «/» — литерал в тексте, меню фильтруется набором,
+// несовпадение/Esc закрывают с сохранением текста, выбор вырезает «/»+фильтр и
+// применяет тип. В отличие от статичного setup здесь строка ПОДПИСАНА на стор
+// (reactiveRow), чтобы value textarea отражал набор — иначе вырезание и конверсия
+// (читают текущий block.text) не проверить. Один текстовый (text) блок.
+function reactiveRow(text = '') {
+  const store = createBuilderStore()
+  store.getState().hydrate({
+    schemaVersion: 2,
+    blocks: [{ id: 't', groupId: 'g1', type: 'text', text }],
+  })
+  const engine = createFocusEngine()
+  function Row() {
+    const blocks = useStore(store, (s) => s.blocks)
+    const b = blocks[0]
+    if (!b) return null
+    return (
+      <BlockRow
+        block={b}
+        formId="f"
+        groupHandle={null}
+        openMenuOnMount={false}
+        onAddBelow={vi.fn()}
+        onInsertBelow={vi.fn()}
+        onBackspaceAtStart={vi.fn()}
+        onDeleteObject={vi.fn()}
+        onDeleteBlock={vi.fn()}
+        onAnswerAction={vi.fn()}
+        onArrow={vi.fn()}
+      />
+    )
+  }
+  render(
+    <BuilderStoreContext.Provider value={store}>
+      <FocusEngineProvider value={engine}>
+        <DndContext>
+          <SortableContext items={['t']}>
+            <Row />
+          </SortableContext>
+        </DndContext>
+      </FocusEngineProvider>
+    </BuilderStoreContext.Provider>,
+  )
+  return { store, engine }
+}
+
+// type — эмулирует набор в textarea ПОСИМВОЛЬНО (дописывает к текущему значению),
+// каретка в конец. Посимвольность важна: инлайн-слеш триггерится, только когда «/»
+// стоит прямо перед кареткой (§3.5), — вставка всей строки разом это не воспроизводит.
+function type(value: string) {
+  const ta = document.querySelector('textarea')!
+  let cur = ta.value
+  for (const ch of value.slice(cur.length)) {
+    cur += ch
+    fireEvent.change(ta, {
+      target: { value: cur, selectionStart: cur.length, selectionEnd: cur.length },
+    })
+  }
+}
+
+describe('инлайн-слеш (§3.5, TD-33)', () => {
+  it('«/» открывает меню; литерал остаётся в тексте, каретка не покидает строку', () => {
+    const { store } = reactiveRow()
+    const ta = document.querySelector('textarea')!
+    ta.focus()
+    type('/')
+    expect(store.getState().blocks[0]!.text).toBe('/') // «/» в тексте, не проглочен
+    expect(document.body.textContent).toContain('Короткий ответ') // меню открыто
+    expect(document.activeElement).toBe(ta) // фокус в textarea, а не в поповере
+  })
+
+  it('набор после «/» фильтрует пункты', () => {
+    reactiveRow()
+    type('/email')
+    const menu = document.querySelector('[role="listbox"]')!.textContent ?? ''
+    expect(menu).toContain('Email')
+    expect(menu).not.toContain('Дата')
+  })
+
+  it('несовпадение («и/или») закрывает меню, текст сохраняется', () => {
+    const { store } = reactiveRow('и')
+    type('и/или')
+    expect(store.getState().blocks[0]!.text).toBe('и/или')
+    expect(document.querySelector('[role="listbox"]')).toBeNull() // меню закрыто
+  })
+
+  it('Esc закрывает меню, «/» остаётся в тексте', () => {
+    const { store } = reactiveRow()
+    type('/')
+    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Escape', code: 'Escape' })
+    expect(document.querySelector('[role="listbox"]')).toBeNull()
+    expect(store.getState().blocks[0]!.text).toBe('/')
+  })
+
+  it('выбор вырезает «/»+фильтр и конвертирует (Вопрос: подпись+поле)', () => {
+    const { store } = reactiveRow()
+    type('/email')
+    // ArrowDown не нужен — активен первый пункт (q_email, раздел «Вопросы»).
+    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
+    const blocks = store.getState().blocks
+    expect(blocks.map((b) => b.type)).toEqual(['title', 'email'])
+    expect(blocks[0]!.text).toBe('') // «/email» вырезан целиком
+  })
+
+  it('текст перед «/» становится подписью поля', () => {
+    const { store } = reactiveRow('Возраст')
+    type('Возраст/')
+    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
+    const blocks = store.getState().blocks
+    expect(blocks[0]!.type).toBe('title')
+    expect(blocks[0]!.text).toBe('Возраст') // «/» вырезан, текст-подпись сохранён
   })
 })
 

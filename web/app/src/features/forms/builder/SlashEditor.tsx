@@ -172,7 +172,11 @@ export function SlashEditor({
     const id = opts.inside
       ? addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
       : addBlockAfterGroup(afterId, DEFAULT_BLOCK_TYPE)
-    if (opts.seed) updateBlock(id, { text: opts.seed })
+    // openMenu (вставка блока по «/» с объектной остановки/пустого полотна) засевает
+    // строку литералом «/»: инлайн-слеш открыт с монтирования на позиции 0 (§3.5),
+    // «/» остаётся в тексте, как при наборе «/» в самой строке.
+    const seed = opts.openMenu ? '/' : opts.seed
+    if (seed) updateBlock(id, { text: seed })
     if (opts.openMenu) setMenuForId(id)
     engine.focusBlock(id)
   }
