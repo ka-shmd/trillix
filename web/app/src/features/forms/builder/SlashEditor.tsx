@@ -39,6 +39,7 @@ import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
+import { chords } from './shortcuts'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
 import { Input } from '@/components/ui/input'
@@ -526,7 +527,7 @@ function EmptyStarter({
   onStart: (opts?: { openMenu?: boolean; seed?: string }) => void
 }) {
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    if (e.key === 'Enter') {
+    if (chords.enter(e)) {
       e.preventDefault()
       onStart()
     } else if (e.key === '/') {
@@ -630,7 +631,7 @@ function FormTitleInput({
   // Enter/↓ — уйти на первый блок; Enter в заголовке не заводит перевод строки
   // (title однострочный логически, хоть и переносится визуально при отрисовке).
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === 'Enter' || e.key === 'ArrowDown') {
+    if (chords.enter(e) || chords.arrowDown(e)) {
       e.preventDefault()
       onEnter()
     }

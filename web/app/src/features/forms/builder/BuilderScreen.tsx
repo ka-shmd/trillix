@@ -17,6 +17,7 @@ import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { useAutosave } from './useAutosave'
+import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
 // Что показано вместо полотна. Полотно (edit) — документ из блоков; превью — как
@@ -73,21 +74,18 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   // отмене всего документа — так ведёт себя Notion/Tally). Пустой стек — no-op.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return
-      // Сверяем физическую клавишу (e.code), а не e.key: при кириллической (и любой
-      // не-латинской) раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался —
-      // срабатывал нативный undo контролируемого textarea (откат по одному символу).
-      if (e.code !== 'KeyZ' && e.code !== 'KeyY') return
+      // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
+      // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
+      // undo контролируемого textarea (откат по одному символу).
+      const isUndo = chords.undo(e)
+      const isRedo = chords.redo(e)
+      if (!isUndo && !isRedo) return
       // Поля со своей историей (название формы — серверный rename вне стора билдера)
       // откатываются нативным undo браузера: их не перехватываем.
       if ((e.target as HTMLElement | null)?.closest('[data-undo-native]')) return
-      if (e.code === 'KeyZ' && !e.shiftKey) {
-        e.preventDefault()
-        undo()
-      } else {
-        e.preventDefault()
-        redo()
-      }
+      e.preventDefault()
+      if (isUndo) undo()
+      else redo()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

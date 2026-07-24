@@ -194,7 +194,7 @@ describe('Backspace на инпуте плейсхолдера (§3.4)', () => {
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
-    fireEvent.keyDown(el(), { key: 'Backspace' })
+    fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
     expect(handlers.onDeleteObject).toHaveBeenCalledWith('st')
   })
 
@@ -204,7 +204,7 @@ describe('Backspace на инпуте плейсхолдера (§3.4)', () => {
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: { placeholder: 'Иван' } }],
     })
     engine.focusBlock('st', 'end')
-    fireEvent.keyDown(el(), { key: 'Backspace' })
+    fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
     expect(handlers.onDeleteObject).not.toHaveBeenCalled()
   })
 })

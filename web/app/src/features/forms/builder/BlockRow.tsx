@@ -34,6 +34,7 @@ import { textCaret } from './caret'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
+import { arrowDir, chords } from './shortcuts'
 
 export interface BlockRowProps {
   block: Block
@@ -65,18 +66,6 @@ export interface BlockRowProps {
   // родитель — знает состав группы). На картинке файловый диалог открывает ObjectStop.
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
-}
-
-// deleteChord — Cmd/Ctrl+Shift+Backspace по e.code (§3.1/§3.4): единый предикат для
-// всех поверхностей строки, чтобы явное удаление не разъезжалось между ними.
-function deleteChord(e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; code: string }) {
-  return (e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Backspace'
-}
-
-// actionChord — Cmd/Ctrl+. (Period по e.code, §3.3): открыть меню действий блока.
-// Один предикат на все поверхности строки.
-function actionChord(e: { metaKey: boolean; ctrlKey: boolean; code: string }) {
-  return (e.metaKey || e.ctrlKey) && e.code === 'Period'
 }
 
 // BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
@@ -196,62 +185,62 @@ export function BlockRow({
     // onLabelChange пересчитает/закроет фильтр) — иначе на «/» в начале строки
     // сработало бы схлопывание блока. Печать проваливается в текст и фильтрует.
     if (slash) {
-      if (e.code === 'ArrowDown') {
+      if (chords.arrowDown(e)) {
         e.preventDefault()
         return setSlashActive((i) => (slashList.length ? (i + 1) % slashList.length : 0))
       }
-      if (e.code === 'ArrowUp') {
+      if (chords.arrowUp(e)) {
         e.preventDefault()
         return setSlashActive((i) =>
           slashList.length ? (i - 1 + slashList.length) % slashList.length : 0,
         )
       }
-      if (e.code === 'Enter') {
+      if (chords.enter(e)) {
         e.preventDefault()
         const item = slashList[slashActive]
         if (item) pickSlash(item)
         return
       }
-      if (e.code === 'Escape') {
+      if (chords.escape(e)) {
         e.preventDefault()
         return closeSlash()
       }
-      if (e.code === 'Backspace') return
+      if (chords.backspace(e)) return
     }
-    if (actionChord(e)) {
+    if (chords.actionMenu(e)) {
       e.preventDefault()
       setActionOpen(true)
-    } else if (deleteChord(e)) {
+    } else if (chords.deleteBlock(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
-    } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
+    } else if (chords.answerAction(e)) {
       // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2). Проверяем ДО простого Enter.
       e.preventDefault()
       onAnswerAction(block.id)
-    } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    } else if (chords.moveGroup(e)) {
       // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
       // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
       // меняется (regroup якорит по id), строка не перемонтируется.
       e.preventDefault()
-      moveGroup(block.id, e.code === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.code === 'Enter') {
+      moveGroup(block.id, arrowDir(e))
+    } else if (chords.enter(e)) {
       // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
       e.preventDefault()
       onAddBelow(block.id, { inside: e.shiftKey })
-    } else if (e.code === 'Backspace' && c.caretAtStart()) {
+    } else if (chords.backspace(e) && c.caretAtStart()) {
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
       // гасим всегда — нативный Backspace в начале блока и так ничего не делает.
       e.preventDefault()
       onBackspaceAtStart(block.id)
-    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    } else if (chords.moveItem(e)) {
       e.preventDefault()
-      moveBlock(block.id, e.code === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.code === 'ArrowUp' && c.caretAtStart()) {
+      moveBlock(block.id, arrowDir(e))
+    } else if (chords.arrowUp(e) && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.code === 'ArrowDown' && c.caretAtEnd()) {
+    } else if (chords.arrowDown(e) && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
     }
@@ -559,37 +548,37 @@ function ObjectStop({
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (actionChord(e)) {
+    if (chords.actionMenu(e)) {
       e.preventDefault()
       onOpenActions()
-    } else if (deleteChord(e)) {
+    } else if (chords.deleteBlock(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
-    } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
+    } else if (chords.answerAction(e)) {
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
       e.preventDefault()
       ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click()
-    } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    } else if (chords.moveGroup(e)) {
       e.preventDefault()
-      onMoveGroup(e.code === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+      onMoveGroup(arrowDir(e))
+    } else if (chords.moveItem(e)) {
       e.preventDefault()
-      onMove(e.code === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.code === 'ArrowUp') {
+      onMove(arrowDir(e))
+    } else if (chords.arrowUp(e)) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.code === 'ArrowDown') {
+    } else if (chords.arrowDown(e)) {
       e.preventDefault()
       onArrow(block.id, 'down')
-    } else if (e.code === 'Enter') {
+    } else if (chords.enter(e)) {
       e.preventDefault()
       onAddBelow(block.id)
     } else if (e.key === '/') {
       e.preventDefault()
       onAddBelow(block.id, { openMenu: true })
-    } else if (e.code === 'Backspace') {
+    } else if (chords.backspace(e)) {
       e.preventDefault()
       onDeleteObject(block.id)
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -728,21 +717,21 @@ function AnswerField({
   // текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (onOpenActions && actionChord(e)) {
+    if (onOpenActions && chords.actionMenu(e)) {
       e.preventDefault()
       onOpenActions()
-    } else if (onDeleteBlock && deleteChord(e)) {
+    } else if (onDeleteBlock && chords.deleteBlock(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
-    } else if (onArrow && e.key === 'ArrowUp' && c.caretAtStart()) {
+    } else if (onArrow && chords.arrowUp(e) && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (onArrow && e.key === 'ArrowDown' && c.caretAtEnd()) {
+    } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
     } else if (
       onEmptyBackspace &&
-      e.key === 'Backspace' &&
+      chords.backspace(e) &&
       e.currentTarget.value === '' &&
       c.caretAtStart()
     ) {
@@ -883,46 +872,46 @@ function OptionsInline({
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
     const isLast = i === options.length - 1
-    if (actionChord(e)) {
+    if (chords.actionMenu(e)) {
       e.preventDefault()
       onOpenActions()
-    } else if (deleteChord(e)) {
+    } else if (chords.deleteBlock(e)) {
       // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
       e.preventDefault()
       onDeleteBlock(block.id)
-    } else if (e.code === 'Enter' && !e.metaKey && !e.ctrlKey && isLast && empty) {
+    } else if (chords.enter(e) && !e.metaKey && !e.ctrlKey && isLast && empty) {
       // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
       // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
       e.preventDefault()
       removeOption(block.id, optionId)
       onAddBelow(block.id)
-    } else if (e.code === 'Enter') {
+    } else if (chords.enter(e)) {
       // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
       // тот же жест «действие над ответом» (§3.2).
       e.preventDefault()
       pendingFocus.current = addOptionAfter(block.id, optionId)
-    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    } else if (chords.moveItem(e)) {
       // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
       e.preventDefault()
-      const dir = e.code === 'ArrowUp' ? 'up' : 'down'
+      const dir = arrowDir(e)
       const target = dir === 'up' ? i - 1 : i + 1
       if (target >= 0 && target < options.length) {
         moveOption(block.id, optionId, dir)
         pendingFocus.current = optionId
       }
-    } else if (e.code === 'Backspace' && empty) {
+    } else if (chords.backspace(e) && empty) {
       e.preventDefault()
       const prev = options[i - 1]
       removeOption(block.id, optionId)
       if (prev) pendingFocus.current = prev.id
       else onLeaveTop()
-    } else if (e.code === 'ArrowDown') {
+    } else if (chords.arrowDown(e)) {
       // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
       e.preventDefault()
       const next = options[i + 1]
       if (next) optionRefs.current.get(next.id)?.focus()
       else onArrow(block.id, 'down')
-    } else if (e.code === 'ArrowUp') {
+    } else if (chords.arrowUp(e)) {
       e.preventDefault()
       const prev = options[i - 1]
       if (prev) optionRefs.current.get(prev.id)?.focus()

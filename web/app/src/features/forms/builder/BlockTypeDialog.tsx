@@ -3,6 +3,7 @@ import { ArrowRight, Search } from 'lucide-react'
 import { type Block, type BlockType, carriesText, isChoiceType } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { chords } from './shortcuts'
 import { typeIcons } from './blockTypeIcons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -63,7 +64,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && activeMeta) onPick(activeMeta)
+              if (chords.enter(e) && activeMeta) onPick(activeMeta)
             }}
             placeholder="Поиск по названию…"
             className="pl-8"
