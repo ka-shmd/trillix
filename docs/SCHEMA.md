@@ -160,7 +160,6 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
         ],
         "placeholder": "Например…", // текстовые поля ввода (≤200); подсказка в поле
         "imageKey": "ws/ab12.png",  // только у image: ключ объекта в бакете (≤200)
-        "alt": "Схема процесса",    // только у image: alt-текст картинки (≤500)
         "scaleMin": 1,              // только у scale: оба конца или ни одного;
         "scaleMax": 5               //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
       }
@@ -206,7 +205,6 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `settings.placeholder` | ≤ 200 |
 | `settings.scaleMin` / `scaleMax` (scale) | оба или ни одного; 0 ≤ min < max ≤ 10 |
 | длина `settings.imageKey` (image) | ≤ 200 |
-| длина `settings.alt` (image) | ≤ 500 |
 
 ---
 

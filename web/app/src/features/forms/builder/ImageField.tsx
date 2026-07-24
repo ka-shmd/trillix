@@ -1,20 +1,19 @@
 import { useRef, useState, type ChangeEvent } from 'react'
 import { ImagePlus, RefreshCw, Trash2 } from 'lucide-react'
-import { type Block, MAX_ALT_LEN } from '@entities/formSchema'
+import { type Block } from '@entities/formSchema'
 import { mediaSrc } from '@fields/media'
 import { useBuilderStore } from './storeContext'
 import { uploadImage } from './mediaUpload'
 
 // ImageField — редактор image-блока: пустой блок показывает зону загрузки, при
 // выборе файла — оптимистичный локальный превью (createObjectURL) с прогресс-баром,
-// на успех пишет settings.imageKey (автосейв сохранит), готовый блок — картинка +
-// поле alt; «заменить»/«удалить» — оверлей поверх картинки, виден при наведении.
+// на успех пишет settings.imageKey (автосейв сохранит), готовый блок — картинка;
+// «заменить»/«удалить» — оверлей поверх картинки, виден при наведении.
 // Вид самой картинки — общий rf-image; layout и
 // зона загрузки — Tailwind (editor-only, респондент их не видит).
 export function ImageField({ block, formId }: { block: Block; formId: string }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const imageKey = block.settings?.imageKey
-  const alt = block.settings?.alt ?? ''
   const fileRef = useRef<HTMLInputElement>(null)
   // Локальный превью на время загрузки (blob:-URL); прогресс 0–100 или null (не грузим).
   const [preview, setPreview] = useState<string | null>(null)
@@ -56,7 +55,7 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
 
       {shownSrc ? (
         <div className="group relative w-fit">
-          <img className="rf-image" src={shownSrc} alt={alt} />
+          <img className="rf-image" src={shownSrc} alt="" />
           {uploading && <ProgressOverlay pct={progress} />}
           {imageKey && !uploading && (
             <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-[var(--rf-radius)] bg-black/35 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -94,19 +93,6 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
             Повторить
           </button>
         </p>
-      )}
-
-      {imageKey && !uploading && (
-        <div className="mt-2 flex flex-col gap-2">
-          <input
-            value={alt}
-            onChange={(e) => updateBlock(block.id, { settings: { ...block.settings, alt: e.target.value } })}
-            maxLength={MAX_ALT_LEN}
-            placeholder="Описание картинки (alt, необязательно)"
-            aria-label="Описание картинки (alt)"
-            className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
-          />
-        </div>
       )}
     </div>
   )

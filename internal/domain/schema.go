@@ -36,7 +36,6 @@ const (
 	MaxSubmitLabelLen = 100
 	MaxPlaceholderLen = 200
 	MaxImageKeyLen    = 200
-	MaxAltLen         = 500
 	// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода;
 	// на телефоне больше десяти в строку не помещается (нужно число — есть number).
 	// Низ — 0: NPS считается от нуля.
@@ -121,7 +120,7 @@ func (t BlockType) isAnswerable() bool { return !t.isContent() }
 
 // carriesText — тип несёт собственное поле text: подписи, контентные абзацы/
 // заголовки и consent (текст согласия рядом с галочкой). У прочих отвечаемых
-// (и у image, где текст в settings.alt) поле text обязано быть пустым.
+// (и у image) поле text обязано быть пустым.
 func (t BlockType) carriesText() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockConsent
 }
@@ -134,7 +133,7 @@ type Option struct {
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
-// placeholder у текстовых полей ввода, imageKey/alt у типа image, диапазон у scale.
+// placeholder у текстовых полей ввода, imageKey у типа image, диапазон у scale.
 //
 // ScaleMin/ScaleMax — указатели, а не int: 0 — законный минимум шкалы (NPS 0–10),
 // и с `omitempty` нулевое значение вылетало бы из JSON, а «не задано» было бы
@@ -144,7 +143,6 @@ type BlockSettings struct {
 	Options     []Option `json:"options,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 	ImageKey    string   `json:"imageKey,omitempty"`
-	Alt         string   `json:"alt,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
 }
@@ -327,7 +325,7 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		return schemaErr("%s: text длиннее %d символов", at, MaxTextLen)
 	}
 	// Собственный text — только у carriesText-типов (подписи, контент, consent);
-	// у прочих подпись живёт отдельным блоком, а у image текст в settings.alt.
+	// у прочих подпись живёт отдельным блоком.
 	if !b.Type.carriesText() && b.Text != "" {
 		return schemaErr("%s: тип %q не несёт собственного текста", at, b.Type)
 	}
@@ -337,11 +335,8 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if n := utf8.RuneCountInString(b.Settings.ImageKey); n > MaxImageKeyLen {
 		return schemaErr("%s: imageKey длиннее %d символов", at, MaxImageKeyLen)
 	}
-	if n := utf8.RuneCountInString(b.Settings.Alt); n > MaxAltLen {
-		return schemaErr("%s: alt длиннее %d символов", at, MaxAltLen)
-	}
-	// imageKey/alt — только у image (как options у choice).
-	if b.Type != BlockImage && (b.Settings.ImageKey != "" || b.Settings.Alt != "") {
+	// imageKey — только у image (как options у choice).
+	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
 	if err := validateScaleSettings(b); err != nil {

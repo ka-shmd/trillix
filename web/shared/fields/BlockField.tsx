@@ -46,7 +46,7 @@ export function BlockField({
     if (block.type === 'image') {
       const key = block.settings?.imageKey
       return key ? (
-        <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+        <img className="rf-image" src={mediaSrc(key)} alt="" />
       ) : (
         <div className="rf-image-empty" aria-hidden="true" />
       )
@@ -92,7 +92,7 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
   if (block.type === 'image') {
     const key = block.settings?.imageKey
     return key ? (
-      <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+      <img className="rf-image" src={mediaSrc(key)} alt="" />
     ) : (
       <div className="rf-image-empty" aria-hidden="true" />
     )

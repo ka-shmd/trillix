@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   formSchemaSchema,
   isValidPhone,
-  MAX_ALT_LEN,
   MAX_BLOCKS,
   MAX_IMAGE_KEY_LEN,
   MAX_OPTIONS,
@@ -52,7 +51,7 @@ describe('formSchemaSchema — валидные', () => {
       schemaVersion: 2,
       blocks: [
         { id: 'l1', groupId: 'g1', type: 'label', text: 'Логотип' },
-        { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png', alt: 'пример' } },
+        { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
         { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     },
@@ -160,17 +159,15 @@ describe('formSchemaSchema — невалидные', () => {
     'imageKey на не-image': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { imageKey: 'ws/x.png' } }],
     },
-    'alt на не-image': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'heading', text: 'x', settings: { alt: 'y' } }],
+    // alt удалён из контракта целиком (фаза 13): strictObject отвергает его даже у image.
+    'alt удалён из контракта': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png', alt: 'y' } }],
     },
     'image с опциями': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { options: [{ id: 'o', label: 'z' }] } }],
     },
     'слишком длинный imageKey': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { imageKey: 'a'.repeat(MAX_IMAGE_KEY_LEN + 1) } }],
-    },
-    'слишком длинный alt': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { alt: 'я'.repeat(MAX_ALT_LEN + 1) } }],
     },
     'дубль id опций внутри блока': {
       blocks: [

@@ -20,9 +20,8 @@ export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
 export const MAX_PLACEHOLDER_LEN = 200
-// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.) и alt-текст.
+// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.).
 export const MAX_IMAGE_KEY_LEN = 200
-export const MAX_ALT_LEN = 500
 // Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 export const MAX_THANK_YOU_TEXT_LEN = 2000
 export const MAX_REDIRECT_URL_LEN = 2000
@@ -139,8 +138,8 @@ export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
 export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
 // Типы с собственным полем text: подписи, контентные абзацы/заголовки и consent
-// (текст согласия рядом с галочкой). У прочих отвечаемых и у image (текст в
-// settings.alt) поле text обязано быть пустым. Зеркалит Go carriesText().
+// (текст согласия рядом с галочкой). У прочих отвечаемых и у image поле text
+// обязано быть пустым. Зеркалит Go carriesText().
 const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
   'title',
   'label',
@@ -167,10 +166,9 @@ const settingsSchema = z.strictObject({
   options: z.array(optionSchema).max(MAX_OPTIONS).optional(),
   // Плейсхолдер поля ввода (текстовые типы). У остальных игнорируется.
   placeholder: z.string().max(MAX_PLACEHOLDER_LEN).optional(),
-  // Картинка (тип image): ключ объекта в бакете и alt-текст. У остальных типов —
-  // запрещены (superRefine ниже), как options у не-choice.
+  // Картинка (тип image): ключ объекта в бакете. У остальных типов запрещён
+  // (superRefine ниже), как options у не-choice.
   imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
-  alt: z.string().max(MAX_ALT_LEN).optional(),
   // Диапазон шкалы (тип scale). Оба конца или ни одного (superRefine ниже);
   // «ни одного» — недособранный черновик, как choice без опций.
   scaleMin: z.number().int().optional(),
@@ -208,22 +206,13 @@ export const blockSchema = z
         path: ['text'],
       })
     }
-    // imageKey/alt — только у image (как options только у choice).
-    if (b.type !== 'image') {
-      if (b.settings?.imageKey) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `тип ${b.type} не имеет картинки`,
-          path: ['settings', 'imageKey'],
-        })
-      }
-      if (b.settings?.alt) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `тип ${b.type} не имеет alt`,
-          path: ['settings', 'alt'],
-        })
-      }
+    // imageKey — только у image (как options только у choice).
+    if (b.type !== 'image' && b.settings?.imageKey) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не имеет картинки`,
+        path: ['settings', 'imageKey'],
+      })
     }
     // Диапазон шкалы — только у scale (как options у choice).
     const { scaleMin, scaleMax } = b.settings ?? {}

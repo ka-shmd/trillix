@@ -278,7 +278,7 @@ export function BlockRow({
           ответов не собирает, required к нему неприменим. */}
       {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
 
-      {/* Image (неотвечаемый) — загрузка/картинка + alt вместо текстовой строки;
+      {/* Image (неотвечаемый) — загрузка/картинка вместо текстовой строки;
           менять тип у него нельзя, поэтому без SlashMenu и label-textarea. */}
       {isImage ? (
         <div className="min-w-0">

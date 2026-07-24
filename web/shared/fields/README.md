@@ -147,15 +147,16 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
 объектном хранилище (S3; полный дизайн — `docs/DESIGN-s3-media.md`). Что важно для
 полотна:
 
-- **Схема:** `settings.imageKey` (ключ объекта в бакете, не URL) и `settings.alt`.
-  Хранится ключ — URL вычисляется, чтобы данные не привязывались к провайдеру.
+- **Схема:** `settings.imageKey` (ключ объекта в бакете, не URL). Хранится ключ —
+  URL вычисляется, чтобы данные не привязывались к провайдеру. Alt-текста нет:
+  картинка декоративна, рендерер ставит жёсткий `alt=""` (ADR §10, фаза 13).
 - **URL:** `mediaSrc(key)` (`@fields/media`) → относительный `/media/<key>`, одинаков
   для кабинета и рендерера (раздаётся same-origin: в проде Caddy, в dev vite-proxy;
   `docs/DESIGN-s3-media.md` §8). Покрывается CSP `img-src 'self'`.
 - **Рендер (все три поверхности):** `BlockField` рисует `<img class="rf-image">` по
   `mediaSrc` (пустой ключ → ничего). `rf-image` — в `fields.css`. Превью и рендерер
   едут автоматически; **редактор** рисует свой `ImageField` (зона загрузки, прогресс,
-  `alt`, замена/удаление) — его editor-only вид на Tailwind, но саму картинку он
+  замена/удаление) — его editor-only вид на Tailwind, но саму картинку он
   показывает тем же `rf-image`.
 - **Загрузка:** `mediaUpload.ts` — XHR `POST /api/v1/forms/{id}/media` (multipart,
   прогресс через `upload.onprogress`, CSRF из cookie); ответ `{ imageKey }` пишется в
