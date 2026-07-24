@@ -44,9 +44,10 @@ export interface BlockRowProps {
   groupHandle?: Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners'> | null
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
-  // onAddBelow — новая текстовая строка ПОСЛЕ группы. Enter — пустая; с объектной
-  // остановки — засев (печатный символ/вставка → seed) или открытие меню («/»).
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
+  // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
+  // (opts.inside) — внутрь группы под текущей строкой; с объектной остановки — засев
+  // (печатный символ/вставка → seed) или открытие меню («/»).
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
   onInsertBelow: (id: string) => void
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
@@ -77,6 +78,7 @@ export function BlockRow({
   const engine = useFocusEngine()
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
+  const moveGroup = useBuilderStore((s) => s.moveGroup)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
@@ -151,11 +153,21 @@ export function BlockRow({
     caret()?.autosize()
   }, [caret, block.text])
 
+  // Биндинги по e.code (§3.1): физическая клавиша не зависит от раскладки. «/» —
+  // единственное исключение (нужен именно символ, а не клавиша Slash), и он будет
+  // переписан инлайн-фильтрацией слеш-меню (13.2 §3.5).
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (e.key === 'Enter') {
+    if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+      // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
+      // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
+      // меняется (regroup якорит по id), строка не перемонтируется.
       e.preventDefault()
-      onAddBelow(block.id)
+      moveGroup(block.id, e.code === 'ArrowUp' ? 'up' : 'down')
+    } else if (e.code === 'Enter') {
+      // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
+      e.preventDefault()
+      onAddBelow(block.id, { inside: e.shiftKey })
     } else if (e.key === '/' && isContent) {
       // «/» открывает меню типов у неотвечаемого (text) блока — в т.ч. когда текст
       // уже набран: он станет подписью выбранного поля (changeBlockType сохраняет
@@ -164,20 +176,20 @@ export function BlockRow({
       // литеральный «/» в text-абзаце с клавиатуры не ввести (всегда команда).
       e.preventDefault()
       setSlashOpen(true)
-    } else if (e.key === 'Backspace' && c.caretAtStart()) {
+    } else if (e.code === 'Backspace' && c.caretAtStart()) {
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
       // гасим всегда — нативный Backspace в начале блока и так ничего не делает.
       e.preventDefault()
       onBackspaceAtStart(block.id)
-    } else if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       e.preventDefault()
-      moveBlock(block.id, e.key === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.key === 'ArrowUp' && c.caretAtStart()) {
+      moveBlock(block.id, e.code === 'ArrowUp' ? 'up' : 'down')
+    } else if (e.code === 'ArrowUp' && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.key === 'ArrowDown' && c.caretAtEnd()) {
+    } else if (e.code === 'ArrowDown' && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
     }
@@ -316,6 +328,7 @@ export function BlockRow({
             block={block}
             onLeaveTop={() => onArrow(block.id, 'up')}
             onArrow={onArrow}
+            onAddBelow={onAddBelow}
           />
         </div>
       ) : supportsPlaceholder(block.type) ? (
@@ -330,6 +343,7 @@ export function BlockRow({
           onDeleteObject={onDeleteObject}
           onArrow={onArrow}
           onMove={(dir) => moveBlock(block.id, dir)}
+          onMoveGroup={(dir) => moveGroup(block.id, dir)}
         >
           {isImage ? (
             <ImageField block={block} formId={formId} />
@@ -393,37 +407,44 @@ function ObjectStop({
   onDeleteObject,
   onArrow,
   onMove,
+  onMoveGroup,
 }: {
   block: Block
   children: ReactNode
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onDeleteObject: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   onMove: (dir: 'up' | 'down') => void
+  onMoveGroup: (dir: 'up' | 'down') => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
 
+  // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
+  // ниже) — как и в текстовой строке.
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       e.preventDefault()
-      onMove(e.key === 'ArrowUp' ? 'up' : 'down')
-    } else if (e.key === 'ArrowUp') {
+      onMoveGroup(e.code === 'ArrowUp' ? 'up' : 'down')
+    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+      e.preventDefault()
+      onMove(e.code === 'ArrowUp' ? 'up' : 'down')
+    } else if (e.code === 'ArrowUp') {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.key === 'ArrowDown') {
+    } else if (e.code === 'ArrowDown') {
       e.preventDefault()
       onArrow(block.id, 'down')
-    } else if (e.key === 'Enter') {
+    } else if (e.code === 'Enter') {
       e.preventDefault()
       onAddBelow(block.id)
     } else if (e.key === '/') {
       e.preventDefault()
       onAddBelow(block.id, { openMenu: true })
-    } else if (e.key === 'Backspace') {
+    } else if (e.code === 'Backspace') {
       e.preventDefault()
       onDeleteObject(block.id)
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -641,19 +662,28 @@ function AnswerField({
 }
 
 // OptionsInline — варианты choice-блока строками прямо под вопросом, с глифом
-// радио/чекбокса как у готового поля. Клавиатура: Enter — новый вариант (фокус на
-// него), Backspace в пустом — удалить и уйти на предыдущий (пустой первый →
-// onLeaveTop, к подписи группы), ↑/↓ — обход вариантов, на краях — соседняя строка.
+// радио/чекбокса как у готового поля. Клавиатура (§3.2): Enter — новый вариант
+// СРАЗУ ПОСЛЕ текущего (Д5, фокус на него); Enter в пустом последнем — выход из
+// списка (удалить его, новая строка после группы); Cmd/Ctrl+Enter — тоже вариант
+// после текущего; Alt+↑/↓ — перенос варианта; Backspace в пустом — удалить и уйти
+// на предыдущий (пустой первый → onLeaveTop, к подписи группы); ↑/↓ — обход
+// вариантов, на краях — соседняя строка.
 function OptionsInline({
   block,
   onLeaveTop,
   onArrow,
+  onAddBelow,
 }: {
   block: Block
   onLeaveTop: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
+  // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
+  // после всей группы choice-блока.
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
 }) {
   const addOption = useBuilderStore((s) => s.addOption)
+  const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
+  const moveOption = useBuilderStore((s) => s.moveOption)
   const updateOption = useBuilderStore((s) => s.updateOption)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
@@ -685,24 +715,43 @@ function OptionsInline({
     pendingFocus.current = null
   }, [options])
 
+  // Биндинги по e.code (§3.1). i — индекс варианта в options.
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
-    if (e.key === 'Enter') {
+    const empty = e.currentTarget.value === ''
+    const isLast = i === options.length - 1
+    if (e.code === 'Enter' && !e.metaKey && !e.ctrlKey && isLast && empty) {
+      // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
+      // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
       e.preventDefault()
-      pendingFocus.current = 'last'
-      addOption(block.id)
-    } else if (e.key === 'Backspace' && e.currentTarget.value === '') {
+      removeOption(block.id, optionId)
+      onAddBelow(block.id)
+    } else if (e.code === 'Enter') {
+      // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
+      // тот же жест «действие над ответом» (§3.2).
+      e.preventDefault()
+      pendingFocus.current = addOptionAfter(block.id, optionId)
+    } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+      // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
+      e.preventDefault()
+      const dir = e.code === 'ArrowUp' ? 'up' : 'down'
+      const target = dir === 'up' ? i - 1 : i + 1
+      if (target >= 0 && target < options.length) {
+        moveOption(block.id, optionId, dir)
+        pendingFocus.current = optionId
+      }
+    } else if (e.code === 'Backspace' && empty) {
       e.preventDefault()
       const prev = options[i - 1]
       removeOption(block.id, optionId)
       if (prev) pendingFocus.current = prev.id
       else onLeaveTop()
-    } else if (e.key === 'ArrowDown') {
+    } else if (e.code === 'ArrowDown') {
       // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
       e.preventDefault()
       const next = options[i + 1]
       if (next) optionRefs.current.get(next.id)?.focus()
       else onArrow(block.id, 'down')
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.code === 'ArrowUp') {
       e.preventDefault()
       const prev = options[i - 1]
       if (prev) optionRefs.current.get(prev.id)?.focus()

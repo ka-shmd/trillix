@@ -160,7 +160,7 @@ describe('поведение объектной остановки (§2.2)', () 
 
   it('Enter → пустая строка ниже', () => {
     const { stop, handlers } = objectStop()
-    fireEvent.keyDown(stop, { key: 'Enter' })
+    fireEvent.keyDown(stop, { key: 'Enter', code: 'Enter' })
     expect(handlers.onAddBelow).toHaveBeenCalledWith('sc')
   })
 
@@ -172,13 +172,13 @@ describe('поведение объектной остановки (§2.2)', () 
 
   it('Backspace → удалить объект', () => {
     const { stop, handlers } = objectStop()
-    fireEvent.keyDown(stop, { key: 'Backspace' })
+    fireEvent.keyDown(stop, { key: 'Backspace', code: 'Backspace' })
     expect(handlers.onDeleteObject).toHaveBeenCalledWith('sc')
   })
 
   it('стрелки — обход строк, а не засев', () => {
     const { stop, handlers } = objectStop()
-    fireEvent.keyDown(stop, { key: 'ArrowDown' })
+    fireEvent.keyDown(stop, { key: 'ArrowDown', code: 'ArrowDown' })
     expect(handlers.onArrow).toHaveBeenCalledWith('sc', 'down')
     expect(handlers.onAddBelow).not.toHaveBeenCalled()
   })
@@ -203,5 +203,89 @@ describe('Backspace на инпуте плейсхолдера (§3.4)', () => {
     engine.focusBlock('st', 'end')
     fireEvent.keyDown(el(), { key: 'Backspace' })
     expect(handlers.onDeleteObject).not.toHaveBeenCalled()
+  })
+})
+
+// Клавиатурный поток (§3.2, этап 13.2). Строки рендерятся из статичного снапшота
+// (setup не пере-подписывается), поэтому наблюдаем НЕ ре-рендер, а результат: спай
+// onAddBelow для текстовых маршрутов и store.getState() для операций над документом.
+describe('Enter / Shift+Enter на текстовой строке (§3.2)', () => {
+  function textRow() {
+    const ctx = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' }],
+    })
+    ctx.engine.focusBlock('t', 'end')
+    return ctx
+  }
+
+  it('Enter → новая строка после группы (inside: false)', () => {
+    const { handlers } = textRow()
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('t', { inside: false })
+  })
+
+  it('Shift+Enter → новая строка внутрь группы (inside: true)', () => {
+    const { handlers } = textRow()
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', shiftKey: true })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('t', { inside: true })
+  })
+
+  it('Alt+Shift+↓ на подписи — перенос группы целиком (moveGroup)', () => {
+    const { store, engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 't1', groupId: 'g1', type: 'title', text: 'A' },
+        { id: 'f1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 't2', groupId: 'g2', type: 'title', text: 'B' },
+        { id: 'f2', groupId: 'g2', type: 'email', settings: {} },
+      ],
+    })
+    engine.focusBlock('t1', 'end')
+    fireEvent.keyDown(el(), { key: 'ArrowDown', code: 'ArrowDown', altKey: true, shiftKey: true })
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['t2', 'f2', 't1', 'f1'])
+  })
+})
+
+describe('клавиатура вариантов choice (§3.2, Д5)', () => {
+  function choiceRow(options: { id: string; label: string }[]) {
+    const ctx = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options } }],
+    })
+    return ctx
+  }
+  const opts = (store: ReturnType<typeof setup>['store']) =>
+    store.getState().blocks[0]!.settings!.options!
+
+  it('Enter на варианте → новый вариант сразу после текущего (не в конец)', () => {
+    const { store, engine } = choiceRow([
+      { id: 'o1', label: 'A' },
+      { id: 'o2', label: 'B' },
+    ])
+    engine.focusBlock('ch', 'start') // каретка на первом варианте
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    const ids = opts(store).map((o) => o.id)
+    expect(ids).toHaveLength(3)
+    expect(ids[0]).toBe('o1')
+    expect(ids[2]).toBe('o2') // новый встал между o1 и o2
+  })
+
+  it('Enter в пустом последнем варианте → выход из списка (удалить + строка ниже)', () => {
+    const { store, engine, handlers } = choiceRow([{ id: 'o1', label: '' }])
+    engine.focusBlock('ch', 'end')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(opts(store)).toHaveLength(0) // пустой вариант удалён
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('ch') // новая строка после группы
+  })
+
+  it('Alt+↓ на варианте → перенос варианта вниз', () => {
+    const { store, engine } = choiceRow([
+      { id: 'o1', label: 'A' },
+      { id: 'o2', label: 'B' },
+    ])
+    engine.focusBlock('ch', 'start')
+    fireEvent.keyDown(el(), { key: 'ArrowDown', code: 'ArrowDown', altKey: true })
+    expect(opts(store).map((o) => o.id)).toEqual(['o2', 'o1'])
   })
 })

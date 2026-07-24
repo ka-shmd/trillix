@@ -54,6 +54,7 @@ const DEFAULT_BLOCK_TYPE = 'text' as const
 export function SlashEditor({ formId, initialTitle }: { formId: string; initialTitle: string }) {
   const blocks = useBuilderStore((s) => s.blocks)
   const addBlockAfter = useBuilderStore((s) => s.addBlockAfter)
+  const addBlockAfterGroup = useBuilderStore((s) => s.addBlockAfterGroup)
   const addQuestionAfter = useBuilderStore((s) => s.addQuestionAfter)
   const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
@@ -147,10 +148,18 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     else reorderBlocks(activeId, String(over.id))
   }
 
-  // Создаёт новую строку (тип text): опционально засевает первый символ и просит
-  // открыть меню типов. Возвращает фокус на неё.
-  function startBlock(afterId: string | null, opts: { openMenu?: boolean; seed?: string } = {}) {
-    const id = addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
+  // Создаёт новую текстовую строку и фокусирует её. Enter (§3.2) кладёт строку ПОСЛЕ
+  // всей группы — новый блок не втискивается в текущий вопрос; Shift+Enter (opts.inside)
+  // — сразу под текущей строкой, внутри группы (regroup оставит контент в вопросе).
+  // Засев первого символа и открытие меню типов — опции с объектной остановки/пустого
+  // полотна.
+  function startBlock(
+    afterId: string | null,
+    opts: { openMenu?: boolean; seed?: string; inside?: boolean } = {},
+  ) {
+    const id = opts.inside
+      ? addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
+      : addBlockAfterGroup(afterId, DEFAULT_BLOCK_TYPE)
     if (opts.seed) updateBlock(id, { text: opts.seed })
     if (opts.openMenu) setMenuForId(id)
     engine.focusBlock(id)
@@ -172,9 +181,13 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     el.setSelectionRange(el.value.length, el.value.length)
   }
 
-  // onAddBelow: пустая текстовая строка ниже (Enter), либо с засевом/меню — с
-  // объектной остановки (§2.2). Прокидывает opts в startBlock.
-  function handleAddBelow(id: string, opts?: { openMenu?: boolean; seed?: string }) {
+  // onAddBelow: новая текстовая строка ниже — Enter (после группы), Shift+Enter
+  // (opts.inside — внутрь группы), либо с засевом/меню с объектной остановки (§2.2).
+  // Прокидывает opts в startBlock.
+  function handleAddBelow(
+    id: string,
+    opts?: { openMenu?: boolean; seed?: string; inside?: boolean },
+  ) {
     startBlock(id, opts)
   }
 
@@ -356,7 +369,7 @@ function GroupRow({
   blockIds: string[]
   highlight: boolean
   menuForId: string | null
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
   onDeleteObject: (id: string) => void
