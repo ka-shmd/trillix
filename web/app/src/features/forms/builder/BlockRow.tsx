@@ -320,7 +320,7 @@ export function BlockRow({
         </div>
       ) : supportsPlaceholder(block.type) ? (
         <div className="min-w-0">
-          <AnswerField block={block} onArrow={onArrow} />
+          <AnswerField block={block} onArrow={onArrow} onEmptyBackspace={onDeleteObject} />
         </div>
       ) : (
         // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
@@ -523,9 +523,13 @@ function ScaleInline({ block }: { block: Block }) {
 function AnswerField({
   block,
   onArrow,
+  onEmptyBackspace,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
+  // Backspace в начале пустого плейсхолдера — удалить блок поля (§3.4: текста не
+  // осталось). Без этого каретка застревала в начале инпута навсегда.
+  onEmptyBackspace?: (id: string) => void
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
@@ -546,17 +550,25 @@ function AnswerField({
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
 
-  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Left/Right и
-  // вертикаль внутри длинного текста остаются нативными (caret-проверка на краю).
+  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1); Backspace в
+  // начале пустого — удалить блок поля. Left/Right и вертикаль внутри длинного
+  // текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
-    if (!onArrow) return
     const c = textCaret(e.currentTarget)
-    if (e.key === 'ArrowUp' && c.caretAtStart()) {
+    if (onArrow && e.key === 'ArrowUp' && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
-    } else if (e.key === 'ArrowDown' && c.caretAtEnd()) {
+    } else if (onArrow && e.key === 'ArrowDown' && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
+    } else if (
+      onEmptyBackspace &&
+      e.key === 'Backspace' &&
+      e.currentTarget.value === '' &&
+      c.caretAtStart()
+    ) {
+      e.preventDefault()
+      onEmptyBackspace(block.id)
     }
   }
   // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт

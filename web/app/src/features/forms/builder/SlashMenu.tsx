@@ -28,7 +28,16 @@ export function SlashMenu({
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>{children}</PopoverAnchor>
-      <PopoverContent className="w-64 p-0" align="start" side="bottom">
+      <PopoverContent
+        className="w-64 p-0"
+        align="start"
+        side="bottom"
+        // Фокус после выбора ставит фокус-движок (pickType → engine.focusBlock), а
+        // Radix при закрытии возвращает его на якорь — который при конверсии блока
+        // уже перемонтирован, и фокус падал в body (каретка пропадала). Возврат
+        // Radix'а глушим: движок — единственный, кто решает, где каретка.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <Command>
           <CommandInput placeholder="Тип поля…" />
           <CommandList>

@@ -31,6 +31,15 @@ export function createFocusEngine(): FocusEngine {
   const targets = new Map<string, FocusTarget>()
   // Отложенный запрос: focusBlock звали раньше, чем строка смонтировалась.
   let pending: { id: string; edge: CaretEdge } | null = null
+  // Последний поставленный фокус — страховка от ремаунта. focusBlock часто зовут
+  // синхронно в обработчике, ДО коммита React; если операция меняет groupId строки,
+  // GroupRow перемонтируется целиком, сфокусированный элемент гибнет и фокус падает
+  // в body (так пропадала каретка при «/» → вопрос). Новая цель того же id при
+  // регистрации возвращает каретку, если фокус к этому моменту потерян.
+  let last: { id: string; edge: CaretEdge } | null = null
+
+  const focusLost = () =>
+    document.activeElement === null || document.activeElement === document.body
 
   return {
     register(id, target) {
@@ -38,6 +47,8 @@ export function createFocusEngine(): FocusEngine {
       if (pending && pending.id === id) {
         target.focus(pending.edge)
         pending = null
+      } else if (last && last.id === id && focusLost()) {
+        target.focus(last.edge)
       }
       return () => {
         // Снимаем только СВОЮ регистрацию: при ремаунте строки с тем же id новый
@@ -46,6 +57,7 @@ export function createFocusEngine(): FocusEngine {
       }
     },
     focusBlock(id, edge = 'end') {
+      last = { id, edge }
       const t = targets.get(id)
       if (t) t.focus(edge)
       else pending = { id, edge }

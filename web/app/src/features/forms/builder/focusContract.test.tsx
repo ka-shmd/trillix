@@ -183,3 +183,25 @@ describe('поведение объектной остановки (§2.2)', () 
     expect(handlers.onAddBelow).not.toHaveBeenCalled()
   })
 })
+
+describe('Backspace на инпуте плейсхолдера (§3.4)', () => {
+  it('пустой плейсхолдер, каретка в начале → удалить блок поля', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
+    })
+    engine.focusBlock('st', 'start')
+    fireEvent.keyDown(el(), { key: 'Backspace' })
+    expect(handlers.onDeleteObject).toHaveBeenCalledWith('st')
+  })
+
+  it('плейсхолдер с текстом — Backspace не удаляет блок (правит текст)', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: { placeholder: 'Иван' } }],
+    })
+    engine.focusBlock('st', 'end')
+    fireEvent.keyDown(el(), { key: 'Backspace' })
+    expect(handlers.onDeleteObject).not.toHaveBeenCalled()
+  })
+})

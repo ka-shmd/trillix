@@ -24,7 +24,12 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { type Block, DEFAULT_SUBMIT_LABEL, MAX_SUBMIT_LABEL_LEN } from '@entities/formSchema'
+import {
+  type Block,
+  DEFAULT_SUBMIT_LABEL,
+  isCaptionType,
+  MAX_SUBMIT_LABEL_LEN,
+} from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
 import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
@@ -53,6 +58,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
@@ -211,11 +217,13 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
       if ((cur.text ?? '') === '' && cur.type !== 'text') changeBlockType(cur.id, 'text')
       return
     }
-    // Пустой блок схлопываем в предыдущий (фокус в его конец). Предыдущего нет —
-    // удаляем последний блок вовсе: форма пустеет, а каретку переносим на заголовок
-    // (иначе фокус потерялся бы в body и печатать было бы некуда).
+    // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
+    // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
+    // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
+    // блока нет — полотно пустеет, каретка на заголовок (не в body).
     if ((cur.text ?? '') === '') {
-      removeBlock(id)
+      if (isCaptionType(cur.type)) removeGroup(id)
+      else removeBlock(id)
       if (prev) engine.focusBlock(prev.id)
       else focusTitle()
     }

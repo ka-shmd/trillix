@@ -85,21 +85,54 @@ describe('createFocusEngine', () => {
     expect(p.edges).toEqual(['end'])
   })
 
-  it('отложенный запрос одноразовый — повторный register не фокусирует снова', () => {
+  it('отложенный запрос одноразовый — повторный register при живом фокусе молчит', () => {
     const engine = createFocusEngine()
     engine.focusBlock('b1')
-    const p1 = probe()
-    engine.register('b1', p1)
-    expect(p1.edges).toEqual(['end'])
-    // Ремаунт той же строки без нового focusBlock фокус не крадёт.
+    const el1 = makeTextarea('b1')
+    engine.register('b1', { focus: (edge) => textCaret(el1).focus(edge) })
+    expect(document.activeElement).toBe(el1)
+    // Ремаунт той же строки без нового focusBlock и с живым фокусом молчит
+    // (страховка от потери — отдельный кейс ниже: только когда фокус упал в body).
     const p2 = probe()
     engine.register('b1', p2)
     expect(p2.edges).toEqual([])
+    expect(document.activeElement).toBe(el1)
   })
 
   it('focusBlock на неизвестную строку — no-op (не бросает)', () => {
     const engine = createFocusEngine()
     expect(() => engine.focusBlock('нет-такой')).not.toThrow()
+  })
+
+  it('ремаунт строки возвращает потерянный фокус (страховка от смены groupId)', () => {
+    const engine = createFocusEngine()
+    // Фокус поставлен синхронно на старый элемент…
+    const el1 = makeTextarea('старый')
+    engine.register('b1', { focus: (edge) => textCaret(el1).focus(edge) })
+    engine.focusBlock('b1', 'end')
+    expect(document.activeElement).toBe(el1)
+    // …операция сменила groupId → GroupRow ремаунтится: старый элемент гибнет,
+    // фокус падает в body.
+    el1.remove()
+    expect(document.activeElement === null || document.activeElement === document.body).toBe(true)
+    // Новая цель того же id при регистрации возвращает каретку.
+    const el2 = makeTextarea('новый')
+    engine.register('b1', { focus: (edge) => textCaret(el2).focus(edge) })
+    expect(document.activeElement).toBe(el2)
+  })
+
+  it('ремаунт НЕ крадёт фокус, если он жив в другом месте', () => {
+    const engine = createFocusEngine()
+    const el1 = makeTextarea('строка')
+    engine.register('b1', { focus: (edge) => textCaret(el1).focus(edge) })
+    engine.focusBlock('b1')
+    // Пользователь ушёл в другое поле…
+    const other = makeTextarea('другое')
+    other.focus()
+    // …ремаунт b1 не должен вырывать каретку.
+    const el2 = makeTextarea('новая b1')
+    engine.register('b1', { focus: (edge) => textCaret(el2).focus(edge) })
+    expect(document.activeElement).toBe(other)
   })
 
   it('unregister снимает только свою запись', () => {

@@ -22,7 +22,12 @@ export function BlockTypeDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl">
+      <DialogContent
+        className="max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        // Как у SlashMenu: фокус после вставки ставит движок (handlePickInsertType →
+        // engine.focusBlock), возврат фокуса Radix'ом на кнопку «+» глушим.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogTitle className="sr-only">Добавить блок</DialogTitle>
         <DialogDescription className="sr-only">Выберите тип блока формы.</DialogDescription>
         {/* Тело — отдельный компонент внутри Content: Radix размонтирует его при
