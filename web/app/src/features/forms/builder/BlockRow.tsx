@@ -31,6 +31,7 @@ import { useBuilderStore } from './storeContext'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { textCaret } from './caret'
 import { SlashMenu } from './SlashMenu'
+import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
 
 export interface BlockRowProps {
@@ -71,6 +72,12 @@ function deleteChord(e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean;
   return (e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Backspace'
 }
 
+// actionChord — Cmd/Ctrl+. (Period по e.code, §3.3): открыть меню действий блока.
+// Один предикат на все поверхности строки.
+function actionChord(e: { metaKey: boolean; ctrlKey: boolean; code: string }) {
+  return (e.metaKey || e.ctrlKey) && e.code === 'Period'
+}
+
 // BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
 // (dnd) и «+», по центру редактируемый заголовок и живое превью поля, справа —
 // меню действий и удаление. Клавиатура: Enter — новый блок, «/» — меню типов,
@@ -98,9 +105,12 @@ export function BlockRow({
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
+  const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
   const labelRef = useRef<HTMLTextAreaElement>(null)
   // Строку создали по «/» → меню типов открыто с монтирования (без setState в эффекте).
   const [slashOpen, setSlashOpen] = useState(openMenuOnMount)
+  // Меню действий блока (Cmd+. §3.3): открыто ли.
+  const [actionOpen, setActionOpen] = useState(false)
   // Описание вопроса: раскрыто ли поле. Непустое описание раскрыто с монтирования.
   // Триггер раскрытия живёт в левом кластере значков (absolute) — см. коммент там.
   // Плейсхолдер заголовка виден только у активной (в фокусе) строки: неактивный
@@ -172,7 +182,10 @@ export function BlockRow({
   // переписан инлайн-фильтрацией слеш-меню (13.2 §3.5).
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (deleteChord(e)) {
+    if (actionChord(e)) {
+      e.preventDefault()
+      setActionOpen(true)
+    } else if (deleteChord(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
     } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
@@ -253,6 +266,20 @@ export function BlockRow({
       style={style}
       className={`group relative rounded-md py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
+      {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
+          строки, сам поповер порталится. onPickType — тот же pickType, что у слеш-меню
+          (makeQuestion/makeField/changeBlockType + фокус на результат). */}
+      <BlockActionMenu
+        open={actionOpen}
+        onOpenChange={setActionOpen}
+        block={block}
+        anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
+        onToggleRequired={() => updateBlock(block.id, { required: !block.required })}
+        onDuplicate={() => duplicateBlock(block.id)}
+        onDelete={() => onDeleteBlock(block.id)}
+        onPickType={pickType}
+      />
+
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Всегда видимы; высота кластера =
           line-height первой строки блока (rowLineH) + items-center → значки на
@@ -351,6 +378,7 @@ export function BlockRow({
             onArrow={onArrow}
             onAddBelow={onAddBelow}
             onDeleteBlock={onDeleteBlock}
+            onOpenActions={() => setActionOpen(true)}
           />
         </div>
       ) : supportsPlaceholder(block.type) ? (
@@ -360,6 +388,7 @@ export function BlockRow({
             onArrow={onArrow}
             onEmptyBackspace={onDeleteObject}
             onDeleteBlock={onDeleteBlock}
+            onOpenActions={() => setActionOpen(true)}
           />
         </div>
       ) : (
@@ -370,6 +399,7 @@ export function BlockRow({
           onDeleteObject={onDeleteObject}
           onArrow={onArrow}
           onDeleteBlock={onDeleteBlock}
+          onOpenActions={() => setActionOpen(true)}
           onMove={(dir) => moveBlock(block.id, dir)}
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
         >
@@ -434,6 +464,7 @@ function ObjectStop({
   onAddBelow,
   onDeleteObject,
   onDeleteBlock,
+  onOpenActions,
   onArrow,
   onMove,
   onMoveGroup,
@@ -443,6 +474,7 @@ function ObjectStop({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onDeleteObject: (id: string) => void
   onDeleteBlock: (id: string) => void
+  onOpenActions: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   onMove: (dir: 'up' | 'down') => void
   onMoveGroup: (dir: 'up' | 'down') => void
@@ -456,7 +488,10 @@ function ObjectStop({
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (deleteChord(e)) {
+    if (actionChord(e)) {
+      e.preventDefault()
+      onOpenActions()
+    } else if (deleteChord(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
     } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
@@ -585,6 +620,7 @@ function AnswerField({
   onArrow,
   onEmptyBackspace,
   onDeleteBlock,
+  onOpenActions,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
@@ -594,6 +630,8 @@ function AnswerField({
   // Cmd+Shift+Backspace — явное удаление блока/группы (§3.4). Только у редактируемого
   // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
   onDeleteBlock?: (id: string) => void
+  // Cmd+. — меню действий блока (§3.3).
+  onOpenActions?: () => void
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
@@ -619,7 +657,10 @@ function AnswerField({
   // текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (onDeleteBlock && deleteChord(e)) {
+    if (onOpenActions && actionChord(e)) {
+      e.preventDefault()
+      onOpenActions()
+    } else if (onDeleteBlock && deleteChord(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
     } else if (onArrow && e.key === 'ArrowUp' && c.caretAtStart()) {
@@ -720,6 +761,7 @@ function OptionsInline({
   onArrow,
   onAddBelow,
   onDeleteBlock,
+  onOpenActions,
 }: {
   block: Block
   onLeaveTop: () => void
@@ -729,6 +771,8 @@ function OptionsInline({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
   onDeleteBlock: (id: string) => void
+  // Cmd+. на варианте — меню действий всего choice-блока (§3.3).
+  onOpenActions: () => void
 }) {
   const addOption = useBuilderStore((s) => s.addOption)
   const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
@@ -768,7 +812,10 @@ function OptionsInline({
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
     const isLast = i === options.length - 1
-    if (deleteChord(e)) {
+    if (actionChord(e)) {
+      e.preventDefault()
+      onOpenActions()
+    } else if (deleteChord(e)) {
       // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
       e.preventDefault()
       onDeleteBlock(block.id)

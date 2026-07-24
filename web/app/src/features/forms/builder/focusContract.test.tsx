@@ -347,3 +347,30 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
     expect(handlers.onAddBelow).not.toHaveBeenCalled()
   })
 })
+
+describe('Cmd+. — меню действий блока (§3.3)', () => {
+  it('открывает поповер с действиями (дублировать/сменить тип/удалить)', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' }],
+    })
+    engine.focusBlock('t', 'end')
+    fireEvent.keyDown(el(), { key: '.', code: 'Period', metaKey: true })
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Дублировать')
+    expect(text).toContain('Сменить тип')
+    expect(text).toContain('Удалить')
+  })
+
+  it('на варианте choice — открывает меню всего блока', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
+      ],
+    })
+    engine.focusBlock('ch', 'start')
+    fireEvent.keyDown(el(), { key: '.', code: 'Period', ctrlKey: true })
+    expect(document.body.textContent ?? '').toContain('Дублировать')
+  })
+})
