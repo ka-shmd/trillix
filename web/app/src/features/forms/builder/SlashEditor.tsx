@@ -24,6 +24,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { toast } from 'sonner'
 import {
   type Block,
   DEFAULT_SUBMIT_LABEL,
@@ -242,6 +243,31 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     }
   }
 
+  // Cmd+Shift+Backspace (§3.4): явное удаление блока — на подписи сносит группу
+  // целиком (подпись владеет группой), иначе один блок. Без диалога подтверждения
+  // (решение владельца): страховка — тост с напоминанием про Ctrl+Z, а undo
+  // восстанавливает группу в целости. Исход фокуса по контракту (§2.4): следующая
+  // строка после группы, иначе предыдущая, иначе заголовок формы.
+  function handleDeleteBlock(id: string) {
+    const i = blocks.findIndex((b) => b.id === id)
+    const cur = blocks[i]
+    if (!cur) return
+    const isGroup = isCaptionType(cur.type)
+    // Удаляемый диапазон: подпись → вся смежная группа (regroup держит группу
+    // односвязной), иначе только этот блок. Соседей берём ДО удаления по краям
+    // диапазона — их id переживают операцию.
+    const removed = isGroup ? blocks.filter((b) => b.groupId === cur.groupId) : [cur]
+    const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
+    const next = blocks[firstIdx + removed.length]
+    const prev = blocks[firstIdx - 1]
+    if (isGroup) removeGroup(id)
+    else removeBlock(id)
+    if (next) engine.focusBlock(next.id, 'start')
+    else if (prev) engine.focusBlock(prev.id, 'end')
+    else focusTitle()
+    toast(isGroup ? 'Вопрос удалён' : 'Блок удалён', { description: 'Ctrl+Z — вернуть' })
+  }
+
   // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
   // предыдущей строки; её нет → заголовок формы.
   function handleDeleteObject(id: string) {
@@ -314,6 +340,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
                   onDeleteObject={handleDeleteObject}
+                  onDeleteBlock={handleDeleteBlock}
                   onArrow={handleArrow}
                 />
               ))}
@@ -362,6 +389,7 @@ function GroupRow({
   onInsertBelow,
   onBackspaceAtStart,
   onDeleteObject,
+  onDeleteBlock,
   onArrow,
 }: {
   group: { id: string; blocks: Block[] }
@@ -373,6 +401,7 @@ function GroupRow({
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
   onDeleteObject: (id: string) => void
+  onDeleteBlock: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -407,6 +436,7 @@ function GroupRow({
               onInsertBelow={onInsertBelow}
               onBackspaceAtStart={onBackspaceAtStart}
               onDeleteObject={onDeleteObject}
+              onDeleteBlock={onDeleteBlock}
               onArrow={onArrow}
             />
           ))}

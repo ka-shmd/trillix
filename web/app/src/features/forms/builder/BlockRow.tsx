@@ -56,7 +56,16 @@ export interface BlockRowProps {
   // onDeleteObject — Backspace на объектной остановке (image/date/scale): удалить
   // объект и увести каретку на предыдущую строку/заголовок (§2.2, знает соседей).
   onDeleteObject: (id: string) => void
+  // onDeleteBlock — Cmd+Shift+Backspace (§3.4): явное удаление блока/группы + тост,
+  // исход фокуса по контракту (решает родитель — знает соседей и владение группой).
+  onDeleteBlock: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
+}
+
+// deleteChord — Cmd/Ctrl+Shift+Backspace по e.code (§3.1/§3.4): единый предикат для
+// всех поверхностей строки, чтобы явное удаление не разъезжалось между ними.
+function deleteChord(e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; code: string }) {
+  return (e.metaKey || e.ctrlKey) && e.shiftKey && e.code === 'Backspace'
 }
 
 // BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
@@ -73,6 +82,7 @@ export function BlockRow({
   onInsertBelow,
   onBackspaceAtStart,
   onDeleteObject,
+  onDeleteBlock,
   onArrow,
 }: BlockRowProps) {
   const engine = useFocusEngine()
@@ -158,7 +168,10 @@ export function BlockRow({
   // переписан инлайн-фильтрацией слеш-меню (13.2 §3.5).
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    if (deleteChord(e)) {
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
       // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
       // меняется (regroup якорит по id), строка не перемонтируется.
@@ -329,11 +342,17 @@ export function BlockRow({
             onLeaveTop={() => onArrow(block.id, 'up')}
             onArrow={onArrow}
             onAddBelow={onAddBelow}
+            onDeleteBlock={onDeleteBlock}
           />
         </div>
       ) : supportsPlaceholder(block.type) ? (
         <div className="min-w-0">
-          <AnswerField block={block} onArrow={onArrow} onEmptyBackspace={onDeleteObject} />
+          <AnswerField
+            block={block}
+            onArrow={onArrow}
+            onEmptyBackspace={onDeleteObject}
+            onDeleteBlock={onDeleteBlock}
+          />
         </div>
       ) : (
         // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
@@ -342,6 +361,7 @@ export function BlockRow({
           onAddBelow={onAddBelow}
           onDeleteObject={onDeleteObject}
           onArrow={onArrow}
+          onDeleteBlock={onDeleteBlock}
           onMove={(dir) => moveBlock(block.id, dir)}
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
         >
@@ -405,6 +425,7 @@ function ObjectStop({
   children,
   onAddBelow,
   onDeleteObject,
+  onDeleteBlock,
   onArrow,
   onMove,
   onMoveGroup,
@@ -413,6 +434,7 @@ function ObjectStop({
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onDeleteObject: (id: string) => void
+  onDeleteBlock: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   onMove: (dir: 'up' | 'down') => void
   onMoveGroup: (dir: 'up' | 'down') => void
@@ -426,7 +448,10 @@ function ObjectStop({
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
+    if (deleteChord(e)) {
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       e.preventDefault()
       onMoveGroup(e.code === 'ArrowUp' ? 'up' : 'down')
     } else if (e.altKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
@@ -545,12 +570,16 @@ function AnswerField({
   block,
   onArrow,
   onEmptyBackspace,
+  onDeleteBlock,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
   // Backspace в начале пустого плейсхолдера — удалить блок поля (§3.4: текста не
   // осталось). Без этого каретка застревала в начале инпута навсегда.
   onEmptyBackspace?: (id: string) => void
+  // Cmd+Shift+Backspace — явное удаление блока/группы (§3.4). Только у редактируемого
+  // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
+  onDeleteBlock?: (id: string) => void
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
@@ -576,7 +605,10 @@ function AnswerField({
   // текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
-    if (onArrow && e.key === 'ArrowUp' && c.caretAtStart()) {
+    if (onDeleteBlock && deleteChord(e)) {
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (onArrow && e.key === 'ArrowUp' && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
     } else if (onArrow && e.key === 'ArrowDown' && c.caretAtEnd()) {
@@ -673,6 +705,7 @@ function OptionsInline({
   onLeaveTop,
   onArrow,
   onAddBelow,
+  onDeleteBlock,
 }: {
   block: Block
   onLeaveTop: () => void
@@ -680,6 +713,8 @@ function OptionsInline({
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
   // после всей группы choice-блока.
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
+  onDeleteBlock: (id: string) => void
 }) {
   const addOption = useBuilderStore((s) => s.addOption)
   const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
@@ -719,7 +754,11 @@ function OptionsInline({
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
     const isLast = i === options.length - 1
-    if (e.code === 'Enter' && !e.metaKey && !e.ctrlKey && isLast && empty) {
+    if (deleteChord(e)) {
+      // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (e.code === 'Enter' && !e.metaKey && !e.ctrlKey && isLast && empty) {
       // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
       // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
       e.preventDefault()

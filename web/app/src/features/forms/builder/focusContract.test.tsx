@@ -31,6 +31,7 @@ function setup(schema: FormSchema) {
     onInsertBelow: vi.fn(),
     onBackspaceAtStart: vi.fn(),
     onDeleteObject: vi.fn(),
+    onDeleteBlock: vi.fn(),
     onArrow: vi.fn(),
   }
   render(
@@ -287,5 +288,32 @@ describe('клавиатура вариантов choice (§3.2, Д5)', () => {
     engine.focusBlock('ch', 'start')
     fireEvent.keyDown(el(), { key: 'ArrowDown', code: 'ArrowDown', altKey: true })
     expect(opts(store).map((o) => o.id)).toEqual(['o2', 'o1'])
+  })
+})
+
+describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
+  it('на подписи — зовёт onDeleteBlock с id (родитель сносит группу)', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' },
+        { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
+      ],
+    })
+    engine.focusBlock('t', 'end')
+    fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace', metaKey: true, shiftKey: true })
+    expect(handlers.onDeleteBlock).toHaveBeenCalledWith('t')
+  })
+
+  it('на варианте choice — зовёт onDeleteBlock с id блока (не варианта)', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
+      ],
+    })
+    engine.focusBlock('ch', 'start')
+    fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace', ctrlKey: true, shiftKey: true })
+    expect(handlers.onDeleteBlock).toHaveBeenCalledWith('ch')
   })
 })
