@@ -360,12 +360,13 @@ export function SlashEditor({
           }}
         >
           <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
-            {/* Отступ заголовок→блоки и шаг между блоками держим равными ритму
-                .rf-page/.rf-form у превью и респондента (32px и 20px). У блока
-                свой py-1.5 (место под hover-контролы), поэтому здесь mt-7+6=34
-                и gap-2+6+6=20, а не «на глаз» mt-8/gap-1.5: те давали 58px под
-                заголовком против 32px в превью — редактор разъезжался с формой. */}
-            <ol className="mt-7 flex flex-col gap-2">
+            {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
+                mt-12 (48px) заголовок формы→первый блок = gap у .rf-page; gap-7 (28px)
+                МЕЖДУ группами = .rf-form. Внутри группы шаг 14px даёт GroupRow (gap-3.5).
+                py-1.5 строк в вертикаль НЕ входит (там -my-1.5, см. BlockRow), поэтому
+                flex-gap здесь = чистый просвет контента и совпадает с превью замером
+                (критерий 13.3 — ноль расхождений). */}
+            <ol className="mt-12 flex flex-col gap-7">
               {groups.map((g) => (
                 <GroupRow
                   key={g.id}
@@ -463,7 +464,9 @@ function GroupRow({
       }`}
     >
       <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
-        <div className="flex flex-col gap-2">
+        {/* Внутри вопроса блоки стоят теснее — 14px (gap-3.5), как .rf-group у превью.
+            py-1.5 строк скомпенсирован их -my-1.5, поэтому gap = чистый просвет. */}
+        <div className="flex flex-col gap-3.5">
           {group.blocks.map((b, i) => (
             <BlockRow
               key={b.id}
@@ -497,7 +500,8 @@ function SubmitButtonEditor() {
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
 
   return (
-    <div className="mt-10">
+    // 48px форма→кнопка отправки = gap .rf-page у превью/рендерера (этап 13.3).
+    <div className="mt-12">
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
@@ -551,7 +555,7 @@ function EmptyStarter({
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
-      className="mt-7 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
+      className="mt-12 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
@@ -659,9 +663,10 @@ function FormTitleInput({
       // Название вне стора билдера (серверный rename) — Ctrl+Z здесь нативный,
       // document-undo билдера его не перехватывает (см. BuilderScreen).
       data-undo-native
-      // mb-0: отступ заголовок→блоки целиком задаёт mt-7 у списка блоков (см.
-      // коммент там). Прежние mb-5 + mt-8 складывались в 52px против 32px в превью.
-      className="rf-title w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
+      // block: textarea по умолчанию inline-block и оставляет под собой ~7px
+      // базлайн-просвета — он раздувал отступ заголовок→первый блок (13.3). Отступ
+      // заголовок→блоки целиком задаёт mt-12 (48px) у списка блоков (см. коммент там).
+      className="rf-title block w-full resize-none overflow-hidden bg-transparent outline-none placeholder:text-muted-foreground/40"
     />
   )
 }

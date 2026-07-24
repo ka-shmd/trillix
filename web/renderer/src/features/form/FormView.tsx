@@ -3,7 +3,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import { groupMeta } from '@fields/groups'
+import { groupBlocks, groupMeta } from '@fields/groups'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
@@ -204,26 +204,37 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     <main className="rf-page">
       <h1 className="rf-title">{form.title.trim() || 'Форма'}</h1>
       <div className="rf-form">
-        {blocks.map((block, index) => (
-          // onFocusCapture на обёртке, а не новый проп у BlockField: поля общие с
-          // превью билдера, и заводить в них аналитику публичной страницы нельзя.
-          // Capture — потому что фокус приходит на вложенный input, а не на div.
-          <div
-            key={block.id}
-            onFocusCapture={() => {
-              if (index > furthest.current) furthest.current = index
-            }}
-          >
-            <BlockField
-              block={block}
-              captionText={groups.get(block.groupId)?.caption}
-              captionRequired={groups.get(block.groupId)?.required}
-              value={answers[block.id]}
-              onChange={(value: Answer) => onChange(block.id, value)}
-              onBlur={() => onBlur(block.id)}
-              error={errors[block.id]}
-              disabled={locked}
-            />
+        {groupBlocks(blocks).map((group) => (
+          // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
+          // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
+          <div key={group.id} className="rf-group">
+            {group.blocks.map((block) => {
+              // Индекс блока в полном потоке — для «самой дальней точки визита»
+              // (furthest): группировка не меняет порядок, индекс берём из blocks.
+              const index = blocks.indexOf(block)
+              return (
+                // onFocusCapture на обёртке, а не новый проп у BlockField: поля общие
+                // с превью билдера, и заводить в них аналитику публичной страницы
+                // нельзя. Capture — фокус приходит на вложенный input, а не на div.
+                <div
+                  key={block.id}
+                  onFocusCapture={() => {
+                    if (index > furthest.current) furthest.current = index
+                  }}
+                >
+                  <BlockField
+                    block={block}
+                    captionText={groups.get(block.groupId)?.caption}
+                    captionRequired={groups.get(block.groupId)?.required}
+                    value={answers[block.id]}
+                    onChange={(value: Answer) => onChange(block.id, value)}
+                    onBlur={() => onBlur(block.id)}
+                    error={errors[block.id]}
+                    disabled={locked}
+                  />
+                </div>
+              )
+            })}
           </div>
         ))}
       </div>

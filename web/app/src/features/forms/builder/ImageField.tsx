@@ -44,7 +44,10 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
   const shownSrc = preview ?? (imageKey ? mediaSrc(imageKey) : null)
 
   return (
-    <div className="mt-1.5">
+    // Свой вертикальный отступ не нужен: просвет до соседей задаёт ритм полотна
+    // (картинка — блок-одиночка, 28px через .rf-group/список; этап 13.3). Прежний
+    // mt-1.5 смещал зону загрузки на 6px и рвал замер редактор/превью.
+    <div>
       <input
         ref={fileRef}
         type="file"

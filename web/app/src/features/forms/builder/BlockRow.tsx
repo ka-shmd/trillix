@@ -317,7 +317,12 @@ export function BlockRow({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group relative rounded-md py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
+      // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
+      // поток она НЕ входит: -my-1.5 гасит её ровно на padding, поэтому flex-gap
+      // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента
+      // и совпадает с превью (ритм 13.3). Значки центрируются по top-1.5 = padding →
+      // на первой строке текста. Меняешь padding — правь -my И top-1.5 значков.
+      className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
           строки, сам поповер порталится. onPickType — тот же pickType, что у слеш-меню
@@ -425,7 +430,10 @@ export function BlockRow({
                 onFocus={() => setLabelFocused(true)}
                 onBlur={() => setLabelFocused(false)}
                 onKeyDown={onLabelKeyDown}
-                className={`w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${captionCls}`}
+                // block: textarea по умолчанию inline-block и оставляет под собой
+                // ~7px базлайн-просвета (line-box строки-подписи выше textarea) — он
+                // раздувал ритм подпись→поле (13.3). display:block его убирает.
+                className={`block w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${captionCls}`}
               />
             </div>
           </div>
@@ -636,9 +644,10 @@ function ScaleInline({ block }: { block: Block }) {
     'h-7 rounded border border-muted-foreground/30 bg-transparent px-1.5 text-sm text-foreground'
 
   return (
-    <div className="mt-2 flex flex-col gap-2">
+    <div className="flex flex-col gap-2">
       {/* Только контрол, без FieldShell: подпись рисует строка заголовка выше —
-          оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой). */}
+          оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой).
+          Просвет подпись→шкала (14px) даёт групповой контейнер, не свой mt (ритм 13.3). */}
       <BlockControl block={block} />
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <label className="flex items-center gap-1.5">
@@ -753,10 +762,11 @@ function AnswerField({
     </span>
   )
   // Обёртка — только якорь глифа; ширину берёт из .rf-field-wrap (index.css),
-  // где стоит тот же потолок --rf-input-max, что у поля. mt-2 — синхронно с gap
-  // 0.5rem у .rf-field.
+  // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (14px)
+  // даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не нужен (был бы
+  // двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
-    <div className={`rf-field-wrap mt-2 ${wide ? 'rf-field-wrap--wide' : ''}`}>
+    <div className={`rf-field-wrap ${wide ? 'rf-field-wrap--wide' : ''}`}>
       {control}
       {typeGlyph}
     </div>
@@ -780,7 +790,9 @@ function AnswerField({
         onKeyDown={onFieldKeyDown}
         rows={2}
         placeholder={hint}
-        className={cls}
+        // block: убрать базлайн-просвет inline-block textarea (см. подпись выше) —
+        // иначе под длинным полем копится ~7px и ритм 13.3 расходится.
+        className={`block ${cls}`}
         {...focusProps}
       />,
       true,
@@ -914,8 +926,9 @@ function OptionsInline({
 
   return (
     // items-start — карточки обнимают текст, как .rf-options у респондента;
-    // gap-3 = 0.75rem там же.
-    <div className="mt-2 flex flex-col items-start gap-3">
+    // gap-3 = 0.75rem там же. Просвет подпись→первый вариант (14px) даёт групповой
+    // контейнер, не свой mt (ритм 13.3).
+    <div className="flex flex-col items-start gap-3">
       {options.map((o, i) => {
         const placeholder = `Вариант ${i + 1}`
         const key = optionKey(i)
