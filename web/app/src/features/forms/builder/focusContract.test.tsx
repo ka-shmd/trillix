@@ -1,0 +1,185 @@
+// @vitest-environment happy-dom
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render } from '@testing-library/react'
+import { DndContext } from '@dnd-kit/core'
+import { SortableContext } from '@dnd-kit/sortable'
+
+import type { FormSchema } from '@entities/formSchema'
+import { createBuilderStore } from './store'
+import { BuilderStoreContext } from './storeContext'
+import { createFocusEngine, FocusEngineProvider } from './focusEngine'
+import { BlockRow } from './BlockRow'
+
+// Контракт фокуса полотна (§2.1, §2.4): каждая строка регистрирует фокус-цель, и
+// focusBlock(id, edge) ставит document.activeElement на её поверхность — textarea
+// подписи, инпут плейсхолдера/варианта или объектную остановку. Рендерим НАСТОЯЩИЕ
+// BlockRow под happy-dom и проверяем activeElement. Так демо-критерий этапа
+// («каретка нигде не в body») закрыт быстрым юнитом, а не только e2e.
+
+afterEach(cleanup)
+
+// setup — рендерит полотно из блоков схемы (регруппировка — как в билдере) с реальным
+// стором и движком. Обработчики строк — шпионы: проверяем, что клавиши объекта зовут
+// правильный колбэк. Возвращает движок и блоки (по id фокусируем).
+function setup(schema: FormSchema) {
+  const store = createBuilderStore()
+  store.getState().hydrate(schema)
+  const engine = createFocusEngine()
+  const blocks = store.getState().blocks
+  const handlers = {
+    onAddBelow: vi.fn(),
+    onInsertBelow: vi.fn(),
+    onBackspaceAtStart: vi.fn(),
+    onDeleteObject: vi.fn(),
+    onArrow: vi.fn(),
+  }
+  render(
+    <BuilderStoreContext.Provider value={store}>
+      <FocusEngineProvider value={engine}>
+        <DndContext>
+          <SortableContext items={blocks.map((b) => b.id)}>
+            {blocks.map((b) => (
+              <BlockRow
+                key={b.id}
+                block={b}
+                formId="f"
+                groupHandle={null}
+                openMenuOnMount={false}
+                {...handlers}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+      </FocusEngineProvider>
+    </BuilderStoreContext.Provider>,
+  )
+  return { store, engine, blocks, handlers }
+}
+
+const el = () => document.activeElement as HTMLElement
+
+describe('контракт фокус-целей строк (§2.1)', () => {
+  it('подпись/контент/consent — фокус на textarea своего текста', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'title', groupId: 'g1', type: 'title', text: 'Вопрос' },
+        { id: 'head', groupId: 'g2', type: 'heading', text: 'Раздел' },
+        { id: 'cons', groupId: 'g3', type: 'consent', text: 'Согласен', required: true },
+      ],
+    })
+    for (const [id, text] of [
+      ['title', 'Вопрос'],
+      ['head', 'Раздел'],
+      ['cons', 'Согласен'],
+    ]) {
+      engine.focusBlock(id!, 'end')
+      expect(el().tagName).toBe('TEXTAREA')
+      expect((el() as HTMLTextAreaElement).value).toBe(text)
+    }
+  })
+
+  it('край каретки: start → в начало, end → в конец текста', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'title', groupId: 'g1', type: 'title', text: 'Привет' }],
+    })
+    engine.focusBlock('title', 'start')
+    expect((el() as HTMLTextAreaElement).selectionStart).toBe(0)
+    engine.focusBlock('title', 'end')
+    expect((el() as HTMLTextAreaElement).selectionStart).toBe(6)
+  })
+
+  it('текстовые поля — фокус на инпут плейсхолдера', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'st', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'lt', groupId: 'g2', type: 'long_text', settings: {} },
+        { id: 'em', groupId: 'g3', type: 'email', settings: {} },
+      ],
+    })
+    engine.focusBlock('st', 'end')
+    expect(el().tagName).toBe('INPUT')
+    engine.focusBlock('lt', 'end')
+    expect(el().tagName).toBe('TEXTAREA') // long_text — многострочный плейсхолдер
+    engine.focusBlock('em', 'end')
+    expect(el().tagName).toBe('INPUT')
+  })
+
+  it('choice — фокус на инпут варианта: start → первый, end → последний', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Красный' }, { id: 'o2', label: 'Синий' }] },
+        },
+      ],
+    })
+    engine.focusBlock('ch', 'start')
+    expect((el() as HTMLInputElement).value).toBe('Красный')
+    engine.focusBlock('ch', 'end')
+    expect((el() as HTMLInputElement).value).toBe('Синий')
+  })
+
+  it('image/date/scale — фокус на объектную остановку (tabIndex -1)', () => {
+    const { engine } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'img', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
+        { id: 'dt', groupId: 'g2', type: 'date', settings: {} },
+        { id: 'sc', groupId: 'g3', type: 'scale', settings: { scaleMin: 1, scaleMax: 5 } },
+      ],
+    })
+    for (const id of ['img', 'dt', 'sc']) {
+      engine.focusBlock(id)
+      expect(el().tagName).toBe('DIV')
+      expect(el().getAttribute('tabindex')).toBe('-1')
+    }
+  })
+})
+
+describe('поведение объектной остановки (§2.2)', () => {
+  function objectStop() {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'sc', groupId: 'g1', type: 'scale', settings: { scaleMin: 1, scaleMax: 5 } }],
+    })
+    engine.focusBlock('sc')
+    return { stop: el(), handlers }
+  }
+
+  it('печатный символ → text-блок ниже с засевом', () => {
+    const { stop, handlers } = objectStop()
+    fireEvent.keyDown(stop, { key: 'ф' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('sc', { seed: 'ф' })
+  })
+
+  it('Enter → пустая строка ниже', () => {
+    const { stop, handlers } = objectStop()
+    fireEvent.keyDown(stop, { key: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('sc')
+  })
+
+  it('«/» → строка ниже с открытым меню', () => {
+    const { stop, handlers } = objectStop()
+    fireEvent.keyDown(stop, { key: '/' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('sc', { openMenu: true })
+  })
+
+  it('Backspace → удалить объект', () => {
+    const { stop, handlers } = objectStop()
+    fireEvent.keyDown(stop, { key: 'Backspace' })
+    expect(handlers.onDeleteObject).toHaveBeenCalledWith('sc')
+  })
+
+  it('стрелки — обход строк, а не засев', () => {
+    const { stop, handlers } = objectStop()
+    fireEvent.keyDown(stop, { key: 'ArrowDown' })
+    expect(handlers.onArrow).toHaveBeenCalledWith('sc', 'down')
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
+  })
+})
