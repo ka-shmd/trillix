@@ -59,6 +59,9 @@ export interface BlockRowProps {
   // onDeleteBlock — Cmd+Shift+Backspace (§3.4): явное удаление блока/группы + тост,
   // исход фокуса по контракту (решает родитель — знает соседей и владение группой).
   onDeleteBlock: (id: string) => void
+  // onAnswerAction — Cmd/Ctrl+Enter (§3.2): прыжок к контролу ответа группы (решает
+  // родитель — знает состав группы). На картинке файловый диалог открывает ObjectStop.
+  onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
 
@@ -83,6 +86,7 @@ export function BlockRow({
   onBackspaceAtStart,
   onDeleteObject,
   onDeleteBlock,
+  onAnswerAction,
   onArrow,
 }: BlockRowProps) {
   const engine = useFocusEngine()
@@ -171,6 +175,10 @@ export function BlockRow({
     if (deleteChord(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
+    } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
+      // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2). Проверяем ДО простого Enter.
+      e.preventDefault()
+      onAnswerAction(block.id)
     } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
       // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
@@ -451,6 +459,12 @@ function ObjectStop({
     if (deleteChord(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
+    } else if ((e.metaKey || e.ctrlKey) && e.code === 'Enter') {
+      // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
+      // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
+      // нет — селектор ничего не найдёт, жест — no-op.
+      e.preventDefault()
+      ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click()
     } else if (e.altKey && e.shiftKey && (e.code === 'ArrowUp' || e.code === 'ArrowDown')) {
       e.preventDefault()
       onMoveGroup(e.code === 'ArrowUp' ? 'up' : 'down')

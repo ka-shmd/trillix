@@ -28,7 +28,9 @@ import { toast } from 'sonner'
 import {
   type Block,
   DEFAULT_SUBMIT_LABEL,
+  isAnswerableType,
   isCaptionType,
+  isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
@@ -59,6 +61,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   const addQuestionAfter = useBuilderStore((s) => s.addQuestionAfter)
   const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const addOption = useBuilderStore((s) => s.addOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
@@ -243,6 +246,21 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     }
   }
 
+  // Cmd/Ctrl+Enter (§3.2) — «действие над ответом»: из подписи/контента прыгнуть к
+  // контролу ответа своей группы. choice: каретка на последний вариант (edge end);
+  // список пуст (недособранный черновик addBlock/changeBlockType) → создать первый.
+  // На картинке файловый диалог открывает сама объектная остановка (см. ObjectStop).
+  function handleAnswerAction(id: string) {
+    const src = blocks.find((b) => b.id === id)
+    if (!src) return
+    const field = blocks.find((b) => b.groupId === src.groupId && isAnswerableType(b.type))
+    if (!field) return
+    if (isChoiceType(field.type) && (field.settings?.options?.length ?? 0) === 0) {
+      addOption(field.id) // пустой choice — родить первый вариант
+    }
+    engine.focusBlock(field.id, 'end')
+  }
+
   // Cmd+Shift+Backspace (§3.4): явное удаление блока — на подписи сносит группу
   // целиком (подпись владеет группой), иначе один блок. Без диалога подтверждения
   // (решение владельца): страховка — тост с напоминанием про Ctrl+Z, а undo
@@ -341,6 +359,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   onBackspaceAtStart={handleBackspaceAtStart}
                   onDeleteObject={handleDeleteObject}
                   onDeleteBlock={handleDeleteBlock}
+                  onAnswerAction={handleAnswerAction}
                   onArrow={handleArrow}
                 />
               ))}
@@ -390,6 +409,7 @@ function GroupRow({
   onBackspaceAtStart,
   onDeleteObject,
   onDeleteBlock,
+  onAnswerAction,
   onArrow,
 }: {
   group: { id: string; blocks: Block[] }
@@ -402,6 +422,7 @@ function GroupRow({
   onBackspaceAtStart: (id: string) => void
   onDeleteObject: (id: string) => void
   onDeleteBlock: (id: string) => void
+  onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -437,6 +458,7 @@ function GroupRow({
               onBackspaceAtStart={onBackspaceAtStart}
               onDeleteObject={onDeleteObject}
               onDeleteBlock={onDeleteBlock}
+              onAnswerAction={onAnswerAction}
               onArrow={onArrow}
             />
           ))}

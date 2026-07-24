@@ -32,6 +32,7 @@ function setup(schema: FormSchema) {
     onBackspaceAtStart: vi.fn(),
     onDeleteObject: vi.fn(),
     onDeleteBlock: vi.fn(),
+    onAnswerAction: vi.fn(),
     onArrow: vi.fn(),
   }
   render(
@@ -315,5 +316,34 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
     engine.focusBlock('ch', 'start')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace', ctrlKey: true, shiftKey: true })
     expect(handlers.onDeleteBlock).toHaveBeenCalledWith('ch')
+  })
+})
+
+describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', () => {
+  it('с подписи — зовёт onAnswerAction с id (родитель прыгает к контролу)', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' },
+        { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
+      ],
+    })
+    engine.focusBlock('t', 'end')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', metaKey: true })
+    expect(handlers.onAnswerAction).toHaveBeenCalledWith('t')
+  })
+
+  it('на картинке — открывает файловый диалог (клик по скрытому input)', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'img', groupId: 'g1', type: 'image', settings: {} }],
+    })
+    const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
+    const click = vi.spyOn(input, 'click').mockImplementation(() => {})
+    engine.focusBlock('img')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', ctrlKey: true })
+    expect(click).toHaveBeenCalled()
+    // Объект не должен трактовать это как обычный Enter (строка ниже).
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
   })
 })
