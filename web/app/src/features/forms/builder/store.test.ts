@@ -11,18 +11,16 @@ describe('createBuilderStore', () => {
   it('стартует пустым и не dirty', () => {
     const s = createBuilderStore().getState()
     expect(s.blocks).toEqual([])
-    expect(s.selectedId).toBeNull()
     expect(s.dirty).toBe(false)
   })
 
-  it('addBlock добавляет в конец, выделяет новый и помечает dirty', () => {
+  it('addBlock добавляет в конец и помечает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     store.getState().addBlock('email')
 
     const s = store.getState()
     expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
-    expect(s.selectedId).toBe(s.blocks[1]?.id)
     expect(s.dirty).toBe(true)
     expect(s.blocks[0]?.id).not.toBe(s.blocks[1]?.id)
   })
@@ -66,16 +64,17 @@ describe('createBuilderStore', () => {
     expect(s.dirty).toBe(true)
   })
 
-  it('removeBlock удаляет блок и снимает выделение, если удалили выделенный', () => {
+  it('removeBlock удаляет блок и помечает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
 
     store.getState().removeBlock(id)
 
     const s = store.getState()
     expect(s.blocks).toHaveLength(0)
-    expect(s.selectedId).toBeNull()
+    expect(s.dirty).toBe(true)
   })
 
   it('moveBlock двигает блок и no-op на границе', () => {
@@ -106,7 +105,6 @@ describe('createBuilderStore', () => {
     const s = store.getState()
     expect(s.blocks.map((x) => x.id)).toEqual([a, newId, c])
     expect(s.blocks[1]?.type).toBe('email')
-    expect(s.selectedId).toBe(newId)
     expect(s.dirty).toBe(true)
   })
 
@@ -412,7 +410,6 @@ describe('createBuilderStore', () => {
     const copy = s.blocks[1]!
     expect(copy.id).not.toBe(orig.id)
     expect(copy.type).toBe('single_choice')
-    expect(s.selectedId).toBe(copy.id)
 
     store.getState().updateBlock(copy.id, { settings: { options: [{ id: 'o1', label: 'Z' }] } })
     expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('A')
@@ -492,7 +489,6 @@ describe('createBuilderStore', () => {
     const s = store.getState()
     expect(s.blocks).toEqual(schema.blocks)
     expect(s.dirty).toBe(false)
-    expect(s.selectedId).toBeNull()
     expect(s.blocks[0]).not.toBe(schema.blocks[0])
   })
 
@@ -694,14 +690,12 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().blocks).toEqual([])
   })
 
-  it('undo снимает выделение, если выделенный блок исчез', () => {
+  it('undo убирает добавленный блок', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
-    const id = store.getState().blocks[0]!.id
-    expect(store.getState().selectedId).toBe(id)
+    expect(store.getState().blocks).toHaveLength(1)
 
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
-    expect(store.getState().selectedId).toBeNull()
   })
 })

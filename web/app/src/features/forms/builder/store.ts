@@ -42,9 +42,9 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 export type BlockPatch = Partial<Pick<Block, 'text' | 'required' | 'settings'>>
 
 // Snapshot — снимок документа (blocks + поля формы-уровня) для стеков undo/redo.
-// selectedId и dirty — производный UI, в снапшот не входят; при откате selectedId
-// чинится, если выделенный блок исчез. Новое поле документа обязано попасть сюда,
-// иначе undo его молча потеряет.
+// dirty — производный UI, в снапшот не входит. Фокус — не стейт стора (живёт в
+// фокус-движке полотна, §2.5), поэтому откат его не касается. Новое поле документа
+// обязано попасть сюда, иначе undo его молча потеряет.
 export type Snapshot = {
   blocks: Block[]
   submitLabel: string
@@ -63,7 +63,6 @@ export type BuilderState = {
   // дефолтную благодарность; redirectUrl пусто → перехода нет.
   thankYouText: string
   redirectUrl: string
-  selectedId: string | null
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
   // считается правкой и dirty не трогает.
@@ -127,7 +126,6 @@ export type BuilderActions = {
   updateOption: (blockId: string, optionId: string, label: string) => void
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
-  select: (id: string | null) => void
   // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
   setSubmitLabel: (label: string) => void
   // setAfterSubmit применяет настройки экрана «после отправки» целиком. Одним
@@ -270,11 +268,6 @@ const snapshot = (s: BuilderState): Snapshot => ({
   redirectUrl: s.redirectUrl,
 })
 
-// fixSelection чинит выделение после отката: если выделенный блок в новом наборе
-// исчез, снимаем выделение.
-const fixSelection = (selectedId: string | null, blocks: Block[]): string | null =>
-  selectedId && blocks.some((b) => b.id === selectedId) ? selectedId : null
-
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
 // (text/settings-placeholder) в один блок делят шаг истории; патч с required (или
 // иным дискретным полем) — свой шаг (тег null).
@@ -317,7 +310,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       submitLabel: '',
       thankYouText: '',
       redirectUrl: '',
-      selectedId: null,
       dirty: false,
       past: [],
       future: [],
@@ -329,7 +321,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           submitLabel: schema.submitLabel ?? '',
           thankYouText: schema.thankYouText ?? '',
           redirectUrl: schema.redirectUrl ?? '',
-          selectedId: null,
           dirty: false,
           past: [],
           future: [],
@@ -338,7 +329,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       addBlock: (type) => {
         const block = newBlock(type)
-        commit(null, (s) => structural({ blocks: [...s.blocks, block], selectedId: block.id }))
+        commit(null, (s) => structural({ blocks: [...s.blocks, block] }))
       },
 
       addBlockAfter: (afterId, type) => {
@@ -348,7 +339,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const at = i >= 0 ? i + 1 : s.blocks.length
           const blocks = s.blocks.slice()
           blocks.splice(at, 0, block)
-          return structural({ blocks, selectedId: block.id })
+          return structural({ blocks })
         })
         return block.id
       },
@@ -367,7 +358,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           }
           return structural({
             blocks: s.blocks.map((b) => (b.id === id ? converted : b)),
-            selectedId: id,
           })
         })
         return id
@@ -388,7 +378,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             focus = title.id
             const blocks = s.blocks.slice()
             blocks.splice(i, 1, title, field)
-            return structural({ blocks, selectedId: title.id })
+            return structural({ blocks })
           }
           // Блок ВНУТРИ группы → новый вопрос НИЖЕ группы: инпут не встраивается между
           // подписью и контролом, а начинает новую группу. Текущий блок — контент.
@@ -396,7 +386,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           focus = title.id
           const blocks = s.blocks.slice()
           blocks.splice(gEnd + 1, 0, title, field)
-          return structural({ blocks, selectedId: title.id })
+          return structural({ blocks })
         })
         return focus
       },
@@ -414,7 +404,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             const field: Block = { ...newBlock(type), id }
             return structural({
               blocks: s.blocks.map((b) => (b.id === id ? field : b)),
-              selectedId: id,
             })
           }
           // Внутри группы → голое поле новой группой ниже; текущий блок остаётся.
@@ -422,7 +411,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           focus = field.id
           const blocks = s.blocks.slice()
           blocks.splice(gEnd + 1, 0, field)
-          return structural({ blocks, selectedId: field.id })
+          return structural({ blocks })
         })
         return focus
       },
@@ -434,7 +423,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
           blocks.splice(at, 0, title, field)
-          return structural({ blocks, selectedId: title.id })
+          return structural({ blocks })
         })
         return title.id
       },
@@ -445,7 +434,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
           blocks.splice(at, 0, field)
-          return structural({ blocks, selectedId: field.id })
+          return structural({ blocks })
         })
         return field.id
       },
@@ -456,12 +445,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         })),
 
       removeBlock: (id) =>
-        commit(null, (s) =>
-          structural({
-            blocks: s.blocks.filter((b) => b.id !== id),
-            selectedId: s.selectedId === id ? null : s.selectedId,
-          }),
-        ),
+        commit(null, (s) => structural({ blocks: s.blocks.filter((b) => b.id !== id) })),
 
       removeGroup: (id) =>
         commit(null, (s) => {
@@ -471,7 +455,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const removed = new Set(s.blocks.slice(gStart, gEnd + 1).map((b) => b.id))
           return structural({
             blocks: s.blocks.filter((b) => !removed.has(b.id)),
-            selectedId: s.selectedId && removed.has(s.selectedId) ? null : s.selectedId,
           })
         }),
 
@@ -536,7 +519,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const copy: Block = { ...cloneBlock(src), id: newBlockId() }
           const blocks = s.blocks.slice()
           blocks.splice(i + 1, 0, copy)
-          return structural({ blocks, selectedId: copy.id })
+          return structural({ blocks })
         }),
 
       addOption: (blockId) =>
@@ -571,8 +554,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           }),
         ),
 
-      select: (id) => set({ selectedId: id }),
-
       setSubmitLabel: (label) => commit('sl', () => ({ submitLabel: label })),
 
       // Тег null: настройки прилетают готовым набором по кнопке, коалесить нечего.
@@ -591,7 +572,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // это ровно тот способ, которым новое поле документа теряется в undo.
           return {
             ...prev,
-            selectedId: fixSelection(s.selectedId, prev.blocks),
             past: s.past.slice(0, -1),
             future: [...s.future, snapshot(s)],
             lastTag: null,
@@ -605,7 +585,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (!next) return s
           return {
             ...next,
-            selectedId: fixSelection(s.selectedId, next.blocks),
             past: [...s.past, snapshot(s)],
             future: s.future.slice(0, -1),
             lastTag: null,
