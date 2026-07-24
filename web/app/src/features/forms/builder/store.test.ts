@@ -698,4 +698,126 @@ describe('createBuilderStore — undo/redo', () => {
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
   })
+
+  // --- Этап 13.2: клавиатурный поток ---
+
+  it('addBlockAfterGroup вставляет строку ПОСЛЕ всей группы (Enter §3.2)', () => {
+    const store = createBuilderStore()
+    // Группа [title, text(контент), short_text] + одиночка ниже.
+    store.getState().addQuestionAfter(null, 'short_text')
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().addBlockAfter(titleId, 'text') // контент внутрь группы
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['title', 'text', 'short_text'])
+    store.getState().markSaved()
+
+    // Enter с контентного блока внутри группы → text ПОСЛЕ всей группы, не между.
+    const contentId = store.getState().blocks[1]!.id
+    const newId = store.getState().addBlockAfterGroup(contentId, 'text')
+
+    const s = store.getState().blocks
+    expect(s.map((b) => b.type)).toEqual(['title', 'text', 'short_text', 'text'])
+    expect(s[3]!.id).toBe(newId)
+    // Новая строка — вне исходной группы (своя одиночка).
+    expect(s[3]!.groupId).not.toBe(s[0]!.groupId)
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('addBlockAfter (Shift+Enter) вставляет строку ВНУТРЬ группы', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // [title, short_text]
+    const titleId = store.getState().blocks[0]!.id
+
+    // Shift+Enter с подписи → контент сразу под ней, в той же группе.
+    store.getState().addBlockAfter(titleId, 'text')
+
+    const s = store.getState().blocks
+    expect(s.map((b) => b.type)).toEqual(['title', 'text', 'short_text'])
+    expect(s[1]!.groupId).toBe(s[0]!.groupId) // остался в группе вопроса
+  })
+
+  it('choice-вопрос (makeQuestion) рождается с одним пустым вариантом', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().makeQuestion(id, 'single_choice')
+
+    const field = store.getState().blocks.find((b) => b.type === 'single_choice')
+    expect(field?.settings?.options).toHaveLength(1)
+    expect(field?.settings?.options?.[0]?.label).toBe('')
+  })
+
+  it('choice-поле (addFieldAfter/makeField) рождается с одним пустым вариантом', () => {
+    const store = createBuilderStore()
+    const fieldId = store.getState().addFieldAfter(null, 'multi_choice')
+    expect(store.getState().blocks.find((b) => b.id === fieldId)?.settings?.options).toHaveLength(1)
+
+    store.getState().addBlock('text')
+    const loneId = store.getState().blocks.find((b) => b.type === 'text')!.id
+    store.getState().makeField(loneId, 'dropdown')
+    expect(store.getState().blocks.find((b) => b.id === loneId)?.settings?.options).toHaveLength(1)
+  })
+
+  it('addBlock/changeBlockType оставляют choice с пустым списком (недособранный черновик)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    expect(store.getState().blocks[0]?.settings?.options).toEqual([])
+  })
+
+  it('addOptionAfter вставляет вариант сразу после текущего и возвращает id (Д5)', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'single_choice') // рождается с 1 вариантом
+    const blockId = store.getState().blocks[0]!.id
+    const first = store.getState().blocks[0]!.settings!.options![0]!.id
+    store.getState().addOption(blockId) // теперь [first, second]
+    const second = store.getState().blocks[0]!.settings!.options![1]!.id
+    store.getState().markSaved()
+
+    // Enter на ПЕРВОМ варианте → новый ложится между first и second, а не в конец.
+    const newId = store.getState().addOptionAfter(blockId, first)
+
+    const opts = store.getState().blocks[0]!.settings!.options!
+    expect(opts.map((o) => o.id)).toEqual([first, newId, second])
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('addOptionAfter на non-choice — no-op, dirty не поднимается', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().addOptionAfter(id, 'opt_nope')
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('moveGroup переставляет группу целиком с соседней; каретка (id) стабильна', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // группа A: [title, short_text]
+    store.getState().addQuestionAfter(null, 'email') // группа B: [title, email]
+    let b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'title', 'email'])
+    const aTitleId = b[0]!.id
+    const bEmailId = b[3]!.id
+    store.getState().markSaved()
+
+    // Двигаем группу A вниз (по любому её блоку) — B встаёт первой.
+    store.getState().moveGroup(aTitleId, 'down')
+    b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'email', 'title', 'short_text'])
+    // id блоков сохранились (каретка едет с группой): подпись A теперь третья строка.
+    expect(b[1]!.id).toBe(bEmailId)
+    expect(b[2]!.id).toBe(aTitleId)
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('moveGroup на границе полотна — no-op (dirty не трогает)', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text')
+    store.getState().addQuestionAfter(null, 'email')
+    const topId = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().moveGroup(topId, 'up') // верхняя группа вверх — некуда
+    expect(store.getState().dirty).toBe(false)
+  })
 })

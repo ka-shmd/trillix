@@ -85,8 +85,14 @@ export type BuilderActions = {
   addBlock: (type: BlockType) => void
   // addBlockAfter вставляет блок сразу после afterId (или в конец при null) и
   // возвращает его id — slash-редактору нужен id, чтобы поставить фокус на новую
-  // строку (Enter создаёт следующий блок под текущим, а не в конце списка).
+  // строку. Вставка ВНУТРЬ группы (Shift+Enter §3.2): новая строка ложится сразу
+  // под текущую, regroup оставляет её в той же группе (контент между подписью и
+  // полем). Enter (после всей группы) — addBlockAfterGroup.
   addBlockAfter: (afterId: string | null, type: BlockType) => string
+  // addBlockAfterGroup вставляет блок ПОСЛЕ всей группы afterId (Enter §3.2: новая
+  // строка не втискивается в текущий вопрос, а начинает следующий блок под ним) и
+  // возвращает его id. В конец при null/ненайденном.
+  addBlockAfterGroup: (afterId: string | null, type: BlockType) => string
   // changeBlockType меняет тип блока на месте (id стабилен): раздел «Отдельные
   // поля»/«Лэйаут» меню и Backspace-схлопывание. Текст переносится, если новый тип
   // его несёт. Возвращает id для фокуса.
@@ -111,6 +117,10 @@ export type BuilderActions = {
   removeGroup: (id: string) => void
   // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не трогает).
   moveBlock: (id: string, dir: 'up' | 'down') => void
+  // moveGroup переставляет группу блока id с соседней (Alt+Shift+↑/↓ §3.2): группа
+  // едет целиком, внутренний порядок цел, каретка остаётся на том же блоке (id
+  // стабилен). На границе полотна — no-op (dirty не трогает).
+  moveGroup: (id: string, dir: 'up' | 'down') => void
   // reorderBlocks переносит БЛОК activeId на позицию overId (блочный слой dnd —
   // плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как единицы —
   // reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
@@ -123,6 +133,10 @@ export type BuilderActions = {
   duplicateBlock: (id: string) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
   addOption: (blockId: string) => void
+  // addOptionAfter вставляет пустой вариант СРАЗУ ПОСЛЕ optionId (Enter §3.2: вариант
+  // рождается под текущим, а не в конце — дефект Д5) и возвращает его id для фокуса.
+  // На non-choice/ненайденном варианте — no-op (возвращённый id тогда не всплывёт).
+  addOptionAfter: (blockId: string, optionId: string) => string
   updateOption: (blockId: string, optionId: string, label: string) => void
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
@@ -167,6 +181,18 @@ export function newBlock(type: BlockType): Block {
     return { ...base, settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } }
   }
   return base
+}
+
+// newFieldBlock — поле, создаваемое ВОПРОСНЫМ жестом (makeQuestion/makeField и
+// диалоги addQuestionAfter/addFieldAfter): choice-тип рождается с ОДНИМ пустым
+// вариантом, а не с пустым списком. Так choice сразу даёт каретке место (§2.1) и
+// клавиатурный поток вариантов работает с первого нажатия. addBlock/changeBlockType
+// оставляют choice с пустым списком (недособранный черновик — там вариант появится
+// вводом), поэтому сид живёт здесь, а не в newBlock.
+function newFieldBlock(type: BlockType): Block {
+  const b = newBlock(type)
+  if (isChoiceType(type)) return { ...b, settings: { options: [{ id: newOptionId(), label: '' }] } }
+  return b
 }
 
 // regroup выводит groupId из раскладки. Правило (v2, фаза 8.7): группами считаются
@@ -344,6 +370,17 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         return block.id
       },
 
+      addBlockAfterGroup: (afterId, type) => {
+        const block = newBlock(type)
+        commit(null, (s) => {
+          const at = groupEndAfter(s.blocks, afterId)
+          const blocks = s.blocks.slice()
+          blocks.splice(at, 0, block)
+          return structural({ blocks })
+        })
+        return block.id
+      },
+
       changeBlockType: (id, type) => {
         commit(null, (s) => {
           const src = s.blocks.find((b) => b.id === id)
@@ -370,7 +407,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const src = s.blocks[i]
           if (!src) return null
           const [gStart, gEnd] = groupSpan(s.blocks, i)
-          const field: Block = { ...newBlock(type), text: '' }
+          const field: Block = { ...newFieldBlock(type), text: '' }
           if (gStart === gEnd) {
             // Одиночный блок (своя группа) → он становится подписью, поле под ним.
             // Фокус на подпись (у неё textarea, автор правит текст вопроса дальше).
@@ -401,13 +438,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (gStart === gEnd) {
             // Одиночный блок → конверсия на месте в голое поле (текст роняется — у
             // поля его нет). Тот же путь, что changeBlockType на отвечаемый тип.
-            const field: Block = { ...newBlock(type), id }
+            const field: Block = { ...newFieldBlock(type), id }
             return structural({
               blocks: s.blocks.map((b) => (b.id === id ? field : b)),
             })
           }
           // Внутри группы → голое поле новой группой ниже; текущий блок остаётся.
-          const field = newBlock(type)
+          const field = newFieldBlock(type)
           focus = field.id
           const blocks = s.blocks.slice()
           blocks.splice(gEnd + 1, 0, field)
@@ -418,7 +455,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       addQuestionAfter: (afterId, type) => {
         const title = newBlock('title')
-        const field = newBlock(type)
+        const field = newFieldBlock(type)
         commit(null, (s) => {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
@@ -429,7 +466,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       },
 
       addFieldAfter: (afterId, type) => {
-        const field = newBlock(type)
+        const field = newFieldBlock(type)
         commit(null, (s) => {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
@@ -469,6 +506,32 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           blocks[i] = b
           blocks[j] = a
           return structural({ blocks })
+        }),
+
+      moveGroup: (id, dir) =>
+        commit(null, (s) => {
+          // Собираем порядок групп с их блоками (группы смежны — regroup) и меняем
+          // текущую группу местами с соседней. То же построение, что reorderGroups,
+          // но на один шаг вверх/вниз (Alt+Shift+стрелки), а не в позицию дропа.
+          const cur = s.blocks.find((b) => b.id === id)
+          if (!cur) return null
+          const order: string[] = []
+          const byGroup = new Map<string, Block[]>()
+          for (const b of s.blocks) {
+            const g = byGroup.get(b.groupId)
+            if (g) g.push(b)
+            else {
+              byGroup.set(b.groupId, [b])
+              order.push(b.groupId)
+            }
+          }
+          const gi = order.indexOf(cur.groupId)
+          const gj = dir === 'up' ? gi - 1 : gi + 1
+          if (gj < 0 || gj >= order.length) return null // группа на границе — no-op
+          const tmp = order[gi]!
+          order[gi] = order[gj]!
+          order[gj] = tmp
+          return structural({ blocks: order.flatMap((g) => byGroup.get(g)!) })
         }),
 
       reorderBlocks: (activeId, overId) =>
@@ -526,6 +589,20 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         commit(null, (s) =>
           mutateOptions(s.blocks, blockId, (opts) => [...opts, { id: newOptionId(), label: '' }]),
         ),
+
+      addOptionAfter: (blockId, optionId) => {
+        const opt: Option = { id: newOptionId(), label: '' }
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => {
+            const i = opts.findIndex((o) => o.id === optionId)
+            if (i < 0) return opts // вариант не найден — тот же массив (no-op)
+            const next = opts.slice()
+            next.splice(i + 1, 0, opt)
+            return next
+          }),
+        )
+        return opt.id
+      },
 
       updateOption: (blockId, optionId, label) =>
         commit(`uo:${blockId}:${optionId}`, (s) =>
