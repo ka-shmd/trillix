@@ -187,24 +187,28 @@ describe('поведение объектной остановки (§2.2)', () 
   })
 })
 
-describe('Backspace на инпуте плейсхолдера (§3.4)', () => {
-  it('пустой плейсхолдер, каретка в начале → удалить блок поля', () => {
+describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-24)', () => {
+  it('пустой плейсхолдер, каретка в начале → уход вверх, поле НЕ удаляется', () => {
     const { engine, handlers } = setup({
       schemaVersion: 2,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
-    expect(handlers.onDeleteObject).toHaveBeenCalledWith('st')
+    // Лист-поле сносит только явный Cmd+Shift+Backspace: пустой Backspace лишь уводит
+    // каретку на предыдущую остановку (не оставляет подпись группы сиротой).
+    expect(handlers.onArrow).toHaveBeenCalledWith('st', 'up')
+    expect(handlers.onDeleteObject).not.toHaveBeenCalled()
   })
 
-  it('плейсхолдер с текстом — Backspace не удаляет блок (правит текст)', () => {
+  it('плейсхолдер с текстом — Backspace правит текст (не уходит вверх)', () => {
     const { engine, handlers } = setup({
       schemaVersion: 2,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: { placeholder: 'Иван' } }],
     })
     engine.focusBlock('st', 'end')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
+    expect(handlers.onArrow).not.toHaveBeenCalled()
     expect(handlers.onDeleteObject).not.toHaveBeenCalled()
   })
 })

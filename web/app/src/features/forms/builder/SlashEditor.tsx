@@ -40,6 +40,7 @@ import { BlockRow } from './BlockRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { chords } from './shortcuts'
+import { stopNeighbor } from './navigation'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
 import { Input } from '@/components/ui/input'
@@ -250,11 +251,13 @@ export function SlashEditor({
     // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
     // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
     // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
-    // блока нет — полотно пустеет, каретка на заголовок (не в body).
+    // блока нет — полотно пустеет, каретка на заголовок (не в body). Инпут плейсхолдера
+    // перескакиваем (stopNeighbor): каретка встаёт на подпись, а не в поле.
     if ((cur.text ?? '') === '') {
+      const prevStop = stopNeighbor(blocks, i, 'up')
       if (isCaptionType(cur.type)) removeGroup(id)
       else removeBlock(id)
-      if (prev) engine.focusBlock(prev.id)
+      if (prevStop) engine.focusBlock(prevStop.id, 'end')
       else focusTitle()
     }
   }
@@ -289,8 +292,10 @@ export function SlashEditor({
     // диапазона — их id переживают операцию.
     const removed = isGroup ? blocks.filter((b) => b.groupId === cur.groupId) : [cur]
     const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
-    const next = blocks[firstIdx + removed.length]
-    const prev = blocks[firstIdx - 1]
+    // Исход фокуса перескакивает лист-поля (navigation.ts): от краёв удаляемого
+    // диапазона ищем ближайшую остановку — следующую, иначе предыдущую.
+    const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down')
+    const prev = stopNeighbor(blocks, firstIdx, 'up')
     if (isGroup) removeGroup(id)
     else removeBlock(id)
     if (next) engine.focusBlock(next.id, 'start')
@@ -303,18 +308,20 @@ export function SlashEditor({
   // предыдущей строки; её нет → заголовок формы.
   function handleDeleteObject(id: string) {
     const i = blocks.findIndex((b) => b.id === id)
-    const prev = blocks[i - 1]
+    const prevStop = stopNeighbor(blocks, i, 'up')
     removeBlock(id)
-    if (prev) engine.focusBlock(prev.id, 'end')
+    if (prevStop) engine.focusBlock(prevStop.id, 'end')
     else focusTitle()
   }
 
   // Обход стрелками между строками (§2.1): вниз — в начало следующей, вверх — в конец
   // предыдущей; из первой строки вверх — заголовок формы. Край определяет, куда встанет
   // каретка у многострочных/составных целей (первый/последний вариант choice).
+  // Инпуты плейсхолдера с подписью — листы: поток их перескакивает (stopNeighbor),
+  // каретка приземляется на подпись, а не в необязательное поле (navigation.ts).
   function handleArrow(id: string, dir: 'up' | 'down') {
     const i = blocks.findIndex((b) => b.id === id)
-    const neighbor = dir === 'up' ? blocks[i - 1] : blocks[i + 1]
+    const neighbor = stopNeighbor(blocks, i, dir)
     if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
     else if (dir === 'up') focusTitle()
   }

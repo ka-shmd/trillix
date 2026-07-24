@@ -446,7 +446,6 @@ export function BlockRow({
           <AnswerField
             block={block}
             onArrow={onArrow}
-            onEmptyBackspace={onDeleteObject}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
           />
@@ -678,15 +677,11 @@ function ScaleInline({ block }: { block: Block }) {
 function AnswerField({
   block,
   onArrow,
-  onEmptyBackspace,
   onDeleteBlock,
   onOpenActions,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
-  // Backspace в начале пустого плейсхолдера — удалить блок поля (§3.4: текста не
-  // осталось). Без этого каретка застревала в начале инпута навсегда.
-  onEmptyBackspace?: (id: string) => void
   // Cmd+Shift+Backspace — явное удаление блока/группы (§3.4). Только у редактируемого
   // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
   onDeleteBlock?: (id: string) => void
@@ -712,9 +707,12 @@ function AnswerField({
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
 
-  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1); Backspace в
-  // начале пустого — удалить блок поля. Left/Right и вертикаль внутри длинного
-  // текста остаются нативными (caret-проверка на краю).
+  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в начале
+  // пустого — уход ВВЕРХ на предыдущую остановку (обычно подпись группы), НЕ удаление:
+  // поле — необязательный лист, его сносит только явный Cmd+Shift+Backspace, иначе
+  // подпись осталась бы сиротой (решение владельца 2026-07-24; navigation.ts). В само
+  // поле каретка попадает лишь явно (Cmd+Enter/клик), поэтому это редкий путь. Left/
+  // Right и вертикаль внутри длинного текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
     if (onOpenActions && chords.actionMenu(e)) {
@@ -729,14 +727,9 @@ function AnswerField({
     } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
-    } else if (
-      onEmptyBackspace &&
-      chords.backspace(e) &&
-      e.currentTarget.value === '' &&
-      c.caretAtStart()
-    ) {
+    } else if (onArrow && chords.backspace(e) && e.currentTarget.value === '' && c.caretAtStart()) {
       e.preventDefault()
-      onEmptyBackspace(block.id)
+      onArrow(block.id, 'up')
     }
   }
   // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
