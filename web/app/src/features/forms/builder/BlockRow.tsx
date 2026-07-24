@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
@@ -27,8 +28,8 @@ import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
-import { useFocusEngine } from './focusEngine'
-import { textareaCaret } from './caret'
+import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
+import { textCaret } from './caret'
 import { SlashMenu } from './SlashMenu'
 import { ImageField } from './ImageField'
 
@@ -43,13 +44,17 @@ export interface BlockRowProps {
   groupHandle?: Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners'> | null
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
-  // onAddBelow — Enter: новая текстовая строка без меню (продолжаем писать).
-  onAddBelow: (id: string) => void
+  // onAddBelow — новая текстовая строка ПОСЛЕ группы. Enter — пустая; с объектной
+  // остановки — засев (печатный символ/вставка → seed) или открытие меню («/»).
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
   onInsertBelow: (id: string) => void
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
   // схлопнуть пустой блок в предыдущий (решает родитель — знает соседей).
   onBackspaceAtStart: (id: string) => void
+  // onDeleteObject — Backspace на объектной остановке (image/date/scale): удалить
+  // объект и увести каретку на предыдущую строку/заголовок (§2.2, знает соседей).
+  onDeleteObject: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }
 
@@ -66,6 +71,7 @@ export function BlockRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
+  onDeleteObject,
   onArrow,
 }: BlockRowProps) {
   const engine = useFocusEngine()
@@ -129,29 +135,24 @@ export function BlockRow({
   const style = { transform: CSS.Translate.toString(transform), transition }
 
   // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
-  // textarea: image/поля/варианты). Строится от АКТУАЛЬНОГО элемента: identity
-  // textarea могла смениться при ре-рендере, поэтому не кэшируем сам адаптер.
+  // textarea). Строится от АКТУАЛЬНОГО элемента: identity textarea могла смениться
+  // при ре-рендере, поэтому не кэшируем сам адаптер.
   const caret = useCallback(() => {
     const el = labelRef.current
-    return el ? textareaCaret(el) : null
+    return el ? textCaret(el) : null
   }, [])
 
   // Регистрация фокус-цели строки в фокус-движке (§2.5): текстовые строки дают цель
-  // каретки, и движок ставит на них фокус по focusBlock(id). Строки без textarea
-  // цель пока не регистрируют — их фокус-цели (объектная остановка, инпуты полей и
-  // вариантов) добавляет срез §2.1; до тех пор поведение прежнее (фокус на них не
-  // встаёт). Прежде это делали проп focusMe + эффект + onFocusHandled.
-  useEffect(() => {
-    if (!hasTextLine) return
-    return engine.register(block.id, { focus: (edge) => caret()?.focus(edge) })
-  }, [engine, block.id, hasTextLine, caret])
+  // каретки, и движок ставит на них фокус по focusBlock(id). Строки-поля/варианты/
+  // объекты регистрируют свои цели сами (AnswerField/OptionsInline/ObjectStop ниже).
+  useRegisterFocusTarget(block.id, (edge) => caret()?.focus(edge), hasTextLine)
 
   useEffect(() => {
     caret()?.autosize()
   }, [caret, block.text])
 
   function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    const c = textareaCaret(e.currentTarget)
+    const c = textCaret(e.currentTarget)
     if (e.key === 'Enter') {
       e.preventDefault()
       onAddBelow(block.id)
@@ -189,15 +190,18 @@ export function BlockRow({
     // «Вопросы» → бандл подпись+поле; «Отдельные поля» → голое поле; и то, и другое
     // одиночный блок конвертирует на месте, а внутри группы — новой группой ниже
     // (инпут не встраивается между подписью и контролом). «Лэйаут» → тип на месте.
-    if (item.group === 'question') makeQuestion(block.id, item.type)
-    else if (item.group === 'field') makeField(block.id, item.type)
-    else changeBlockType(block.id, item.type)
+    // Фокус — на ВОЗВРАЩЁННЫЙ сторами id (§2.4, Д2): поверхность нового/сконвертиро-
+    // ванного блока (подпись бандла, инпут поля, объектная остановка image/date/scale).
+    // eager-text под картинкой больше не заводим — вставка объекта это один шаг undo,
+    // каретка встаёт на сам объект (§2.3).
+    const focusId =
+      item.group === 'question'
+        ? makeQuestion(block.id, item.type)
+        : item.group === 'field'
+          ? makeField(block.id, item.type)
+          : changeBlockType(block.id, item.type)
     setSlashOpen(false)
-    // У image нет редактируемого заголовка (ImageField, labelRef=null) — фокусировать
-    // нечего; продолжаем поток текстовой строкой ниже. У бандла/подписи фокус на
-    // текущий блок (стал title); у голого поля textarea нет — caret() no-op.
-    if (item.type === 'image') onAddBelow(block.id)
-    else requestAnimationFrame(() => caret()?.focus('end'))
+    engine.focusBlock(focusId, 'end')
   }
 
   const iconBtn =
@@ -231,11 +235,15 @@ export function BlockRow({
           обработчик кнопки не срабатывает. Именно так «+ Описание», стоявшее в
           потоке под заголовком, съедало первый клик по «+ Добавить блок» (TD-22).
           Любой новый reveal-on-hover контрол блока — только сюда. */}
+      {/* tabIndex=-1 у значков строки: полотно — один Tab-stop, кнопки-значки —
+          мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
+          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2). */}
       <div
         className={`absolute right-full top-1.5 mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
       >
         <button
           type="button"
+          tabIndex={-1}
           onClick={() => (isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id))}
           aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
           className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
@@ -244,6 +252,7 @@ export function BlockRow({
         </button>
         <button
           type="button"
+          tabIndex={-1}
           onClick={() => onInsertBelow(block.id)}
           aria-label="Добавить блок ниже (выбрать тип)"
           className={iconBtn}
@@ -257,6 +266,9 @@ export function BlockRow({
           type="button"
           {...(groupHandle ? groupHandle.attributes : attributes)}
           {...(groupHandle ? groupHandle.listeners : listeners)}
+          // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
+          // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
+          tabIndex={-1}
           aria-label={
             groupHandle && isCaptionType(block.type)
               ? 'Перетащить вопрос (группу)'
@@ -273,13 +285,11 @@ export function BlockRow({
           ответов не собирает, required к нему неприменим. */}
       {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
 
-      {/* Image (неотвечаемый) — загрузка/картинка вместо текстовой строки;
-          менять тип у него нельзя, поэтому без SlashMenu и label-textarea. */}
-      {isImage ? (
-        <div className="min-w-0">
-          <ImageField block={block} formId={formId} />
-        </div>
-      ) : hasTextLine ? (
+      {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
+          textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
+          инпут плейсхолдера; image/date/scale — объектная остановка (§2.2).
+          Каждая ветка регистрирует свою фокус-цель в движке. */}
+      {hasTextLine ? (
         <SlashMenu open={slashOpen} onOpenChange={setSlashOpen} onPick={pickType}>
           <div className="min-w-0">
             <div className={isConsent ? 'flex items-start gap-2' : undefined}>
@@ -300,16 +310,35 @@ export function BlockRow({
             </div>
           </div>
         </SlashMenu>
-      ) : (
+      ) : isChoiceType(block.type) ? (
         <div className="min-w-0">
-          {isChoiceType(block.type) ? (
-            <OptionsInline block={block} onLeaveTop={() => {}} />
+          <OptionsInline
+            block={block}
+            onLeaveTop={() => onArrow(block.id, 'up')}
+            onArrow={onArrow}
+          />
+        </div>
+      ) : supportsPlaceholder(block.type) ? (
+        <div className="min-w-0">
+          <AnswerField block={block} onArrow={onArrow} />
+        </div>
+      ) : (
+        // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
+        <ObjectStop
+          block={block}
+          onAddBelow={onAddBelow}
+          onDeleteObject={onDeleteObject}
+          onArrow={onArrow}
+          onMove={(dir) => moveBlock(block.id, dir)}
+        >
+          {isImage ? (
+            <ImageField block={block} formId={formId} />
           ) : block.type === 'scale' ? (
             <ScaleInline block={block} />
           ) : (
             <AnswerField block={block} />
           )}
-        </div>
+        </ObjectStop>
       )}
     </div>
   )
@@ -350,6 +379,81 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
   )
 }
 
+
+// ObjectStop — объектная остановка строки-объекта (image/date/scale): у неё нет
+// текстовой поверхности, поэтому «каретка стоит на объекте» — это фокус на самой
+// строке-обёртке с подсветкой кольцом (§2.1–2.2). Печать/вставка не проваливаются:
+// печатный символ или вставка засевают text-блок ниже, Enter — пустую строку, «/» —
+// строку с меню, Backspace — удаляет объект. tabIndex=-1: остановка достижима
+// стрелками и focusBlock, но не Tab (полотно — один Tab-stop, §3.1 / срез roving).
+function ObjectStop({
+  block,
+  children,
+  onAddBelow,
+  onDeleteObject,
+  onArrow,
+  onMove,
+}: {
+  block: Block
+  children: ReactNode
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
+  onDeleteObject: (id: string) => void
+  onArrow: (id: string, dir: 'up' | 'down') => void
+  onMove: (dir: 'up' | 'down') => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useRegisterFocusTarget(block.id, () => ref.current?.focus())
+
+  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Перехватываем клавиши, только когда фокус на самой остановке, а не во
+    // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
+    if (e.target !== e.currentTarget) return
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault()
+      onMove(e.key === 'ArrowUp' ? 'up' : 'down')
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      onArrow(block.id, 'up')
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      onArrow(block.id, 'down')
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      onAddBelow(block.id)
+    } else if (e.key === '/') {
+      e.preventDefault()
+      onAddBelow(block.id, { openMenu: true })
+    } else if (e.key === 'Backspace') {
+      e.preventDefault()
+      onDeleteObject(block.id)
+    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault()
+      onAddBelow(block.id, { seed: e.key })
+    }
+  }
+
+  function onPaste(e: ClipboardEvent<HTMLDivElement>) {
+    if (e.target !== e.currentTarget) return
+    const text = e.clipboardData.getData('text')
+    if (!text) return
+    e.preventDefault()
+    onAddBelow(block.id, { seed: text })
+  }
+
+  return (
+    <div
+      ref={ref}
+      tabIndex={-1}
+      onKeyDown={onKeyDown}
+      onPaste={onPaste}
+      // Кольцо при фокусе (§2.1): объектная остановка «подсвечена», видно, что каретка
+      // на ней. Программный фокус с клавиатуры даёт focus-visible; :focus — подстраховка.
+      className="min-w-0 rounded-md outline-none ring-primary/40 focus:ring-2 focus-visible:ring-2"
+    >
+      {children}
+    </div>
+  )
+}
 
 // AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
 // автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит
@@ -416,14 +520,45 @@ function ScaleInline({ block }: { block: Block }) {
   )
 }
 
-function AnswerField({ block }: { block: Block }) {
+function AnswerField({
+  block,
+  onArrow,
+}: {
+  block: Block
+  onArrow?: (id: string, dir: 'up' | 'down') => void
+}) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  // Фокус-цель текстового поля — инпут плейсхолдера (§2.1). Только у placeholder-
+  // типов; date рисуется превью и фокусируется как объект (цель — у ObjectStop).
+  useRegisterFocusTarget(
+    block.id,
+    (edge) => {
+      const el = inputRef.current
+      if (el) textCaret(el).focus(edge)
+    },
+    supportsPlaceholder(block.type),
+  )
   const ph = block.settings?.placeholder ?? ''
   const setPh = (value: string) =>
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
+
+  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Left/Right и
+  // вертикаль внутри длинного текста остаются нативными (caret-проверка на краю).
+  function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
+    if (!onArrow) return
+    const c = textCaret(e.currentTarget)
+    if (e.key === 'ArrowUp' && c.caretAtStart()) {
+      e.preventDefault()
+      onArrow(block.id, 'up')
+    } else if (e.key === 'ArrowDown' && c.caretAtEnd()) {
+      e.preventDefault()
+      onArrow(block.id, 'down')
+    }
+  }
   // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
   // место под глиф типа справа (см. index.css).
   const cls = 'rf-input rf-input-typed'
@@ -464,8 +599,12 @@ function AnswerField({ block }: { block: Block }) {
   if (block.type === 'long_text') {
     return wrap(
       <textarea
+        ref={(el) => {
+          inputRef.current = el
+        }}
         value={ph}
         onChange={(e) => setPh(e.target.value)}
+        onKeyDown={onFieldKeyDown}
         rows={2}
         placeholder={hint}
         className={cls}
@@ -476,8 +615,12 @@ function AnswerField({ block }: { block: Block }) {
   }
   return wrap(
     <input
+      ref={(el) => {
+        inputRef.current = el
+      }}
       value={ph}
       onChange={(e) => setPh(e.target.value)}
+      onKeyDown={onFieldKeyDown}
       placeholder={hint}
       className={cls}
       {...focusProps}
@@ -487,17 +630,40 @@ function AnswerField({ block }: { block: Block }) {
 
 // OptionsInline — варианты choice-блока строками прямо под вопросом, с глифом
 // радио/чекбокса как у готового поля. Клавиатура: Enter — новый вариант (фокус на
-// него), Backspace в пустом — удалить и уйти на предыдущий (или на заголовок).
-function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => void }) {
+// него), Backspace в пустом — удалить и уйти на предыдущий (пустой первый →
+// onLeaveTop, к подписи группы), ↑/↓ — обход вариантов, на краях — соседняя строка.
+function OptionsInline({
+  block,
+  onLeaveTop,
+  onArrow,
+}: {
+  block: Block
+  onLeaveTop: () => void
+  onArrow: (id: string, dir: 'up' | 'down') => void
+}) {
   const addOption = useBuilderStore((s) => s.addOption)
   const updateOption = useBuilderStore((s) => s.updateOption)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
+  const addBtnRef = useRef<HTMLButtonElement>(null)
   // Запрос фокуса держим в ref, а не в state: после add/remove опций стор меняет
   // массив → эффект переставляет фокус, не вызывая лишний ре-рендер (setState в
   // эффекте под запретом линта). 'last' — на последнюю опцию (после Enter/добавления).
   const pendingFocus = useRef<string | 'last' | null>(null)
+
+  // Фокус-цель choice-строки (§2.1) — инпут варианта: край start → первый, end →
+  // последний. Список пуст (недособранный черновик) → кнопка «добавить вариант»,
+  // чтобы каретка не пропала (13.2 заведёт choice сразу с одним вариантом).
+  useRegisterFocusTarget(block.id, (edge) => {
+    if (options.length === 0) {
+      addBtnRef.current?.focus()
+      return
+    }
+    const target = edge === 'start' ? options[0] : options[options.length - 1]
+    const el = target && optionRefs.current.get(target.id)
+    if (el) textCaret(el).focus(edge)
+  })
 
   useEffect(() => {
     const req = pendingFocus.current
@@ -517,6 +683,17 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
       const prev = options[i - 1]
       removeOption(block.id, optionId)
       if (prev) pendingFocus.current = prev.id
+      else onLeaveTop()
+    } else if (e.key === 'ArrowDown') {
+      // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
+      e.preventDefault()
+      const next = options[i + 1]
+      if (next) optionRefs.current.get(next.id)?.focus()
+      else onArrow(block.id, 'down')
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      const prev = options[i - 1]
+      if (prev) optionRefs.current.get(prev.id)?.focus()
       else onLeaveTop()
     }
   }
@@ -562,6 +739,7 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
             </span>
             <button
               type="button"
+              tabIndex={-1}
               onClick={() => removeOption(block.id, o.id)}
               aria-label="Удалить вариант"
               className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
@@ -572,7 +750,9 @@ function OptionsInline({ block, onLeaveTop }: { block: Block; onLeaveTop: () => 
         )
       })}
       <button
+        ref={addBtnRef}
         type="button"
+        tabIndex={-1}
         onClick={() => {
           pendingFocus.current = 'last'
           addOption(block.id)

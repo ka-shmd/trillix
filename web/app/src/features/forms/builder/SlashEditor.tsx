@@ -156,8 +156,20 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     else startBlock(null)
   }
 
-  function handleAddBelow(id: string) {
-    startBlock(id)
+  // Фокус на заголовок формы (его textarea всегда смонтирован над полотном): каретка
+  // в конец. Сюда уходит фокус, когда удаляют первую/единственную строку — иначе он
+  // потерялся бы в body. rAF не нужен (нет Radix-возврата фокуса).
+  function focusTitle() {
+    const el = titleRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }
+
+  // onAddBelow: пустая текстовая строка ниже (Enter), либо с засевом/меню — с
+  // объектной остановки (§2.2). Прокидывает opts в startBlock.
+  function handleAddBelow(id: string, opts?: { openMenu?: boolean; seed?: string }) {
+    startBlock(id, opts)
   }
 
   // Кнопка «+»: открыть диалог выбора типа блока (после блока id).
@@ -167,7 +179,10 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
   }
 
   // Выбор пункта в диалоге: «Вопросы» → подпись+поле новой группой; «Отдельные поля»
-  // → голое поле новой группой; «Лэйаут» → один блок после текущего.
+  // → голое поле новой группой; «Лэйаут» → один блок после текущего. Фокус — на
+  // поверхность вставленного блока по возвращённому id (§2.4): подпись бандла, инпут
+  // голого поля или объектная остановка (image/date/scale). Отдельной текстовой
+  // строки под картинкой больше не заводим (§2.3, eager-text убран).
   function handlePickInsertType(item: MenuItem) {
     const id =
       item.group === 'question'
@@ -175,10 +190,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
         : item.group === 'field'
           ? addFieldAfter(insertAfterId, item.type)
           : addBlockAfter(insertAfterId, item.type)
-    // image без редактируемого заголовка не на что фокусировать — открываем новую
-    // текстовую строку ниже (как в slash-потоке), чтобы каретка не пропала.
-    if (item.type === 'image') startBlock(id)
-    else engine.focusBlock(id)
+    engine.focusBlock(id)
     setInsertOpen(false)
   }
 
@@ -205,23 +217,28 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
     if ((cur.text ?? '') === '') {
       removeBlock(id)
       if (prev) engine.focusBlock(prev.id)
-      else {
-        // Заголовок всегда смонтирован (над полотном), поэтому фокусируем его сразу —
-        // ре-рендер пустого полотна его не размонтирует, каретка сохранится. rAF тут
-        // не нужен (нет Radix-возврата фокуса) и в фоновой вкладке не сработал бы.
-        const el = titleRef.current
-        if (el) {
-          el.focus()
-          el.setSelectionRange(el.value.length, el.value.length)
-        }
-      }
+      else focusTitle()
     }
   }
 
+  // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
+  // предыдущей строки; её нет → заголовок формы.
+  function handleDeleteObject(id: string) {
+    const i = blocks.findIndex((b) => b.id === id)
+    const prev = blocks[i - 1]
+    removeBlock(id)
+    if (prev) engine.focusBlock(prev.id, 'end')
+    else focusTitle()
+  }
+
+  // Обход стрелками между строками (§2.1): вниз — в начало следующей, вверх — в конец
+  // предыдущей; из первой строки вверх — заголовок формы. Край определяет, куда встанет
+  // каретка у многострочных/составных целей (первый/последний вариант choice).
   function handleArrow(id: string, dir: 'up' | 'down') {
     const i = blocks.findIndex((b) => b.id === id)
     const neighbor = dir === 'up' ? blocks[i - 1] : blocks[i + 1]
-    if (neighbor) engine.focusBlock(neighbor.id)
+    if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
+    else if (dir === 'up') focusTitle()
   }
 
   return (
@@ -275,6 +292,7 @@ export function SlashEditor({ formId, initialTitle }: { formId: string; initialT
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
+                  onDeleteObject={handleDeleteObject}
                   onArrow={handleArrow}
                 />
               ))}
@@ -322,6 +340,7 @@ function GroupRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
+  onDeleteObject,
   onArrow,
 }: {
   group: { id: string; blocks: Block[] }
@@ -329,9 +348,10 @@ function GroupRow({
   blockIds: string[]
   highlight: boolean
   menuForId: string | null
-  onAddBelow: (id: string) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
+  onDeleteObject: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -365,6 +385,7 @@ function GroupRow({
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}
               onBackspaceAtStart={onBackspaceAtStart}
+              onDeleteObject={onDeleteObject}
               onArrow={onArrow}
             />
           ))}

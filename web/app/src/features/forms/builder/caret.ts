@@ -15,13 +15,18 @@ export interface CaretAdapter {
   caretAtStart(): boolean
   // Каретка схлопнута в самом конце текста (для ↓ на границе строки).
   caretAtEnd(): boolean
-  // Подгон высоты textarea под контент (автовысота, без скролла).
+  // Подгон высоты textarea под контент (автовысота, без скролла); у <input> — no-op.
   autosize(): void
 }
 
-// textareaCaret — реализация адаптера поверх <textarea>. Дёшев, создаётся на каждый
-// вызов от актуального элемента (identity элемента могла смениться при ре-рендере).
-export function textareaCaret(el: HTMLTextAreaElement): CaretAdapter {
+// Текстовая поверхность строки: многострочный <textarea> (подписи, абзацы) или
+// однострочный <input> (плейсхолдеры полей, варианты выбора). API selection у них
+// общий, поэтому адаптер один на оба.
+type TextEl = HTMLTextAreaElement | HTMLInputElement
+
+// textCaret — реализация адаптера поверх <textarea>/<input>. Дёшев, создаётся на
+// каждый вызов от актуального элемента (identity могла смениться при ре-рендере).
+export function textCaret(el: TextEl): CaretAdapter {
   return {
     focus(edge) {
       el.focus()
@@ -32,6 +37,7 @@ export function textareaCaret(el: HTMLTextAreaElement): CaretAdapter {
     caretAtEnd: () =>
       el.selectionStart === el.value.length && el.selectionEnd === el.value.length,
     autosize() {
+      if (!(el instanceof HTMLTextAreaElement)) return
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
     },

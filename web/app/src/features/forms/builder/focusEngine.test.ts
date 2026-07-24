@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { createFocusEngine, type FocusTarget } from './focusEngine'
-import { textareaCaret } from './caret'
+import { textCaret } from './caret'
 
 // Юнит-тесты фокус-движка и адаптера каретки (§2.5–2.6). DOM-окружение —
 // happy-dom (докблок выше): нужен настоящий <textarea> с selection и
@@ -20,10 +20,10 @@ function makeTextarea(value = ''): HTMLTextAreaElement {
   return el
 }
 
-describe('textareaCaret', () => {
+describe('textCaret', () => {
   it('focus("start") ставит каретку в начало и фокус на элемент', () => {
     const el = makeTextarea('привет')
-    textareaCaret(el).focus('start')
+    textCaret(el).focus('start')
     expect(document.activeElement).toBe(el)
     expect(el.selectionStart).toBe(0)
     expect(el.selectionEnd).toBe(0)
@@ -31,14 +31,14 @@ describe('textareaCaret', () => {
 
   it('focus("end") ставит каретку в конец', () => {
     const el = makeTextarea('привет')
-    textareaCaret(el).focus('end')
+    textCaret(el).focus('end')
     expect(el.selectionStart).toBe(6)
     expect(el.selectionEnd).toBe(6)
   })
 
   it('caretAtStart/caretAtEnd — только при схлопнутой каретке на краю', () => {
     const el = makeTextarea('abc')
-    const c = textareaCaret(el)
+    const c = textCaret(el)
     el.setSelectionRange(0, 0)
     expect(c.caretAtStart()).toBe(true)
     expect(c.caretAtEnd()).toBe(false)

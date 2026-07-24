@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, useEffect, useRef } from 'react'
 import type { CaretEdge } from './caret'
 
 // Фокус-движок полотна (§2.5 спеки реворка) — ЕДИНЫЙ источник правды о фокусе.
@@ -63,4 +63,29 @@ export function useFocusEngine(): FocusEngine {
   const engine = useContext(FocusEngineContext)
   if (!engine) throw new Error('useFocusEngine вызван вне FocusEngineProvider')
   return engine
+}
+
+// useRegisterFocusTarget — строка регистрирует свою фокус-цель в движке на всё время
+// жизни. `focus` может меняться каждый рендер (замыкает актуальные refs/props) —
+// держим его в ref, поэтому регистрация стабильна и не пере-подписывается на каждую
+// правку. `enabled=false` — цель не регистрируется (у блока в этом типе нет своей
+// поверхности: напр. AnswerField для date рисует превью, а фокус-цель — объектная
+// остановка вокруг него).
+export function useRegisterFocusTarget(
+  id: string,
+  focus: (edge: CaretEdge) => void,
+  enabled = true,
+): void {
+  const engine = useFocusEngine()
+  // Latest-ref: держим актуальный focus, не пере-подписывая регистрацию на каждый
+  // рендер. Начальное значение — из useRef(focus); обновляем в эффекте (правка ref
+  // во время рендера запрещена правилом react-hooks/refs).
+  const focusRef = useRef(focus)
+  useEffect(() => {
+    focusRef.current = focus
+  })
+  useEffect(() => {
+    if (!enabled) return
+    return engine.register(id, { focus: (edge) => focusRef.current(edge) })
+  }, [engine, id, enabled])
 }
