@@ -476,8 +476,11 @@ half-полями собирается с нуля до готовности к 
    (`schema.go`: `Alt`, `MaxAltLen`, ветки валидации) + тесты обеих сторон
    (`formSchema.test.ts`, `schema_test.go`); UI (`ImageField`); жёсткий `alt=""` в
    `BlockField`; упоминания в EDITOR.md / fields README / SCHEMA.md; `npm run check:bundle`.
-3. Тост-инфраструктура: вендорный shadcn Toast на Radix-примитиве из зонтичного `radix-ui`
-   (не новая зависимость); проверка `node -e "console.log(typeof require('radix-ui').Toast)"`.
+3. Тост-инфраструктура: штатный toast-компонент shadcn — вендоренный `sonner.tsx`
+   (`src/components/ui/sonner.tsx`), уже присутствовавший от скаффолда фазы 6.5; `Toaster`
+   монтируется в `__root.tsx` над `_app`/`_auth`. Зависимости `sonner` + peer `next-themes`
+   узаконены в `web/CLAUDE.md` (решение владельца: использовать компоненты shadcn, а не
+   Radix-примитив напрямую). Демо — тост показывается тестовым вызовом.
 
 **Демо.** Схема с alt отвергается 422 обеими сторонами; в редакторе alt-поля нет; тост
 показывается тестовым вызовом.
