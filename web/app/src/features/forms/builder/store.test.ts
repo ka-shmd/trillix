@@ -514,6 +514,24 @@ describe('createBuilderStore', () => {
     expect(rowBoundaryTarget(blocks, left!.id, right!.id)).toBeNull()
   })
 
+  it('rowBoundaryTarget: участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
+    const store = createBuilderStore()
+    for (const t of ['short_text', 'email', 'phone', 'number'] as const) store.getState().addBlock(t)
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b]
+    store.getState().placeInRow(d!.groupId, c!.groupId) // ряд [c, d]
+    const blocks = store.getState().blocks
+
+    // b из верхнего ряда тащат на c — щель между c и d. Правило обязано подменить цель
+    // концом нижнего ряда: без этого b занял бы ячейку c, а d вылетел бы своим рядом.
+    expect(rowBoundaryTarget(blocks, b!.id, c!.id)).toBe(d!.id)
+    // И наоборот: c из нижнего ряда на b (снизу щель между a и b даёт цель «b») —
+    // подмена на строку за верхним рядом, то есть на сам c: остаться на месте.
+    expect(rowBoundaryTarget(blocks, c!.id, b!.id)).toBe(c!.id)
+    // Дроп снизу на a — это позиция НАД рядом, она легальна и подмены не требует.
+    expect(rowBoundaryTarget(blocks, c!.id, a!.id)).toBeNull()
+  })
+
   it('rowBoundaryTarget: вставка контента ВНУТРЬ участника ряда остаётся легальной', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title + поле (левый)
@@ -1094,26 +1112,53 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     expect(rows(store)).toEqual([1, 1, 1])
   })
 
-  it('перенос правого вниз за чужую группу снимает его бит', () => {
-    const store = paired('short_text', 'email', 'long_text')
+  // Сосед у бита — КОНКРЕТНЫЙ: «встань в ряд с этим вопросом», а не «с кем угодно
+  // сверху». Сосед в этих трёх тестах whitelist-типа, поэтому инертность бит не
+  // снимет — снимает его именно правило подмены соседа.
+  it('перенос правого вниз снимает бит, а не приклеивает к новому соседу', () => {
+    const store = paired('short_text', 'email', 'phone')
     store.getState().moveGroup(store.getState().blocks[1]!.id, 'down')
-    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'long_text', 'email'])
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
     expect(cols(store)).toEqual(['-', '-', '-'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('дроп группы на правого участника не собирает ряд молча', () => {
+    const store = paired('short_text', 'email', 'phone')
+    const [, right, c] = store.getState().blocks
+    store.getState().reorderGroups(c!.groupId, right!.groupId)
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 1, 1])
   })
 
   it('вставка контентного блока между участниками ряда рвёт ряд', () => {
     const store = paired('short_text', 'email')
     store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'heading')
     expect(rows(store)).toEqual([1, 1, 1])
-    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual(['-', '-', '-'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
   })
 
-  it('вставка короткого поля между участниками: ячейку занимает новичок', () => {
+  it('вставка короткого поля между участниками рвёт ряд, а не отдаёт ячейку новичку', () => {
     const store = paired('short_text', 'email')
     store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'phone')
-    // Бит правого сработал — но уже с новым левым соседом; полотно покажет ровно это.
     expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('перенос из одного ряда в свободную ячейку другого — не no-op', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b], c один
+    store.getState().placeInRow(b!.groupId, c!.groupId) // b переезжает к c
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'phone', 'email'])
     expect(rows(store)).toEqual([1, 2])
+  })
+
+  it('makeQuestion на правом участнике сохраняет ряд (бит переезжает на новое поле)', () => {
+    const store = paired('short_text', 'short_text')
+    store.getState().makeQuestion(store.getState().blocks[1]!.id, 'short_text')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'title', 'short_text'])
+    expect(rows(store)).toEqual([2])
   })
 
   it('hydrate снимает инертный бит (левого соседа нет)', () => {
@@ -1198,6 +1243,23 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
     store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
     store.getState().moveOption(id, options(store)[1]!.id, 'up')
     expect(optRows(store)).toEqual([['b'], ['a']])
+  })
+
+  it('вариант, уехавший вниз, не приклеивается к новому соседу', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+    // b уезжает под c: бит держался за a, значит снимается — иначе b встал бы в ряд с c.
+    store.getState().moveOption(id, options(store)[1]!.id, 'down')
+    expect(optRows(store)).toEqual([['a'], ['c'], ['b']])
+  })
+
+  it('перестановка dnd не собирает ряд молча (сосед сменился — бит снят)', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, a!.id) // ряд [a, b]
+    store.getState().reorderOptions(id, c!.id, b!.id) // c встаёт на место b
+    expect(optRows(store)).toEqual([['a'], ['c'], ['b']])
   })
 })
 

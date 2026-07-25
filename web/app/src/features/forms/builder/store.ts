@@ -288,32 +288,87 @@ function optionWithoutColumn(o: Option): Option {
   return next
 }
 
-// normalizeColumns снимает ИНЕРТНЫЕ биты ряда (спека §5) — и у блоков, и у вариантов.
-// Инертен тот флаг, которому некуда примениться: левого соседа нет, он не умеет делить
-// ряд или его ячейка уже занята. Такой флаг легален в контракте (кросс-блочное условие
-// намеренно не валидируется — иначе undo и промежуточные состояния драга ловили бы
-// 422), но в сторе его чистят, и не ради валидности: иначе вставка короткого вопроса
-// выше молча затянула бы блок в чужой ряд.
+// rowPartners — для каждого носителя бита: id блока-соседа, РЯДОМ С КОТОРЫМ он реально
+// стоит (носитель левого участника). Ключ — id носителя, а не groupId: groupId выводится
+// regroup и может смениться от чужой правки, id блока стабилен (на него же ссылаются
+// answers).
+function rowPartners(blocks: Block[]): Map<string, string> {
+  const m = new Map<string, string>()
+  for (const row of packRows(groupBlocks(blocks))) {
+    if (row.length < 2) continue
+    const left = row[0]!.blocks.find((b) => isAnswerableType(b.type))
+    const right = row[1]!.blocks.find((b) => b.settings?.column === COLUMN_RIGHT)
+    if (left && right) m.set(right.id, left.id)
+  }
+  return m
+}
+
+// То же для вариантов: сосед варианта — предыдущий вариант его ряда.
+function optionPartners(options: Option[]): Map<string, string> {
+  const m = new Map<string, string>()
+  for (const row of packOptionRows(options)) {
+    if (row.length > 1) m.set(row[1]!.id, row[0]!.id)
+  }
+  return m
+}
+
+// normalizeColumns снимает биты ряда, которые перестали значить то, что значили (спека
+// §5) — и у блоков, и у вариантов. Снимаются два вида:
 //
-// Что инертно, решает ТОТ ЖЕ раскладчик, что рисует ряды (packRows/packOptionRows):
-// флаг у элемента, открывшего ряд (первого в row), не сработал. Своё правило здесь
-// разъехалось бы с рендером — это и был дефект «помечен half — нарисован full».
+//  1. ИНЕРТНЫЙ — флаг, которому некуда примениться: левого соседа нет, он не умеет
+//     делить ряд, его ячейка занята. Такой флаг легален в контракте (кросс-блочное
+//     условие намеренно не валидируется — иначе undo и промежуточные состояния драга
+//     ловили бы 422), но в сторе его чистят, чтобы он не воскрес: иначе вставка
+//     короткого вопроса выше молча затянула бы блок в чужой ряд.
+//  2. С ПОДМЕНЁННЫМ СОСЕДОМ — флаг остался рабочим, но сосед у него уже другой. Бит
+//     держится за КОНКРЕТНОГО соседа: «встань в ряд с этим вопросом», а не «встань в
+//     ряд с кем угодно, кто окажется выше». Без этого правила любой вертикальный
+//     перенос (Alt+Shift+↑↓, дроп группы, перестановка вариантов) приклеивал бы
+//     участника ряда к постороннему вопросу — ряд собирался бы сам, без просьбы.
+//     Проверяется только при известном prev (структурная правка); hydrate и undo/redo
+//     приезжают со своей историей и подмены не видят — им сравнивать не с чем и не нужно.
+//     placed — единственное исключение: элемент, которому бит поставили ИМЕННО СЕЙЧАС
+//     (placeInRow), меняет соседа по прямой просьбе, и снимать его бит нельзя, иначе
+//     перенос из одного ряда в свободную ячейку другого был бы no-op'ом.
+//
+// Что именно стоит в ряду, решает ТОТ ЖЕ раскладчик, что рисует ряды (packRows/
+// packOptionRows): своё правило здесь разъехалось бы с рендером — это и был дефект
+// «помечен half — нарисован full».
 // Возвращает исходный массив, если снимать нечего (дешёвые no-op коммиты).
-function normalizeColumns(blocks: Block[]): Block[] {
+function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Block[] {
   const clear = new Set<string>() // id блоков, с которых снимаем бит
   for (const row of packRows(groupBlocks(blocks))) {
     for (const b of row[0]!.blocks) {
-      if (b.settings?.column === COLUMN_RIGHT) clear.add(b.id)
+      if (b.settings?.column === COLUMN_RIGHT) clear.add(b.id) // (1) инертный
+    }
+  }
+  if (prev) {
+    // (2) сосед сменился. Носителей, которых в prev не было вовсе, не трогаем: это
+    // свежий бит от placeInRow, ему сравнивать не с чем.
+    const was = rowPartners(prev)
+    const now = rowPartners(blocks)
+    for (const [id, partner] of now) {
+      const before = was.get(id)
+      if (id !== placed && before !== undefined && before !== partner) clear.add(id)
     }
   }
   // Варианты — тот же приём внутри каждого choice-блока.
   const optClear = new Map<string, Set<string>>()
+  const prevOptions = new Map(prev?.map((b) => [b.id, b.settings?.options ?? []]))
   for (const b of blocks) {
     const options = b.settings?.options
     if (!options?.length) continue
     const ids = new Set<string>()
     for (const row of packOptionRows(options)) {
       if (row[0]!.column === COLUMN_RIGHT) ids.add(row[0]!.id)
+    }
+    const before = prevOptions.get(b.id)
+    if (before) {
+      const was = optionPartners(before)
+      for (const [id, partner] of optionPartners(options)) {
+        const had = was.get(id)
+        if (id !== placed && had !== undefined && had !== partner) ids.add(id)
+      }
     }
     if (ids.size > 0) optClear.set(b.id, ids)
   }
@@ -476,8 +531,12 @@ export function rowBoundaryTarget(blocks: Block[], activeId: string, overId: str
     const rs = at(row[0]!.blocks[0]!.id) // первая строка ряда
     const mid = at(row[1]!.blocks[0]!.id) // первая строка ПРАВОГО участника
     const re = at(row[1]!.blocks[row[1]!.blocks.length - 1]!.id) // последняя строка ряда
-    if (ai >= rs && ai <= re) return null // активный сам из этого ряда — не мешаем
+    // Сначала «цель не в этом ряду» и только потом «активный из этого ряда»: обратный
+    // порядок выходил из ЦИКЛА на первом же ряду, где нашёлся активный, и защита не
+    // доставалась ни одному ряду ниже — участник верхнего ряда мог уронить блок в
+    // щель нижнего.
     if (ti < rs || ti > re) continue
+    if (ai >= rs && ai <= re) return null // цель в СВОЁМ ряду — перестановка свободна
     // Позиция вставки = индекс цели в исходном списке (арифметика planBlockDrop).
     // Сверху щель между участниками даёт цель «последняя строка левого», снизу —
     // «первая строка правого»; прочие цели внутри ряда легальны и ряд не рвут.
@@ -498,18 +557,23 @@ function mutateOptions(
   blocks: Block[],
   blockId: string,
   fn: (options: Option[]) => Option[],
+  // placed — вариант, которому бит ряда поставили именно сейчас (см. normalizeColumns).
+  placed?: string,
 ): Pick<BuilderState, 'blocks'> | null {
   const block = blocks.find((b) => b.id === blockId)
   if (!block || !isChoiceType(block.type)) return null
   const options = block.settings?.options ?? []
   const next = fn(options)
   if (next === options) return null
-  // normalizeColumns и здесь: у вариантов бит ряда инертнеет от тех же правок, что у
+  // normalizeColumns и здесь: у вариантов бит ряда ломается от тех же правок, что у
   // блоков (левого удалили, переставили порядок), и чистить его надо там же, где он
-  // ломается — иначе флаг воскреснет при следующей вставке варианта выше.
+  // ломается. prev — сами blocks: перестановка вариантов обязана снимать бит с того,
+  // у кого сменился сосед, иначе Alt+↑↓ приклеивал бы вариант к чужому ряду.
   return {
     blocks: normalizeColumns(
       blocks.map((b) => (b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b)),
+      blocks,
+      placed,
     ),
   }
 }
@@ -569,10 +633,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
     // structural — патч, меняющий состав/порядок/типы блоков: пропускает blocks
     // через regroup, чтобы groupId всегда отражал раскладку, и normalizeColumns,
-    // чтобы инертный бит ряда не воскрес при следующей вставке (спека §5).
-    function structural(patch: (Partial<BuilderState> & { blocks: Block[] }) | null) {
+    // чтобы бит ряда не воскрес и не приклеился к новому соседу (спека §5).
+    //
+    // Прежнюю раскладку берём из get(): патч считается ВНУТРИ producer'а, до того как
+    // set его применит, поэтому get() — это ещё «до». Так правило «сосед сменился —
+    // бит снят» действует на ВСЕ структурные пути сразу (переносы, дропы, вставки),
+    // а не на те, где о нём вспомнили: путь, который о нём забудет, — это молча
+    // собравшийся ряд, которого никто не просил.
+    function structural(
+      patch: (Partial<BuilderState> & { blocks: Block[] }) | null,
+      placed?: string,
+    ) {
       if (patch === null) return null
-      return { ...patch, blocks: normalizeColumns(regroup(patch.blocks)) }
+      return { ...patch, blocks: normalizeColumns(regroup(patch.blocks), get().blocks, placed) }
     }
 
     return {
@@ -664,6 +737,11 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             // Фокус на подпись (у неё textarea, автор правит текст вопроса дальше).
             const title: Block = { ...src, type: 'title', settings: {}, required: false }
             focus = title.id
+            // Бит ряда переезжает на НОВОЕ поле (носитель бита — отвечаемый блок, а
+            // подпись его не несёт): «дать вопросу подпись» не должно разваливать ряд.
+            // Тот же carryLayout, что у makeField и changeBlockType — иначе два пункта
+            // одного меню («Вопросы» и «Отдельные поля») вели бы себя противоположно.
+            carryLayout(src, field)
             const blocks = s.blocks.slice()
             blocks.splice(i, 1, title, field)
             return structural({ blocks })
@@ -862,13 +940,17 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (from < 0 || !order.includes(targetGroupId)) return null
           order.splice(from, 1)
           order.splice(order.indexOf(targetGroupId) + 1, 0, activeGroupId)
-          const moved = structural({
-            blocks: order
-              .flatMap((g) => byGroup.get(g)!)
-              .map((b) =>
-                b.id === active.id ? { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } } : b,
-              ),
-          })!
+          const moved = structural(
+            {
+              blocks: order
+                .flatMap((g) => byGroup.get(g)!)
+                .map((b) =>
+                  b.id === active.id ? { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } } : b,
+                ),
+            },
+            // Смена соседа здесь — по прямой просьбе, а не побочный эффект переноса.
+            active.id,
+          )!
           // Флаг не приземлился (цель не умеет делить ряд) — normalizeColumns его снял,
           // а «перенос вплотную за цель» без ряда не то, о чём просили: откатываем весь
           // патч, чтобы не мусорить в истории.
@@ -889,7 +971,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       placeOptionInRow: (blockId, activeOptionId, targetOptionId) =>
         commit(null, (s) =>
-          mutateOptions(s.blocks, blockId, (opts) => {
+          mutateOptions(
+            s.blocks,
+            blockId,
+            (opts) => {
             if (activeOptionId === targetOptionId) return opts
             const from = opts.findIndex((o) => o.id === activeOptionId)
             if (from < 0 || !opts.some((o) => o.id === targetOptionId)) return opts
@@ -897,12 +982,15 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             if (!optionRowHasFreeCell(opts, targetOptionId)) return opts
             const next = opts.slice()
             const [moved] = next.splice(from, 1)
-            next.splice(next.findIndex((o) => o.id === targetOptionId) + 1, 0, {
-              ...moved!,
-              column: COLUMN_RIGHT,
-            })
-            return next
-          }),
+              next.splice(next.findIndex((o) => o.id === targetOptionId) + 1, 0, {
+                ...moved!,
+                column: COLUMN_RIGHT,
+              })
+              return next
+            },
+            // Как у блока: этому варианту сосед меняется по просьбе.
+            activeOptionId,
+          ),
         ),
 
       takeOptionOwnRow: (blockId, optionId) =>
