@@ -12,6 +12,8 @@ import {
   isAnswerableType,
   isCaptionType,
   carriesText,
+  supportsHalfWidth,
+  supportsOptionColumns,
 } from '@entities/formSchema'
 
 // Стор билдера — высокочастотный локальный документ формы (ARCHITECTURE §5.1):
@@ -131,6 +133,20 @@ export type BuilderActions = {
   // блоков группы сохраняется. Неизвестный id или та же группа — no-op.
   reorderGroups: (activeGroupId: string, overGroupId: string) => void
   duplicateBlock: (id: string) => void
+  // pairWithPrevious ставит вопрос рядом с предыдущим (спека §5): отвечаемые обеих
+  // групп получают width='half' и пакуются в один ряд. Условия — canPairWithPrevious;
+  // иначе no-op. Один шаг undo на оба блока.
+  pairWithPrevious: (id: string) => void
+  // setFullWidth разворачивает вопрос на всю ширину: снимает width с отвечаемого
+  // его группы; осиротевший сосед по ряду разворачивается сам (normalizeWidths).
+  setFullWidth: (id: string) => void
+  // placeGroupBeside — жест бокового дропа (спека §5): группа activeGroupId встаёт
+  // вплотную before/after группы overGroupId, обе становятся half и пакуются в ряд.
+  // Цель должна быть свободной whitelist-группой (не в паре); иначе no-op.
+  placeGroupBeside: (activeGroupId: string, overGroupId: string, side: 'before' | 'after') => void
+  // setOptionColumns — раскладка списка вариантов (спека §5.1): 2 — сетка в две
+  // колонки, 1 — прежний стек (ключ снимается). Только single_choice/multi_choice.
+  setOptionColumns: (blockId: string, cols: 1 | 2) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
   addOption: (blockId: string) => void
   // addOptionAfter вставляет пустой вариант СРАЗУ ПОСЛЕ optionId (Enter §3.2: вариант
@@ -241,6 +257,93 @@ function regroup(blocks: Block[]): Block[] {
     return { ...b, groupId: g }
   })
   return changed ? next : blocks
+}
+
+// carryLayout переносит лэйаут-свойства (width, optionColumns) со старого блока на
+// сконвертированный, если новый тип их несёт; вне своих whitelist они молча
+// роняются — чтобы автосейв не ловил 422 на невалидном сочетании (спека §5/§5.1).
+// Мутирует dst (свежесозданный блок конверсии, ещё не в сторе).
+function carryLayout(src: Block, dst: Block): void {
+  if (src.settings?.width === 'half' && supportsHalfWidth(dst.type)) {
+    dst.settings = { ...dst.settings, width: 'half' }
+  }
+  if (src.settings?.optionColumns === 2 && supportsOptionColumns(dst.type)) {
+    dst.settings = { ...dst.settings, optionColumns: 2 }
+  }
+}
+
+// withoutWidth снимает half-ширину с блока (канон хранит только отклонение —
+// ключ просто удаляется). Возвращает тот же объект, если снимать нечего.
+function withoutWidth(b: Block): Block {
+  if (b.settings?.width === undefined) return b
+  const settings = { ...b.settings }
+  delete settings.width
+  return { ...b, settings }
+}
+
+// normalizeWidths держит инвариант спеки §5 «одинокая половина возвращается на
+// full»: half-группы живут только смежными ПАРАМИ (слева направо, как packRows),
+// у непарной половины ширина снимается. Прогоняется после каждой структурной
+// правки (structural) — сосед уехал/удалён/сменил тип, и вдовец сам разворачивается
+// во всю ширину; дыры в полряда на полотне не бывает. Возвращает исходный массив,
+// если снимать нечего (сохраняет дешёвые no-op коммиты).
+function normalizeWidths(blocks: Block[]): Block[] {
+  // Половину несёт отвечаемый блок группы; группы смежны (regroup), поэтому
+  // достаточно пройти по границам groupId и спарить соседние half-группы.
+  const clear = new Set<string>()
+  let pending: string | null = null // id отвечаемого half-группы, ждущей пару
+  let gid: string | null = null
+  let half: string | null = null // отвечаемый с width='half' текущей группы
+  const flush = () => {
+    if (half) {
+      if (pending) pending = null // пара сложилась
+      else pending = half
+    } else if (pending) {
+      clear.add(pending)
+      pending = null
+    }
+  }
+  for (const b of blocks) {
+    if (b.groupId !== gid) {
+      if (gid !== null) flush()
+      gid = b.groupId
+      half = null
+    }
+    if (isAnswerableType(b.type) && b.settings?.width === 'half') half = b.id
+  }
+  if (gid !== null) flush()
+  if (pending) clear.add(pending)
+  if (clear.size === 0) return blocks
+  return blocks.map((b) => (clear.has(b.id) ? withoutWidth(b) : b))
+}
+
+// groupAnswerable — отвечаемый блок группы gid (носитель width) или null.
+function groupAnswerable(blocks: Block[], gid: string): Block | null {
+  return blocks.find((b) => b.groupId === gid && isAnswerableType(b.type)) ?? null
+}
+
+// canPairWithPrevious — доступен ли жест «поставить рядом с предыдущим» для блока
+// id: обе группы (текущая и предыдущая) несут whitelist-отвечаемые, и предыдущая
+// ещё не в паре (half-группы нормализованы, поэтому «предыдущая half» = «уже в
+// паре» — третьему в ряду места нет). Читается Cmd+.-меню для видимости пункта,
+// та же проверка стоит в pairWithPrevious.
+export function canPairWithPrevious(blocks: Block[], id: string): boolean {
+  const i = blocks.findIndex((b) => b.id === id)
+  if (i < 0) return false
+  const gid = blocks[i]!.groupId
+  const [gStart] = groupSpan(blocks, i)
+  if (gStart === 0) return false // первая группа — рядом ставить не с кем
+  const prevGid = blocks[gStart - 1]!.groupId
+  const cur = groupAnswerable(blocks, gid)
+  const prev = groupAnswerable(blocks, prevGid)
+  return (
+    cur !== null &&
+    prev !== null &&
+    supportsHalfWidth(cur.type) &&
+    supportsHalfWidth(prev.type) &&
+    prev.settings?.width !== 'half' &&
+    cur.settings?.width !== 'half'
+  )
 }
 
 // groupSpan — [начало, конец] непрерывного участка группы блока с индексом i.
@@ -423,10 +526,11 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
     }
 
     // structural — патч, меняющий состав/порядок/типы блоков: пропускает blocks
-    // через regroup, чтобы groupId всегда отражал раскладку.
+    // через regroup, чтобы groupId всегда отражал раскладку, и normalizeWidths,
+    // чтобы half-группы жили только парами (одинокая половина → full, спека §5).
     function structural(patch: (Partial<BuilderState> & { blocks: Block[] }) | null) {
       if (patch === null) return null
-      return { ...patch, blocks: regroup(patch.blocks) }
+      return { ...patch, blocks: normalizeWidths(regroup(patch.blocks)) }
     }
 
     return {
@@ -441,7 +545,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       hydrate: (schema) =>
         set({
-          blocks: regroup(schema.blocks.map(cloneBlock)),
+          // normalizeWidths и здесь: контракт формально допускает одинокую половину,
+          // а редактор с ней не работает — приводим при загрузке (dirty не ставится,
+          // на сервер уедет со следующей правкой).
+          blocks: normalizeWidths(regroup(schema.blocks.map(cloneBlock))),
           submitLabel: schema.submitLabel ?? '',
           thankYouText: schema.thankYouText ?? '',
           redirectUrl: schema.redirectUrl ?? '',
@@ -491,6 +598,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             text: carriesText(type) ? src.text : '',
             required: isAnswerableType(type) ? src.required : false,
           }
+          // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
+          // short_text→email не должна молча разваливать ряд); вне whitelist они
+          // роняются здесь — иначе автосейв ловил бы 422 (нормализация добьёт пару).
+          carryLayout(src, converted)
           return structural({
             blocks: s.blocks.map((b) => (b.id === id ? converted : b)),
           })
@@ -535,8 +646,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const [gStart, gEnd] = groupSpan(s.blocks, i)
           if (gStart === gEnd) {
             // Одиночный блок → конверсия на месте в голое поле (текст роняется — у
-            // поля его нет). Тот же путь, что changeBlockType на отвечаемый тип.
+            // поля его нет). Тот же путь, что changeBlockType на отвечаемый тип;
+            // ширина/колонки переезжают по тому же правилу (carryLayout).
             const field: Block = { ...newFieldBlock(type), id }
+            carryLayout(src, field)
             return structural({
               blocks: s.blocks.map((b) => (b.id === id ? field : b)),
             })
@@ -677,6 +790,82 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const blocks = s.blocks.slice()
           blocks.splice(i + 1, 0, copy)
           return structural({ blocks })
+        }),
+
+      pairWithPrevious: (id) =>
+        commit(null, (s) => {
+          if (!canPairWithPrevious(s.blocks, id)) return null
+          const i = s.blocks.findIndex((b) => b.id === id)
+          const [gStart] = groupSpan(s.blocks, i)
+          const cur = groupAnswerable(s.blocks, s.blocks[i]!.groupId)!
+          const prev = groupAnswerable(s.blocks, s.blocks[gStart - 1]!.groupId)!
+          const half = new Set([cur.id, prev.id])
+          return structural({
+            blocks: s.blocks.map((b) =>
+              half.has(b.id) ? { ...b, settings: { ...b.settings, width: 'half' } } : b,
+            ),
+          })
+        }),
+
+      setFullWidth: (id) =>
+        commit(null, (s) => {
+          const src = s.blocks.find((b) => b.id === id)
+          if (!src) return null
+          const a = groupAnswerable(s.blocks, src.groupId)
+          if (!a || a.settings?.width !== 'half') return null
+          return structural({
+            blocks: s.blocks.map((b) => (b.id === a.id ? withoutWidth(b) : b)),
+          })
+        }),
+
+      placeGroupBeside: (activeGroupId, overGroupId, side) =>
+        commit(null, (s) => {
+          if (activeGroupId === overGroupId) return null
+          const active = groupAnswerable(s.blocks, activeGroupId)
+          const over = groupAnswerable(s.blocks, overGroupId)
+          // Оба конца жеста — whitelist-отвечаемые; цель не в паре (в ряду максимум
+          // двое — третий легально приземляется только под рядом, обычным дропом).
+          if (
+            !active ||
+            !over ||
+            !supportsHalfWidth(active.type) ||
+            !supportsHalfWidth(over.type) ||
+            over.settings?.width === 'half'
+          )
+            return null
+          const order: string[] = []
+          const byGroup = new Map<string, Block[]>()
+          for (const b of s.blocks) {
+            const g = byGroup.get(b.groupId)
+            if (g) g.push(b)
+            else {
+              byGroup.set(b.groupId, [b])
+              order.push(b.groupId)
+            }
+          }
+          const from = order.indexOf(activeGroupId)
+          if (from < 0 || !order.includes(overGroupId)) return null
+          order.splice(from, 1)
+          const at = order.indexOf(overGroupId) + (side === 'after' ? 1 : 0)
+          order.splice(at, 0, activeGroupId)
+          const half = new Set([active.id, over.id])
+          return structural({
+            blocks: order
+              .flatMap((g) => byGroup.get(g)!)
+              .map((b) => (half.has(b.id) ? { ...b, settings: { ...b.settings, width: 'half' } } : b)),
+          })
+        }),
+
+      setOptionColumns: (blockId, cols) =>
+        commit(null, (s) => {
+          const src = s.blocks.find((b) => b.id === blockId)
+          if (!src || !supportsOptionColumns(src.type)) return null
+          const current = src.settings?.optionColumns === 2 ? 2 : 1
+          if (current === cols) return null
+          const settings = { ...src.settings }
+          if (cols === 2) settings.optionColumns = 2
+          else delete settings.optionColumns
+          return { blocks: s.blocks.map((b) => (b.id === blockId ? { ...b, settings } : b)) }
         }),
 
       addOption: (blockId) =>
