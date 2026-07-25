@@ -25,11 +25,29 @@ export const SEED_PASSWORD = 'supersecret123'
 // но адрес всё равно уникальный: сценарий не должен видеть формы прошлого прогона.
 export function seedAccount(prefix: string): string {
   const email = `${prefix}-${Date.now()}@example.com`
-  // stdio: наружу отдаём только stderr — на падении в отчёте видно причину, а stdout
-  // (структурный лог сервиса) сценарию не нужен.
-  execFileSync('docker', ['exec', API_CONTAINER, '/api', 'seed-user', email, SEED_PASSWORD], {
-    stdio: ['ignore', 'ignore', 'inherit'],
-  })
+  try {
+    // stderr забираем в строку, а не наружу: у execFileSync своё сообщение
+    // («Command failed: docker exec …»), и без перехвата причина до отчёта не
+    // доезжает — падение выглядит немым.
+    execFileSync('docker', ['exec', API_CONTAINER, '/api', 'seed-user', email, SEED_PASSWORD], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      encoding: 'utf8',
+    })
+  } catch (e) {
+    const err = e as { stderr?: string; message?: string }
+    const out = err.stderr ?? ''
+    // Самая частая причина на живущем стеке: контейнер поднят на образе, собранном
+    // ДО появления подкоманды. Стек не пересобирается сам — `up -d` не трогает
+    // контейнер, у которого образ с тем же тегом уже был. CI этого не видит (там
+    // `make prod-local` собирает образ каждый прогон), поэтому подсказка нужна здесь.
+    if (out.includes('unknown command')) {
+      throw new Error(
+        `В контейнере ${API_CONTAINER} бинарник без подкоманды seed-user — стек поднят ` +
+          'на старом образе. Пересоберите prod-local: `make prod-local`.',
+      )
+    }
+    throw new Error(`seed-user (${API_CONTAINER}): ${out.trim() || err.message}`)
+  }
   return email
 }
 
