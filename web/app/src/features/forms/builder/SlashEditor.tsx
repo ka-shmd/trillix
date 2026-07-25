@@ -102,6 +102,12 @@ export function SlashEditor({
   const [drag, setDrag] = useState<{ kind: 'group' | 'block'; overGroup: string | null } | null>(
     null,
   )
+  // Замер рамки гонит rAF-цикл, а не события драга: строки доигрывают свой
+  // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
+  // рамка отставала от расступающихся строк. Цикл меряет каждый кадр; аргументы
+  // (активный блок и цель) обновляют обработчики. Пустой ref = цикл остановлен.
+  const frameArgsRef = useRef<{ activeId: string; overId: string | null } | null>(null)
+  const frameRafRef = useRef(0)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
   // фокус переносим сюда, а не теряем в body.
@@ -201,11 +207,33 @@ export function SlashEditor({
     )
   }
 
+  function startFrameLoop(activeId: string) {
+    frameArgsRef.current = { activeId, overId: null }
+    cancelAnimationFrame(frameRafRef.current)
+    const tick = () => {
+      const a = frameArgsRef.current
+      if (!a) return
+      updateFrame(a.activeId, a.overId)
+      frameRafRef.current = requestAnimationFrame(tick)
+    }
+    frameRafRef.current = requestAnimationFrame(tick)
+  }
+
+  function stopFrameLoop() {
+    frameArgsRef.current = null
+    cancelAnimationFrame(frameRafRef.current)
+    setFrame(null)
+    rawOverRef.current = null
+  }
+
+  // Страховка на анмаунт посреди драга (смена маршрута): rAF-цикл не должен пережить
+  // полотно.
+  useEffect(() => () => cancelAnimationFrame(frameRafRef.current), [])
+
   // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
-    setFrame(null)
+    stopFrameLoop()
     setDrag(null)
-    rawOverRef.current = null
     const { active, over } = e
     if (!over || active.id === over.id) return
     const activeId = String(active.id)
@@ -394,7 +422,10 @@ export function SlashEditor({
           className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-primary/40"
           initial={false}
           animate={{ x: frame.x - 10, y: frame.y - 6, width: frame.w + 20, height: frame.h + 12 }}
-          transition={{ type: 'spring', stiffness: 550, damping: 45 }}
+          // Жёсткая пружина (~100мс): цель обновляется каждый кадр rAF-циклом, и
+          // рамка должна обнимать строки, а не догонять их; лёгкое сглаживание
+          // остаётся на скачок состава (переезд рамки на другую группу).
+          transition={{ type: 'spring', stiffness: 1200, damping: 80 }}
         />
       )}
       <FormTitleInput
@@ -412,22 +443,21 @@ export function SlashEditor({
           collisionDetection={collisionDetection}
           onDragStart={(e) => {
             const id = String(e.active.id)
-            setDrag({ kind: groupIds.has(id) ? 'group' : 'block', overGroup: null })
+            const isGroup = groupIds.has(id)
+            setDrag({ kind: isGroup ? 'group' : 'block', overGroup: null })
+            // Рамку ведёт rAF-цикл (см. frameArgsRef); групповой драг вместо
+            // рамки ведёт рейл группы-цели (drag.overGroup).
+            if (!isGroup) startFrameLoop(id)
           }}
-          // Рамка пересчитывается и по move (курсор едет, строки доигрывают
-          // трансформы), и по over (сменилась цель → сменился будущий состав).
-          // Групповой драг вместо рамки ведёт рейл группы-цели (drag.overGroup).
-          onDragMove={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
           onDragOver={(e) => {
             const overId = e.over ? String(e.over.id) : null
             setDrag((d) => (d && d.kind === 'group' ? { ...d, overGroup: overId } : d))
-            updateFrame(String(e.active.id), overId)
+            if (frameArgsRef.current) frameArgsRef.current.overId = overId
           }}
           onDragEnd={onDragEnd}
           onDragCancel={() => {
-            setFrame(null)
+            stopFrameLoop()
             setDrag(null)
-            rawOverRef.current = null
           }}
         >
           <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
