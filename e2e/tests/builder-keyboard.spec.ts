@@ -168,7 +168,15 @@ test('билдер без мыши: форма собирается клавиа
 
   await nameField.fill(nameA)
   await mailField.fill(mailA)
-  await formPage.getByRole('radio', { name: srcA }).check()
+  // Вариант выбирается кликом по КАРТОЧКЕ, а не по радиокнопке: настоящий input
+  // спрятан (`.rf-choice-input` — position:absolute под карточкой), видимый контрол —
+  // сама `label.rf-option`, и поверх input'а лежит буквенный бейдж «A». `.check()` по
+  // роли упирается в него («intercepts pointer events») — но это не дефект: респондент
+  // жмёт карточку, а не невидимый кружок. Клик по label переключает input штатно,
+  // поэтому проверяем результат ролью — так падение отличит «не кликнулось» от
+  // «кликнулось не туда».
+  await formPage.locator('label.rf-option', { hasText: srcA }).click()
+  await expect(formPage.getByRole('radio', { name: srcA })).toBeChecked()
 
   // Антиспам (фаза 5): отправка быстрее 3 с от выдачи формы отклоняется как бот.
   await formPage.waitForTimeout(3500)
