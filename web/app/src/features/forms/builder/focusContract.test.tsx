@@ -187,6 +187,31 @@ describe('поведение объектной остановки (§2.2)', () 
   })
 })
 
+describe('Backspace в первом пустом варианте (TD-30)', () => {
+  it('вариант удаляется, а каретка уходит вверх — не в body', () => {
+    // Реестровый дефект был не в ветке обработчика, а в её адресате: onLeaveTop
+    // приходил пустой заглушкой, вариант исчезал, и фокус проваливался в body.
+    // Проверяем именно адресата: строка просит родителя увести каретку наверх
+    // (дальше её ведёт stopNeighbor — см. navigation.test.ts).
+    const { engine, handlers, store } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Ваш выбор' },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: '' }] },
+        },
+      ],
+    })
+    engine.focusBlock('ch', 'start')
+    fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
+    expect(handlers.onArrow).toHaveBeenCalledWith('ch', 'up')
+    expect(store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options).toEqual([])
+  })
+})
+
 describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-24)', () => {
   it('пустой плейсхолдер, каретка в начале → уход вверх, поле НЕ удаляется', () => {
     const { engine, handlers } = setup({
