@@ -524,10 +524,11 @@ export function SlashEditor({
                 flex-gap здесь = чистый просвет контента и совпадает с превью замером
                 (критерий 13.3 — ноль расхождений). */}
             <ol className="mt-12 flex flex-col gap-7">
-              {groups.map((g) => (
+              {groups.map((g, gi) => (
                 <GroupRow
                   key={g.id}
                   group={g}
+                  firstGroup={gi === 0}
                   formId={formId}
                   blockIds={blockIds}
                   rail={
@@ -609,6 +610,7 @@ export function SlashEditor({
 // GroupRow своей подсветки не несёт.
 function GroupRow({
   group,
+  firstGroup,
   formId,
   blockIds,
   rail,
@@ -622,6 +624,9 @@ function GroupRow({
   onArrow,
 }: {
   group: { id: string; blocks: Block[] }
+  // Первая группа полотна: её первая строка — начало формы, у пустого текста там
+  // свой плейсхолдер (§7).
+  firstGroup: boolean
   formId: string
   blockIds: string[]
   // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
@@ -686,6 +691,9 @@ function GroupRow({
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
               groupHasAnswer={hasAnswer}
+              // Позиция строки — для контекстного плейсхолдера пустой строки (§7).
+              insideQuestion={group.blocks.length > 1 && i > 0}
+              firstOfForm={firstGroup && i === 0}
               openMenuOnMount={menuForId === b.id}
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}

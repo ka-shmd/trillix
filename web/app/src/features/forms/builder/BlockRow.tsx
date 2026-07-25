@@ -50,6 +50,12 @@ export interface BlockRowProps {
   // groupHasAnswer — есть ли в группе строки отвечаемый блок. Нужен подсказкам: без
   // него Mod+Enter («к полю ответа») молчит, и обещать его нельзя (§7).
   groupHasAnswer?: boolean
+  // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
+  // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
+  // (там пустой текст = описание вопроса); firstOfForm — самая первая строка полотна
+  // (там пустой текст = начало формы, и подсказка зовёт добавить вопрос).
+  insideQuestion?: boolean
+  firstOfForm?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
   // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
@@ -83,6 +89,8 @@ export function BlockRow({
   formId,
   groupHandle,
   groupHasAnswer = false,
+  insideQuestion = false,
+  firstOfForm = false,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
@@ -125,6 +133,17 @@ export function BlockRow({
   // зависят чипы у каретки и шпаргалка Mod+/. Остальные поверхности строки (варианты,
   // инпут плейсхолдера, объектная остановка) объявляют свой контекст сами.
   const textFocus = useRowFocus(block.id, 'text', groupHasAnswer)
+  // Плейсхолдер пустой строки — подсказка в самом месте каретки (§7, слой 1). У
+  // подписей он от позиции не зависит (тип уже сказал, что это) и виден всегда; у
+  // обычного текста зависит и показывается только под кареткой: неактивная пустая
+  // строка молчит, иначе полотно пестрит серым текстом.
+  const textPh = insideQuestion
+    ? // Пустой текст внутри вопроса — это его описание, а не новый блок.
+      'Пояснение к вопросу'
+    : firstOfForm
+      ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
+        'Текст, или «/» — чтобы добавить вопрос'
+      : 'Текст, или «/» для поля'
   const captionPh =
     block.type === 'title'
       ? 'Заголовок вопроса'
@@ -135,7 +154,7 @@ export function BlockRow({
           : block.type === 'consent'
             ? 'Текст согласия'
             : labelFocused
-              ? 'Текст, или «/» для поля'
+              ? textPh
               : undefined
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
