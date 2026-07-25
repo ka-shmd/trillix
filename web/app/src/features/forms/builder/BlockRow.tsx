@@ -357,7 +357,9 @@ export function BlockRow({
           мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
           шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2). */}
       <div
-        className={`absolute right-full top-1.5 mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+        // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
+        // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
+        className={`absolute right-full top-1.5 mr-2.5 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
       >
         <button
           type="button"

@@ -459,10 +459,23 @@ function GroupRow({
     <li
       ref={setNodeRef}
       style={style}
-      className={`rounded-md ${isDragging ? 'relative z-10 opacity-70' : ''} ${
+      // group/grp — именованная Tailwind-группа: `group` без имени занят строками
+      // (BlockRow) для своих hover-значков, hover группы должен слушаться отдельно.
+      className={`group/grp relative rounded-md ${isDragging ? 'z-10 opacity-70' : ''} ${
         highlight ? 'ring-2 ring-primary/40' : ''
       }`}
     >
+      {/* Рейл — постоянная идентичность МУЛЬТИ-группы (§4.3): тонкая линия в левом
+          жёлобе, проявляется по hover/focus-within всей группы. Absolute и вне
+          потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
+          BlockRow), чтобы не наезжать. top/bottom-0 = ровно высота текста группы:
+          -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент. */}
+      {group.blocks.length > 1 && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-primary/40 opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100"
+        />
+      )}
       <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
         {/* Внутри вопроса блоки стоят теснее — 14px (gap-3.5), как .rf-group у превью.
             py-1.5 строк скомпенсирован их -my-1.5, поэтому gap = чистый просвет. */}
