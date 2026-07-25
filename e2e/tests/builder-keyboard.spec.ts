@@ -1,4 +1,4 @@
-import { test, expect, devices } from '@playwright/test'
+import { test, expect, devices, type Locator } from '@playwright/test'
 import { login, seedAccount } from './helpers/session'
 
 // «Билдер без мыши» (фаза 13, этап 13.7) — сквозной критерий реворка полотна: форма
@@ -27,6 +27,17 @@ const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
 // Командный модификатор карты шорткатов (`mod` в builder/shortcuts.ts): Cmd на маке,
 // Ctrl на остальных. CI — ubuntu, локальный прогон бывает и на маке.
 const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+// sideBySide — «эти двое стоят в одном ряду»: одна высота и второй правее первого.
+// Ряд проверяется геометрией на всех поверхностях, потому что разметка у них РАЗНАЯ
+// (у полотна своя раскладка flex-wrap, у респондента общий `.rf-row`), а совпасть
+// они обязаны видом. Допуск по вертикали — на разную высоту строк подписи.
+async function sideBySide(left: Locator, right: Locator): Promise<boolean> {
+  const a = await left.boundingBox()
+  const b = await right.boundingBox()
+  if (!a || !b) return false
+  return Math.abs(a.y - b.y) < 8 && b.x >= a.x + a.width
+}
 
 test('билдер без мыши: форма собирается клавиатурой, ряд доезжает до респондента', async ({
   page,
@@ -57,6 +68,11 @@ test('билдер без мыши: форма собирается клавиа
 
   await page.goto(`/forms/${form.slug}/edit`)
 
+  // Заголовки вопросов на полотне — textarea (`rf-label`), их текст лежит в value:
+  // getByText такую строку не видит, поэтому берём по порядку документа. Счётчик
+  // заодно служит воротами: пока строка не появилась, печатать в неё рано.
+  const canvasTitles = page.locator('textarea.rf-label')
+
   // 3. Каретка — в название формы (focus, а не клик), Enter уводит на полотно. Форма
   // пустая, поэтому Enter здесь создаёт первую строку (focusFirstOrCreate).
   await page.getByLabel('Название формы').focus()
@@ -65,50 +81,61 @@ test('билдер без мыши: форма собирается клавиа
   // 4. Первый вопрос: «/» остаётся в тексте литералом и открывает инлайн-меню,
   // продолжение набора фильтрует. Фильтр БЕЗ ПРОБЕЛОВ — пробел закрывает меню
   // (onLabelChange), это часть контракта §3.5, а не ограничение теста.
+  //
+  // Открытое меню — ещё и доказательство, что каретка ушла из названия формы на
+  // строку полотна: в названии «/» меню не открывает. Ждём его, а не полагаемся на
+  // то, что React успел перерисоваться между нажатиями.
+  await page.keyboard.type('/Корот')
+  await expect(page.getByRole('option', { name: 'Короткий ответ' }).first()).toBeVisible()
   // Enter берёт первый пункт отфильтрованного списка; порядок MENU_ITEMS (вопросы →
   // отдельные поля → лэйаут) гарантирует, что это связка «заголовок + поле», и
   // каретка встаёт на её заголовок.
-  await page.keyboard.type('/Корот')
   await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(1)
   await page.keyboard.type(nameQ)
 
   // 5. Enter с заголовка кладёт новую строку ПОСЛЕ всей группы (не внутрь вопроса) —
   // на ней собираем второй вопрос тем же жестом.
   await page.keyboard.press('Enter')
   await page.keyboard.type('/Email')
+  await expect(page.getByRole('option', { name: 'Email' }).first()).toBeVisible()
   await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(2)
   await page.keyboard.type(mailQ)
 
   // 6. Ряд (§5, этап 13.6): Mod+Alt+→ — клавиатурное зеркало жеста, команда переноса
   // в правую ячейку ряда предыдущего вопроса. Оба типа в whitelist `canShareRow`.
   await page.keyboard.press(`${MOD}+Alt+ArrowRight`)
 
-  // Ряд виден на полотне сразу: заголовки стоят на одной высоте, второй правее
-  // первого. Проверяем геометрией, а не классом: у полотна своя раскладка
-  // (flex-wrap + 50%), общий `.rf-row` — только у превью и рендерера, и совпасть
-  // они обязаны видом, а не разметкой. Заголовок вопроса на полотне — textarea
-  // (`rf-label`), его текст лежит в value: getByText такую строку не видит,
-  // поэтому берём по порядку документа.
-  const canvasTitles = page.locator('textarea.rf-label')
-  await expect(canvasTitles).toHaveCount(2)
+  // Ряд виден на полотне: заголовки стоят на одной высоте, второй правее первого.
+  // Проверяем геометрией, а не классом — у полотна своя раскладка (flex-wrap + 50%),
+  // общий `.rf-row` есть только у превью и рендерера, и совпасть они обязаны видом.
   await expect(canvasTitles.nth(0)).toHaveValue(nameQ)
   await expect(canvasTitles.nth(1)).toHaveValue(mailQ)
-  const nameBox = (await canvasTitles.nth(0).boundingBox())!
-  const mailBox = (await canvasTitles.nth(1).boundingBox())!
-  expect(Math.abs(nameBox.y - mailBox.y)).toBeLessThan(8)
-  expect(mailBox.x).toBeGreaterThan(nameBox.x + nameBox.width)
+  // poll, а не разовый замер: перенос в ряд — обычный ре-рендер React, и координаты
+  // сразу после нажатия клавиши могут быть ещё старыми (столбик). Ждём, а не гадаем.
+  await expect.poll(() => sideBySide(canvasTitles.nth(0), canvasTitles.nth(1))).toBe(true)
 
   // 7. Третий вопрос — с вариантами: Enter уводит с заголовка ряда на новую строку
   // ниже (ряд для вставки атомарен), Mod+Enter с заголовка прыгает к полю ответа —
   // тут это первый (пустой) вариант, Enter в варианте заводит следующий.
   await page.keyboard.press('Enter')
   await page.keyboard.type('/Один')
+  await expect(page.getByRole('option', { name: 'Один из списка' }).first()).toBeVisible()
   await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(3)
   await page.keyboard.type(srcQ)
+
+  // Mod+Enter с заголовка — к полю ответа группы; у choice это его единственный
+  // (пустой) вариант, рождённый вместе с вопросом (`newFieldBlock`). Значение
+  // варианта после набора — доказательство, что прыжок попал куда обещано: уйди
+  // текст в заголовок, тест упадёт здесь, а не через десять шагов на публикации.
   await page.keyboard.press(`${MOD}+Enter`)
   await page.keyboard.type(srcA)
+  await expect(page.getByLabel('Вариант 1')).toHaveValue(srcA)
   await page.keyboard.press('Enter')
   await page.keyboard.type('Реклама')
+  await expect(page.getByLabel('Вариант 2')).toHaveValue('Реклама')
 
   // 8. Публикация — тоже без мыши: кнопка активна, только когда автосейв догнал
   // редактор; фокусируем и жмём Enter.
@@ -137,10 +164,7 @@ test('билдер без мыши: форма собирается клавиа
   await expect(row.getByText(nameQ)).toBeVisible()
   await expect(row.getByText(mailQ)).toBeVisible()
 
-  const nameFieldBox = (await nameField.boundingBox())!
-  const mailFieldBox = (await mailField.boundingBox())!
-  expect(Math.abs(nameFieldBox.y - mailFieldBox.y)).toBeLessThan(8)
-  expect(mailFieldBox.x).toBeGreaterThan(nameFieldBox.x + nameFieldBox.width)
+  expect(await sideBySide(nameField, mailField)).toBe(true)
 
   await nameField.fill(nameA)
   await mailField.fill(mailA)
