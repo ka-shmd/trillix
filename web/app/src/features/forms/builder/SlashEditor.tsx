@@ -148,7 +148,13 @@ export function SlashEditor({
     }
     return out
   }, [blocks])
-  const groupIds = useMemo(() => new Set(groups.map((g) => g.id)), [groups])
+  // groupIdList ОБЯЗАН быть стабильной ссылкой между ре-рендерами драга (как и
+  // blockIds): items внешнего SortableContext сравниваются в useSortable по
+  // ссылке (itemsHaveChanged), и свежий массив на рендере, где группа начинает
+  // смещаться, отключает её transition — группа телепортируется вместо сдвига.
+  // Ре-рендеры во время драга есть: setDrag (рейл цели) и setFrame (rAF рамки).
+  const groupIdList = useMemo(() => groups.map((g) => g.id), [groups])
+  const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
   const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
 
   const collisionDetection: CollisionDetection = (args) => {
@@ -451,7 +457,11 @@ export function SlashEditor({
           }}
           onDragOver={(e) => {
             const overId = e.over ? String(e.over.id) : null
-            setDrag((d) => (d && d.kind === 'group' ? { ...d, overGroup: overId } : d))
+            // Бэйл на тот же overGroup: лишний setState = лишний ре-рендер посреди
+            // драга (см. коммент у groupIdList, чем это опасно).
+            setDrag((d) =>
+              d && d.kind === 'group' && d.overGroup !== overId ? { ...d, overGroup: overId } : d,
+            )
             if (frameArgsRef.current) frameArgsRef.current.overId = overId
           }}
           onDragEnd={onDragEnd}
@@ -460,7 +470,7 @@ export function SlashEditor({
             setDrag(null)
           }}
         >
-          <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
+          <SortableContext items={groupIdList} strategy={verticalListSortingStrategy}>
             {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
                 mt-12 (48px) заголовок формы→первый блок = gap у .rf-page; gap-7 (28px)
                 МЕЖДУ группами = .rf-form. Внутри группы шаг 14px даёт GroupRow (gap-3.5).
