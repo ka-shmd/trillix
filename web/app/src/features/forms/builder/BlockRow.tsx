@@ -35,6 +35,7 @@ import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
 import { arrowDir, chords } from './shortcuts'
+import { useRowFocus } from './activeRow'
 
 export interface BlockRowProps {
   block: Block
@@ -45,6 +46,9 @@ export interface BlockRowProps {
   // только на подпись мульти-группы («подпись владеет группой»). null/undefined —
   // грип тащит блок (блочный слой dnd: одиночки и внутренние строки).
   groupHandle?: Pick<ReturnType<typeof useSortable>, 'attributes' | 'listeners'> | null
+  // groupHasAnswer — есть ли в группе строки отвечаемый блок. Нужен подсказкам: без
+  // него Mod+Enter («к полю ответа») молчит, и обещать его нельзя (§7).
+  groupHasAnswer?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
   // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
@@ -77,6 +81,7 @@ export function BlockRow({
   block,
   formId,
   groupHandle,
+  groupHasAnswer = false,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
@@ -115,6 +120,10 @@ export function BlockRow({
   // Плейсхолдер заголовка виден только у активной (в фокусе) строки: неактивный
   // пустой блок ничего не показывает.
   const [labelFocused, setLabelFocused] = useState(false)
+  // Подсказки (§7): текстовая поверхность объявляет свой контекст карты — от него
+  // зависят чипы у каретки и шпаргалка Mod+/. Остальные поверхности строки (варианты,
+  // инпут плейсхолдера, объектная остановка) объявляют свой контекст сами.
+  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer)
   const captionPh =
     block.type === 'title'
       ? 'Заголовок вопроса'
@@ -432,8 +441,14 @@ export function BlockRow({
                 value={block.text ?? ''}
                 placeholder={captionPh}
                 onChange={onLabelChange}
-                onFocus={() => setLabelFocused(true)}
-                onBlur={() => setLabelFocused(false)}
+                onFocus={() => {
+                  setLabelFocused(true)
+                  textFocus.onFocus()
+                }}
+                onBlur={() => {
+                  setLabelFocused(false)
+                  textFocus.onBlur()
+                }}
                 onKeyDown={onLabelKeyDown}
                 // block: textarea по умолчанию inline-block и оставляет под собой
                 // ~7px базлайн-просвета (line-box строки-подписи выше textarea) — он
@@ -553,6 +568,9 @@ function ObjectStop({
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
+  // Контекст подсказок: у картинки Mod+Enter открывает файловый диалог, у date/scale
+  // открывать нечего — это разные контексты карты, а не один «объект» (§7).
+  const rowFocus = useRowFocus(block.id, block.type === 'image' ? 'image' : 'object')
 
   // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
   // ниже) — как и в текстовой строке.
@@ -613,6 +631,11 @@ function ObjectStop({
       tabIndex={-1}
       onKeyDown={onKeyDown}
       onPaste={onPaste}
+      // Подсказки объявляем только когда фокус на самой остановке: во внутреннем
+      // контроле (селектор шкалы, кнопки картинки) клавиши остановки не работают — та
+      // же граница, что у onKeyDown выше. onFocus/onBlur всплывают, поэтому проверка нужна.
+      onFocus={(e) => e.target === e.currentTarget && rowFocus.onFocus()}
+      onBlur={(e) => e.target === e.currentTarget && rowFocus.onBlur()}
       // Кольцо при фокусе (§2.1): объектная остановка «подсвечена», видно, что каретка
       // на ней. Программный фокус с клавиатуры даёт focus-visible; :focus — подстраховка.
       className="min-w-0 rounded-md outline-none ring-primary/40 focus:ring-2 focus-visible:ring-2"
@@ -704,6 +727,9 @@ function AnswerField({
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
+  // Контекст подсказок инпута плейсхолдера (§7). Клавиш у него почти нет — это
+  // необязательный лист обхода, и чипы там показывают ровно одну строку.
+  const rowFocus = useRowFocus(block.id, 'field')
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   // Фокус-цель текстового поля — инпут плейсхолдера (§2.1). Только у placeholder-
   // типов; date рисуется превью и фокусируется как объект (цель — у ObjectStop).
@@ -781,8 +807,14 @@ function AnswerField({
     return wrap(<input type="date" disabled className={`${cls} pointer-events-none`} />)
   }
   const focusProps = {
-    onFocus: () => setFocused(true),
-    onBlur: () => setFocused(false),
+    onFocus: () => {
+      setFocused(true)
+      rowFocus.onFocus()
+    },
+    onBlur: () => {
+      setFocused(false)
+      rowFocus.onBlur()
+    },
   }
   if (block.type === 'long_text') {
     return wrap(
@@ -850,6 +882,9 @@ function OptionsInline({
   const updateOption = useBuilderStore((s) => s.updateOption)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
+  // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
+  // вариант — поэтому у списка свои чипы, а не текстовые.
+  const rowFocus = useRowFocus(block.id, 'option')
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
   const addBtnRef = useRef<HTMLButtonElement>(null)
   // Запрос фокуса держим в ref, а не в state: после add/remove опций стор меняет
@@ -968,6 +1003,7 @@ function OptionsInline({
                   aria-label={placeholder}
                   onChange={(e) => updateOption(block.id, o.id, e.target.value)}
                   onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
+                  {...rowFocus}
                   className="bg-transparent outline-none placeholder:text-muted-foreground"
                 />
               </span>

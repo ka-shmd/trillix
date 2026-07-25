@@ -41,6 +41,14 @@ import { BlockRow } from './BlockRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { chords } from './shortcuts'
+import {
+  ActiveRowApiProvider,
+  ActiveRowValueProvider,
+  CANVAS_ROW,
+  TITLE_ROW,
+  useActiveRowState,
+  useRowFocus,
+} from './activeRow'
 import { stopNeighbor } from './navigation'
 import { useRenameForm } from '../queries'
 import { DEFAULT_FORM_TITLE } from '../../../entities/form'
@@ -115,6 +123,8 @@ export function SlashEditor({
   // (null — в конец).
   const [insertOpen, setInsertOpen] = useState(false)
   const [insertAfterId, setInsertAfterId] = useState<string | null>(null)
+  // Активная строка полотна (§7) — источник контекста для чипов и шпаргалки.
+  const activeRow = useActiveRowState()
 
   // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
   // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки.
@@ -415,6 +425,10 @@ export function SlashEditor({
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
     <FocusEngineProvider value={engine}>
+    {/* Активная строка (§7): значение и API — разными провайдерами, чтобы строки-
+        репортёры не перерисовывались от смены каретки (см. activeRow.ts). */}
+    <ActiveRowApiProvider value={activeRow.api}>
+    <ActiveRowValueProvider value={activeRow.active}>
     {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него). */}
     <div ref={canvasRef} className="relative mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
       {/* Драг-рамка (Д10): один absolute-прямоугольник ДО списка в DOM — строки
@@ -522,6 +536,8 @@ export function SlashEditor({
 
       <SubmitButtonEditor />
     </div>
+    </ActiveRowValueProvider>
+    </ActiveRowApiProvider>
     </FocusEngineProvider>
   )
 }
@@ -576,6 +592,10 @@ function GroupRow({
   // Translate-only (как у BlockRow): сдвиг без scaleY, чтобы группа не сжималась
   // под высоту соседнего слота при перетаскивании.
   const style = { transform: CSS.Translate.toString(transform), transition }
+  // Есть ли в группе контрол ответа: от этого зависит, работает ли Mod+Enter из
+  // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
+  // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
+  const hasAnswer = group.blocks.some((b) => isAnswerableType(b.type))
 
   return (
     <li
@@ -613,6 +633,7 @@ function GroupRow({
               groupHandle={
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
+              groupHasAnswer={hasAnswer}
               openMenuOnMount={menuForId === b.id}
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}
@@ -675,6 +696,10 @@ function EmptyStarter({
 }: {
   onStart: (opts?: { openMenu?: boolean; seed?: string }) => void
 }) {
+  // Пустое полотно — тоже поверхность карты (§7): Enter/«/»/печатный символ. Блочных
+  // клавиш нет — блока ещё не существует.
+  const rowFocus = useRowFocus(CANVAS_ROW, 'canvas')
+
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     if (chords.enter(e)) {
       e.preventDefault()
@@ -693,6 +718,7 @@ function EmptyStarter({
       tabIndex={0}
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
+      {...rowFocus}
       className="mt-12 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <p>
@@ -730,6 +756,9 @@ function FormTitleInput({
   titleRef: RefObject<HTMLTextAreaElement | null>
 }) {
   const rename = useRenameForm()
+  // Заголовок формы — не блок, поэтому в подсказках адресуется сентинелом (§7):
+  // блочных клавиш тут нет, а Enter/↓ уводят на первую строку.
+  const rowFocus = useRowFocus(TITLE_ROW, 'title')
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -796,6 +825,7 @@ function FormTitleInput({
       defaultValue={initialValue}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
+      {...rowFocus}
       placeholder="Название формы"
       aria-label="Название формы"
       // Название вне стора билдера (серверный rename) — Ctrl+Z здесь нативный,
