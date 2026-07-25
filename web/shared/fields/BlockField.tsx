@@ -4,6 +4,7 @@ import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/fo
 
 import { type Answer, optionKey, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
+import { packOptionRows } from './groups'
 import { mediaSrc } from './media'
 
 // BlockField — как один блок увидит человек, заполняющий форму. Два режима одним
@@ -46,7 +47,7 @@ export function BlockField({
     if (block.type === 'image') {
       const key = block.settings?.imageKey
       return key ? (
-        <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+        <img className="rf-image" src={mediaSrc(key)} alt="" />
       ) : (
         <div className="rf-image-empty" aria-hidden="true" />
       )
@@ -92,7 +93,7 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
   if (block.type === 'image') {
     const key = block.settings?.imageKey
     return key ? (
-      <img className="rf-image" src={mediaSrc(key)} alt={block.settings?.alt ?? ''} />
+      <img className="rf-image" src={mediaSrc(key)} alt="" />
     ) : (
       <div className="rf-image-empty" aria-hidden="true" />
     )
@@ -407,30 +408,53 @@ function ChoiceList({
     if (!onChange) return
     onChange(multiple ? toggleMulti(selectedMany, id, checked) : id)
   }
+  // Буквенный бейдж и состояние выбора считаются по позиции в ПОЛНОМ списке, а не
+  // внутри ряда: порядок документа рядами не меняется (спека §5.1), и A/B/C обязаны
+  // остаться теми же, что до переноса варианта в ряд.
+  const card = (o: (typeof options)[number], i: number) => {
+    const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
+    const key = optionKey(i)
+    return (
+      // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
+      // класс работает одинаково во всех браузерах и виден в тестах.
+      <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
+        <input
+          className="rf-choice-input"
+          type={multiple ? 'checkbox' : 'radio'}
+          name={block.id}
+          checked={checked}
+          onChange={(e) => onToggle(o.id, e.target.checked)}
+          disabled={disabled}
+        />
+        {key && (
+          <span className="rf-option-key" aria-hidden="true">
+            {key}
+          </span>
+        )}
+        <span>{o.label.trim() || 'Вариант'}</span>
+      </label>
+    )
+  }
+  // Ряды вариантов (спека §5.1) — тот же раскладчик и та же обёртка .rf-row, что у
+  // вопросов; ряд из одного в обёртку не заворачивается.
+  const index = new Map(options.map((o, i) => [o.id, i]))
   return (
     <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
-      {options.map((o, i) => {
-        const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
-        const key = optionKey(i)
-        return (
-          // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
-          // класс работает одинаково во всех браузерах и виден в тестах.
-          <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
-            <input
-              className="rf-choice-input"
-              type={multiple ? 'checkbox' : 'radio'}
-              name={block.id}
-              checked={checked}
-              onChange={(e) => onToggle(o.id, e.target.checked)}
-              disabled={disabled}
-            />
-            {key && (
-              <span className="rf-option-key" aria-hidden="true">
-                {key}
-              </span>
-            )}
-            <span>{o.label.trim() || 'Вариант'}</span>
-          </label>
+      {packOptionRows(options).map((row) => {
+        const first = row[0]!
+        // Ряд из двоих — две ячейки .rf-cell по половине колонки; карточка внутри
+        // обнимает текст, но начинается там, где ячейка (правая — с середины).
+        // Ряд из одного в обёртку не заворачивается.
+        return row.length > 1 ? (
+          <div key={first.id} className="rf-row">
+            {row.map((o) => (
+              <div key={o.id} className="rf-cell">
+                {card(o, index.get(o.id)!)}
+              </div>
+            ))}
+          </div>
+        ) : (
+          card(first, index.get(first.id)!)
         )
       })}
     </div>

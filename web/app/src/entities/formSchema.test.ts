@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   formSchemaSchema,
   isValidPhone,
-  MAX_ALT_LEN,
   MAX_BLOCKS,
   MAX_IMAGE_KEY_LEN,
   MAX_OPTIONS,
@@ -52,7 +51,7 @@ describe('formSchemaSchema — валидные', () => {
       schemaVersion: 2,
       blocks: [
         { id: 'l1', groupId: 'g1', type: 'label', text: 'Логотип' },
-        { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png', alt: 'пример' } },
+        { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
         { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     },
@@ -84,6 +83,34 @@ describe('formSchemaSchema — валидные', () => {
     },
     'минимальный блок без settings/required': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text' }],
+    },
+    // Фаза 13.6: бит ряда у whitelist-типов и у вариантов.
+    'column right у short_text': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'right' } }],
+    },
+    'column right у dropdown': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'dropdown', settings: { column: 'right', options: [{ id: 'o1', label: 'Мск' }] } }],
+    },
+    'column right у варианта': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет', column: 'right' }] },
+        },
+      ],
+    },
+    // Инертный флаг легален (спека §5): слева никого нет, но 422 быть не должно —
+    // иначе undo и промежуточные состояния драга ловили бы отказ автосейва.
+    'column right у первого блока — инертен, но валиден': {
+      blocks: [
+        { id: 'b', groupId: 'g1', type: 'email', settings: { column: 'right' } },
+        { id: 'b2', groupId: 'g2', type: 'long_text', settings: {} },
+      ],
+    },
+    'column right у первого варианта — инертен': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'multi_choice', settings: { options: [{ id: 'o1', label: 'Go', column: 'right' }] } }],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
@@ -160,17 +187,15 @@ describe('formSchemaSchema — невалидные', () => {
     'imageKey на не-image': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { imageKey: 'ws/x.png' } }],
     },
-    'alt на не-image': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'heading', text: 'x', settings: { alt: 'y' } }],
+    // alt удалён из контракта целиком (фаза 13): strictObject отвергает его даже у image.
+    'alt удалён из контракта': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png', alt: 'y' } }],
     },
     'image с опциями': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { options: [{ id: 'o', label: 'z' }] } }],
     },
     'слишком длинный imageKey': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { imageKey: 'a'.repeat(MAX_IMAGE_KEY_LEN + 1) } }],
-    },
-    'слишком длинный alt': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: { alt: 'я'.repeat(MAX_ALT_LEN + 1) } }],
     },
     'дубль id опций внутри блока': {
       blocks: [
@@ -220,6 +245,24 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'шкала у не-scale': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 1, scaleMax: 5 } }],
+    },
+    // Фаза 13.6: бит ряда вне whitelist / вне допустимых значений.
+    'column у long_text (не whitelist)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { column: 'right' } }],
+    },
+    'column у single_choice (не whitelist)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { column: 'right' } }],
+    },
+    'column неизвестное значение': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'third' } }],
+    },
+    'column left не хранится (канон — только отклонение)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'left' } }],
+    },
+    'column left у варианта не хранится': {
+      blocks: [
+        { id: 'b', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да', column: 'left' }] } },
+      ],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
     'redirect javascript:': { blocks: [], redirectUrl: 'javascript:alert(document.cookie)' },

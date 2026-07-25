@@ -36,7 +36,6 @@ const (
 	MaxSubmitLabelLen = 100
 	MaxPlaceholderLen = 200
 	MaxImageKeyLen    = 200
-	MaxAltLen         = 500
 	// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода;
 	// на телефоне больше десяти в строку не помещается (нужно число — есть number).
 	// Низ — 0: NPS считается от нуля.
@@ -49,6 +48,11 @@ const (
 	MaxThankYouTextLen = 2000
 	MaxRedirectURLLen  = 2000
 )
+
+// ColumnRight — единственное значение бита ряда (спека §5): «встань в ряд с
+// предыдущим». Отсутствие ключа = свой ряд; "left" канон не пишет и не принимает.
+// Зеркалит COLUMN_RIGHT в formSchema.ts.
+const ColumnRight = "right"
 
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
@@ -121,9 +125,21 @@ func (t BlockType) isAnswerable() bool { return !t.isContent() }
 
 // carriesText — тип несёт собственное поле text: подписи, контентные абзацы/
 // заголовки и consent (текст согласия рядом с галочкой). У прочих отвечаемых
-// (и у image, где текст в settings.alt) поле text обязано быть пустым.
+// (и у image) поле text обязано быть пустым.
 func (t BlockType) carriesText() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockConsent
+}
+
+// canShareRow — типу разрешено делить ряд с предыдущим вопросом (спека фазы 13 §5,
+// ADR §10): визуально короткие контролы. long_text/scale/choice-карточки в половину
+// колонки не читаются. Зеркалит canShareRow в formSchema.ts.
+func (t BlockType) canShareRow() bool {
+	switch t {
+	case BlockShortText, BlockEmail, BlockPhone, BlockNumber, BlockDate, BlockDropdown:
+		return true
+	default:
+		return false
+	}
 }
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
@@ -131,10 +147,15 @@ func (t BlockType) carriesText() bool {
 type Option struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// Column — тот же бит ряда, что у блока (спека §5.1): "right" = «встань в ряд
+	// с предыдущим вариантом», пусто = свой ряд. У опций dropdown инертен (список
+	// живёт в нативном select) — и потому не запрещён, как и любой другой флаг,
+	// которому некуда примениться.
+	Column string `json:"column,omitempty"`
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
-// placeholder у текстовых полей ввода, imageKey/alt у типа image, диапазон у scale.
+// placeholder у текстовых полей ввода, imageKey у типа image, диапазон у scale.
 //
 // ScaleMin/ScaleMax — указатели, а не int: 0 — законный минимум шкалы (NPS 0–10),
 // и с `omitempty` нулевое значение вылетало бы из JSON, а «не задано» было бы
@@ -144,9 +165,16 @@ type BlockSettings struct {
 	Options     []Option `json:"options,omitempty"`
 	Placeholder string   `json:"placeholder,omitempty"`
 	ImageKey    string   `json:"imageKey,omitempty"`
-	Alt         string   `json:"alt,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
+	// Column — ряд из двух вопросов (спека §5): "right" на отвечаемом блоке
+	// читается как «встань в ряд с предыдущим вопросом», пусто = свой ряд.
+	// Ширина не хранится вовсе — её выводит раскладчик. Только у canShareRow-типов.
+	//
+	// Кросс-блочное условие «левый сосед существует и умеет делить ряд» здесь
+	// НЕ проверяется намеренно: флаг, которому некуда примениться, инертен и
+	// легален, иначе undo и промежуточные состояния драга ловили бы 422.
+	Column string `json:"column,omitempty"`
 }
 
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
@@ -327,7 +355,7 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		return schemaErr("%s: text длиннее %d символов", at, MaxTextLen)
 	}
 	// Собственный text — только у carriesText-типов (подписи, контент, consent);
-	// у прочих подпись живёт отдельным блоком, а у image текст в settings.alt.
+	// у прочих подпись живёт отдельным блоком.
 	if !b.Type.carriesText() && b.Text != "" {
 		return schemaErr("%s: тип %q не несёт собственного текста", at, b.Type)
 	}
@@ -337,12 +365,19 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if n := utf8.RuneCountInString(b.Settings.ImageKey); n > MaxImageKeyLen {
 		return schemaErr("%s: imageKey длиннее %d символов", at, MaxImageKeyLen)
 	}
-	if n := utf8.RuneCountInString(b.Settings.Alt); n > MaxAltLen {
-		return schemaErr("%s: alt длиннее %d символов", at, MaxAltLen)
-	}
-	// imageKey/alt — только у image (как options у choice).
-	if b.Type != BlockImage && (b.Settings.ImageKey != "" || b.Settings.Alt != "") {
+	// imageKey — только у image (как options у choice).
+	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
+	}
+	// column — только "right" и только у whitelist-типов (спека §5). Канон хранит
+	// отклонение: "left" в документе не пишется, а значит и не принимается.
+	if b.Settings.Column != "" {
+		if b.Settings.Column != ColumnRight {
+			return schemaErr("%s: неизвестная колонка %q", at, b.Settings.Column)
+		}
+		if !b.Type.canShareRow() {
+			return schemaErr("%s: тип %q не может делить ряд", at, b.Type)
+		}
 	}
 	if err := validateScaleSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)
@@ -369,6 +404,11 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		seenOpt[o.ID] = struct{}{}
 		if n := utf8.RuneCountInString(o.Label); n > MaxOptionLabelLen {
 			return schemaErr("%s: опция #%d: label длиннее %d символов", at, j, MaxOptionLabelLen)
+		}
+		// Тот же бит ряда, что у блока (спека §5.1): только "right". Есть ли слева
+		// свободная ячейка — не проверяется, как и у блока: флаг инертен, не невалиден.
+		if o.Column != "" && o.Column != ColumnRight {
+			return schemaErr("%s: опция #%d: неизвестная колонка %q", at, j, o.Column)
 		}
 	}
 	return nil

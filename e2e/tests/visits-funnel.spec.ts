@@ -1,4 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
+import { login, seedAccount } from './helpers/session'
 
 // Визиты и воронка (фаза 8.5, шаги 6 и 6б) против prod-local.
 //
@@ -23,13 +24,13 @@ test('визит считается под прод-CSP, конверсия и �
   const uniq = Date.now()
   const formTitle = `Воронка ${uniq}`
 
-  // 1. Регистрация через UI: сессия и CSRF-cookie оказываются в контексте страницы,
-  // и дальше page.request ходит уже авторизованным.
-  await page.goto('/register')
-  await page.getByLabel('Email').fill(`visits-${uniq}@example.com`)
-  await page.getByLabel('Пароль').fill('supersecret123')
-  await page.getByRole('button', { name: 'Создать аккаунт' }).click()
-  await page.waitForURL('**/forms')
+  // 1. Сессия: учётка заводится мимо HTTP, вход — обычной ручкой (сессия и
+  // CSRF-cookie оказываются в контексте страницы, дальше page.request ходит
+  // авторизованным). Регистрация здесь не предмет проверки, а средство — и как
+  // средство она стоила сюите перезапусков: ведро `registerBurst` на три сценария
+  // выбиралось в ноль, и этот, идущий последним, регулярно ловил 429.
+  const email = seedAccount('visits')
+  await login(page, email)
 
   // 2. Форма с ДВУМЯ вопросами через API. Второй нужен, чтобы воронка была
   // содержательной: респондент коснётся только первого, и шаги обязаны разойтись.

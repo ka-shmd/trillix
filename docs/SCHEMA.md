@@ -156,13 +156,20 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
       "required": true,             // опционально, по умолчанию false
       "settings": {                 // опционально
         "options": [                // только у single_choice / dropdown / multi_choice
-          { "id": "opt_1", "label": "Друзья" }
+          { "id": "opt_1", "label": "Друзья" },
+          { "id": "opt_2", "label": "Реклама",
+            "column": "right" }     // тот же бит ряда, что у блока (фаза 13.6):
+                                    //   встань в ряд с предыдущим вариантом
         ],
         "placeholder": "Например…", // текстовые поля ввода (≤200); подсказка в поле
         "imageKey": "ws/ab12.png",  // только у image: ключ объекта в бакете (≤200)
-        "alt": "Схема процесса",    // только у image: alt-текст картинки (≤500)
         "scaleMin": 1,              // только у scale: оба конца или ни одного;
-        "scaleMax": 5               //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
+        "scaleMax": 5,              //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
+        "column": "right"           // ряд из двух вопросов (фаза 13.6): «встань в ряд
+                                    //   с предыдущим вопросом». Только whitelist
+                                    //   short_text/email/phone/number/date/dropdown;
+                                    //   отсутствие = свой ряд ("left" не хранится).
+                                    //   Ширина не хранится — её выводит раскладчик
       }
     }
   ],
@@ -206,7 +213,10 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `settings.placeholder` | ≤ 200 |
 | `settings.scaleMin` / `scaleMax` (scale) | оба или ни одного; 0 ≤ min < max ≤ 10 |
 | длина `settings.imageKey` (image) | ≤ 200 |
-| длина `settings.alt` (image) | ≤ 500 |
+| `settings.column` | только `"right"` и только у short_text/email/phone/number/date/dropdown |
+| `column` у варианта | только `"right"`; тип блока не ограничен (у dropdown флаг инертен) |
+
+Кросс-блочное условие бита ряда («слева есть свободная ячейка, и левый сосед умеет делить ряд») **намеренно не валидируется** ни в Go, ни в Zod: флаг, которому некуда примениться, инертен при рендере и снимается стором редактора на структурной правке. Валидируй его — и undo, промежуточные состояния драга и вставка блока между участниками ряда ловили бы 422 в автосейве.
 
 ---
 

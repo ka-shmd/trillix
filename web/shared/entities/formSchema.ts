@@ -20,9 +20,8 @@ export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
 export const MAX_PLACEHOLDER_LEN = 200
-// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.) и alt-текст.
+// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.).
 export const MAX_IMAGE_KEY_LEN = 200
-export const MAX_ALT_LEN = 500
 // Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 export const MAX_THANK_YOU_TEXT_LEN = 2000
 export const MAX_REDIRECT_URL_LEN = 2000
@@ -106,6 +105,24 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
 
+// Типы, которым разрешено делить ряд с предыдущим вопросом (спека §5, ADR §10):
+// визуально короткие контролы. long_text/scale/choice-карточки в половину колонки
+// не читаются. Зеркалит Go canShareRow().
+const SHARE_ROW_TYPES: ReadonlySet<BlockType> = new Set([
+  'short_text',
+  'email',
+  'phone',
+  'number',
+  'date',
+  'dropdown',
+])
+export const canShareRow = (t: BlockType): boolean => SHARE_ROW_TYPES.has(t)
+
+// Единственное значение бита ряда (спека §5): «встань в ряд с предыдущим».
+// Отсутствие ключа = свой ряд; 'left' канон не пишет и не принимает. Зеркалит
+// Go ColumnRight.
+export const COLUMN_RIGHT = 'right'
+
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
 // номера (+380, добавочные, международные) — для формы это дороже, чем принять
@@ -139,8 +156,8 @@ export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
 export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
 // Типы с собственным полем text: подписи, контентные абзацы/заголовки и consent
-// (текст согласия рядом с галочкой). У прочих отвечаемых и у image (текст в
-// settings.alt) поле text обязано быть пустым. Зеркалит Go carriesText().
+// (текст согласия рядом с галочкой). У прочих отвечаемых и у image поле text
+// обязано быть пустым. Зеркалит Go carriesText().
 const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
   'title',
   'label',
@@ -158,6 +175,11 @@ const idSchema = z.string().min(1).max(MAX_ID_LEN)
 export const optionSchema = z.strictObject({
   id: idSchema,
   label: z.string().max(MAX_OPTION_LABEL_LEN),
+  // Тот же бит ряда, что у блока (спека §5.1): 'right' = «встань в ряд с
+  // предыдущим вариантом», отсутствие = свой ряд. Свободна ли ячейка слева — не
+  // валидируется, как и у блока: флаг инертен, а не невалиден. У опций dropdown
+  // инертен всегда (список живёт в нативном select) — и потому не запрещён.
+  column: z.literal(COLUMN_RIGHT).optional(),
 })
 export type Option = z.infer<typeof optionSchema>
 
@@ -167,14 +189,19 @@ const settingsSchema = z.strictObject({
   options: z.array(optionSchema).max(MAX_OPTIONS).optional(),
   // Плейсхолдер поля ввода (текстовые типы). У остальных игнорируется.
   placeholder: z.string().max(MAX_PLACEHOLDER_LEN).optional(),
-  // Картинка (тип image): ключ объекта в бакете и alt-текст. У остальных типов —
-  // запрещены (superRefine ниже), как options у не-choice.
+  // Картинка (тип image): ключ объекта в бакете. У остальных типов запрещён
+  // (superRefine ниже), как options у не-choice.
   imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
-  alt: z.string().max(MAX_ALT_LEN).optional(),
   // Диапазон шкалы (тип scale). Оба конца или ни одного (superRefine ниже);
   // «ни одного» — недособранный черновик, как choice без опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
+  // Ряд из двух вопросов (спека §5): 'right' на отвечаемом блоке = «встань в ряд
+  // с предыдущим вопросом», отсутствие ключа = свой ряд. Ширина не хранится вовсе,
+  // её выводит раскладчик. Разрешён только whitelist-типам (superRefine ниже);
+  // кросс-блочное условие «слева есть свободная ячейка» намеренно не валидируется
+  // — инертный флаг легален, иначе undo и промежуточные состояния драга ловили бы 422.
+  column: z.literal(COLUMN_RIGHT).optional(),
 })
 
 // scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
@@ -208,22 +235,21 @@ export const blockSchema = z
         path: ['text'],
       })
     }
-    // imageKey/alt — только у image (как options только у choice).
-    if (b.type !== 'image') {
-      if (b.settings?.imageKey) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `тип ${b.type} не имеет картинки`,
-          path: ['settings', 'imageKey'],
-        })
-      }
-      if (b.settings?.alt) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `тип ${b.type} не имеет alt`,
-          path: ['settings', 'alt'],
-        })
-      }
+    // imageKey — только у image (как options только у choice).
+    if (b.type !== 'image' && b.settings?.imageKey) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не имеет картинки`,
+        path: ['settings', 'imageKey'],
+      })
+    }
+    // column: 'right' — только у whitelist-типов (спека §5).
+    if (b.settings?.column && !canShareRow(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не может делить ряд`,
+        path: ['settings', 'column'],
+      })
     }
     // Диапазон шкалы — только у scale (как options у choice).
     const { scaleMin, scaleMax } = b.settings ?? {}

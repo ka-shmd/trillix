@@ -13,9 +13,11 @@ import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SlashEditor } from './SlashEditor'
+import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { useAutosave } from './useAutosave'
+import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
 // Что показано вместо полотна. Полотно (edit) — документ из блоков; превью — как
@@ -36,9 +38,27 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
     return s
   })
 
+  // Фокус-движок полотна живёт здесь (а не в SlashEditor): он обязан пережить
+  // переключение режима edit↔preview (SlashEditor размонтируется) и, главное, дать
+  // undo/redo поставить каретку на затронутый блок (§2.4) — отмену дёргает этот
+  // экран (клавиатура + кнопки), а не полотно. SlashEditor раздаёт его через контекст.
+  const [engine] = useState(() => createFocusEngine())
+
   const headerSlot = useHeaderSlot()
   const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+
+  // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
+  // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
+  // фокус, как только строка зарегистрирует цель (pending в focusEngine).
+  const undo = () => {
+    const id = store.getState().undo()
+    if (id) engine.focusBlock(id)
+  }
+  const redo = () => {
+    const id = store.getState().redo()
+    if (id) engine.focusBlock(id)
+  }
 
   // Публиковать можно только когда серверный черновик догнал редактор: нет
   // несохранённых правок и последний автосейв успешен (иначе снапшот будет старым).
@@ -54,25 +74,23 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   // отмене всего документа — так ведёт себя Notion/Tally). Пустой стек — no-op.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey)) return
-      // Сверяем физическую клавишу (e.code), а не e.key: при кириллической (и любой
-      // не-латинской) раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался —
-      // срабатывал нативный undo контролируемого textarea (откат по одному символу).
-      if (e.code !== 'KeyZ' && e.code !== 'KeyY') return
+      // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
+      // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
+      // undo контролируемого textarea (откат по одному символу).
+      const isUndo = chords.undo(e)
+      const isRedo = chords.redo(e)
+      if (!isUndo && !isRedo) return
       // Поля со своей историей (название формы — серверный rename вне стора билдера)
       // откатываются нативным undo браузера: их не перехватываем.
       if ((e.target as HTMLElement | null)?.closest('[data-undo-native]')) return
-      if (e.code === 'KeyZ' && !e.shiftKey) {
-        e.preventDefault()
-        store.getState().undo()
-      } else {
-        e.preventDefault()
-        store.getState().redo()
-      }
+      e.preventDefault()
+      if (isUndo) undo()
+      else redo()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [store])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store, engine])
 
   return (
     <BuilderStoreContext.Provider value={store}>
@@ -89,7 +107,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 size="icon-sm"
                 className="text-muted-foreground"
                 disabled={!canUndo}
-                onClick={() => store.getState().undo()}
+                onClick={undo}
                 aria-label="Отменить (Ctrl+Z)"
                 title="Отменить (Ctrl+Z)"
               >
@@ -100,7 +118,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 size="icon-sm"
                 className="text-muted-foreground"
                 disabled={!canRedo}
-                onClick={() => store.getState().redo()}
+                onClick={redo}
                 aria-label="Повторить (Ctrl+Shift+Z)"
                 title="Повторить (Ctrl+Shift+Z)"
               >
@@ -151,7 +169,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' && <SlashEditor formId={detail.id} initialTitle={detail.title} />}
+      {mode === 'edit' && (
+        <SlashEditor formId={detail.id} initialTitle={detail.title} engine={engine} />
+      )}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
           <PreviewPane title={detail.title} />

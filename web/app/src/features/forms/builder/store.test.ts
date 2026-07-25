@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
+import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
-import { createBuilderStore } from './store'
+import { createBuilderStore, planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -11,18 +12,16 @@ describe('createBuilderStore', () => {
   it('стартует пустым и не dirty', () => {
     const s = createBuilderStore().getState()
     expect(s.blocks).toEqual([])
-    expect(s.selectedId).toBeNull()
     expect(s.dirty).toBe(false)
   })
 
-  it('addBlock добавляет в конец, выделяет новый и помечает dirty', () => {
+  it('addBlock добавляет в конец и помечает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     store.getState().addBlock('email')
 
     const s = store.getState()
     expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
-    expect(s.selectedId).toBe(s.blocks[1]?.id)
     expect(s.dirty).toBe(true)
     expect(s.blocks[0]?.id).not.toBe(s.blocks[1]?.id)
   })
@@ -66,16 +65,17 @@ describe('createBuilderStore', () => {
     expect(s.dirty).toBe(true)
   })
 
-  it('removeBlock удаляет блок и снимает выделение, если удалили выделенный', () => {
+  it('removeBlock удаляет блок и помечает dirty', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
 
     store.getState().removeBlock(id)
 
     const s = store.getState()
     expect(s.blocks).toHaveLength(0)
-    expect(s.selectedId).toBeNull()
+    expect(s.dirty).toBe(true)
   })
 
   it('moveBlock двигает блок и no-op на границе', () => {
@@ -106,7 +106,6 @@ describe('createBuilderStore', () => {
     const s = store.getState()
     expect(s.blocks.map((x) => x.id)).toEqual([a, newId, c])
     expect(s.blocks[1]?.type).toBe('email')
-    expect(s.selectedId).toBe(newId)
     expect(s.dirty).toBe(true)
   })
 
@@ -399,6 +398,160 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
+  it('reorderBlocks §4.4: инпут, уроненный внутрь чужой мульти-группы, приземляется под ней', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('text') // одиночка под группой
+    store.getState().addBlock('email') // голое поле в конце
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'text', 'email'])
+
+    // Тащим email на f1 — «между подписью и полем» чужого вопроса (Д11).
+    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+
+    const s = store.getState().blocks
+    // Приземлился СРАЗУ ПОД группой (выше text-одиночки), не внутри неё.
+    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'email', 'text'])
+    // Подпись осталась у прежнего поля, email — голое поле со своей группой:
+    // колонки CSV и шаги воронки не переименованы.
+    expect(s[0]!.groupId).toBe(s[1]!.groupId)
+    expect(s[2]!.groupId).not.toBe(s[0]!.groupId)
+  })
+
+  it('reorderBlocks §4.4: подпись, уроненная между строк чужой мульти-группы, уезжает под неё', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('text')
+    store.getState().addBlock('label') // сирота-подпись в конце
+    const b = store.getState().blocks
+
+    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+
+    const s = store.getState().blocks
+    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'label', 'text'])
+    // Вопрос не перехвачен: группа по-прежнему «title + short_text».
+    expect(s[0]!.groupId).toBe(s[1]!.groupId)
+    expect(s[2]!.groupId).not.toBe(s[1]!.groupId)
+  })
+
+  it('§4.4 не мешает жесту «дать голому полю подпись» (группа из одного блока)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email') // голое поле
+    store.getState().addBlock('label')
+    const [email, label] = store.getState().blocks.map((x) => x.id)
+
+    store.getState().reorderBlocks(label!, email!)
+
+    const s = store.getState().blocks
+    expect(s.map((x) => x.type)).toEqual(['label', 'email'])
+    expect(s[0]!.groupId).toBe(s[1]!.groupId) // подпись пристегнулась к полю
+  })
+
+  it('planBlockDrop: frameIds — будущий состав группы активного блока', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email')
+    store.getState().addBlock('label')
+    const b = store.getState().blocks
+
+    // Подпись летит над голое поле: рамка обнимет будущую пару «подпись+поле».
+    const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
+    expect(join?.redirected).toBe(false)
+    expect(join?.frameIds).toEqual([b[1]!.id, b[0]!.id])
+  })
+
+  it('planBlockDrop: при перенаправлении рамке отдаётся чужая группа; дроп-возврат — changed=false', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('email') // голое поле сразу под группой
+    const b = store.getState().blocks
+
+    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — внутрь группы
+    expect(plan?.redirected).toBe(true)
+    expect(plan?.frameIds).toEqual([b[0]!.id, b[1]!.id])
+    // Легальная точка — под группой, где email и так стоит: коммитить нечего.
+    expect(plan?.changed).toBe(false)
+  })
+
+  it('remapDropTarget: щель раскрывается под чужой группой, а не внутри неё', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email') // голое поле НАД группой
+    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'short_text') // title, f1
+    store.getState().addBlock('number') // голое поле ПОД группой
+    store.getState().addBlock('text') // контент в конце
+    const [top, title, f1, below, txt] = store.getState().blocks
+    const blocks = store.getState().blocks
+
+    // Сверху: цель внутри группы → подмена на её последнюю строку (щель под группой).
+    expect(remapDropTarget(blocks, top!.id, title!.id)).toBe(f1!.id)
+    // Цель — последняя строка: дроп и так ляжет под группу, подмена не нужна.
+    expect(remapDropTarget(blocks, top!.id, f1!.id)).toBeNull()
+    // Снизу: цель внутри → строка сразу под группой (здесь — сам активный: «на месте»).
+    expect(remapDropTarget(blocks, below!.id, f1!.id)).toBe(below!.id)
+    // Снизу на подпись — легальный дроп НАД группой.
+    expect(remapDropTarget(blocks, below!.id, title!.id)).toBeNull()
+    // Контента правило не касается: text падает внутрь группы свободно.
+    expect(remapDropTarget(blocks, txt!.id, f1!.id)).toBeNull()
+  })
+
+  it('rowBoundaryTarget: щель между участниками ряда подменяется границей ряда', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text') // контент НАД рядом
+    store.getState().addBlock('short_text') // левый участник
+    store.getState().addBlock('email') // правый участник
+    store.getState().addBlock('number') // голое поле ПОД рядом
+    const [txt, left, right, below] = store.getState().blocks
+    store.getState().placeInRow(right!.groupId, left!.groupId)
+    const blocks = store.getState().blocks
+
+    // Сверху щель между участниками даёт цель «левый участник» → подмена на конец ряда.
+    expect(rowBoundaryTarget(blocks, txt!.id, left!.id)).toBe(right!.id)
+    // Снизу её даёт цель «правый участник» → строка за рядом (здесь — сам активный).
+    expect(rowBoundaryTarget(blocks, below!.id, right!.id)).toBe(below!.id)
+    // Прочие цели легальны: дроп над рядом и под ним ряд не рвёт.
+    expect(rowBoundaryTarget(blocks, below!.id, left!.id)).toBeNull()
+    expect(rowBoundaryTarget(blocks, txt!.id, right!.id)).toBeNull()
+    // Участник ряда, переставляемый внутри своего ряда, правилу не подчиняется.
+    expect(rowBoundaryTarget(blocks, left!.id, right!.id)).toBeNull()
+  })
+
+  it('rowBoundaryTarget: участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
+    const store = createBuilderStore()
+    for (const t of ['short_text', 'email', 'phone', 'number'] as const) store.getState().addBlock(t)
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b]
+    store.getState().placeInRow(d!.groupId, c!.groupId) // ряд [c, d]
+    const blocks = store.getState().blocks
+
+    // b из верхнего ряда тащат на c — щель между c и d. Правило обязано подменить цель
+    // концом нижнего ряда: без этого b занял бы ячейку c, а d вылетел бы своим рядом.
+    expect(rowBoundaryTarget(blocks, b!.id, c!.id)).toBe(d!.id)
+    // И наоборот: c из нижнего ряда на b (снизу щель между a и b даёт цель «b») —
+    // подмена на строку за верхним рядом, то есть на сам c: остаться на месте.
+    expect(rowBoundaryTarget(blocks, c!.id, b!.id)).toBe(c!.id)
+    // Дроп снизу на a — это позиция НАД рядом, она легальна и подмены не требует.
+    expect(rowBoundaryTarget(blocks, c!.id, a!.id)).toBeNull()
+  })
+
+  it('rowBoundaryTarget: вставка контента ВНУТРЬ участника ряда остаётся легальной', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title + поле (левый)
+    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email') // правый
+    store.getState().addBlock('text') // контент в конце
+    const b0 = store.getState().blocks
+    const rightField = b0[3]!
+    store.getState().placeInRow(rightField.groupId, b0[1]!.groupId)
+    const blocks = store.getState().blocks
+    const [leftTitle, , rightTitle, , txt] = blocks
+
+    // Цель «поле правого участника» — это вставка МЕЖДУ подписью и полем внутри
+    // вопроса: участник остаётся участником, ряд цел, правило молчит.
+    expect(rowBoundaryTarget(blocks, txt!.id, rightField.id)).toBeNull()
+    // А цель «подпись правого» снизу — та самая щель между участниками.
+    expect(rowBoundaryTarget(blocks, txt!.id, rightTitle!.id)).toBe(txt!.id)
+    // Строки самого ряда правилу не подчиняются — внутри ряда перестановка свободна.
+    expect(rowBoundaryTarget(blocks, leftTitle!.id, rightTitle!.id)).toBeNull()
+  })
+
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
@@ -412,7 +565,6 @@ describe('createBuilderStore', () => {
     const copy = s.blocks[1]!
     expect(copy.id).not.toBe(orig.id)
     expect(copy.type).toBe('single_choice')
-    expect(s.selectedId).toBe(copy.id)
 
     store.getState().updateBlock(copy.id, { settings: { options: [{ id: 'o1', label: 'Z' }] } })
     expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('A')
@@ -492,7 +644,6 @@ describe('createBuilderStore', () => {
     const s = store.getState()
     expect(s.blocks).toEqual(schema.blocks)
     expect(s.dirty).toBe(false)
-    expect(s.selectedId).toBeNull()
     expect(s.blocks[0]).not.toBe(schema.blocks[0])
   })
 
@@ -694,14 +845,453 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().blocks).toEqual([])
   })
 
-  it('undo снимает выделение, если выделенный блок исчез', () => {
+  it('undo убирает добавленный блок', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
-    const id = store.getState().blocks[0]!.id
-    expect(store.getState().selectedId).toBe(id)
+    expect(store.getState().blocks).toHaveLength(1)
 
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
-    expect(store.getState().selectedId).toBeNull()
+  })
+
+  // --- Этап 13.2: клавиатурный поток ---
+
+  it('addBlockAfterGroup вставляет строку ПОСЛЕ всей группы (Enter §3.2)', () => {
+    const store = createBuilderStore()
+    // Группа [title, text(контент), short_text] + одиночка ниже.
+    store.getState().addQuestionAfter(null, 'short_text')
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().addBlockAfter(titleId, 'text') // контент внутрь группы
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['title', 'text', 'short_text'])
+    store.getState().markSaved()
+
+    // Enter с контентного блока внутри группы → text ПОСЛЕ всей группы, не между.
+    const contentId = store.getState().blocks[1]!.id
+    const newId = store.getState().addBlockAfterGroup(contentId, 'text')
+
+    const s = store.getState().blocks
+    expect(s.map((b) => b.type)).toEqual(['title', 'text', 'short_text', 'text'])
+    expect(s[3]!.id).toBe(newId)
+    // Новая строка — вне исходной группы (своя одиночка).
+    expect(s[3]!.groupId).not.toBe(s[0]!.groupId)
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('addBlockAfter (Shift+Enter) вставляет строку ВНУТРЬ группы', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // [title, short_text]
+    const titleId = store.getState().blocks[0]!.id
+
+    // Shift+Enter с подписи → контент сразу под ней, в той же группе.
+    store.getState().addBlockAfter(titleId, 'text')
+
+    const s = store.getState().blocks
+    expect(s.map((b) => b.type)).toEqual(['title', 'text', 'short_text'])
+    expect(s[1]!.groupId).toBe(s[0]!.groupId) // остался в группе вопроса
+  })
+
+  it('choice-вопрос (makeQuestion) рождается с одним пустым вариантом', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().makeQuestion(id, 'single_choice')
+
+    const field = store.getState().blocks.find((b) => b.type === 'single_choice')
+    expect(field?.settings?.options).toHaveLength(1)
+    expect(field?.settings?.options?.[0]?.label).toBe('')
+  })
+
+  it('choice-поле (addFieldAfter/makeField) рождается с одним пустым вариантом', () => {
+    const store = createBuilderStore()
+    const fieldId = store.getState().addFieldAfter(null, 'multi_choice')
+    expect(store.getState().blocks.find((b) => b.id === fieldId)?.settings?.options).toHaveLength(1)
+
+    store.getState().addBlock('text')
+    const loneId = store.getState().blocks.find((b) => b.type === 'text')!.id
+    store.getState().makeField(loneId, 'dropdown')
+    expect(store.getState().blocks.find((b) => b.id === loneId)?.settings?.options).toHaveLength(1)
+  })
+
+  it('addBlock/changeBlockType оставляют choice с пустым списком (недособранный черновик)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    expect(store.getState().blocks[0]?.settings?.options).toEqual([])
+  })
+
+  it('addOptionAfter вставляет вариант сразу после текущего и возвращает id (Д5)', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'single_choice') // рождается с 1 вариантом
+    const blockId = store.getState().blocks[0]!.id
+    const first = store.getState().blocks[0]!.settings!.options![0]!.id
+    store.getState().addOption(blockId) // теперь [first, second]
+    const second = store.getState().blocks[0]!.settings!.options![1]!.id
+    store.getState().markSaved()
+
+    // Enter на ПЕРВОМ варианте → новый ложится между first и second, а не в конец.
+    const newId = store.getState().addOptionAfter(blockId, first)
+
+    const opts = store.getState().blocks[0]!.settings!.options!
+    expect(opts.map((o) => o.id)).toEqual([first, newId, second])
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('addOptionAfter на non-choice — no-op, dirty не поднимается', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().addOptionAfter(id, 'opt_nope')
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('moveGroup переставляет группу целиком с соседней; каретка (id) стабильна', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // группа A: [title, short_text]
+    store.getState().addQuestionAfter(null, 'email') // группа B: [title, email]
+    let b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'title', 'email'])
+    const aTitleId = b[0]!.id
+    const bEmailId = b[3]!.id
+    store.getState().markSaved()
+
+    // Двигаем группу A вниз (по любому её блоку) — B встаёт первой.
+    store.getState().moveGroup(aTitleId, 'down')
+    b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'email', 'title', 'short_text'])
+    // id блоков сохранились (каретка едет с группой): подпись A теперь третья строка.
+    expect(b[1]!.id).toBe(bEmailId)
+    expect(b[2]!.id).toBe(aTitleId)
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('moveGroup на границе полотна — no-op (dirty не трогает)', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text')
+    store.getState().addQuestionAfter(null, 'email')
+    const topId = store.getState().blocks[0]!.id
+    store.getState().markSaved()
+
+    store.getState().moveGroup(topId, 'up') // верхняя группа вверх — некуда
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('undo возвращает id блока, которого коснулся откат текста (§2.4)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    store.getState().addBlock('short_text')
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(titleId, { text: 'Имя' })
+
+    const focus = store.getState().undo() // откат правки текста подписи
+    expect(focus).toBe(titleId)
+    expect(store.getState().blocks[0]?.text).toBe('')
+  })
+
+  it('undo удаления в хвосте фокусирует соседа; undo единственной вставки → null', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text') // единственная вставка
+    // Откат вставки: список пустеет → фокусировать нечего (каретка уйдёт на заголовок).
+    expect(store.getState().undo()).toBeNull()
+
+    // Две строки + третья; откат третьей → сосед (последняя оставшаяся).
+    store.getState().redo() // вернуть short_text
+    store.getState().addBlock('email')
+    const emailId = store.getState().blocks[1]!.id
+    store.getState().addBlock('number') // третья, в хвосте
+    expect(store.getState().undo()).toBe(emailId) // сосед — предыдущий хвост
+  })
+
+  it('redo возвращает id восстановленного блока', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    const id = store.getState().blocks[0]!.id
+    store.getState().undo() // убрали
+    expect(store.getState().redo()).toBe(id) // вернули — каретка на него
+  })
+})
+
+describe('createBuilderStore — ряды из двух вопросов (фаза 13.6)', () => {
+  // Полотно из голых полей: каждое — своя группа.
+  const fields = (...types: ('short_text' | 'email' | 'phone' | 'long_text' | 'single_choice' | 'dropdown')[]) => {
+    const store = createBuilderStore()
+    for (const t of types) store.getState().addBlock(t)
+    return store
+  }
+  // Хранимый бит ряда — по блокам потока.
+  const cols = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.settings?.column ?? '-')
+  // Ряды, которые из этих битов выведет рендер: стор и полотно обязаны совпадать
+  // (расхождение «помечен — нарисован иначе» и было дефектом первой реализации).
+  const rows = (store: ReturnType<typeof createBuilderStore>) =>
+    packRows(groupBlocks(store.getState().blocks)).map((row) => row.length)
+
+  // Ряд из двух полей: второе уезжает в правую ячейку первого.
+  const paired = (...types: ('short_text' | 'email' | 'phone' | 'long_text')[]) => {
+    const store = fields(...types)
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    return store
+  }
+
+  it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {
+    const store = paired('short_text', 'email')
+    expect(cols(store)).toEqual(['-', 'right'])
+    expect(rows(store)).toEqual([2])
+
+    store.getState().undo()
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(rows(store)).toEqual([1, 1])
+
+    store.getState().redo()
+    expect(cols(store)).toEqual(['-', 'right'])
+  })
+
+  it('placeInRow переносит группу вплотную за цель (жест через блок)', () => {
+    const store = fields('short_text', 'long_text', 'email')
+    const [a, , c] = store.getState().blocks
+    store.getState().placeInRow(c!.groupId, a!.groupId)
+
+    const s = store.getState()
+    expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email', 'long_text'])
+    expect(cols(store)).toEqual(['-', 'right', '-'])
+  })
+
+  it('ряд цели полон / цель не умеет делить ряд — no-op, история и dirty целы', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, , c, d] = store.getState().blocks
+    store.getState().placeInRow(store.getState().blocks[1]!.groupId, a!.groupId)
+    const order = store.getState().blocks.map((b) => b.id)
+    store.getState().markSaved()
+
+    store.getState().placeInRow(c!.groupId, a!.groupId) // ячейка ряда занята
+    store.getState().placeInRow(c!.groupId, d!.groupId) // цель не whitelist
+    const s = store.getState()
+    expect(s.dirty).toBe(false)
+    expect(s.blocks.map((b) => b.id)).toEqual(order)
+    expect(rows(store)).toEqual([2, 1, 1])
+  })
+
+  it('takeOwnRow возвращает правого своим рядом', () => {
+    const store = paired('short_text', 'email')
+    store.getState().takeOwnRow(store.getState().blocks[1]!.id)
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(rows(store)).toEqual([1, 1])
+  })
+
+  it('удаление левого: бит правого снят, полряда не остаётся', () => {
+    const store = paired('short_text', 'email')
+    store.getState().removeGroup(store.getState().blocks[0]!.id)
+    expect(cols(store)).toEqual(['-'])
+    expect(rows(store)).toEqual([1])
+  })
+
+  it('смена типа левого вне whitelist снимает бит правого', () => {
+    const store = paired('short_text', 'email')
+    const a = store.getState().blocks[0]!
+
+    store.getState().changeBlockType(a.id, 'phone') // внутри whitelist — ряд цел
+    expect(cols(store)).toEqual(['-', 'right'])
+
+    store.getState().changeBlockType(a.id, 'long_text') // вне whitelist
+    expect(cols(store)).toEqual(['-', '-'])
+  })
+
+  it('смена типа правого вне whitelist роняет его собственный бит', () => {
+    const store = paired('short_text', 'email')
+    store.getState().changeBlockType(store.getState().blocks[1]!.id, 'long_text')
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('перенос левого вниз рвёт ряд (правый становится первым — бит инертен)', () => {
+    const store = paired('short_text', 'email', 'long_text')
+    store.getState().moveGroup(store.getState().blocks[0]!.id, 'down')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['email', 'short_text', 'long_text'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  // Сосед у бита — КОНКРЕТНЫЙ: «встань в ряд с этим вопросом», а не «с кем угодно
+  // сверху». Сосед в этих трёх тестах whitelist-типа, поэтому инертность бит не
+  // снимет — снимает его именно правило подмены соседа.
+  it('перенос правого вниз снимает бит, а не приклеивает к новому соседу', () => {
+    const store = paired('short_text', 'email', 'phone')
+    store.getState().moveGroup(store.getState().blocks[1]!.id, 'down')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('дроп группы на правого участника не собирает ряд молча', () => {
+    const store = paired('short_text', 'email', 'phone')
+    const [, right, c] = store.getState().blocks
+    store.getState().reorderGroups(c!.groupId, right!.groupId)
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('вставка контентного блока между участниками ряда рвёт ряд', () => {
+    const store = paired('short_text', 'email')
+    store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'heading')
+    expect(rows(store)).toEqual([1, 1, 1])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+  })
+
+  it('вставка короткого поля между участниками рвёт ряд, а не отдаёт ячейку новичку', () => {
+    const store = paired('short_text', 'email')
+    store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'phone')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('перенос из одного ряда в свободную ячейку другого — не no-op', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b], c один
+    store.getState().placeInRow(b!.groupId, c!.groupId) // b переезжает к c
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 2])
+  })
+
+  it('makeQuestion на правом участнике сохраняет ряд (бит переезжает на новое поле)', () => {
+    const store = paired('short_text', 'short_text')
+    store.getState().makeQuestion(store.getState().blocks[1]!.id, 'short_text')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'title', 'short_text'])
+    expect(rows(store)).toEqual([2])
+  })
+
+  it('hydrate снимает инертный бит (левого соседа нет)', () => {
+    const store = createBuilderStore()
+    const schema = formSchemaSchema.parse({
+      schemaVersion: 2,
+      blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', settings: { column: 'right' } }],
+    } satisfies FormSchema)
+    store.getState().hydrate(schema)
+    expect(store.getState().blocks[0]?.settings).not.toHaveProperty('column')
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('toSchema после переноса в ряд проходит валидацию контракта', () => {
+    const store = paired('short_text', 'email')
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+})
+
+describe('createBuilderStore — ряды вариантов (фаза 13.6, §5.1)', () => {
+  const choiceWith = (...labels: string[]) => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    for (const label of labels) {
+      store.getState().addOption(id)
+      const opts = store.getState().blocks[0]!.settings!.options!
+      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
+    }
+    return { store, id }
+  }
+  const options = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks[0]!.settings!.options!
+  const optRows = (store: ReturnType<typeof createBuilderStore>) =>
+    packOptionRows(options(store)).map((row) => row.map((o) => o.label))
+
+  it('placeOptionInRow — тот же бит и та же упаковка, что у вопросов', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [, b] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, options(store)[0]!.id)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+
+    store.getState().undo()
+    expect(optRows(store)).toEqual([['a'], ['b'], ['c']])
+  })
+
+  it('placeOptionInRow переносит вариант вплотную за цель', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, , c] = options(store)
+    store.getState().placeOptionInRow(id, c!.id, a!.id)
+    expect(optRows(store)).toEqual([['a', 'c'], ['b']])
+  })
+
+  it('ряд цели полон — no-op без dirty', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, a!.id)
+    store.getState().markSaved()
+
+    store.getState().placeOptionInRow(id, c!.id, a!.id)
+    expect(store.getState().dirty).toBe(false)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+  })
+
+  it('takeOptionOwnRow возвращает вариант своим рядом', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().takeOptionOwnRow(id, options(store)[1]!.id)
+    expect(optRows(store)).toEqual([['a'], ['b']])
+  })
+
+  it('удаление левого варианта снимает бит правого', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().removeOption(id, options(store)[0]!.id)
+    expect(options(store)[0]).not.toHaveProperty('column')
+    expect(optRows(store)).toEqual([['b']])
+  })
+
+  it('вариант, уехавший наверх Alt+↑, теряет бит', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().moveOption(id, options(store)[1]!.id, 'up')
+    expect(optRows(store)).toEqual([['b'], ['a']])
+  })
+
+  it('вариант, уехавший вниз, не приклеивается к новому соседу', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+    // b уезжает под c: бит держался за a, значит снимается — иначе b встал бы в ряд с c.
+    store.getState().moveOption(id, options(store)[1]!.id, 'down')
+    expect(optRows(store)).toEqual([['a'], ['c'], ['b']])
+  })
+
+  it('перестановка dnd не собирает ряд молча (сосед сменился — бит снят)', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, a!.id) // ряд [a, b]
+    store.getState().reorderOptions(id, c!.id, b!.id) // c встаёт на место b
+    expect(optRows(store)).toEqual([['a'], ['c'], ['b']])
+  })
+})
+
+describe('createBuilderStore — reorderOptions (dnd вариантов, фаза 13.6)', () => {
+  const choiceWith3 = () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    for (const label of ['a', 'b', 'c']) {
+      store.getState().addOption(id)
+      const opts = store.getState().blocks[0]!.settings!.options!
+      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
+    }
+    return { store, id }
+  }
+  const labels = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks[0]!.settings!.options!.map((o) => o.label)
+
+  it('переносит вариант на позицию цели (сплайс, как reorderBlocks)', () => {
+    const { store, id } = choiceWith3()
+    const [a, , c] = store.getState().blocks[0]!.settings!.options!
+    store.getState().reorderOptions(id, a!.id, c!.id)
+    expect(labels(store)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('незнакомый id и дроп на себя — no-op без dirty', () => {
+    const { store, id } = choiceWith3()
+    const a = store.getState().blocks[0]!.settings!.options![0]!
+    store.getState().markSaved()
+    store.getState().reorderOptions(id, a.id, a.id)
+    store.getState().reorderOptions(id, 'нет-такого', a.id)
+    expect(store.getState().dirty).toBe(false)
+    expect(labels(store)).toEqual(['a', 'b', 'c'])
   })
 })

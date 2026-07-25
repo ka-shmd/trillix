@@ -3,6 +3,7 @@ import { ArrowRight, Search } from 'lucide-react'
 import { type Block, type BlockType, carriesText, isChoiceType } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { chords } from './shortcuts'
 import { typeIcons } from './blockTypeIcons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -22,7 +23,12 @@ export function BlockTypeDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl">
+      <DialogContent
+        className="max-w-4xl gap-0 overflow-hidden p-0 sm:max-w-4xl"
+        // Как у SlashMenu: фокус после вставки ставит движок (handlePickInsertType →
+        // engine.focusBlock), возврат фокуса Radix'ом на кнопку «+» глушим.
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogTitle className="sr-only">Добавить блок</DialogTitle>
         <DialogDescription className="sr-only">Выберите тип блока формы.</DialogDescription>
         {/* Тело — отдельный компонент внутри Content: Radix размонтирует его при
@@ -58,7 +64,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && activeMeta) onPick(activeMeta)
+              if (chords.enter(e) && activeMeta) onPick(activeMeta)
             }}
             placeholder="Поиск по названию…"
             className="pl-8"
