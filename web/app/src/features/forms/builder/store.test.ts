@@ -1101,3 +1101,36 @@ describe('createBuilderStore — half-ширина и колонки вариа�
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 })
+
+describe('createBuilderStore — reorderOptions (dnd вариантов, фаза 13.6)', () => {
+  const choiceWith3 = () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    for (const label of ['a', 'b', 'c']) {
+      store.getState().addOption(id)
+      const opts = store.getState().blocks[0]!.settings!.options!
+      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
+    }
+    return { store, id }
+  }
+  const labels = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks[0]!.settings!.options!.map((o) => o.label)
+
+  it('переносит вариант на позицию цели (сплайс, как reorderBlocks)', () => {
+    const { store, id } = choiceWith3()
+    const [a, , c] = store.getState().blocks[0]!.settings!.options!
+    store.getState().reorderOptions(id, a!.id, c!.id)
+    expect(labels(store)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('незнакомый id и дроп на себя — no-op без dirty', () => {
+    const { store, id } = choiceWith3()
+    const a = store.getState().blocks[0]!.settings!.options![0]!
+    store.getState().markSaved()
+    store.getState().reorderOptions(id, a.id, a.id)
+    store.getState().reorderOptions(id, 'нет-такого', a.id)
+    expect(store.getState().dirty).toBe(false)
+    expect(labels(store)).toEqual(['a', 'b', 'c'])
+  })
+})

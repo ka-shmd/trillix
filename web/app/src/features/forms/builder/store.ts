@@ -154,6 +154,9 @@ export type BuilderActions = {
   // На non-choice/ненайденном варианте — no-op (возвращённый id тогда не всплывёт).
   addOptionAfter: (blockId: string, optionId: string) => string
   updateOption: (blockId: string, optionId: string, label: string) => void
+  // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
+  // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
+  reorderOptions: (blockId: string, activeOptionId: string, overOptionId: string) => void
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
   // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
@@ -892,6 +895,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           mutateOptions(s.blocks, blockId, (opts) =>
             opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
           ),
+        ),
+
+      reorderOptions: (blockId, activeOptionId, overOptionId) =>
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => {
+            const from = opts.findIndex((o) => o.id === activeOptionId)
+            const to = opts.findIndex((o) => o.id === overOptionId)
+            if (from < 0 || to < 0 || from === to) return opts
+            const next = opts.slice()
+            const [moved] = next.splice(from, 1)
+            next.splice(to, 0, moved!)
+            return next
+          }),
         ),
 
       removeOption: (blockId, optionId) =>
