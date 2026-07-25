@@ -10,7 +10,19 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
-import { useSortable } from '@dnd-kit/sortable'
+import {
+  DndContext,
+  MeasuringStrategy,
+  PointerSensor,
+  closestCenter,
+  pointerWithin,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type CollisionDetection,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
 import {
@@ -26,6 +38,7 @@ import {
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
+import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
@@ -919,6 +932,15 @@ function AnswerField({
 // после текущего; Alt+↑/↓ — перенос варианта; Backspace в пустом — удалить и уйти
 // на предыдущий (пустой первый → onLeaveTop, к подписи группы); ↑/↓ — обход
 // вариантов, на краях — соседняя строка.
+// Свободные ячейки рядов вариантов — отдельное пространство id, чтобы они не путались
+// с id самих вариантов (те — sortable-элементы того же контекста).
+const OPT_CELL = 'optcell:'
+const optCellId = (optionId: string) => `${OPT_CELL}${optionId}`
+const optCellOption = (id: string | number): string | null => {
+  const s = String(id)
+  return s.startsWith(OPT_CELL) ? s.slice(OPT_CELL.length) : null
+}
+
 function OptionsInline({
   block,
   onLeaveTop,
@@ -949,7 +971,7 @@ function OptionsInline({
   const moveOption = useBuilderStore((s) => s.moveOption)
   const placeOptionInRow = useBuilderStore((s) => s.placeOptionInRow)
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
-  const updateOption = useBuilderStore((s) => s.updateOption)
+  const reorderOptions = useBuilderStore((s) => s.reorderOptions)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
@@ -957,6 +979,27 @@ function OptionsInline({
   const rowFocus = useRowFocus(block.id, 'option')
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
   const addBtnRef = useRef<HTMLButtonElement>(null)
+  // Id варианта, который тащат (null — драга нет): от него зависит, светить ли
+  // свободные ячейки рядов.
+  const [optDrag, setOptDrag] = useState<string | null>(null)
+  const optionIds = useMemo(() => options.map((o) => o.id), [options])
+  // Тот же порог активации, что у полотна: клик по ручке не должен начинать драг.
+  // Клавиатурного сенсора здесь нет намеренно — у вариантов своя карта (Alt+↑↓,
+  // Mod+Alt+←/→), и второй клавиатурный путь через ручку дублировал бы её.
+  const optSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  // Свободная ячейка спрашивается указателем и ПЕРВОЙ — как зона жеста у вопросов:
+  // цель намеренная, в общий конкурс центров её пускать незачем.
+  const optCollision: CollisionDetection = (args) => {
+    const cells = args.droppableContainers.filter((c) => optCellOption(c.id) !== null)
+    if (cells.length > 0) {
+      const hit = pointerWithin({ ...args, droppableContainers: cells })
+      if (hit.length > 0) return hit
+    }
+    return closestCenter({
+      ...args,
+      droppableContainers: args.droppableContainers.filter((c) => optCellOption(c.id) === null),
+    })
+  }
   // Запрос фокуса держим в ref, а не в state: после add/remove опций стор меняет
   // массив → эффект переставляет фокус, не вызывая лишний ре-рендер (setState в
   // эффекте под запретом линта). 'last' — на последнюю опцию (после Enter/добавления).
@@ -1044,76 +1087,200 @@ function OptionsInline({
     }
   }
 
+  // Дроп варианта (§5.1): на другой вариант — перестановка, в свободную ячейку ряда —
+  // бит column. Фокус не трогаем ни в одном исходе — «dnd мышью фокус не трогает» (§2.4).
+  function onOptionDragEnd(e: DragEndEvent) {
+    setOptDrag(null)
+    const active = String(e.active.id)
+    const over = e.over ? String(e.over.id) : null
+    if (over === null) return
+    const cell = optCellOption(over)
+    if (cell !== null) {
+      if (cell !== active) placeOptionInRow(block.id, active, cell)
+      return
+    }
+    if (over !== active) reorderOptions(block.id, active, over)
+  }
+
+  const rows = packOptionRows(options)
+  const index = new Map(options.map((o, i) => [o.id, i]))
+
   return (
-    // items-start — карточки обнимают текст, как .rf-options у респондента;
-    // gap-3 = 0.75rem там же. Просвет подпись→первый вариант (14px) даёт групповой
-    // контейнер, не свой mt (ритм 13.3).
-    <div className="flex flex-col items-start gap-3">
-      {options.map((o, i) => {
-        const placeholder = `Вариант ${i + 1}`
-        const key = optionKey(i)
-        return (
-          // Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется
-          // только opacity): контрол, появляющийся по hover в потоке, схлопывается
-          // на mousedown и съедает клик — TD-22, разбор у кластера значков выше.
-          // group/opt — именованная группа СВОЕЙ строки варианта (TD-31): безымянный
-          // group занят всей строкой блока, и от него крестики расцветали у всех
-          // вариантов разом при наведении на любую точку строки.
-          <div key={o.id} className="group/opt flex items-center gap-1">
-            <span className="rf-option">
-              {/* Буква — та же декоративная подсказка, что видит респондент
-                  (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
-                  тут, ни в форме: «один из» против «несколько из» показывает
-                  превью, где виден настоящий контрол. */}
-              {key && (
-                <span className="rf-option-key" aria-hidden="true">
-                  {key}
-                </span>
-              )}
-              {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
-                  в index.css). Пустой вариант меряется по плейсхолдеру, иначе
-                  карточка схлопнулась бы в точку. */}
-              <span className="rf-option-edit" data-value={o.label || placeholder}>
-                <input
-                  ref={(el) => {
-                    optionRefs.current.set(o.id, el)
-                  }}
-                  value={o.label}
-                  placeholder={placeholder}
-                  aria-label={placeholder}
-                  onChange={(e) => updateOption(block.id, o.id, e.target.value)}
-                  onKeyDown={(e) => onOptionKeyDown(e, o.id, i)}
-                  {...rowFocus}
-                  className="bg-transparent outline-none placeholder:text-muted-foreground"
-                />
-              </span>
-            </span>
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={() => removeOption(block.id, o.id)}
-              aria-label="Удалить вариант"
-              className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/opt:opacity-100"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-        )
-      })}
+    // Просвет подпись→первый вариант (14px) даёт групповой контейнер, не свой mt
+    // (ритм 13.3).
+    //
+    // Dnd вариантов — СВОЙ DndContext, изолированный от блочного и группового слоёв
+    // полотна (§5.1, EDITOR §5): третий слой в общем фильтре коллизий стал бы
+    // конкурентом строкам, а его сенсор активируется только своей ручкой, поэтому
+    // вложенность контекстов драги не смешивает. Always-замер — свободная ячейка
+    // появляется на dragStart и меняет геометрию ряда.
+    <DndContext
+      sensors={optSensors}
+      collisionDetection={optCollision}
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+      onDragStart={(e) => setOptDrag(String(e.active.id))}
+      onDragCancel={() => setOptDrag(null)}
+      onDragEnd={onOptionDragEnd}
+    >
+      <SortableContext items={optionIds} strategy={rectSortingStrategy}>
+        {/* rf-options/rf-row — ТЕ ЖЕ классы, что у превью и рендерера (fields.css), а
+            не их Tailwind-копия: оттуда приезжает и ритм списка (12px), и потолок
+            карточки min(--rf-input-max, 100%). Копия давала бы ритм, но не потолок —
+            длинный вариант в редакторе был бы шире, чем у респондента. */}
+        <div className="rf-options">
+          {rows.map((row) => {
+            const cards = row.map((o) => (
+              <OptionCard
+                key={o.id}
+                block={block}
+                option={o}
+                // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
+                // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
+                index={index.get(o.id)!}
+                inputRef={(el) => {
+                  optionRefs.current.set(o.id, el)
+                }}
+                onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                rowFocus={rowFocus}
+              />
+            ))
+            // Ряд из одного + идёт драг варианта → показываем свободную ячейку как
+            // цель. У вопросов зона — правая треть ряда, но карточка варианта обнимает
+            // текст и ряда не заполняет: ячейка честнее рисуется там, где она и есть —
+            // справа от карточки.
+            const showCell = row.length === 1 && optDrag !== null && optDrag !== row[0]!.id
+            return row.length > 1 || showCell ? (
+              <div key={row[0]!.id} className="rf-row items-start">
+                {cards}
+                {showCell && <FreeCell optionId={row[0]!.id} />}
+              </div>
+            ) : (
+              cards[0]
+            )
+          })}
+          <button
+            ref={addBtnRef}
+            type="button"
+            tabIndex={-1}
+            onClick={() => {
+              pendingFocus.current = 'last'
+              addOption(block.id)
+            }}
+            // Служебный ярус (14px), а не тело формы: это контрол редактора, которого
+            // респондент не видит — как «+ Добавить блок» ниже по полотну. Был text-base
+            // и читался как ещё один вариант ответа.
+            className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <Plus className="size-4" /> Добавить вариант
+          </button>
+        </div>
+      </SortableContext>
+    </DndContext>
+  )
+}
+
+// Свободная правая ячейка ряда вариантов — цель жеста «встань рядом с этим вариантом»
+// (§5.1). Живёт только во время драга варианта, поэтому места в покое не занимает и
+// схлопнуть клик по карточке не может (урок TD-22 — про контролы, появляющиеся по
+// hover). Пунктир показывает, куда именно ляжет карточка.
+function FreeCell({ optionId }: { optionId: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id: optCellId(optionId) })
+  return (
+    <div
+      ref={setNodeRef}
+      aria-hidden="true"
+      className={`h-9 w-24 rounded-md border border-dashed transition-colors ${
+        isOver ? 'border-primary bg-primary/10' : 'border-muted-foreground/40'
+      }`}
+    />
+  )
+}
+
+// OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
+// контекста. Ручка — вне потока (absolute): контрол, занимающий место и появляющийся
+// по hover, схлопывается на mousedown и съедает клик (TD-22).
+function OptionCard({
+  block,
+  option,
+  index,
+  inputRef,
+  onKeyDown,
+  rowFocus,
+}: {
+  block: Block
+  option: NonNullable<NonNullable<Block['settings']>['options']>[number]
+  index: number
+  inputRef: (el: HTMLInputElement | null) => void
+  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
+  rowFocus: ReturnType<typeof useRowFocus>
+}) {
+  const updateOption = useBuilderStore((s) => s.updateOption)
+  const removeOption = useBuilderStore((s) => s.removeOption)
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: option.id,
+    animateLayoutChanges: noLayoutAnimation,
+  })
+  const placeholder = `Вариант ${index + 1}`
+  const key = optionKey(index)
+  return (
+    // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
+    // всей строкой блока, и от него крестики расцветали у всех вариантов разом при
+    // наведении на любую точку строки.
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={`group/opt relative flex items-center gap-1 ${isDragging ? 'z-10 opacity-70' : ''}`}
+    >
       <button
-        ref={addBtnRef}
+        type="button"
+        aria-label="Переместить вариант"
+        className="absolute -left-5 cursor-grab text-muted-foreground opacity-0 transition-opacity group-hover/opt:opacity-100"
+        {...attributes}
+        {...listeners}
+        // Ручка — не остановка обхода: каретка ходит по вариантам, а не по их ручкам
+        // (тот же tabIndex, что у крестика). Ставим ПОСЛЕ спреда: attributes несут
+        // свой tabIndex, и порядок здесь решает, чей победит.
+        tabIndex={-1}
+      >
+        <GripVertical className="size-3.5" />
+      </button>
+      <span className="rf-option">
+        {/* Буква — та же декоративная подсказка, что видит респондент
+            (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
+            тут, ни в форме: «один из» против «несколько из» показывает
+            превью, где виден настоящий контрол. */}
+        {key && (
+          <span className="rf-option-key" aria-hidden="true">
+            {key}
+          </span>
+        )}
+        {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
+            в index.css). Пустой вариант меряется по плейсхолдеру, иначе
+            карточка схлопнулась бы в точку. */}
+        <span className="rf-option-edit" data-value={option.label || placeholder}>
+          <input
+            ref={inputRef}
+            value={option.label}
+            placeholder={placeholder}
+            aria-label={placeholder}
+            onChange={(e) => updateOption(block.id, option.id, e.target.value)}
+            onKeyDown={onKeyDown}
+            {...rowFocus}
+            className="bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+        </span>
+      </span>
+      {/* Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется только
+          opacity): контрол, появляющийся по hover в потоке, схлопывается на mousedown
+          и съедает клик — TD-22, разбор у кластера значков выше. */}
+      <button
         type="button"
         tabIndex={-1}
-        onClick={() => {
-          pendingFocus.current = 'last'
-          addOption(block.id)
-        }}
-        // Служебный ярус (14px), а не тело формы: это контрол редактора, которого
-        // респондент не видит — как «+ Добавить блок» ниже по полотну. Был text-base
-        // и читался как ещё один вариант ответа.
-        className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+        onClick={() => removeOption(block.id, option.id)}
+        aria-label="Удалить вариант"
+        className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/opt:opacity-100"
       >
-        <Plus className="size-4" /> Добавить вариант
+        <X className="size-3.5" />
       </button>
     </div>
   )
