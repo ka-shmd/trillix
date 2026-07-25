@@ -24,7 +24,6 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -419,19 +418,22 @@ export function SlashEditor({
     {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него). */}
     <div ref={canvasRef} className="relative mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
       {/* Драг-рамка (Д10): один absolute-прямоугольник ДО списка в DOM — строки
-          (positioned) рисуются поверх. Спринг motion сглаживает переезд между
-          группами и расширение под растущий состав; initial=false — рамка
-          появляется сразу на месте, без вылета из угла. */}
+          (positioned) рисуются поверх. Позиционирование ПРЯМОЕ, без собственной
+          анимации: rAF-замер и так даёт гладкие значения (строки едут CSS-пере-
+          ходами, union-rect движется вместе с ними), а своя пружина, ретаргети-
+          руемая каждый кадр, копила скорость по движущейся цели — рамка отставала
+          от расступающихся строк и отскакивала на их остановке. Скачок остаётся
+          только при смене состава (переезд на другую группу) — осознанно: это
+          резкая смена цели, а не движение. */}
       {frame && (
-        <motion.div
+        <div
           aria-hidden="true"
           className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-primary/40"
-          initial={false}
-          animate={{ x: frame.x - 10, y: frame.y - 6, width: frame.w + 20, height: frame.h + 12 }}
-          // Жёсткая пружина (~100мс): цель обновляется каждый кадр rAF-циклом, и
-          // рамка должна обнимать строки, а не догонять их; лёгкое сглаживание
-          // остаётся на скачок состава (переезд рамки на другую группу).
-          transition={{ type: 'spring', stiffness: 1200, damping: 80 }}
+          style={{
+            transform: `translate(${frame.x - 10}px, ${frame.y - 6}px)`,
+            width: frame.w + 20,
+            height: frame.h + 12,
+          }}
         />
       )}
       <FormTitleInput
