@@ -90,6 +90,11 @@ export function SlashEditor({
   // (sortable двигает группы сам), рамка не участвует.
   const canvasRef = useRef<HTMLDivElement>(null)
   const [frame, setFrame] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  // Сырая цель коллизии ДО подмены remapDropTarget. Рамка считает состав от неё:
+  // e.over приходит уже ремапнутым (легальная точка), и planBlockDrop по нему
+  // перенаправления не видит — рамка «обними чужую группу» иначе не зажглась бы
+  // никогда, осталась бы одна щель.
+  const rawOverRef = useRef<string | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
   // фокус переносим сюда, а не теряем в body.
@@ -142,6 +147,7 @@ export function SlashEditor({
       ),
     })
     if (isGroupDrag || collisions.length === 0) return collisions
+    rawOverRef.current = String(collisions[0]!.id)
     // Честная щель (§4.4): если ближайшая цель — строка внутри чужой мульти-группы,
     // куда отвечаемому/подписи нельзя, цель подменяется той строкой, дроп «на
     // которую» даёт легальную точку — sortable раскрывает щель там, где блок реально
@@ -161,7 +167,7 @@ export function SlashEditor({
   function updateFrame(activeId: string, overId: string | null) {
     const root = canvasRef.current
     if (!root || !overId || groupIds.has(activeId)) return setFrame(null)
-    const plan = planBlockDrop(blocks, activeId, overId)
+    const plan = planBlockDrop(blocks, activeId, rawOverRef.current ?? overId)
     if (!plan || plan.frameIds.length === 0) return setFrame(null)
     const cr = root.getBoundingClientRect()
     let left = Infinity
@@ -187,6 +193,7 @@ export function SlashEditor({
   // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
     setFrame(null)
+    rawOverRef.current = null
     const { active, over } = e
     if (!over || active.id === over.id) return
     const activeId = String(active.id)
@@ -396,7 +403,10 @@ export function SlashEditor({
           onDragMove={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
           onDragOver={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
           onDragEnd={onDragEnd}
-          onDragCancel={() => setFrame(null)}
+          onDragCancel={() => {
+            setFrame(null)
+            rawOverRef.current = null
+          }}
         >
           <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
             {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
