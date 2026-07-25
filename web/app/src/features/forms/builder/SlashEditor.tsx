@@ -95,6 +95,13 @@ export function SlashEditor({
   // перенаправления не видит — рамка «обними чужую группу» иначе не зажглась бы
   // никогда, осталась бы одна щель.
   const rawOverRef = useRef<string | null>(null)
+  // Во время драга рейлом групп управляет не hover (курсор с таскаемым элементом
+  // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
+  // рейл у группы-цели постоянно, блочный — гасит рейлы совсем (иначе рейл
+  // накладывался на драг-рамку).
+  const [drag, setDrag] = useState<{ kind: 'group' | 'block'; overGroup: string | null } | null>(
+    null,
+  )
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
   // фокус переносим сюда, а не теряем в body.
@@ -178,12 +185,16 @@ export function SlashEditor({
       const el = root.querySelector<HTMLElement>(`[data-block-id="${id}"]`)
       if (!el) continue
       const r = el.getBoundingClientRect()
-      left = Math.min(left, r.left)
       top = Math.min(top, r.top)
-      right = Math.max(right, r.right)
       bottom = Math.max(bottom, r.bottom)
+      // Горизонталь — только от строк-резидентов: активная строка следует за
+      // курсором по обеим осям, и её rect растягивал рамку вбок при горизонтальном
+      // дрейфе, хотя горизонтального перемещения у полотна нет.
+      if (id === activeId) continue
+      left = Math.min(left, r.left)
+      right = Math.max(right, r.right)
     }
-    if (left === Infinity) return setFrame(null)
+    if (left === Infinity || top === Infinity) return setFrame(null)
     const next = { x: left - cr.left, y: top - cr.top, w: right - left, h: bottom - top }
     setFrame((p) =>
       p && p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h ? p : next,
@@ -193,6 +204,7 @@ export function SlashEditor({
   // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
     setFrame(null)
+    setDrag(null)
     rawOverRef.current = null
     const { active, over } = e
     if (!over || active.id === over.id) return
@@ -398,13 +410,23 @@ export function SlashEditor({
         <DndContext
           sensors={sensors}
           collisionDetection={collisionDetection}
+          onDragStart={(e) => {
+            const id = String(e.active.id)
+            setDrag({ kind: groupIds.has(id) ? 'group' : 'block', overGroup: null })
+          }}
           // Рамка пересчитывается и по move (курсор едет, строки доигрывают
           // трансформы), и по over (сменилась цель → сменился будущий состав).
+          // Групповой драг вместо рамки ведёт рейл группы-цели (drag.overGroup).
           onDragMove={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
-          onDragOver={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
+          onDragOver={(e) => {
+            const overId = e.over ? String(e.over.id) : null
+            setDrag((d) => (d && d.kind === 'group' ? { ...d, overGroup: overId } : d))
+            updateFrame(String(e.active.id), overId)
+          }}
           onDragEnd={onDragEnd}
           onDragCancel={() => {
             setFrame(null)
+            setDrag(null)
             rawOverRef.current = null
           }}
         >
@@ -422,6 +444,13 @@ export function SlashEditor({
                   group={g}
                   formId={formId}
                   blockIds={blockIds}
+                  rail={
+                    drag
+                      ? drag.kind === 'group' && g.id === drag.overGroup
+                        ? 'on'
+                        : 'off'
+                      : 'auto'
+                  }
                   menuForId={menuForId}
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
@@ -472,6 +501,7 @@ function GroupRow({
   group,
   formId,
   blockIds,
+  rail,
   menuForId,
   onAddBelow,
   onInsertBelow,
@@ -484,6 +514,9 @@ function GroupRow({
   group: { id: string; blocks: Block[] }
   formId: string
   blockIds: string[]
+  // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
+  // (групповой драг над этой группой), off — скрыт (любой другой драг).
+  rail: 'auto' | 'on' | 'off'
   menuForId: string | null
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onInsertBelow: (id: string) => void
@@ -511,14 +544,19 @@ function GroupRow({
       className={`group/grp relative rounded-md ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Рейл — постоянная идентичность МУЛЬТИ-группы (§4.3): тонкая линия в левом
-          жёлобе, проявляется по hover/focus-within всей группы. Absolute и вне
-          потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
+          жёлобе, в покое проявляется по hover/focus-within всей группы; во время
+          драга режимом управляет полотно (проп rail — см. SlashEditor). Absolute и
+          вне потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
           BlockRow), чтобы не наезжать. top/bottom-0 = ровно высота текста группы:
           -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент. */}
-      {group.blocks.length > 1 && (
+      {group.blocks.length > 1 && rail !== 'off' && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-primary/40 opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100"
+          className={`pointer-events-none absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-primary/40 ${
+            rail === 'on'
+              ? ''
+              : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
+          }`}
         />
       )}
       <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
