@@ -442,13 +442,19 @@ function ChoiceList({
     <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
       {packOptionRows(options).map((row) => {
         const first = row[0]!
-        const cards = row.map((o) => card(o, index.get(o.id)!))
+        // Ряд из двоих — две ячейки .rf-cell по половине колонки; карточка внутри
+        // обнимает текст, но начинается там, где ячейка (правая — с середины).
+        // Ряд из одного в обёртку не заворачивается.
         return row.length > 1 ? (
           <div key={first.id} className="rf-row">
-            {cards}
+            {row.map((o) => (
+              <div key={o.id} className="rf-cell">
+                {card(o, index.get(o.id)!)}
+              </div>
+            ))}
           </div>
         ) : (
-          cards[0]
+          card(first, index.get(first.id)!)
         )
       })}
     </div>

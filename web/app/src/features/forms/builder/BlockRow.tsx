@@ -1129,33 +1129,37 @@ function OptionsInline({
             длинный вариант в редакторе был бы шире, чем у респондента. */}
         <div className="rf-options">
           {rows.map((row) => {
-            const cards = row.map((o) => (
-              <OptionCard
-                key={o.id}
-                block={block}
-                option={o}
-                // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
-                // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
-                index={index.get(o.id)!}
-                inputRef={(el) => {
-                  optionRefs.current.set(o.id, el)
-                }}
-                onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
-                rowFocus={rowFocus}
-              />
+            // .rf-cell — половина ряда (fields.css). Карточка внутри обнимает текст, но
+            // правая начинается с середины: у респондента ровно так же. У ряда из одного
+            // обёртка ни на что не влияет — правило CSS адресует только детей .rf-row.
+            const cells = row.map((o) => (
+              <div key={o.id} className="rf-cell">
+                <OptionCard
+                  block={block}
+                  option={o}
+                  // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
+                  // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
+                  index={index.get(o.id)!}
+                  inputRef={(el) => {
+                    optionRefs.current.set(o.id, el)
+                  }}
+                  onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                  rowFocus={rowFocus}
+                />
+              </div>
             ))
-            // Ряд из одного + идёт драг варианта → показываем свободную ячейку как
-            // цель. У вопросов зона — правая треть ряда, но карточка варианта обнимает
-            // текст и ряда не заполняет: ячейка честнее рисуется там, где она и есть —
-            // справа от карточки.
+            // Ряд из одного + идёт драг варианта → правая ячейка показывается как
+            // цель дропа. Зона — вся ПОЛОВИНА ряда (не полоса у края, как у вопросов):
+            // карточка варианта обнимает текст, поэтому «край ряда» у неё не там, где
+            // читается граница, а ячейка занимает ровно то место, куда карточка встанет.
             const showCell = row.length === 1 && optDrag !== null && optDrag !== row[0]!.id
             return row.length > 1 || showCell ? (
               <div key={row[0]!.id} className="rf-row items-start">
-                {cards}
+                {cells}
                 {showCell && <FreeCell optionId={row[0]!.id} />}
               </div>
             ) : (
-              cards[0]
+              cells[0]
             )
           })}
           <button
@@ -1180,16 +1184,18 @@ function OptionsInline({
 }
 
 // Свободная правая ячейка ряда вариантов — цель жеста «встань рядом с этим вариантом»
-// (§5.1). Живёт только во время драга варианта, поэтому места в покое не занимает и
-// схлопнуть клик по карточке не может (урок TD-22 — про контролы, появляющиеся по
-// hover). Пунктир показывает, куда именно ляжет карточка.
+// (§5.1). Занимает РОВНО половину ряда (.rf-cell), то есть то самое место, куда карточка
+// и встанет после дропа: у вопросов приглашением служит полоса у края ряда, но карточка
+// варианта обнимает текст, и «край ряда» у неё не там, где читается граница. Живёт только
+// во время драга варианта, поэтому места в покое не занимает и схлопнуть клик по карточке
+// не может (урок TD-22 — про контролы, появляющиеся по hover).
 function FreeCell({ optionId }: { optionId: string }) {
   const { setNodeRef, isOver } = useDroppable({ id: optCellId(optionId) })
   return (
     <div
       ref={setNodeRef}
       aria-hidden="true"
-      className={`h-9 w-24 rounded-md border border-dashed transition-colors ${
+      className={`rf-cell min-h-9 rounded-md border border-dashed transition-colors ${
         isOver ? 'border-primary bg-primary/10' : 'border-muted-foreground/40'
       }`}
     />
