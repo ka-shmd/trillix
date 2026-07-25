@@ -89,6 +89,46 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	return nil
 }
 
+// runSeedUser заводит ОДНУ учётку без форм: `api seed-user <email> <password>`.
+// Идемпотентен — существующий адрес не ошибка (повторный прогон ничего не портит).
+//
+// Зачем отдельная команда, а не HTTP-регистрация: e2e-сценариям нужна сессия, а
+// `POST /auth/register` сидит под своим ведром лимитера (registerBurst = 3 при
+// пополнении ~1/30 с) — тремя существующими сценариями оно расходуется в ноль, и
+// четвёртый падал бы на 429. Лимит ради тестов не ослабляется (инвариант 6), поэтому
+// учётка заводится мимо HTTP — тем же сервисным вызовом, что и у `seed` (argon2id и
+// все проверки на месте, обходится только транспорт). Команда требует доступа к БД,
+// то есть новой поверхности атаки не создаёт: у кого есть DATABASE_URL, у того и так
+// есть всё.
+func runSeedUser(args []string, cfg config.Config, log *slog.Logger) error {
+	if len(args) != 2 {
+		return fmt.Errorf("usage: api seed-user <email> <password>")
+	}
+	email, password := args[0], args[1]
+
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	// Как в runSeed: сброс пароля не вызывается, поэтому почтовый сервис и базовый
+	// URL кабинета сервису не нужны.
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, nil, auth.DefaultSessionTTL, "")
+
+	// Пароль в лог не попадает ни в одной ветке (инвариант 2) — только адрес.
+	switch _, _, err := authSvc.Register(ctx, email, password); {
+	case err == nil:
+		log.Info("seed-user: created", slog.String("email", email))
+	case errors.Is(err, domain.ErrEmailTaken):
+		log.Info("seed-user: already exists", slog.String("email", email))
+	default:
+		return fmt.Errorf("register user: %w", err)
+	}
+	return nil
+}
+
 // v1/v2 схемы демо-формы экспорта. v2 переименовывает опцию (o_fr), убирает вопрос
 // b_phone и добавляет b_city — так CSV показывает объединение колонок (телефон живёт
 // колонкой для ответов v1), подписи опций из версии ответа и пустые ячейки.

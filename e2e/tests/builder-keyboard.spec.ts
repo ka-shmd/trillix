@@ -1,0 +1,178 @@
+import { test, expect, devices } from '@playwright/test'
+import { login, seedAccount } from './helpers/session'
+
+// «Билдер без мыши» (фаза 13, этап 13.7) — сквозной критерий реворка полотна: форма
+// собирается ОДНОЙ КЛАВИАТУРОЙ, публикуется и доезжает до респондента.
+//
+// ЗАЧЕМ ОТДЕЛЬНЫЙ СЦЕНАРИЙ, а не дописать в full-loop: тот ходит по билдеру мышью
+// (слеш-меню кликом, диалог типов кликом) и проверяет ДРУГОЕ — что каждый тип блока
+// проходит полный цикл до CSV. Здесь предмет один: клавиатурный поток полотна. Если
+// смешать, падение перестанет называть подсистему.
+//
+// ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ ВПЕРВЫЕ (юниты этого не видят):
+//   1. Клавиатурный поток целиком в ПРОД-СБОРКЕ: Enter из названия → «/» + фильтр +
+//      Enter (инлайн-меню типов, TD-33) → Enter между вопросами → Mod+Enter к полю
+//      ответа → Enter в списке вариантов. vitest держит контракт фокуса на happy-dom,
+//      но не то, что собранное приложение отдаёт те же поверхности.
+//   2. Ряд из двух вопросов (§5 спеки, этап 13.6) от клавиши до респондента: бит
+//      `column` пережил автосейв, снапшот версии при публикации и рендерер.
+//   3. Мобильный столбик ряда — медиазапрос `.rf-row` живёт в общем fields.css, и
+//      только прод-сборка доказывает, что CSS доехал.
+//
+// СЕССИЯ — не UI-регистрацией: `registerBurst` расходуется тремя старыми сценариями
+// в ноль (см. helpers/session.ts). Форма создаётся запросом к API: предмет теста —
+// полотно, а не кнопка «Новая форма» (её ход держит full-loop).
+const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
+
+// Командный модификатор карты шорткатов (`mod` в builder/shortcuts.ts): Cmd на маке,
+// Ctrl на остальных. CI — ubuntu, локальный прогон бывает и на маке.
+const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+
+test('билдер без мыши: форма собирается клавиатурой, ряд доезжает до респондента', async ({
+  page,
+  browser,
+}) => {
+  const uniq = Date.now()
+  const formTitle = `Опрос без мыши ${uniq}`
+  const nameQ = 'Ваше имя'
+  const mailQ = 'Рабочая почта'
+  const srcQ = 'Как вы о нас узнали'
+  const nameA = `Иван ${uniq}`
+  const mailA = `ivan-${uniq}@example.com`
+  const srcA = 'Друзья'
+
+  // 1. Сессия: учётка заведена мимо HTTP, вход — настоящей ручкой (куки садятся в
+  // контекст, дальше и page.goto, и page.request авторизованы).
+  const email = seedAccount('builder')
+  await login(page, email)
+
+  // 2. Форма — запросом к API, сразу с названием. Дальше мышь не участвует.
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const created = await page.request.post('/api/v1/forms', {
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+    data: { title: formTitle },
+  })
+  expect(created.ok()).toBeTruthy()
+  const form = (await created.json()) as { id: string; slug: string }
+
+  await page.goto(`/forms/${form.slug}/edit`)
+
+  // 3. Каретка — в название формы (focus, а не клик), Enter уводит на полотно. Форма
+  // пустая, поэтому Enter здесь создаёт первую строку (focusFirstOrCreate).
+  await page.getByLabel('Название формы').focus()
+  await page.keyboard.press('Enter')
+
+  // 4. Первый вопрос: «/» остаётся в тексте литералом и открывает инлайн-меню,
+  // продолжение набора фильтрует. Фильтр БЕЗ ПРОБЕЛОВ — пробел закрывает меню
+  // (onLabelChange), это часть контракта §3.5, а не ограничение теста.
+  // Enter берёт первый пункт отфильтрованного списка; порядок MENU_ITEMS (вопросы →
+  // отдельные поля → лэйаут) гарантирует, что это связка «заголовок + поле», и
+  // каретка встаёт на её заголовок.
+  await page.keyboard.type('/Корот')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(nameQ)
+
+  // 5. Enter с заголовка кладёт новую строку ПОСЛЕ всей группы (не внутрь вопроса) —
+  // на ней собираем второй вопрос тем же жестом.
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/Email')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(mailQ)
+
+  // 6. Ряд (§5, этап 13.6): Mod+Alt+→ — клавиатурное зеркало жеста, команда переноса
+  // в правую ячейку ряда предыдущего вопроса. Оба типа в whitelist `canShareRow`.
+  await page.keyboard.press(`${MOD}+Alt+ArrowRight`)
+
+  // Ряд виден на полотне сразу: заголовки стоят на одной высоте, второй правее
+  // первого. Проверяем геометрией, а не классом: у полотна своя раскладка
+  // (flex-wrap + 50%), общий `.rf-row` — только у превью и рендерера, и совпасть
+  // они обязаны видом, а не разметкой. Заголовок вопроса на полотне — textarea
+  // (`rf-label`), его текст лежит в value: getByText такую строку не видит,
+  // поэтому берём по порядку документа.
+  const canvasTitles = page.locator('textarea.rf-label')
+  await expect(canvasTitles).toHaveCount(2)
+  await expect(canvasTitles.nth(0)).toHaveValue(nameQ)
+  await expect(canvasTitles.nth(1)).toHaveValue(mailQ)
+  const nameBox = (await canvasTitles.nth(0).boundingBox())!
+  const mailBox = (await canvasTitles.nth(1).boundingBox())!
+  expect(Math.abs(nameBox.y - mailBox.y)).toBeLessThan(8)
+  expect(mailBox.x).toBeGreaterThan(nameBox.x + nameBox.width)
+
+  // 7. Третий вопрос — с вариантами: Enter уводит с заголовка ряда на новую строку
+  // ниже (ряд для вставки атомарен), Mod+Enter с заголовка прыгает к полю ответа —
+  // тут это первый (пустой) вариант, Enter в варианте заводит следующий.
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/Один')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type(srcQ)
+  await page.keyboard.press(`${MOD}+Enter`)
+  await page.keyboard.type(srcA)
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('Реклама')
+
+  // 8. Публикация — тоже без мыши: кнопка активна, только когда автосейв догнал
+  // редактор; фокусируем и жмём Enter.
+  const publish = page.getByRole('button', { name: 'Опубликовать' })
+  await expect(publish).toBeEnabled()
+  await publish.focus()
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/forms\/[^/]+\/share/)
+
+  const link = await page.locator('input[readonly]').first().inputValue()
+  expect(link).toContain('/r/')
+
+  // 9. Респондент на десктопе: ряд остался рядом, вопросы отвечаются.
+  const desktop = await browser.newContext({ ignoreHTTPSErrors: true, baseURL: RENDERER })
+  const formPage = await desktop.newPage()
+  await formPage.goto(link)
+
+  const nameField = formPage.getByLabel(nameQ)
+  const mailField = formPage.getByLabel(mailQ)
+  await expect(nameField).toBeVisible()
+
+  // Обёртка ряда достаётся ТОЛЬКО ряду из двоих (packRows): ровно одна на форму —
+  // третий вопрос в неё попасть не должен.
+  const row = formPage.locator('.rf-row')
+  await expect(row).toHaveCount(1)
+  await expect(row.getByText(nameQ)).toBeVisible()
+  await expect(row.getByText(mailQ)).toBeVisible()
+
+  const nameFieldBox = (await nameField.boundingBox())!
+  const mailFieldBox = (await mailField.boundingBox())!
+  expect(Math.abs(nameFieldBox.y - mailFieldBox.y)).toBeLessThan(8)
+  expect(mailFieldBox.x).toBeGreaterThan(nameFieldBox.x + nameFieldBox.width)
+
+  await nameField.fill(nameA)
+  await mailField.fill(mailA)
+  await formPage.getByRole('radio', { name: srcA }).check()
+
+  // Антиспам (фаза 5): отправка быстрее 3 с от выдачи формы отклоняется как бот.
+  await formPage.waitForTimeout(3500)
+  await formPage.locator('button.rf-submit').click()
+  await expect(formPage.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
+  await desktop.close()
+
+  // 10. Тот же ряд на телефоне — столбик (медиазапрос `.rf-row` в общем fields.css).
+  // Отдельным анонимным контекстом, без отправки: предмет — раскладка.
+  const mobile = await browser.newContext({
+    ...devices['Pixel 5'],
+    ignoreHTTPSErrors: true,
+    baseURL: RENDERER,
+  })
+  const mobilePage = await mobile.newPage()
+  await mobilePage.goto(link)
+  const mobileName = (await mobilePage.getByLabel(nameQ).boundingBox())!
+  const mobileMail = (await mobilePage.getByLabel(mailQ).boundingBox())!
+  expect(mobileMail.y).toBeGreaterThan(mobileName.y + mobileName.height)
+  await mobile.close()
+
+  // 11. Ответ доехал до кабинета: форма, собранная клавиатурой, даёт нормальные
+  // данные — вопросы ряда не потеряли ни подписи, ни значений.
+  await page.goto(`/forms/${form.slug}/responses`)
+  await expect(page.getByRole('heading', { name: formTitle })).toBeVisible()
+  await page.getByRole('button', { name: 'Открыть' }).first().click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText(nameA)).toBeVisible()
+  await expect(dialog.getByText(mailA)).toBeVisible()
+  await expect(dialog.getByText(srcA, { exact: true })).toBeVisible()
+})
