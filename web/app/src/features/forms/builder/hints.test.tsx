@@ -12,6 +12,7 @@ import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { ActiveRowApiProvider, ActiveRowValueProvider, useActiveRowState } from './activeRow'
 import { BlockRow } from './BlockRow'
 import { BLOCK_COMMON, GLOBAL } from './shortcuts'
+import { ShortcutSheet } from './ShortcutSheet'
 
 // Подсказки полотна (§7): у сфокусированной строки видно ТОЛЬКО специфичные её
 // поверхности клавиши, общие вынесены в шпаргалку. Демо-критерий этапа —
@@ -176,6 +177,17 @@ describe('чипы у сфокусированной строки (§7)', () => 
     // значит и подсказки быть не должно.
     focus('sc')
     expect(chips()).not.toContain('Ctrl+Enter')
+  })
+
+  it('шпаргалка Mod+/ показывает контекст строки И вынесенное общее', () => {
+    // Смысл разделения: чипы у строки короткие, потому что общее переехало сюда.
+    // Если шпаргалка перестанет печатать общий ярус, вынесенное пропадёт совсем.
+    render(<ShortcutSheet ctx="option" open onOpenChange={() => {}} />)
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Вариант ответа')
+    expect(text).toContain('Выйти из списка') // длинный пункт, в чипы не попавший
+    expect(text).toContain('Везде на полотне')
+    for (const s of BLOCK_COMMON) expect(text).toContain(s.hint)
   })
 
   it('каретка ушла с полотна — чипы гаснут', () => {

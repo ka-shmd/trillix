@@ -40,7 +40,8 @@ import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
-import { chords } from './shortcuts'
+import { chords, formatLabel, type ShortcutContext } from './shortcuts'
+import { ShortcutSheet } from './ShortcutSheet'
 import {
   ActiveRowApiProvider,
   ActiveRowValueProvider,
@@ -125,6 +126,35 @@ export function SlashEditor({
   const [insertAfterId, setInsertAfterId] = useState<string | null>(null)
   // Активная строка полотна (§7) — источник контекста для чипов и шпаргалки.
   const activeRow = useActiveRowState()
+  // Шпаргалка Mod+/ (§7, слой 3). Контекст — СНИМОК на момент вызова: открытие диалога
+  // уводит фокус с полотна и гасит активную строку, а шпаргалка обязана показывать ту
+  // строку, из которой её позвали.
+  const [sheet, setSheet] = useState<{ open: boolean; ctx: ShortcutContext | null }>({
+    open: false,
+    ctx: null,
+  })
+  // Читать активную строку в оконном слушателе — только через ref: иначе подписка
+  // пересоздаётся на каждое движение каретки.
+  const activeCtxRef = useRef<ShortcutContext | null>(null)
+  const sheetOpenRef = useRef(false)
+  useEffect(() => {
+    activeCtxRef.current = activeRow.active?.ctx ?? null
+    sheetOpenRef.current = sheet.open
+  })
+  const openSheet = () => setSheet({ open: true, ctx: activeCtxRef.current })
+  useEffect(() => {
+    // globalThis.KeyboardEvent — нативное событие окна: имя KeyboardEvent в этом файле
+    // занято React-синтетическим (импорт сверху).
+    function onKey(e: globalThis.KeyboardEvent) {
+      if (!chords.cheatSheet(e)) return
+      // Mod+/ — тогл: повторное нажатие при открытой шпаргалке закрывает её, как Esc.
+      e.preventDefault()
+      if (sheetOpenRef.current) setSheet((s) => ({ ...s, open: false }))
+      else setSheet({ open: true, ctx: activeCtxRef.current })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
   // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки.
@@ -522,17 +552,39 @@ export function SlashEditor({
         </DndContext>
       )}
 
-      {blocks.length > 0 && (
+      {/* Служебный ярус под полотном: вставка блока мышью и вход в шпаргалку. Указатель
+          на Mod+/ стоит здесь потому, что общие клавиши из строк вынесены (§7) — без
+          него шпаргалку с ними никто не найдёт. */}
+      <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground">
+        {blocks.length > 0 && (
+          <button
+            type="button"
+            onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
+            className="text-left hover:text-foreground"
+          >
+            + Добавить блок
+          </button>
+        )}
         <button
           type="button"
-          onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
-          className="mt-4 text-left text-sm text-muted-foreground hover:text-foreground"
+          // mousedown гасим: иначе клик уводит фокус со строки ДО обработчика, активная
+          // строка гаснет, и шпаргалка открылась бы без контекста. Заодно Radix вернёт
+          // каретку в ту же строку при закрытии.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={openSheet}
+          className="ml-auto hover:text-foreground"
         >
-          + Добавить блок
+          {formatLabel('Mod+/')} — горячие клавиши
         </button>
-      )}
+      </div>
 
       <BlockTypeDialog open={insertOpen} onOpenChange={setInsertOpen} onPick={handlePickInsertType} />
+
+      <ShortcutSheet
+        ctx={sheet.ctx}
+        open={sheet.open}
+        onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
+      />
 
       <SubmitButtonEditor />
     </div>
