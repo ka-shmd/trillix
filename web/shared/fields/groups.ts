@@ -1,4 +1,4 @@
-import { type Block, isAnswerableType } from '@entities/formSchema'
+import { type Block, type BlockType, COLUMN_RIGHT, canShareRow, isAnswerableType } from '@entities/formSchema'
 
 // Метаданные группы для рендера (v2, фаза 8.7): подпись группы и признак
 // обязательности её поля. Раскладчик блоков (FormView/PreviewPane) считает их один
@@ -23,40 +23,58 @@ export function groupBlocks<T extends { groupId: string }>(blocks: T[]): { id: s
   return out
 }
 
-// Половинная группа: её отвечаемый блок несёт settings.width === 'half' (валидация
-// пускает width только whitelist-типам, здесь достаточно самого ключа).
-function groupIsHalf(blocks: { settings?: { width?: 'half' } }[]): boolean {
-  return blocks.some((b) => b.settings?.width === 'half')
+// Ядро упаковки в ряды (спека §5). Идём по потоку: элемент с битом 'right'
+// присоединяется к последнему ряду, если тот ещё не полон (в нём ровно один
+// участник) и оба участника умеют делить ряд; иначе открывает свой ряд — флаг
+// инертен, а не невалиден (кросс-блочное условие не валидируется ни в Zod, ни в Go,
+// иначе undo и промежуточные состояния драга ловили бы 422). «В ряду максимум
+// двое» — не отдельное правило, а физика ячеек: полон = length === 1 занят.
+//
+// Порядок документа неприкосновенен: конкатенация рядов равна исходному списку.
+// Один и тот же раскладчик пакует и группы (packRows), и варианты (packOptionRows) —
+// одна модель на два слоя, как требует §5.1.
+function packCells<T>(items: T[], isRight: (i: T) => boolean, shares: (i: T) => boolean): T[][] {
+  const rows: T[][] = []
+  for (const item of items) {
+    const last = rows[rows.length - 1]
+    if (isRight(item) && last?.length === 1 && shares(last[0]!) && shares(item)) last.push(item)
+    else rows.push([item])
+  }
+  return rows
 }
 
-// Упаковка групп в ряды (спека §5): два ПОДРЯД идущих half-вопроса — один ряд,
-// всё остальное — ряд из одного. Одинокая половина (пары нет) кладётся рядом из
-// одного и рендерится во всю ширину: стор это состояние не сохраняет (авторазвод),
-// но опубликованная схема формально может его нести — рендер обязан быть
-// детерминирован и без дыр в полряда. Порядок документа не меняется. Единый
+// Носитель бита ряда у группы — её отвечаемый блок (у подписи и контента бита нет:
+// ряд — свойство вопроса). Группа без отвечаемого блока (секционный heading,
+// одинокая картинка) партнёром по ряду быть не может — shares вернёт false.
+type RowCell = { type: BlockType; settings?: { column?: typeof COLUMN_RIGHT } }
+
+const groupIsRight = (blocks: RowCell[]): boolean =>
+  blocks.some((b) => b.settings?.column === COLUMN_RIGHT)
+
+const groupSharesRow = (blocks: RowCell[]): boolean =>
+  blocks.some((b) => isAnswerableType(b.type) && canShareRow(b.type))
+
+// Упаковка групп в ряды: обёртка .rf-row достаётся только ряду из двоих, ряд из
+// одного рендерится как раньше (лишний div не меняет вид, но шумит в DOM). Единый
 // раскладчик всех трёх поверхностей — поверх groupBlocks.
-export function packRows<T extends { blocks: { settings?: { width?: 'half' } }[] }>(
-  groups: T[],
-): T[][] {
-  const rows: T[][] = []
-  // half, ждущий пару: следующий half замыкает ряд, всё прочее оставляет его одного.
-  let pending: T | null = null
-  for (const g of groups) {
-    const half = groupIsHalf(g.blocks)
-    if (pending) {
-      if (half) {
-        rows.push([pending, g])
-        pending = null
-        continue
-      }
-      rows.push([pending])
-      pending = null
-    }
-    if (half) pending = g
-    else rows.push([g])
-  }
-  if (pending) rows.push([pending])
-  return rows
+export function packRows<T extends { blocks: RowCell[] }>(groups: T[]): T[][] {
+  return packCells(
+    groups,
+    (g) => groupIsRight(g.blocks),
+    (g) => groupSharesRow(g.blocks),
+  )
+}
+
+// Упаковка вариантов в ряды (спека §5.1) — тот же бит, тот же раскладчик. Whitelist
+// здесь не нужен: карточка варианта делит ряд всегда (потолок ширины у неё тот же,
+// что у короткого поля), поэтому shares — константа. У опций dropdown флаг инертен
+// по другой причине: список живёт в нативном select и рядов не имеет вовсе.
+export function packOptionRows<T extends { column?: typeof COLUMN_RIGHT }>(options: T[]): T[][] {
+  return packCells(
+    options,
+    (o) => o.column === COLUMN_RIGHT,
+    () => true,
+  )
 }
 
 export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {

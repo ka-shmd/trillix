@@ -12,8 +12,8 @@ export function PreviewPane({ title }: { title: string }) {
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   const groups = groupMeta(blocks)
-  // Ряды half-вопросов (спека §5): два соседних half — бок о бок, остальное — во
-  // всю ширину. Тот же раскладчик, что у рендерера и полотна (packRows).
+  // Ряды вопросов (спека §5): вопрос с column='right' встаёт рядом с предыдущим,
+  // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
   const rows = packRows(groupBlocks(blocks))
 
   return (

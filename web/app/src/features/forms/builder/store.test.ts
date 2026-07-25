@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
+import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
-import { canPairWithPrevious, createBuilderStore, planBlockDrop, remapDropTarget } from './store'
+import { createBuilderStore, planBlockDrop, remapDropTarget } from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -951,154 +952,211 @@ describe('createBuilderStore — undo/redo', () => {
   })
 })
 
-describe('createBuilderStore — half-ширина и колонки вариантов (фаза 13.6)', () => {
+describe('createBuilderStore — ряды из двух вопросов (фаза 13.6)', () => {
   // Полотно из голых полей: каждое — своя группа.
   const fields = (...types: ('short_text' | 'email' | 'phone' | 'long_text' | 'single_choice' | 'dropdown')[]) => {
     const store = createBuilderStore()
     for (const t of types) store.getState().addBlock(t)
     return store
   }
-  const widths = (store: ReturnType<typeof createBuilderStore>) =>
-    store.getState().blocks.map((b) => b.settings?.width ?? 'full')
+  // Хранимый бит ряда — по блокам потока.
+  const cols = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.settings?.column ?? '-')
+  // Ряды, которые из этих битов выведет рендер: стор и полотно обязаны совпадать
+  // (расхождение «помечен — нарисован иначе» и было дефектом первой реализации).
+  const rows = (store: ReturnType<typeof createBuilderStore>) =>
+    packRows(groupBlocks(store.getState().blocks)).map((row) => row.length)
 
-  it('pairWithPrevious ставит обе группы в half одним шагом undo', () => {
-    const store = fields('short_text', 'email')
-    const second = store.getState().blocks[1]!
-    expect(canPairWithPrevious(store.getState().blocks, second.id)).toBe(true)
+  // Ряд из двух полей: второе уезжает в правую ячейку первого.
+  const paired = (...types: ('short_text' | 'email' | 'phone' | 'long_text')[]) => {
+    const store = fields(...types)
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    return store
+  }
 
-    store.getState().pairWithPrevious(second.id)
-    expect(widths(store)).toEqual(['half', 'half'])
+  it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {
+    const store = paired('short_text', 'email')
+    expect(cols(store)).toEqual(['-', 'right'])
+    expect(rows(store)).toEqual([2])
 
     store.getState().undo()
-    expect(widths(store)).toEqual(['full', 'full'])
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(rows(store)).toEqual([1, 1])
+
+    store.getState().redo()
+    expect(cols(store)).toEqual(['-', 'right'])
   })
 
-  it('canPairWithPrevious: первая группа и не-whitelist сосед — нельзя', () => {
-    const store = fields('long_text', 'short_text')
-    const [first, second] = store.getState().blocks
-    expect(canPairWithPrevious(store.getState().blocks, first!.id)).toBe(false)
-    // Предыдущая группа — long_text (не whitelist).
-    expect(canPairWithPrevious(store.getState().blocks, second!.id)).toBe(false)
-    store.getState().pairWithPrevious(second!.id)
-    expect(widths(store)).toEqual(['full', 'full'])
-  })
-
-  it('третьему в ряду места нет: предыдущая уже в паре — no-op', () => {
-    const store = fields('short_text', 'email', 'short_text')
-    const [, b, c] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
-    expect(canPairWithPrevious(store.getState().blocks, c!.id)).toBe(false)
-    store.getState().pairWithPrevious(c!.id)
-    expect(widths(store)).toEqual(['half', 'half', 'full'])
-  })
-
-  it('setFullWidth разворачивает и осиротевшего соседа по ряду', () => {
-    const store = fields('short_text', 'email')
-    const [a, b] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
-    store.getState().setFullWidth(a!.id)
-    expect(widths(store)).toEqual(['full', 'full'])
-  })
-
-  it('удаление соседа возвращает вдовца на всю ширину', () => {
-    const store = fields('short_text', 'email')
-    const [a, b] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
-    store.getState().removeGroup(a!.id)
-    expect(widths(store)).toEqual(['full'])
-  })
-
-  it('перенос группы из пары разворачивает обе (сосед уехал)', () => {
-    const store = fields('short_text', 'email', 'long_text')
-    const [a, b] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
-    store.getState().moveGroup(a!.id, 'down') // a уезжает за long_text? нет — a меняется с b, пара остаётся смежной
-    // Смежная перестановка внутри пары пару не рвёт (обе half и рядом).
-    expect(widths(store).filter((w) => w === 'half')).toHaveLength(2)
-
-    // А вот отъезд b вниз за long_text рвёт пару: между половинами чужая группа.
-    store.getState().moveGroup(store.getState().blocks[1]!.id, 'down')
-    expect(widths(store)).toEqual(['full', 'full', 'full'])
-  })
-
-  it('смена типа вне whitelist снимает ширину у обоих; внутри whitelist пара цела', () => {
-    const store = fields('short_text', 'email')
-    const [a, b] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
-
-    store.getState().changeBlockType(a!.id, 'phone') // внутри whitelist
-    expect(widths(store)).toEqual(['half', 'half'])
-
-    store.getState().changeBlockType(a!.id, 'long_text') // вне whitelist
-    expect(widths(store)).toEqual(['full', 'full'])
-  })
-
-  it('placeGroupBeside ставит группу вплотную к цели и спаривает', () => {
+  it('placeInRow переносит группу вплотную за цель (жест через блок)', () => {
     const store = fields('short_text', 'long_text', 'email')
     const [a, , c] = store.getState().blocks
-    store.getState().placeGroupBeside(c!.groupId, a!.groupId, 'after')
+    store.getState().placeInRow(c!.groupId, a!.groupId)
 
     const s = store.getState()
     expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email', 'long_text'])
-    expect(s.blocks.map((b) => b.settings?.width ?? 'full')).toEqual(['half', 'half', 'full'])
+    expect(cols(store)).toEqual(['-', 'right', '-'])
   })
 
-  it('placeGroupBeside в занятую пару и на не-whitelist — no-op', () => {
-    const store = fields('short_text', 'email', 'short_text', 'long_text')
-    const [a, b, c, d] = store.getState().blocks
-    store.getState().pairWithPrevious(b!.id)
+  it('ряд цели полон / цель не умеет делить ряд — no-op, история и dirty целы', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, , c, d] = store.getState().blocks
+    store.getState().placeInRow(store.getState().blocks[1]!.groupId, a!.groupId)
+    const order = store.getState().blocks.map((b) => b.id)
     store.getState().markSaved()
 
-    store.getState().placeGroupBeside(c!.groupId, a!.groupId, 'after') // цель в паре
-    store.getState().placeGroupBeside(c!.groupId, d!.groupId, 'after') // цель не whitelist
+    store.getState().placeInRow(c!.groupId, a!.groupId) // ячейка ряда занята
+    store.getState().placeInRow(c!.groupId, d!.groupId) // цель не whitelist
     const s = store.getState()
     expect(s.dirty).toBe(false)
-    expect(s.blocks.map((x) => x.id)).toEqual([a!.id, b!.id, c!.id, d!.id])
+    expect(s.blocks.map((b) => b.id)).toEqual(order)
+    expect(rows(store)).toEqual([2, 1, 1])
   })
 
-  it('setOptionColumns: 2 ставится, 1 снимает ключ, dropdown — no-op', () => {
-    const store = fields('single_choice', 'dropdown')
-    const [choice, dropdown] = store.getState().blocks
-
-    store.getState().setOptionColumns(choice!.id, 2)
-    expect(store.getState().blocks[0]?.settings?.optionColumns).toBe(2)
-
-    store.getState().setOptionColumns(choice!.id, 1)
-    expect(store.getState().blocks[0]?.settings).not.toHaveProperty('optionColumns')
-
-    store.getState().markSaved()
-    store.getState().setOptionColumns(dropdown!.id, 2)
-    expect(store.getState().dirty).toBe(false)
-    expect(store.getState().blocks[1]?.settings).not.toHaveProperty('optionColumns')
+  it('takeOwnRow возвращает правого своим рядом', () => {
+    const store = paired('short_text', 'email')
+    store.getState().takeOwnRow(store.getState().blocks[1]!.id)
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(rows(store)).toEqual([1, 1])
   })
 
-  it('смена типа single→multi переносит колонки, →dropdown роняет', () => {
-    const store = fields('single_choice')
-    const id = store.getState().blocks[0]!.id
-    store.getState().setOptionColumns(id, 2)
-
-    store.getState().changeBlockType(id, 'multi_choice')
-    expect(store.getState().blocks[0]?.settings?.optionColumns).toBe(2)
-
-    store.getState().changeBlockType(id, 'dropdown')
-    expect(store.getState().blocks[0]?.settings).not.toHaveProperty('optionColumns')
+  it('удаление левого: бит правого снят, полряда не остаётся', () => {
+    const store = paired('short_text', 'email')
+    store.getState().removeGroup(store.getState().blocks[0]!.id)
+    expect(cols(store)).toEqual(['-'])
+    expect(rows(store)).toEqual([1])
   })
 
-  it('hydrate нормализует одинокую половину в full', () => {
+  it('смена типа левого вне whitelist снимает бит правого', () => {
+    const store = paired('short_text', 'email')
+    const a = store.getState().blocks[0]!
+
+    store.getState().changeBlockType(a.id, 'phone') // внутри whitelist — ряд цел
+    expect(cols(store)).toEqual(['-', 'right'])
+
+    store.getState().changeBlockType(a.id, 'long_text') // вне whitelist
+    expect(cols(store)).toEqual(['-', '-'])
+  })
+
+  it('смена типа правого вне whitelist роняет его собственный бит', () => {
+    const store = paired('short_text', 'email')
+    store.getState().changeBlockType(store.getState().blocks[1]!.id, 'long_text')
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('перенос левого вниз рвёт ряд (правый становится первым — бит инертен)', () => {
+    const store = paired('short_text', 'email', 'long_text')
+    store.getState().moveGroup(store.getState().blocks[0]!.id, 'down')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['email', 'short_text', 'long_text'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+    expect(rows(store)).toEqual([1, 1, 1])
+  })
+
+  it('перенос правого вниз за чужую группу снимает его бит', () => {
+    const store = paired('short_text', 'email', 'long_text')
+    store.getState().moveGroup(store.getState().blocks[1]!.id, 'down')
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'long_text', 'email'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+  })
+
+  it('вставка контентного блока между участниками ряда рвёт ряд', () => {
+    const store = paired('short_text', 'email')
+    store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'heading')
+    expect(rows(store)).toEqual([1, 1, 1])
+    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual(['-', '-', '-'])
+  })
+
+  it('вставка короткого поля между участниками: ячейку занимает новичок', () => {
+    const store = paired('short_text', 'email')
+    store.getState().addBlockAfter(store.getState().blocks[0]!.id, 'phone')
+    // Бит правого сработал — но уже с новым левым соседом; полотно покажет ровно это.
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
+    expect(rows(store)).toEqual([1, 2])
+  })
+
+  it('hydrate снимает инертный бит (левого соседа нет)', () => {
     const store = createBuilderStore()
     const schema = formSchemaSchema.parse({
       schemaVersion: 2,
-      blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', settings: { width: 'half' } }],
+      blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', settings: { column: 'right' } }],
     } satisfies FormSchema)
     store.getState().hydrate(schema)
-    expect(store.getState().blocks[0]?.settings).not.toHaveProperty('width')
+    expect(store.getState().blocks[0]?.settings).not.toHaveProperty('column')
     expect(store.getState().dirty).toBe(false)
   })
 
-  it('toSchema после спаривания проходит валидацию контракта', () => {
-    const store = fields('short_text', 'email')
-    store.getState().pairWithPrevious(store.getState().blocks[1]!.id)
+  it('toSchema после переноса в ряд проходит валидацию контракта', () => {
+    const store = paired('short_text', 'email')
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+})
+
+describe('createBuilderStore — ряды вариантов (фаза 13.6, §5.1)', () => {
+  const choiceWith = (...labels: string[]) => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    for (const label of labels) {
+      store.getState().addOption(id)
+      const opts = store.getState().blocks[0]!.settings!.options!
+      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
+    }
+    return { store, id }
+  }
+  const options = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks[0]!.settings!.options!
+  const optRows = (store: ReturnType<typeof createBuilderStore>) =>
+    packOptionRows(options(store)).map((row) => row.map((o) => o.label))
+
+  it('placeOptionInRow — тот же бит и та же упаковка, что у вопросов', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [, b] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, options(store)[0]!.id)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+
+    store.getState().undo()
+    expect(optRows(store)).toEqual([['a'], ['b'], ['c']])
+  })
+
+  it('placeOptionInRow переносит вариант вплотную за цель', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, , c] = options(store)
+    store.getState().placeOptionInRow(id, c!.id, a!.id)
+    expect(optRows(store)).toEqual([['a', 'c'], ['b']])
+  })
+
+  it('ряд цели полон — no-op без dirty', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    store.getState().placeOptionInRow(id, b!.id, a!.id)
+    store.getState().markSaved()
+
+    store.getState().placeOptionInRow(id, c!.id, a!.id)
+    expect(store.getState().dirty).toBe(false)
+    expect(optRows(store)).toEqual([['a', 'b'], ['c']])
+  })
+
+  it('takeOptionOwnRow возвращает вариант своим рядом', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().takeOptionOwnRow(id, options(store)[1]!.id)
+    expect(optRows(store)).toEqual([['a'], ['b']])
+  })
+
+  it('удаление левого варианта снимает бит правого', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().removeOption(id, options(store)[0]!.id)
+    expect(options(store)[0]).not.toHaveProperty('column')
+    expect(optRows(store)).toEqual([['b']])
+  })
+
+  it('вариант, уехавший наверх Alt+↑, теряет бит', () => {
+    const { store, id } = choiceWith('a', 'b')
+    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    store.getState().moveOption(id, options(store)[1]!.id, 'up')
+    expect(optRows(store)).toEqual([['b'], ['a']])
   })
 })
 

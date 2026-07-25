@@ -4,6 +4,7 @@ import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/fo
 
 import { type Answer, optionKey, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
+import { packOptionRows } from './groups'
 import { mediaSrc } from './media'
 
 // BlockField — как один блок увидит человек, заполняющий форму. Два режима одним
@@ -407,33 +408,47 @@ function ChoiceList({
     if (!onChange) return
     onChange(multiple ? toggleMulti(selectedMany, id, checked) : id)
   }
-  // Раскладка в две колонки (спека §5.1) — свойство всего списка; порядок DOM
-  // не меняется, сетку строит CSS (rf-options--cols).
-  const cols = block.settings?.optionColumns === 2 ? ' rf-options--cols' : ''
+  // Буквенный бейдж и состояние выбора считаются по позиции в ПОЛНОМ списке, а не
+  // внутри ряда: порядок документа рядами не меняется (спека §5.1), и A/B/C обязаны
+  // остаться теми же, что до переноса варианта в ряд.
+  const card = (o: (typeof options)[number], i: number) => {
+    const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
+    const key = optionKey(i)
+    return (
+      // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
+      // класс работает одинаково во всех браузерах и виден в тестах.
+      <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
+        <input
+          className="rf-choice-input"
+          type={multiple ? 'checkbox' : 'radio'}
+          name={block.id}
+          checked={checked}
+          onChange={(e) => onToggle(o.id, e.target.checked)}
+          disabled={disabled}
+        />
+        {key && (
+          <span className="rf-option-key" aria-hidden="true">
+            {key}
+          </span>
+        )}
+        <span>{o.label.trim() || 'Вариант'}</span>
+      </label>
+    )
+  }
+  // Ряды вариантов (спека §5.1) — тот же раскладчик и та же обёртка .rf-row, что у
+  // вопросов; ряд из одного в обёртку не заворачивается.
+  const index = new Map(options.map((o, i) => [o.id, i]))
   return (
-    <div className={`rf-options${cols}`} role="group" aria-label="Варианты ответа" onBlur={onBlur}>
-      {options.map((o, i) => {
-        const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
-        const key = optionKey(i)
-        return (
-          // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
-          // класс работает одинаково во всех браузерах и виден в тестах.
-          <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
-            <input
-              className="rf-choice-input"
-              type={multiple ? 'checkbox' : 'radio'}
-              name={block.id}
-              checked={checked}
-              onChange={(e) => onToggle(o.id, e.target.checked)}
-              disabled={disabled}
-            />
-            {key && (
-              <span className="rf-option-key" aria-hidden="true">
-                {key}
-              </span>
-            )}
-            <span>{o.label.trim() || 'Вариант'}</span>
-          </label>
+    <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
+      {packOptionRows(options).map((row) => {
+        const first = row[0]!
+        const cards = row.map((o) => card(o, index.get(o.id)!))
+        return row.length > 1 ? (
+          <div key={first.id} className="rf-row">
+            {cards}
+          </div>
+        ) : (
+          cards[0]
         )
       })}
     </div>

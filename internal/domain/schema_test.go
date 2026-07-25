@@ -48,11 +48,14 @@ func TestValidateSchema_Valid(t *testing.T) {
 			{"id":"b1","groupId":"g1","type":"short_text","settings":{}}
 		]}`,
 		"v2: секционный heading своей группой": `{"schemaVersion":2,"blocks":[{"id":"h1","groupId":"g1","type":"heading","text":"О компании"},{"id":"b1","groupId":"g2","type":"short_text","settings":{}}]}`,
-		// Фаза 13.6: half-ширина у whitelist-типов и колонки вариантов у choice-карточек.
-		"width half у short_text":         `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"width":"half"}}]}`,
-		"width half у dropdown":           `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"dropdown","settings":{"width":"half","options":[{"id":"o1","label":"Мск"}]}}]}`,
-		"optionColumns 2 у single_choice": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"optionColumns":2,"options":[{"id":"o1","label":"Да"},{"id":"o2","label":"Нет"}]}}]}`,
-		"optionColumns 2 у multi_choice":  `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"multi_choice","settings":{"optionColumns":2,"options":[{"id":"o1","label":"Go"}]}}]}`,
+		// Фаза 13.6: бит ряда у whitelist-типов и у вариантов.
+		"column right у short_text": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":"right"}}]}`,
+		"column right у dropdown":   `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"dropdown","settings":{"column":"right","options":[{"id":"o1","label":"Мск"}]}}]}`,
+		"column right у варианта":   `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"},{"id":"o2","label":"Нет","column":"right"}]}}]}`,
+		// Инертный флаг легален (спека §5): левого соседа нет, но 422 быть не должно —
+		// иначе undo и промежуточные состояния драга ловили бы отказ автосейва.
+		"column right у первого блока — инертен, но валиден": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"column":"right"}},{"id":"b2","groupId":"g2","type":"long_text","settings":{}}]}`,
+		"column right у первого варианта — инертен":          `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Go","column":"right"}]}}]}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -126,14 +129,12 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"v2: пустой groupId": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"","type":"short_text","settings":{}}]}`,
 		"v2: группа разорвана чужим блоком": `{"schemaVersion":2,"blocks":[{"id":"a","groupId":"g1","type":"title","text":"A"},{"id":"b","groupId":"g2","type":"short_text","settings":{}},{"id":"c","groupId":"g1","type":"email","settings":{}}]}`,
 		"v2: два отвечаемых в одной группе": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{}},{"id":"b2","groupId":"g1","type":"email","settings":{}}]}`,
-		// Фаза 13.6: ширина и колонки вариантов вне whitelist / вне допустимых значений.
-		"width у long_text (не whitelist)":     `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"long_text","settings":{"width":"half"}}]}`,
-		"width у single_choice (не whitelist)": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"width":"half"}}]}`,
-		"width неизвестное значение":           `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"width":"third"}}]}`,
-		"width full не хранится":               `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"width":"full"}}]}`,
-		"optionColumns у dropdown":             `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"dropdown","settings":{"optionColumns":2,"options":[{"id":"o1","label":"Мск"}]}}]}`,
-		"optionColumns у short_text":           `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"optionColumns":2}}]}`,
-		"optionColumns 3 недопустимо":          `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"optionColumns":3,"options":[{"id":"o1","label":"Да"}]}}]}`,
+		// Фаза 13.6: бит ряда вне whitelist / вне допустимых значений.
+		"column у long_text (не whitelist)":     `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"long_text","settings":{"column":"right"}}]}`,
+		"column у single_choice (не whitelist)": `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"column":"right"}}]}`,
+		"column неизвестное значение":           `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":"third"}}]}`,
+		"column left не хранится":               `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":"left"}}]}`,
+		"column left у варианта не хранится":    `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","column":"left"}]}}]}`,
 	}
 	for name, raw := range cases {
 		t.Run(name, func(t *testing.T) {

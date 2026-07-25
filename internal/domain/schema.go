@@ -49,6 +49,11 @@ const (
 	MaxRedirectURLLen  = 2000
 )
 
+// ColumnRight — единственное значение бита ряда (спека §5): «встань в ряд с
+// предыдущим». Отсутствие ключа = свой ряд; "left" канон не пишет и не принимает.
+// Зеркалит COLUMN_RIGHT в formSchema.ts.
+const ColumnRight = "right"
+
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
 // оформление). Подписи и контент неотвечаемы (isContent): исключены из
@@ -125,9 +130,10 @@ func (t BlockType) carriesText() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockConsent
 }
 
-// supportsHalfWidth — типу разрешена half-ширина (спека фазы 13 §5, ADR §10):
-// визуально короткие контролы. Зеркалит supportsHalfWidth в formSchema.ts.
-func (t BlockType) supportsHalfWidth() bool {
+// canShareRow — типу разрешено делить ряд с предыдущим вопросом (спека фазы 13 §5,
+// ADR §10): визуально короткие контролы. long_text/scale/choice-карточки в половину
+// колонки не читаются. Зеркалит canShareRow в formSchema.ts.
+func (t BlockType) canShareRow() bool {
 	switch t {
 	case BlockShortText, BlockEmail, BlockPhone, BlockNumber, BlockDate, BlockDropdown:
 		return true
@@ -136,18 +142,16 @@ func (t BlockType) supportsHalfWidth() bool {
 	}
 }
 
-// supportsOptionColumns — список вариантов умеет раскладываться в две колонки
-// (спека §5.1): choice-карточки. dropdown исключён — его список живёт внутри
-// нативного select. Зеркалит supportsOptionColumns в formSchema.ts.
-func (t BlockType) supportsOptionColumns() bool {
-	return t == BlockSingleChoice || t == BlockMultiChoice
-}
-
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.
 type Option struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+	// Column — тот же бит ряда, что у блока (спека §5.1): "right" = «встань в ряд
+	// с предыдущим вариантом», пусто = свой ряд. У опций dropdown инертен (список
+	// живёт в нативном select) — и потому не запрещён, как и любой другой флаг,
+	// которому некуда примениться.
+	Column string `json:"column,omitempty"`
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
@@ -163,12 +167,14 @@ type BlockSettings struct {
 	ImageKey    string   `json:"imageKey,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
-	// Width — half-ширина вопроса (спека §5): канон хранит только отклонение
-	// ("half"), пусто = во всю ширину. Только у supportsHalfWidth-типов.
-	Width string `json:"width,omitempty"`
-	// OptionColumns — раскладка списка вариантов в две колонки (спека §5.1):
-	// 0 = одна колонка, 2 = две. Только у supportsOptionColumns-типов.
-	OptionColumns int `json:"optionColumns,omitempty"`
+	// Column — ряд из двух вопросов (спека §5): "right" на отвечаемом блоке
+	// читается как «встань в ряд с предыдущим вопросом», пусто = свой ряд.
+	// Ширина не хранится вовсе — её выводит раскладчик. Только у canShareRow-типов.
+	//
+	// Кросс-блочное условие «левый сосед существует и умеет делить ряд» здесь
+	// НЕ проверяется намеренно: флаг, которому некуда примениться, инертен и
+	// легален, иначе undo и промежуточные состояния драга ловили бы 422.
+	Column string `json:"column,omitempty"`
 }
 
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
@@ -363,23 +369,14 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
-	// width — только "half" и только у whitelist-типов (спека §5). Канон хранит
-	// отклонение: "full" в документе не пишется, а значит и не принимается.
-	if b.Settings.Width != "" {
-		if b.Settings.Width != "half" {
-			return schemaErr("%s: неизвестная ширина %q", at, b.Settings.Width)
+	// column — только "right" и только у whitelist-типов (спека §5). Канон хранит
+	// отклонение: "left" в документе не пишется, а значит и не принимается.
+	if b.Settings.Column != "" {
+		if b.Settings.Column != ColumnRight {
+			return schemaErr("%s: неизвестная колонка %q", at, b.Settings.Column)
 		}
-		if !b.Type.supportsHalfWidth() {
-			return schemaErr("%s: тип %q не может быть половинной ширины", at, b.Type)
-		}
-	}
-	// optionColumns — только 2 и только у choice-карточек (спека §5.1).
-	if b.Settings.OptionColumns != 0 {
-		if b.Settings.OptionColumns != 2 {
-			return schemaErr("%s: недопустимое число колонок вариантов %d", at, b.Settings.OptionColumns)
-		}
-		if !b.Type.supportsOptionColumns() {
-			return schemaErr("%s: тип %q не имеет колонок вариантов", at, b.Type)
+		if !b.Type.canShareRow() {
+			return schemaErr("%s: тип %q не может делить ряд", at, b.Type)
 		}
 	}
 	if err := validateScaleSettings(b); err != nil {
@@ -407,6 +404,11 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		seenOpt[o.ID] = struct{}{}
 		if n := utf8.RuneCountInString(o.Label); n > MaxOptionLabelLen {
 			return schemaErr("%s: опция #%d: label длиннее %d символов", at, j, MaxOptionLabelLen)
+		}
+		// Тот же бит ряда, что у блока (спека §5.1): только "right". Есть ли слева
+		// свободная ячейка — не проверяется, как и у блока: флаг инертен, не невалиден.
+		if o.Column != "" && o.Column != ColumnRight {
+			return schemaErr("%s: опция #%d: неизвестная колонка %q", at, j, o.Column)
 		}
 	}
 	return nil

@@ -105,10 +105,10 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
 
-// Типы, которым разрешена half-ширина (спека §5, ADR §10): визуально короткие
-// контролы. long_text/scale/choice-карточки в половину колонки не читаются.
-// Зеркалит Go supportsHalfWidth().
-const HALF_WIDTH_TYPES: ReadonlySet<BlockType> = new Set([
+// Типы, которым разрешено делить ряд с предыдущим вопросом (спека §5, ADR §10):
+// визуально короткие контролы. long_text/scale/choice-карточки в половину колонки
+// не читаются. Зеркалит Go canShareRow().
+const SHARE_ROW_TYPES: ReadonlySet<BlockType> = new Set([
   'short_text',
   'email',
   'phone',
@@ -116,13 +116,12 @@ const HALF_WIDTH_TYPES: ReadonlySet<BlockType> = new Set([
   'date',
   'dropdown',
 ])
-export const supportsHalfWidth = (t: BlockType): boolean => HALF_WIDTH_TYPES.has(t)
+export const canShareRow = (t: BlockType): boolean => SHARE_ROW_TYPES.has(t)
 
-// Типы, у которых список вариантов умеет раскладываться в две колонки (спека
-// §5.1): choice-карточки на полотне. dropdown исключён — его список живёт внутри
-// нативного select, колонок там нет. Зеркалит Go supportsOptionColumns().
-const OPTION_COLUMNS_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'multi_choice'])
-export const supportsOptionColumns = (t: BlockType): boolean => OPTION_COLUMNS_TYPES.has(t)
+// Единственное значение бита ряда (спека §5): «встань в ряд с предыдущим».
+// Отсутствие ключа = свой ряд; 'left' канон не пишет и не принимает. Зеркалит
+// Go ColumnRight.
+export const COLUMN_RIGHT = 'right'
 
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
@@ -176,6 +175,11 @@ const idSchema = z.string().min(1).max(MAX_ID_LEN)
 export const optionSchema = z.strictObject({
   id: idSchema,
   label: z.string().max(MAX_OPTION_LABEL_LEN),
+  // Тот же бит ряда, что у блока (спека §5.1): 'right' = «встань в ряд с
+  // предыдущим вариантом», отсутствие = свой ряд. Свободна ли ячейка слева — не
+  // валидируется, как и у блока: флаг инертен, а не невалиден. У опций dropdown
+  // инертен всегда (список живёт в нативном select) — и потому не запрещён.
+  column: z.literal(COLUMN_RIGHT).optional(),
 })
 export type Option = z.infer<typeof optionSchema>
 
@@ -192,12 +196,12 @@ const settingsSchema = z.strictObject({
   // «ни одного» — недособранный черновик, как choice без опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
-  // Half-ширина вопроса (спека §5): канон хранит только отклонение — отсутствие
-  // ключа = во всю ширину. Разрешена только whitelist-типам (superRefine ниже).
-  width: z.literal('half').optional(),
-  // Раскладка списка вариантов в две колонки (спека §5.1): свойство всего списка,
-  // отсутствие = одна колонка. Только single_choice/multi_choice (superRefine).
-  optionColumns: z.literal(2).optional(),
+  // Ряд из двух вопросов (спека §5): 'right' на отвечаемом блоке = «встань в ряд
+  // с предыдущим вопросом», отсутствие ключа = свой ряд. Ширина не хранится вовсе,
+  // её выводит раскладчик. Разрешён только whitelist-типам (superRefine ниже);
+  // кросс-блочное условие «слева есть свободная ячейка» намеренно не валидируется
+  // — инертный флаг легален, иначе undo и промежуточные состояния драга ловили бы 422.
+  column: z.literal(COLUMN_RIGHT).optional(),
 })
 
 // scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
@@ -239,20 +243,12 @@ export const blockSchema = z
         path: ['settings', 'imageKey'],
       })
     }
-    // width: 'half' — только у whitelist-типов (спека §5).
-    if (b.settings?.width && !supportsHalfWidth(b.type)) {
+    // column: 'right' — только у whitelist-типов (спека §5).
+    if (b.settings?.column && !canShareRow(b.type)) {
       ctx.addIssue({
         code: 'custom',
-        message: `тип ${b.type} не может быть половинной ширины`,
-        path: ['settings', 'width'],
-      })
-    }
-    // optionColumns — только у choice-карточек (спека §5.1).
-    if (b.settings?.optionColumns && !supportsOptionColumns(b.type)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `тип ${b.type} не имеет колонок вариантов`,
-        path: ['settings', 'optionColumns'],
+        message: `тип ${b.type} не может делить ряд`,
+        path: ['settings', 'column'],
       })
     }
     // Диапазон шкалы — только у scale (как options у choice).

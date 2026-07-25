@@ -207,8 +207,8 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         {packRows(groupBlocks(blocks)).map((row) => {
           // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
           // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
-          // Два соседних half-вопроса едут одним рядом .rf-row (фаза 13.6, спека §5);
-          // обёртка ряда — только у настоящей пары.
+          // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
+          // спека §5); обёртка ряда — только у ряда из двоих.
           const groupNodes = row.map((group) => (
             <div key={group.id} className="rf-group">
               {group.blocks.map((block) => {
