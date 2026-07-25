@@ -51,7 +51,9 @@ type RowCell = { type: BlockType; settings?: { column?: typeof COLUMN_RIGHT } }
 const groupIsRight = (blocks: RowCell[]): boolean =>
   blocks.some((b) => b.settings?.column === COLUMN_RIGHT)
 
-const groupSharesRow = (blocks: RowCell[]): boolean =>
+// Экспортируется: полотно редактора спрашивает тем же предикатом, кому светить зону
+// жеста, — чтобы «кому можно в ряд» жило в одном месте с упаковкой.
+export const groupCanShareRow = (blocks: RowCell[]): boolean =>
   blocks.some((b) => isAnswerableType(b.type) && canShareRow(b.type))
 
 // Упаковка групп в ряды: обёртка .rf-row достаётся только ряду из двоих, ряд из
@@ -61,7 +63,7 @@ export function packRows<T extends { blocks: RowCell[] }>(groups: T[]): T[][] {
   return packCells(
     groups,
     (g) => groupIsRight(g.blocks),
-    (g) => groupSharesRow(g.blocks),
+    (g) => groupCanShareRow(g.blocks),
   )
 }
 

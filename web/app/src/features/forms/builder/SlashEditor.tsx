@@ -13,6 +13,8 @@ import {
   MeasuringStrategy,
   PointerSensor,
   closestCenter,
+  pointerWithin,
+  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -28,13 +30,14 @@ import { CSS } from '@dnd-kit/utilities'
 import { toast } from 'sonner'
 import {
   type Block,
+  canShareRow,
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
   isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
-import { packRows } from '@fields/groups'
+import { groupCanShareRow, packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
 import { planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
 import { type MenuItem } from './blockTypes'
@@ -91,6 +94,7 @@ export function SlashEditor({
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
+  const placeInRow = useBuilderStore((s) => s.placeInRow)
   // Драг-рамка (Д10): прямоугольник в координатах полотна (canvasRef), обнимающий
   // union-rect РЕАЛЬНЫХ (трансформированных) rect'ов строк будущего состава группы.
   // Статичный ring на <li> группы врал: sortable раздвигает строки CSS-трансформами,
@@ -109,9 +113,11 @@ export function SlashEditor({
   // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
   // рейл у группы-цели постоянно, блочный — гасит рейлы совсем (иначе рейл
   // накладывался на драг-рамку).
-  const [drag, setDrag] = useState<{ kind: 'group' | 'block'; overGroup: string | null } | null>(
-    null,
-  )
+  const [drag, setDrag] = useState<{
+    kind: 'group' | 'block'
+    activeId: string
+    overGroup: string | null
+  } | null>(null)
   // Замер рамки гонит rAF-цикл, а не события драга: строки доигрывают свой
   // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
   // рамка отставала от расступающихся строк. Цикл меряет каждый кадр; аргументы
@@ -216,12 +222,37 @@ export function SlashEditor({
     return m
   }, [groups])
 
+  // Жест ряда (спека §5): пока тащат подходящий ВОПРОС, у каждого ряда со свободной
+  // ячейкой горит правая треть. Кандидат — группа активного элемента: мульти-вопрос
+  // едет за ручку подписи (групповой драг), голое поле — блочным слоем. Строку из
+  // середины чужого вопроса жест не касается: она переносит блок, а не вопрос.
+  const rowCandidate = useMemo(() => {
+    if (!drag) return null
+    if (drag.kind === 'group') {
+      const g = groups.find((x) => x.id === drag.activeId)
+      return g && groupCanShareRow(g.blocks) ? g.id : null
+    }
+    const b = blocks.find((x) => x.id === drag.activeId)
+    if (!b || !isAnswerableType(b.type) || !canShareRow(b.type)) return null
+    const g = groups.find((x) => x.id === b.groupId)
+    return g && g.blocks.length === 1 ? g.id : null
+  }, [drag, groups, blocks])
+
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
+    // Зоны жеста спрашиваются ПЕРВЫМИ и указателем, а не центрами: зона узкая и
+    // намеренная, попадание в неё однозначно, а closestCenter тянул бы её в общий
+    // конкурс со строками и мазал. Слоёв это не смешивает — зона отдельный вид
+    // droppable'а и из обоих фильтров ниже исключена.
+    const zones = args.droppableContainers.filter((c) => rowZoneGroup(c.id) !== null)
+    if (zones.length > 0) {
+      const hit = pointerWithin({ ...args, droppableContainers: zones })
+      if (hit.length > 0) return hit
+    }
     const collisions = closestCenter({
       ...args,
       droppableContainers: args.droppableContainers.filter(
-        (c) => groupIds.has(String(c.id)) === isGroupDrag,
+        (c) => rowZoneGroup(c.id) === null && groupIds.has(String(c.id)) === isGroupDrag,
       ),
     })
     if (isGroupDrag || collisions.length === 0) return collisions
@@ -306,12 +337,19 @@ export function SlashEditor({
   // полотно.
   useEffect(() => () => cancelAnimationFrame(frameRafRef.current), [])
 
-  // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
+  // Дроп по слою: зона жеста → перенос в ряд, группа → перестановка групп, блок →
+  // перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
     stopFrameLoop()
+    const candidate = rowCandidate
     setDrag(null)
     const { active, over } = e
     if (!over || active.id === over.id) return
+    const zoneTarget = rowZoneGroup(over.id)
+    if (zoneTarget !== null) {
+      if (candidate) placeInRow(candidate, zoneTarget)
+      return
+    }
     const activeId = String(active.id)
     if (groupIds.has(activeId)) reorderGroups(activeId, String(over.id))
     else reorderBlocks(activeId, String(over.id))
@@ -531,7 +569,7 @@ export function SlashEditor({
           onDragStart={(e) => {
             const id = String(e.active.id)
             const isGroup = groupIds.has(id)
-            setDrag({ kind: isGroup ? 'group' : 'block', overGroup: null })
+            setDrag({ kind: isGroup ? 'group' : 'block', activeId: id, overGroup: null })
             // Рамку ведёт rAF-цикл (см. frameArgsRef); групповой драг вместо
             // рамки ведёт рейл группы-цели (drag.overGroup).
             if (!isGroup) startFrameLoop(id)
@@ -572,6 +610,15 @@ export function SlashEditor({
                   formId={formId}
                   blockIds={blockIds}
                   side={rowSide.get(g.id) ?? null}
+                  // Зона жеста — у ряда со СВОБОДНОЙ ячейкой (в ряду один участник,
+                  // и он умеет делить ряд), и только пока тащат подходящий вопрос.
+                  // Себе самому ряд не предлагаем.
+                  rowZone={
+                    rowCandidate !== null &&
+                    rowCandidate !== g.id &&
+                    !rowSide.has(g.id) &&
+                    groupCanShareRow(g.blocks)
+                  }
                   rail={
                     drag
                       ? drag.kind === 'group' && g.id === drag.overGroup
@@ -636,6 +683,39 @@ export function SlashEditor({
   )
 }
 
+// Зоны жеста ряда — третий вид droppable'а, помимо групп и строк. Отдельное
+// пространство id (префикс), чтобы фильтр коллизий по слоям их не путал ни с
+// groupId, ни с block-id.
+const ROW_ZONE = 'rowzone:'
+const rowZoneId = (groupId: string) => `${ROW_ZONE}${groupId}`
+const rowZoneGroup = (id: string | number): string | null => {
+  const s = String(id)
+  return s.startsWith(ROW_ZONE) ? s.slice(ROW_ZONE.length) : null
+}
+
+// SideDropZone — правая треть ряда со свободной ячейкой (спека §5). Зона узкая
+// намеренно: полоса у края холста делала жест «доступным через один» — попасть в неё
+// мышью было сложнее, чем в саму цель. Вертикальная линия у правого края горит всё
+// время, пока тащат подходящий вопрос (это и есть приглашение), и наливается под
+// курсором. Вне потока и pointer-events-none: dnd-kit меряет rect, а не ловит
+// события, а занимающий место контрол схлопнул бы строку на mousedown (урок TD-22).
+function SideDropZone({ groupId }: { groupId: string }) {
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(groupId) })
+  return (
+    <div
+      ref={setNodeRef}
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-y-0 right-0 z-20 w-1/3"
+    >
+      <span
+        className={`absolute inset-y-0 right-0 w-0.5 rounded-full bg-primary transition-opacity ${
+          isOver ? 'opacity-100' : 'opacity-30'
+        }`}
+      />
+    </div>
+  )
+}
+
 // GroupRow — группа как ЕДИНИЦА перетаскивания: один sortable-элемент внешнего
 // уровня (li c useSortable по groupId) со всеми строками группы внутри. Драг группы
 // полностью нативный: li целиком едет за курсором, соседние группы раздвигаются
@@ -655,6 +735,7 @@ function GroupRow({
   formId,
   blockIds,
   side,
+  rowZone,
   rail,
   menuForId,
   onAddBelow,
@@ -676,6 +757,9 @@ function GroupRow({
   // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Ряды видны
   // и во время драга (WYSIWYG) — сторона не гасится.
   side: 'left' | 'right' | null
+  // Показывать зону жеста «встань в правую ячейку этого ряда» (решает полотно —
+  // только оно знает, что тащат).
+  rowZone: boolean
   // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
   // (групповой драг над этой группой), off — скрыт (любой другой драг).
   rail: 'auto' | 'on' | 'off'
@@ -733,6 +817,7 @@ function GroupRow({
           }`}
         />
       )}
+      {rowZone && <SideDropZone groupId={group.id} />}
       <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
         {/* Внутри вопроса блоки стоят теснее — 14px (gap-3.5), как .rf-group у превью.
             py-1.5 строк скомпенсирован их -my-1.5, поэтому gap = чистый просвет. */}
