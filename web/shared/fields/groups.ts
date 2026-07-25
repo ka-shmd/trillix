@@ -23,6 +23,42 @@ export function groupBlocks<T extends { groupId: string }>(blocks: T[]): { id: s
   return out
 }
 
+// Половинная группа: её отвечаемый блок несёт settings.width === 'half' (валидация
+// пускает width только whitelist-типам, здесь достаточно самого ключа).
+function groupIsHalf(blocks: { settings?: { width?: 'half' } }[]): boolean {
+  return blocks.some((b) => b.settings?.width === 'half')
+}
+
+// Упаковка групп в ряды (спека §5): два ПОДРЯД идущих half-вопроса — один ряд,
+// всё остальное — ряд из одного. Одинокая половина (пары нет) кладётся рядом из
+// одного и рендерится во всю ширину: стор это состояние не сохраняет (авторазвод),
+// но опубликованная схема формально может его нести — рендер обязан быть
+// детерминирован и без дыр в полряда. Порядок документа не меняется. Единый
+// раскладчик всех трёх поверхностей — поверх groupBlocks.
+export function packRows<T extends { blocks: { settings?: { width?: 'half' } }[] }>(
+  groups: T[],
+): T[][] {
+  const rows: T[][] = []
+  // half, ждущий пару: следующий half замыкает ряд, всё прочее оставляет его одного.
+  let pending: T | null = null
+  for (const g of groups) {
+    const half = groupIsHalf(g.blocks)
+    if (pending) {
+      if (half) {
+        rows.push([pending, g])
+        pending = null
+        continue
+      }
+      rows.push([pending])
+      pending = null
+    }
+    if (half) pending = g
+    else rows.push([g])
+  }
+  if (pending) rows.push([pending])
+  return rows
+}
+
 export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
   const meta = new Map<string, GroupMeta>()
   const hasTitle = new Set<string>()

@@ -1,6 +1,6 @@
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta } from '@fields/groups'
+import { groupBlocks, groupMeta, packRows } from '@fields/groups'
 
 import { useBuilderStore } from './storeContext'
 
@@ -12,7 +12,9 @@ export function PreviewPane({ title }: { title: string }) {
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   const groups = groupMeta(blocks)
-  const grouped = groupBlocks(blocks)
+  // Ряды half-вопросов (спека §5): два соседних half — бок о бок, остальное — во
+  // всю ширину. Тот же раскладчик, что у рендерера и полотна (packRows).
+  const rows = packRows(groupBlocks(blocks))
 
   return (
     <div className="rf-page">
@@ -21,18 +23,31 @@ export function PreviewPane({ title }: { title: string }) {
         <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
       ) : (
         <div className="rf-form">
-          {grouped.map((group) => (
-            <div key={group.id} className="rf-group">
-              {group.blocks.map((block) => (
-                <BlockField
-                  key={block.id}
-                  block={block}
-                  captionText={groups.get(block.groupId)?.caption}
-                  captionRequired={groups.get(block.groupId)?.required}
-                />
-              ))}
-            </div>
-          ))}
+          {rows.map((row) => {
+            const groupNodes = row.map((group) => (
+              <div key={group.id} className="rf-group">
+                {group.blocks.map((block) => (
+                  <BlockField
+                    key={block.id}
+                    block={block}
+                    captionText={groups.get(block.groupId)?.caption}
+                    captionRequired={groups.get(block.groupId)?.required}
+                  />
+                ))}
+              </div>
+            ))
+            // Обёртка rf-row — только у настоящей пары: одиночный ряд остаётся
+            // прямым ребёнком rf-form (лишний div не меняет вид, но шумит в DOM).
+            const first = row[0]
+            if (!first) return null
+            return row.length > 1 ? (
+              <div key={first.id} className="rf-row">
+                {groupNodes}
+              </div>
+            ) : (
+              groupNodes[0]
+            )
+          })}
         </div>
       )}
       {/* Не disabled: превью показывает кнопку как у респондента (активной);

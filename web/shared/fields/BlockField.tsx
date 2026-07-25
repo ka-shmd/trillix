@@ -407,8 +407,11 @@ function ChoiceList({
     if (!onChange) return
     onChange(multiple ? toggleMulti(selectedMany, id, checked) : id)
   }
+  // Раскладка в две колонки (спека §5.1) — свойство всего списка; порядок DOM
+  // не меняется, сетку строит CSS (rf-options--cols).
+  const cols = block.settings?.optionColumns === 2 ? ' rf-options--cols' : ''
   return (
-    <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
+    <div className={`rf-options${cols}`} role="group" aria-label="Варианты ответа" onBlur={onBlur}>
       {options.map((o, i) => {
         const checked = multiple ? selectedMany.includes(o.id) : selectedOne === o.id
         const key = optionKey(i)
