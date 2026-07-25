@@ -264,6 +264,87 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
   return groupSpan(blocks, i)[1] + 1
 }
 
+// planBlockDrop — чистый расчёт блочного дропа: activeId переносится на позицию
+// overId (плоский сплайс, как arrayMove у sortable), но с правилом §4.4 спеки
+// (Д11): отвечаемый блок И подпись (решение владельца — шире спеки, подпись тоже
+// крадёт вопрос), уроненные МЕЖДУ строк чужой МУЛЬТИ-группы, приземляются сразу
+// ПОД ней. Дроп внутрь молча пересобирал группу вокруг пришельца (regroup
+// переклеивал подпись → колонки CSV и шаги воронки тихо переименовывались) —
+// теперь dnd согласован с правилом слеш-меню «инпут не втискивается в чужой
+// вопрос». Что остаётся свободным: подпись НАД голым полем (группа из одного
+// блока — жест «дать полю подпись»), контент text/image внутрь группы (он и есть
+// тело вопроса), перенос в границах СВОЕЙ группы.
+// frameIds — состав для драг-рамки (union-rect строк на полотне): при
+// перенаправлении — строки чужой группы, под которую уедет блок; иначе —
+// мульти-группа, в которую активный блок войдёт после дропа (пусто, если
+// останется одиночкой). changed=false — дроп вернул блок на своё же место
+// (стору коммитить нечего, но рамке состав всё ещё нужен).
+export function planBlockDrop(
+  blocks: Block[],
+  activeId: string,
+  overId: string,
+): { blocks: Block[]; changed: boolean; frameIds: string[]; redirected: boolean } | null {
+  const from = blocks.findIndex((b) => b.id === activeId)
+  const to = blocks.findIndex((b) => b.id === overId)
+  if (from < 0 || to < 0 || from === to) return null
+  const active = blocks[from]!
+  const rest = blocks.slice()
+  rest.splice(from, 1)
+  let at = to // вставка на индекс overId в списке БЕЗ активного = arrayMove
+  let redirected = false
+  let frameIds: string[] = []
+  if (isAnswerableType(active.type) || isCaptionType(active.type)) {
+    // Мульти-группы ищутся по СТАРЫМ groupId остатка (группы смежны). Группа
+    // самого активного блока исключена: перенос внутри своей — свободен, а её
+    // groupId у остатка тот же, что у активного.
+    let gs = 0
+    while (gs < rest.length) {
+      let ge = gs
+      while (ge + 1 < rest.length && rest[ge + 1]!.groupId === rest[gs]!.groupId) ge++
+      // «Внутрь» = слот строго между строками группы: gs < at ≤ ge.
+      if (rest[gs]!.groupId !== active.groupId && ge > gs && at > gs && at <= ge) {
+        at = ge + 1
+        redirected = true
+        frameIds = rest.slice(gs, ge + 1).map((b) => b.id)
+        break
+      }
+      gs = ge + 1
+    }
+  }
+  const next = rest.slice()
+  next.splice(at, 0, active)
+  const changed = !next.every((b, i) => b === blocks[i])
+  if (!redirected) {
+    const predicted = regroup(next)
+    const gid = predicted.find((b) => b.id === activeId)!.groupId
+    const members = predicted.filter((b) => b.groupId === gid)
+    if (members.length > 1) frameIds = members.map((b) => b.id)
+  }
+  return { blocks: next, changed, frameIds, redirected }
+}
+
+// remapDropTarget — слой отклика того же правила §4.4: над какой строкой sortable
+// должен раскрыть щель, чтобы она совпала с реальной точкой приземления (иначе
+// строки чужой группы раздвигаются изнутри, а блок падает под неё — полотно врёт).
+// Возвращает id строки-подмены или null (цель легальна, подмена не нужна).
+// Направление имеет значение: arrayMove кладёт активный блок на индекс цели,
+// поэтому «сразу под группой» из-под верха — это её последняя строка, а снизу —
+// строка, следующая за группой (может оказаться самим активным блоком: over=self
+// у sortable — «остаться на месте», что и требуется).
+export function remapDropTarget(blocks: Block[], activeId: string, overId: string): string | null {
+  const ai = blocks.findIndex((b) => b.id === activeId)
+  const ti = blocks.findIndex((b) => b.id === overId)
+  if (ai < 0 || ti < 0 || ai === ti) return null
+  const active = blocks[ai]!
+  if (!isAnswerableType(active.type) && !isCaptionType(active.type)) return null
+  if (blocks[ti]!.groupId === active.groupId) return null
+  const [gs, ge] = groupSpan(blocks, ti)
+  if (ge === gs) return null // одиночка/голое поле — не мульти-группа
+  if (ai < gs && ti < ge) return blocks[ge]!.id
+  if (ai > ge && ti > gs) return blocks[ge + 1]!.id
+  return null
+}
+
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного
 // (в т.ч. массива options) не задевала исходник из Query или дубликат.
 const cloneBlock = (b: Block): Block => structuredClone(b)
@@ -553,18 +634,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       reorderBlocks: (activeId, overId) =>
         commit(null, (s) => {
-          // Плоский перенос одной строки (arrayMove — как sortable и показывает);
-          // принадлежность группам после переноса выводит regroup. Целостность
+          // Плоский перенос одной строки через planBlockDrop: arrayMove — как
+          // sortable и показывает — плюс правило §4.4 (отвечаемый/подпись не
+          // приземляются внутрь чужой мульти-группы, а уезжают под неё).
+          // Принадлежность группам после переноса выводит regroup. Целостность
           // мульти-группы при переносе ЕЁ САМОЙ охраняет не этот метод, а UI:
           // подпись мульти-группы несёт групповую ручку → reorderGroups.
-          const from = s.blocks.findIndex((b) => b.id === activeId)
-          const to = s.blocks.findIndex((b) => b.id === overId)
-          if (from < 0 || to < 0 || from === to) return null
-          const blocks = s.blocks.slice()
-          const [moved] = blocks.splice(from, 1)
-          if (!moved) return null
-          blocks.splice(to, 0, moved)
-          return structural({ blocks })
+          const plan = planBlockDrop(s.blocks, activeId, overId)
+          return plan && plan.changed ? structural({ blocks: plan.blocks }) : null
         }),
 
       reorderGroups: (activeGroupId, overGroupId) =>

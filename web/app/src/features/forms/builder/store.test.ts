@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
 
-import { createBuilderStore } from './store'
+import { createBuilderStore, planBlockDrop, remapDropTarget } from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -395,6 +395,101 @@ describe('createBuilderStore', () => {
     store.getState().reorderBlocks('нет', c!)
     expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
     expect(store.getState().dirty).toBe(false)
+  })
+
+  it('reorderBlocks §4.4: инпут, уроненный внутрь чужой мульти-группы, приземляется под ней', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('text') // одиночка под группой
+    store.getState().addBlock('email') // голое поле в конце
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'text', 'email'])
+
+    // Тащим email на f1 — «между подписью и полем» чужого вопроса (Д11).
+    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+
+    const s = store.getState().blocks
+    // Приземлился СРАЗУ ПОД группой (выше text-одиночки), не внутри неё.
+    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'email', 'text'])
+    // Подпись осталась у прежнего поля, email — голое поле со своей группой:
+    // колонки CSV и шаги воронки не переименованы.
+    expect(s[0]!.groupId).toBe(s[1]!.groupId)
+    expect(s[2]!.groupId).not.toBe(s[0]!.groupId)
+  })
+
+  it('reorderBlocks §4.4: подпись, уроненная между строк чужой мульти-группы, уезжает под неё', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('text')
+    store.getState().addBlock('label') // сирота-подпись в конце
+    const b = store.getState().blocks
+
+    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+
+    const s = store.getState().blocks
+    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'label', 'text'])
+    // Вопрос не перехвачен: группа по-прежнему «title + short_text».
+    expect(s[0]!.groupId).toBe(s[1]!.groupId)
+    expect(s[2]!.groupId).not.toBe(s[1]!.groupId)
+  })
+
+  it('§4.4 не мешает жесту «дать голому полю подпись» (группа из одного блока)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email') // голое поле
+    store.getState().addBlock('label')
+    const [email, label] = store.getState().blocks.map((x) => x.id)
+
+    store.getState().reorderBlocks(label!, email!)
+
+    const s = store.getState().blocks
+    expect(s.map((x) => x.type)).toEqual(['label', 'email'])
+    expect(s[0]!.groupId).toBe(s[1]!.groupId) // подпись пристегнулась к полю
+  })
+
+  it('planBlockDrop: frameIds — будущий состав группы активного блока', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email')
+    store.getState().addBlock('label')
+    const b = store.getState().blocks
+
+    // Подпись летит над голое поле: рамка обнимет будущую пару «подпись+поле».
+    const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
+    expect(join?.redirected).toBe(false)
+    expect(join?.frameIds).toEqual([b[1]!.id, b[0]!.id])
+  })
+
+  it('planBlockDrop: при перенаправлении рамке отдаётся чужая группа; дроп-возврат — changed=false', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title, f1
+    store.getState().addBlock('email') // голое поле сразу под группой
+    const b = store.getState().blocks
+
+    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — внутрь группы
+    expect(plan?.redirected).toBe(true)
+    expect(plan?.frameIds).toEqual([b[0]!.id, b[1]!.id])
+    // Легальная точка — под группой, где email и так стоит: коммитить нечего.
+    expect(plan?.changed).toBe(false)
+  })
+
+  it('remapDropTarget: щель раскрывается под чужой группой, а не внутри неё', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email') // голое поле НАД группой
+    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'short_text') // title, f1
+    store.getState().addBlock('number') // голое поле ПОД группой
+    store.getState().addBlock('text') // контент в конце
+    const [top, title, f1, below, txt] = store.getState().blocks
+    const blocks = store.getState().blocks
+
+    // Сверху: цель внутри группы → подмена на её последнюю строку (щель под группой).
+    expect(remapDropTarget(blocks, top!.id, title!.id)).toBe(f1!.id)
+    // Цель — последняя строка: дроп и так ляжет под группу, подмена не нужна.
+    expect(remapDropTarget(blocks, top!.id, f1!.id)).toBeNull()
+    // Снизу: цель внутри → строка сразу под группой (здесь — сам активный: «на месте»).
+    expect(remapDropTarget(blocks, below!.id, f1!.id)).toBe(below!.id)
+    // Снизу на подпись — легальный дроп НАД группой.
+    expect(remapDropTarget(blocks, below!.id, title!.id)).toBeNull()
+    // Контента правило не касается: text падает внутрь группы свободно.
+    expect(remapDropTarget(blocks, txt!.id, f1!.id)).toBeNull()
   })
 
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
