@@ -36,7 +36,7 @@ import {
 } from '@entities/formSchema'
 import { packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
-import { planBlockDrop, remapDropTarget } from './store'
+import { planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
 import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
@@ -198,13 +198,14 @@ export function SlashEditor({
   const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
   const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
 
-  // Сторона группы в ряду half-пары (WYSIWYG, спека §5): раскладчик тот же, что у
-  // превью/рендерера (packRows). Пары двигают кластеры значков: у правой колонки
-  // они зеркалятся вправо (левый кластер лёг бы в 28px-жёлоб и наехал на соседа).
-  // На время драга полотно разворачивается в столбик (halfSide игнорируется) —
-  // решение спеки: вертикальный SortableContext живёт весь драг, несущие решения
-  // dnd не трогаются.
-  const halfSide = useMemo(() => {
+  // Сторона группы в ряду (WYSIWYG, спека §5): раскладчик тот же, что у превью и
+  // рендерера (packRows). Ряд двигает кластеры значков: у правой колонки они
+  // зеркалятся вправо (левый кластер лёг бы в 28px-жёлоб и наехал на соседа).
+  // Ряды видны ВСЕГДА, включая время драга: в столбике ряд распадается и появляется
+  // цель «между левым и правым», которая после упаковки значит не то, что показала.
+  // В двумерном полотне такой цели нет — вертикально вставляются между рядами
+  // (границу держит rowBoundaryTarget).
+  const rowSide = useMemo(() => {
     const m = new Map<string, 'left' | 'right'>()
     for (const row of packRows(groups)) {
       if (row.length === 2) {
@@ -224,7 +225,9 @@ export function SlashEditor({
       ),
     })
     if (isGroupDrag || collisions.length === 0) return collisions
-    rawOverRef.current = String(collisions[0]!.id)
+    const activeId = String(args.active.id)
+    const rawOver = String(collisions[0]!.id)
+    rawOverRef.current = rawOver
     // Честная щель (§4.4): если ближайшая цель — строка внутри чужой мульти-группы,
     // куда отвечаемому/подписи нельзя, цель подменяется той строкой, дроп «на
     // которую» даёт легальную точку — sortable раскрывает щель там, где блок реально
@@ -232,7 +235,16 @@ export function SlashEditor({
     // этом легален уже на уровне over; правило в planBlockDrop — вторая линия
     // обороны для путей мимо коллизий. Подмена — перестановкой внутри списка
     // closestCenter (там все кандидаты слоя): у dnd-kit over = collisions[0].
-    const remapped = remapDropTarget(blocks, String(args.active.id), String(collisions[0]!.id))
+    let remapped = remapDropTarget(blocks, activeId, rawOver)
+    // Ряд атомарен (§5) — и проверяется ПОСЛЕ §4.4: «под левым участником», которое
+    // вернул remapDropTarget, и есть запретная щель между участниками ряда.
+    const rowFixed = rowBoundaryTarget(blocks, activeId, remapped ?? rawOver)
+    if (rowFixed) {
+      remapped = rowFixed
+      // Рамке тоже отдаём легальную цель: по сырой она обвела бы состав, который
+      // после подмены не сложится (блок ляжет под ряд, а не в группу участника).
+      rawOverRef.current = rowFixed
+    }
     if (!remapped) return collisions
     const hit = collisions.find((c) => String(c.id) === remapped)
     return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
@@ -512,10 +524,9 @@ export function SlashEditor({
         <DndContext
           sensors={sensors}
           collisionDetection={collisionDetection}
-          // Разворот полотна в столбик на dragStart меняет layout уже ПОСЛЕ замера
-          // rect'ов (дефолт WhileDragging меряет один раз) — Always перемеряет
-          // droppable'ы по ходу драга, иначе коллизии считались бы по рядам,
-          // которых на экране больше нет.
+          // Always, а не дефолтный WhileDragging (меряет один раз на старте): ряды
+          // живут весь драг, и блок, уходящий из ряда, меняет геометрию соседей по
+          // ходу — по устаревшим rect'ам коллизии считались бы по прежней раскладке.
           measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragStart={(e) => {
             const id = String(e.active.id)
@@ -560,7 +571,7 @@ export function SlashEditor({
                   firstGroup={gi === 0}
                   formId={formId}
                   blockIds={blockIds}
-                  side={drag ? null : (halfSide.get(g.id) ?? null)}
+                  side={rowSide.get(g.id) ?? null}
                   rail={
                     drag
                       ? drag.kind === 'group' && g.id === drag.overGroup
@@ -660,10 +671,10 @@ function GroupRow({
   firstGroup: boolean
   formId: string
   blockIds: string[]
-  // Сторона в ряду half-пары (спека §5): left/right — группа занимает полколонки
+  // Сторона в ряду (спека §5): left/right — группа занимает полколонки
   // (calc(50% − 14px), полряда flex-wrap полотна), null — во всю ширину. right
-  // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Во время
-  // драга полотно всегда столбик — родитель шлёт null.
+  // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Ряды видны
+  // и во время драга (WYSIWYG) — сторона не гасится.
   side: 'left' | 'right' | null
   // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
   // (групповой драг над этой группой), off — скрыт (любой другой драг).

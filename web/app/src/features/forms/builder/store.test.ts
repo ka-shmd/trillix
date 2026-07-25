@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
-import { createBuilderStore, planBlockDrop, remapDropTarget } from './store'
+import { createBuilderStore, planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -491,6 +491,47 @@ describe('createBuilderStore', () => {
     expect(remapDropTarget(blocks, below!.id, title!.id)).toBeNull()
     // Контента правило не касается: text падает внутрь группы свободно.
     expect(remapDropTarget(blocks, txt!.id, f1!.id)).toBeNull()
+  })
+
+  it('rowBoundaryTarget: щель между участниками ряда подменяется границей ряда', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text') // контент НАД рядом
+    store.getState().addBlock('short_text') // левый участник
+    store.getState().addBlock('email') // правый участник
+    store.getState().addBlock('number') // голое поле ПОД рядом
+    const [txt, left, right, below] = store.getState().blocks
+    store.getState().placeInRow(right!.groupId, left!.groupId)
+    const blocks = store.getState().blocks
+
+    // Сверху щель между участниками даёт цель «левый участник» → подмена на конец ряда.
+    expect(rowBoundaryTarget(blocks, txt!.id, left!.id)).toBe(right!.id)
+    // Снизу её даёт цель «правый участник» → строка за рядом (здесь — сам активный).
+    expect(rowBoundaryTarget(blocks, below!.id, right!.id)).toBe(below!.id)
+    // Прочие цели легальны: дроп над рядом и под ним ряд не рвёт.
+    expect(rowBoundaryTarget(blocks, below!.id, left!.id)).toBeNull()
+    expect(rowBoundaryTarget(blocks, txt!.id, right!.id)).toBeNull()
+    // Участник ряда, переставляемый внутри своего ряда, правилу не подчиняется.
+    expect(rowBoundaryTarget(blocks, left!.id, right!.id)).toBeNull()
+  })
+
+  it('rowBoundaryTarget: вставка контента ВНУТРЬ участника ряда остаётся легальной', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // title + поле (левый)
+    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email') // правый
+    store.getState().addBlock('text') // контент в конце
+    const b0 = store.getState().blocks
+    const rightField = b0[3]!
+    store.getState().placeInRow(rightField.groupId, b0[1]!.groupId)
+    const blocks = store.getState().blocks
+    const [leftTitle, , rightTitle, , txt] = blocks
+
+    // Цель «поле правого участника» — это вставка МЕЖДУ подписью и полем внутри
+    // вопроса: участник остаётся участником, ряд цел, правило молчит.
+    expect(rowBoundaryTarget(blocks, txt!.id, rightField.id)).toBeNull()
+    // А цель «подпись правого» снизу — та самая щель между участниками.
+    expect(rowBoundaryTarget(blocks, txt!.id, rightTitle!.id)).toBe(txt!.id)
+    // Строки самого ряда правилу не подчиняются — внутри ряда перестановка свободна.
+    expect(rowBoundaryTarget(blocks, leftTitle!.id, rightTitle!.id)).toBeNull()
   })
 
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {

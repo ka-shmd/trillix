@@ -454,6 +454,39 @@ export function remapDropTarget(blocks: Block[], activeId: string, overId: strin
   return null
 }
 
+// rowBoundaryTarget — РЯД АТОМАРЕН ДЛЯ ВЕРТИКАЛЬНОЙ ВСТАВКИ (спека §5). Полотно во
+// время драга остаётся двумерным (в столбик не сворачивается), и ровно в одной позиции
+// verticalListSortingStrategy врёт: цель «щель между участниками ряда». Уронённый туда
+// блок либо сам занимает левую ячейку правого участника, либо гасит его бит — в обоих
+// случаях ряд рвётся, а щель показывала не это. Лечится подменой цели границей ряда —
+// ТЕМ ЖЕ приёмом, что §4.4 для чужих мульти-групп, и с тем же выбором направления:
+// сверху — последняя строка ряда (блок ложится под ряд), снизу — строка за рядом.
+//
+// Вставки ВНУТРЬ участника ряда это не касается: контент, добавленный в вопрос, ряд не
+// рвёт (участник остаётся тем же участником) — и остаётся легальным, как был.
+// Композиция с §4.4 обязательна и в этом порядке: remapDropTarget сам может вернуть
+// «под левым участником», а это и есть та самая щель.
+export function rowBoundaryTarget(blocks: Block[], activeId: string, overId: string): string | null {
+  const ai = blocks.findIndex((b) => b.id === activeId)
+  const ti = blocks.findIndex((b) => b.id === overId)
+  if (ai < 0 || ti < 0 || ai === ti) return null
+  const at = (id: string) => blocks.findIndex((b) => b.id === id)
+  for (const row of packRows(groupBlocks(blocks))) {
+    if (row.length < 2) continue
+    const rs = at(row[0]!.blocks[0]!.id) // первая строка ряда
+    const mid = at(row[1]!.blocks[0]!.id) // первая строка ПРАВОГО участника
+    const re = at(row[1]!.blocks[row[1]!.blocks.length - 1]!.id) // последняя строка ряда
+    if (ai >= rs && ai <= re) return null // активный сам из этого ряда — не мешаем
+    if (ti < rs || ti > re) continue
+    // Позиция вставки = индекс цели в исходном списке (арифметика planBlockDrop).
+    // Сверху щель между участниками даёт цель «последняя строка левого», снизу —
+    // «первая строка правого»; прочие цели внутри ряда легальны и ряд не рвут.
+    if (ai < rs) return ti === mid - 1 ? blocks[re]!.id : null
+    return ti === mid ? (blocks[re + 1]?.id ?? null) : null
+  }
+  return null
+}
+
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного
 // (в т.ч. массива options) не задевала исходник из Query или дубликат.
 const cloneBlock = (b: Block): Block => structuredClone(b)
