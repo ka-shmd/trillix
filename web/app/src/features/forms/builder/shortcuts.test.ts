@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { arrowDir, chords, SHORTCUTS, type KeyLike } from './shortcuts'
+import {
+  arrowDir,
+  BLOCK_COMMON,
+  chords,
+  commonFor,
+  formatLabel,
+  GLOBAL,
+  SHORTCUTS,
+  shortcutsFor,
+  type KeyLike,
+  type ShortcutContext,
+} from './shortcuts'
 
 // Ключевое событие по умолчанию — без модификаторов. Тесты дописывают нужные поля.
 function key(over: Partial<KeyLike>): KeyLike {
@@ -48,14 +59,15 @@ describe('chords — биндинги по e.code (§3.1)', () => {
 })
 
 describe('карта SHORTCUTS — единый источник (§3.2)', () => {
-  it('каждый контекст непустой и его матчеры не расходятся с chords', () => {
-    // «/» и печатный seed — символьные жесты, в карту не входят: у неё только биндинги.
+  it('каждый контекст непустой, у каждого пункта есть подпись и описание', () => {
     for (const [ctx, list] of Object.entries(SHORTCUTS)) {
       expect(list.length, ctx).toBeGreaterThan(0)
       for (const s of list) {
-        expect(typeof s.match, `${ctx}:${s.label}`).toBe('function')
         expect(s.label.length, `${ctx}:${s.hint}`).toBeGreaterThan(0)
         expect(s.hint.length, `${ctx}:${s.label}`).toBeGreaterThan(0)
+        // match необязателен только у символьных жестов («/», «любой символ», «⌫ в
+        // пустом»): их ловят по произведённому символу/состоянию, а не по e.code.
+        if (s.match !== undefined) expect(typeof s.match, `${ctx}:${s.label}`).toBe('function')
       }
     }
   })
@@ -63,7 +75,61 @@ describe('карта SHORTCUTS — единый источник (§3.2)', () =>
   it('Shift+Enter в тексте — отдельная строка карты, матчится только с Shift', () => {
     const inside = SHORTCUTS.text.find((s) => s.label === 'Shift+Enter')
     expect(inside).toBeDefined()
-    expect(inside!.match(key({ code: 'Enter', shiftKey: true }))).toBe(true)
-    expect(inside!.match(key({ code: 'Enter' }))).toBe(false)
+    expect(inside!.match!(key({ code: 'Enter', shiftKey: true }))).toBe(true)
+    expect(inside!.match!(key({ code: 'Enter' }))).toBe(false)
+  })
+})
+
+describe('ярусы карты — общее вынесено из контекстов (§7)', () => {
+  const contexts = Object.keys(SHORTCUTS) as ShortcutContext[]
+
+  it('ни один контекстный пункт не повторяет общий ярус', () => {
+    // Смысл разделения: у сфокусированной строки видно только специфичное, общее
+    // живёт в шпаргалке. Дубль в контексте вернул бы «Cmd+.» во все чипы разом.
+    const commonLabels = new Set([...BLOCK_COMMON, ...GLOBAL].map((s) => s.label))
+    for (const ctx of contexts) {
+      for (const s of SHORTCUTS[ctx]) {
+        expect(commonLabels.has(s.label), `${ctx}:${s.label}`).toBe(false)
+      }
+    }
+  })
+
+  it('внутри контекста подписи клавиш не дублируются', () => {
+    for (const ctx of contexts) {
+      const labels = SHORTCUTS[ctx].map((s) => s.label)
+      expect(new Set(labels).size, ctx).toBe(labels.length)
+    }
+  })
+
+  it('общий ярус блочных строк не приезжает на заголовок формы и пустое полотно', () => {
+    // На названии формы не работают ни меню действий, ни удаление блока, а undo там
+    // нативный (data-undo-native) — из общего остаётся только сама шпаргалка.
+    expect(commonFor('title').map((s) => s.label)).toEqual(['Mod+/'])
+    // Пустое полотно — не строка блока: Cmd+. и Cmd+Shift+⌫ там некому обработать.
+    expect(commonFor('canvas')).toEqual(GLOBAL)
+    expect(commonFor('text')).toEqual([...BLOCK_COMMON, ...GLOBAL])
+  })
+
+  it('Mod+Enter показывается текстовой строке только при отвечаемом блоке в группе', () => {
+    // handleAnswerAction молчит, когда в группе нет контрола ответа (одиночный абзац):
+    // подсказка обязана исчезать вместе с действием — демо-критерий этапа.
+    const withAnswer = shortcutsFor('text', { hasAnswer: true }).map((s) => s.label)
+    const alone = shortcutsFor('text').map((s) => s.label)
+    expect(withAnswer).toContain('Mod+Enter')
+    expect(alone).not.toContain('Mod+Enter')
+    // Остальные пункты контекста от флага не зависят.
+    expect(alone).toEqual(withAnswer.filter((l) => l !== 'Mod+Enter'))
+  })
+
+  it('картинка и date/scale — разные контексты: файловый диалог обещан только картинке', () => {
+    // На date/scale Cmd+Enter ищет input[type=file] внутри остановки и не находит.
+    expect(shortcutsFor('image').map((s) => s.label)).toContain('Mod+Enter')
+    expect(shortcutsFor('object').map((s) => s.label)).not.toContain('Mod+Enter')
+  })
+
+  it('formatLabel подставляет модификатор машины вместо токена Mod', () => {
+    // В node-окружении (без navigator) это Ctrl; на маке — ⌘. Токен наружу не течёт.
+    expect(formatLabel('Mod+Shift+⌫')).toBe('Ctrl+Shift+⌫')
+    expect(formatLabel('Alt+↑↓')).toBe('Alt+↑↓')
   })
 })
