@@ -125,6 +125,24 @@ func (t BlockType) carriesText() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockConsent
 }
 
+// supportsHalfWidth — типу разрешена half-ширина (спека фазы 13 §5, ADR §10):
+// визуально короткие контролы. Зеркалит supportsHalfWidth в formSchema.ts.
+func (t BlockType) supportsHalfWidth() bool {
+	switch t {
+	case BlockShortText, BlockEmail, BlockPhone, BlockNumber, BlockDate, BlockDropdown:
+		return true
+	default:
+		return false
+	}
+}
+
+// supportsOptionColumns — список вариантов умеет раскладываться в две колонки
+// (спека §5.1): choice-карточки. dropdown исключён — его список живёт внутри
+// нативного select. Зеркалит supportsOptionColumns в formSchema.ts.
+func (t BlockType) supportsOptionColumns() bool {
+	return t == BlockSingleChoice || t == BlockMultiChoice
+}
+
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.
 type Option struct {
@@ -145,6 +163,12 @@ type BlockSettings struct {
 	ImageKey    string   `json:"imageKey,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
+	// Width — half-ширина вопроса (спека §5): канон хранит только отклонение
+	// ("half"), пусто = во всю ширину. Только у supportsHalfWidth-типов.
+	Width string `json:"width,omitempty"`
+	// OptionColumns — раскладка списка вариантов в две колонки (спека §5.1):
+	// 0 = одна колонка, 2 = две. Только у supportsOptionColumns-типов.
+	OptionColumns int `json:"optionColumns,omitempty"`
 }
 
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
@@ -338,6 +362,25 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	// imageKey — только у image (как options у choice).
 	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
+	}
+	// width — только "half" и только у whitelist-типов (спека §5). Канон хранит
+	// отклонение: "full" в документе не пишется, а значит и не принимается.
+	if b.Settings.Width != "" {
+		if b.Settings.Width != "half" {
+			return schemaErr("%s: неизвестная ширина %q", at, b.Settings.Width)
+		}
+		if !b.Type.supportsHalfWidth() {
+			return schemaErr("%s: тип %q не может быть половинной ширины", at, b.Type)
+		}
+	}
+	// optionColumns — только 2 и только у choice-карточек (спека §5.1).
+	if b.Settings.OptionColumns != 0 {
+		if b.Settings.OptionColumns != 2 {
+			return schemaErr("%s: недопустимое число колонок вариантов %d", at, b.Settings.OptionColumns)
+		}
+		if !b.Type.supportsOptionColumns() {
+			return schemaErr("%s: тип %q не имеет колонок вариантов", at, b.Type)
+		}
 	}
 	if err := validateScaleSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)

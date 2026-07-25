@@ -105,6 +105,25 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
 
+// Типы, которым разрешена half-ширина (спека §5, ADR §10): визуально короткие
+// контролы. long_text/scale/choice-карточки в половину колонки не читаются.
+// Зеркалит Go supportsHalfWidth().
+const HALF_WIDTH_TYPES: ReadonlySet<BlockType> = new Set([
+  'short_text',
+  'email',
+  'phone',
+  'number',
+  'date',
+  'dropdown',
+])
+export const supportsHalfWidth = (t: BlockType): boolean => HALF_WIDTH_TYPES.has(t)
+
+// Типы, у которых список вариантов умеет раскладываться в две колонки (спека
+// §5.1): choice-карточки на полотне. dropdown исключён — его список живёт внутри
+// нативного select, колонок там нет. Зеркалит Go supportsOptionColumns().
+const OPTION_COLUMNS_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'multi_choice'])
+export const supportsOptionColumns = (t: BlockType): boolean => OPTION_COLUMNS_TYPES.has(t)
+
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
 // номера (+380, добавочные, международные) — для формы это дороже, чем принять
@@ -173,6 +192,12 @@ const settingsSchema = z.strictObject({
   // «ни одного» — недособранный черновик, как choice без опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
+  // Half-ширина вопроса (спека §5): канон хранит только отклонение — отсутствие
+  // ключа = во всю ширину. Разрешена только whitelist-типам (superRefine ниже).
+  width: z.literal('half').optional(),
+  // Раскладка списка вариантов в две колонки (спека §5.1): свойство всего списка,
+  // отсутствие = одна колонка. Только single_choice/multi_choice (superRefine).
+  optionColumns: z.literal(2).optional(),
 })
 
 // scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
@@ -212,6 +237,22 @@ export const blockSchema = z
         code: 'custom',
         message: `тип ${b.type} не имеет картинки`,
         path: ['settings', 'imageKey'],
+      })
+    }
+    // width: 'half' — только у whitelist-типов (спека §5).
+    if (b.settings?.width && !supportsHalfWidth(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не может быть половинной ширины`,
+        path: ['settings', 'width'],
+      })
+    }
+    // optionColumns — только у choice-карточек (спека §5.1).
+    if (b.settings?.optionColumns && !supportsOptionColumns(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не имеет колонок вариантов`,
+        path: ['settings', 'optionColumns'],
       })
     }
     // Диапазон шкалы — только у scale (как options у choice).

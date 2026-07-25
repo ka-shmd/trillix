@@ -84,6 +84,26 @@ describe('formSchemaSchema — валидные', () => {
     'минимальный блок без settings/required': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text' }],
     },
+    // Фаза 13.6: half-ширина у whitelist-типов и колонки вариантов у choice-карточек.
+    'width half у short_text': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { width: 'half' } }],
+    },
+    'width half у dropdown': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'dropdown', settings: { width: 'half', options: [{ id: 'o1', label: 'Мск' }] } }],
+    },
+    'optionColumns 2 у single_choice': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { optionColumns: 2, options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет' }] },
+        },
+      ],
+    },
+    'optionColumns 2 у multi_choice': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'multi_choice', settings: { optionColumns: 2, options: [{ id: 'o1', label: 'Go' }] } }],
+    },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
     'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
@@ -217,6 +237,30 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'шкала у не-scale': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 1, scaleMax: 5 } }],
+    },
+    // Фаза 13.6: ширина и колонки вариантов вне whitelist / вне допустимых значений.
+    'width у long_text (не whitelist)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { width: 'half' } }],
+    },
+    'width у single_choice (не whitelist)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { width: 'half' } }],
+    },
+    'width неизвестное значение': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { width: 'third' } }],
+    },
+    'width full не хранится (канон — только отклонение)': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { width: 'full' } }],
+    },
+    'optionColumns у dropdown': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'dropdown', settings: { optionColumns: 2, options: [{ id: 'o1', label: 'Мск' }] } }],
+    },
+    'optionColumns у short_text': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { optionColumns: 2 } }],
+    },
+    'optionColumns 3 недопустимо': {
+      blocks: [
+        { id: 'b', groupId: 'g1', type: 'single_choice', settings: { optionColumns: 3, options: [{ id: 'o1', label: 'Да' }] } },
+      ],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
     'redirect javascript:': { blocks: [], redirectUrl: 'javascript:alert(document.cookie)' },

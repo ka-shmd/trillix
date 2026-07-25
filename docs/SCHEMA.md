@@ -161,7 +161,12 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
         "placeholder": "Например…", // текстовые поля ввода (≤200); подсказка в поле
         "imageKey": "ws/ab12.png",  // только у image: ключ объекта в бакете (≤200)
         "scaleMin": 1,              // только у scale: оба конца или ни одного;
-        "scaleMax": 5               //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
+        "scaleMax": 5,              //   0 ≤ min < max ≤ 10 (1–5, NPS 0–10)
+        "width": "half",            // half-ширина вопроса (фаза 13.6): только whitelist
+                                    //   short_text/email/phone/number/date/dropdown;
+                                    //   отсутствие = во всю ширину ("full" не хранится)
+        "optionColumns": 2          // варианты в две колонки (только single_choice/
+                                    //   multi_choice); отсутствие = одна колонка
       }
     }
   ],
@@ -205,6 +210,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | длина `settings.placeholder` | ≤ 200 |
 | `settings.scaleMin` / `scaleMax` (scale) | оба или ни одного; 0 ≤ min < max ≤ 10 |
 | длина `settings.imageKey` (image) | ≤ 200 |
+| `settings.width` | только `"half"` и только у short_text/email/phone/number/date/dropdown |
+| `settings.optionColumns` | только `2` и только у single_choice/multi_choice |
 
 ---
 
