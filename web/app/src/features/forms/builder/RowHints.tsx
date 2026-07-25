@@ -34,7 +34,10 @@ export function RowHints({ rowId, lineH }: { rowId: string; lineH: string }) {
       // (top-1.5 = вертикальный padding строки, как у кластера значков слева). Правое
       // ПОЛЕ строки занято тоглом обязательности (left-full) — не пересекаемся.
       // Фон непрозрачный: длинная подпись занимает всю колонку и проходит под чипами.
-      className={`pointer-events-none absolute right-0 top-1.5 flex ${lineH} items-center gap-3 rounded-md bg-background pl-3 text-xs text-muted-foreground`}
+      // animate-in fade-in: проявление через opacity (§7) — чипы должны «проступать»,
+      // а не мигать при каждом переезде каретки. Утилита из tw-animate-css, та же, что
+      // у оверлеев shadcn; своей анимации (motion) тут не нужно.
+      className={`pointer-events-none absolute right-0 top-1.5 flex ${lineH} animate-in items-center gap-3 rounded-md bg-background pl-3 text-xs text-muted-foreground fade-in duration-150`}
     >
       {list.map((s) => (
         <span key={s.label} className="flex items-center gap-1.5 whitespace-nowrap">
