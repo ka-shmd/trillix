@@ -1,4 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
+import { login, seedAccount } from './helpers/session'
 
 // Настройки формы на стороне респондента (фаза 8.5, шаги 1 и 4) против prod-local:
 // свой текст благодарности и лимит мест, закрывающий приём.
@@ -32,13 +33,12 @@ test('свой текст благодарности и лимит мест: в�
   const thankYouText = `Записали вас, до встречи ${uniq}`
   const closedMessage = `Мест больше нет ${uniq}`
 
-  // 1. Регистрация через UI: сессия и CSRF-cookie оказываются в контексте страницы,
-  // и дальше page.request ходит уже авторизованным.
-  await page.goto('/register')
-  await page.getByLabel('Email').fill(`settings-${uniq}@example.com`)
-  await page.getByLabel('Пароль').fill('supersecret123')
-  await page.getByRole('button', { name: 'Создать аккаунт' }).click()
-  await page.waitForURL('**/forms')
+  // 1. Сессия: учётка заводится мимо HTTP, вход — обычной ручкой (сессия и
+  // CSRF-cookie оказываются в контексте страницы, дальше page.request ходит
+  // авторизованным). Регистрация здесь не предмет проверки, а средство: ведро
+  // `registerBurst` бережём для full-loop, которому она предмет.
+  const email = seedAccount('settings')
+  await login(page, email)
 
   const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
