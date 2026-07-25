@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
@@ -188,6 +188,33 @@ describe('чипы у сфокусированной строки (§7)', () => 
     expect(text).toContain('Выйти из списка') // длинный пункт, в чипы не попавший
     expect(text).toContain('Везде на полотне')
     for (const s of BLOCK_COMMON) expect(text).toContain(s.hint)
+  })
+
+  it('переход между поверхностями одной строки чипы не гасит', () => {
+    // Вариант → соседний вариант: focusout приходит перед focusin, и безусловное
+    // снятие активности давало бы пустой кадр — чипы моргали бы на каждой стрелке
+    // по списку. Проверяем именно промежуточное состояние: после focusout с целью
+    // внутри своей же строки набор обязан остаться.
+    const { focus } = setup({
+      schemaVersion: 2,
+      blocks: [
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: {
+            options: [
+              { id: 'o1', label: 'Да' },
+              { id: 'o2', label: 'Нет' },
+            ],
+          },
+        },
+      ],
+    })
+    focus('ch', 'start')
+    const [first, second] = [...document.querySelectorAll('input')]
+    act(() => fireEvent.focusOut(first!, { relatedTarget: second }))
+    expect(chips()).toEqual(['Enter', '⌫ в пустом', 'Alt+↑↓'])
   })
 
   it('каретка ушла с полотна — чипы гаснут', () => {

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import type { FocusEvent } from 'react'
 import type { ShortcutContext } from './shortcuts'
 
 // activeRow — где сейчас каретка на полотне, в терминах карты шорткатов (§7 спеки
@@ -83,7 +84,7 @@ export function useRowFocus(
   id: string,
   ctx: ShortcutContext,
   hasAnswer = false,
-): { onFocus: () => void; onBlur: () => void } {
+): { onFocus: () => void; onBlur: (e: FocusEvent<Element>) => void } {
   const api = useActiveRowApi()
   // Снятие при размонтировании: у удалённой строки focusout не приходит, и подсказки
   // остались бы висеть от несуществующего блока. id держим в ref (правка ref во время
@@ -96,7 +97,17 @@ export function useRowFocus(
   return useMemo(
     () => ({
       onFocus: () => api?.activate({ id, ctx, hasAnswer }),
-      onBlur: () => api?.deactivate(id),
+      onBlur: (e: FocusEvent<Element>) => {
+        // Переход МЕЖДУ поверхностями одной строки (вариант → соседний вариант) —
+        // не уход с неё. Без этой проверки focusout гасит активность, а следующий
+        // focusin зажигает её заново: два рендера подряд, и чипы моргают на каждой
+        // стрелке по списку вариантов. Свою строку узнаём по data-block-id корня
+        // (BlockRow); у сентинелов заголовка/пустого полотна его нет — они гасятся
+        // как обычно.
+        const to = e.relatedTarget as HTMLElement | null
+        if (to?.closest('[data-block-id]')?.getAttribute('data-block-id') === id) return
+        api?.deactivate(id)
+      },
     }),
     [api, id, ctx, hasAnswer],
   )

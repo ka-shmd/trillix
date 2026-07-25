@@ -6,6 +6,7 @@ import {
   useState,
   type ChangeEvent,
   type ClipboardEvent,
+  type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
@@ -470,9 +471,9 @@ export function BlockRow({
                   setLabelFocused(true)
                   textFocus.onFocus()
                 }}
-                onBlur={() => {
+                onBlur={(e) => {
                   setLabelFocused(false)
-                  textFocus.onBlur()
+                  textFocus.onBlur(e)
                 }}
                 onKeyDown={onLabelKeyDown}
                 // block: textarea по умолчанию inline-block и оставляет под собой
@@ -660,7 +661,7 @@ function ObjectStop({
       // контроле (селектор шкалы, кнопки картинки) клавиши остановки не работают — та
       // же граница, что у onKeyDown выше. onFocus/onBlur всплывают, поэтому проверка нужна.
       onFocus={(e) => e.target === e.currentTarget && rowFocus.onFocus()}
-      onBlur={(e) => e.target === e.currentTarget && rowFocus.onBlur()}
+      onBlur={(e) => e.target === e.currentTarget && rowFocus.onBlur(e)}
       // Кольцо при фокусе (§2.1): объектная остановка «подсвечена», видно, что каретка
       // на ней. Программный фокус с клавиатуры даёт focus-visible; :focus — подстраховка.
       className="min-w-0 rounded-md outline-none ring-primary/40 focus:ring-2 focus-visible:ring-2"
@@ -836,9 +837,9 @@ function AnswerField({
       setFocused(true)
       rowFocus.onFocus()
     },
-    onBlur: () => {
+    onBlur: (e: FocusEvent<Element>) => {
       setFocused(false)
-      rowFocus.onBlur()
+      rowFocus.onBlur(e)
     },
   }
   if (block.type === 'long_text') {

@@ -127,6 +127,23 @@ describe('ярусы карты — общее вынесено из конте�
     expect(shortcutsFor('object').map((s) => s.label)).not.toContain('Mod+Enter')
   })
 
+  it('символьные жесты объектной остановки различены: «/» и печатный символ', () => {
+    // ObjectStop.onKeyDown обрабатывает «/» ОТДЕЛЬНО от печатного символа: «/» ставит
+    // строку ниже с открытым меню типов, любой другой символ засевает ею текст. Один
+    // пункт «любой символ» на оба обещал бы за «/» неправду.
+    for (const ctx of ['image', 'object'] as const) {
+      const labels = SHORTCUTS[ctx].map((s) => s.label)
+      expect(labels, ctx).toContain('/')
+      expect(labels, ctx).toContain('любой символ')
+    }
+  })
+
+  it('Mod+Enter в варианте показан: обработчик списка ловит его как Enter', () => {
+    // chords.enter матчит и Cmd+Enter (code 'Enter'), и OptionsInline не исключает
+    // модификатор — клавиша работает, значит обязана быть в карте.
+    expect(SHORTCUTS.option.map((s) => s.label)).toContain('Mod+Enter')
+  })
+
   it('formatLabel подставляет модификатор машины вместо токена Mod', () => {
     // В node-окружении (без navigator) это Ctrl; на маке — ⌘. Токен наружу не течёт.
     expect(formatLabel('Mod+Shift+⌫')).toBe('Ctrl+Shift+⌫')
