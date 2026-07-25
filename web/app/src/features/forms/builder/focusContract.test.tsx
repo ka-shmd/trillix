@@ -35,6 +35,7 @@ function setup(schema: FormSchema) {
     onDeleteBlock: vi.fn(),
     onAnswerAction: vi.fn(),
     onArrow: vi.fn(),
+    onRowShift: vi.fn(),
   }
   render(
     <BuilderStoreContext.Provider value={store}>
@@ -407,6 +408,7 @@ function reactiveRow(text = '') {
         onDeleteBlock={vi.fn()}
         onAnswerAction={vi.fn()}
         onArrow={vi.fn()}
+        onRowShift={vi.fn()}
       />
     )
   }
@@ -516,5 +518,92 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     engine.focusBlock('ch', 'start')
     fireEvent.keyDown(el(), { key: '.', code: 'Period', ctrlKey: true })
     expect(document.body.textContent ?? '').toContain('Дублировать')
+  })
+})
+
+describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркало жеста)', () => {
+  const rowKey = (dir: 'left' | 'right') => ({
+    key: dir === 'right' ? 'ArrowRight' : 'ArrowLeft',
+    code: dir === 'right' ? 'ArrowRight' : 'ArrowLeft',
+    ctrlKey: true,
+    altKey: true,
+  })
+
+  it('на подписи вопроса зовёт перенос — цель выбирает полотно', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'c1', groupId: 'g1', type: 'title', text: 'Имя' },
+        { id: 'f1', groupId: 'g1', type: 'short_text' },
+      ],
+    })
+    engine.focusBlock('c1', 'end')
+    fireEvent.keyDown(el(), rowKey('right'))
+    expect(handlers.onRowShift).toHaveBeenCalledWith('c1', 'right')
+    fireEvent.keyDown(el(), rowKey('left'))
+    expect(handlers.onRowShift).toHaveBeenCalledWith('c1', 'left')
+  })
+
+  it('на инпуте плейсхолдера работает: у голого поля это единственная поверхность', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
+    })
+    engine.focusBlock('st', 'start')
+    fireEvent.keyDown(el(), rowKey('right'))
+    expect(handlers.onRowShift).toHaveBeenCalledWith('st', 'right')
+  })
+
+  it('на объектной остановке (date) переносит ВОПРОС, а не строку', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [{ id: 'd', groupId: 'g1', type: 'date', settings: {} }],
+    })
+    engine.focusBlock('d')
+    fireEvent.keyDown(el(), rowKey('right'))
+    expect(handlers.onRowShift).toHaveBeenCalledWith('d', 'right')
+  })
+
+  it('на варианте choice ставит в ряд ВАРИАНТ; каретка едет с ним', () => {
+    const { engine, store, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет' }] },
+        },
+      ],
+    })
+    engine.focusBlock('ch', 'end') // каретка на последнем варианте
+    const before = el()
+    fireEvent.keyDown(before, rowKey('right'))
+    const opts = () => store.getState().blocks[0]!.settings!.options!
+    expect(opts()[1]?.column).toBe('right')
+    // Вопрос не тронут: жест на варианте — про вариант (§5.1).
+    expect(handlers.onRowShift).not.toHaveBeenCalled()
+    expect(el()).toBe(before)
+
+    fireEvent.keyDown(el(), rowKey('left'))
+    expect(opts()[1]).not.toHaveProperty('column')
+  })
+
+  it('на варианте dropdown жест уходит ВОПРОСУ: рядов у нативного списка нет', () => {
+    const { engine, store, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        {
+          id: 'dd',
+          groupId: 'g1',
+          type: 'dropdown',
+          settings: { options: [{ id: 'o1', label: 'Мск' }, { id: 'o2', label: 'Спб' }] },
+        },
+      ],
+    })
+    engine.focusBlock('dd', 'end')
+    fireEvent.keyDown(el(), rowKey('right'))
+    expect(handlers.onRowShift).toHaveBeenCalledWith('dd', 'right')
+    expect(store.getState().blocks[0]!.settings!.options![1]).not.toHaveProperty('column')
   })
 })

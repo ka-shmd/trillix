@@ -45,6 +45,11 @@ export const chords = {
   moveGroup: (e: KeyLike) => e.altKey && e.shiftKey && vertArrow(e),
   // Alt+↑/↓ — перенос блока/варианта (§3.2). Проверяется после moveGroup.
   moveItem: (e: KeyLike) => e.altKey && vertArrow(e),
+  // Mod+Alt+→ / Mod+Alt+← — перенос в правую ячейку ряда и обратно (§5): клавиатурное
+  // зеркало жеста, команда ПЕРЕНОСА, а не переключатель режима. Именно Mod+Alt, а не
+  // Alt: Alt+←/→ и Alt+Shift+←/→ заняты навигацией и выделением по словам внутри текста.
+  rowRight: (e: KeyLike) => mod(e) && e.altKey && e.code === 'ArrowRight',
+  rowLeft: (e: KeyLike) => mod(e) && e.altKey && e.code === 'ArrowLeft',
   // Enter — новый блок/вариант; Shift+Enter (внутрь группы) отличают по e.shiftKey
   // в обработчике. Проверяется после answerAction (Cmd+Enter — тоже code 'Enter').
   enter: (e: KeyLike) => e.code === 'Enter',
@@ -157,12 +162,16 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     sc((e) => chords.enter(e) && e.shiftKey, 'Shift+Enter', 'Новый блок внутрь вопроса'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
+    sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
+    sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
     gesture('⌫ в начале', 'Склеить с предыдущей строкой'),
   ],
   option: [
     sc(chords.enter, 'Enter', 'Новый вариант ниже', 'Новый вариант'),
     gesture('⌫ в пустом', 'Удалить вариант', 'Удалить'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить вариант', 'Переместить'),
+    sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вариантом', 'В ряд'),
+    sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
     // Длинные подписи — в чипы такие пункты не влезают, поэтому стоят после трёх
     // коротких: чипы берут начало списка, шпаргалка печатает его целиком.
     gesture('Enter в пустом последнем', 'Выйти из списка'),
@@ -172,8 +181,14 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     sc(chords.answerAction, 'Mod+Enter', 'Новый вариант ниже'),
   ],
   // field — инпут текста-подсказки под вопросом. Клавиш у него почти нет намеренно:
-  // это необязательный лист (§2.1), Enter и переносы там не обрабатываются.
-  field: [gesture('⌫ в пустом', 'Вернуться к подписи', 'К подписи')],
+  // это необязательный лист (§2.1), Enter и вертикальные переносы там не обрабатываются.
+  // Исключение — ряд: у ГОЛОГО поля (без подписи) это единственная поверхность, и без
+  // Mod+Alt+←/→ здесь сборка ряда без мыши для него была бы невозможна.
+  field: [
+    gesture('⌫ в пустом', 'Вернуться к подписи', 'К подписи'),
+    sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
+    sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
+  ],
   // На объектной остановке (image/date/scale) печатный символ засевает текстовую
   // строку НИЖЕ, а «/» — строку с открытым меню типов: два разных жеста, и «любой
   // символ» без отдельной строки про «/» обещал бы за него неправду.
@@ -183,6 +198,8 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     sc(chords.enter, 'Enter', 'Новый блок ниже', 'Новый блок'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
+    sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
+    sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
     gesture('/', 'Вставить блок ниже'),
     gesture('любой символ', 'Начать текст ниже'),
   ],
@@ -192,6 +209,8 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     gesture('любой символ', 'Начать текст ниже', 'Текст ниже'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
+    sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
+    sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
     gesture('/', 'Вставить блок ниже'),
   ],
   title: [sc((e) => chords.enter(e) || chords.arrowDown(e), 'Enter / ↓', 'К первому блоку')],

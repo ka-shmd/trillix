@@ -41,6 +41,7 @@ function CanvasBody({
     onDeleteBlock: vi.fn(),
     onAnswerAction: vi.fn(),
     onArrow: vi.fn(),
+    onRowShift: vi.fn(),
   }
   return (
     <BuilderStoreContext.Provider value={store}>
@@ -138,10 +139,12 @@ describe('чипы у сфокусированной строки (§7)', () => 
     expect(chips()).not.toEqual(first)
   })
 
-  it('инпут плейсхолдера: своя одна подсказка, а не текстовые клавиши', () => {
+  it('инпут плейсхолдера: свои клавиши листа и ряд, а не текстовые', () => {
     const { focus } = setup(QUESTION)
     focus('inp', 'end')
-    expect(chips()).toEqual(['⌫ в пустом'])
+    // Лист обхода: Enter и «/» здесь не работают и не обещаются. Ряд (Mod+Alt+←/→)
+    // работает — у голого поля это единственная поверхность вопроса (§5).
+    expect(chips()).toEqual(['⌫ в пустом', 'Ctrl+Alt+→', 'Ctrl+Alt+←'])
     expect(hintText()).toContain('К подписи')
   })
 

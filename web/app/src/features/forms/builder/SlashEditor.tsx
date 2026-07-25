@@ -95,6 +95,7 @@ export function SlashEditor({
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
   const placeInRow = useBuilderStore((s) => s.placeInRow)
+  const takeOwnRow = useBuilderStore((s) => s.takeOwnRow)
   // Драг-рамка (Д10): прямоугольник в координатах полотна (canvasRef), обнимающий
   // union-rect РЕАЛЬНЫХ (трансформированных) rect'ов строк будущего состава группы.
   // Статичный ring на <li> группы врал: sortable раздвигает строки CSS-трансформами,
@@ -519,6 +520,20 @@ export function SlashEditor({
     else if (dir === 'up') focusTitle()
   }
 
+  // Mod+Alt+→/← — клавиатурное зеркало жеста ряда (§5). Цель выбирает полотно: оно
+  // знает соседей (как и у Backspace-схлопывания), строка знает только себя. Вправо —
+  // в правую ячейку ПРЕДЫДУЩЕГО ряда, то есть в ряд с предыдущей группой; влево —
+  // назад своим рядом. Каретка не трогается: id блока стабилен, строка не
+  // перемонтируется — «каретка едет с блоком» (§2.4).
+  function handleRowShift(id: string, dir: 'left' | 'right') {
+    if (dir === 'left') return takeOwnRow(id)
+    const gid = blocks.find((b) => b.id === id)?.groupId
+    if (gid === undefined) return
+    const gi = groups.findIndex((g) => g.id === gid)
+    const prev = groups[gi - 1]
+    if (prev) placeInRow(gid, prev.id)
+  }
+
   return (
     // Метрики холста = общий .rf-page (fields.css): десктоп 96/80/96, мобильный
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
@@ -634,6 +649,7 @@ export function SlashEditor({
                   onDeleteBlock={handleDeleteBlock}
                   onAnswerAction={handleAnswerAction}
                   onArrow={handleArrow}
+                  onRowShift={handleRowShift}
                 />
               ))}
             </ol>
@@ -745,6 +761,7 @@ function GroupRow({
   onDeleteBlock,
   onAnswerAction,
   onArrow,
+  onRowShift,
 }: {
   group: { id: string; blocks: Block[] }
   // Первая группа полотна: её первая строка — начало формы, у пустого текста там
@@ -771,6 +788,7 @@ function GroupRow({
   onDeleteBlock: (id: string) => void
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
+  onRowShift: (id: string, dir: 'left' | 'right') => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: group.id,
@@ -845,6 +863,7 @@ function GroupRow({
               onDeleteBlock={onDeleteBlock}
               onAnswerAction={onAnswerAction}
               onArrow={onArrow}
+              onRowShift={onRowShift}
             />
           ))}
         </div>

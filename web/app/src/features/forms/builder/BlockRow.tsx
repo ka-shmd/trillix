@@ -82,6 +82,9 @@ export interface BlockRowProps {
   // родитель — знает состав группы). На картинке файловый диалог открывает ObjectStop.
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
+  // Mod+Alt+→/← — перенос вопроса в правую ячейку ряда и обратно (§5). Цель выбирает
+  // полотно (знает соседей), строка только сообщает о жесте.
+  onRowShift: (id: string, dir: 'left' | 'right') => void
 }
 
 // BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
@@ -105,6 +108,7 @@ export function BlockRow({
   onDeleteBlock,
   onAnswerAction,
   onArrow,
+  onRowShift,
 }: BlockRowProps) {
   const engine = useFocusEngine()
   const updateBlock = useBuilderStore((s) => s.updateBlock)
@@ -258,6 +262,11 @@ export function BlockRow({
       // меняется (regroup якорит по id), строка не перемонтируется.
       e.preventDefault()
       moveGroup(block.id, arrowDir(e))
+    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+      // Mod+Alt+→/← — в ряд с предыдущим вопросом и обратно (§5). Каретка едет с
+      // блоком по той же причине, что у moveGroup: id стабилен, ремаунта нет.
+      e.preventDefault()
+      onRowShift(block.id, chords.rowRight(e) ? 'right' : 'left')
     } else if (chords.enter(e)) {
       // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
       e.preventDefault()
@@ -502,6 +511,7 @@ export function BlockRow({
             onAddBelow={onAddBelow}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
+            onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
       ) : supportsPlaceholder(block.type) ? (
@@ -511,6 +521,7 @@ export function BlockRow({
             onArrow={onArrow}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
+            onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
       ) : (
@@ -524,6 +535,7 @@ export function BlockRow({
           onOpenActions={() => setActionOpen(true)}
           onMove={(dir) => moveBlock(block.id, dir)}
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
+          onRowShift={(dir) => onRowShift(block.id, dir)}
         >
           {isImage ? (
             <ImageField block={block} formId={formId} />
@@ -590,6 +602,7 @@ function ObjectStop({
   onArrow,
   onMove,
   onMoveGroup,
+  onRowShift,
 }: {
   block: Block
   children: ReactNode
@@ -600,6 +613,7 @@ function ObjectStop({
   onArrow: (id: string, dir: 'up' | 'down') => void
   onMove: (dir: 'up' | 'down') => void
   onMoveGroup: (dir: 'up' | 'down') => void
+  onRowShift: (dir: 'left' | 'right') => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
@@ -628,6 +642,11 @@ function ObjectStop({
     } else if (chords.moveGroup(e)) {
       e.preventDefault()
       onMoveGroup(arrowDir(e))
+    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+      // Mod+Alt+→/← — ряд (§5): у объектной остановки (date/scale/картинка в вопросе)
+      // жест тот же, что на подписи — переносится ВОПРОС, а не строка.
+      e.preventDefault()
+      onRowShift(chords.rowRight(e) ? 'right' : 'left')
     } else if (chords.moveItem(e)) {
       e.preventDefault()
       onMove(arrowDir(e))
@@ -751,6 +770,7 @@ function AnswerField({
   onArrow,
   onDeleteBlock,
   onOpenActions,
+  onRowShift,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
@@ -759,6 +779,10 @@ function AnswerField({
   onDeleteBlock?: (id: string) => void
   // Cmd+. — меню действий блока (§3.3).
   onOpenActions?: () => void
+  // Mod+Alt+→/← — ряд (§5). У ГОЛОГО поля инпут плейсхолдера — единственная
+  // поверхность вопроса, поэтому жест обязан работать и здесь. Внутри объектной
+  // остановки (date) поля рисуются без обработчиков — там жест ведёт ObjectStop.
+  onRowShift?: (dir: 'left' | 'right') => void
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
@@ -796,6 +820,9 @@ function AnswerField({
     } else if (onDeleteBlock && chords.deleteBlock(e)) {
       e.preventDefault()
       onDeleteBlock(block.id)
+    } else if (onRowShift && (chords.rowRight(e) || chords.rowLeft(e))) {
+      e.preventDefault()
+      onRowShift(chords.rowRight(e) ? 'right' : 'left')
     } else if (onArrow && chords.arrowUp(e) && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
@@ -899,6 +926,7 @@ function OptionsInline({
   onAddBelow,
   onDeleteBlock,
   onOpenActions,
+  onRowShift,
 }: {
   block: Block
   onLeaveTop: () => void
@@ -910,10 +938,17 @@ function OptionsInline({
   onDeleteBlock: (id: string) => void
   // Cmd+. на варианте — меню действий всего choice-блока (§3.3).
   onOpenActions: () => void
+  // Mod+Alt+→/← у dropdown: список живёт в нативном select, рядов у его вариантов НЕТ
+  // (спека §5.1), поэтому жест на этой поверхности переносит сам ВОПРОС. У голого
+  // dropdown-поля список — единственная поверхность, иначе ряд ему был бы недоступен
+  // с клавиатуры вовсе.
+  onRowShift: (dir: 'left' | 'right') => void
 }) {
   const addOption = useBuilderStore((s) => s.addOption)
   const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
   const moveOption = useBuilderStore((s) => s.moveOption)
+  const placeOptionInRow = useBuilderStore((s) => s.placeOptionInRow)
+  const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const updateOption = useBuilderStore((s) => s.updateOption)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
@@ -970,6 +1005,16 @@ function OptionsInline({
       // тот же жест «действие над ответом» (§3.2).
       e.preventDefault()
       pendingFocus.current = addOptionAfter(block.id, optionId)
+    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+      // Mod+Alt+→/← — ряд вариантов (§5.1): та же механика и те же аккорды, что у
+      // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
+      // У dropdown рядов нет, и жест уходит вопросу (см. проп onRowShift).
+      e.preventDefault()
+      if (block.type === 'dropdown') return onRowShift(chords.rowRight(e) ? 'right' : 'left')
+      const prev = options[i - 1]
+      if (chords.rowLeft(e)) takeOptionOwnRow(block.id, optionId)
+      else if (prev) placeOptionInRow(block.id, optionId, prev.id)
+      pendingFocus.current = optionId
     } else if (chords.moveItem(e)) {
       // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
       e.preventDefault()
