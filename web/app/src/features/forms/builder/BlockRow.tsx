@@ -317,6 +317,9 @@ export function BlockRow({
     <div
       ref={setNodeRef}
       style={style}
+      // data-block-id — якорь для замера строки драг-рамкой (updateFrame в
+      // SlashEditor): getBoundingClientRect по нему учитывает live-трансформы.
+      data-block-id={block.id}
       // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
       // поток она НЕ входит: -my-1.5 гасит её ровно на padding, поэтому flex-gap
       // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента

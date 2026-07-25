@@ -24,6 +24,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { motion } from 'motion/react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -34,6 +35,7 @@ import {
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 import { useBuilderStore } from './storeContext'
+import { planBlockDrop, remapDropTarget } from './store'
 import { type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
@@ -79,11 +81,15 @@ export function SlashEditor({
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
-  // dragBlockId/overBlockId — активный БЛОК (не группа) и строка под ним: для
-  // подсветки целевой группы и линии вставки при блочном драге. У группового драга
-  // отклик нативный (sortable двигает группы сам), эти состояния не участвуют.
-  const [dragBlockId, setDragBlockId] = useState<string | null>(null)
-  const [overBlockId, setOverBlockId] = useState<string | null>(null)
+  // Драг-рамка (Д10): прямоугольник в координатах полотна (canvasRef), обнимающий
+  // union-rect РЕАЛЬНЫХ (трансформированных) rect'ов строк будущего состава группы.
+  // Статичный ring на <li> группы врал: sortable раздвигает строки CSS-трансформами,
+  // а layout-бокс родителя не меняется — строки визуально уезжали за рамку. Поэтому
+  // рамка — absolute-оверлей, который меряет DOM (getBoundingClientRect учитывает
+  // трансформы) на каждый onDragMove/onDragOver. У группового драга отклик нативный
+  // (sortable двигает группы сам), рамка не участвует.
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const [frame, setFrame] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Ссылка на textarea заголовка формы: когда удаляют последний блок и полотно пустеет,
   // фокус переносим сюда, а не теряем в body.
@@ -129,32 +135,58 @@ export function SlashEditor({
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
-    return closestCenter({
+    const collisions = closestCenter({
       ...args,
       droppableContainers: args.droppableContainers.filter(
         (c) => groupIds.has(String(c.id)) === isGroupDrag,
       ),
     })
+    if (isGroupDrag || collisions.length === 0) return collisions
+    // Честная щель (§4.4): если ближайшая цель — строка внутри чужой мульти-группы,
+    // куда отвечаемому/подписи нельзя, цель подменяется той строкой, дроп «на
+    // которую» даёт легальную точку — sortable раскрывает щель там, где блок реально
+    // приземлится (сразу под группой), а не раздвигает её строки изнутри. Дроп при
+    // этом легален уже на уровне over; правило в planBlockDrop — вторая линия
+    // обороны для путей мимо коллизий. Подмена — перестановкой внутри списка
+    // closestCenter (там все кандидаты слоя): у dnd-kit over = collisions[0].
+    const remapped = remapDropTarget(blocks, String(args.active.id), String(collisions[0]!.id))
+    if (!remapped) return collisions
+    const hit = collisions.find((c) => String(c.id) === remapped)
+    return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
   }
 
-  // Отклик блочного драга над ЧУЖОЙ мульти-группой: ring подсвечивает её границы —
-  // видно, какой вопрос примет блок. Позицию вставки показывает сама нативная
-  // анимация (строки расступаются), линия не нужна. Одиночки не подсвечиваем
-  // (ring вокруг одной строки — шум без информации).
-  let highlightGroupId: string | null = null
-  if (dragBlockId && overBlockId) {
-    const activeBlk = blocks.find((b) => b.id === dragBlockId)
-    const overBlk = blocks.find((b) => b.id === overBlockId)
-    if (activeBlk && overBlk && activeBlk.groupId !== overBlk.groupId) {
-      const g = groups.find((x) => x.id === overBlk.groupId)
-      if (g && g.blocks.length > 1) highlightGroupId = g.id
+  // Пересчёт драг-рамки: состав отдаёт planBlockDrop (будущая группа активного
+  // блока, при перенаправлении — чужая группа, под которую он уедет), геометрию —
+  // живой DOM по data-block-id. Пустой состав (блок остаётся одиночкой) — рамки нет.
+  function updateFrame(activeId: string, overId: string | null) {
+    const root = canvasRef.current
+    if (!root || !overId || groupIds.has(activeId)) return setFrame(null)
+    const plan = planBlockDrop(blocks, activeId, overId)
+    if (!plan || plan.frameIds.length === 0) return setFrame(null)
+    const cr = root.getBoundingClientRect()
+    let left = Infinity
+    let top = Infinity
+    let right = -Infinity
+    let bottom = -Infinity
+    for (const id of plan.frameIds) {
+      const el = root.querySelector<HTMLElement>(`[data-block-id="${id}"]`)
+      if (!el) continue
+      const r = el.getBoundingClientRect()
+      left = Math.min(left, r.left)
+      top = Math.min(top, r.top)
+      right = Math.max(right, r.right)
+      bottom = Math.max(bottom, r.bottom)
     }
+    if (left === Infinity) return setFrame(null)
+    const next = { x: left - cr.left, y: top - cr.top, w: right - left, h: bottom - top }
+    setFrame((p) =>
+      p && p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h ? p : next,
+    )
   }
 
   // Дроп по слою: группа → перестановка групп, блок → перестановка блоков.
   function onDragEnd(e: DragEndEvent) {
-    setDragBlockId(null)
-    setOverBlockId(null)
+    setFrame(null)
     const { active, over } = e
     if (!over || active.id === over.id) return
     const activeId = String(active.id)
@@ -331,7 +363,21 @@ export function SlashEditor({
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
     <FocusEngineProvider value={engine}>
-    <div className="mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
+    {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него). */}
+    <div ref={canvasRef} className="relative mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24">
+      {/* Драг-рамка (Д10): один absolute-прямоугольник ДО списка в DOM — строки
+          (positioned) рисуются поверх. Спринг motion сглаживает переезд между
+          группами и расширение под растущий состав; initial=false — рамка
+          появляется сразу на месте, без вылета из угла. */}
+      {frame && (
+        <motion.div
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-primary/40"
+          initial={false}
+          animate={{ x: frame.x - 10, y: frame.y - 6, width: frame.w + 20, height: frame.h + 12 }}
+          transition={{ type: 'spring', stiffness: 550, damping: 45 }}
+        />
+      )}
       <FormTitleInput
         formId={formId}
         initialTitle={initialTitle}
@@ -345,19 +391,12 @@ export function SlashEditor({
         <DndContext
           sensors={sensors}
           collisionDetection={collisionDetection}
-          onDragStart={(e) => {
-            const id = String(e.active.id)
-            setDragBlockId(groupIds.has(id) ? null : id)
-          }}
-          onDragOver={(e) => {
-            const id = e.over ? String(e.over.id) : null
-            setOverBlockId(id && !groupIds.has(id) ? id : null)
-          }}
+          // Рамка пересчитывается и по move (курсор едет, строки доигрывают
+          // трансформы), и по over (сменилась цель → сменился будущий состав).
+          onDragMove={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
+          onDragOver={(e) => updateFrame(String(e.active.id), e.over ? String(e.over.id) : null)}
           onDragEnd={onDragEnd}
-          onDragCancel={() => {
-            setDragBlockId(null)
-            setOverBlockId(null)
-          }}
+          onDragCancel={() => setFrame(null)}
         >
           <SortableContext items={groups.map((g) => g.id)} strategy={verticalListSortingStrategy}>
             {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
@@ -373,7 +412,6 @@ export function SlashEditor({
                   group={g}
                   formId={formId}
                   blockIds={blockIds}
-                  highlight={g.id === highlightGroupId}
                   menuForId={menuForId}
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
@@ -418,12 +456,12 @@ export function SlashEditor({
 // blockIds — ОБЩИЙ список всех block-id полотна: items вложенного SortableContext
 // одинаковы у всех групп, чтобы блочный слой был одной сортируемой вселенной
 // (глобальные индексы → родная анимация через границы групп; см. коммент у blockIds
-// в SlashEditor). highlight — над группой тащат блок: ring показывает её границы.
+// в SlashEditor). Отклик блочного драга над группой — драг-рамка полотна (Д10),
+// GroupRow своей подсветки не несёт.
 function GroupRow({
   group,
   formId,
   blockIds,
-  highlight,
   menuForId,
   onAddBelow,
   onInsertBelow,
@@ -436,7 +474,6 @@ function GroupRow({
   group: { id: string; blocks: Block[] }
   formId: string
   blockIds: string[]
-  highlight: boolean
   menuForId: string | null
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onInsertBelow: (id: string) => void
@@ -461,9 +498,7 @@ function GroupRow({
       style={style}
       // group/grp — именованная Tailwind-группа: `group` без имени занят строками
       // (BlockRow) для своих hover-значков, hover группы должен слушаться отдельно.
-      className={`group/grp relative rounded-md ${isDragging ? 'z-10 opacity-70' : ''} ${
-        highlight ? 'ring-2 ring-primary/40' : ''
-      }`}
+      className={`group/grp relative rounded-md ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Рейл — постоянная идентичность МУЛЬТИ-группы (§4.3): тонкая линия в левом
           жёлобе, проявляется по hover/focus-within всей группы. Absolute и вне
