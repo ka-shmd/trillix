@@ -36,6 +36,7 @@ import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
 import { arrowDir, chords } from './shortcuts'
 import { useRowFocus } from './activeRow'
+import { RowHints } from './RowHints'
 
 export interface BlockRowProps {
   block: Block
@@ -416,6 +417,11 @@ export function BlockRow({
           левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
           ответов не собирает, required к нему неприменим. */}
       {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
+
+      {/* Чипы-подсказки сфокусированной строки (§7): только клавиши этой поверхности,
+          общие — в шпаргалке Mod+/. Рисуются всегда, содержимое выбирает сам RowHints
+          по активной строке (и ничего не рисует, когда каретка не здесь). */}
+      <RowHints rowId={block.id} lineH={rowLineH} />
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —

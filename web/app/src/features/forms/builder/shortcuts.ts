@@ -85,17 +85,31 @@ export type ShortcutContext =
 export interface Shortcut {
   label: string
   hint: string
+  // short — та же мысль в размер чипа. Чипы стоят справа В СТРОКЕ, места там столько,
+  // сколько не занял текст, и полное `hint` («Новый блок после вопроса») ложится на
+  // подпись. Шпаргалке место не жмёт — она печатает `hint`, где важна точность
+  // (Enter «после вопроса» против Shift+Enter «внутрь вопроса»). Нет short — чип
+  // берёт hint.
+  short?: string
   match?: (e: KeyLike) => boolean
 }
 
-const sc = (match: (e: KeyLike) => boolean, label: string, hint: string): Shortcut => ({
-  match,
-  label,
-  hint,
-})
+const sc = (
+  match: (e: KeyLike) => boolean,
+  label: string,
+  hint: string,
+  short?: string,
+): Shortcut => ({ match, label, hint, short })
 
 // gesture — пункт карты без матчера: символьный жест (см. Shortcut.match).
-const gesture = (label: string, hint: string): Shortcut => ({ label, hint })
+const gesture = (label: string, hint: string, short?: string): Shortcut => ({
+  label,
+  hint,
+  short,
+})
+
+// chipText — что печатает чип у сфокусированной строки.
+export const chipText = (s: Shortcut): string => s.short ?? s.hint
 
 // В `label` командный модификатор пишется словом `Mod` — на маке он рисуется как ⌘,
 // на остальных как Ctrl. Подстановку делает UI подсказок (`modLabel` ниже), а не карта:
@@ -134,37 +148,39 @@ export const BLOCK_COMMON: Shortcut[] = [
 // одна карта на код и на подсказки, расхождение = баг (демо-критерий 13.5).
 export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
   text: [
-    sc(chords.enter, 'Enter', 'Новый блок после вопроса'),
-    gesture('/', 'Вставить поле или заголовок'),
+    sc(chords.enter, 'Enter', 'Новый блок после вопроса', 'Новый блок'),
+    gesture('/', 'Вставить поле или заголовок', 'Поле'),
     // Cmd+Enter из подписи прыгает к контролу ответа своей группы — и только если он
     // там есть: в одиночном абзаце handleAnswerAction ничего не находит и молчит.
     // Поэтому пункт условный, см. shortcutsFor({ hasAnswer }).
-    sc(chords.answerAction, 'Mod+Enter', 'К полю ответа'),
+    sc(chords.answerAction, 'Mod+Enter', 'К полю ответа', 'К полю'),
     sc((e) => chords.enter(e) && e.shiftKey, 'Shift+Enter', 'Новый блок внутрь вопроса'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
     gesture('⌫ в начале', 'Склеить с предыдущей строкой'),
   ],
   option: [
-    sc(chords.enter, 'Enter', 'Новый вариант ниже'),
-    gesture('⌫ в пустом', 'Удалить вариант'),
+    sc(chords.enter, 'Enter', 'Новый вариант ниже', 'Новый вариант'),
+    gesture('⌫ в пустом', 'Удалить вариант', 'Удалить'),
+    sc(chords.moveItem, 'Alt+↑↓', 'Переместить вариант', 'Переместить'),
+    // Длинная подпись — в чипы такой пункт не влезает, поэтому он стоит после трёх
+    // коротких: чипы берут начало списка, шпаргалка печатает его целиком.
     gesture('Enter в пустом последнем', 'Выйти из списка'),
-    sc(chords.moveItem, 'Alt+↑↓', 'Переместить вариант'),
   ],
   // field — инпут текста-подсказки под вопросом. Клавиш у него почти нет намеренно:
   // это необязательный лист (§2.1), Enter и переносы там не обрабатываются.
-  field: [gesture('⌫ в пустом', 'Вернуться к подписи')],
+  field: [gesture('⌫ в пустом', 'Вернуться к подписи', 'К подписи')],
   image: [
     sc(chords.answerAction, 'Mod+Enter', 'Выбрать файл'),
-    sc(chords.backspace, '⌫', 'Удалить картинку'),
-    sc(chords.enter, 'Enter', 'Новый блок ниже'),
+    sc(chords.backspace, '⌫', 'Удалить картинку', 'Удалить'),
+    sc(chords.enter, 'Enter', 'Новый блок ниже', 'Новый блок'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
   ],
   object: [
-    sc(chords.backspace, '⌫', 'Удалить блок'),
-    sc(chords.enter, 'Enter', 'Новый блок ниже'),
-    gesture('любой символ', 'Начать текст ниже'),
+    sc(chords.backspace, '⌫', 'Удалить блок', 'Удалить'),
+    sc(chords.enter, 'Enter', 'Новый блок ниже', 'Новый блок'),
+    gesture('любой символ', 'Начать текст ниже', 'Текст ниже'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
   ],
