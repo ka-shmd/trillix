@@ -941,7 +941,10 @@ function OptionsInline({
           // Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется
           // только opacity): контрол, появляющийся по hover в потоке, схлопывается
           // на mousedown и съедает клик — TD-22, разбор у кластера значков выше.
-          <div key={o.id} className="flex items-center gap-1">
+          // group/opt — именованная группа СВОЕЙ строки варианта (TD-31): безымянный
+          // group занят всей строкой блока, и от него крестики расцветали у всех
+          // вариантов разом при наведении на любую точку строки.
+          <div key={o.id} className="group/opt flex items-center gap-1">
             <span className="rf-option">
               {/* Буква — та же декоративная подсказка, что видит респондент
                   (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
@@ -974,7 +977,7 @@ function OptionsInline({
               tabIndex={-1}
               onClick={() => removeOption(block.id, o.id)}
               aria-label="Удалить вариант"
-              className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+              className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/opt:opacity-100"
             >
               <X className="size-3.5" />
             </button>
