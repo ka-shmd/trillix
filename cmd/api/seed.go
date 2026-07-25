@@ -16,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/submissions"
 )
@@ -34,6 +35,33 @@ const (
 	seedExportV1Share     = 4000 // сколько из них отвечены по версии 1 (остальные — v2)
 )
 
+// seedOutbox — почтовый outbox для сидера: письма никуда не кладёт.
+//
+// Сидеру нужен НЕ nil, хотя писем он не шлёт: с фазы 12 сама `Register` кладёт в
+// outbox письмо-подтверждение адреса (`enqueueVerificationEmail`), и nil-зависимость
+// там разыменовывается — команда падала с SIGSEGV. Дефект был не виден, потому что
+// на непустой БД `Register` возвращает ErrEmailTaken раньше этого места: ломался
+// только сид по ЧИСТОЙ базе.
+//
+// Почему заглушка, а не настоящий mail.Service: письмо фикстуре не нужно и слать его
+// некому (сидер живёт вне сервера, диспетчер outbox не крутится), а зависимость от
+// почтовой конфигурации сделала бы `make seed` заложником MAIL_*. Токен подтверждения
+// при этом создаётся честно — учётка ничем не отличается от заведённой через HTTP,
+// кроме неотправленного письма.
+type seedOutbox struct{}
+
+func (seedOutbox) EnqueueEmail(context.Context, postgres.DBTX, mail.EmailMessage) error {
+	return nil
+}
+
+// seedAuthService — auth-сервис для команд сидирования. Базовый URL кабинета пуст:
+// ссылку в письме строить не для кого (см. seedOutbox).
+func seedAuthService(pool *pgxpool.Pool) *auth.Service {
+	return auth.NewService(
+		pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, seedOutbox{}, auth.DefaultSessionTTL, "",
+	)
+}
+
 // runSeed наполняет БД демо-данными (пользователь + формы). Идемпотентен: если у
 // демо-пользователя уже есть формы, ничего не добавляет (повторный запуск не
 // плодит дубли).
@@ -45,9 +73,7 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	// Сидер только регистрирует демо-пользователя — сброс пароля не вызывает,
-	// поэтому почтовый сервис и базовый URL кабинета ему не нужны (nil / "").
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, nil, auth.DefaultSessionTTL, "")
+	authSvc := seedAuthService(pool)
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 
 	// Создать демо-пользователя или найти уже существующего.
@@ -113,9 +139,7 @@ func runSeedUser(args []string, cfg config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	// Как в runSeed: сброс пароля не вызывается, поэтому почтовый сервис и базовый
-	// URL кабинета сервису не нужны.
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, nil, auth.DefaultSessionTTL, "")
+	authSvc := seedAuthService(pool)
 
 	// Пароль в лог не попадает ни в одной ветке (инвариант 2) — только адрес.
 	switch _, _, err := authSvc.Register(ctx, email, password); {
