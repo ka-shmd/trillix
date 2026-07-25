@@ -57,6 +57,10 @@ export interface BlockRowProps {
   // (там пустой текст = начало формы, и подсказка зовёт добавить вопрос).
   insideQuestion?: boolean
   firstOfForm?: boolean
+  // mirrored — строка стоит в ПРАВОЙ колонке half-ряда (спека §5): кластер значков
+  // зеркалится в правое поле (левый лёг бы в 28px-жёлоб между колонками и наехал
+  // на соседнюю группу), тогл обязательности остаётся у правого края текста.
+  mirrored?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
   // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
@@ -92,6 +96,7 @@ export function BlockRow({
   groupHasAnswer = false,
   insideQuestion = false,
   firstOfForm = false,
+  mirrored = false,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
@@ -392,7 +397,11 @@ export function BlockRow({
       <div
         // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
         // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
-        className={`absolute right-full top-1.5 mr-2.5 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+        // mirrored (правая колонка half-ряда): кластер уезжает в ПРАВОЕ поле, за
+        // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
+        className={`absolute top-1.5 flex ${
+          mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
+        } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
       >
         <button
           type="button"

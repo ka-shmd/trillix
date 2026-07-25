@@ -10,6 +10,7 @@ import {
 import {
   DndContext,
   KeyboardSensor,
+  MeasuringStrategy,
   PointerSensor,
   closestCenter,
   useSensor,
@@ -33,6 +34,7 @@ import {
   isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
+import { packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
 import { planBlockDrop, remapDropTarget } from './store'
 import { type MenuItem } from './blockTypes'
@@ -195,6 +197,23 @@ export function SlashEditor({
   const groupIdList = useMemo(() => groups.map((g) => g.id), [groups])
   const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
   const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
+
+  // Сторона группы в ряду half-пары (WYSIWYG, спека §5): раскладчик тот же, что у
+  // превью/рендерера (packRows). Пары двигают кластеры значков: у правой колонки
+  // они зеркалятся вправо (левый кластер лёг бы в 28px-жёлоб и наехал на соседа).
+  // На время драга полотно разворачивается в столбик (halfSide игнорируется) —
+  // решение спеки: вертикальный SortableContext живёт весь драг, несущие решения
+  // dnd не трогаются.
+  const halfSide = useMemo(() => {
+    const m = new Map<string, 'left' | 'right'>()
+    for (const row of packRows(groups)) {
+      if (row.length === 2) {
+        m.set(row[0]!.id, 'left')
+        m.set(row[1]!.id, 'right')
+      }
+    }
+    return m
+  }, [groups])
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
@@ -493,6 +512,11 @@ export function SlashEditor({
         <DndContext
           sensors={sensors}
           collisionDetection={collisionDetection}
+          // Разворот полотна в столбик на dragStart меняет layout уже ПОСЛЕ замера
+          // rect'ов (дефолт WhileDragging меряет один раз) — Always перемеряет
+          // droppable'ы по ходу драга, иначе коллизии считались бы по рядам,
+          // которых на экране больше нет.
+          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragStart={(e) => {
             const id = String(e.active.id)
             const isGroup = groupIds.has(id)
@@ -523,7 +547,12 @@ export function SlashEditor({
                 py-1.5 строк в вертикаль НЕ входит (там -my-1.5, см. BlockRow), поэтому
                 flex-gap здесь = чистый просвет контента и совпадает с превью замером
                 (критерий 13.3 — ноль расхождений). */}
-            <ol className="mt-12 flex flex-col gap-7">
+            {/* flex-wrap (не flex-col): half-пары встают в один ряд сами — две li
+                по calc(50% - 14px) делят строку, full-строки (w-full) живут каждая
+                на своей. gap-7 задаёт ОБА зазора: вертикальный ритм 28px (как
+                прежний flex-col) и 28px между колонками ряда (= .rf-row превью).
+                DOM-порядок = порядок документа, sortable-вселенная не тронута. */}
+            <ol className="mt-12 flex flex-wrap gap-7">
               {groups.map((g, gi) => (
                 <GroupRow
                   key={g.id}
@@ -531,6 +560,7 @@ export function SlashEditor({
                   firstGroup={gi === 0}
                   formId={formId}
                   blockIds={blockIds}
+                  side={drag ? null : (halfSide.get(g.id) ?? null)}
                   rail={
                     drag
                       ? drag.kind === 'group' && g.id === drag.overGroup
@@ -613,6 +643,7 @@ function GroupRow({
   firstGroup,
   formId,
   blockIds,
+  side,
   rail,
   menuForId,
   onAddBelow,
@@ -629,6 +660,11 @@ function GroupRow({
   firstGroup: boolean
   formId: string
   blockIds: string[]
+  // Сторона в ряду half-пары (спека §5): left/right — группа занимает полколонки
+  // (calc(50% − 14px), полряда flex-wrap полотна), null — во всю ширину. right
+  // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Во время
+  // драга полотно всегда столбик — родитель шлёт null.
+  side: 'left' | 'right' | null
   // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
   // (групповой драг над этой группой), off — скрыт (любой другой драг).
   rail: 'auto' | 'on' | 'off'
@@ -660,18 +696,26 @@ function GroupRow({
       style={style}
       // group/grp — именованная Tailwind-группа: `group` без имени занят строками
       // (BlockRow) для своих hover-значков, hover группы должен слушаться отдельно.
-      className={`group/grp relative rounded-md ${isDragging ? 'z-10 opacity-70' : ''}`}
+      // Ширина — по стороне ряда (спека §5): полколонки минус половина 28px-зазора
+      // (= колонка .rf-row превью), иначе вся строка flex-wrap.
+      className={`group/grp relative rounded-md ${
+        side ? 'w-[calc(50%-0.875rem)]' : 'w-full'
+      } ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
       {/* Рейл — постоянная идентичность МУЛЬТИ-группы (§4.3): тонкая линия в левом
           жёлобе, в покое проявляется по hover/focus-within всей группы; во время
           драга режимом управляет полотно (проп rail — см. SlashEditor). Absolute и
           вне потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
           BlockRow), чтобы не наезжать. top/bottom-0 = ровно высота текста группы:
-          -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент. */}
+          -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент.
+          У правой колонки ряда рейл зеркалится в правый жёлоб — левый занят
+          соседней группой. */}
       {group.blocks.length > 1 && rail !== 'off' && (
         <span
           aria-hidden="true"
-          className={`pointer-events-none absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-primary/40 ${
+          className={`pointer-events-none absolute top-0 bottom-0 w-0.5 rounded-full bg-primary/40 ${
+            side === 'right' ? '-right-2' : '-left-2'
+          } ${
             rail === 'on'
               ? ''
               : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
@@ -691,6 +735,9 @@ function GroupRow({
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
               groupHasAnswer={hasAnswer}
+              // Правая колонка ряда зеркалит кластеры значков (спека §5): левый
+              // кластер лёг бы в жёлоб между колонками и наехал на соседа.
+              mirrored={side === 'right'}
               // Позиция строки — для контекстного плейсхолдера пустой строки (§7).
               insideQuestion={group.blocks.length > 1 && i > 0}
               firstOfForm={firstGroup && i === 0}
