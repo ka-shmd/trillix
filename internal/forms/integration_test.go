@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -121,10 +122,10 @@ func TestForms_CRUDFlow(t *testing.T) {
 		t.Fatalf("неожиданная форма: %+v", created)
 	}
 
-	// GET → отдаёт draft_schema, канонизированный до v2 (CanonicalV2 на отдаче).
+	// GET → отдаёт draft_schema, канонизированный до текущей версии (CanonicalV3 на отдаче).
 	detail := getFormDetail(t, c, srv, created.ID, http.StatusOK)
 	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 0 {
-		t.Fatalf("draftSchema = %s, ожидался пустой каркас v2", detail.DraftSchema)
+		t.Fatalf("draftSchema = %s, ожидался пустой канонический каркас", detail.DraftSchema)
 	}
 
 	// Переименование.
@@ -537,6 +538,66 @@ func TestForms_PublicFetch(t *testing.T) {
 	// существование не скрываем (шаг 4, решение владельца — любую закрытую показываем).
 	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
 	getPublic(t, anon, srv, form.Slug, http.StatusGone)
+}
+
+// Демо-критерий этапа 14.2: форма с РАЗМЕЧЕННЫМ текстом, собранная запросом к API,
+// доезжает до публичной ручки без потерь — марки, цвет, фон и ссылка целы, а в данные
+// (og:description публичной страницы) уходит плоский текст без разметки.
+//
+// Проверяется весь путь целиком: PATCH черновика → ValidateSchema → JSONB → публикация
+// → снапшот версии → GET /public/v1. На каждом шаге текст мог схлопнуться в строку или
+// потерять поле спана, и юнит на валидаторе этого не увидел бы.
+func TestForms_RichTextSurvivesRoundTrip(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner-rich@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, owner, srv, "Опрос с оформлением")
+
+	schema := `{"schemaVersion":3,"blocks":[
+		{"id":"t1","groupId":"g1","type":"title","text":[
+			{"t":"Ваше "},
+			{"t":"имя","m":["b","i"],"color":"#c026d3","bg":"#ffff00"},
+			{"t":" — см. политику","href":"https://trillix.ru/privacy"}
+		],"settings":{}},
+		{"id":"b1","groupId":"g1","type":"short_text","required":true,"settings":{}}
+	]}`
+	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, owner, srv, form.ID, http.StatusOK)
+
+	pub, _ := getPublicOK(t, anon, srv, form.Slug)
+	got := parseSchema(t, pub.Schema)
+	if got.SchemaVersion != domain.SchemaVersion {
+		t.Fatalf("наружу ушла версия %d, ждали %d", got.SchemaVersion, domain.SchemaVersion)
+	}
+	if len(got.Blocks) != 2 {
+		t.Fatalf("ждали подпись + поле, получили %+v", got.Blocks)
+	}
+	want := []domain.Span{
+		{T: "Ваше "},
+		{T: "имя", M: []domain.Mark{domain.MarkBold, domain.MarkItalic}, Color: "#c026d3", BG: "#ffff00"},
+		{T: " — см. политику", Href: "https://trillix.ru/privacy"},
+	}
+	if !reflect.DeepEqual(got.Blocks[0].Text, want) {
+		t.Fatalf("богатый текст доехал искажённым:\nждали %+v\nполучили %+v", want, got.Blocks[0].Text)
+	}
+
+	// В данные разметка не протекает: og:description публичной HTML-страницы —
+	// плоский текст подписи.
+	r := do(t, anon, http.MethodGet, srv.URL+"/r/"+form.Slug, "", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("страница формы: статус %d", r.StatusCode)
+	}
+	body := body2(t, r)
+	if !strings.Contains(body, "Ваше имя — см. политику") {
+		t.Fatalf("og:description без плоского текста подписи: %s", body)
+	}
+	for _, marker := range []string{`"m":`, "#c026d3", "trillix.ru/privacy", "<b>"} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("разметка протекла в og:description (%q): %s", marker, body)
+		}
+	}
 }
 
 // HTML-страница формы /r/{slug} (OG-мета от Go): опубликованная → 200 text/html с
