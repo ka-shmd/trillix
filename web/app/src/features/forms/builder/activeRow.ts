@@ -27,6 +27,9 @@ export interface ActiveRow {
   // Есть ли в группе строки отвечаемый блок — от этого зависит, работает ли Mod+Enter
   // (см. shortcutsFor). Осмыслен только у ctx='text'.
   hasAnswer: boolean
+  // Двигает ли Alt+↑↓ саму эту строку (см. shortcutsFor): у строки ответа в
+  // озаглавленной группе — нет, у подписи вопроса — двигает вопрос, а не строку.
+  movesRow: boolean
 }
 
 interface ActiveRowApi {
@@ -54,7 +57,11 @@ export function useActiveRowState(): { active: ActiveRow | null; api: ActiveRowA
     () => ({
       activate: (row) =>
         setActive((cur) =>
-          cur && cur.id === row.id && cur.ctx === row.ctx && cur.hasAnswer === row.hasAnswer
+          cur &&
+          cur.id === row.id &&
+          cur.ctx === row.ctx &&
+          cur.hasAnswer === row.hasAnswer &&
+          cur.movesRow === row.movesRow
             ? cur // бэйл на ту же строку: лишний setState = лишний ре-рендер подсказок
             : row,
         ),
@@ -84,6 +91,7 @@ export function useRowFocus(
   id: string,
   ctx: ShortcutContext,
   hasAnswer = false,
+  movesRow = true,
 ): { onFocus: () => void; onBlur: (e: FocusEvent<Element>) => void } {
   const api = useActiveRowApi()
   // Снятие при размонтировании: у удалённой строки focusout не приходит, и подсказки
@@ -96,7 +104,7 @@ export function useRowFocus(
   useEffect(() => () => api?.deactivate(idRef.current), [api])
   return useMemo(
     () => ({
-      onFocus: () => api?.activate({ id, ctx, hasAnswer }),
+      onFocus: () => api?.activate({ id, ctx, hasAnswer, movesRow }),
       onBlur: (e: FocusEvent<Element>) => {
         // Переход МЕЖДУ поверхностями одной строки (вариант → соседний вариант) —
         // не уход с неё. Без этой проверки focusout гасит активность, а следующий
@@ -109,6 +117,6 @@ export function useRowFocus(
         api?.deactivate(id)
       },
     }),
-    [api, id, ctx, hasAnswer],
+    [api, id, ctx, hasAnswer, movesRow],
   )
 }

@@ -797,6 +797,9 @@ function GroupRow({
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
   const hasAnswer = group.blocks.some((b) => isAnswerableType(b.type))
+  // Есть ли у группы подпись: от неё зависит, кто управляет строкой ответа. У голого
+  // поля (группа без подписи) управлять больше некому — значки остаются на нём.
+  const hasCaption = group.blocks.some((b) => isCaptionType(b.type))
 
   return (
     <li
@@ -847,6 +850,9 @@ function GroupRow({
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
               groupHasAnswer={hasAnswer}
+              // Строкой ответа в озаглавленной группе управляет подпись, а не она
+              // сама: своих значков и своего переноса у неё нет (см. BlockRow).
+              ownedByCaption={isAnswerableType(b.type) && hasCaption}
               // Правая колонка ряда зеркалит кластеры значков (спека §5): левый
               // кластер лёг бы в жёлоб между колонками и наехал на соседа.
               mirrored={side === 'right'}

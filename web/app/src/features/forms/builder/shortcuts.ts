@@ -235,11 +235,17 @@ const BLOCK_CONTEXTS: ReadonlySet<ShortcutContext> = new Set<ShortcutContext>([
 // shortcutsFor — контекстные пункты строки (для чипов и верхней части шпаргалки).
 // hasAnswer — есть ли в группе строки отвечаемый блок; без него Mod+Enter выпадает:
 // прыгать не к чему, а обещать клавишу, которая молчит, нельзя.
+// movesRow — двигает ли Alt+↑↓ именно ЭТУ строку. Ложь в двух случаях, и в обоих
+// пункт «Переместить блок» выпадает: у строки ответа в озаглавленной группе жест
+// не делает ничего (вопрос двигают с подписи), а на самой подписи он двигает вопрос
+// целиком — то есть обещал бы не то, что делает. Перенос вопроса остаётся обещан
+// отдельным пунктом (Alt+Shift+↑↓).
 export function shortcutsFor(
   ctx: ShortcutContext,
-  opts: { hasAnswer?: boolean } = {},
+  opts: { hasAnswer?: boolean; movesRow?: boolean } = {},
 ): Shortcut[] {
-  const list = SHORTCUTS[ctx]
+  let list = SHORTCUTS[ctx]
+  if (opts.movesRow === false) list = list.filter((s) => s.match !== chords.moveItem)
   if (ctx !== 'text' || opts.hasAnswer) return list
   return list.filter((s) => s.match !== chords.answerAction)
 }

@@ -5,7 +5,7 @@ import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
 import type { FormSchema } from '@entities/formSchema'
-import { isAnswerableType } from '@entities/formSchema'
+import { isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -61,6 +61,12 @@ function CanvasBody({
                     groupHasAnswer={blocks.some(
                       (x) => x.groupId === b.groupId && isAnswerableType(x.type),
                     )}
+                    // И так же — признак «строкой управляет подпись»: от него
+                    // зависит, обещан ли перенос строки (Alt+↑↓).
+                    ownedByCaption={
+                      isAnswerableType(b.type) &&
+                      blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
+                    }
                     openMenuOnMount={false}
                     {...handlers}
                   />
@@ -165,6 +171,37 @@ describe('чипы у сфокусированной строки (§7)', () => 
     focus('ch', 'end')
     expect(chips()).toEqual(['Enter', '⌫ в пустом', 'Alt+↑↓'])
     expect(hintText()).toContain('Новый вариант')
+  })
+
+  it('шкале внутри вопроса перенос строки не обещан — двигать её нельзя', () => {
+    // Alt+↑↓ на строке ответа в озаглавленной группе не делает ничего (вопрос
+    // двигают с подписи), значит и пункта в подсказке быть не должно. Голая шкала —
+    // другое дело, но её теперь и не существует: заголовок этому типу обязателен.
+    const { focus } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Оценка' },
+        { id: 'sc', groupId: 'g1', type: 'scale' },
+      ],
+    })
+    focus('sc')
+    expect(chips()).not.toContain('Alt+↑↓')
+    // Перенос вопроса целиком остаётся в карте (Alt+Shift+↑↓) — просто в чипы не
+    // влезает: их потолок три. Состав карты проверяет shortcuts.test.ts.
+  })
+
+  it('подписи вопроса перенос строки не обещан — Alt+↑↓ двигает вопрос', () => {
+    const { focus } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Имя' },
+        { id: 'inp', groupId: 'g1', type: 'short_text' },
+      ],
+    })
+    // groupHandle в этом полотне не рендерится (строки без обвязки GroupRow),
+    // поэтому проверяем сам контракт карты, а не разметку.
+    focus('cap', 'end')
+    expect(chips()).not.toContain('Alt+↑↓')
   })
 
   it('картинке обещан файловый диалог, шкале — нет (разные контексты)', () => {

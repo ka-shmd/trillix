@@ -121,6 +121,22 @@ describe('ярусы карты — общее вынесено из конте�
     expect(alone).toEqual(withAnswer.filter((l) => l !== 'Mod+Enter'))
   })
 
+  it('перенос строки не обещан там, где Alt+↑↓ двигает не строку', () => {
+    // Два случая (решение владельца 2026-07-26): на строке ответа в озаглавленной
+    // группе жест не делает ничего, на подписи вопроса — двигает вопрос целиком.
+    // Пункт «Переместить блок» выпадает в обоих; перенос вопроса остаётся обещан.
+    const moved = shortcutsFor('object').map((s) => s.label)
+    const still = shortcutsFor('object', { movesRow: false }).map((s) => s.label)
+    expect(moved).toContain('Alt+↑↓')
+    expect(still).not.toContain('Alt+↑↓')
+    expect(still).toContain('Alt+Shift+↑↓')
+    expect(still).toEqual(moved.filter((l) => l !== 'Alt+↑↓'))
+
+    const caption = shortcutsFor('text', { hasAnswer: true, movesRow: false }).map((s) => s.label)
+    expect(caption).not.toContain('Alt+↑↓')
+    expect(caption).toContain('Alt+Shift+↑↓')
+  })
+
   it('картинка и date/scale — разные контексты: файловый диалог обещан только картинке', () => {
     // На date/scale Cmd+Enter ищет input[type=file] внутри остановки и не находит.
     expect(shortcutsFor('image').map((s) => s.label)).toContain('Mod+Enter')

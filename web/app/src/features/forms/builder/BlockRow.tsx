@@ -64,6 +64,12 @@ export interface BlockRowProps {
   // groupHasAnswer — есть ли в группе строки отвечаемый блок. Нужен подсказкам: без
   // него Mod+Enter («к полю ответа») молчит, и обещать его нельзя (§7).
   groupHasAnswer?: boolean
+  // ownedByCaption — строка ответа в группе с подписью: ею управляет подпись (решение
+  // владельца 2026-07-26). У такой строки НЕТ кластера значков (удалить/добавить/
+  // перетащить) и нет своего Alt+↑↓: разлучать её с вопросом нечем и незачем — трэш
+  // и ручка на подписи сносят и двигают вопрос целиком. Голое поле (группа без
+  // подписи) значки сохраняет: управлять им больше некому.
+  ownedByCaption?: boolean
   // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
   // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
   // (там пустой текст = описание вопроса); firstOfForm — самая первая строка полотна
@@ -114,6 +120,7 @@ export function BlockRow({
   formId,
   groupHandle,
   groupHasAnswer = false,
+  ownedByCaption = false,
   insideQuestion = false,
   firstOfForm = false,
   mirrored = false,
@@ -157,7 +164,10 @@ export function BlockRow({
   // Подсказки (§7): текстовая поверхность объявляет свой контекст карты — от него
   // зависят чипы у каретки и шпаргалка Mod+/. Остальные поверхности строки (варианты,
   // инпут плейсхолдера, объектная остановка) объявляют свой контекст сами.
-  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer)
+  // movesRow: у подписи вопроса (она несёт групповую ручку) Alt+↑↓ двигает вопрос
+  // целиком, а не строку, — пункт «Переместить блок» из подсказок выпадает, перенос
+  // вопроса остаётся обещан отдельным Alt+Shift+↑↓.
+  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer, !groupHandle)
   // Плейсхолдер пустой строки — подсказка в самом месте каретки (§7, слой 1). У
   // подписей он от позиции не зависит (тип уже сказал, что это) и виден всегда; у
   // обычного текста зависит и показывается только под кареткой: неактивная пустая
@@ -417,7 +427,14 @@ export function BlockRow({
           Любой новый reveal-on-hover контрол блока — только сюда. */}
       {/* tabIndex=-1 у значков строки: полотно — один Tab-stop, кнопки-значки —
           мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
-          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2). */}
+          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2).
+
+          Кластера НЕТ у строки ответа в озаглавленной группе (ownedByCaption): поле
+          неразрывно с подписью, и все три значка там означали бы действия, которых не
+          бывает, — удалить поле отдельно, вставить блок между подписью и полем,
+          утащить поле из своего вопроса. Вопросом управляет строка подписи; у
+          вариантов choice — свои кластеры (см. OptionCard). */}
+      {ownedByCaption ? null : (
       <div
         // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
         // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
@@ -462,6 +479,7 @@ export function BlockRow({
           <GripVertical className="size-4" />
         </button>
       </div>
+      )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
@@ -541,6 +559,7 @@ export function BlockRow({
         // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
         <ObjectStop
           block={block}
+          ownedByCaption={ownedByCaption}
           onAddBelow={onAddBelow}
           onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
@@ -607,6 +626,7 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
 // стрелками и focusBlock, но не Tab (полотно — один Tab-stop, §3.1 / срез roving).
 function ObjectStop({
   block,
+  ownedByCaption = false,
   children,
   onAddBelow,
   onBackspaceDelete,
@@ -618,6 +638,9 @@ function ObjectStop({
   onRowShift,
 }: {
   block: Block
+  // Строка ответа в озаглавленной группе (см. проп BlockRow): у неё нет своего
+  // переноса — вопрос двигают с подписи.
+  ownedByCaption?: boolean
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onBackspaceDelete: (id: string) => void
@@ -632,7 +655,12 @@ function ObjectStop({
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
   // Контекст подсказок: у картинки Mod+Enter открывает файловый диалог, у date/scale
   // открывать нечего — это разные контексты карты, а не один «объект» (§7).
-  const rowFocus = useRowFocus(block.id, block.type === 'image' ? 'image' : 'object')
+  const rowFocus = useRowFocus(
+    block.id,
+    block.type === 'image' ? 'image' : 'object',
+    false,
+    !ownedByCaption,
+  )
 
   // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
   // ниже) — как и в текстовой строке.
@@ -661,8 +689,12 @@ function ObjectStop({
       e.preventDefault()
       onRowShift(chords.rowRight(e) ? 'right' : 'left')
     } else if (chords.moveItem(e)) {
+      // Alt+↑↓ двигает саму строку — а у строки ответа в озаглавленной группе двигать
+      // нечего: она едет только вместе с вопросом (Alt+Shift+↑↓ или та же клавиша на
+      // подписи). Жест ГАСИМ, а не пропускаем: иначе он провалился бы в обычный обход
+      // стрелками и каретка уехала бы на соседнюю строку вместо «ничего не произошло».
       e.preventDefault()
-      onMove(arrowDir(e))
+      if (!ownedByCaption) onMove(arrowDir(e))
     } else if (chords.arrowUp(e)) {
       e.preventDefault()
       onArrow(block.id, 'up')
