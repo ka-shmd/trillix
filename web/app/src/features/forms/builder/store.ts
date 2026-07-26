@@ -155,7 +155,9 @@ export type BuilderActions = {
   placeOptionInRow: (blockId: string, activeOptionId: string, targetOptionId: string) => void
   takeOptionOwnRow: (blockId: string, optionId: string) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
-  addOption: (blockId: string) => void
+  // addOption добавляет вариант в конец и возвращает его id (нужен фокусу): пустой —
+  // кнопкой/жестом, с текстом — первым символом, набранным в «призраке» списка.
+  addOption: (blockId: string, label?: string) => string
   // addOptionAfter вставляет пустой вариант СРАЗУ ПОСЛЕ optionId (Enter §3.2: вариант
   // рождается под текущим, а не в конце — дефект Д5) и возвращает его id для фокуса.
   // На non-choice/ненайденном варианте — no-op (возвращённый id тогда не всплывёт).
@@ -189,11 +191,12 @@ export type BuilderActions = {
 export type BuilderStore = BuilderState & BuilderActions
 
 // newBlock создаёт валидный черновой блок: пустой text, выведенный позже groupId,
-// дефолты. Choice-тип стартует с ОДНИМ пустым вариантом, а не с пустым списком:
-// блок без вариантов не существует (удаление последнего уносит и сам блок —
-// removeOption), поэтому редактор не порождает такое состояние ни одним путём.
-// Каретке при этом всегда есть куда встать (§2.1). Non-choice остаётся с пустыми
-// settings (иначе ValidateSchema отвергнет опции у не-choice).
+// дефолты. Choice-тип стартует с ПУСТЫМ списком: в схеме живут только настоящие
+// варианты, а место для набора даёт «призрак» — пустая строка в конце списка,
+// которой в документе нет (BlockRow, GhostOption). Пустой вариант больше не
+// сохраняется и не публикуется, зато каретке всегда есть куда встать (§2.1).
+// Non-choice остаётся с пустыми settings (иначе ValidateSchema отвергнет опции
+// у не-choice).
 function newBlock(type: BlockType): Block {
   const base: Block = {
     id: newBlockId(),
@@ -203,9 +206,7 @@ function newBlock(type: BlockType): Block {
     required: false,
     settings: {},
   }
-  if (isChoiceType(type)) {
-    return { ...base, settings: { options: [{ id: newOptionId(), label: '' }] } }
-  }
+  if (isChoiceType(type)) return { ...base, settings: { options: [] } }
   // Согласие создаётся обязательным: это дефолт, а не правило типа (решение
   // владельца) — владелец может выключить, если это маркетинг-opt-in.
   if (type === 'consent') return { ...base, required: true }
@@ -1060,10 +1061,16 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           }),
         ),
 
-      addOption: (blockId) =>
-        commit(null, (s) =>
-          mutateOptions(s.blocks, blockId, (opts) => [...opts, { id: newOptionId(), label: '' }]),
-        ),
+      addOption: (blockId, label = '') => {
+        const option: Option = { id: newOptionId(), label }
+        // Тег ub:opt — набор в «призрака» коалесится с последующей правкой этого же
+        // варианта в один шаг истории: для автора первый символ и остальные — одно
+        // действие, и Ctrl+Z не должен разбирать его по буквам.
+        commit(label === '' ? null : `ub:${option.id}:text`, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => [...opts, option]),
+        )
+        return option.id
+      },
 
       addOptionAfter: (blockId, optionId) => {
         const opt: Option = { id: newOptionId(), label: '' }

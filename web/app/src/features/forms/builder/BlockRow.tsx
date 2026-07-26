@@ -560,6 +560,7 @@ export function BlockRow({
             onArrow={onArrow}
             onAddBelow={onAddBelow}
             onDeleteBlock={onDeleteBlock}
+            onBackspaceDelete={onBackspaceDelete}
             onOpenActions={() => setActionOpen(true)}
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
@@ -1006,6 +1007,7 @@ function OptionsInline({
   onArrow,
   onAddBelow,
   onDeleteBlock,
+  onBackspaceDelete,
   onOpenActions,
   onRowShift,
 }: {
@@ -1020,6 +1022,9 @@ function OptionsInline({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
   onDeleteBlock: (id: string) => void
+  // Backspace в пустом «призраке», когда вариантов нет: блок уходит, каретка — на
+  // предыдущую остановку. Тот же обработчик, что у объектов и пустого плейсхолдера.
+  onBackspaceDelete: (id: string) => void
   // Cmd+. на варианте — меню действий всего choice-блока (§3.3).
   onOpenActions: () => void
   // Mod+Alt+→/← у dropdown: список живёт в нативном select, рядов у его вариантов НЕТ
@@ -1035,12 +1040,16 @@ function OptionsInline({
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const reorderOptions = useBuilderStore((s) => s.reorderOptions)
   const removeOption = useBuilderStore((s) => s.removeOption)
+  const removeBlock = useBuilderStore((s) => s.removeBlock)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
   // вариант — поэтому у списка свои чипы, а не текстовые.
   const rowFocus = useRowFocus(block.id, 'option')
+  // У призрака свой контекст подсказок: клавиши варианта на нём не работают (двигать
+  // и удалять нечего), а обещать неработающее нельзя (§7).
+  const ghostFocus = useRowFocus(block.id, 'newOption')
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
-  const addBtnRef = useRef<HTMLButtonElement>(null)
+  const ghostRef = useRef<HTMLInputElement>(null)
   // Id варианта, который тащат (null — драга нет): от него зависит, светить ли
   // свободные ячейки рядов.
   const [optDrag, setOptDrag] = useState<string | null>(null)
@@ -1068,11 +1077,11 @@ function OptionsInline({
   const pendingFocus = useRef<string | 'last' | null>(null)
 
   // Фокус-цель choice-строки (§2.1) — инпут варианта: край start → первый, end →
-  // последний. Список пуст (недособранный черновик) → кнопка «добавить вариант»,
-  // чтобы каретка не пропала (13.2 заведёт choice сразу с одним вариантом).
+  // последний. Вариантов нет вовсе (только что созданный блок) → «призрак»: набор
+  // начинается прямо с него, и каретка не пропадает.
   useRegisterFocusTarget(block.id, (edge) => {
     if (options.length === 0) {
-      addBtnRef.current?.focus()
+      ghostRef.current?.focus()
       return
     }
     const target = edge === 'start' ? options[0] : options[options.length - 1]
@@ -1098,6 +1107,39 @@ function OptionsInline({
     if (!prev) onLeaveTop()
     removeOption(block.id, optionId)
     if (prev) pendingFocus.current = prev.id
+  }
+
+  // Клавиши «призрака» (§3.2). Своих действий у него почти нет — он и есть одно
+  // действие «набери текст»; остальное сводится к соседям и к судьбе блока.
+  function onGhostKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    const last = options[options.length - 1]
+    if (chords.actionMenu(e)) {
+      e.preventDefault()
+      onOpenActions()
+    } else if (chords.deleteBlock(e)) {
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (chords.enter(e)) {
+      // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
+      // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
+      // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
+      e.preventDefault()
+      onAddBelow(block.id)
+      if (options.length === 0) removeBlock(block.id)
+    } else if (chords.backspace(e)) {
+      // Стирать в призраке нечего: либо возвращаемся к последнему варианту, либо —
+      // если их нет — уходит сам блок, как на любой пустой поверхности ответа.
+      e.preventDefault()
+      if (last) optionRefs.current.get(last.id)?.focus()
+      else onBackspaceDelete(block.id)
+    } else if (chords.arrowUp(e)) {
+      e.preventDefault()
+      if (last) optionRefs.current.get(last.id)?.focus()
+      else onLeaveTop()
+    } else if (chords.arrowDown(e)) {
+      e.preventDefault()
+      onArrow(block.id, 'down')
+    }
   }
 
   // Биндинги по e.code (§3.1). i — индекс варианта в options.
@@ -1238,21 +1280,20 @@ function OptionsInline({
               cells[0]
             )
           })}
-          <button
-            ref={addBtnRef}
-            type="button"
-            tabIndex={-1}
-            onClick={() => {
-              pendingFocus.current = 'last'
-              addOption(block.id)
+          {/* «Призрак» — пустая строка в конце списка вместо кнопки «Добавить вариант»
+              (решение владельца 2026-07-26). Вариантом она не является и в схеме её
+              нет: набранный в ней текст рождает НАСТОЯЩИЙ вариант, а призрак тут же
+              появляется под ним. Так список набирается подряд, как текст, а пустые
+              варианты перестают уезжать в опубликованную форму. */}
+          <GhostOption
+            ref={ghostRef}
+            index={options.length}
+            onType={(text) => {
+              pendingFocus.current = addOption(block.id, text)
             }}
-            // Служебный ярус (14px), а не тело формы: это контрол редактора, которого
-            // респондент не видит — как «+ Добавить блок» ниже по полотну. Был text-base
-            // и читался как ещё один вариант ответа.
-            className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="size-4" /> Добавить вариант
-          </button>
+            onKeyDown={onGhostKeyDown}
+            rowFocus={ghostFocus}
+          />
         </div>
       </SortableContext>
     </DndContext>
@@ -1275,6 +1316,60 @@ function FreeCell({ optionId }: { optionId: string }) {
         isOver ? 'border-primary bg-primary/10' : 'border-muted-foreground/40'
       }`}
     />
+  )
+}
+
+// GhostOption — пустая строка в конце списка вариантов: место, где список
+// продолжается. Вариантом она НЕ является — в схеме её нет, значков у неё нет,
+// перетащить и удалить нечего; поэтому и выглядит она неактивной (приглушена), пока
+// в ней пусто. Первый же набранный символ рождает настоящий вариант с этим текстом,
+// каретка переезжает в него, а призрак появляется строкой ниже — визуально текст
+// остаётся на месте, а под ним открывается новая пустая строка.
+//
+// Почему не кнопка «Добавить вариант» (была здесь до 2026-07-26): кнопка — отдельный
+// жест и отдельная остановка, из-за которой список набирался «текст → мышь/Tab →
+// текст». Призрак делает список обычным текстом, который набирают подряд.
+//
+// value всегда пустой: набранное уезжает в стор в тот же тик, поэтому призрак сам
+// текст никогда не хранит — иначе он был бы вариантом-невидимкой со своим состоянием.
+function GhostOption({
+  ref,
+  index,
+  onType,
+  onKeyDown,
+  rowFocus,
+}: {
+  ref: React.RefObject<HTMLInputElement | null>
+  index: number
+  onType: (text: string) => void
+  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
+  rowFocus: ReturnType<typeof useRowFocus>
+}) {
+  const placeholder = `Вариант ${index + 1}`
+  return (
+    <div className="relative flex items-center opacity-60 transition-opacity focus-within:opacity-100">
+      <span className="rf-option">
+        {/* Буква у призрака та же, что получит будущий вариант: без неё строка
+            стояла бы левее остальных и «дёргалась» при наборе первого символа. */}
+        {optionKey(index) && (
+          <span className="rf-option-key" aria-hidden="true">
+            {optionKey(index)}
+          </span>
+        )}
+        <span className="rf-option-edit" data-value={placeholder}>
+          <input
+            ref={ref}
+            value=""
+            placeholder={placeholder}
+            aria-label={placeholder}
+            onChange={(e) => onType(e.target.value)}
+            onKeyDown={onKeyDown}
+            {...rowFocus}
+            className="bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+        </span>
+      </span>
+    </div>
   )
 }
 

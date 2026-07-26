@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 const CONTEXT_TITLES: Record<ShortcutContext, string> = {
   text: 'Текстовая строка',
   option: 'Вариант ответа',
+  newOption: 'Новый вариант',
   field: 'Поле ответа',
   image: 'Картинка',
   object: 'Дата и шкала',

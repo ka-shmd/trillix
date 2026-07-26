@@ -34,7 +34,6 @@ import {
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
-  isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 import { groupBlocks, groupCanShareRow, packRows } from '@fields/groups'
@@ -88,7 +87,6 @@ export function SlashEditor({
   const addQuestionAfter = useBuilderStore((s) => s.addQuestionAfter)
   const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const addOption = useBuilderStore((s) => s.addOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
@@ -452,17 +450,14 @@ export function SlashEditor({
   }
 
   // Cmd/Ctrl+Enter (§3.2) — «действие над ответом»: из подписи/контента прыгнуть к
-  // контролу ответа своей группы. choice: каретка на последний вариант (edge end);
-  // список пуст (недособранный черновик addBlock/changeBlockType) → создать первый.
+  // контролу ответа своей группы. choice: каретка на последний вариант (edge end), а
+  // если вариантов ещё нет — на призрака списка, он же и есть место для набора.
   // На картинке файловый диалог открывает сама объектная остановка (см. ObjectStop).
   function handleAnswerAction(id: string) {
     const src = blocks.find((b) => b.id === id)
     if (!src) return
     const field = blocks.find((b) => b.groupId === src.groupId && isAnswerableType(b.type))
     if (!field) return
-    if (isChoiceType(field.type) && (field.settings?.options?.length ?? 0) === 0) {
-      addOption(field.id) // пустой choice — родить первый вариант
-    }
     engine.focusBlock(field.id, 'end')
   }
 

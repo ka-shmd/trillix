@@ -199,6 +199,81 @@ describe('значки варианта', () => {
   })
 })
 
+// Призрак — пустая строка в конце списка вместо кнопки «Добавить вариант»: вариантом
+// не является, в схеме его нет, и весь его смысл — что набор продолжается подряд.
+describe('призрак в конце списка вариантов', () => {
+  const EMPTY_CHOICE: FormSchema = {
+    schemaVersion: 2,
+    blocks: [
+      { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+      { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [] } },
+    ],
+  }
+
+  it('у пустого блока есть строка для набора, но вариантов в схеме нет', () => {
+    const { store } = setup(EMPTY_CHOICE)
+    expect(row('ch').getByLabelText('Вариант 1')).toBeTruthy()
+    expect(store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options).toEqual([])
+    // Значков у призрака нет: удалять и таскать нечего.
+    expect(controls('ch')).not.toContain('Удалить вариант')
+    expect(controls('ch')).not.toContain('Переместить вариант')
+  })
+
+  it('набор в призраке рождает настоящий вариант с этим текстом', () => {
+    const { store } = setup(EMPTY_CHOICE)
+
+    fireEvent.change(row('ch').getByLabelText('Вариант 1'), { target: { value: 'С' } })
+
+    const opts = store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options
+    expect(opts).toHaveLength(1)
+    expect(opts?.[0]?.label).toBe('С')
+  })
+
+  it('Backspace в призраке пустого блока уносит блок наверх', () => {
+    const { handlers } = setup(EMPTY_CHOICE)
+
+    fireEvent.keyDown(row('ch').getByLabelText('Вариант 1'), {
+      key: 'Backspace',
+      code: 'Backspace',
+    })
+
+    // Тот же обработчик, что у объекта и пустого плейсхолдера: блок уходит, каретка
+    // встаёт на предыдущую остановку.
+    expect(handlers.onBackspaceDelete).toHaveBeenCalledWith('ch')
+  })
+
+  it('Enter в призраке пустого блока — выход из списка, блок уходит', () => {
+    const { store, handlers } = setup(EMPTY_CHOICE)
+
+    fireEvent.keyDown(row('ch').getByLabelText('Вариант 1'), { key: 'Enter', code: 'Enter' })
+
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap'])
+  })
+
+  it('при готовых вариантах призрак стоит следующим номером и блок не трогает', () => {
+    const { store, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Соцсети' }] },
+        },
+      ],
+    })
+    // Мусорка ровно одна — у настоящего варианта, у призрака её нет.
+    expect(controls('ch').filter((l) => l === 'Удалить вариант')).toHaveLength(1)
+
+    fireEvent.keyDown(row('ch').getByLabelText('Вариант 2'), { key: 'Enter', code: 'Enter' })
+
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap', 'ch'])
+  })
+})
+
 describe('Alt+↑↓ на строке ответа', () => {
   it('шкала внутри вопроса не двигается и не отдаёт жест обходу', () => {
     const { store, engine, handlers } = setup({
