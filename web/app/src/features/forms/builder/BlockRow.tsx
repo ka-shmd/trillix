@@ -1035,9 +1035,12 @@ function OptionsInline({
     } else if (chords.enter(e) && !e.metaKey && !e.ctrlKey && isLast && empty) {
       // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
       // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
+      // Строку заводим ДО удаления: последний вариант уносит с собой сам блок, и
+      // позицию «после группы» родителю было бы уже не от чего считать — новая
+      // строка улетела бы в конец полотна.
       e.preventDefault()
-      removeOption(block.id, optionId)
       onAddBelow(block.id)
+      removeOption(block.id, optionId)
     } else if (chords.enter(e)) {
       // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
       // тот же жест «действие над ответом» (§3.2).
@@ -1065,9 +1068,12 @@ function OptionsInline({
     } else if (chords.backspace(e) && empty) {
       e.preventDefault()
       const prev = options[i - 1]
+      // Каретку уводим наверх ДО удаления: последний вариант уносит с собой сам
+      // блок, и после удаления родителю не от чего считать «предыдущую остановку» —
+      // фокус провалился бы в body (TD-30 ровно про это).
+      if (!prev) onLeaveTop()
       removeOption(block.id, optionId)
       if (prev) pendingFocus.current = prev.id
-      else onLeaveTop()
     } else if (chords.arrowDown(e)) {
       // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
       e.preventDefault()

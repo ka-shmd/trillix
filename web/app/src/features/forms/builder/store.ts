@@ -13,6 +13,7 @@ import {
   isCaptionType,
   carriesText,
   canShareRow,
+  requiresCaption,
   COLUMN_RIGHT,
 } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
@@ -105,20 +106,24 @@ export type BuilderActions = {
   // встраивается между подписью и контролом). Возвращает id для фокуса.
   makeQuestion: (id: string, type: BlockType) => string
   // makeField — inline-«/», раздел «Отдельные поля». Одиночный блок → конверсия на
-  // месте в голое поле; блок внутри группы → голое поле новой группой ниже.
+  // месте в голое поле; блок внутри группы → голое поле новой группой ниже; ОДИНОКАЯ
+  // ПОДПИСЬ → поле под ней, в её группу (текст заголовка цел). Тип из requiresCaption
+  // голым не встаёт: везде, кроме одинокой подписи, жест вырождается в makeQuestion.
   makeField: (id: string, type: BlockType) => string
   // addQuestionAfter вставляет вопрос-бандл (подпись title + поле) ПОСЛЕ всей группы
   // afterId (инпут начинает новую группу). Диалог «+», раздел «Вопросы».
   addQuestionAfter: (afterId: string | null, type: BlockType) => string
   // addFieldAfter вставляет голое поле ПОСЛЕ всей группы afterId. Диалог «+», раздел
-  // «Отдельные поля».
+  // «Отдельные поля». Тип из requiresCaption получает свой заголовок, если приземлился
+  // не под ждущей подписью; возвращается id для каретки — заголовка либо поля.
   addFieldAfter: (afterId: string | null, type: BlockType) => string
   updateBlock: (id: string, patch: BlockPatch) => void
   removeBlock: (id: string) => void
   // removeGroup удаляет всю группу блока (подпись владеет группой): trash по подписи
   // сносит подпись + контент + поле. На несуществующем блоке — no-op.
   removeGroup: (id: string) => void
-  // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не трогает).
+  // moveBlock двигает блок на одну позицию; на границе списка — no-op (dirty не
+  // трогает). На ПОДПИСИ вопроса двигает всю группу (подпись — ручка вопроса).
   moveBlock: (id: string, dir: 'up' | 'down') => void
   // moveGroup переставляет группу блока id с соседней (Alt+Shift+↑/↓ §3.2): группа
   // едет целиком, внутренний порядок цел, каретка остаётся на том же блоке (id
@@ -133,6 +138,9 @@ export type BuilderActions = {
   // (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
   // блоков группы сохраняется. Неизвестный id или та же группа — no-op.
   reorderGroups: (activeGroupId: string, overGroupId: string) => void
+  // duplicateBlock кладёт копию блока сразу за оригиналом. Поле, которому обязателен
+  // заголовок (requiresCaption), дублируется вопросом целиком — иначе копия осталась
+  // бы голым полем такого типа, а их не бывает.
   duplicateBlock: (id: string) => void
   // placeInRow — команда ПЕРЕНОСА в правую ячейку ряда (спека §5), единственный вход
   // и для жеста (дроп в правую треть ряда), и для Mod+Alt+→: группа activeGroupId
@@ -156,6 +164,8 @@ export type BuilderActions = {
   // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
   // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
   reorderOptions: (blockId: string, activeOptionId: string, overOptionId: string) => void
+  // removeOption удаляет вариант. Последний вариант уносит с собой сам блок (choice
+  // без вариантов не существует) — остаётся подпись группы; это один шаг истории.
   removeOption: (blockId: string, optionId: string) => void
   moveOption: (blockId: string, optionId: string, dir: 'up' | 'down') => void
   // setSubmitLabel меняет текст кнопки отправки (форма-уровень).
@@ -179,9 +189,11 @@ export type BuilderActions = {
 export type BuilderStore = BuilderState & BuilderActions
 
 // newBlock создаёт валидный черновой блок: пустой text, выведенный позже groupId,
-// дефолты. Choice-тип стартует с пустым списком опций — допустимое недособранное
-// состояние; non-choice остаётся с пустыми settings (иначе ValidateSchema отвергнет
-// опции у не-choice).
+// дефолты. Choice-тип стартует с ОДНИМ пустым вариантом, а не с пустым списком:
+// блок без вариантов не существует (удаление последнего уносит и сам блок —
+// removeOption), поэтому редактор не порождает такое состояние ни одним путём.
+// Каретке при этом всегда есть куда встать (§2.1). Non-choice остаётся с пустыми
+// settings (иначе ValidateSchema отвергнет опции у не-choice).
 function newBlock(type: BlockType): Block {
   const base: Block = {
     id: newBlockId(),
@@ -191,7 +203,9 @@ function newBlock(type: BlockType): Block {
     required: false,
     settings: {},
   }
-  if (isChoiceType(type)) return { ...base, settings: { options: [] } }
+  if (isChoiceType(type)) {
+    return { ...base, settings: { options: [{ id: newOptionId(), label: '' }] } }
+  }
   // Согласие создаётся обязательным: это дефолт, а не правило типа (решение
   // владельца) — владелец может выключить, если это маркетинг-opt-in.
   if (type === 'consent') return { ...base, required: true }
@@ -201,18 +215,6 @@ function newBlock(type: BlockType): Block {
     return { ...base, settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } }
   }
   return base
-}
-
-// newFieldBlock — поле, создаваемое ВОПРОСНЫМ жестом (makeQuestion/makeField и
-// диалоги addQuestionAfter/addFieldAfter): choice-тип рождается с ОДНИМ пустым
-// вариантом, а не с пустым списком. Так choice сразу даёт каретке место (§2.1) и
-// клавиатурный поток вариантов работает с первого нажатия. addBlock/changeBlockType
-// оставляют choice с пустым списком (недособранный черновик — там вариант появится
-// вводом), поэтому сид живёт здесь, а не в newBlock.
-function newFieldBlock(type: BlockType): Block {
-  const b = newBlock(type)
-  if (isChoiceType(type)) return { ...b, settings: { options: [{ id: newOptionId(), label: '' }] } }
-  return b
 }
 
 // regroup выводит groupId из раскладки. Правило (v2, фаза 8.7): группами считаются
@@ -405,6 +407,34 @@ function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
 // groupAnswerable — отвечаемый блок группы gid (носитель бита ряда) или null.
 function groupAnswerable(blocks: Block[], gid: string): Block | null {
   return blocks.find((b) => b.groupId === gid && isAnswerableType(b.type)) ?? null
+}
+
+// captionAwaitingField — подпись, у которой ещё нет своего ответа («ждёт поле»).
+// Поле, вставленное сразу под такой подписью, входит в ЕЁ группу (regroup склеит) —
+// поэтому свой заголовок ему не нужен, даже если тип без заголовка не живёт. Это и
+// есть смысл раздела «Отдельные поля»: подсадить ответ к одинокому заголовку,
+// который остался, например, после удаления всех вариантов у choice.
+function captionAwaitingField(blocks: Block[], block: Block | undefined): boolean {
+  return !!block && isCaptionType(block.type) && groupAnswerable(blocks, block.groupId) === null
+}
+
+// swapGroupWithNeighbor — перестановка группы блока id с соседней. Один код на два
+// жеста: Alt+Shift+↑↓ на любой строке (moveGroup) и Alt+↑↓ на ПОДПИСИ вопроса
+// (moveBlock — подпись есть ручка вопроса, а не отдельная строка). null — блок не
+// найден или группа уже на границе полотна (no-op, историю и dirty не трогаем).
+function swapGroupWithNeighbor(blocks: Block[], id: string, dir: 'up' | 'down'): Block[] | null {
+  const cur = blocks.find((b) => b.id === id)
+  if (!cur) return null
+  // Группы смежны (regroup), поэтому достаточно разложить полотно общим groupBlocks
+  // и поменять текущую группу с соседней — внутренний порядок блоков цел.
+  const groups = groupBlocks(blocks)
+  const gi = groups.findIndex((g) => g.id === cur.groupId)
+  const gj = dir === 'up' ? gi - 1 : gi + 1
+  if (gj < 0 || gj >= groups.length) return null
+  const tmp = groups[gi]!
+  groups[gi] = groups[gj]!
+  groups[gj] = tmp
+  return groups.flatMap((g) => g.blocks)
 }
 
 // groupSpan — [начало, конец] непрерывного участка группы блока с индексом i.
@@ -731,11 +761,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const src = s.blocks[i]
           if (!src) return null
           const [gStart, gEnd] = groupSpan(s.blocks, i)
-          const field: Block = { ...newFieldBlock(type), text: '' }
+          const field: Block = { ...newBlock(type), text: '' }
           if (gStart === gEnd) {
             // Одиночный блок (своя группа) → он становится подписью, поле под ним.
             // Фокус на подпись (у неё textarea, автор правит текст вопроса дальше).
-            const title: Block = { ...src, type: 'title', settings: {}, required: false }
+            // Подпись, уже бывшая подписью, свой размер сохраняет: label не обязан
+            // вырасти в title только потому, что ему подсадили поле.
+            const title: Block = {
+              ...src,
+              type: isCaptionType(src.type) ? src.type : 'title',
+              settings: {},
+              required: false,
+            }
             focus = title.id
             // Бит ряда переезжает на НОВОЕ поле (носитель бита — отвечаемый блок, а
             // подпись его не несёт): «дать вопросу подпись» не должно разваливать ряд.
@@ -758,24 +795,35 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       },
 
       makeField: (id, type) => {
+        const src0 = get().blocks.find((b) => b.id === id)
+        // Тип, которому обязателен заголовок, голым не вставляется (requiresCaption).
+        // Единственное место, где он всё-таки встаёт один, — подпись, ждущая поле:
+        // там он входит в ЕЁ группу, и заголовок у него есть. Во всех остальных
+        // местах жест вырождается в «Вопросы» — поле приезжает со своим заголовком.
+        if (src0 && requiresCaption(type) && !captionAwaitingField(get().blocks, src0)) {
+          return get().makeQuestion(id, type)
+        }
         let focus = id
         commit(null, (s) => {
           const i = s.blocks.findIndex((b) => b.id === id)
           const src = s.blocks[i]
           if (!src) return null
           const [gStart, gEnd] = groupSpan(s.blocks, i)
-          if (gStart === gEnd) {
+          if (gStart === gEnd && !isCaptionType(src.type)) {
             // Одиночный блок → конверсия на месте в голое поле (текст роняется — у
             // поля его нет). Тот же путь, что changeBlockType на отвечаемый тип;
             // ширина/колонки переезжают по тому же правилу (carryLayout).
-            const field: Block = { ...newFieldBlock(type), id }
+            const field: Block = { ...newBlock(type), id }
             carryLayout(src, field)
             return structural({
               blocks: s.blocks.map((b) => (b.id === id ? field : b)),
             })
           }
           // Внутри группы → голое поле новой группой ниже; текущий блок остаётся.
-          const field = newFieldBlock(type)
+          // На ОДИНОКОЙ ПОДПИСИ — то же место (сразу под ней), но смысл другой: поле
+          // входит в её группу, и это жест «подсадить ответ к заголовку». Конверсией
+          // на месте здесь идти нельзя — она уронила бы текст заголовка.
+          const field = newBlock(type)
           focus = field.id
           const blocks = s.blocks.slice()
           blocks.splice(gEnd + 1, 0, field)
@@ -786,7 +834,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       addQuestionAfter: (afterId, type) => {
         const title = newBlock('title')
-        const field = newFieldBlock(type)
+        const field = newBlock(type)
         commit(null, (s) => {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
@@ -797,14 +845,25 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       },
 
       addFieldAfter: (afterId, type) => {
-        const field = newFieldBlock(type)
+        const field = newBlock(type)
+        let focus = field.id
         commit(null, (s) => {
           const at = groupEndAfter(s.blocks, afterId)
           const blocks = s.blocks.slice()
-          blocks.splice(at, 0, field)
+          // То же правило, что у makeField, но точку вставки диалог «+» выбирает сам
+          // (после всей группы afterId), поэтому спрашиваем блок НАД ней: подпись,
+          // ждущая поле, принимает его в свою группу; иначе поле приезжает с
+          // заголовком, и каретка встаёт на заголовок (§12, как у addQuestionAfter).
+          if (requiresCaption(type) && !captionAwaitingField(s.blocks, s.blocks[at - 1])) {
+            const title = newBlock('title')
+            focus = title.id
+            blocks.splice(at, 0, title, field)
+          } else {
+            blocks.splice(at, 0, field)
+          }
           return structural({ blocks })
         })
-        return field.id
+        return focus
       },
 
       updateBlock: (id, patch) =>
@@ -845,10 +904,20 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       moveBlock: (id, dir) =>
         commit(null, (s) => {
           const i = s.blocks.findIndex((b) => b.id === id)
-          const j = dir === 'up' ? i - 1 : i + 1
           const a = s.blocks[i]
+          if (!a) return null
+          // Подпись вопроса — ручка вопроса, а не отдельная строка: Alt+↑↓ на ней
+          // двигает ВСЮ группу. Иначе подпись уезжает из своего вопроса и ниже молча
+          // усыновляет чужое голое поле — та же кража подписи, от которой защищён
+          // дроп (§5), только клавиатурой. Подпись без ответа (одинокая) двигается
+          // как обычный блок: её группа — она сама.
+          if (isCaptionType(a.type) && groupAnswerable(s.blocks, a.groupId)) {
+            const blocks = swapGroupWithNeighbor(s.blocks, id, dir)
+            return blocks ? structural({ blocks }) : null
+          }
+          const j = dir === 'up' ? i - 1 : i + 1
           const b = s.blocks[j]
-          if (!a || !b) return null // блок не найден или уже на границе — ничего не меняем
+          if (!b) return null // уже на границе — ничего не меняем
           const blocks = s.blocks.slice()
           blocks[i] = b
           blocks[j] = a
@@ -857,19 +926,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       moveGroup: (id, dir) =>
         commit(null, (s) => {
-          // Группы смежны (regroup), поэтому достаточно разложить полотно на группы
-          // общим groupBlocks и поменять текущую с соседней. То же, что reorderGroups,
-          // но на один шаг вверх/вниз (Alt+Shift+стрелки), а не в позицию дропа.
-          const cur = s.blocks.find((b) => b.id === id)
-          if (!cur) return null
-          const groups = groupBlocks(s.blocks)
-          const gi = groups.findIndex((g) => g.id === cur.groupId)
-          const gj = dir === 'up' ? gi - 1 : gi + 1
-          if (gj < 0 || gj >= groups.length) return null // группа на границе — no-op
-          const tmp = groups[gi]!
-          groups[gi] = groups[gj]!
-          groups[gj] = tmp
-          return structural({ blocks: groups.flatMap((g) => g.blocks) })
+          // То же, что reorderGroups, но на один шаг вверх/вниз (Alt+Shift+стрелки),
+          // а не в позицию дропа.
+          const blocks = swapGroupWithNeighbor(s.blocks, id, dir)
+          return blocks ? structural({ blocks }) : null
         }),
 
       reorderBlocks: (activeId, overId) =>
@@ -904,9 +964,15 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const i = s.blocks.findIndex((b) => b.id === id)
           const src = s.blocks[i]
           if (!src) return null
-          const copy: Block = { ...cloneBlock(src), id: newBlockId() }
+          // Поле, которому обязателен заголовок, дублируется ВОПРОСОМ целиком: копия
+          // одного такого поля осталась бы голой — состояния, которого не бывает.
+          // Остальные блоки дублируются по одному, как раньше.
+          const [from, to] = requiresCaption(src.type) ? groupSpan(s.blocks, i) : [i, i]
+          const copies = s.blocks
+            .slice(from, to + 1)
+            .map((b): Block => ({ ...cloneBlock(b), id: newBlockId() }))
           const blocks = s.blocks.slice()
-          blocks.splice(i + 1, 0, copy)
+          blocks.splice(to + 1, 0, ...copies)
           return structural({ blocks })
         }),
 
@@ -1034,9 +1100,23 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         ),
 
       removeOption: (blockId, optionId) =>
-        commit(null, (s) =>
-          mutateOptions(s.blocks, blockId, (opts) => opts.filter((o) => o.id !== optionId)),
-        ),
+        commit(null, (s) => {
+          const block = s.blocks.find((b) => b.id === blockId)
+          if (!block || !isChoiceType(block.type)) return null
+          const options = block.settings?.options ?? []
+          // Незнакомый вариант — no-op: filter вернул бы новый массив, и удаление
+          // «в никуда» стоило бы шага истории и dirty.
+          if (!options.some((o) => o.id === optionId)) return null
+          // Последний вариант уносит с собой сам блок: choice без вариантов не
+          // существует (см. newBlock). Остаётся голая подпись — законное состояние,
+          // в которое автор подсаживает любой блок ответа («/» → «Вопросы» или
+          // «Отдельные поля», см. captionAwaitingField). Удаление варианта и блока —
+          // ОДИН шаг истории: Ctrl+Z возвращает вопрос целиком, а не пустой блок.
+          if (options.length === 1) {
+            return structural({ blocks: s.blocks.filter((b) => b.id !== blockId) })
+          }
+          return mutateOptions(s.blocks, blockId, (opts) => opts.filter((o) => o.id !== optionId))
+        }),
 
       moveOption: (blockId, optionId, dir) =>
         commit(null, (s) =>

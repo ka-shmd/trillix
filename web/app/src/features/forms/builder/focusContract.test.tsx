@@ -209,7 +209,9 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
     engine.focusBlock('ch', 'start')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
     expect(handlers.onArrow).toHaveBeenCalledWith('ch', 'up')
-    expect(store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options).toEqual([])
+    // Вариант был последним, поэтому вместе с ним ушёл и сам блок: остаётся голая
+    // подпись, в которую автор подсаживает любой блок ответа.
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap'])
   })
 })
 
@@ -308,8 +310,11 @@ describe('клавиатура вариантов choice (§3.2, Д5)', () => {
     const { store, engine, handlers } = choiceRow([{ id: 'o1', label: '' }])
     engine.focusBlock('ch', 'end')
     fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
-    expect(opts(store)).toHaveLength(0) // пустой вариант удалён
-    expect(handlers.onAddBelow).toHaveBeenCalledWith('ch') // новая строка после группы
+    // Пустой вариант был последним — блок ушёл вместе с ним (здесь он и был всей
+    // формой). Новую строку родитель заводит ДО удаления, чтобы ей было от чего
+    // считать позицию «после группы».
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
+    expect(store.getState().blocks).toHaveLength(0)
   })
 
   it('Alt+↓ на варианте → перенос варианта вниз', () => {
