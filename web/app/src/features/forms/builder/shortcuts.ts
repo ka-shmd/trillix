@@ -64,6 +64,17 @@ export const chords = {
   // Cmd/Ctrl+Z — undo; Cmd/Ctrl+Shift+Z и Ctrl+Y — redo (документ-уровень, §3.2).
   undo: (e: KeyLike) => mod(e) && !e.shiftKey && e.code === 'KeyZ',
   redo: (e: KeyLike) => mod(e) && ((e.shiftKey && e.code === 'KeyZ') || e.code === 'KeyY'),
+  // Богатый текст (фаза 14, §3.3 `DESIGN-rich-text.md`). В карту подсказок пункты
+  // приезжают этапом 14.4 вместе с панелью — здесь пока только матчеры для пробы 14.0,
+  // и это не нарушает «подсказка не имеет права врать»: обещать неработающее нельзя,
+  // не обещать работающее — можно.
+  //
+  // Mod+B/I/U обязаны гаситься ЯВНО: внутри contenteditable их обрабатывает сам
+  // браузер и вставляет собственные теги мимо нашей модели.
+  bold: (e: KeyLike) => mod(e) && !e.shiftKey && e.code === 'KeyB',
+  // Проба: одна значимая марка. Постоянный аккорд цвета фазой не предусмотрен —
+  // значение не булево, выборщик открывается панелью (§3.3 спеки).
+  spikeColor: (e: KeyLike) => mod(e) && e.shiftKey && e.code === 'KeyH',
 } satisfies Record<string, (e: KeyLike) => boolean>
 
 // ShortcutContext — поверхности полотна из таблиц §3.2. По этим ключам чипы-подсказки

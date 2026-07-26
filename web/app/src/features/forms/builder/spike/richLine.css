@@ -1,0 +1,9 @@
+/* ПРОБА ЭТАПА 14.0. Плейсхолдер пустой строки: у contenteditable нет атрибута
+   placeholder, поэтому его рисует псевдоэлемент. Живёт в каталоге пробы, а не в
+   fields.css: подтвердится проба — переедет туда вместе с видом марок (rf-b и др.). */
+[data-rich-line]:empty::before {
+  content: attr(data-ph);
+  color: var(--muted-foreground);
+  opacity: 0.6;
+  pointer-events: none;
+}
