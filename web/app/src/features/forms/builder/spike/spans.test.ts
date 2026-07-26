@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   caretOffset,
   hasMarkThroughout,
+  markClass,
   normalize,
   plainText,
   pointAt,
@@ -98,10 +99,10 @@ describe('DOM ↔ модель', () => {
     // репозитории (инвариант 4), и правило линтера не делает исключения для тестов.
     const el = div()
     const bold = document.createElement('span')
-    bold.dataset.m = 'b'
+    bold.className = 'rf-b'
     bold.appendChild(document.createTextNode('жир'))
     const painted = document.createElement('span')
-    painted.style.color = '#c026d3'
+    painted.dataset.color = '#c026d3'
     painted.appendChild(document.createTextNode('ный'))
     bold.appendChild(painted)
     el.appendChild(bold)
@@ -109,6 +110,26 @@ describe('DOM ↔ модель', () => {
       { t: 'жир', m: ['b'] },
       { t: 'ный', m: ['b'], color: '#c026d3' },
     ])
+  })
+
+  // Регресс на промах, найденный в браузере: жирный не имел вида, потому что кусок не
+  // нёс ничего, за что CSS мог бы зацепиться. Утверждение «выглядит жирным» юнит-тест
+  // сделать не может (лэйаута у happy-dom нет), а вот «несёт класс, которому дан вид» —
+  // может, и этого достаточно, чтобы правило нельзя было потерять молча.
+  it('жирный кусок несёт класс, которому CSS даёт вид', () => {
+    const el = div()
+    spansToDom(el, [{ t: 'жир', m: ['b'] }])
+    expect(el.querySelector('span')!.classList.contains(markClass('b'))).toBe(true)
+  })
+
+  it('цвет переживает нормализацию style.color браузером', () => {
+    const el = div()
+    spansToDom(el, [{ t: 'а', color: '#c026d3' }])
+    // Браузер при чтении style.color отдаёт «rgb(192, 38, 211)» — воспроизводим это,
+    // перезаписав инлайн-стиль. Модель обязана остаться в форме #rrggbb: иначе цвет
+    // приезжал бы в схему тем, что валидатор фазы отвергнет.
+    el.querySelector('span')!.style.color = 'rgb(192, 38, 211)'
+    expect(spansFromDom(el)).toEqual([{ t: 'а', color: '#c026d3' }])
   })
 
   it('<br> из вставки становится пробелом — строка полотна однострочная', () => {

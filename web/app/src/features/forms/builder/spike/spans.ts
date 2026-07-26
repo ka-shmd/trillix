@@ -128,6 +128,11 @@ export const setColor = (spans: Span[], from: number, to: number, color?: string
 // spansToDom печатает модель в поверхность. Кусок без стиля — голый текстовый узел (а не
 // <span> с пустыми атрибутами): так DOM остаётся минимальным, а браузер при наборе не
 // плодит обёрток вокруг обёрток.
+// markClass — вид булевой марки задаёт КЛАСС, а не атрибут: так вид описывается одной
+// строкой CSS и в фазе переезжает в `fields.css` (`rf-b`/`rf-i`/…) общим на три
+// поверхности, как требует §3.1 спеки.
+export const markClass = (m: Mark): string => `rf-${m}`
+
 export function spansToDom(root: HTMLElement, spans: Span[]): void {
   root.textContent = ''
   const doc = root.ownerDocument
@@ -138,8 +143,16 @@ export function spansToDom(root: HTMLElement, spans: Span[]): void {
       continue
     }
     const el = doc.createElement('span')
-    if (st.m?.length) el.dataset.m = st.m.join(',')
-    if (st.color) el.style.color = st.color
+    if (st.m?.length) el.className = st.m.map(markClass).join(' ')
+    if (st.color) {
+      // Значение марки хранится в data-атрибуте, а вид — в инлайн-стиле. Разделение
+      // не косметика: браузер нормализует `style.color` при ЧТЕНИИ («#c026d3» →
+      // «rgb(192, 38, 211)»), и модель, собранная обратно из стиля, приезжала бы в
+      // схему в форме, которую валидатор `^#[0-9a-f]{6}$` обязан отвергнуть.
+      // data-атрибут возвращается тем же, чем записан.
+      el.dataset.color = st.color
+      el.style.color = st.color
+    }
     el.textContent = s.t
     root.appendChild(el)
   }
@@ -164,11 +177,10 @@ export function spansFromDom(root: HTMLElement): Span[] {
         continue
       }
       const own: Style = {
-        m: [
-          ...(inherited.m ?? []),
-          ...((child.dataset.m?.split(',').filter(Boolean) ?? []) as Mark[]),
-        ],
-        color: child.style.color || inherited.color,
+        m: [...(inherited.m ?? []), ...MARKS.filter((mk) => child.classList.contains(markClass(mk)))],
+        // Только data-атрибут: `style.color` браузер отдаёт нормализованным (см.
+        // комментарий в spansToDom), и модель поехала бы в схему в форме rgb().
+        color: child.dataset.color || inherited.color,
       }
       walk(child, own)
     }
