@@ -264,6 +264,21 @@ describe('марки поверх модели', () => {
     expect(store.getState().blocks[0]!.text).toBe('абвгд')
   })
 
+  // Найдено владельцем при первой браузерной проверке: Mod+B занят вендоренным
+  // сайдбаром shadcn — слушателем на window (`components/ui/sidebar.tsx:100`).
+  // preventDefault его не останавливает: он про действие браузера, а не про всплытие.
+  it('Mod+B не доходит до window — сайдбар не схлопывается вместе с жирным', () => {
+    reactiveRow('абвгд')
+    const el = line()
+    el.focus()
+    setSelection(el, 1, 3)
+    const onWindow = vi.fn()
+    window.addEventListener('keydown', onWindow)
+    fireEvent.keyDown(el, { key: 'b', code: 'KeyB', ctrlKey: true })
+    window.removeEventListener('keydown', onWindow)
+    expect(onWindow).not.toHaveBeenCalled()
+  })
+
   it('Mod+B со схлопнутой кареткой ничего не делает и не роняет строку', () => {
     reactiveRow('абвгд')
     const el = line()

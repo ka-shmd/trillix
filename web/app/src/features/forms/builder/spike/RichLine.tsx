@@ -94,6 +94,12 @@ export function RichLine({
     // своё жирное внутри contenteditable и вставит теги мимо модели.
     if (chords.bold(e)) {
       e.preventDefault()
+      // stopPropagation, а не только preventDefault: Mod+B занят вендоренным
+      // сайдбаром shadcn (`components/ui/sidebar.tsx:100` — слушатель на window), и
+      // без остановки всплытия жирный ставился бы вместе со схлопыванием сайдбара.
+      // Забирает аккорд себе ТОЛЬКО текстовая строка: везде в кабинете Mod+B
+      // по-прежнему сайдбар, а в редакторе текста он обязан быть жирным.
+      e.stopPropagation()
       return apply((s, from, to) => toggleMark(s, from, to, 'b'))
     }
     if (chords.spikeColor(e)) {
