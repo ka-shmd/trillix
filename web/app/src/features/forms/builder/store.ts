@@ -246,9 +246,13 @@ function regroup(blocks: Block[]): Block[] {
     let j = i - 1
     while (j >= floor && (blocks[j]!.type === 'text' || blocks[j]!.type === 'image')) j--
     if (j >= floor && isCaptionType(blocks[j]!.type)) {
-      let s = j // подряд идущие подписи выше — в ту же группу (title над label)
-      while (s > floor && isCaptionType(blocks[s - 1]!.type)) s--
-      for (let k = s; k <= i; k++) anchor[k] = b.id
+      // Подпись ровно ОДНА — ближайшая к полю (решение владельца 2026-07-26).
+      // Собранная группа «подпись + поле» целая, второй заголовок в неё не входит:
+      // подписи выше остаются одиночками. Раньше группа забирала все подряд идущие
+      // подписи («title над label»), и осиротевшая подпись мёртвого вопроса,
+      // оказавшись вплотную над следующим, молча становилась ЕГО вторым заголовком —
+      // а первый непустой title перебивал настоящий в CSV и воронке.
+      for (let k = j; k <= i; k++) anchor[k] = b.id
     } else {
       anchor[i] = b.id // голое поле — группа из одного блока
     }
@@ -408,6 +412,23 @@ function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
 // groupAnswerable — отвечаемый блок группы gid (носитель бита ряда) или null.
 function groupAnswerable(blocks: Block[], gid: string): Block | null {
   return blocks.find((b) => b.groupId === gid && isAnswerableType(b.type)) ?? null
+}
+
+// groupIsComplete — в группе есть и подпись, и поле ответа: вопрос собран. В такую
+// группу нельзя добавить ни второй ответ, ни второй заголовок (решение владельца
+// 2026-07-26) — только лэйаут (text/image), он и есть тело вопроса. Правило
+// одинаково у всех входов: слеш-меню и «+» кладут такое ниже группы, дроп
+// перенаправляет туда же (planBlockDrop), а regroup второй подписи в группу не
+// пускает вовсе.
+function groupIsComplete(blocks: Block[], gid: string): boolean {
+  let caption = false
+  let answer = false
+  for (const b of blocks) {
+    if (b.groupId !== gid) continue
+    if (isCaptionType(b.type)) caption = true
+    else if (isAnswerableType(b.type)) answer = true
+  }
+  return caption && answer
 }
 
 // captionAwaitingField — подпись, у которой ещё нет своего ответа («ждёт поле»).
@@ -713,7 +734,16 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         const block = newBlock(type)
         commit(null, (s) => {
           const i = afterId ? s.blocks.findIndex((b) => b.id === afterId) : -1
-          const at = i >= 0 ? i + 1 : s.blocks.length
+          // Подпись в СОБРАННЫЙ вопрос не встраивается — ложится под ним, как поле и
+          // как вопрос (§3): второго заголовка у вопроса не бывает, и regroup всё
+          // равно отдал бы группу ближайшей к полю подписи, молча переименовав вопрос
+          // в CSV и воронке. Лэйаут (text/image) внутрь группы по-прежнему ложится.
+          const at =
+            i < 0
+              ? s.blocks.length
+              : isCaptionType(type) && groupIsComplete(s.blocks, s.blocks[i]!.groupId)
+                ? groupSpan(s.blocks, i)[1] + 1
+                : i + 1
           const blocks = s.blocks.slice()
           blocks.splice(at, 0, block)
           return structural({ blocks })

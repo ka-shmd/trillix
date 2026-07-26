@@ -268,14 +268,18 @@ describe('createBuilderStore', () => {
     expect(b[0]!.groupId).not.toBe(b[1]!.groupId)
   })
 
-  it('regroup: подряд идущие подписи над полем — одна группа (title перебьёт label)', () => {
+  it('regroup: подпись у вопроса ровно одна — ближайшая к полю', () => {
+    // Собранная группа «подпись + поле» целая: второй заголовок в неё не входит,
+    // он остаётся одиночкой (решение владельца 2026-07-26). Иначе осиротевшая
+    // подпись мёртвого вопроса, оказавшись над следующим, становилась его вторым
+    // заголовком и перебивала настоящий в CSV и воронке.
     const store = createBuilderStore()
     store.getState().addBlock('title')
     store.getState().addBlock('label')
     store.getState().addBlock('email')
     const b = store.getState().blocks
-    expect(b[0]!.groupId).toBe(b[2]!.groupId)
-    expect(b[1]!.groupId).toBe(b[2]!.groupId)
+    expect(b[1]!.groupId).toBe(b[2]!.groupId) // label + email — вопрос
+    expect(b[0]!.groupId).not.toBe(b[2]!.groupId) // title сам по себе
   })
 
   it('regroup: контент, ведущий к полю, — в одной группе с полем', () => {
@@ -1449,7 +1453,7 @@ describe('createBuilderStore — поле не живёт без подписи 
     expect(store.getState().blocks.some((b) => b.settings?.column)).toBe(false)
   })
 
-  it('голый заголовок прямо НАД следующим вопросом входит в его группу (regroup v2)', () => {
+  it('голый заголовок прямо НАД следующим вопросом остаётся одиночкой', () => {
     const store = createBuilderStore()
     store.getState().addFieldAfter(null, 'single_choice') // [t1, choice]
     const dead = store.getState().blocks[1]!
@@ -1458,13 +1462,15 @@ describe('createBuilderStore — поле не живёт без подписи 
 
     store.getState().removeOption(dead.id, only)
 
-    // Осиротевшая подпись оказалась вплотную над чужим вопросом, и правило v2
-    // «подряд идущие подписи входят в группу поля» склеило их в ОДНУ группу с
-    // двумя заголовками. Состояние достижимо и без этого правила (так же ведёт
-    // себя удаление любого поля), но здесь оно на главном пути.
+    // Подпись мёртвого вопроса стоит вплотную над чужим — и НЕ прилипает к нему:
+    // у группы «подпись + поле» подпись ровно одна, ближайшая к полю. Автор видит
+    // осиротевший заголовок и решает сам, что с ним делать.
     expect(types(store)).toEqual(['title', 'title', 'email'])
     const groups = groupBlocks(store.getState().blocks)
-    expect(groups).toHaveLength(1)
+    expect(groups).toHaveLength(2)
+    const b = store.getState().blocks
+    expect(b[0]!.groupId).not.toBe(b[2]!.groupId)
+    expect(b[1]!.groupId).toBe(b[2]!.groupId)
   })
 
   it('duplicateBlock на таком поле дублирует вопрос целиком', () => {
@@ -1502,5 +1508,53 @@ describe('createBuilderStore — поле не живёт без подписи 
     store.getState().moveBlock(labelId, 'up')
 
     expect(types(store)).toEqual(['label', 'text'])
+  })
+})
+
+// Собранный вопрос (подпись + поле) — целый: второго заголовка и второго ответа в
+// нём не бывает (решение владельца 2026-07-26). Правило держат три входа сразу —
+// regroup (кого группа принимает), вставка из меню и дроп.
+describe('createBuilderStore — целая группа не принимает второй заголовок', () => {
+  const question = () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // [title, short_text]
+    return { store, titleId: store.getState().blocks[0]!.id }
+  }
+
+  it('«+» с подписью кладёт её ПОД вопрос, а не внутрь', () => {
+    const { store, titleId } = question()
+
+    const id = store.getState().addBlockAfter(titleId, 'label')
+
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'label'])
+    // Новая подпись — одиночка: своего поля у неё пока нет, чужое она не забирает.
+    expect(b.find((x) => x.id === id)!.groupId).not.toBe(b[0]!.groupId)
+    expect(b[0]!.groupId).toBe(b[1]!.groupId)
+  })
+
+  it('лэйаут внутрь вопроса по-прежнему встаёт — это его тело', () => {
+    const { store, titleId } = question()
+
+    store.getState().addBlockAfter(titleId, 'text')
+
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'text', 'short_text'])
+    expect(new Set(b.map((x) => x.groupId)).size).toBe(1)
+  })
+
+  it('дроп подписи между строк чужого вопроса приземляет её под ним', () => {
+    const { store, titleId } = question()
+    store.getState().addBlockAfter(titleId, 'text') // [title, text, short_text]
+    const store2 = store.getState()
+    store2.addBlockAfterGroup(store2.blocks[2]!.id, 'label') // одинокая подпись ниже
+    const b = store.getState().blocks
+    const lone = b[3]!
+
+    // Целимся в середину чужой группы — правило §5 уводит подпись под неё.
+    const plan = planBlockDrop(b, lone.id, b[1]!.id)
+
+    expect(plan!.redirected).toBe(true)
+    expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'text', 'short_text', 'label'])
   })
 })
