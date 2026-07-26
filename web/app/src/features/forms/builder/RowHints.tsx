@@ -21,7 +21,10 @@ const MAX_CHIPS = 3
 export function RowHints({ rowId, lineH }: { rowId: string; lineH: string }) {
   const active = useActiveRow()
   if (!active || active.id !== rowId) return null
-  const list = shortcutsFor(active.ctx, { hasAnswer: active.hasAnswer }).slice(0, MAX_CHIPS)
+  const list = shortcutsFor(active.ctx, {
+    hasAnswer: active.hasAnswer,
+    movesRow: active.movesRow,
+  }).slice(0, MAX_CHIPS)
   if (list.length === 0) return null
 
   return (

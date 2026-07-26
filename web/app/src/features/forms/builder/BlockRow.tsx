@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
+import { Asterisk, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   carriesText,
@@ -64,6 +64,20 @@ export interface BlockRowProps {
   // groupHasAnswer — есть ли в группе строки отвечаемый блок. Нужен подсказкам: без
   // него Mod+Enter («к полю ответа») молчит, и обещать его нельзя (§7).
   groupHasAnswer?: boolean
+  // ownedByCaption — строка ответа в группе с подписью: ею управляет подпись (решение
+  // владельца 2026-07-26). У такой строки НЕТ кластера значков (удалить/добавить/
+  // перетащить) и нет своего Alt+↑↓: разлучать её с вопросом нечем и незачем — трэш
+  // и ручка на подписи сносят и двигают вопрос целиком. Голое поле (группа без
+  // подписи) значки сохраняет: управлять им больше некому.
+  ownedByCaption?: boolean
+  // requiredFor — блок, чью обязательность представляет эта строка (носитель флага —
+  // всегда отвечаемый блок, модель не меняется). У поля это оно само, у первой
+  // подписи группы — поле её вопроса, у контента — ничего.
+  //
+  // Звёздочку рисует подпись, а не поле (решение владельца 2026-07-26): у превью и
+  // рендерера она и так на подписи (§6), а строка ответа теперь вообще не несёт
+  // управления. У группы без подписи звёздочка остаётся на самом поле — больше негде.
+  requiredFor?: Block
   // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
   // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
   // (там пустой текст = описание вопроса); firstOfForm — самая первая строка полотна
@@ -85,9 +99,13 @@ export interface BlockRowProps {
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
   // схлопнуть пустой блок в предыдущий (решает родитель — знает соседей).
   onBackspaceAtStart: (id: string) => void
-  // onDeleteObject — Backspace на объектной остановке (image/date/scale): удалить
-  // объект и увести каретку на предыдущую строку/заголовок (§2.2, знает соседей).
-  onDeleteObject: (id: string) => void
+  // onBackspaceDelete — Backspace на поверхности БЕЗ собственного текста: объектной
+  // остановке (image/date/scale) или пустом инпуте плейсхолдера. Удаляет блок и
+  // уводит каретку на предыдущую остановку/заголовок (§2.2, знает соседей).
+  // Поведение единое для всех поверхностей ответа (решение владельца 2026-07-26):
+  // «стёрли ответ» — это вопрос без поля, а не поле с пустотой внутри. У choice то
+  // же самое делает Backspace в последнем пустом варианте (removeOption).
+  onBackspaceDelete: (id: string) => void
   // onDeleteBlock — Cmd+Shift+Backspace (§3.4): явное удаление блока/группы + тост,
   // исход фокуса по контракту (решает родитель — знает соседей и владение группой).
   onDeleteBlock: (id: string) => void
@@ -110,6 +128,8 @@ export function BlockRow({
   formId,
   groupHandle,
   groupHasAnswer = false,
+  ownedByCaption = false,
+  requiredFor,
   insideQuestion = false,
   firstOfForm = false,
   mirrored = false,
@@ -117,7 +137,7 @@ export function BlockRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onAnswerAction,
   onArrow,
@@ -153,7 +173,10 @@ export function BlockRow({
   // Подсказки (§7): текстовая поверхность объявляет свой контекст карты — от него
   // зависят чипы у каретки и шпаргалка Mod+/. Остальные поверхности строки (варианты,
   // инпут плейсхолдера, объектная остановка) объявляют свой контекст сами.
-  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer)
+  // movesRow: у подписи вопроса (она несёт групповую ручку) Alt+↑↓ двигает вопрос
+  // целиком, а не строку, — пункт «Переместить блок» из подсказок выпадает, перенос
+  // вопроса остаётся обещан отдельным Alt+Shift+↑↓.
+  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer, !groupHandle)
   // Плейсхолдер пустой строки — подсказка в самом месте каретки (§7, слой 1). У
   // подписей он от позиции не зависит (тип уже сказал, что это) и виден всегда; у
   // обычного текста зависит и показывается только под кареткой: неактивная пустая
@@ -389,7 +412,13 @@ export function BlockRow({
         onOpenChange={setActionOpen}
         block={block}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
-        onToggleRequired={() => updateBlock(block.id, { required: !block.required })}
+        // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
+        // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись
+        // ответов не собирает, а флаг — как раз про её вопрос).
+        requiredFor={requiredFor}
+        onToggleRequired={() =>
+          requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
+        }
         onDuplicate={() => duplicateBlock(block.id)}
         onDelete={() => onDeleteBlock(block.id)}
         onPickType={pickType}
@@ -413,7 +442,14 @@ export function BlockRow({
           Любой новый reveal-on-hover контрол блока — только сюда. */}
       {/* tabIndex=-1 у значков строки: полотно — один Tab-stop, кнопки-значки —
           мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
-          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2). */}
+          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2).
+
+          Кластера НЕТ у строки ответа в озаглавленной группе (ownedByCaption): поле
+          неразрывно с подписью, и все три значка там означали бы действия, которых не
+          бывает, — удалить поле отдельно, вставить блок между подписью и полем,
+          утащить поле из своего вопроса. Вопросом управляет строка подписи; у
+          вариантов choice — свои кластеры (см. OptionCard). */}
+      {ownedByCaption ? null : (
       <div
         // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
         // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
@@ -458,11 +494,16 @@ export function BlockRow({
           <GripVertical className="size-4" />
         </button>
       </div>
+      )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
-          левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
-          ответов не собирает, required к нему неприменим. */}
-      {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
+          левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
+          рендерер, §6), а пишет в отвечаемый блок группы — носитель флага не менялся.
+          У группы без подписи звёздочка остаётся на самом поле: показать её больше
+          негде. Контент ответов не собирает — там её нет вовсе. */}
+      {requiredFor && !ownedByCaption ? (
+        <RequiredToggle block={requiredFor} lineH={rowLineH} />
+      ) : null}
 
       {/* Чипы-подсказки сфокусированной строки (§7): только клавиши этой поверхности,
           общие — в шпаргалке Mod+/. Рисуются всегда, содержимое выбирает сам RowHints
@@ -514,10 +555,12 @@ export function BlockRow({
         <div className="min-w-0">
           <OptionsInline
             block={block}
+            mirrored={mirrored}
             onLeaveTop={() => onArrow(block.id, 'up')}
             onArrow={onArrow}
             onAddBelow={onAddBelow}
             onDeleteBlock={onDeleteBlock}
+            onBackspaceDelete={onBackspaceDelete}
             onOpenActions={() => setActionOpen(true)}
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
@@ -527,6 +570,7 @@ export function BlockRow({
           <AnswerField
             block={block}
             onArrow={onArrow}
+            onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
             onRowShift={(dir) => onRowShift(block.id, dir)}
@@ -536,8 +580,9 @@ export function BlockRow({
         // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
         <ObjectStop
           block={block}
+          ownedByCaption={ownedByCaption}
           onAddBelow={onAddBelow}
-          onDeleteObject={onDeleteObject}
+          onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
           onDeleteBlock={onDeleteBlock}
           onOpenActions={() => setActionOpen(true)}
@@ -602,9 +647,10 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
 // стрелками и focusBlock, но не Tab (полотно — один Tab-stop, §3.1 / срез roving).
 function ObjectStop({
   block,
+  ownedByCaption = false,
   children,
   onAddBelow,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
   onArrow,
@@ -613,9 +659,12 @@ function ObjectStop({
   onRowShift,
 }: {
   block: Block
+  // Строка ответа в озаглавленной группе (см. проп BlockRow): у неё нет своего
+  // переноса — вопрос двигают с подписи.
+  ownedByCaption?: boolean
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
-  onDeleteObject: (id: string) => void
+  onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onOpenActions: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
@@ -627,7 +676,12 @@ function ObjectStop({
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
   // Контекст подсказок: у картинки Mod+Enter открывает файловый диалог, у date/scale
   // открывать нечего — это разные контексты карты, а не один «объект» (§7).
-  const rowFocus = useRowFocus(block.id, block.type === 'image' ? 'image' : 'object')
+  const rowFocus = useRowFocus(
+    block.id,
+    block.type === 'image' ? 'image' : 'object',
+    false,
+    !ownedByCaption,
+  )
 
   // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
   // ниже) — как и в текстовой строке.
@@ -656,8 +710,12 @@ function ObjectStop({
       e.preventDefault()
       onRowShift(chords.rowRight(e) ? 'right' : 'left')
     } else if (chords.moveItem(e)) {
+      // Alt+↑↓ двигает саму строку — а у строки ответа в озаглавленной группе двигать
+      // нечего: она едет только вместе с вопросом (Alt+Shift+↑↓ или та же клавиша на
+      // подписи). Жест ГАСИМ, а не пропускаем: иначе он провалился бы в обычный обход
+      // стрелками и каретка уехала бы на соседнюю строку вместо «ничего не произошло».
       e.preventDefault()
-      onMove(arrowDir(e))
+      if (!ownedByCaption) onMove(arrowDir(e))
     } else if (chords.arrowUp(e)) {
       e.preventDefault()
       onArrow(block.id, 'up')
@@ -672,7 +730,7 @@ function ObjectStop({
       onAddBelow(block.id, { openMenu: true })
     } else if (chords.backspace(e)) {
       e.preventDefault()
-      onDeleteObject(block.id)
+      onBackspaceDelete(block.id)
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault()
       onAddBelow(block.id, { seed: e.key })
@@ -776,12 +834,16 @@ function ScaleInline({ block }: { block: Block }) {
 function AnswerField({
   block,
   onArrow,
+  onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
   onRowShift,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
+  // Backspace в ПУСТОМ плейсхолдере — удалить поле (см. проп BlockRow). Внутри
+  // объектной остановки (date) поля рисуются без обработчиков — там свой Backspace.
+  onBackspaceDelete?: (id: string) => void
   // Cmd+Shift+Backspace — явное удаление блока/группы (§3.4). Только у редактируемого
   // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
   onDeleteBlock?: (id: string) => void
@@ -814,12 +876,14 @@ function AnswerField({
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
 
-  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в начале
-  // пустого — уход ВВЕРХ на предыдущую остановку (обычно подпись группы), НЕ удаление:
-  // поле — необязательный лист, его сносит только явный Cmd+Shift+Backspace, иначе
-  // подпись осталась бы сиротой (решение владельца 2026-07-24; navigation.ts). В само
-  // поле каретка попадает лишь явно (Cmd+Enter/клик), поэтому это редкий путь. Left/
-  // Right и вертикаль внутри длинного текста остаются нативными (caret-проверка на краю).
+  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в пустом
+  // плейсхолдере УДАЛЯЕТ поле и уводит каретку на предыдущую остановку — единое
+  // поведение всех поверхностей ответа (решение владельца 2026-07-26, отменяет
+  // «поле — необязательный лист, Backspace его только пропускает» от 2026-07-24):
+  // объект сносится Backspace'ом, последний вариант choice уносит свой блок, и
+  // плейсхолдер не имеет права быть исключением. Осиротевшая подпись — законное
+  // состояние: в неё подсаживают новый блок ответа. Left/Right и вертикаль внутри
+  // длинного текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
     if (onOpenActions && chords.actionMenu(e)) {
@@ -837,9 +901,9 @@ function AnswerField({
     } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
-    } else if (onArrow && chords.backspace(e) && e.currentTarget.value === '' && c.caretAtStart()) {
+    } else if (onBackspaceDelete && chords.backspace(e) && e.currentTarget.value === '') {
       e.preventDefault()
-      onArrow(block.id, 'up')
+      onBackspaceDelete(block.id)
     }
   }
   // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
@@ -938,14 +1002,19 @@ const optCellOption = (id: string | number): string | null => {
 
 function OptionsInline({
   block,
+  mirrored,
   onLeaveTop,
   onArrow,
   onAddBelow,
   onDeleteBlock,
+  onBackspaceDelete,
   onOpenActions,
   onRowShift,
 }: {
   block: Block
+  // Вся группа стоит в правой колонке ряда вопросов — кластеры значков уезжают
+  // вправо, включая значки вариантов (см. OptionCard).
+  mirrored: boolean
   onLeaveTop: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
@@ -953,6 +1022,9 @@ function OptionsInline({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
   onDeleteBlock: (id: string) => void
+  // Backspace в пустом «призраке», когда вариантов нет: блок уходит, каретка — на
+  // предыдущую остановку. Тот же обработчик, что у объектов и пустого плейсхолдера.
+  onBackspaceDelete: (id: string) => void
   // Cmd+. на варианте — меню действий всего choice-блока (§3.3).
   onOpenActions: () => void
   // Mod+Alt+→/← у dropdown: список живёт в нативном select, рядов у его вариантов НЕТ
@@ -968,12 +1040,16 @@ function OptionsInline({
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const reorderOptions = useBuilderStore((s) => s.reorderOptions)
   const removeOption = useBuilderStore((s) => s.removeOption)
+  const removeBlock = useBuilderStore((s) => s.removeBlock)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
   // вариант — поэтому у списка свои чипы, а не текстовые.
   const rowFocus = useRowFocus(block.id, 'option')
+  // У призрака свой контекст подсказок: клавиши варианта на нём не работают (двигать
+  // и удалять нечего), а обещать неработающее нельзя (§7).
+  const ghostFocus = useRowFocus(block.id, 'newOption')
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
-  const addBtnRef = useRef<HTMLButtonElement>(null)
+  const ghostRef = useRef<HTMLInputElement>(null)
   // Id варианта, который тащат (null — драга нет): от него зависит, светить ли
   // свободные ячейки рядов.
   const [optDrag, setOptDrag] = useState<string | null>(null)
@@ -1001,11 +1077,11 @@ function OptionsInline({
   const pendingFocus = useRef<string | 'last' | null>(null)
 
   // Фокус-цель choice-строки (§2.1) — инпут варианта: край start → первый, end →
-  // последний. Список пуст (недособранный черновик) → кнопка «добавить вариант»,
-  // чтобы каретка не пропала (13.2 заведёт choice сразу с одним вариантом).
+  // последний. Вариантов нет вовсе (только что созданный блок) → «призрак»: набор
+  // начинается прямо с него, и каретка не пропадает.
   useRegisterFocusTarget(block.id, (edge) => {
     if (options.length === 0) {
-      addBtnRef.current?.focus()
+      ghostRef.current?.focus()
       return
     }
     const target = edge === 'start' ? options[0] : options[options.length - 1]
@@ -1021,6 +1097,51 @@ function OptionsInline({
     pendingFocus.current = null
   }, [options])
 
+  // Удаление варианта с исходом каретки по контракту (§12): предыдущий вариант, а его
+  // нет — подпись группы. Единый путь для Backspace в пустом и для мусорки: удаление
+  // мышью тоже не имеет права уронить каретку в body, а последний вариант вдобавок
+  // уносит с собой сам блок (removeOption), и тогда уводить каретку надо ДО удаления —
+  // после него строки, от которой считается «наверх», уже нет.
+  function removeOptionAt(optionId: string, i: number) {
+    const prev = options[i - 1]
+    if (!prev) onLeaveTop()
+    removeOption(block.id, optionId)
+    if (prev) pendingFocus.current = prev.id
+  }
+
+  // Клавиши «призрака» (§3.2). Своих действий у него почти нет — он и есть одно
+  // действие «набери текст»; остальное сводится к соседям и к судьбе блока.
+  function onGhostKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    const last = options[options.length - 1]
+    if (chords.actionMenu(e)) {
+      e.preventDefault()
+      onOpenActions()
+    } else if (chords.deleteBlock(e)) {
+      e.preventDefault()
+      onDeleteBlock(block.id)
+    } else if (chords.enter(e)) {
+      // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
+      // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
+      // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
+      e.preventDefault()
+      onAddBelow(block.id)
+      if (options.length === 0) removeBlock(block.id)
+    } else if (chords.backspace(e)) {
+      // Стирать в призраке нечего: либо возвращаемся к последнему варианту, либо —
+      // если их нет — уходит сам блок, как на любой пустой поверхности ответа.
+      e.preventDefault()
+      if (last) optionRefs.current.get(last.id)?.focus()
+      else onBackspaceDelete(block.id)
+    } else if (chords.arrowUp(e)) {
+      e.preventDefault()
+      if (last) optionRefs.current.get(last.id)?.focus()
+      else onLeaveTop()
+    } else if (chords.arrowDown(e)) {
+      e.preventDefault()
+      onArrow(block.id, 'down')
+    }
+  }
+
   // Биндинги по e.code (§3.1). i — индекс варианта в options.
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
@@ -1035,9 +1156,12 @@ function OptionsInline({
     } else if (chords.enter(e) && !e.metaKey && !e.ctrlKey && isLast && empty) {
       // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
       // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
+      // Строку заводим ДО удаления: последний вариант уносит с собой сам блок, и
+      // позицию «после группы» родителю было бы уже не от чего считать — новая
+      // строка улетела бы в конец полотна.
       e.preventDefault()
-      removeOption(block.id, optionId)
       onAddBelow(block.id)
+      removeOption(block.id, optionId)
     } else if (chords.enter(e)) {
       // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
       // тот же жест «действие над ответом» (§3.2).
@@ -1064,10 +1188,7 @@ function OptionsInline({
       }
     } else if (chords.backspace(e) && empty) {
       e.preventDefault()
-      const prev = options[i - 1]
-      removeOption(block.id, optionId)
-      if (prev) pendingFocus.current = prev.id
-      else onLeaveTop()
+      removeOptionAt(optionId, i)
     } else if (chords.arrowDown(e)) {
       // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
       e.preventDefault()
@@ -1135,10 +1256,12 @@ function OptionsInline({
                   // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
                   // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
                   index={index.get(o.id)!}
+                  mirrored={mirrored}
                   inputRef={(el) => {
                     optionRefs.current.set(o.id, el)
                   }}
                   onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                  onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
                   rowFocus={rowFocus}
                 />
               </div>
@@ -1157,21 +1280,20 @@ function OptionsInline({
               cells[0]
             )
           })}
-          <button
-            ref={addBtnRef}
-            type="button"
-            tabIndex={-1}
-            onClick={() => {
-              pendingFocus.current = 'last'
-              addOption(block.id)
+          {/* «Призрак» — пустая строка в конце списка вместо кнопки «Добавить вариант»
+              (решение владельца 2026-07-26). Вариантом она не является и в схеме её
+              нет: набранный в ней текст рождает НАСТОЯЩИЙ вариант, а призрак тут же
+              появляется под ним. Так список набирается подряд, как текст, а пустые
+              варианты перестают уезжать в опубликованную форму. */}
+          <GhostOption
+            ref={ghostRef}
+            multiple={block.type === 'multi_choice'}
+            onType={(text) => {
+              pendingFocus.current = addOption(block.id, text)
             }}
-            // Служебный ярус (14px), а не тело формы: это контрол редактора, которого
-            // респондент не видит — как «+ Добавить блок» ниже по полотну. Был text-base
-            // и читался как ещё один вариант ответа.
-            className="flex w-fit items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-          >
-            <Plus className="size-4" /> Добавить вариант
-          </button>
+            onKeyDown={onGhostKeyDown}
+            rowFocus={ghostFocus}
+          />
         </div>
       </SortableContext>
     </DndContext>
@@ -1197,32 +1319,104 @@ function FreeCell({ optionId }: { optionId: string }) {
   )
 }
 
+// GhostOption — пустая строка в конце списка вариантов: место, где список
+// продолжается. Вариантом она НЕ является — в схеме её нет, значков у неё нет,
+// перетащить и удалить нечего; поэтому и выглядит она неактивной (приглушена), пока
+// в ней пусто. Первый же набранный символ рождает настоящий вариант с этим текстом,
+// каретка переезжает в него, а призрак появляется строкой ниже — визуально текст
+// остаётся на месте, а под ним открывается новая пустая строка.
+//
+// Почему не кнопка «Добавить вариант» (была здесь до 2026-07-26): кнопка — отдельный
+// жест и отдельная остановка, из-за которой список набирался «текст → мышь/Tab →
+// текст». Призрак делает список обычным текстом, который набирают подряд.
+//
+// value всегда пустой: набранное уезжает в стор в тот же тик, поэтому призрак сам
+// текст никогда не хранит — иначе он был бы вариантом-невидимкой со своим состоянием.
+function GhostOption({
+  ref,
+  multiple,
+  onType,
+  onKeyDown,
+  rowFocus,
+}: {
+  ref: React.RefObject<HTMLInputElement | null>
+  // Тип списка решает ширину невидимого слота под глифом (чекбокс шире буквы).
+  multiple: boolean
+  onType: (text: string) => void
+  onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
+  rowFocus: ReturnType<typeof useRowFocus>
+}) {
+  const placeholder = 'Добавить ответ'
+  return (
+    // Приглушён сильнее обычного (решение владельца 2026-07-26): строка обязана
+    // читаться как приглашение, а не как ещё один вариант, который автор забыл
+    // заполнить. В фокусе гасит приглушение — в неё уже набирают.
+    <div className="relative flex items-center opacity-45 transition-opacity focus-within:opacity-100">
+      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
+        {/* Слот под глиф будущего варианта — невидимый, но место занимает: без него
+            текст призрака стоял бы левее списка и прыгал бы вправо на первом же
+            набранном символе. Ширину даёт тот же класс, что у настоящего варианта. */}
+        <span
+          aria-hidden="true"
+          className={`${multiple ? 'rf-mark rf-mark--check' : 'rf-option-key'} opacity-0`}
+        />
+        <span className="rf-option-edit" data-value={placeholder}>
+          <input
+            ref={ref}
+            value=""
+            placeholder={placeholder}
+            aria-label={placeholder}
+            onChange={(e) => onType(e.target.value)}
+            onKeyDown={onKeyDown}
+            {...rowFocus}
+            className="bg-transparent outline-none placeholder:text-muted-foreground"
+          />
+        </span>
+      </span>
+    </div>
+  )
+}
+
 // OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
-// контекста. Ручка — вне потока (absolute): контрол, занимающий место и появляющийся
-// по hover, схлопывается на mousedown и съедает клик (TD-22).
+// контекста. Значки — тот же кластер, что у строк полотна (удалить + перетащить),
+// только адресованы варианту: строка ответа своих значков лишилась, потому что ею
+// управляет подпись, а вариантами управлять по отдельности как раз нужно.
+// Кластер absolute и вне потока: контрол, занимающий место и появляющийся по hover,
+// схлопывается на mousedown и съедает клик (TD-22).
 function OptionCard({
   block,
   option,
   index,
+  mirrored,
   inputRef,
   onKeyDown,
+  onRemove,
   rowFocus,
 }: {
   block: Block
   option: NonNullable<NonNullable<Block['settings']>['options']>[number]
   index: number
+  // mirrored — вся группа стоит в правой колонке ряда ВОПРОСОВ (см. BlockRow): слева
+  // от неё чужой вопрос во всю ширину, поэтому кластер уезжает вправо вместе с
+  // кластерами строк. Внутри списка вариантов сторона не меняется никогда — даже у
+  // правого варианта ряда: карточка обнимает текст, и слева от неё есть место
+  // (решение владельца 2026-07-26: варианты выглядят как блоки вопросов).
+  mirrored: boolean
   inputRef: (el: HTMLInputElement | null) => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
+  // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
+  // один знает соседей. Мусорка и Backspace в пустом ведут в одну точку.
+  onRemove: () => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
-  const removeOption = useBuilderStore((s) => s.removeOption)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: option.id,
     animateLayoutChanges: noLayoutAnimation,
   })
   const placeholder = `Вариант ${index + 1}`
   const key = optionKey(index)
+  const multiple = block.type === 'multi_choice'
   return (
     // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
     // всей строкой блока, и от него крестики расцветали у всех вариантов разом при
@@ -1230,30 +1424,57 @@ function OptionCard({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={`group/opt relative flex items-center gap-1 ${isDragging ? 'z-10 opacity-70' : ''}`}
+      className={`group/opt relative flex items-center ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
-      <button
-        type="button"
-        aria-label="Переместить вариант"
-        className="absolute -left-5 cursor-grab text-muted-foreground opacity-0 transition-opacity group-hover/opt:opacity-100"
-        {...attributes}
-        {...listeners}
-        // Ручка — не остановка обхода: каретка ходит по вариантам, а не по их ручкам
-        // (тот же tabIndex, что у крестика). Ставим ПОСЛЕ спреда: attributes несут
-        // свой tabIndex, и порядок здесь решает, чей победит.
-        tabIndex={-1}
+      {/* Кластер значков варианта — зеркало кластера строки: те же размеры, тот же
+          порядок (удалить, перетащить — ручка ближе к тексту), то же проявление по
+          hover своей карточки (group/opt: безымянный group занят строкой блока, и от
+          него значки расцветали у всех вариантов разом — TD-31).
+          Отступ тоже тот же (mr-2.5, не mr-1.5): в жёлобе между кластером и текстом
+          лежит рейл группы (-left-2, GroupRow), и с меньшим отступом ручка ложится
+          прямо на линию. Ручки вариантов и ручки строк выстраиваются в одну
+          вертикаль — у обоих кластеров правый край на 10px левее колонки. */}
+      <div
+        className={`absolute flex ${
+          mirrored ? 'left-full ml-2.5 flex-row-reverse' : 'right-full mr-2.5'
+        } items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
       >
-        <GripVertical className="size-3.5" />
-      </button>
-      <span className="rf-option">
-        {/* Буква — та же декоративная подсказка, что видит респондент
-            (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
-            тут, ни в форме: «один из» против «несколько из» показывает
-            превью, где виден настоящий контрол. */}
-        {key && (
-          <span className="rf-option-key" aria-hidden="true">
-            {key}
-          </span>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onRemove}
+          aria-label="Удалить вариант"
+          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+        >
+          <Trash2 className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Переместить вариант"
+          className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+          // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
+          // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
+          // здесь решает, чей победит.
+          tabIndex={-1}
+        >
+          <GripVertical className="size-4" />
+        </button>
+      </div>
+      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
+        {/* Что стоит перед текстом, решает тип — ровно как у респондента
+            (BlockField): «несколько из списка» — обычный чекбокс без карточки,
+            «один из списка» — карточка с буквенным бейджем. Здесь оба элемента
+            декоративны (span, aria-hidden): автор правит текст, а не отвечает. */}
+        {multiple ? (
+          <span className="rf-mark rf-mark--check" aria-hidden="true" />
+        ) : (
+          key && (
+            <span className="rf-option-key" aria-hidden="true">
+              {key}
+            </span>
+          )
         )}
         {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
             в index.css). Пустой вариант меряется по плейсхолдеру, иначе
@@ -1271,18 +1492,6 @@ function OptionCard({
           />
         </span>
       </span>
-      {/* Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется только
-          opacity): контрол, появляющийся по hover в потоке, схлопывается на mousedown
-          и съедает клик — TD-22, разбор у кластера значков выше. */}
-      <button
-        type="button"
-        tabIndex={-1}
-        onClick={() => removeOption(block.id, option.id)}
-        aria-label="Удалить вариант"
-        className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/opt:opacity-100"
-      >
-        <X className="size-3.5" />
-      </button>
     </div>
   )
 }

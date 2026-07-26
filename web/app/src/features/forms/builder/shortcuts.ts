@@ -74,6 +74,9 @@ export const chords = {
 export type ShortcutContext =
   | 'text'
   | 'option'
+  // Пустая строка в конце списка вариантов («призрак»): вариантом ещё не является,
+  // поэтому клавиши варианта на ней не работают и обещать их нельзя — свой контекст.
+  | 'newOption'
   | 'field'
   | 'image'
   | 'object'
@@ -180,12 +183,20 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     // «действие над ответом». Работает — значит, в карте быть обязано.
     sc(chords.answerAction, 'Mod+Enter', 'Новый вариант ниже'),
   ],
+  // newOption — «призрак» в конце списка: пустая строка, которая вариантом станет,
+  // как только в неё что-то напишут. Клавиш у неё почти нет намеренно — она и есть
+  // одна клавиша: набери текст. ⌫ показываем только словами «удалить блок», потому
+  // что удалять в самом призраке нечего.
+  newOption: [
+    gesture('любой символ', 'Добавить вариант', 'Вариант'),
+    gesture('⌫ в пустом', 'Удалить блок, если вариантов нет', 'Удалить блок'),
+  ],
   // field — инпут текста-подсказки под вопросом. Клавиш у него почти нет намеренно:
   // это необязательный лист (§2.1), Enter и вертикальные переносы там не обрабатываются.
   // Исключение — ряд: у ГОЛОГО поля (без подписи) это единственная поверхность, и без
   // Mod+Alt+←/→ здесь сборка ряда без мыши для него была бы невозможна.
   field: [
-    gesture('⌫ в пустом', 'Вернуться к подписи', 'К подписи'),
+    gesture('⌫ в пустом', 'Удалить поле', 'Удалить'),
     sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
     sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
   ],
@@ -227,6 +238,7 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
 const BLOCK_CONTEXTS: ReadonlySet<ShortcutContext> = new Set<ShortcutContext>([
   'text',
   'option',
+  'newOption',
   'field',
   'image',
   'object',
@@ -235,11 +247,17 @@ const BLOCK_CONTEXTS: ReadonlySet<ShortcutContext> = new Set<ShortcutContext>([
 // shortcutsFor — контекстные пункты строки (для чипов и верхней части шпаргалки).
 // hasAnswer — есть ли в группе строки отвечаемый блок; без него Mod+Enter выпадает:
 // прыгать не к чему, а обещать клавишу, которая молчит, нельзя.
+// movesRow — двигает ли Alt+↑↓ именно ЭТУ строку. Ложь в двух случаях, и в обоих
+// пункт «Переместить блок» выпадает: у строки ответа в озаглавленной группе жест
+// не делает ничего (вопрос двигают с подписи), а на самой подписи он двигает вопрос
+// целиком — то есть обещал бы не то, что делает. Перенос вопроса остаётся обещан
+// отдельным пунктом (Alt+Shift+↑↓).
 export function shortcutsFor(
   ctx: ShortcutContext,
-  opts: { hasAnswer?: boolean } = {},
+  opts: { hasAnswer?: boolean; movesRow?: boolean } = {},
 ): Shortcut[] {
-  const list = SHORTCUTS[ctx]
+  let list = SHORTCUTS[ctx]
+  if (opts.movesRow === false) list = list.filter((s) => s.match !== chords.moveItem)
   if (ctx !== 'text' || opts.hasAnswer) return list
   return list.filter((s) => s.match !== chords.answerAction)
 }

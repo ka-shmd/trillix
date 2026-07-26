@@ -34,7 +34,6 @@ import {
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
-  isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
 import { groupBlocks, groupCanShareRow, packRows } from '@fields/groups'
@@ -88,7 +87,6 @@ export function SlashEditor({
   const addQuestionAfter = useBuilderStore((s) => s.addQuestionAfter)
   const addFieldAfter = useBuilderStore((s) => s.addFieldAfter)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const addOption = useBuilderStore((s) => s.addOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
@@ -452,17 +450,14 @@ export function SlashEditor({
   }
 
   // Cmd/Ctrl+Enter (§3.2) — «действие над ответом»: из подписи/контента прыгнуть к
-  // контролу ответа своей группы. choice: каретка на последний вариант (edge end);
-  // список пуст (недособранный черновик addBlock/changeBlockType) → создать первый.
+  // контролу ответа своей группы. choice: каретка на последний вариант (edge end), а
+  // если вариантов ещё нет — на призрака списка, он же и есть место для набора.
   // На картинке файловый диалог открывает сама объектная остановка (см. ObjectStop).
   function handleAnswerAction(id: string) {
     const src = blocks.find((b) => b.id === id)
     if (!src) return
     const field = blocks.find((b) => b.groupId === src.groupId && isAnswerableType(b.type))
     if (!field) return
-    if (isChoiceType(field.type) && (field.settings?.options?.length ?? 0) === 0) {
-      addOption(field.id) // пустой choice — родить первый вариант
-    }
     engine.focusBlock(field.id, 'end')
   }
 
@@ -495,7 +490,7 @@ export function SlashEditor({
 
   // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
   // предыдущей строки; её нет → заголовок формы.
-  function handleDeleteObject(id: string) {
+  function handleBackspaceDelete(id: string) {
     const i = blocks.findIndex((b) => b.id === id)
     const prevStop = stopNeighbor(blocks, i, 'up')
     removeBlock(id)
@@ -640,7 +635,7 @@ export function SlashEditor({
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
-                  onDeleteObject={handleDeleteObject}
+                  onBackspaceDelete={handleBackspaceDelete}
                   onDeleteBlock={handleDeleteBlock}
                   onAnswerAction={handleAnswerAction}
                   onArrow={handleArrow}
@@ -752,7 +747,7 @@ function GroupRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onAnswerAction,
   onArrow,
@@ -779,7 +774,7 @@ function GroupRow({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
-  onDeleteObject: (id: string) => void
+  onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
@@ -797,6 +792,13 @@ function GroupRow({
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
   const hasAnswer = group.blocks.some((b) => isAnswerableType(b.type))
+  // Есть ли у группы подпись: от неё зависит, кто управляет строкой ответа. У голого
+  // поля (группа без подписи) управлять больше некому — значки остаются на нём.
+  const hasCaption = group.blocks.some((b) => isCaptionType(b.type))
+  // Отвечаемый блок группы — носитель required. Звёздочку показывает подпись (как в
+  // превью и рендерере, §6), а пишет она в это поле; у группы без подписи звёздочка
+  // остаётся на самом поле.
+  const answerable = group.blocks.find((b) => isAnswerableType(b.type))
 
   return (
     <li
@@ -847,6 +849,15 @@ function GroupRow({
                 group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
               }
               groupHasAnswer={hasAnswer}
+              // Строкой ответа в озаглавленной группе управляет подпись, а не она
+              // сама: своих значков и своего переноса у неё нет (см. BlockRow).
+              ownedByCaption={isAnswerableType(b.type) && hasCaption}
+              // Чью обязательность представляет строка: поле — свою, ПЕРВАЯ подпись
+              // группы — поля своего вопроса. Прочие строки (контент, вторая подпись)
+              // — ничью.
+              requiredFor={
+                isAnswerableType(b.type) ? b : isCaptionType(b.type) && i === 0 ? answerable : undefined
+              }
               // Правая колонка ряда зеркалит кластеры значков (спека §5): левый
               // кластер лёг бы в жёлоб между колонками и наехал на соседа.
               mirrored={side === 'right'}
@@ -857,7 +868,7 @@ function GroupRow({
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}
               onBackspaceAtStart={onBackspaceAtStart}
-              onDeleteObject={onDeleteObject}
+              onBackspaceDelete={onBackspaceDelete}
               onDeleteBlock={onDeleteBlock}
               onAnswerAction={onAnswerAction}
               onArrow={onArrow}

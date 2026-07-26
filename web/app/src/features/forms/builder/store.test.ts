@@ -39,12 +39,14 @@ describe('createBuilderStore', () => {
     expect(email?.groupId).not.toBe(field?.groupId)
   })
 
-  it('choice-блок стартует с пустым списком опций, non-choice — без опций', () => {
+  it('choice-блок стартует с пустым списком, non-choice — без опций', () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
     store.getState().addBlock('number')
 
     const [choice, number] = store.getState().blocks
+    // В схеме живут только настоящие варианты: пустой список = «автор ещё ничего не
+    // набрал», а место для набора даёт призрак в редакторе, которого здесь нет.
     expect(choice?.settings?.options).toEqual([])
     expect(number?.settings?.options).toBeUndefined()
   })
@@ -266,14 +268,18 @@ describe('createBuilderStore', () => {
     expect(b[0]!.groupId).not.toBe(b[1]!.groupId)
   })
 
-  it('regroup: подряд идущие подписи над полем — одна группа (title перебьёт label)', () => {
+  it('regroup: подпись у вопроса ровно одна — ближайшая к полю', () => {
+    // Собранная группа «подпись + поле» целая: второй заголовок в неё не входит,
+    // он остаётся одиночкой (решение владельца 2026-07-26). Иначе осиротевшая
+    // подпись мёртвого вопроса, оказавшись над следующим, становилась его вторым
+    // заголовком и перебивала настоящий в CSV и воронке.
     const store = createBuilderStore()
     store.getState().addBlock('title')
     store.getState().addBlock('label')
     store.getState().addBlock('email')
     const b = store.getState().blocks
-    expect(b[0]!.groupId).toBe(b[2]!.groupId)
-    expect(b[1]!.groupId).toBe(b[2]!.groupId)
+    expect(b[1]!.groupId).toBe(b[2]!.groupId) // label + email — вопрос
+    expect(b[0]!.groupId).not.toBe(b[2]!.groupId) // title сам по себе
   })
 
   it('regroup: контент, ведущий к полю, — в одной группе с полем', () => {
@@ -365,7 +371,7 @@ describe('createBuilderStore', () => {
     expect(s.blocks[0]?.id).toBe(id)
     expect(s.blocks[0]?.type).toBe('single_choice')
     expect(s.blocks[0]?.text).toBe('') // поле текст не несёт — сброшен
-    expect(s.blocks[0]?.settings?.options).toEqual([])
+    expect(s.blocks[0]?.settings?.options).toEqual([]) // варианты набирает автор
     expect(returned).toBe(id)
   })
 
@@ -609,11 +615,12 @@ describe('createBuilderStore', () => {
     const id = store.getState().blocks[0]!.id
     store.getState().markSaved()
 
-    store.getState().addOption(id)
+    const newId = store.getState().addOption(id)
 
     const opts = store.getState().blocks[0]?.settings?.options
     expect(opts).toHaveLength(1)
     expect(opts?.[0]?.label).toBe('')
+    expect(opts?.[0]?.id).toBe(newId) // id возвращается — по нему ставят каретку
     expect(store.getState().dirty).toBe(true)
   })
 
@@ -923,47 +930,50 @@ describe('createBuilderStore — undo/redo', () => {
     expect(s[1]!.groupId).toBe(s[0]!.groupId) // остался в группе вопроса
   })
 
-  it('choice-вопрос (makeQuestion) рождается с одним пустым вариантом', () => {
+  it('choice рождается с пустым списком любым путём — пустых вариантов в схеме нет', () => {
+    // Место для набора даёт призрак в редакторе (BlockRow), а не заготовленный
+    // пустой вариант: иначе он уезжал бы в опубликованную форму пустой карточкой.
     const store = createBuilderStore()
     store.getState().addBlock('text')
     const id = store.getState().blocks[0]!.id
     store.getState().makeQuestion(id, 'single_choice')
+    expect(store.getState().blocks.find((b) => b.type === 'single_choice')?.settings?.options).toEqual([])
 
-    const field = store.getState().blocks.find((b) => b.type === 'single_choice')
-    expect(field?.settings?.options).toHaveLength(1)
-    expect(field?.settings?.options?.[0]?.label).toBe('')
+    store.getState().addFieldAfter(null, 'multi_choice')
+    expect(store.getState().blocks.find((b) => b.type === 'multi_choice')?.settings?.options).toEqual([])
+
+    const textId = store.getState().addBlockAfter(null, 'text')
+    store.getState().changeBlockType(textId, 'dropdown')
+    expect(store.getState().blocks.find((b) => b.id === textId)?.settings?.options).toEqual([])
   })
 
-  it('choice-поле (addFieldAfter/makeField) рождается с одним пустым вариантом', () => {
-    const store = createBuilderStore()
-    const fieldId = store.getState().addFieldAfter(null, 'multi_choice')
-    expect(store.getState().blocks.find((b) => b.id === fieldId)?.settings?.options).toHaveLength(1)
-
-    store.getState().addBlock('text')
-    const loneId = store.getState().blocks.find((b) => b.type === 'text')!.id
-    store.getState().makeField(loneId, 'dropdown')
-    expect(store.getState().blocks.find((b) => b.id === loneId)?.settings?.options).toHaveLength(1)
-  })
-
-  it('addBlock/changeBlockType оставляют choice с пустым списком (недособранный черновик)', () => {
+  it('addOption с текстом рождает готовый вариант (первый символ в призраке)', () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
-    expect(store.getState().blocks[0]?.settings?.options).toEqual([])
+    const id = store.getState().blocks[0]!.id
+
+    const newId = store.getState().addOption(id, 'С')
+
+    const opts = store.getState().blocks[0]!.settings!.options!
+    expect(opts).toHaveLength(1)
+    expect(opts[0]).toMatchObject({ id: newId, label: 'С' })
   })
 
   it('addOptionAfter вставляет вариант сразу после текущего и возвращает id (Д5)', () => {
     const store = createBuilderStore()
-    store.getState().addFieldAfter(null, 'single_choice') // рождается с 1 вариантом
-    const blockId = store.getState().blocks[0]!.id
-    const first = store.getState().blocks[0]!.settings!.options![0]!.id
+    // Приезжает вопросом (подпись + поле): голого choice не бывает.
+    store.getState().addFieldAfter(null, 'single_choice')
+    const choice = () => store.getState().blocks.find((b) => b.type === 'single_choice')!
+    const blockId = choice().id
+    const first = store.getState().addOption(blockId)
     store.getState().addOption(blockId) // теперь [first, second]
-    const second = store.getState().blocks[0]!.settings!.options![1]!.id
+    const second = choice().settings!.options![1]!.id
     store.getState().markSaved()
 
     // Enter на ПЕРВОМ варианте → новый ложится между first и second, а не в конец.
     const newId = store.getState().addOptionAfter(blockId, first)
 
-    const opts = store.getState().blocks[0]!.settings!.options!
+    const opts = choice().settings!.options!
     expect(opts.map((o) => o.id)).toEqual([first, newId, second])
     expect(store.getState().dirty).toBe(true)
   })
@@ -1212,15 +1222,13 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 })
 
 describe('createBuilderStore — ряды вариантов (фаза 13.6, §5.1)', () => {
+  // Блок рождается с пустым списком: варианты в нём — только настоящие, набранные
+  // автором (место для набора даёт «призрак», которого в схеме нет).
   const choiceWith = (...labels: string[]) => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
     const id = store.getState().blocks[0]!.id
-    for (const label of labels) {
-      store.getState().addOption(id)
-      const opts = store.getState().blocks[0]!.settings!.options!
-      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
-    }
+    for (const label of labels) store.getState().addOption(id, label)
     return { store, id }
   }
   const options = (store: ReturnType<typeof createBuilderStore>) =>
@@ -1301,11 +1309,7 @@ describe('createBuilderStore — reorderOptions (dnd вариантов, фаз�
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
     const id = store.getState().blocks[0]!.id
-    for (const label of ['a', 'b', 'c']) {
-      store.getState().addOption(id)
-      const opts = store.getState().blocks[0]!.settings!.options!
-      store.getState().updateOption(id, opts[opts.length - 1]!.id, label)
-    }
+    for (const label of ['a', 'b', 'c']) store.getState().addOption(id, label)
     return { store, id }
   }
   const labels = (store: ReturnType<typeof createBuilderStore>) =>
@@ -1326,5 +1330,231 @@ describe('createBuilderStore — reorderOptions (dnd вариантов, фаз�
     store.getState().reorderOptions(id, 'нет-такого', a.id)
     expect(store.getState().dirty).toBe(false)
     expect(labels(store)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+// Правило «поле не живёт без подписи» (решение владельца 2026-07-26, предикат
+// requiresCaption): choice и шкала голыми не бывают, а блок без вариантов не
+// существует вовсе. Правило держит стор — в Zod и Go зеркала нет намеренно
+// (кросс-блочное условие там ловило бы 422 на undo, как у бита ряда §5).
+describe('createBuilderStore — поле не живёт без подписи (requiresCaption)', () => {
+  const types = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.type)
+
+  it('addFieldAfter: в пустое место тип приезжает со своим заголовком, каретка на него', () => {
+    const store = createBuilderStore()
+    const focus = store.getState().addFieldAfter(null, 'single_choice')
+
+    expect(types(store)).toEqual(['title', 'single_choice'])
+    const [title, field] = store.getState().blocks
+    expect(focus).toBe(title!.id) // каретка на заголовок, как у addQuestionAfter
+    expect(title!.groupId).toBe(field!.groupId) // одна группа, а не две
+  })
+
+  it('addFieldAfter: под ждущей подписью поле входит в её группу, второго заголовка нет', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(titleId, { text: 'Откуда узнали?' })
+
+    const focus = store.getState().addFieldAfter(titleId, 'multi_choice')
+
+    expect(types(store)).toEqual(['title', 'multi_choice'])
+    const [title, field] = store.getState().blocks
+    expect(title!.text).toBe('Откуда узнали?') // текст заголовка цел
+    expect(focus).toBe(field!.id) // каретка на само поле — заголовок уже написан
+    expect(title!.groupId).toBe(field!.groupId)
+  })
+
+  it('makeField на одинокой подписи: поле под ней, текст не роняется', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('label')
+    const labelId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(labelId, { text: 'Город' })
+
+    // Тип без обязательного заголовка идёт тем же путём: конверсия на месте
+    // уронила бы текст подписи, а «Отдельные поля» существуют ровно ради того,
+    // чтобы подсадить ответ к одинокому заголовку.
+    store.getState().makeField(labelId, 'email')
+
+    expect(types(store)).toEqual(['label', 'email'])
+    expect(store.getState().blocks[0]!.text).toBe('Город')
+    expect(store.getState().blocks[0]!.groupId).toBe(store.getState().blocks[1]!.groupId)
+  })
+
+  it('makeField на одиночном абзаце: choice-тип вырождается в вопрос', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text')
+    const loneId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(loneId, { text: 'Откуда узнали?' })
+
+    const focus = store.getState().makeField(loneId, 'single_choice')
+
+    // Абзац стал подписью (текст сохранён), поле встало под ним — это makeQuestion.
+    expect(types(store)).toEqual(['title', 'single_choice'])
+    expect(store.getState().blocks[0]!.text).toBe('Откуда узнали?')
+    expect(focus).toBe(loneId)
+  })
+
+  it('makeQuestion на подписи не превращает label в title', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('label')
+    const labelId = store.getState().blocks[0]!.id
+
+    store.getState().makeQuestion(labelId, 'short_text')
+
+    expect(types(store)).toEqual(['label', 'short_text'])
+  })
+
+  it('удаление последнего варианта уносит блок — остаётся голая подпись', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'single_choice') // [title, single_choice]
+    const titleId = store.getState().blocks[0]!.id
+    store.getState().updateBlock(titleId, { text: 'Откуда узнали?' })
+    const choiceId = store.getState().blocks[1]!.id
+    const only = store.getState().addOption(choiceId, 'Соцсети')
+
+    store.getState().removeOption(choiceId, only)
+
+    expect(types(store)).toEqual(['title'])
+    expect(store.getState().blocks[0]!.text).toBe('Откуда узнали?')
+  })
+
+  it('удаление последнего варианта — ОДИН шаг истории (undo возвращает вопрос целиком)', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'multi_choice')
+    const choiceId = store.getState().blocks[1]!.id
+    const only = store.getState().addOption(choiceId, 'Соцсети')
+
+    store.getState().removeOption(choiceId, only)
+    store.getState().undo()
+
+    expect(types(store)).toEqual(['title', 'multi_choice'])
+    expect(store.getState().blocks[1]!.settings!.options).toHaveLength(1)
+  })
+
+  it('вопрос, потерявший поле, разваливает свой ряд', () => {
+    const store = createBuilderStore()
+    // Слева — короткий текст, справа в ряду — dropdown (оба из whitelist §5).
+    store.getState().addQuestionAfter(null, 'short_text')
+    const left = store.getState().blocks[1]!
+    store.getState().addFieldAfter(left.id, 'dropdown')
+    const right = store.getState().blocks[3]!
+    const only = store.getState().addOption(right.id, 'Да')
+    store.getState().placeInRow(right.groupId, left.groupId)
+    expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(1) // ряд собран
+
+    // Стёрли единственный вариант правого — поле ушло вместе с битом ряда, а
+    // оставшаяся подпись партнёром по ряду быть не может (нет отвечаемого блока).
+    store.getState().removeOption(right.id, only)
+
+    expect(types(store)).toEqual(['title', 'short_text', 'title'])
+    expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(2)
+    expect(store.getState().blocks.some((b) => b.settings?.column)).toBe(false)
+  })
+
+  it('голый заголовок прямо НАД следующим вопросом остаётся одиночкой', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'single_choice') // [t1, choice]
+    const dead = store.getState().blocks[1]!
+    const only = store.getState().addOption(dead.id, 'Да')
+    store.getState().addQuestionAfter(dead.id, 'email') // [t1, choice, t2, email]
+
+    store.getState().removeOption(dead.id, only)
+
+    // Подпись мёртвого вопроса стоит вплотную над чужим — и НЕ прилипает к нему:
+    // у группы «подпись + поле» подпись ровно одна, ближайшая к полю. Автор видит
+    // осиротевший заголовок и решает сам, что с ним делать.
+    expect(types(store)).toEqual(['title', 'title', 'email'])
+    const groups = groupBlocks(store.getState().blocks)
+    expect(groups).toHaveLength(2)
+    const b = store.getState().blocks
+    expect(b[0]!.groupId).not.toBe(b[2]!.groupId)
+    expect(b[1]!.groupId).toBe(b[2]!.groupId)
+  })
+
+  it('duplicateBlock на таком поле дублирует вопрос целиком', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'scale') // [title, scale]
+    const scale = store.getState().blocks[1]!
+
+    store.getState().duplicateBlock(scale.id)
+
+    expect(types(store)).toEqual(['title', 'scale', 'title', 'scale'])
+    const [, , copyTitle, copyField] = store.getState().blocks
+    expect(copyTitle!.groupId).toBe(copyField!.groupId) // копия — своя группа
+    expect(copyField!.id).not.toBe(scale.id)
+  })
+
+  it('Alt+↑↓ на подписи вопроса двигает всю группу, а не строку', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // [t1, f1]
+    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email') // [t1,f1,t2,f2]
+    const secondTitle = store.getState().blocks[2]!
+
+    store.getState().moveBlock(secondTitle.id, 'up')
+
+    // Второй вопрос уехал наверх целиком; подпись не осталась среди чужих строк.
+    expect(types(store)).toEqual(['title', 'email', 'title', 'short_text'])
+    expect(store.getState().blocks[0]!.groupId).toBe(store.getState().blocks[1]!.groupId)
+  })
+
+  it('Alt+↑↓ на ОДИНОКОЙ подписи двигает её как обычный блок', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text')
+    store.getState().addBlock('label') // одинокая подпись без поля
+    const labelId = store.getState().blocks[1]!.id
+
+    store.getState().moveBlock(labelId, 'up')
+
+    expect(types(store)).toEqual(['label', 'text'])
+  })
+})
+
+// Собранный вопрос (подпись + поле) — целый: второго заголовка и второго ответа в
+// нём не бывает (решение владельца 2026-07-26). Правило держат три входа сразу —
+// regroup (кого группа принимает), вставка из меню и дроп.
+describe('createBuilderStore — целая группа не принимает второй заголовок', () => {
+  const question = () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // [title, short_text]
+    return { store, titleId: store.getState().blocks[0]!.id }
+  }
+
+  it('«+» с подписью кладёт её ПОД вопрос, а не внутрь', () => {
+    const { store, titleId } = question()
+
+    const id = store.getState().addBlockAfter(titleId, 'label')
+
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'label'])
+    // Новая подпись — одиночка: своего поля у неё пока нет, чужое она не забирает.
+    expect(b.find((x) => x.id === id)!.groupId).not.toBe(b[0]!.groupId)
+    expect(b[0]!.groupId).toBe(b[1]!.groupId)
+  })
+
+  it('лэйаут внутрь вопроса по-прежнему встаёт — это его тело', () => {
+    const { store, titleId } = question()
+
+    store.getState().addBlockAfter(titleId, 'text')
+
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['title', 'text', 'short_text'])
+    expect(new Set(b.map((x) => x.groupId)).size).toBe(1)
+  })
+
+  it('дроп подписи между строк чужого вопроса приземляет её под ним', () => {
+    const { store, titleId } = question()
+    store.getState().addBlockAfter(titleId, 'text') // [title, text, short_text]
+    const store2 = store.getState()
+    store2.addBlockAfterGroup(store2.blocks[2]!.id, 'label') // одинокая подпись ниже
+    const b = store.getState().blocks
+    const lone = b[3]!
+
+    // Целимся в середину чужой группы — правило §5 уводит подпись под неё.
+    const plan = planBlockDrop(b, lone.id, b[1]!.id)
+
+    expect(plan!.redirected).toBe(true)
+    expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'text', 'short_text', 'label'])
   })
 })
