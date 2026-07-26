@@ -109,7 +109,11 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
 3. **Контрол** `web/shared/fields/BlockField.tsx` — ветка в `switch (block.type)`
    (`FieldControl`), при нужде стиль в `fields.css`.
 4. **Редактор** `BlockRow.tsx` — как тип правится автором (поле ответа/варианты/абзац);
-   `SlashMenu.tsx` / `BlockTypeDialog.tsx` — пункт в выборе типа.
+   `SlashMenu.tsx` / `BlockTypeDialog.tsx` — пункт в выборе типа. Здесь же реши,
+   **живёт ли тип без подписи** (`requiresCaption` в `formSchema.ts`, [`EDITOR.md`](../../../docs/EDITOR.md) §1):
+   если нет — вставка сама подставит ему заголовок, а строка поля лишится значков
+   и своего `Alt+↑↓`, потому что управлять ею будет подпись. Предикат **фронтовой**,
+   зеркала в Go у него нет намеренно.
 5. **Валидация ответа**: рендерер `web/renderer/.../form/validation.ts` (+ `answers.ts`),
    Go `internal/domain/answers*.go`.
 6. **Экспорт/таблица**: Go `internal/domain/csv.go`, кабинет
