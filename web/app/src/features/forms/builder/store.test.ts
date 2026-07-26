@@ -369,6 +369,39 @@ describe('createBuilderStore', () => {
     expect(returned).toBe(id)
   })
 
+  it('updateBlock на несуществующем блоке — no-op (ни истории, ни dirty)', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    store.getState().markSaved()
+    const before = store.getState()
+
+    // Так приходит отложенный колбэк, переживший свой блок: загрузка картинки
+    // дописывает imageKey уже после того, как блок удалили.
+    store.getState().updateBlock('нет-такого', { text: 'привет' })
+
+    const after = store.getState()
+    expect(after.dirty).toBe(false)
+    expect(after.past.length).toBe(before.past.length)
+    // Ссылка на массив не меняется — подписка автосейва не будится.
+    expect(after.blocks).toBe(before.blocks)
+  })
+
+  it('updateBlock без фактического изменения — no-op', () => {
+    const store = createBuilderStore()
+    const id = store.getState().addBlockAfter(null, 'title')
+    store.getState().updateBlock(id, { text: 'Имя' })
+    store.getState().markSaved()
+    const before = store.getState()
+
+    store.getState().updateBlock(id, { text: 'Имя' })
+    store.getState().updateBlock(id, { required: false })
+
+    const after = store.getState()
+    expect(after.dirty).toBe(false)
+    expect(after.past.length).toBe(before.past.length)
+    expect(after.blocks).toBe(before.blocks)
+  })
+
   it('changeBlockType на несуществующем блоке — no-op', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')

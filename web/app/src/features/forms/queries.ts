@@ -78,10 +78,40 @@ export function renameDetailPatch(form: Form) {
     old ? { ...old, title: form.title, updatedAt: form.updatedAt } : old
 }
 
+// detailEntryById — запись кэша detail по UUID формы. Detail ключуется slug'ом, а на
+// входе rename только id, поэтому ищем перебором (деталей в кэше единицы).
+function detailEntryById(qc: ReturnType<typeof useQueryClient>, id: string) {
+  return qc
+    .getQueriesData<FormDetail>({ queryKey: formKeys.detailAll() })
+    .find(([, data]) => data?.id === id)
+}
+
 export function useRenameForm() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) => renameForm(id, title),
+    // Заголовок кладём в detail ОПТИМИСТИЧНО, не дожидаясь ответа. Полотно, которое
+    // перемонтировали, пока PATCH летит (переключение «Просмотр» → «Редактор»),
+    // читает начальное значение поля из этого кэша — и без патча показало бы ещё
+    // старое название, то есть правка выглядела бы потерянной, хотя она сохраняется.
+    // Поле заголовка неконтролируемое (defaultValue, ради нативного Ctrl+Z), поэтому
+    // пришедший позже ответ его уже не поправит.
+    //
+    // updatedAt здесь НЕ трогаем: он — токен оптимистичной блокировки автосейва схемы
+    // (formLockToken), и придумывать ему значение до ответа сервера нельзя.
+    onMutate: ({ id, title }) => {
+      const entry = detailEntryById(qc, id)
+      if (!entry?.[1]) return undefined
+      const [key, data] = entry
+      qc.setQueryData<FormDetail>(key, { ...data, title })
+      // Возвращаем прежний заголовок для отката: неудачный PATCH не должен оставить
+      // в кэше название, которого на сервере нет.
+      return { key, title: data.title }
+    },
+    onError: (_err, _vars, ctx) => {
+      if (!ctx) return
+      qc.setQueryData<FormDetail>(ctx.key, (old) => (old ? { ...old, title: ctx.title } : old))
+    },
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), renameDetailPatch(form))

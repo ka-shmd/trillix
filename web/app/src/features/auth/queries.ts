@@ -1,4 +1,4 @@
-import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { authKeys, oauthKeys } from './keys'
 import {
   forgotPassword,
@@ -23,12 +23,28 @@ export const meQueryOptions = queryOptions({
   staleTime: 5 * 60 * 1000,
 })
 
+// adoptSession — единая реакция на «в этой вкладке теперь другая личность»: снести
+// ВЕСЬ клиентский кэш и положить в него нового пользователя.
+//
+// Выборочное удаление одного лишь authKeys.me() (как было до TD-40) оставляло в
+// общем in-memory QueryClient формы, детали, ответы и воронки предыдущего аккаунта,
+// и SPA отдавала их следующему прямо из кэша, без обращения к серверу. Серверная
+// идентичность при этом всегда была верной — она определяется исключительно cookie
+// session, — поэтому лечится это только на клиенте.
+//
+// Порядок важен: clear() первым, setQueryData — после, иначе свежий me вычистился бы
+// вместе с чужими данными, и гард _app сходил бы за ним ещё раз впустую.
+function adoptSession(qc: QueryClient, user: User): void {
+  qc.clear()
+  qc.setQueryData(authKeys.me(), user)
+}
+
 export function useLogin() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: login,
     // Патчим кэш me возвращённым пользователем — забытая синхронизация это баг.
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    onSuccess: (user: User) => adoptSession(qc, user),
   })
 }
 
@@ -36,7 +52,7 @@ export function useRegister() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: register,
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    onSuccess: (user: User) => adoptSession(qc, user),
   })
 }
 
@@ -44,8 +60,9 @@ export function useLogout() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: logout,
-    // Сессия мертва — убираем me из кэша, чтобы гард не пустил в приложение.
-    onSuccess: () => qc.removeQueries({ queryKey: authKeys.me() }),
+    // Сессия мертва — сносим ВЕСЬ кэш, а не только me: иначе формы и ответы
+    // вышедшего аккаунта дождутся следующего входа в этой вкладке (TD-40).
+    onSuccess: () => qc.clear(),
   })
 }
 
@@ -88,7 +105,10 @@ export function useLinkProvider() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: linkProvider,
-    // После привязки открыта полноценная сессия — кэш me патчим, как в логине.
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    // После привязки открыта полноценная сессия — это такой же вход, как login, и
+    // сбрасывать кэш надо по той же причине (TD-40). Путь не гипотетический:
+    // сессия предыдущего аккаунта могла истечь без logout, и его данные лежат в
+    // кэше этой вкладки, пока сюда приходит другая личность.
+    onSuccess: (user: User) => adoptSession(qc, user),
   })
 }
