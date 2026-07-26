@@ -37,7 +37,7 @@ import {
   isChoiceType,
   MAX_SUBMIT_LABEL_LEN,
 } from '@entities/formSchema'
-import { groupCanShareRow, packRows } from '@fields/groups'
+import { groupBlocks, groupCanShareRow, packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
 import { planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
 import { type MenuItem } from './blockTypes'
@@ -187,15 +187,10 @@ export function SlashEditor({
   // droppable'ы по слою активного элемента — тащат группу → только группы, тащат
   // блок → только строки. Без фильтра closestCenter метался между контейнером
   // группы и её строками (джиттер).
-  const groups = useMemo(() => {
-    const out: { id: string; blocks: Block[] }[] = []
-    for (const b of blocks) {
-      const last = out[out.length - 1]
-      if (last && last.id === b.groupId) last.blocks.push(b)
-      else out.push({ id: b.groupId, blocks: [b] })
-    }
-    return out
-  }, [blocks])
+  // Разбиение — общий groupBlocks (@fields/groups), тот же, которым пакуют группы
+  // превью и рендерер. Здесь стояла его побайтовая копия: единый раскладчик, ради
+  // которого модуль и заведён, на одной из трёх поверхностей не использовался.
+  const groups = useMemo(() => groupBlocks(blocks), [blocks])
   // groupIdList ОБЯЗАН быть стабильной ссылкой между ре-рендерами драга (как и
   // blockIds): items внешнего SortableContext сравниваются в useSortable по
   // ссылке (itemsHaveChanged), и свежий массив на рендере, где группа начинает

@@ -42,7 +42,7 @@ export type Form = z.infer<typeof formSchema>
 // показываем его как «Без названия» (плейсхолдер), а не как введённый текст.
 export const DEFAULT_FORM_TITLE = 'Untitled form'
 
-export const isUntitled = (title: string): boolean =>
+const isUntitled = (title: string): boolean =>
   title.trim() === '' || title === DEFAULT_FORM_TITLE
 
 // Заголовок формы для показа: плейсхолдер для безымянной, иначе сам title.

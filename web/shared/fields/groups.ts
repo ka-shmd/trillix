@@ -11,8 +11,10 @@ export type GroupMeta = { caption: string; required: boolean }
 // groupId и идут подряд (regroup держит группу односвязной). Возвращает группы в
 // порядке первого вхождения, внутри — блоки в исходном порядке. Единый источник
 // разбиения для всех поверхностей: рендерер и превью оборачивают каждую группу в
-// .rf-group (ритм внутри вопроса 14px против 28px между — этап 13.3); полотно
-// редактора строит из этого же ту же вложенность (SlashEditor.groups).
+// .rf-group (ритм внутри вопроса 14px против 28px между — этап 13.3), полотно
+// редактора строит из этого же ту же вложенность (`SlashEditor.groups`), а стор
+// раскладывает им же полотно, когда двигает группы целиком (`moveGroup`,
+// `reorderGroups`, `placeInRow`).
 export function groupBlocks<T extends { groupId: string }>(blocks: T[]): { id: string; blocks: T[] }[] {
   const out: { id: string; blocks: T[] }[] = []
   for (const b of blocks) {
