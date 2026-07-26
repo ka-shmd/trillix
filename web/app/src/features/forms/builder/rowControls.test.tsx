@@ -110,6 +110,62 @@ describe('кластер значков строки', () => {
   })
 })
 
+describe('значки варианта', () => {
+  const CHOICE: FormSchema = {
+    schemaVersion: 2,
+    blocks: [
+      { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+      {
+        id: 'ch',
+        groupId: 'g1',
+        type: 'single_choice',
+        settings: {
+          options: [
+            { id: 'o1', label: 'Соцсети' },
+            { id: 'o2', label: 'Реклама' },
+          ],
+        },
+      },
+    ],
+  }
+
+  it('у каждого варианта своя мусорка и своя ручка, крестика больше нет', () => {
+    setup(CHOICE)
+    // Значки строки choice ушли (ими управляет подпись) — а вариантов стало двое,
+    // и у каждого свой полный набор.
+    expect(controls('ch')).not.toContain('Удалить блок')
+    expect(controls('ch').filter((l) => l === 'Удалить вариант')).toHaveLength(2)
+    expect(controls('ch').filter((l) => l === 'Переместить вариант')).toHaveLength(2)
+  })
+
+  it('мусорка варианта удаляет именно свой вариант', () => {
+    const { store } = setup(CHOICE)
+    row('ch').getAllByLabelText('Удалить вариант')[1]!.click()
+
+    const opts = store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options
+    expect(opts?.map((o) => o.id)).toEqual(['o1'])
+    // Каретка на предыдущий вариант едет тем же removeOptionAt, что и у Backspace
+    // (её исход проверяет focusContract): здесь полотно из статичного снапшота и
+    // не перерисовывается, поэтому наблюдать перенос фокуса тут нечем.
+  })
+
+  it('мусорка последнего варианта уносит блок, а каретку — наверх', () => {
+    const { store, handlers } = setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+      ],
+    })
+    row('ch').getByLabelText('Удалить вариант').click()
+
+    // Остался голый заголовок; каретку наверх просит сама строка — до удаления,
+    // пока родителю ещё есть от чего считать соседа.
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap'])
+    expect(handlers.onArrow).toHaveBeenCalledWith('ch', 'up')
+  })
+})
+
 describe('Alt+↑↓ на строке ответа', () => {
   it('шкала внутри вопроса не двигается и не отдаёт жест обходу', () => {
     const { store, engine, handlers } = setup({

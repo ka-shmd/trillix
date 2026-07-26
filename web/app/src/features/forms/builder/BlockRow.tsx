@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Trash2, X } from 'lucide-react'
+import { Asterisk, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   carriesText,
@@ -536,6 +536,7 @@ export function BlockRow({
         <div className="min-w-0">
           <OptionsInline
             block={block}
+            mirrored={mirrored}
             onLeaveTop={() => onArrow(block.id, 'up')}
             onArrow={onArrow}
             onAddBelow={onAddBelow}
@@ -981,6 +982,7 @@ const optCellOption = (id: string | number): string | null => {
 
 function OptionsInline({
   block,
+  mirrored,
   onLeaveTop,
   onArrow,
   onAddBelow,
@@ -989,6 +991,9 @@ function OptionsInline({
   onRowShift,
 }: {
   block: Block
+  // Вся группа стоит в правой колонке ряда вопросов — кластеры значков уезжают
+  // вправо, включая значки вариантов (см. OptionCard).
+  mirrored: boolean
   onLeaveTop: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
@@ -1064,6 +1069,18 @@ function OptionsInline({
     pendingFocus.current = null
   }, [options])
 
+  // Удаление варианта с исходом каретки по контракту (§12): предыдущий вариант, а его
+  // нет — подпись группы. Единый путь для Backspace в пустом и для мусорки: удаление
+  // мышью тоже не имеет права уронить каретку в body, а последний вариант вдобавок
+  // уносит с собой сам блок (removeOption), и тогда уводить каретку надо ДО удаления —
+  // после него строки, от которой считается «наверх», уже нет.
+  function removeOptionAt(optionId: string, i: number) {
+    const prev = options[i - 1]
+    if (!prev) onLeaveTop()
+    removeOption(block.id, optionId)
+    if (prev) pendingFocus.current = prev.id
+  }
+
   // Биндинги по e.code (§3.1). i — индекс варианта в options.
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
@@ -1110,13 +1127,7 @@ function OptionsInline({
       }
     } else if (chords.backspace(e) && empty) {
       e.preventDefault()
-      const prev = options[i - 1]
-      // Каретку уводим наверх ДО удаления: последний вариант уносит с собой сам
-      // блок, и после удаления родителю не от чего считать «предыдущую остановку» —
-      // фокус провалился бы в body (TD-30 ровно про это).
-      if (!prev) onLeaveTop()
-      removeOption(block.id, optionId)
-      if (prev) pendingFocus.current = prev.id
+      removeOptionAt(optionId, i)
     } else if (chords.arrowDown(e)) {
       // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
       e.preventDefault()
@@ -1184,10 +1195,12 @@ function OptionsInline({
                   // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
                   // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
                   index={index.get(o.id)!}
+                  mirrored={mirrored}
                   inputRef={(el) => {
                     optionRefs.current.set(o.id, el)
                   }}
                   onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                  onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
                   rowFocus={rowFocus}
                 />
               </div>
@@ -1247,25 +1260,38 @@ function FreeCell({ optionId }: { optionId: string }) {
 }
 
 // OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
-// контекста. Ручка — вне потока (absolute): контрол, занимающий место и появляющийся
-// по hover, схлопывается на mousedown и съедает клик (TD-22).
+// контекста. Значки — тот же кластер, что у строк полотна (удалить + перетащить),
+// только адресованы варианту: строка ответа своих значков лишилась, потому что ею
+// управляет подпись, а вариантами управлять по отдельности как раз нужно.
+// Кластер absolute и вне потока: контрол, занимающий место и появляющийся по hover,
+// схлопывается на mousedown и съедает клик (TD-22).
 function OptionCard({
   block,
   option,
   index,
+  mirrored,
   inputRef,
   onKeyDown,
+  onRemove,
   rowFocus,
 }: {
   block: Block
   option: NonNullable<NonNullable<Block['settings']>['options']>[number]
   index: number
+  // mirrored — вся группа стоит в правой колонке ряда ВОПРОСОВ (см. BlockRow): слева
+  // от неё чужой вопрос во всю ширину, поэтому кластер уезжает вправо вместе с
+  // кластерами строк. Внутри списка вариантов сторона не меняется никогда — даже у
+  // правого варианта ряда: карточка обнимает текст, и слева от неё есть место
+  // (решение владельца 2026-07-26: варианты выглядят как блоки вопросов).
+  mirrored: boolean
   inputRef: (el: HTMLInputElement | null) => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
+  // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
+  // один знает соседей. Мусорка и Backspace в пустом ведут в одну точку.
+  onRemove: () => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
-  const removeOption = useBuilderStore((s) => s.removeOption)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: option.id,
     animateLayoutChanges: noLayoutAnimation,
@@ -1279,21 +1305,40 @@ function OptionCard({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={`group/opt relative flex items-center gap-1 ${isDragging ? 'z-10 opacity-70' : ''}`}
+      className={`group/opt relative flex items-center ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
-      <button
-        type="button"
-        aria-label="Переместить вариант"
-        className="absolute -left-5 cursor-grab text-muted-foreground opacity-0 transition-opacity group-hover/opt:opacity-100"
-        {...attributes}
-        {...listeners}
-        // Ручка — не остановка обхода: каретка ходит по вариантам, а не по их ручкам
-        // (тот же tabIndex, что у крестика). Ставим ПОСЛЕ спреда: attributes несут
-        // свой tabIndex, и порядок здесь решает, чей победит.
-        tabIndex={-1}
+      {/* Кластер значков варианта — зеркало кластера строки: те же размеры, тот же
+          порядок (удалить, перетащить — ручка ближе к тексту), то же проявление по
+          hover своей карточки (group/opt: безымянный group занят строкой блока, и от
+          него значки расцветали у всех вариантов разом — TD-31). */}
+      <div
+        className={`absolute flex ${
+          mirrored ? 'left-full ml-1.5 flex-row-reverse' : 'right-full mr-1.5'
+        } items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
       >
-        <GripVertical className="size-3.5" />
-      </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={onRemove}
+          aria-label="Удалить вариант"
+          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+        >
+          <Trash2 className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Переместить вариант"
+          className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+          // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
+          // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
+          // здесь решает, чей победит.
+          tabIndex={-1}
+        >
+          <GripVertical className="size-4" />
+        </button>
+      </div>
       <span className="rf-option">
         {/* Буква — та же декоративная подсказка, что видит респондент
             (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
@@ -1320,18 +1365,6 @@ function OptionCard({
           />
         </span>
       </span>
-      {/* Кнопка удаления — ВНЕ карточки и с постоянно занятым местом (меняется только
-          opacity): контрол, появляющийся по hover в потоке, схлопывается на mousedown
-          и съедает клик — TD-22, разбор у кластера значков выше. */}
-      <button
-        type="button"
-        tabIndex={-1}
-        onClick={() => removeOption(block.id, option.id)}
-        aria-label="Удалить вариант"
-        className="text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover/opt:opacity-100"
-      >
-        <X className="size-3.5" />
-      </button>
     </div>
   )
 }
