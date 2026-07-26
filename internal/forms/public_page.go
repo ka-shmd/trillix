@@ -197,7 +197,9 @@ func ogDescriptionFromSchema(schema json.RawMessage) string {
 		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
 			continue
 		}
-		text := strings.TrimSpace(b.Text)
+		// Плоский текст: og:description читают краулеры и соцсети, разметке там места
+		// нет (фаза 14).
+		text := strings.TrimSpace(domain.PlainText(b.Text))
 		if text == "" {
 			continue
 		}

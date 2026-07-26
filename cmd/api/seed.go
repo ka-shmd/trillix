@@ -158,26 +158,26 @@ func runSeedUser(args []string, cfg config.Config, log *slog.Logger) error {
 // колонкой для ответов v1), подписи опций из версии ответа и пустые ячейки.
 func exportSchemaV1() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: "Ваше имя"},
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: domain.TextFromString("Ваше имя")},
 		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
-		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: "Как вы о нас узнали?"},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: domain.TextFromString("Как вы о нас узнали?")},
 		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "t_phone", GroupID: "g_phone", Type: domain.BlockTitle, Text: "Телефон"},
+		{ID: "t_phone", GroupID: "g_phone", Type: domain.BlockTitle, Text: domain.TextFromString("Телефон")},
 		{ID: "b_phone", GroupID: "g_phone", Type: domain.BlockShortText},
 	}}
 }
 
 func exportSchemaV2() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: "Ваше имя"},
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: domain.TextFromString("Ваше имя")},
 		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
-		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: "Как вы о нас узнали?"},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: domain.TextFromString("Как вы о нас узнали?")},
 		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья (реф.)"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "t_city", GroupID: "g_city", Type: domain.BlockTitle, Text: "Город"},
+		{ID: "t_city", GroupID: "g_city", Type: domain.BlockTitle, Text: domain.TextFromString("Город")},
 		{ID: "b_city", GroupID: "g_city", Type: domain.BlockShortText},
 	}}
 }

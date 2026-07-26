@@ -227,7 +227,7 @@ func TestForms_Duplicate(t *testing.T) {
 	// Черновик копии = черновик оригинала (канонизированный, апгрейд v1→v2:
 	// вопрос разложен на подпись title + поле b1).
 	got := parseSchema(t, getFormDetail(t, alice, srv, dup.ID, http.StatusOK).DraftSchema)
-	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема копии не совпадает с оригиналом: %+v", got)
 	}
 
@@ -352,7 +352,7 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	if got.SchemaVersion != 2 || len(got.Blocks) != 2 {
 		t.Fatalf("канонизация не проставила schemaVersion/группу: %+v", got)
 	}
-	if got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" {
+	if got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" {
 		t.Fatalf("подпись сохранена неверно: %+v", got.Blocks[0])
 	}
 	if b := got.Blocks[1]; b.ID != "b1" || b.Type != "short_text" || !b.Required {
@@ -520,9 +520,9 @@ func TestForms_PublicFetch(t *testing.T) {
 	if pub.Token == "" || etag == "" {
 		t.Fatalf("нет token (%q) или ETag (%q)", pub.Token, etag)
 	}
-	// Наружу уходит v2: welded-вопрос v1 разложен на подпись title + поле b1.
+	// Наружу уходит канон (v3): welded-вопрос v1 разложен на подпись title + поле b1.
 	got := parseSchema(t, pub.Schema)
-	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема опубликованной версии неверна: %+v", got)
 	}
 

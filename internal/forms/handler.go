@@ -180,7 +180,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 	// до v2 на отдаче. Ошибка невозможна на валидных данных БД; на всякий случай
 	// отдаём сырьё, а не пустоту (лучше отладить, чем потерять черновик).
 	schema := f.DraftSchema
-	if up, err := domain.CanonicalV2(schema); err == nil {
+	if up, err := domain.CanonicalV3(schema); err == nil {
 		schema = up
 	}
 	return formDetailResponse{
