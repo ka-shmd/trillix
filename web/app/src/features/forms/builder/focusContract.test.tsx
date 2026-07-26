@@ -1,5 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// Набор написан под <textarea> (хелперы ищут поверхность как
+// `document.querySelector('textarea')`) и переписывается под богатый текст этапом 14.3.
+// До тех пор он ПРИБИВАЕТ себе поверхность гвоздём, а не читает переключатель пробы:
+// иначе прогон краснел бы от того, что кто-то включил пробу для браузера, — то есть от
+// состояния чужого рабочего дерева, а не от кода. Проба точно так же прибивает себе
+// свою (`spike/richLine.test.tsx`).
+vi.mock('./spike/flag', () => ({ RICH_TEXT_SPIKE: false }))
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
