@@ -133,6 +133,27 @@ describe('название формы: дебаунс не должен съед
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('F5 с ненабежавшим дебаунсом предупреждает, а не молчит', async () => {
+    const { input } = setup()
+
+    // Пока правок нет — уходить можно свободно.
+    expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(true)
+
+    fireEvent.change(input, { target: { value: 'Опрос' } })
+    await settle()
+
+    // Правка назначена и ещё не ушла: браузер обязан спросить. fireEvent возвращает
+    // false, когда обработчик отменил событие — это и есть диалог «есть
+    // несохранённые изменения». Сохранить на unload нельзя: браузер отменяет
+    // незавершённый fetch, поэтому здесь предупреждение, как у схемы (useAutosave).
+    expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(false)
+
+    // Правка уехала — предупреждать больше не о чем.
+    fireEvent.blur(input)
+    await settle()
+    expect(fireEvent(window, new Event('beforeunload', { cancelable: true }))).toBe(true)
+  })
+
   it('повторный blur без новой правки второго запроса не делает', async () => {
     const { input } = setup()
 

@@ -1000,9 +1000,8 @@ export function FormTitleInput({
   // Размонтирование здесь — не редкий путь, а обычный уход с полотна: клик по
   // «Ответы» в шапке, переключение в превью или настройки. Прежде cleanup просто
   // гасил таймер, и название, набранное меньше чем за 800 мс до ухода, пропадало
-  // МОЛЧА. Страховка beforeunload автосейва сюда не достаёт по двум причинам сразу:
-  // она смотрит store.dirty, а название живёт вне стора билдера (серверный rename
-  // отдельной колонки), и SPA-навигация beforeunload вообще не поднимает.
+  // МОЛЧА. Страховка beforeunload автосейва сюда не достаёт: она смотрит store.dirty,
+  // а название живёт вне стора билдера (серверный rename отдельной колонки).
   function flush() {
     if (timer.current) clearTimeout(timer.current)
     timer.current = null
@@ -1019,6 +1018,19 @@ export function FormTitleInput({
     flushRef.current = flush
   })
   useEffect(() => () => flushRef.current(), [])
+
+  // F5 и закрытие вкладки размонтирования не дают, а flush из обработчика unload не
+  // спасёт: браузер отменяет незавершённый fetch. Поэтому здесь — предупреждение, а
+  // не сохранение: ровно то, что кабинет уже делает с несохранённой СХЕМОЙ
+  // (useAutosave). Без этого название было единственным полем полотна, которое
+  // пропадало по F5 совсем молча.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (pending.current !== null) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [])
 
   // Поле НЕконтролируемое (defaultValue, без value): контролируемый React-инпут
   // переустанавливает .value на каждый ввод и стирает нативный стек undo элемента,

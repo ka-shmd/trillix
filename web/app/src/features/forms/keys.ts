@@ -11,4 +11,7 @@ export const formKeys = {
   // detail ключуется slug'ом формы (идентификатор URL кабинета), не UUID:
   // роут даёт slug, мутации патчат кэш по возвращённому form.slug.
   detail: (slug: string) => ['forms', 'detail', slug] as const,
+  // detailAll() — префикс всех деталей: нужен там, где на руках только UUID формы,
+  // а её slug ещё неизвестен (оптимистичный патч rename — см. queries.ts).
+  detailAll: () => ['forms', 'detail'] as const,
 }
