@@ -857,28 +857,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       moveGroup: (id, dir) =>
         commit(null, (s) => {
-          // Собираем порядок групп с их блоками (группы смежны — regroup) и меняем
-          // текущую группу местами с соседней. То же построение, что reorderGroups,
+          // Группы смежны (regroup), поэтому достаточно разложить полотно на группы
+          // общим groupBlocks и поменять текущую с соседней. То же, что reorderGroups,
           // но на один шаг вверх/вниз (Alt+Shift+стрелки), а не в позицию дропа.
           const cur = s.blocks.find((b) => b.id === id)
           if (!cur) return null
-          const order: string[] = []
-          const byGroup = new Map<string, Block[]>()
-          for (const b of s.blocks) {
-            const g = byGroup.get(b.groupId)
-            if (g) g.push(b)
-            else {
-              byGroup.set(b.groupId, [b])
-              order.push(b.groupId)
-            }
-          }
-          const gi = order.indexOf(cur.groupId)
+          const groups = groupBlocks(s.blocks)
+          const gi = groups.findIndex((g) => g.id === cur.groupId)
           const gj = dir === 'up' ? gi - 1 : gi + 1
-          if (gj < 0 || gj >= order.length) return null // группа на границе — no-op
-          const tmp = order[gi]!
-          order[gi] = order[gj]!
-          order[gj] = tmp
-          return structural({ blocks: order.flatMap((g) => byGroup.get(g)!) })
+          if (gj < 0 || gj >= groups.length) return null // группа на границе — no-op
+          const tmp = groups[gi]!
+          groups[gi] = groups[gj]!
+          groups[gj] = tmp
+          return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
 
       reorderBlocks: (activeId, overId) =>
@@ -895,26 +886,17 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       reorderGroups: (activeGroupId, overGroupId) =>
         commit(null, (s) => {
-          // Группы смежны (regroup), поэтому достаточно собрать порядок групп с их
-          // блоками, переставить группу (arrayMove — как sortable и показывает) и
-          // склеить обратно. Внутренний порядок блоков группы не меняется.
+          // Группы смежны (regroup), поэтому достаточно разложить полотно на группы,
+          // переставить одну (arrayMove — как sortable и показывает) и склеить
+          // обратно. Внутренний порядок блоков группы не меняется.
           if (activeGroupId === overGroupId) return null
-          const order: string[] = []
-          const byGroup = new Map<string, Block[]>()
-          for (const b of s.blocks) {
-            const g = byGroup.get(b.groupId)
-            if (g) g.push(b)
-            else {
-              byGroup.set(b.groupId, [b])
-              order.push(b.groupId)
-            }
-          }
-          const from = order.indexOf(activeGroupId)
-          const to = order.indexOf(overGroupId)
+          const groups = groupBlocks(s.blocks)
+          const from = groups.findIndex((g) => g.id === activeGroupId)
+          const to = groups.findIndex((g) => g.id === overGroupId)
           if (from < 0 || to < 0) return null
-          const [moved] = order.splice(from, 1)
-          order.splice(to, 0, moved!)
-          return structural({ blocks: order.flatMap((g) => byGroup.get(g)!) })
+          const [moved] = groups.splice(from, 1)
+          groups.splice(to, 0, moved!)
+          return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
 
       duplicateBlock: (id) =>
@@ -942,24 +924,16 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // ряд — normalizeColumns его снимет).
           if (!active || !canShareRow(active.type)) return null
           if (!rowHasFreeCell(s.blocks, targetGroupId)) return null
-          const order: string[] = []
-          const byGroup = new Map<string, Block[]>()
-          for (const b of s.blocks) {
-            const g = byGroup.get(b.groupId)
-            if (g) g.push(b)
-            else {
-              byGroup.set(b.groupId, [b])
-              order.push(b.groupId)
-            }
-          }
-          const from = order.indexOf(activeGroupId)
-          if (from < 0 || !order.includes(targetGroupId)) return null
-          order.splice(from, 1)
-          order.splice(order.indexOf(targetGroupId) + 1, 0, activeGroupId)
+          const groups = groupBlocks(s.blocks)
+          const from = groups.findIndex((g) => g.id === activeGroupId)
+          if (from < 0 || !groups.some((g) => g.id === targetGroupId)) return null
+          const [moved0] = groups.splice(from, 1)
+          // Позицию цели ищем ПОСЛЕ выреза активной группы: до него индексы сдвинуты.
+          groups.splice(groups.findIndex((g) => g.id === targetGroupId) + 1, 0, moved0!)
           const moved = structural(
             {
-              blocks: order
-                .flatMap((g) => byGroup.get(g)!)
+              blocks: groups
+                .flatMap((g) => g.blocks)
                 .map((b) =>
                   b.id === active.id ? { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } } : b,
                 ),
