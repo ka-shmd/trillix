@@ -28,6 +28,14 @@ function setup(schema: FormSchema) {
   const blocks = store.getState().blocks
   const owned = (b: Block) =>
     isAnswerableType(b.type) && blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
+  // Как в GroupRow: чью обязательность показывает строка — поле своё, первая подпись
+  // группы — поле своего вопроса.
+  const requiredFor = (b: Block, i: number) =>
+    isAnswerableType(b.type)
+      ? b
+      : isCaptionType(b.type) && (i === 0 || blocks[i - 1]!.groupId !== b.groupId)
+        ? blocks.find((x) => x.groupId === b.groupId && isAnswerableType(x.type))
+        : undefined
   const handlers = {
     onAddBelow: vi.fn(),
     onInsertBelow: vi.fn(),
@@ -43,13 +51,14 @@ function setup(schema: FormSchema) {
       <FocusEngineProvider value={engine}>
         <DndContext>
           <SortableContext items={blocks.map((b) => b.id)}>
-            {blocks.map((b) => (
+            {blocks.map((b, i) => (
               <BlockRow
                 key={b.id}
                 block={b}
                 formId="f"
                 groupHandle={null}
                 ownedByCaption={owned(b)}
+                requiredFor={requiredFor(b, i)}
                 openMenuOnMount={false}
                 {...handlers}
               />
@@ -107,6 +116,30 @@ describe('кластер значков строки', () => {
   it('у одиночного абзаца значки остаются', () => {
     setup(QUESTION)
     expect(controls('para')).toContain('Удалить блок')
+  })
+})
+
+describe('звёздочка обязательности', () => {
+  it('живёт на подписи вопроса, а пишет в его поле', () => {
+    const { store } = setup(QUESTION)
+    expect(controls('inp')).not.toContain('Сделать вопрос обязательным')
+
+    row('cap').getByLabelText('Сделать вопрос обязательным').click()
+
+    // Носитель флага не поменялся — им остаётся отвечаемый блок группы.
+    expect(store.getState().blocks.find((b) => b.id === 'inp')?.required).toBe(true)
+    expect(store.getState().blocks.find((b) => b.id === 'cap')?.required).toBeFalsy()
+  })
+
+  it('у голого поля остаётся на нём самом — показать её больше негде', () => {
+    const { store } = setup(QUESTION)
+    row('bare').getByLabelText('Сделать вопрос обязательным').click()
+    expect(store.getState().blocks.find((b) => b.id === 'bare')?.required).toBe(true)
+  })
+
+  it('у одиночного абзаца её нет — ответов он не собирает', () => {
+    setup(QUESTION)
+    expect(controls('para')).not.toContain('Сделать вопрос обязательным')
   })
 })
 

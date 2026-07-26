@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Asterisk, Copy, Replace, Trash2 } from 'lucide-react'
-import { type Block, isAnswerableType, isCaptionType } from '@entities/formSchema'
+import { type Block, isCaptionType } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
 import { typeIcons } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -25,6 +25,7 @@ export function BlockActionMenu({
   onOpenChange,
   block,
   anchor,
+  requiredFor,
   onToggleRequired,
   onDuplicate,
   onDelete,
@@ -36,6 +37,9 @@ export function BlockActionMenu({
   // anchor — элемент, к которому Radix привязывает поповер (позиционированный span
   // в absolute-поле строки); asChild измеряет его.
   anchor: ReactNode
+  // requiredFor — блок, чью обязательность правит пункт меню (см. BlockRow): у поля
+  // это оно само, у подписи — поле её вопроса, у контента — ничего, и пункта нет.
+  requiredFor?: Block
   onToggleRequired: () => void
   onDuplicate: () => void
   onDelete: () => void
@@ -44,7 +48,6 @@ export function BlockActionMenu({
   // Какой вид показан: действия или выбор нового типа. Сбрасывается на «действия»
   // при закрытии, чтобы следующее открытие начиналось с корня.
   const [view, setView] = useState<'actions' | 'types'>('actions')
-  const answerable = isAnswerableType(block.type)
   const isGroup = isCaptionType(block.type)
 
   const close = () => {
@@ -73,7 +76,7 @@ export function BlockActionMenu({
           <Command>
             <CommandList>
               <CommandGroup>
-                {answerable && (
+                {requiredFor && (
                   <CommandItem
                     onSelect={() => {
                       onToggleRequired()
@@ -81,7 +84,7 @@ export function BlockActionMenu({
                     }}
                   >
                     <Asterisk className="size-4" />
-                    {block.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                    {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
                   </CommandItem>
                 )}
                 <CommandItem onSelect={() => setView('types')}>

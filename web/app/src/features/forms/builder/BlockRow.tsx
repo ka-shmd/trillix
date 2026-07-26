@@ -70,6 +70,14 @@ export interface BlockRowProps {
   // и ручка на подписи сносят и двигают вопрос целиком. Голое поле (группа без
   // подписи) значки сохраняет: управлять им больше некому.
   ownedByCaption?: boolean
+  // requiredFor — блок, чью обязательность представляет эта строка (носитель флага —
+  // всегда отвечаемый блок, модель не меняется). У поля это оно само, у первой
+  // подписи группы — поле её вопроса, у контента — ничего.
+  //
+  // Звёздочку рисует подпись, а не поле (решение владельца 2026-07-26): у превью и
+  // рендерера она и так на подписи (§6), а строка ответа теперь вообще не несёт
+  // управления. У группы без подписи звёздочка остаётся на самом поле — больше негде.
+  requiredFor?: Block
   // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
   // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
   // (там пустой текст = описание вопроса); firstOfForm — самая первая строка полотна
@@ -121,6 +129,7 @@ export function BlockRow({
   groupHandle,
   groupHasAnswer = false,
   ownedByCaption = false,
+  requiredFor,
   insideQuestion = false,
   firstOfForm = false,
   mirrored = false,
@@ -403,7 +412,13 @@ export function BlockRow({
         onOpenChange={setActionOpen}
         block={block}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
-        onToggleRequired={() => updateBlock(block.id, { required: !block.required })}
+        // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
+        // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись
+        // ответов не собирает, а флаг — как раз про её вопрос).
+        requiredFor={requiredFor}
+        onToggleRequired={() =>
+          requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
+        }
         onDuplicate={() => duplicateBlock(block.id)}
         onDelete={() => onDeleteBlock(block.id)}
         onPickType={pickType}
@@ -482,9 +497,13 @@ export function BlockRow({
       )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
-          левому кластеру значков. Только у отвечаемых блоков: неотвечаемый text
-          ответов не собирает, required к нему неприменим. */}
-      {isContent ? null : <RequiredToggle block={block} lineH={rowLineH} />}
+          левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
+          рендерер, §6), а пишет в отвечаемый блок группы — носитель флага не менялся.
+          У группы без подписи звёздочка остаётся на самом поле: показать её больше
+          негде. Контент ответов не собирает — там её нет вовсе. */}
+      {requiredFor && !ownedByCaption ? (
+        <RequiredToggle block={requiredFor} lineH={rowLineH} />
+      ) : null}
 
       {/* Чипы-подсказки сфокусированной строки (§7): только клавиши этой поверхности,
           общие — в шпаргалке Mod+/. Рисуются всегда, содержимое выбирает сам RowHints
