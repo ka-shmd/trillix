@@ -3,18 +3,7 @@
 // DESIGN-s3-media.md §6a). Синхронный HTTP-путь: ответ 201 и есть завершение,
 // статус-поллинга нет.
 
-const CSRF_COOKIE = 'csrf_token'
-const CSRF_HEADER = 'X-CSRF-Token'
-
-// readCookie — зеркало shared/api/client.ts: csrf_token (double-submit) в заголовок
-// мутирующего запроса. Cookie сессии httpOnly, JS её не видит (credentials шлют её сами).
-function readCookie(name: string): string | undefined {
-  const prefix = `${name}=`
-  for (const part of document.cookie.split('; ')) {
-    if (part.startsWith(prefix)) return decodeURIComponent(part.slice(prefix.length))
-  }
-  return undefined
-}
+import { CSRF_HEADER, csrfToken } from '../../../shared/api/csrf'
 
 export interface UploadHandlers {
   onProgress?: (pct: number) => void
@@ -30,7 +19,7 @@ export function uploadImage(formId: string, file: File, h: UploadHandlers = {}):
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `/api/v1/forms/${formId}/media`)
     xhr.withCredentials = true
-    const csrf = readCookie(CSRF_COOKIE)
+    const csrf = csrfToken()
     if (csrf) xhr.setRequestHeader(CSRF_HEADER, csrf)
 
     xhr.upload.onprogress = (e) => {
