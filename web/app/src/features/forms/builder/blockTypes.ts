@@ -93,10 +93,3 @@ export function filterMenuItems(query: string): MenuItem[] {
   const q = query.trim().toLowerCase()
   return q ? MENU_ITEMS.filter((b) => b.label.toLowerCase().includes(q)) : [...MENU_ITEMS]
 }
-
-// blockTypeLabel — человеческая подпись типа блока (единая с меню). Тип встречается
-// в нескольких пунктах, но подпись у него одна.
-const TYPE_LABELS = new Map<BlockType, string>(
-  [...FIELD_TYPES, ...LAYOUT_TYPES].map((t) => [t.type, t.label]),
-)
-export const blockTypeLabel = (t: BlockType): string => TYPE_LABELS.get(t) ?? t

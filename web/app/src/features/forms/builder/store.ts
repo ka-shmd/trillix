@@ -182,7 +182,7 @@ export type BuilderStore = BuilderState & BuilderActions
 // дефолты. Choice-тип стартует с пустым списком опций — допустимое недособранное
 // состояние; non-choice остаётся с пустыми settings (иначе ValidateSchema отвергнет
 // опции у не-choice).
-export function newBlock(type: BlockType): Block {
+function newBlock(type: BlockType): Block {
   const base: Block = {
     id: newBlockId(),
     groupId: '', // проставит regroup
