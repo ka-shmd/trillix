@@ -808,9 +808,25 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       },
 
       updateBlock: (id, patch) =>
-        commit(updateBlockTag(id, patch), (s) => ({
-          blocks: s.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)),
-        })),
+        commit(updateBlockTag(id, patch), (s) => {
+          const i = s.blocks.findIndex((b) => b.id === id)
+          const src = s.blocks[i]
+          // Блока нет — правку не к чему применить, и это не редкость: сюда
+          // приходит отложенный колбэк, переживший свой блок (загрузка картинки
+          // завершилась после того, как автора удалил блок). Прежде такой вызов
+          // всё равно проходил через commit — `blocks.map` возвращает новый массив
+          // даже когда ни один блок не совпал, — и давал шаг истории, в котором
+          // ничего не меняется (Ctrl+Z «съедал» нажатие), dirty и лишний PATCH.
+          if (!src) return null
+          // Патч ничего не меняет — тот же no-op. Сравниваем по ссылке: text и
+          // required примитивны, а settings приходит новым объектом только тогда,
+          // когда его действительно пересобрали.
+          const keys = Object.keys(patch) as (keyof BlockPatch)[]
+          if (keys.every((k) => Object.is(src[k], patch[k]))) return null
+          const blocks = s.blocks.slice()
+          blocks[i] = { ...src, ...patch }
+          return { blocks }
+        }),
 
       removeBlock: (id) =>
         commit(null, (s) => structural({ blocks: s.blocks.filter((b) => b.id !== id) })),
