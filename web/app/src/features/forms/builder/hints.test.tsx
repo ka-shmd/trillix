@@ -37,7 +37,7 @@ function CanvasBody({
     onAddBelow: vi.fn(),
     onInsertBelow: vi.fn(),
     onBackspaceAtStart: vi.fn(),
-    onDeleteObject: vi.fn(),
+    onBackspaceDelete: vi.fn(),
     onDeleteBlock: vi.fn(),
     onAnswerAction: vi.fn(),
     onArrow: vi.fn(),
@@ -145,7 +145,9 @@ describe('чипы у сфокусированной строки (§7)', () => 
     // Лист обхода: Enter и «/» здесь не работают и не обещаются. Ряд (Mod+Alt+←/→)
     // работает — у голого поля это единственная поверхность вопроса (§5).
     expect(chips()).toEqual(['⌫ в пустом', 'Ctrl+Alt+→', 'Ctrl+Alt+←'])
-    expect(hintText()).toContain('К подписи')
+    // Пустой Backspace здесь удаляет поле (единое поведение поверхностей ответа),
+    // и подсказка обязана говорить именно это, а не «вернуться к подписи».
+    expect(hintText()).toContain('Удалить')
   })
 
   it('вариант choice: клавиши списка, а не блока', () => {

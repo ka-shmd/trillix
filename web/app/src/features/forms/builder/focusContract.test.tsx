@@ -31,7 +31,7 @@ function setup(schema: FormSchema) {
     onAddBelow: vi.fn(),
     onInsertBelow: vi.fn(),
     onBackspaceAtStart: vi.fn(),
-    onDeleteObject: vi.fn(),
+    onBackspaceDelete: vi.fn(),
     onDeleteBlock: vi.fn(),
     onAnswerAction: vi.fn(),
     onArrow: vi.fn(),
@@ -177,7 +177,7 @@ describe('поведение объектной остановки (§2.2)', () 
   it('Backspace → удалить объект', () => {
     const { stop, handlers } = objectStop()
     fireEvent.keyDown(stop, { key: 'Backspace', code: 'Backspace' })
-    expect(handlers.onDeleteObject).toHaveBeenCalledWith('sc')
+    expect(handlers.onBackspaceDelete).toHaveBeenCalledWith('sc')
   })
 
   it('стрелки — обход строк, а не засев', () => {
@@ -215,18 +215,18 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
   })
 })
 
-describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-24)', () => {
-  it('пустой плейсхолдер, каретка в начале → уход вверх, поле НЕ удаляется', () => {
+describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-26)', () => {
+  it('пустой плейсхолдер → поле удаляется, как объект и как последний вариант', () => {
     const { engine, handlers } = setup({
       schemaVersion: 2,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
-    // Лист-поле сносит только явный Cmd+Shift+Backspace: пустой Backspace лишь уводит
-    // каретку на предыдущую остановку (не оставляет подпись группы сиротой).
-    expect(handlers.onArrow).toHaveBeenCalledWith('st', 'up')
-    expect(handlers.onDeleteObject).not.toHaveBeenCalled()
+    // Единое поведение поверхностей ответа: «стёрли ответ» = вопрос без поля.
+    // Каретку на предыдущую остановку уводит родитель (handleBackspaceDelete).
+    expect(handlers.onBackspaceDelete).toHaveBeenCalledWith('st')
+    expect(handlers.onArrow).not.toHaveBeenCalled()
   })
 
   it('плейсхолдер с текстом — Backspace правит текст (не уходит вверх)', () => {
@@ -237,7 +237,7 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
     engine.focusBlock('st', 'end')
     fireEvent.keyDown(el(), { key: 'Backspace', code: 'Backspace' })
     expect(handlers.onArrow).not.toHaveBeenCalled()
-    expect(handlers.onDeleteObject).not.toHaveBeenCalled()
+    expect(handlers.onBackspaceDelete).not.toHaveBeenCalled()
   })
 })
 
@@ -409,7 +409,7 @@ function reactiveRow(text = '') {
         onAddBelow={vi.fn()}
         onInsertBelow={vi.fn()}
         onBackspaceAtStart={vi.fn()}
-        onDeleteObject={vi.fn()}
+        onBackspaceDelete={vi.fn()}
         onDeleteBlock={vi.fn()}
         onAnswerAction={vi.fn()}
         onArrow={vi.fn()}

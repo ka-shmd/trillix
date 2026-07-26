@@ -495,7 +495,7 @@ export function SlashEditor({
 
   // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
   // предыдущей строки; её нет → заголовок формы.
-  function handleDeleteObject(id: string) {
+  function handleBackspaceDelete(id: string) {
     const i = blocks.findIndex((b) => b.id === id)
     const prevStop = stopNeighbor(blocks, i, 'up')
     removeBlock(id)
@@ -640,7 +640,7 @@ export function SlashEditor({
                   onAddBelow={handleAddBelow}
                   onInsertBelow={handleInsertBelow}
                   onBackspaceAtStart={handleBackspaceAtStart}
-                  onDeleteObject={handleDeleteObject}
+                  onBackspaceDelete={handleBackspaceDelete}
                   onDeleteBlock={handleDeleteBlock}
                   onAnswerAction={handleAnswerAction}
                   onArrow={handleArrow}
@@ -752,7 +752,7 @@ function GroupRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onAnswerAction,
   onArrow,
@@ -779,7 +779,7 @@ function GroupRow({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
-  onDeleteObject: (id: string) => void
+  onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
@@ -857,7 +857,7 @@ function GroupRow({
               onAddBelow={onAddBelow}
               onInsertBelow={onInsertBelow}
               onBackspaceAtStart={onBackspaceAtStart}
-              onDeleteObject={onDeleteObject}
+              onBackspaceDelete={onBackspaceDelete}
               onDeleteBlock={onDeleteBlock}
               onAnswerAction={onAnswerAction}
               onArrow={onArrow}

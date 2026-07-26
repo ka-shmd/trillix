@@ -85,9 +85,13 @@ export interface BlockRowProps {
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
   // схлопнуть пустой блок в предыдущий (решает родитель — знает соседей).
   onBackspaceAtStart: (id: string) => void
-  // onDeleteObject — Backspace на объектной остановке (image/date/scale): удалить
-  // объект и увести каретку на предыдущую строку/заголовок (§2.2, знает соседей).
-  onDeleteObject: (id: string) => void
+  // onBackspaceDelete — Backspace на поверхности БЕЗ собственного текста: объектной
+  // остановке (image/date/scale) или пустом инпуте плейсхолдера. Удаляет блок и
+  // уводит каретку на предыдущую остановку/заголовок (§2.2, знает соседей).
+  // Поведение единое для всех поверхностей ответа (решение владельца 2026-07-26):
+  // «стёрли ответ» — это вопрос без поля, а не поле с пустотой внутри. У choice то
+  // же самое делает Backspace в последнем пустом варианте (removeOption).
+  onBackspaceDelete: (id: string) => void
   // onDeleteBlock — Cmd+Shift+Backspace (§3.4): явное удаление блока/группы + тост,
   // исход фокуса по контракту (решает родитель — знает соседей и владение группой).
   onDeleteBlock: (id: string) => void
@@ -117,7 +121,7 @@ export function BlockRow({
   onAddBelow,
   onInsertBelow,
   onBackspaceAtStart,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onAnswerAction,
   onArrow,
@@ -527,6 +531,7 @@ export function BlockRow({
           <AnswerField
             block={block}
             onArrow={onArrow}
+            onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
             onRowShift={(dir) => onRowShift(block.id, dir)}
@@ -537,7 +542,7 @@ export function BlockRow({
         <ObjectStop
           block={block}
           onAddBelow={onAddBelow}
-          onDeleteObject={onDeleteObject}
+          onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
           onDeleteBlock={onDeleteBlock}
           onOpenActions={() => setActionOpen(true)}
@@ -604,7 +609,7 @@ function ObjectStop({
   block,
   children,
   onAddBelow,
-  onDeleteObject,
+  onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
   onArrow,
@@ -615,7 +620,7 @@ function ObjectStop({
   block: Block
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
-  onDeleteObject: (id: string) => void
+  onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onOpenActions: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
@@ -672,7 +677,7 @@ function ObjectStop({
       onAddBelow(block.id, { openMenu: true })
     } else if (chords.backspace(e)) {
       e.preventDefault()
-      onDeleteObject(block.id)
+      onBackspaceDelete(block.id)
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault()
       onAddBelow(block.id, { seed: e.key })
@@ -776,12 +781,16 @@ function ScaleInline({ block }: { block: Block }) {
 function AnswerField({
   block,
   onArrow,
+  onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
   onRowShift,
 }: {
   block: Block
   onArrow?: (id: string, dir: 'up' | 'down') => void
+  // Backspace в ПУСТОМ плейсхолдере — удалить поле (см. проп BlockRow). Внутри
+  // объектной остановки (date) поля рисуются без обработчиков — там свой Backspace.
+  onBackspaceDelete?: (id: string) => void
   // Cmd+Shift+Backspace — явное удаление блока/группы (§3.4). Только у редактируемого
   // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
   onDeleteBlock?: (id: string) => void
@@ -814,12 +823,14 @@ function AnswerField({
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
   const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
 
-  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в начале
-  // пустого — уход ВВЕРХ на предыдущую остановку (обычно подпись группы), НЕ удаление:
-  // поле — необязательный лист, его сносит только явный Cmd+Shift+Backspace, иначе
-  // подпись осталась бы сиротой (решение владельца 2026-07-24; navigation.ts). В само
-  // поле каретка попадает лишь явно (Cmd+Enter/клик), поэтому это редкий путь. Left/
-  // Right и вертикаль внутри длинного текста остаются нативными (caret-проверка на краю).
+  // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в пустом
+  // плейсхолдере УДАЛЯЕТ поле и уводит каретку на предыдущую остановку — единое
+  // поведение всех поверхностей ответа (решение владельца 2026-07-26, отменяет
+  // «поле — необязательный лист, Backspace его только пропускает» от 2026-07-24):
+  // объект сносится Backspace'ом, последний вариант choice уносит свой блок, и
+  // плейсхолдер не имеет права быть исключением. Осиротевшая подпись — законное
+  // состояние: в неё подсаживают новый блок ответа. Left/Right и вертикаль внутри
+  // длинного текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
     const c = textCaret(e.currentTarget)
     if (onOpenActions && chords.actionMenu(e)) {
@@ -837,9 +848,9 @@ function AnswerField({
     } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
       e.preventDefault()
       onArrow(block.id, 'down')
-    } else if (onArrow && chords.backspace(e) && e.currentTarget.value === '' && c.caretAtStart()) {
+    } else if (onBackspaceDelete && chords.backspace(e) && e.currentTarget.value === '') {
       e.preventDefault()
-      onArrow(block.id, 'up')
+      onBackspaceDelete(block.id)
     }
   }
   // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
