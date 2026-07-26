@@ -1287,7 +1287,7 @@ function OptionsInline({
               варианты перестают уезжать в опубликованную форму. */}
           <GhostOption
             ref={ghostRef}
-            index={options.length}
+            multiple={block.type === 'multi_choice'}
             onType={(text) => {
               pendingFocus.current = addOption(block.id, text)
             }}
@@ -1334,28 +1334,32 @@ function FreeCell({ optionId }: { optionId: string }) {
 // текст никогда не хранит — иначе он был бы вариантом-невидимкой со своим состоянием.
 function GhostOption({
   ref,
-  index,
+  multiple,
   onType,
   onKeyDown,
   rowFocus,
 }: {
   ref: React.RefObject<HTMLInputElement | null>
-  index: number
+  // Тип списка решает ширину невидимого слота под глифом (чекбокс шире буквы).
+  multiple: boolean
   onType: (text: string) => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
-  const placeholder = `Вариант ${index + 1}`
+  const placeholder = 'Добавить ответ'
   return (
-    <div className="relative flex items-center opacity-60 transition-opacity focus-within:opacity-100">
-      <span className="rf-option">
-        {/* Буква у призрака та же, что получит будущий вариант: без неё строка
-            стояла бы левее остальных и «дёргалась» при наборе первого символа. */}
-        {optionKey(index) && (
-          <span className="rf-option-key" aria-hidden="true">
-            {optionKey(index)}
-          </span>
-        )}
+    // Приглушён сильнее обычного (решение владельца 2026-07-26): строка обязана
+    // читаться как приглашение, а не как ещё один вариант, который автор забыл
+    // заполнить. В фокусе гасит приглушение — в неё уже набирают.
+    <div className="relative flex items-center opacity-45 transition-opacity focus-within:opacity-100">
+      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
+        {/* Слот под глиф будущего варианта — невидимый, но место занимает: без него
+            текст призрака стоял бы левее списка и прыгал бы вправо на первом же
+            набранном символе. Ширину даёт тот же класс, что у настоящего варианта. */}
+        <span
+          aria-hidden="true"
+          className={`${multiple ? 'rf-mark rf-mark--check' : 'rf-option-key'} opacity-0`}
+        />
         <span className="rf-option-edit" data-value={placeholder}>
           <input
             ref={ref}
@@ -1412,6 +1416,7 @@ function OptionCard({
   })
   const placeholder = `Вариант ${index + 1}`
   const key = optionKey(index)
+  const multiple = block.type === 'multi_choice'
   return (
     // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
     // всей строкой блока, и от него крестики расцветали у всех вариантов разом при
@@ -1457,15 +1462,19 @@ function OptionCard({
           <GripVertical className="size-4" />
         </button>
       </div>
-      <span className="rf-option">
-        {/* Буква — та же декоративная подсказка, что видит респондент
-            (rf-option-key). Глиф радио/чекбокса у карточки не рисуется ни
-            тут, ни в форме: «один из» против «несколько из» показывает
-            превью, где виден настоящий контрол. */}
-        {key && (
-          <span className="rf-option-key" aria-hidden="true">
-            {key}
-          </span>
+      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
+        {/* Что стоит перед текстом, решает тип — ровно как у респондента
+            (BlockField): «несколько из списка» — обычный чекбокс без карточки,
+            «один из списка» — карточка с буквенным бейджем. Здесь оба элемента
+            декоративны (span, aria-hidden): автор правит текст, а не отвечает. */}
+        {multiple ? (
+          <span className="rf-mark rf-mark--check" aria-hidden="true" />
+        ) : (
+          key && (
+            <span className="rf-option-key" aria-hidden="true">
+              {key}
+            </span>
+          )
         )}
         {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
             в index.css). Пустой вариант меряется по плейсхолдеру, иначе

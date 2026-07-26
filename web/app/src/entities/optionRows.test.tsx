@@ -14,10 +14,13 @@ import { BlockField } from '@fields/BlockField'
 
 afterEach(cleanup)
 
+// Одиночный выбор: у него карточки с буквенным бейджем, и в текстовом содержимом
+// карточки видно и букву, и подпись. У множественного бейджей нет вовсе (обычные
+// чекбоксы, 2026-07-26) — раскладку рядов это не меняет, её проверяют те же тесты.
 const choice = (...options: { id: string; label: string; column?: 'right' }[]): Block => ({
   id: 'ch',
   groupId: 'g1',
-  type: 'multi_choice',
+  type: 'single_choice',
   settings: { options },
 })
 
@@ -54,5 +57,37 @@ describe('ряды вариантов в @fields/BlockField', () => {
 
     const labels = [...list().querySelectorAll('.rf-option')].map((el) => el.textContent)
     expect(labels).toEqual(['AA-вариант', 'BB-вариант', 'CC-вариант'])
+  })
+})
+
+// «Несколько из списка» — обычные чекбоксы (решение владельца 2026-07-26): глиф
+// видимый, карточки и буквенного бейджа нет. «Один из списка» остаётся карточкой
+// с буквой и спрятанным radio — разницу между типами должно быть видно сразу.
+describe('вид вариантов по типу', () => {
+  const withType = (type: 'single_choice' | 'multi_choice'): Block => ({
+    id: 'ch',
+    groupId: 'g1',
+    type,
+    settings: { options: [{ id: 'o1', label: 'Да' }] },
+  })
+
+  it('множественный выбор: видимый чекбокс, без карточки и без буквы', () => {
+    render(<BlockField block={withType('multi_choice')} />)
+
+    const option = list().querySelector('.rf-option')!
+    expect(option.classList.contains('rf-option--check')).toBe(true)
+    expect(option.querySelector('.rf-option-key')).toBeNull()
+    const input = option.querySelector('input')!
+    expect(input.getAttribute('type')).toBe('checkbox')
+    expect(input.className).toContain('rf-mark') // виден, а не спрятан
+  })
+
+  it('одиночный выбор: карточка с буквой и спрятанный radio', () => {
+    render(<BlockField block={withType('single_choice')} />)
+
+    const option = list().querySelector('.rf-option')!
+    expect(option.classList.contains('rf-option--check')).toBe(false)
+    expect(option.querySelector('.rf-option-key')?.textContent).toBe('A')
+    expect(option.querySelector('input')!.className).toContain('rf-choice-input')
   })
 })

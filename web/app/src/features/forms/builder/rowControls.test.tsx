@@ -171,6 +171,25 @@ describe('значки варианта', () => {
     expect(controls('ch').filter((l) => l === 'Переместить вариант')).toHaveLength(2)
   })
 
+  it('редактор показывает тот же глиф, что респондент: чекбокс у «нескольких»', () => {
+    setup({
+      schemaVersion: 2,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: 'Что берёте?' },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'multi_choice',
+          settings: { options: [{ id: 'o1', label: 'Чай' }] },
+        },
+      ],
+    })
+    const card = document.querySelector('[data-block-id="ch"] .rf-option')!
+    expect(card.classList.contains('rf-option--check')).toBe(true)
+    expect(card.querySelector('.rf-mark--check')).toBeTruthy()
+    expect(card.querySelector('.rf-option-key')).toBeNull()
+  })
+
   it('мусорка варианта удаляет именно свой вариант', () => {
     const { store } = setup(CHOICE)
     row('ch').getAllByLabelText('Удалить вариант')[1]!.click()
@@ -212,7 +231,7 @@ describe('призрак в конце списка вариантов', () => {
 
   it('у пустого блока есть строка для набора, но вариантов в схеме нет', () => {
     const { store } = setup(EMPTY_CHOICE)
-    expect(row('ch').getByLabelText('Вариант 1')).toBeTruthy()
+    expect(row('ch').getByLabelText('Добавить ответ')).toBeTruthy()
     expect(store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options).toEqual([])
     // Значков у призрака нет: удалять и таскать нечего.
     expect(controls('ch')).not.toContain('Удалить вариант')
@@ -222,7 +241,7 @@ describe('призрак в конце списка вариантов', () => {
   it('набор в призраке рождает настоящий вариант с этим текстом', () => {
     const { store } = setup(EMPTY_CHOICE)
 
-    fireEvent.change(row('ch').getByLabelText('Вариант 1'), { target: { value: 'С' } })
+    fireEvent.change(row('ch').getByLabelText('Добавить ответ'), { target: { value: 'С' } })
 
     const opts = store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options
     expect(opts).toHaveLength(1)
@@ -232,7 +251,7 @@ describe('призрак в конце списка вариантов', () => {
   it('Backspace в призраке пустого блока уносит блок наверх', () => {
     const { handlers } = setup(EMPTY_CHOICE)
 
-    fireEvent.keyDown(row('ch').getByLabelText('Вариант 1'), {
+    fireEvent.keyDown(row('ch').getByLabelText('Добавить ответ'), {
       key: 'Backspace',
       code: 'Backspace',
     })
@@ -245,13 +264,13 @@ describe('призрак в конце списка вариантов', () => {
   it('Enter в призраке пустого блока — выход из списка, блок уходит', () => {
     const { store, handlers } = setup(EMPTY_CHOICE)
 
-    fireEvent.keyDown(row('ch').getByLabelText('Вариант 1'), { key: 'Enter', code: 'Enter' })
+    fireEvent.keyDown(row('ch').getByLabelText('Добавить ответ'), { key: 'Enter', code: 'Enter' })
 
     expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap'])
   })
 
-  it('при готовых вариантах призрак стоит следующим номером и блок не трогает', () => {
+  it('при готовых вариантах призрак стоит последним и блок не трогает', () => {
     const { store, handlers } = setup({
       schemaVersion: 2,
       blocks: [
@@ -267,7 +286,7 @@ describe('призрак в конце списка вариантов', () => {
     // Мусорка ровно одна — у настоящего варианта, у призрака её нет.
     expect(controls('ch').filter((l) => l === 'Удалить вариант')).toHaveLength(1)
 
-    fireEvent.keyDown(row('ch').getByLabelText('Вариант 2'), { key: 'Enter', code: 'Enter' })
+    fireEvent.keyDown(row('ch').getByLabelText('Добавить ответ'), { key: 'Enter', code: 'Enter' })
 
     expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap', 'ch'])

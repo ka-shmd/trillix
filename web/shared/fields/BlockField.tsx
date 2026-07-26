@@ -417,16 +417,23 @@ function ChoiceList({
     return (
       // Состояние выбора — классом от React, а не CSS-селектором :has(:checked):
       // класс работает одинаково во всех браузерах и виден в тестах.
-      <label key={o.id} className={`rf-option${checked ? ' rf-option--on' : ''}`}>
+      //
+      // Множественный выбор — обычные чекбоксы: сам глиф видим, карточки и буквы нет
+      // (fields.css, .rf-option--check). Одиночный остаётся карточкой с буквой, и
+      // настоящий radio у него спрятан — вид карточке даёт rf-option--on.
+      <label
+        key={o.id}
+        className={`rf-option${multiple ? ' rf-option--check' : ''}${checked ? ' rf-option--on' : ''}`}
+      >
         <input
-          className="rf-choice-input"
+          className={multiple ? 'rf-mark rf-mark--check' : 'rf-choice-input'}
           type={multiple ? 'checkbox' : 'radio'}
           name={block.id}
           checked={checked}
           onChange={(e) => onToggle(o.id, e.target.checked)}
           disabled={disabled}
         />
-        {key && (
+        {!multiple && key && (
           <span className="rf-option-key" aria-hidden="true">
             {key}
           </span>
