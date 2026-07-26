@@ -11,7 +11,7 @@ import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import type { FormSchema } from '@entities/formSchema'
+import { type FormSchema, plainText, textFromString } from '@entities/formSchema'
 import { createBuilderStore } from '../store'
 import { BuilderStoreContext } from '../storeContext'
 import { createFocusEngine, FocusEngineProvider } from '../focusEngine'
@@ -39,8 +39,8 @@ const line = () => document.querySelector('[data-rich-line]') as HTMLElement
 function reactiveRow(text = '', type: 'text' | 'title' = 'text') {
   const store = createBuilderStore()
   const schema: FormSchema = {
-    schemaVersion: 2,
-    blocks: [{ id: 't', groupId: 'g1', type, text }],
+    schemaVersion: 3,
+    blocks: [{ id: 't', groupId: 'g1', type, text: textFromString(text) }],
   }
   store.getState().hydrate(schema)
   const engine = createFocusEngine()
@@ -140,7 +140,7 @@ describe('инлайн-слеш (§3.5) на новой поверхности',
     const { store } = reactiveRow()
     line().focus()
     typeRich('/')
-    expect(store.getState().blocks[0]!.text).toBe('/')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('/')
     expect(document.body.textContent).toContain('Короткий ответ')
     expect(document.activeElement).toBe(line())
   })
@@ -156,7 +156,7 @@ describe('инлайн-слеш (§3.5) на новой поверхности',
   it('несовпадение («и/или») закрывает меню, текст сохраняется', () => {
     const { store } = reactiveRow('и')
     typeRich('и/или')
-    expect(store.getState().blocks[0]!.text).toBe('и/или')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('и/или')
     expect(document.querySelector('[role="listbox"]')).toBeNull()
   })
 
@@ -165,7 +165,7 @@ describe('инлайн-слеш (§3.5) на новой поверхности',
     typeRich('/')
     fireEvent.keyDown(line(), { key: 'Escape', code: 'Escape' })
     expect(document.querySelector('[role="listbox"]')).toBeNull()
-    expect(store.getState().blocks[0]!.text).toBe('/')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('/')
   })
 
   it('выбор вырезает «/»+фильтр и конвертирует (Вопрос: подпись+поле)', () => {
@@ -174,14 +174,14 @@ describe('инлайн-слеш (§3.5) на новой поверхности',
     fireEvent.keyDown(line(), { key: 'Enter', code: 'Enter' })
     const blocks = store.getState().blocks
     expect(blocks.map((b) => b.type)).toEqual(['title', 'email'])
-    expect(blocks[0]!.text).toBe('')
+    expect(plainText(blocks[0]!.text)).toBe('')
   })
 
   it('текст перед «/» становится подписью поля', () => {
     const { store } = reactiveRow('Возраст')
     typeRich('Возраст/')
     fireEvent.keyDown(line(), { key: 'Enter', code: 'Enter' })
-    expect(store.getState().blocks[0]!.text).toBe('Возраст')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Возраст')
   })
 })
 
@@ -261,7 +261,7 @@ describe('марки поверх модели', () => {
     fireEvent.keyDown(el, { key: 'b', code: 'KeyB', ctrlKey: true })
     expect(spansFromDom(line())).toEqual([{ t: 'а' }, { t: 'бв', m: ['b'] }, { t: 'гд' }])
     // Плоский текст форматирование не меняет — в сторе он прежний.
-    expect(store.getState().blocks[0]!.text).toBe('абвгд')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('абвгд')
   })
 
   // Найдено владельцем при первой браузерной проверке: Mod+B занят вендоренным

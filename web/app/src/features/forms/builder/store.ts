@@ -15,6 +15,7 @@ import {
   canShareRow,
   requiresCaption,
   COLUMN_RIGHT,
+  sameRichText,
 } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
@@ -202,7 +203,7 @@ function newBlock(type: BlockType): Block {
     id: newBlockId(),
     groupId: '', // проставит regroup
     type,
-    text: '',
+    text: [],
     required: false,
     settings: {},
   }
@@ -771,7 +772,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const converted: Block = {
             ...newBlock(type),
             id,
-            text: carriesText(type) ? src.text : '',
+            text: carriesText(type) ? src.text : [],
             required: isAnswerableType(type) ? src.required : false,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
@@ -792,7 +793,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const src = s.blocks[i]
           if (!src) return null
           const [gStart, gEnd] = groupSpan(s.blocks, i)
-          const field: Block = { ...newBlock(type), text: '' }
+          const field: Block = { ...newBlock(type), text: [] }
           if (gStart === gEnd) {
             // Одиночный блок (своя группа) → он становится подписью, поле под ним.
             // Фокус на подпись (у неё textarea, автор правит текст вопроса дальше).
@@ -908,11 +909,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // даже когда ни один блок не совпал, — и давал шаг истории, в котором
           // ничего не меняется (Ctrl+Z «съедал» нажатие), dirty и лишний PATCH.
           if (!src) return null
-          // Патч ничего не меняет — тот же no-op. Сравниваем по ссылке: text и
-          // required примитивны, а settings приходит новым объектом только тогда,
-          // когда его действительно пересобрали.
+          // Патч ничего не меняет — тот же no-op. Сравнение по ссылке годится для
+          // required (примитив) и settings (приходит новым объектом только когда его
+          // действительно пересобрали), но НЕ для text: с фазы 14 это массив спанов,
+          // и каждый набранный символ приносит свежий массив с тем же содержимым.
+          // По ссылке такой патч выглядел бы изменением — и «правка, которая ничего
+          // не меняет» перестала бы быть no-op: лишний шаг истории (Ctrl+Z съедает
+          // нажатие), dirty и лишний PATCH на каждый отложенный колбэк.
           const keys = Object.keys(patch) as (keyof BlockPatch)[]
-          if (keys.every((k) => Object.is(src[k], patch[k]))) return null
+          const same = (k: keyof BlockPatch) =>
+            k === 'text'
+              ? sameRichText(src.text, patch.text)
+              : Object.is(src[k], patch[k])
+          if (keys.every(same)) return null
           const blocks = s.blocks.slice()
           blocks[i] = { ...src, ...patch }
           return { blocks }

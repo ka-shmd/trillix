@@ -123,7 +123,7 @@ func TestForms_CRUDFlow(t *testing.T) {
 
 	// GET → отдаёт draft_schema, канонизированный до v2 (CanonicalV2 на отдаче).
 	detail := getFormDetail(t, c, srv, created.ID, http.StatusOK)
-	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != 2 || len(got.Blocks) != 0 {
+	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 0 {
 		t.Fatalf("draftSchema = %s, ожидался пустой каркас v2", detail.DraftSchema)
 	}
 
@@ -349,7 +349,7 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	// v1→v2), вопрос разложен на подпись + поле. Порядок ключей задаёт JSONB (не
 	// Go-маршалинг), поэтому сверяем разбором.
 	got := parseSchema(t, getFormDetail(t, c, srv, form.ID, http.StatusOK).DraftSchema)
-	if got.SchemaVersion != 2 || len(got.Blocks) != 2 {
+	if got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 2 {
 		t.Fatalf("канонизация не проставила schemaVersion/группу: %+v", got)
 	}
 	if got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" {

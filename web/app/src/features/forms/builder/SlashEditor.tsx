@@ -35,6 +35,7 @@ import {
   isAnswerableType,
   isCaptionType,
   MAX_SUBMIT_LABEL_LEN,
+  textFromString,
 } from '@entities/formSchema'
 import { groupBlocks, groupCanShareRow, packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
@@ -365,7 +366,7 @@ export function SlashEditor({
     // строку литералом «/»: инлайн-слеш открыт с монтирования на позиции 0 (§3.5),
     // «/» остаётся в тексте, как при наборе «/» в самой строке.
     const seed = opts.openMenu ? '/' : opts.seed
-    if (seed) updateBlock(id, { text: seed })
+    if (seed) updateBlock(id, { text: textFromString(seed) })
     if (opts.openMenu) setMenuForId(id)
     engine.focusBlock(id)
   }

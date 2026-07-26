@@ -30,10 +30,12 @@ import {
   isCaptionType,
   isChoiceType,
   isContentType,
+  plainText,
   SCALE_LOWER_BOUND,
   SCALE_UPPER_BOUND,
   scaleRange,
   supportsPlaceholder,
+  textFromString,
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
@@ -360,9 +362,11 @@ export function BlockRow({
   // текст из стора (подпись поля = то, что осталось), см. pickType.
   function pickSlash(item: MenuItem) {
     if (slash) {
-      const value = block.text ?? ''
+      const value = plainText(block.text)
       const end = slash.start + 1 + slash.query.length
-      updateBlock(block.id, { text: value.slice(0, slash.start) + value.slice(end) })
+      updateBlock(block.id, {
+        text: textFromString(value.slice(0, slash.start) + value.slice(end)),
+      })
     }
     pickType(item)
   }
@@ -376,8 +380,12 @@ export function BlockRow({
   // Принимает уже разобранные текст и позицию каретки, а не событие: у textarea это
   // value/selectionStart, у contenteditable — обход текстовых узлов (проба 14.0), и
   // логика слеша от разницы не зависит.
+  //
+  // Пишет ОДИН кусок без разметки: поверхности этапа 14.1 (textarea и проба) марок не
+  // производят. Настоящие спаны начнёт отдавать rich-поверхность этапа 14.3 — тогда
+  // сюда приедет её вывод, а не подъём строки.
   function onLabelChange(value: string, pos: number) {
-    updateBlock(block.id, { text: value })
+    updateBlock(block.id, { text: textFromString(value) })
     if (slash) {
       if (pos <= slash.start || value[slash.start] !== '/') return closeSlash()
       const query = value.slice(slash.start + 1, pos)
@@ -546,7 +554,7 @@ export function BlockRow({
                   elRef={(el) => {
                     labelRef.current = el
                   }}
-                  value={block.text ?? ''}
+                  value={plainText(block.text)}
                   placeholder={captionPh}
                   onChange={onLabelChange}
                   onFocus={() => {
@@ -564,7 +572,7 @@ export function BlockRow({
                 <textarea
                   ref={labelRef as React.RefObject<HTMLTextAreaElement>}
                   rows={1}
-                  value={block.text ?? ''}
+                  value={plainText(block.text)}
                   placeholder={captionPh}
                   onChange={(e) =>
                     onLabelChange(e.target.value, e.target.selectionStart ?? e.target.value.length)

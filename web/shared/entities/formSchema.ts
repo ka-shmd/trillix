@@ -11,11 +11,17 @@ import { z } from 'zod'
 // Лимиты — те же числа, что в Go. Длины строк на фронте считаются в UTF-16
 // code units (JS), в Go — в рунах; для ASCII-id и обычного текста расхождение
 // несущественно, а серверная проверка в любом случае финальна.
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 export const MAX_BLOCKS = 200
 export const MAX_OPTIONS = 100
-// Текст подписи/контента (title/label/heading/text/consent). Зеркалит MaxTextLen в Go.
+// Суммарная длина текста блока по всем спанам (title/label/heading/text/consent).
+// Зеркалит MaxTextLen в Go. Число то же, что было у строки в v2: текст не стал длиннее
+// от того, что его покрасили.
 export const MAX_TEXT_LEN = 2000
+// Число спанов в тексте одного блока. Зеркалит MaxSpans. Второй лимит обязателен: без
+// него MAX_TEXT_LEN перестал быть лимитом документа в тот момент, когда строка стала
+// массивом (2000 кусков по одному символу прошли бы проверку длины).
+export const MAX_SPANS = 200
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
@@ -185,6 +191,88 @@ const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const carriesText = (t: BlockType): boolean => CARRIES_TEXT_TYPES.has(t)
 
+// Богатый текст блока (v3): плоский массив спанов вместо строки. Формат — ADR §10
+// ARCHITECTURE, обоснование и инварианты — docs/DESIGN-rich-text.md §2. Зеркало —
+// internal/domain/spans.go (правится тем же PR, с тестами обеих сторон).
+//
+// Булевы марки списком, значимые — своими полями. Список булевых открыт по
+// построению: новая марка — строка в MARKS, строка в fields.css, кнопка в панель.
+export const MARKS = ['b', 'i', 'u', 's'] as const
+export const markSchema = z.enum(MARKS)
+export type Mark = z.infer<typeof markSchema>
+
+// Цвет — строгий `#rrggbb` в нижнем регистре, а не произвольная CSS-нотация (ADR §10,
+// решение владельца 2026-07-26 «цвет свободный»): значение уходит в inline-style
+// рендерера, и хотя React его экранирует, свободная нотация открыла бы место под
+// url(...) и наследие expression. Зеркалит isHexColor в Go.
+const HEX_COLOR = /^#[0-9a-f]{6}$/
+export const isHexColor = (s: string): boolean => HEX_COLOR.test(s)
+
+// Спан — кусок текста с одинаковым оформлением. t непуст: пустой кусок — мусор,
+// который пришлось бы тащить через три поверхности рендера и через plainText.
+export const spanSchema = z.strictObject({
+  t: z.string().min(1).max(MAX_TEXT_LEN),
+  m: z.array(markSchema).optional(),
+  color: z.string().regex(HEX_COLOR).optional(),
+  bg: z.string().regex(HEX_COLOR).optional(),
+  // Ссылка — единственная марка с угрозой безопасности. Валидатор переиспользуется,
+  // а не пишется заново (ADR §10): тот же isHttpUrl, что у redirectUrl.
+  href: z.string().max(MAX_REDIRECT_URL_LEN).refine(isHttpUrl, 'нужен http(s)-адрес').optional(),
+})
+export type Span = z.infer<typeof spanSchema>
+
+// richTextSchema — текст блока целиком. Два лимита: число кусков (здесь) и суммарная
+// длина (superRefine ниже) — по отдельности ни один не ограничивает документ.
+//
+// Склейка соседних одинаково размеченных кусков НЕ проверяется: это обязанность
+// редактора. Кросс-элементное условие в валидаторе ловило бы 422 на undo и на
+// промежуточных состояниях набора, а автосейв обязан хранить недособранное — то же
+// решение, что у инертного бита ряда.
+export const richTextSchema = z
+  .array(spanSchema)
+  .max(MAX_SPANS)
+  .superRefine((spans, ctx) => {
+    const total = spans.reduce((n, s) => n + s.t.length, 0)
+    if (total > MAX_TEXT_LEN) {
+      ctx.addIssue({ code: 'custom', message: `текст длиннее ${MAX_TEXT_LEN} символов` })
+    }
+    for (const [i, s] of spans.entries()) {
+      const dup = s.m && new Set(s.m).size !== s.m.length
+      if (dup) {
+        ctx.addIssue({ code: 'custom', message: 'повторяющаяся марка', path: [i, 'm'] })
+      }
+    }
+  })
+
+// plainText — текст без оформления. Единственный способ, которым богатый текст попадает
+// в данные: подписи для CSV/воронки/сводки, тизер ссылки, aria-label. Зеркалит
+// PlainText в Go. Разметка в данные не протекает никогда.
+export const plainText = (spans: Span[] | undefined): string =>
+  spans ? spans.map((s) => s.t).join('') : ''
+
+// sameRichText — равенство богатого текста ПО ЗНАЧЕНИЮ. Нужно там, где раньше хватало
+// сравнения строк по ссылке: набор символа приносит свежий массив с тем же содержимым,
+// и по ссылке любая правка выглядела бы изменением. От этого зависят три вещи, каждая
+// из которых ломается молча: no-op в updateBlock (лишний шаг истории — Ctrl+Z «съедает»
+// нажатие), флаг dirty и лишний PATCH автосейва.
+export const sameRichText = (a: Span[] | undefined, b: Span[] | undefined): boolean => {
+  const x = a ?? []
+  const y = b ?? []
+  if (x.length !== y.length) return false
+  return x.every((s, i) => {
+    const o = y[i]!
+    if (s.t !== o.t || s.color !== o.color || s.bg !== o.bg || s.href !== o.href) return false
+    const sm = s.m ?? []
+    const om = o.m ?? []
+    return sm.length === om.length && sm.every((m, j) => m === om[j])
+  })
+}
+
+// textFromString — подъём плоской строки в спаны (редактор, тесты). Пустая строка даёт
+// пустой массив, а не массив с пустым куском: одно представление пустоты, иначе дифф
+// автосейва шумит на ровном месте. Зеркалит TextFromString в Go.
+export const textFromString = (s: string): Span[] => (s === '' ? [] : [{ t: s }])
+
 // Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
 // навязываем — id генерируется клиентом, важны непустота и уникальность.
 const idSchema = z.string().min(1).max(MAX_ID_LEN)
@@ -240,13 +328,13 @@ export const blockSchema = z
     id: idSchema,
     groupId: idSchema,
     type: blockTypeSchema,
-    text: z.string().max(MAX_TEXT_LEN).optional(),
+    text: richTextSchema.optional(),
     required: z.boolean().optional(),
     settings: settingsSchema.optional(),
   })
   .superRefine((b, ctx) => {
     // Собственный text — только у carriesText-типов (подписи, контент, consent).
-    if (b.text && !carriesText(b.type)) {
+    if (b.text?.length && !carriesText(b.type)) {
       ctx.addIssue({
         code: 'custom',
         message: `тип ${b.type} не несёт собственного текста`,

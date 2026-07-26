@@ -1,6 +1,14 @@
 import { type ChangeEvent } from 'react'
 
-import { CONSENT_YES, type Block, isContentType, scaleRange } from '@entities/formSchema'
+import {
+  CONSENT_YES,
+  type Block,
+  type Span,
+  isContentType,
+  isHttpUrl,
+  plainText,
+  scaleRange,
+} from '@entities/formSchema'
 
 import { type Answer, optionKey, toggleMulti } from './answer'
 import { FieldShell } from './FieldShell'
@@ -98,11 +106,11 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
       <div className="rf-image-empty" aria-hidden="true" />
     )
   }
-  const text = (block.text ?? '').trim()
+  const text = plainText(block.text).trim()
   if (block.type === 'title' || block.type === 'label') {
     return (
       <div className={block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label'}>
-        {text || 'Без названия'}
+        {text ? <RichText spans={block.text} /> : 'Без названия'}
         {required && (
           <span className="rf-required" aria-hidden="true">
             {' '}
@@ -113,9 +121,59 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
     )
   }
   if (block.type === 'heading') {
-    return <div className="rf-heading">{text || 'Заголовок раздела'}</div>
+    return (
+      <div className="rf-heading">
+        {text ? <RichText spans={block.text} /> : 'Заголовок раздела'}
+      </div>
+    )
   }
-  return <p className="rf-text">{text || ' '}</p>
+  return <p className="rf-text">{text ? <RichText spans={block.text} /> : ' '}</p>
+}
+
+// RichText — вывод богатого текста блока (фаза 14, §3.1 спеки). Один `.map`: кусок без
+// оформления печатается как есть, оформленный — в <span> с классами булевых марок
+// (`rf-b`/`rf-i`/`rf-u`/`rf-s`, вид в fields.css) и inline-стилем цвета; кусок со
+// ссылкой — в <a>.
+//
+// Три правила, каждое куплено раньше и не обсуждается:
+//   1. Только React-элементы: инвариант 4 запрещает dangerouslySetInnerHTML во всём
+//      репозитории, поэтому экранирование остаётся автоматическим.
+//   2. href проверяется ПОВТОРНО здесь, а не только при сохранении, — ровно как
+//      redirectUrl: доверять содержимому схемы в точке использования нельзя. Не прошёл
+//      проверку — рисуем текст без ссылки, а не битую ссылку.
+//   3. Цвет уходит в style, а не в className: значение свободное (ADR §10), React его
+//      экранирует, а `#rrggbb` из схемы не оставляет места ни для url(...), ни для
+//      наследия expression.
+export function RichText({ spans }: { spans: Span[] | undefined }) {
+  if (!spans?.length) return null
+  return (
+    <>
+      {spans.map((s, i) => {
+        const cls = s.m?.length ? s.m.map((m) => `rf-${m}`).join(' ') : undefined
+        const style = s.color || s.bg ? { color: s.color, backgroundColor: s.bg } : undefined
+        if (s.href && isHttpUrl(s.href)) {
+          return (
+            <a
+              key={i}
+              className={cls}
+              style={style}
+              href={s.href}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {s.t}
+            </a>
+          )
+        }
+        if (!cls && !style) return s.t
+        return (
+          <span key={i} className={cls} style={style}>
+            {s.t}
+          </span>
+        )
+      })}
+    </>
+  )
 }
 
 type ControlProps = {
@@ -240,7 +298,11 @@ function FieldControl({ block, label, value, onChange, disabled, invalid, errorI
             {...invalidProps}
           />
           <span className="rf-consent">
-            {(block.text ?? '').trim() || 'Текст согласия'}
+            {plainText(block.text).trim() ? (
+              <RichText spans={block.text} />
+            ) : (
+              'Текст согласия'
+            )}
             {block.required && (
               <span className="rf-required" aria-hidden="true"> *</span>
             )}

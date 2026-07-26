@@ -16,7 +16,7 @@ afterEach(() => {
 const validBody = JSON.stringify({
   title: 'Опрос',
   version: 2,
-  schema: { schemaVersion: 2, blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', required: true }] },
+  schema: { schemaVersion: 3, blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', required: true }] },
   token: '1752307200000.sig',
 })
 

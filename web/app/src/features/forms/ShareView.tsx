@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 
-import { type Block } from '@entities/formSchema'
+import { type Block, plainText } from '@entities/formSchema'
 import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
@@ -100,7 +100,8 @@ function linkTeaser(blocks: Block[]): string {
   for (const b of blocks) {
     // Тизер — из блоков-подписей (title/label), как og:description на бэке.
     if (b.type !== 'title' && b.type !== 'label') continue
-    const label = (b.text ?? '').trim()
+    // Тизер — текст, не разметка (фаза 14): как og:description на бэке.
+    const label = plainText(b.text).trim()
     if (!label) continue
     labels.push(label)
     if (labels.length === 3) break

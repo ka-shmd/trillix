@@ -1,4 +1,11 @@
-import { type Block, type BlockType, COLUMN_RIGHT, canShareRow, isAnswerableType } from '@entities/formSchema'
+import {
+  type Block,
+  type BlockType,
+  COLUMN_RIGHT,
+  canShareRow,
+  isAnswerableType,
+  plainText,
+} from '@entities/formSchema'
 
 // Метаданные группы для рендера (v2, фаза 8.7): подпись группы и признак
 // обязательности её поля. Раскладчик блоков (FormView/PreviewPane) считает их один
@@ -94,15 +101,19 @@ export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
   }
   for (const b of blocks) {
     const m = get(b.groupId)
-    const text = (b.text ?? '').trim()
+    // Подпись группы уходит в aria-label контрола и в тизеры — то есть в текст, а не в
+    // разметку (фаза 14). Богатый заголовок вопроса РИСУЕТ ContentBlock из спанов; здесь
+    // нужна плоская строка.
+    const flat = plainText(b.text)
+    const text = flat.trim()
     if (b.type === 'title') {
       if (text && !hasTitle.has(b.groupId)) {
-        m.caption = b.text ?? ''
+        m.caption = flat
         hasTitle.add(b.groupId)
       }
     } else if (b.type === 'label') {
       if (text && !hasTitle.has(b.groupId) && !m.caption) {
-        m.caption = b.text ?? ''
+        m.caption = flat
       }
     } else if (isAnswerableType(b.type)) {
       if (b.required) m.required = true
