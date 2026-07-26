@@ -967,7 +967,8 @@ function Kbd({ children }: { children: ReactNode }) {
 // FormTitleInput — название формы как первая строка полотна. Пишет в forms.title
 // (отдельная колонка БД, не блок схемы) дебаунс-PATCH'ем через useRenameForm.
 // Пустое название не отправляем (совпадает с серверной валидацией: title обязателен).
-function FormTitleInput({
+// Экспортируется ради регресс-теста флаша (titleFlush.test.tsx), полотно рисует её само.
+export function FormTitleInput({
   formId,
   initialTitle,
   onEnter,
@@ -987,10 +988,37 @@ function FormTitleInput({
   const lastSaved = useRef(initialTitle)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // pending — правка, назначенная к отправке, но ещё не ушедшая (дебаунс не дотикал).
+  // null — отправлять нечего.
+  const pending = useRef<string | null>(null)
   // Дефолтное имя показываем пустым полем → виден плейсхолдер.
   const initialValue = initialTitle === DEFAULT_FORM_TITLE ? '' : initialTitle
 
-  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), [])
+  // flush — унести назначенную правку немедленно, не дожидаясь дебаунса. Зовётся
+  // из самого таймера, с blur и с размонтирования.
+  //
+  // Размонтирование здесь — не редкий путь, а обычный уход с полотна: клик по
+  // «Ответы» в шапке, переключение в превью или настройки. Прежде cleanup просто
+  // гасил таймер, и название, набранное меньше чем за 800 мс до ухода, пропадало
+  // МОЛЧА. Страховка beforeunload автосейва сюда не достаёт по двум причинам сразу:
+  // она смотрит store.dirty, а название живёт вне стора билдера (серверный rename
+  // отдельной колонки), и SPA-навигация beforeunload вообще не поднимает.
+  function flush() {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    const title = pending.current
+    if (title === null) return
+    pending.current = null
+    rename.mutate({ id: formId, title }, { onSuccess: () => (lastSaved.current = title) })
+  }
+
+  // Latest-ref: flush замыкает свежую мутацию, но эффект размонтирования обязан
+  // остаться на [] — тот же приём, что у focusEngine и FormsToolbar.
+  const flushRef = useRef(flush)
+  useEffect(() => {
+    flushRef.current = flush
+  })
+  useEffect(() => () => flushRef.current(), [])
 
   // Поле НЕконтролируемое (defaultValue, без value): контролируемый React-инпут
   // переустанавливает .value на каждый ввод и стирает нативный стек undo элемента,
@@ -1022,13 +1050,14 @@ function FormTitleInput({
     resize()
     if (timer.current) clearTimeout(timer.current)
     const trimmed = value.trim()
-    if (!trimmed || trimmed === lastSaved.current) return
-    timer.current = setTimeout(() => {
-      rename.mutate(
-        { id: formId, title: trimmed },
-        { onSuccess: () => (lastSaved.current = trimmed) },
-      )
-    }, 800)
+    // Стёрли до пустого или вернули уже сохранённое — отправлять нечего, и
+    // назначенную ранее правку тоже снимаем (иначе flush унёс бы отменённое).
+    if (!trimmed || trimmed === lastSaved.current) {
+      pending.current = null
+      return
+    }
+    pending.current = trimmed
+    timer.current = setTimeout(() => flushRef.current(), 800)
   }
 
   // Enter/↓ — уйти на первый блок; Enter в заголовке не заводит перевод строки
@@ -1050,7 +1079,13 @@ function FormTitleInput({
       defaultValue={initialValue}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
-      {...rowFocus}
+      onFocus={rowFocus.onFocus}
+      // Спред {...rowFocus} здесь не годится: свой onBlur затёр бы его. Уход
+      // фокуса — самый частый момент «правка закончена», поэтому не ждём дебаунс.
+      onBlur={(e) => {
+        rowFocus.onBlur(e)
+        flush()
+      }}
       placeholder="Название формы"
       aria-label="Название формы"
       // Название вне стора билдера (серверный rename) — Ctrl+Z здесь нативный,
