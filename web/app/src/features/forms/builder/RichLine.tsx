@@ -13,11 +13,28 @@
 //   3. Между compositionstart и compositionend поверхность не трогаем вовсе — ресинк
 //      посреди составного ввода рвёт набор (IME, диакритика).
 
-import { useEffect, useRef, type FocusEvent, type KeyboardEvent } from 'react'
-import { type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
-import { markChord } from './shortcuts'
-import { spansFromDom, spansToDom, toggleMark } from './richText'
-import { richCaret, selectionRange, setCaret, setSelection } from './richCaret'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+} from 'react'
+import { MARKS, type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
+import { chords, markChord } from './shortcuts'
+import {
+  hasMarkThroughout,
+  hrefThroughout,
+  setBg,
+  setColor,
+  setHref,
+  spansFromDom,
+  spansToDom,
+  toggleMark,
+} from './richText'
+import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
+import { FormatBar } from './FormatBar'
 import './richLine.css'
 
 export interface RichLineProps {
@@ -49,6 +66,52 @@ export function RichLine({
   // (ПО ЗНАЧЕНИЮ) и означает «правку сделали снаружи».
   const last = useRef<Span[]>(value)
   const composing = useRef(false)
+  // Выделение, над которым висит панель форматирования. Держится в СОСТОЯНИИ, а не
+  // читается из живого Selection в момент нажатия: поле адреса ссылки берёт фокус, и
+  // живое выделение к тому моменту уже схлопнуто.
+  // Всё про выделение считается ОДИН раз, в момент его изменения, и живёт в состоянии:
+  // читать `ref.current` во время рендера нельзя (правило React), да и незачем — панели
+  // нужен снимок, а не живой DOM.
+  const [sel, setSel] = useState<{
+    from: number
+    to: number
+    rect: DOMRect
+    active: ReadonlySet<Mark>
+    href?: string
+  } | null>(null)
+  const [linkOpen, setLinkOpen] = useState(false)
+
+  // Выделение отслеживается на документе: внутри contenteditable его меняют и мышь, и
+  // клавиатура, и события у них разные — один `selectionchange` покрывает оба.
+  const syncSelection = useCallback(() => {
+    const el = ref.current
+    if (!el || el.ownerDocument.activeElement !== el) return
+    const range = selectionRange(el)
+    const rect = selectionRect(el)
+    if (!range || !rect) {
+      setSel(null)
+      setLinkOpen(false)
+      return
+    }
+    const spans = spansFromDom(el)
+    setSel({
+      ...range,
+      rect,
+      // По MARKS, а не перечислением четырёх: новая марка не должна требовать правки
+      // ни панели, ни этого места.
+      active: new Set(MARKS.filter((m) => hasMarkThroughout(spans, range.from, range.to, m))),
+      href: hrefThroughout(spans, range.from, range.to),
+    })
+  }, [])
+
+  // Выделение меняют и мышь, и клавиатура, и события у них разные — один
+  // `selectionchange` на документе покрывает оба.
+  useEffect(() => {
+    const doc = ref.current?.ownerDocument
+    if (!doc) return
+    doc.addEventListener('selectionchange', syncSelection)
+    return () => doc.removeEventListener('selectionchange', syncSelection)
+  }, [syncSelection])
 
   useEffect(() => {
     const el = ref.current
@@ -74,18 +137,24 @@ export function RichLine({
   // apply — команда форматирования: над МОДЕЛЬЮ, не над DOM. Выделение восстанавливается
   // по смещениям в плоском тексте: DOM-позиции после разрезания спанов другие, а
   // смещения — те же, поэтому выделение переживает наложение марки и его видно на месте.
+  //
+  // Диапазон берётся из состояния, если он там есть (панель), и из живого выделения
+  // иначе (аккорд): у панели живого выделения может уже не быть.
   function apply(f: (s: Span[], from: number, to: number) => Span[]): void {
     const el = ref.current
     if (!el) return
-    const sel = selectionRange(el)
-    if (!sel) return
-    const spans = f(spansFromDom(el), sel.from, sel.to)
+    const range = sel ?? selectionRange(el)
+    if (!range) return
+    const spans = f(spansFromDom(el), range.from, range.to)
     spansToDom(el, spans)
-    setSelection(el, sel.from, sel.to)
+    setSelection(el, range.from, range.to)
     last.current = spans
     // Плоский текст форматирование не меняет, но модель — меняет: отдаём наружу, иначе
     // разметка не доедет ни до автосейва, ни до истории отмены.
-    onChange(spans, sel.to)
+    onChange(spans, range.to)
+    // Форматирование меняет и модель, и «что нажато» в панели. Пересчитываем сразу, а
+    // не ждём `selectionchange`: восстановление выделения его не гарантирует.
+    syncSelection()
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
@@ -102,10 +171,18 @@ export function RichLine({
       e.stopPropagation()
       return apply((s, from, to) => toggleMark(s, from, to, mark))
     }
+    // Mod+K открывает поле адреса, а не применяет значение вслепую: у ссылки есть
+    // значение, и «поставить ссылку» без него — жест без результата.
+    if (chords.link(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (sel) setLinkOpen(true)
+      return
+    }
     onKeyDown(e)
   }
 
-  return (
+  const surface = (
     <div
       ref={(el) => {
         ref.current = el
@@ -141,7 +218,36 @@ export function RichLine({
       }}
       onKeyDown={handleKeyDown}
       onFocus={onFocus}
-      onBlur={onBlur}
+      onBlur={(e) => {
+        // Уход фокуса ИЗ строки в панель — не уход: панель гасит mousedown, но поле
+        // адреса ссылки фокус берёт намеренно. Без этой проверки панель исчезала бы
+        // ровно в тот момент, когда автор в неё целится.
+        if (e.relatedTarget instanceof HTMLElement && e.relatedTarget.closest('[data-format-bar]')) {
+          return
+        }
+        setSel(null)
+        setLinkOpen(false)
+        onBlur(e)
+      }}
     />
+  )
+
+  return (
+    <>
+      {surface}
+      {sel && (
+        <FormatBar
+          rect={sel.rect}
+          active={sel.active}
+          href={sel.href}
+          linkOpen={linkOpen}
+          onLinkOpenChange={setLinkOpen}
+          onToggleMark={(m) => apply((s, from, to) => toggleMark(s, from, to, m))}
+          onColor={(c) => apply((s, from, to) => setColor(s, from, to, c))}
+          onBg={(c) => apply((s, from, to) => setBg(s, from, to, c))}
+          onLink={(href) => apply((s, from, to) => setHref(s, from, to, href))}
+        />
+      )}
+    </>
   )
 }

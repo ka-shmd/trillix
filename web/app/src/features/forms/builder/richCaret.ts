@@ -51,6 +51,18 @@ export function selectionRange(el: HTMLElement): { from: number; to: number } | 
   return from === to ? null : { from: Math.min(from, to), to: Math.max(from, to) }
 }
 
+// selectionRect — экранный прямоугольник выделения: панель форматирования встаёт над
+// ним. Отдельно от selectionRange, потому что координаты нужны ровно одному
+// потребителю, и happy-dom их не считает (`getClientRects` отдаёт нули) — позиция
+// панели проверяется только в браузере.
+export function selectionRect(el: HTMLElement): DOMRect | null {
+  const sel = win(el)?.getSelection()
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null
+  const r = sel.getRangeAt(0)
+  if (!el.contains(r.startContainer)) return null
+  return r.getBoundingClientRect()
+}
+
 function collapsedAt(el: HTMLElement): number | null {
   const sel = win(el)?.getSelection()
   if (!sel || sel.rangeCount === 0 || !sel.isCollapsed) return null

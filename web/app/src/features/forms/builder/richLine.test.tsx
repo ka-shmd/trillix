@@ -370,3 +370,116 @@ describe('марки поверх модели', () => {
     expect(spansFromDom(line())).toEqual([{ t: 'абвгд' }])
   })
 })
+
+// Панель форматирования (этап 14.4, §3.3 спеки). Живое выделение в happy-dom
+// событие `selectionchange` само не рождает, поэтому тест шлёт его руками сразу после
+// установки диапазона — ровно то, что делает браузер. Позицию панели тесты не
+// проверяют вовсе: `getClientRects` у happy-dom отдаёт нули, и это работа браузера.
+function selectText(from: number, to: number) {
+  const el = line()
+  el.focus()
+  setSelection(el, from, to)
+  act(() => {
+    document.dispatchEvent(new Event('selectionchange'))
+  })
+}
+
+const bar = () => document.querySelector('[data-format-bar]')
+const barBtn = (label: string) =>
+  document.querySelector(`[data-format-bar] [aria-label="${label}"]`) as HTMLElement
+
+describe('панель форматирования', () => {
+  it('появляется над непустым выделением и исчезает, когда его нет', () => {
+    reactiveRow('абвгд')
+    expect(bar()).toBeNull()
+    selectText(1, 3)
+    expect(bar()).not.toBeNull()
+
+    setCaret(line(), 2)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    expect(bar()).toBeNull()
+  })
+
+  // Правило, без которого панель ломается тихо: ушедший фокус схлопывает выделение, и
+  // кнопка применяет марку к пустоте. Симптом обманчив — «кнопка не работает».
+  it('не забирает фокус: mousedown на панели погашен', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    const prevented = !fireEvent.mouseDown(bar()!)
+    expect(prevented).toBe(true)
+    expect(document.activeElement).toBe(line())
+  })
+
+  it('кнопка марки применяет её к выделению и показывается нажатой', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.click(barBtn('Жирный'))
+    expect(store.getState().blocks[0]!.text).toEqual([
+      { t: 'а' },
+      { t: 'бв', m: ['b'] },
+      { t: 'гд' },
+    ])
+    expect(barBtn('Жирный').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('выборщик цвета кладёт значение в том виде, которого требует валидатор', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    const input = barBtn('Цвет текста') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '#c026d3' } })
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', color: '#c026d3' })
+  })
+
+  it('фон — та же механика, своё поле спана', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.change(barBtn('Цвет фона'), { target: { value: '#ffff00' } })
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', bg: '#ffff00' })
+  })
+})
+
+describe('ссылка (панель + Mod+K)', () => {
+  const linkInput = () => barBtn('Адрес ссылки') as HTMLInputElement
+
+  it('Mod+K открывает поле адреса, Enter применяет ссылку', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.keyDown(line(), { code: 'KeyK', ctrlKey: true })
+    fireEvent.change(linkInput(), { target: { value: 'https://trillix.ru/p' } })
+    fireEvent.keyDown(linkInput(), { key: 'Enter' })
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({
+      t: 'бв',
+      href: 'https://trillix.ru/p',
+    })
+  })
+
+  // Инвариант 4: тот же валидатор, что у redirectUrl. Схема такое всё равно отвергнет
+  // (422), но давать автору сохранить заведомо битую ссылку и узнать об этом от
+  // автосейва — худший из способов сообщить об ошибке.
+  it.each(['javascript:alert(1)', 'data:text/html,x', '/privacy', 'трилликс'])(
+    'негодный адрес %s не применяется',
+    (bad) => {
+      const { store } = reactiveRow('абвгд')
+      selectText(1, 3)
+      fireEvent.keyDown(line(), { code: 'KeyK', ctrlKey: true })
+      fireEvent.change(linkInput(), { target: { value: bad } })
+      fireEvent.keyDown(linkInput(), { key: 'Enter' })
+      expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
+    },
+  )
+
+  it('«Убрать ссылку» снимает её и возвращает документ к одному куску', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.keyDown(line(), { code: 'KeyK', ctrlKey: true })
+    fireEvent.change(linkInput(), { target: { value: 'https://a.ru' } })
+    fireEvent.keyDown(linkInput(), { key: 'Enter' })
+
+    selectText(1, 3)
+    fireEvent.click(barBtn('Ссылка'))
+    fireEvent.click(barBtn('Убрать ссылку'))
+    expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
+  })
+})

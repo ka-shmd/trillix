@@ -106,6 +106,30 @@ export function hasMarkThroughout(spans: Span[], from: number, to: number, mark:
   return true
 }
 
+// hrefThroughout — адрес, общий для ВСЕГО выделения, иначе undefined. Панель показывает
+// ссылку нажатой только когда она одна на весь диапазон: у выделения, накрывшего две
+// разные ссылки, «текущего адреса» не существует, и подставлять первый попавшийся в
+// поле правки значило бы тихо переписать вторую.
+export function hrefThroughout(spans: Span[], from: number, to: number): string | undefined {
+  if (to <= from) return undefined
+  let pos = 0
+  let seen: string | undefined
+  let first = true
+  for (const s of spans) {
+    const start = pos
+    const end = pos + s.t.length
+    pos = end
+    if (end <= from || start >= to) continue
+    if (first) {
+      seen = s.href
+      first = false
+    } else if (s.href !== seen) {
+      return undefined
+    }
+  }
+  return seen
+}
+
 export const toggleMark = (spans: Span[], from: number, to: number, mark: Mark): Span[] => {
   const on = !hasMarkThroughout(spans, from, to, mark)
   return restyle(spans, from, to, (st) => ({
