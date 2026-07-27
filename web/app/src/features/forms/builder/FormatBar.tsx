@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Bold, Italic, Link2, Link2Off, Strikethrough, Underline } from 'lucide-react'
 import { type Mark, isHttpUrl } from '@entities/formSchema'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { ColorPicker } from './ColorPicker'
 
 // Панель форматирования (фаза 14, этап 14.4, §3.3 `docs/DESIGN-rich-text.md`): всплывает
 // над непустым выделением внутри текстовой строки полотна.
@@ -29,9 +31,13 @@ export interface FormatBarProps {
   // Текущая ссылка выделения, если она одна на весь диапазон.
   href?: string
   onToggleMark: (m: Mark) => void
-  onColor: (color: string) => void
-  onBg: (bg: string) => void
+  // undefined — «убрать цвет»: спан теряет поле, а не получает чёрный.
+  onColor: (color: string | undefined) => void
+  onBg: (bg: string | undefined) => void
   onLink: (href: string | undefined) => void
+  // Вернуть фокус и выделение в строку. Нужен выборщику цвета: он единственный контрол
+  // панели, который фокус забирает не на мгновение, а на всё время выбора.
+  onReturnFocus: () => void
   // Открыть поле адреса сразу (жест Mod+K, а не клик по кнопке).
   linkOpen: boolean
   onLinkOpenChange: (open: boolean) => void
@@ -52,21 +58,12 @@ export function FormatBar({
   onColor,
   onBg,
   onLink,
+  onReturnFocus,
   linkOpen,
   onLinkOpenChange,
 }: FormatBarProps) {
   // keepFocus — единственная причина, по которой панель вообще работает (правило 1).
   const keepFocus = (e: React.MouseEvent) => e.preventDefault()
-
-  // ownFocus — исключение из правила 1 для контролов, которым фокус НУЖЕН: поле адреса
-  // и нативные выборщики цвета. `stopPropagation`, а не отсутствие гарда: гард висит на
-  // контейнере, и без остановки всплытия его `preventDefault` отменил бы у выборщика
-  // цвета само открытие (браузер открывает палитру действием по умолчанию на
-  // mousedown) — кнопка выглядела бы рабочей и молчала.
-  //
-  // Схлопывание живого выделения здесь безвредно: диапазон уже лежит в состоянии
-  // строки, и команды форматирования читают именно его.
-  const ownFocus = (e: React.MouseEvent) => e.stopPropagation()
 
   return createPortal(
     <div
@@ -111,41 +108,34 @@ export function FormatBar({
 
           <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
 
-          {/* Нативный <input type="color"> — осознанное отступление от «только shadcn»
-              (web/CLAUDE.md): своего выборщика цвета в shadcn нет, а системный
-              объективно лучше рукописного — та же причина, что у мобильного
-              date-picker. Побочно он отдаёт ровно `#rrggbb` в нижнем регистре, то есть
-              формат, который требует валидатор схемы (ADR §10). */}
-          <label
-            className="flex size-7 cursor-pointer items-center justify-center rounded text-xs hover:bg-muted"
-            title="Цвет текста"
-            onMouseDown={ownFocus}
+          <ColorButton
+            label="Цвет текста"
+            picker="color"
+            initial="#1d4ed8"
+            swatches={TEXT_SWATCHES}
+            onPick={onColor}
+            onReturnFocus={onReturnFocus}
           >
-            <span aria-hidden="true">A</span>
-            <input
-              type="color"
-              aria-label="Цвет текста"
-              className="sr-only"
-              onMouseDown={ownFocus}
-              onChange={(e) => onColor(e.target.value)}
-            />
-          </label>
-          <label
-            className="flex size-7 cursor-pointer items-center justify-center rounded text-xs hover:bg-muted"
-            title="Цвет фона"
-            onMouseDown={ownFocus}
-          >
-            <span aria-hidden="true" className="rounded-sm bg-muted px-1">
+            <span aria-hidden="true" className="leading-none font-semibold">
               A
             </span>
-            <input
-              type="color"
-              aria-label="Цвет фона"
-              className="sr-only"
-              onMouseDown={ownFocus}
-              onChange={(e) => onBg(e.target.value)}
-            />
-          </label>
+            <span aria-hidden="true" className="mt-px h-1 w-4 rounded-full bg-foreground" />
+          </ColorButton>
+          <ColorButton
+            label="Цвет фона"
+            picker="bg"
+            initial="#fef08a"
+            swatches={BG_SWATCHES}
+            onPick={onBg}
+            onReturnFocus={onReturnFocus}
+          >
+            <span
+              aria-hidden="true"
+              className="rounded-sm bg-muted px-1 leading-none font-semibold"
+            >
+              A
+            </span>
+          </ColorButton>
 
           <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
 
@@ -164,6 +154,140 @@ export function FormatBar({
       )}
     </div>,
     document.body,
+  )
+}
+
+// Палитры готовых цветов. Абсолютные (ADR §10: публичная форма всегда светлая), поэтому
+// подобраны против БЕЛОГО холста формы, а не против темы кабинета: текст — насыщенные,
+// фон — пастель под маркер.
+const TEXT_SWATCHES: readonly string[] = [
+  '#111827',
+  '#374151',
+  '#6b7280',
+  '#9ca3af',
+  '#b91c1c',
+  '#c2410c',
+  '#a16207',
+  '#4d7c0f',
+  '#15803d',
+  '#0f766e',
+  '#0369a1',
+  '#1d4ed8',
+  '#4338ca',
+  '#7e22ce',
+  '#a21caf',
+  '#be185d',
+]
+
+const BG_SWATCHES: readonly string[] = [
+  '#fef08a',
+  '#fed7aa',
+  '#fecaca',
+  '#fbcfe8',
+  '#e9d5ff',
+  '#c7d2fe',
+  '#bfdbfe',
+  '#a5f3fc',
+  '#99f6e4',
+  '#bbf7d0',
+  '#d9f99d',
+  '#fde68a',
+  '#f3f4f6',
+  '#e5e7eb',
+  '#d1d5db',
+  '#ffffff',
+]
+
+// ColorButton — кнопка панели и поповер с выборщиком (shadcn Popover + свой
+// `ColorPicker`, см. его шапку о том, почему свой, а не библиотека).
+//
+// Чего тут больше нет: нативного `<input type="color">` под меткой `<label>`. С ним
+// палитра не открывалась ВООБЩЕ. Метка обещает переслать клик контролу внутри, но
+// пересылка происходит на `click`, а ломалось раньше — на `mousedown`: метка фокус не
+// принимает, панель живёт в портале на `document.body`, фокусируемых предков у неё нет,
+// и фокус уходил из строки В НИКУДА (`relatedTarget: null`). Строка на своём blur
+// закрывала панель, портал исчезал внутри того же `mousedown`, и пересылать `click` было
+// уже некуда. Ровно грабли TD-22, вид сбоку: «кнопка нажимается и молчит».
+//
+// Три вещи, на которых поповер держится, — все про правило 1 (панель не забирает фокус):
+//
+//   • `onOpenAutoFocus` погашен: Radix по умолчанию уводит фокус в содержимое сразу на
+//     открытии, а это схлопнуло бы выделение до того, как автор выбрал цвет.
+//   • `onCloseAutoFocus` погашен И возвращает фокус в СТРОКУ, а не на кнопку панели
+//     (`onReturnFocus`). Иначе после выбора цвета каретка оставалась бы неизвестно где.
+//   • Содержимое носит метку `data-format-bar`, хотя панели не принадлежит: оно
+//     порталится отдельно, а строка и слушатель «клик мимо» опознают своё по этой метке.
+//     Без неё уход фокуса в поле hex читался бы как уход наружу, и панель закрывалась бы
+//     прямо под курсором.
+function ColorButton({
+  label,
+  picker,
+  initial,
+  swatches,
+  onPick,
+  onReturnFocus,
+  children,
+}: {
+  label: string
+  // Метка поповера для тестов: у кнопки панели уже есть aria-label, дублировать его на
+  // содержимом нельзя.
+  picker: string
+  // С какого цвета открывается выборщик. Текущий цвет выделения сюда не приходит —
+  // модель его не считает (осознанная граница, см. отчёт этапа).
+  initial: string
+  swatches: readonly string[]
+  onPick: (color: string | undefined) => void
+  onReturnFocus: () => void
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          title={label}
+          className={`flex size-7 flex-col items-center justify-center rounded text-xs hover:bg-muted ${
+            open ? 'bg-muted text-foreground' : 'text-muted-foreground'
+          }`}
+        >
+          {children}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        data-format-bar=""
+        data-color-popover={picker}
+        align="start"
+        sideOffset={6}
+        className="w-auto p-2"
+        // Тот же гард, что у самой панели, и по той же причине: клик по любому месту
+        // поповера, у которого нет своего обработчика (поля между контролами, отступы),
+        // иначе уводит фокус из строки в никуда — и панель схлопывается вместе с
+        // выборщиком. Исключение одно — поле hex, оно всплытие останавливает.
+        onMouseDown={(e) => e.preventDefault()}
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault()
+          onReturnFocus()
+        }}
+      >
+        <ColorPicker
+          initial={initial}
+          swatches={swatches}
+          removeLabel={`Убрать ${label.toLowerCase()}`}
+          // Цвет применяется НЕПРЕРЫВНО, пока автор возит мышью: выделение под поповером
+          // перекрашивается сразу, и выбор идёт по результату, а не вслепую. Дробить
+          // историю отмены это не должно — правки текста коалесцируются по тегу блока.
+          onChange={onPick}
+          onRemove={() => {
+            onPick(undefined)
+            setOpen(false)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
   )
 }
 

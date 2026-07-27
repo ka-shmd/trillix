@@ -387,6 +387,17 @@ function selectText(from: number, to: number) {
 const bar = () => document.querySelector('[data-format-bar]')
 const barBtn = (label: string) =>
   document.querySelector(`[data-format-bar] [aria-label="${label}"]`) as HTMLElement
+// Выборщик цвета — поповер за кнопкой панели. Мышью по градиенту `react-colorful` в
+// happy-dom не повозишь (лэйаута нет), поэтому тесты ходят через его же поле hex: путь
+// «значение → модель» у них общий.
+const colorPopover = (which: 'color' | 'bg') =>
+  document.querySelector(`[data-color-popover="${which}"]`)
+const openPicker = (which: 'color' | 'bg') => {
+  fireEvent.click(barBtn(which === 'color' ? 'Цвет текста' : 'Цвет фона'))
+  return document.querySelector(
+    `[data-color-popover="${which}"] [aria-label="Свой цвет"]`,
+  ) as HTMLInputElement
+}
 
 describe('панель форматирования', () => {
   it('появляется над непустым выделением и исчезает, когда его нет', () => {
@@ -427,16 +438,70 @@ describe('панель форматирования', () => {
   it('выборщик цвета кладёт значение в том виде, которого требует валидатор', () => {
     const { store } = reactiveRow('абвгд')
     selectText(1, 3)
-    const input = barBtn('Цвет текста') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '#c026d3' } })
+    fireEvent.change(openPicker('color'), { target: { value: '#C026D3' } })
+    // Нижний регистр — не косметика: `#rrggbb` в нём требует HEX_COLOR схемы, и
+    // выборщик отдаёт то, что автор набрал.
     expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', color: '#c026d3' })
   })
 
   it('фон — та же механика, своё поле спана', () => {
     const { store } = reactiveRow('абвгд')
     selectText(1, 3)
-    fireEvent.change(barBtn('Цвет фона'), { target: { value: '#ffff00' } })
+    fireEvent.change(openPicker('bg'), { target: { value: '#ffff00' } })
     expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', bg: '#ffff00' })
+  })
+
+  it('образец из сетки кладёт свой цвет как есть', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    openPicker('bg')
+    fireEvent.click(document.querySelector('[data-color-popover="bg"] [aria-label="#fef08a"]')!)
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', bg: '#fef08a' })
+  })
+
+  // За каждым движением по выборщику стоит весь путь «модель → DOM строки → стор →
+  // полотно». Событий указателя браузер шлёт больше, чем рисует кадров, поэтому без
+  // склейки бо́льшая часть этой цепочки выполняется впустую — так жест и ощущается
+  // вязким. Здесь предъявляется, что три движения внутри одного кадра дают ОДНУ правку,
+  // и правка эта — по последней позиции, а не по первой.
+  it('перетаскивание по полосе тона считает цвет раз в кадр, по последней позиции', async () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    openPicker('color')
+    const hue = document.querySelector(
+      '[data-color-popover="color"] [aria-label="Тон"]',
+    ) as HTMLElement
+    // Лэйаута у happy-dom нет — область меряет себя нулями и жест бы не начался.
+    hue.getBoundingClientRect = () => new DOMRect(0, 0, 360, 12)
+
+    let writes = 0
+    const stop = store.subscribe(() => {
+      writes++
+    })
+    fireEvent.pointerDown(hue, { pointerId: 1, clientX: 0, clientY: 6 })
+    fireEvent.pointerMove(hue, { pointerId: 1, clientX: 60, clientY: 6 })
+    fireEvent.pointerMove(hue, { pointerId: 1, clientX: 120, clientY: 6 })
+    fireEvent.pointerMove(hue, { pointerId: 1, clientX: 180, clientY: 6 })
+    fireEvent.pointerUp(hue, { pointerId: 1, clientX: 180, clientY: 6 })
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    stop()
+
+    expect(writes).toBe(1)
+    // 180 из 360 — середина полосы, тон бирюзовый. Не чистый `#00ffff`: полоса меняет
+    // ТОЛЬКО тон, насыщенность и яркость остаются от исходного `#1d4ed8`. Значение от
+    // последней позиции, а не от первой (иначе тут был бы синий).
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', color: '#1dd8d8' })
+  })
+
+  it('«Убрать» снимает цвет и возвращает документ к одному куску', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.change(openPicker('color'), { target: { value: '#c026d3' } })
+    // Поповер после выбора остаётся открытым — цвет подбирают, а не угадывают с раза.
+    fireEvent.click(barBtn('Убрать цвет текста'))
+    expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
   })
 })
 
@@ -510,14 +575,43 @@ describe('панель: два дефекта первой браузерной 
     expect(bar()).not.toBeNull()
   })
 
-  // Гард «панель не забирает фокус» висит на контейнере, и его preventDefault отменял
-  // у выборщика цвета САМО ОТКРЫТИЕ палитры: браузер открывает её действием по
-  // умолчанию на mousedown. Кнопка выглядела рабочей и молчала.
-  it.each(['Цвет текста', 'Цвет фона'])('%s: mousedown доходит до выборщика непогашенным', (label) => {
+  // Цвет было невозможно поменять: кнопка была меткой `<label>` вокруг спрятанного
+  // `<input type="color">`. Метка фокус не принимает, панель порталится на body, и
+  // mousedown по метке уводил фокус из строки В НИКУДА — строка на своём blur закрывала
+  // панель ВНУТРИ того же mousedown, а обещанный меткой click приходить было уже некуда.
+  // Палитра не открывалась вовсе.
+  it.each([
+    ['Цвет текста', 'color'],
+    ['Цвет фона', 'bg'],
+  ] as const)('%s: нажатие открывает выборщик, а не гасит панель', (label, which) => {
     reactiveRow('абвгд')
     selectText(1, 3)
-    const notPrevented = fireEvent.mouseDown(barBtn(label))
-    expect(notPrevented).toBe(true)
+
+    // mousedown погашен общим гардом панели → фокус и выделение остаются в строке.
+    const prevented = !fireEvent.mouseDown(barBtn(label))
+    expect(prevented).toBe(true)
+    expect(document.activeElement).toBe(line())
+    expect(bar()).not.toBeNull()
+
+    fireEvent.click(barBtn(label))
+    expect(colorPopover(which)).not.toBeNull()
+  })
+
+  // Поповер порталится ОТДЕЛЬНО от панели, поэтому носит её метку `data-format-bar`:
+  // иначе и слушатель «клик мимо», и blur строки считают уход в него уходом наружу —
+  // панель закрывалась бы прямо под курсором вместе с выборщиком.
+  it('клик внутри выборщика цвета не закрывает панель', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    openPicker('color')
+
+    // Пустое место поповера — там, где своего обработчика нет: именно оно и уводило бы
+    // фокус в никуда, схлопывая панель вместе с выборщиком.
+    const prevented = !fireEvent.mouseDown(colorPopover('color')!)
+    expect(prevented).toBe(true)
+    expect(document.activeElement).toBe(line())
+    expect(bar()).not.toBeNull()
+    expect(colorPopover('color')).not.toBeNull()
   })
 
   it('кнопки марок по-прежнему фокус не забирают', () => {
@@ -525,6 +619,24 @@ describe('панель: два дефекта первой браузерной 
     selectText(1, 3)
     const notPrevented = fireEvent.mouseDown(barBtn('Жирный'))
     expect(notPrevented).toBe(false)
+  })
+
+  // Выборщик цвета шлёт команду форматирования КАДРАМИ, а диапазон и марки при этом не
+  // меняются. Держат это две защиты: снимок выделения не пересоздаётся, когда он тот же
+  // (`sameSel`), и эффекты завязаны на факт «панель открыта», а не на сам снимок. Тест
+  // краснеет, если снять ОБЕ, — каждой по отдельности хватает; вторая не лишняя, потому
+  // что `sameSel` бережёт ещё и ре-рендер панели с пересчётом позиции поповера, а это
+  // отсюда не видно.
+  it('неизменившееся выделение не пересоздаёт снимок и не дёргает эффекты', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+
+    const add = vi.spyOn(document, 'addEventListener')
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    expect(add.mock.calls.filter(([type]) => type === 'wheel')).toHaveLength(0)
+    add.mockRestore()
   })
 })
 
