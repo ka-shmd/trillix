@@ -58,6 +58,16 @@ export function FormatBar({
   // keepFocus — единственная причина, по которой панель вообще работает (правило 1).
   const keepFocus = (e: React.MouseEvent) => e.preventDefault()
 
+  // ownFocus — исключение из правила 1 для контролов, которым фокус НУЖЕН: поле адреса
+  // и нативные выборщики цвета. `stopPropagation`, а не отсутствие гарда: гард висит на
+  // контейнере, и без остановки всплытия его `preventDefault` отменил бы у выборщика
+  // цвета само открытие (браузер открывает палитру действием по умолчанию на
+  // mousedown) — кнопка выглядела бы рабочей и молчала.
+  //
+  // Схлопывание живого выделения здесь безвредно: диапазон уже лежит в состоянии
+  // строки, и команды форматирования читают именно его.
+  const ownFocus = (e: React.MouseEvent) => e.stopPropagation()
+
   return createPortal(
     <div
       data-format-bar=""
@@ -109,18 +119,21 @@ export function FormatBar({
           <label
             className="flex size-7 cursor-pointer items-center justify-center rounded text-xs hover:bg-muted"
             title="Цвет текста"
+            onMouseDown={ownFocus}
           >
             <span aria-hidden="true">A</span>
             <input
               type="color"
               aria-label="Цвет текста"
               className="sr-only"
+              onMouseDown={ownFocus}
               onChange={(e) => onColor(e.target.value)}
             />
           </label>
           <label
             className="flex size-7 cursor-pointer items-center justify-center rounded text-xs hover:bg-muted"
             title="Цвет фона"
+            onMouseDown={ownFocus}
           >
             <span aria-hidden="true" className="rounded-sm bg-muted px-1">
               A
@@ -129,6 +142,7 @@ export function FormatBar({
               type="color"
               aria-label="Цвет фона"
               className="sr-only"
+              onMouseDown={ownFocus}
               onChange={(e) => onBg(e.target.value)}
             />
           </label>

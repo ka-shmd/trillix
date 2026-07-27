@@ -104,6 +104,26 @@ export function RichLine({
     })
   }, [])
 
+  // Клик мимо строки и мимо панели закрывает панель. Отдельный слушатель нужен потому,
+  // что blur самой строки этот случай не покрывает: когда открыто поле адреса, фокус уже
+  // не в строке, а в поле, и её blur давно прошёл. Без этого меню ссылки оставалось
+  // висеть после клика в пустоту (найдено владельцем в браузере).
+  useEffect(() => {
+    if (!sel) return
+    const doc = ref.current?.ownerDocument
+    if (!doc) return
+    const onDown = (e: Event) => {
+      const t = e.target
+      if (!(t instanceof Node)) return
+      if (ref.current?.contains(t)) return
+      if (t instanceof Element && t.closest('[data-format-bar]')) return
+      setSel(null)
+      setLinkOpen(false)
+    }
+    doc.addEventListener('mousedown', onDown)
+    return () => doc.removeEventListener('mousedown', onDown)
+  }, [sel])
+
   // Выделение меняют и мышь, и клавиатура, и события у них разные — один
   // `selectionchange` на документе покрывает оба.
   useEffect(() => {

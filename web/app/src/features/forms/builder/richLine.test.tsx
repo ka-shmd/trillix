@@ -483,3 +483,47 @@ describe('ссылка (панель + Mod+K)', () => {
     expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
   })
 })
+
+// Оба дефекта найдены владельцем в браузере 2026-07-27 — тестами они не ловились,
+// потому что оба про доставку события мыши, а не про модель.
+describe('панель: два дефекта первой браузерной проверки', () => {
+  it('клик мимо строки и мимо панели закрывает меню ссылки', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.keyDown(line(), { code: 'KeyK', ctrlKey: true })
+    expect(barBtn('Адрес ссылки')).not.toBeNull()
+
+    // Blur самой строки этот случай не покрывает: фокус уже в поле адреса, и её blur
+    // давно прошёл. Закрывать обязан отдельный слушатель на документе.
+    act(() => {
+      fireEvent.mouseDown(document.body)
+    })
+    expect(bar()).toBeNull()
+  })
+
+  it('клик по панели её НЕ закрывает', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    act(() => {
+      fireEvent.mouseDown(barBtn('Жирный'))
+    })
+    expect(bar()).not.toBeNull()
+  })
+
+  // Гард «панель не забирает фокус» висит на контейнере, и его preventDefault отменял
+  // у выборщика цвета САМО ОТКРЫТИЕ палитры: браузер открывает её действием по
+  // умолчанию на mousedown. Кнопка выглядела рабочей и молчала.
+  it.each(['Цвет текста', 'Цвет фона'])('%s: mousedown доходит до выборщика непогашенным', (label) => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    const notPrevented = fireEvent.mouseDown(barBtn(label))
+    expect(notPrevented).toBe(true)
+  })
+
+  it('кнопки марок по-прежнему фокус не забирают', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    const notPrevented = fireEvent.mouseDown(barBtn('Жирный'))
+    expect(notPrevented).toBe(false)
+  })
+})
