@@ -1,77 +1,29 @@
 // Замок прокрутки на время, пока открыта панель форматирования (фаза 14, этап 14.4;
 // решение владельца 2026-07-27).
 //
-// Зачем: панель стоит на `position: fixed` по координатам выделения, снятым один раз,
-// при появлении. Прокрутка увозит текст, а панель остаётся висеть отдельно от того, к
-// чему относится.
+// Зачем: панель стоит на `position: fixed` по координатам выделения, снятым один раз.
+// Прокрутка увозит текст, а панель остаётся висеть отдельно от того, к чему относится.
 //
-// **Замок НЕ угадывает, какой узел прокручивается, — и это главное.** Первая версия
-// вешала `overflow: hidden` на один помеченный контейнер (`<main>` кабинета), и
-// страница продолжала скроллиться: класс `overflow-auto` на элементе ещё не означает,
-// что прокручивается именно он — если высота не ограничена, элемент растёт по контенту,
-// а едет документ. Проверить это тестом нельзя (лэйаута у happy-dom нет), поэтому
-// правильный ответ — не выбирать один узел, а закрыть все пути сразу:
+// **Ничего не прячем и не двигаем — только гасим события.** Полоса прокрутки остаётся
+// на месте, поэтому лэйаут не меняется вовсе: ни сдвига содержимого, ни исчезающего
+// хедера. Предыдущие две версии вешали `overflow: hidden` и пытались компенсировать
+// исчезнувшую полосу паддингом — обе давали дёрганье, вторая вдобавок ломала шапку.
+// Компенсировать нечего, если ничего не убирать.
 //
-//   1. `overflow: hidden` на документе, body и помеченном контейнере — что бы из них
-//      ни оказалось настоящим скроллером, оно заперто;
-//   2. `wheel` и `touchmove` гасятся на фазе перехвата — это покрывает колесо и тач
-//      внутри любого вложенного скроллера, до которого замок по overflow не дотянулся.
-//
-// Клавиатурная прокрутка (PageUp/PageDown, пробел) не гасится намеренно: каретка в этот
-// момент в тексте, и эти клавиши принадлежат ему, а не странице.
+// Цена решения названа вслух: перетаскивание самой полосы мышью прокрутку не отменяет —
+// у этого жеста нет отменяемого события. Колесо, тачпад и тач закрыты; если окажется,
+// что таскают именно полосу, лечение другое — не запирать прокрутку, а пересчитывать
+// позицию панели на кадрах прокрутки.
 export function lockScroll(from: HTMLElement): () => void {
   const doc = from.ownerDocument
-  const marked = from.closest<HTMLElement>('[data-scroll-root]')
-  const targets = [doc.documentElement, doc.body, marked].filter(
-    (el): el is HTMLElement => el !== null,
-  )
-
-  // Ширина исчезающей полосы прокрутки. У обычного элемента она внутри его бокса, и
-  // разницы offsetWidth/clientWidth достаточно. У КОРНЕВОГО элемента — нет: полоса окна
-  // лежит вне его бокса, и та же разница даёт ноль. Именно поэтому первая версия
-  // компенсации не работала и экран дёргался — считалось ноль, компенсировать было
-  // «нечего». Для корня ширину даёт только innerWidth минус clientWidth.
-  const gapOf = (el: HTMLElement): number =>
-    el === doc.documentElement
-      ? (doc.defaultView?.innerWidth ?? el.clientWidth) - el.clientWidth
-      : el.offsetWidth - el.clientWidth
-
-  // Компенсация корневой полосы уходит на body: паддинг на <html> сам сдвигает всё
-  // содержимое документа — то самое дёрганье, только в другую сторону.
-  const padTargetOf = (el: HTMLElement): HTMLElement =>
-    el === doc.documentElement ? doc.body : el
-
-  const padded = new Set<HTMLElement>()
-  const restore = targets.map((el) => {
-    const prevOverflow = el.style.overflow
-    el.style.overflow = 'hidden'
-
-    const gap = gapOf(el)
-    const padTarget = padTargetOf(el)
-    // Паддинг ставится один раз на элемент: у корня и body цель компенсации общая, и
-    // без этой защиты body получил бы двойной отступ — дёрганье вдвое сильнее.
-    const pad = gap > 0 && !padded.has(padTarget) ? padTarget : null
-    const prevPadding = pad?.style.paddingRight
-    if (pad) {
-      padded.add(pad)
-      pad.style.paddingRight = `${gap}px`
-    }
-
-    return () => {
-      el.style.overflow = prevOverflow
-      if (pad) pad.style.paddingRight = prevPadding ?? ''
-    }
-  })
-
-  // passive: false обязателен — иначе браузер игнорирует preventDefault у wheel/touchmove
-  // и замок молча не работает; capture — чтобы успеть раньше вложенных обработчиков.
   const stop = (e: Event) => e.preventDefault()
+  // passive: false обязателен — иначе браузер игнорирует preventDefault у wheel и
+  // touchmove, и замок молча не работает. capture — чтобы успеть раньше вложенных
+  // обработчиков любого внутреннего скроллера.
   const opts = { passive: false, capture: true } as const
   doc.addEventListener('wheel', stop, opts)
   doc.addEventListener('touchmove', stop, opts)
-
   return () => {
-    for (const undo of restore) undo()
     doc.removeEventListener('wheel', stop, opts)
     doc.removeEventListener('touchmove', stop, opts)
   }

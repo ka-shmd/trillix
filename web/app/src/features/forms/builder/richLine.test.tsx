@@ -13,7 +13,6 @@ import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
 import { richCaret, setCaret, setSelection } from './richCaret'
 import { spansFromDom } from './richText'
-import { lockScroll } from './scrollLock'
 
 // Текстовая поверхность строки полотна (фаза 14, этап 14.3). Главное утверждение,
 // которое здесь предъявляется: замена <textarea> на contenteditable НЕ переписала
@@ -531,44 +530,10 @@ describe('панель: два дефекта первой браузерной 
 
 // Замок прокрутки (решение владельца 2026-07-27): панель стоит по координатам
 // выделения, снятым один раз, и прокрутка увезла бы текст из-под неё.
+//
+// Замок НИЧЕГО не прячет и не двигает — только гасит события. Поэтому и проверять тут
+// нечего, кроме них: лэйаут при открытии панели не меняется вовсе.
 describe('замок прокрутки на время панели', () => {
-  it('запирает контейнер прокрутки, пока панель открыта, и отпускает после', () => {
-    reactiveRow('абвгд')
-    expect(document.body.style.overflow).toBe('')
-
-    selectText(1, 3)
-    expect(document.body.style.overflow).toBe('hidden')
-
-    setCaret(line(), 2)
-    act(() => {
-      document.dispatchEvent(new Event('selectionchange'))
-    })
-    expect(document.body.style.overflow).toBe('')
-  })
-
-  // Первая версия замка вешала overflow на ОДИН помеченный контейнер и не работала:
-  // класс `overflow-auto` на элементе ещё не значит, что прокручивается именно он.
-  // Поэтому запираются все кандидаты сразу, а не выбранный угадыванием.
-  it('запирает документ, body и помеченный контейнер разом', () => {
-    const root = document.createElement('div')
-    root.setAttribute('data-scroll-root', '')
-    document.body.appendChild(root)
-    const el = document.createElement('div')
-    root.appendChild(el)
-
-    const unlock = lockScroll(el)
-    expect(root.style.overflow).toBe('hidden')
-    expect(document.body.style.overflow).toBe('hidden')
-    expect(document.documentElement.style.overflow).toBe('hidden')
-    unlock()
-    expect(root.style.overflow).toBe('')
-    expect(document.body.style.overflow).toBe('')
-    expect(document.documentElement.style.overflow).toBe('')
-    root.remove()
-  })
-
-  // Второй путь: колесо и тач гасятся напрямую — они докручивают то, до чего замок по
-  // overflow не дотянулся (вложенные скроллеры).
   it('гасит колесо и тач, пока панель открыта, и отпускает после', () => {
     reactiveRow('абвгд')
     expect(fireEvent.wheel(document.body)).toBe(true)
@@ -583,52 +548,16 @@ describe('замок прокрутки на время панели', () => {
     })
     expect(fireEvent.wheel(document.body)).toBe(true)
   })
-})
 
-// Компенсация исчезающей полосы прокрутки. Дефект найден владельцем в браузере
-// 2026-07-27: экран дёргался вбок в момент появления панели. Причина — ширина полосы
-// считалась как offsetWidth − clientWidth, а у КОРНЕВОГО элемента полоса лежит вне его
-// бокса, и эта разница даёт ноль: компенсировать было «нечего».
-describe('замок прокрутки: компенсация полосы', () => {
-  const fake = (el: Element, prop: string, value: number) =>
-    Object.defineProperty(el, prop, { value, configurable: true })
-
-  afterEach(() => {
-    document.body.style.paddingRight = ''
-  })
-
-  it('ширина корневой полосы берётся из innerWidth, а компенсация уходит на body', () => {
-    fake(document.documentElement, 'clientWidth', 780)
-    window.innerWidth = 800
-
-    const unlock = lockScroll(document.body)
-    expect(document.body.style.paddingRight).toBe('20px')
-    // На сам <html> паддинг не ставится: он сдвинул бы всё содержимое документа —
-    // то же дёрганье, только в другую сторону.
-    expect(document.documentElement.style.paddingRight).toBe('')
-
-    unlock()
-    expect(document.body.style.paddingRight).toBe('')
-  })
-
-  it('без полосы прокрутки паддинг не появляется вовсе', () => {
-    fake(document.documentElement, 'clientWidth', 800)
-    window.innerWidth = 800
-
-    const unlock = lockScroll(document.body)
-    expect(document.body.style.paddingRight).toBe('')
-    unlock()
-  })
-
-  it('body не получает двойной отступ, когда корень и body заперты оба', () => {
-    fake(document.documentElement, 'clientWidth', 780)
-    window.innerWidth = 800
-    fake(document.body, 'offsetWidth', 800)
-    fake(document.body, 'clientWidth', 780)
-
-    const unlock = lockScroll(document.body)
-    expect(document.body.style.paddingRight).toBe('20px')
-    unlock()
-    expect(document.body.style.paddingRight).toBe('')
+  // Лэйаут не трогается вовсе — ни overflow, ни отступов. Две предыдущие версии
+  // прятали полосу прокрутки и компенсировали её паддингом: обе давали дёрганье
+  // экрана, вторая вдобавок ломала шапку кабинета (найдено владельцем в браузере).
+  it('не трогает ни overflow, ни отступы', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    for (const el of [document.documentElement, document.body]) {
+      expect(el.style.overflow).toBe('')
+      expect(el.style.paddingRight).toBe('')
+    }
   })
 })
