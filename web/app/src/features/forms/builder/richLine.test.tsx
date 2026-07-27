@@ -546,9 +546,10 @@ describe('замок прокрутки на время панели', () => {
     expect(document.body.style.overflow).toBe('')
   })
 
-  // Замок ищет РЕАЛЬНЫЙ контейнер прокрутки по метке: кабинет скроллит <main>, а не
-  // окно, и overflow на body там не сделал бы ничего.
-  it('вешается на помеченный контейнер, а не на body', () => {
+  // Первая версия замка вешала overflow на ОДИН помеченный контейнер и не работала:
+  // класс `overflow-auto` на элементе ещё не значит, что прокручивается именно он.
+  // Поэтому запираются все кандидаты сразу, а не выбранный угадыванием.
+  it('запирает документ, body и помеченный контейнер разом', () => {
     const root = document.createElement('div')
     root.setAttribute('data-scroll-root', '')
     document.body.appendChild(root)
@@ -557,9 +558,29 @@ describe('замок прокрутки на время панели', () => {
 
     const unlock = lockScroll(el)
     expect(root.style.overflow).toBe('hidden')
-    expect(document.body.style.overflow).toBe('')
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(document.documentElement.style.overflow).toBe('hidden')
     unlock()
     expect(root.style.overflow).toBe('')
+    expect(document.body.style.overflow).toBe('')
+    expect(document.documentElement.style.overflow).toBe('')
     root.remove()
+  })
+
+  // Второй путь: колесо и тач гасятся напрямую — они докручивают то, до чего замок по
+  // overflow не дотянулся (вложенные скроллеры).
+  it('гасит колесо и тач, пока панель открыта, и отпускает после', () => {
+    reactiveRow('абвгд')
+    expect(fireEvent.wheel(document.body)).toBe(true)
+
+    selectText(1, 3)
+    expect(fireEvent.wheel(document.body)).toBe(false)
+    expect(fireEvent.touchMove(document.body)).toBe(false)
+
+    setCaret(line(), 2)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    expect(fireEvent.wheel(document.body)).toBe(true)
   })
 })
