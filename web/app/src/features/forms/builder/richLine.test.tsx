@@ -13,6 +13,7 @@ import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
 import { richCaret, setCaret, setSelection } from './richCaret'
 import { spansFromDom } from './richText'
+import { lockScroll } from './scrollLock'
 
 // Текстовая поверхность строки полотна (фаза 14, этап 14.3). Главное утверждение,
 // которое здесь предъявляется: замена <textarea> на contenteditable НЕ переписала
@@ -525,5 +526,40 @@ describe('панель: два дефекта первой браузерной 
     selectText(1, 3)
     const notPrevented = fireEvent.mouseDown(barBtn('Жирный'))
     expect(notPrevented).toBe(false)
+  })
+})
+
+// Замок прокрутки (решение владельца 2026-07-27): панель стоит по координатам
+// выделения, снятым один раз, и прокрутка увезла бы текст из-под неё.
+describe('замок прокрутки на время панели', () => {
+  it('запирает контейнер прокрутки, пока панель открыта, и отпускает после', () => {
+    reactiveRow('абвгд')
+    expect(document.body.style.overflow).toBe('')
+
+    selectText(1, 3)
+    expect(document.body.style.overflow).toBe('hidden')
+
+    setCaret(line(), 2)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+    })
+    expect(document.body.style.overflow).toBe('')
+  })
+
+  // Замок ищет РЕАЛЬНЫЙ контейнер прокрутки по метке: кабинет скроллит <main>, а не
+  // окно, и overflow на body там не сделал бы ничего.
+  it('вешается на помеченный контейнер, а не на body', () => {
+    const root = document.createElement('div')
+    root.setAttribute('data-scroll-root', '')
+    document.body.appendChild(root)
+    const el = document.createElement('div')
+    root.appendChild(el)
+
+    const unlock = lockScroll(el)
+    expect(root.style.overflow).toBe('hidden')
+    expect(document.body.style.overflow).toBe('')
+    unlock()
+    expect(root.style.overflow).toBe('')
+    root.remove()
   })
 })

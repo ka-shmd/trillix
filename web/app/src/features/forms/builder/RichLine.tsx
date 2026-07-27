@@ -35,6 +35,7 @@ import {
 } from './richText'
 import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
 import { FormatBar } from './FormatBar'
+import { lockScroll } from './scrollLock'
 import './richLine.css'
 
 export interface RichLineProps {
@@ -103,6 +104,15 @@ export function RichLine({
       href: hrefThroughout(spans, range.from, range.to),
     })
   }, [])
+
+  // Пока панель открыта, прокрутка заперта: панель стоит по координатам выделения,
+  // снятым один раз, и прокрутка увезла бы текст из-под неё (решение владельца
+  // 2026-07-27; альтернатива — пересчитывать позицию на каждом кадре).
+  useEffect(() => {
+    const el = ref.current
+    if (!sel || !el) return
+    return lockScroll(el)
+  }, [sel])
 
   // Клик мимо строки и мимо панели закрывает панель. Отдельный слушатель нужен потому,
   // что blur самой строки этот случай не покрывает: когда открыто поле адреса, фокус уже

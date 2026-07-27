@@ -57,7 +57,11 @@ function AppLayout() {
         </header>
         {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
             ответам — обычные поля. */}
-        <main className="flex-1 overflow-auto">
+        {/* data-scroll-root — метка настоящего контейнера прокрутки кабинета: окно тут
+            не скроллится, скроллится этот <main>. Её ищет замок прокрутки полотна
+            (builder/scrollLock.ts) — без метки он вешал бы overflow:hidden на body и
+            молча ничего не делал. Переносишь прокрутку в другой узел — переноси метку. */}
+        <main data-scroll-root className="flex-1 overflow-auto">
           {!user.emailVerified && <VerifyEmailBanner />}
           <HeaderSlotContext.Provider value={headerSlot}>
             <Outlet />
