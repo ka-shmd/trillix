@@ -1,19 +1,18 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
+import { plainText, type Span } from '@entities/formSchema'
 import {
   caretOffset,
   hasMarkThroughout,
   markClass,
   normalize,
-  plainText,
   pointAt,
   restyle,
   setColor,
   spansFromDom,
   spansToDom,
   toggleMark,
-  type Span,
-} from './spans'
+} from './richText'
 
 // ПРОБА ЭТАПА 14.0 — модель богатого текста. Проверяется ровно то, на чём стоит вся
 // конструкция: разрезание спанов по границам выделения, канон (склейка соседей),

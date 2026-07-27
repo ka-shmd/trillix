@@ -35,7 +35,7 @@ import {
   SCALE_UPPER_BOUND,
   scaleRange,
   supportsPlaceholder,
-  textFromString,
+  type Span,
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
@@ -46,9 +46,9 @@ import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { textCaret } from './caret'
-import { RichLine } from './spike/RichLine'
-import { richCaret } from './spike/richCaret'
-import { RICH_TEXT_SPIKE } from './spike/flag'
+import { RichLine } from './RichLine'
+import { richCaret } from './richCaret'
+import { cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
@@ -360,13 +360,14 @@ export function BlockRow({
   // предыдущим набором в один шаг истории (тег ub:id:text), поэтому лишнего шага
   // undo вырезание не добавляет. changeBlockType/makeQuestion читают уже очищенный
   // текст из стора (подпись поля = то, что осталось), см. pickType.
+  //
+  // Вырезание идёт через `restyle` по координатам плоского текста, а не склейкой строк:
+  // «/» и фильтр могли быть набраны внутри размеченного куска, и подъём строки заново
+  // стёр бы оформление всей подписи.
   function pickSlash(item: MenuItem) {
     if (slash) {
-      const value = plainText(block.text)
       const end = slash.start + 1 + slash.query.length
-      updateBlock(block.id, {
-        text: textFromString(value.slice(0, slash.start) + value.slice(end)),
-      })
+      updateBlock(block.id, { text: cutRange(block.text ?? [], slash.start, end) })
     }
     pickType(item)
   }
@@ -377,15 +378,12 @@ export function BlockRow({
   // кареткой открывает его на ЛЮБОМ неотвечаемом блоке (isContent: подписи title/label,
   // heading, абзац text), а не только на абзаце. Не открывает на consent: тот текст
   // несёт, но отвечаем — «/» там литерал. Печать всегда идёт в текст.
-  // Принимает уже разобранные текст и позицию каретки, а не событие: у textarea это
-  // value/selectionStart, у contenteditable — обход текстовых узлов (проба 14.0), и
-  // логика слеша от разницы не зависит.
-  //
-  // Пишет ОДИН кусок без разметки: поверхности этапа 14.1 (textarea и проба) марок не
-  // производят. Настоящие спаны начнёт отдавать rich-поверхность этапа 14.3 — тогда
-  // сюда приедет её вывод, а не подъём строки.
-  function onLabelChange(value: string, pos: number) {
-    updateBlock(block.id, { text: textFromString(value) })
+  // Принимает уже разобранную МОДЕЛЬ и позицию каретки в плоском тексте, а не событие:
+  // логика слеша живёт в координатах текста и о поверхности ничего не знает — ровно
+  // поэтому переход textarea → contenteditable её не переписал.
+  function onLabelChange(spans: Span[], pos: number) {
+    updateBlock(block.id, { text: spans })
+    const value = plainText(spans)
     if (slash) {
       if (pos <= slash.start || value[slash.start] !== '/') return closeSlash()
       const query = value.slice(slash.start + 1, pos)
@@ -546,52 +544,24 @@ export function BlockRow({
               {isConsent && (
                 <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
               )}
-              {RICH_TEXT_SPIKE ? (
-                // Проба 14.0: та же строка на contenteditable. Обработчики те же —
-                // подстановка поверхности не переписывает поток, и это ровно то, что
-                // проба и проверяет.
-                <RichLine
-                  elRef={(el) => {
-                    labelRef.current = el
-                  }}
-                  value={plainText(block.text)}
-                  placeholder={captionPh}
-                  onChange={onLabelChange}
-                  onFocus={() => {
-                    setLabelFocused(true)
-                    textFocus.onFocus()
-                  }}
-                  onBlur={(e) => {
-                    setLabelFocused(false)
-                    textFocus.onBlur(e)
-                  }}
-                  onKeyDown={onLabelKeyDown}
-                  className={`block w-full bg-transparent outline-none ${captionCls}`}
-                />
-              ) : (
-                <textarea
-                  ref={labelRef as React.RefObject<HTMLTextAreaElement>}
-                  rows={1}
-                  value={plainText(block.text)}
-                  placeholder={captionPh}
-                  onChange={(e) =>
-                    onLabelChange(e.target.value, e.target.selectionStart ?? e.target.value.length)
-                  }
-                  onFocus={() => {
-                    setLabelFocused(true)
-                    textFocus.onFocus()
-                  }}
-                  onBlur={(e) => {
-                    setLabelFocused(false)
-                    textFocus.onBlur(e)
-                  }}
-                  onKeyDown={onLabelKeyDown}
-                  // block: textarea по умолчанию inline-block и оставляет под собой
-                  // ~7px базлайн-просвета (line-box строки-подписи выше textarea) — он
-                  // раздувал ритм подпись→поле (13.3). display:block его убирает.
-                  className={`block w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${captionCls}`}
-                />
-              )}
+              <RichLine
+                elRef={(el) => {
+                  labelRef.current = el
+                }}
+                value={block.text ?? []}
+                placeholder={captionPh}
+                onChange={onLabelChange}
+                onFocus={() => {
+                  setLabelFocused(true)
+                  textFocus.onFocus()
+                }}
+                onBlur={(e) => {
+                  setLabelFocused(false)
+                  textFocus.onBlur(e)
+                }}
+                onKeyDown={onLabelKeyDown}
+                className={`block w-full bg-transparent outline-none ${captionCls}`}
+              />
             </div>
           </div>
         </SlashMenu>

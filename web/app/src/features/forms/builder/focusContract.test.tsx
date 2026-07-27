@@ -1,27 +1,21 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-// Набор написан под <textarea> (хелперы ищут поверхность как
-// `document.querySelector('textarea')`) и переписывается под богатый текст этапом 14.3.
-// До тех пор он ПРИБИВАЕТ себе поверхность гвоздём, а не читает переключатель пробы:
-// иначе прогон краснел бы от того, что кто-то включил пробу для браузера, — то есть от
-// состояния чужого рабочего дерева, а не от кода. Проба точно так же прибивает себе
-// свою (`spike/richLine.test.tsx`).
-vi.mock('./spike/flag', () => ({ RICH_TEXT_SPIKE: false }))
 import { cleanup, fireEvent, render } from '@testing-library/react'
-import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, plainText, textFromString } from '@entities/formSchema'
+import { type FormSchema, textFromString } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
+import { richCaret } from './richCaret'
 
 // Контракт фокуса полотна (§2.1, §2.4): каждая строка регистрирует фокус-цель, и
-// focusBlock(id, edge) ставит document.activeElement на её поверхность — textarea
-// подписи, инпут плейсхолдера/варианта или объектную остановку. Рендерим НАСТОЯЩИЕ
+// focusBlock(id, edge) ставит document.activeElement на её поверхность — текстовую
+// строку подписи (contenteditable с этапа 14.3), инпут плейсхолдера/варианта или
+// объектную остановку. Рендерим НАСТОЯЩИЕ
 // BlockRow под happy-dom и проверяем activeElement. Так демо-критерий этапа
 // («каретка нигде не в body») закрыт быстрым юнитом, а не только e2e.
 
@@ -71,7 +65,7 @@ function setup(schema: FormSchema) {
 const el = () => document.activeElement as HTMLElement
 
 describe('контракт фокус-целей строк (§2.1)', () => {
-  it('подпись/контент/consent — фокус на textarea своего текста', () => {
+  it('подпись/контент/consent — фокус на текстовую поверхность своего текста', () => {
     const { engine } = setup({
       schemaVersion: 3,
       blocks: [
@@ -86,8 +80,11 @@ describe('контракт фокус-целей строк (§2.1)', () => {
       ['cons', 'Согласен'],
     ]) {
       engine.focusBlock(id!, 'end')
-      expect(el().tagName).toBe('TEXTAREA')
-      expect((el() as HTMLTextAreaElement).value).toBe(text)
+      // С этапа 14.3 текстовая поверхность — contenteditable, а не <textarea>. Сам
+      // контракт от этого не изменился: движок ставит фокус на поверхность строки, и
+      // проверяется именно это, а не тег.
+      expect(el().dataset.richLine).toBeDefined()
+      expect(el().textContent).toBe(text)
     }
   })
 
@@ -97,9 +94,11 @@ describe('контракт фокус-целей строк (§2.1)', () => {
       blocks: [{ id: 'title', groupId: 'g1', type: 'title', text: textFromString('Привет') }],
     })
     engine.focusBlock('title', 'start')
-    expect((el() as HTMLTextAreaElement).selectionStart).toBe(0)
+    expect(richCaret(el()).text().caret).toBe(0)
+    expect(richCaret(el()).caretAtStart()).toBe(true)
     engine.focusBlock('title', 'end')
-    expect((el() as HTMLTextAreaElement).selectionStart).toBe(6)
+    expect(richCaret(el()).text().caret).toBe(6)
+    expect(richCaret(el()).caretAtEnd()).toBe(true)
   })
 
   it('текстовые поля — фокус на инпут плейсхолдера', () => {
@@ -392,120 +391,11 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
   })
 })
 
-// Инлайн-слеш (§3.5, TD-33): «/» — литерал в тексте, меню фильтруется набором,
-// несовпадение/Esc закрывают с сохранением текста, выбор вырезает «/»+фильтр и
-// применяет тип. В отличие от статичного setup здесь строка ПОДПИСАНА на стор
-// (reactiveRow), чтобы value textarea отражал набор — иначе вырезание и конверсия
-// (читают текущий block.text) не проверить. Один текстовый (text) блок.
-function reactiveRow(text = '') {
-  const store = createBuilderStore()
-  store.getState().hydrate({
-    schemaVersion: 3,
-    blocks: [{ id: 't', groupId: 'g1', type: 'text', text: textFromString(text) }],
-  })
-  const engine = createFocusEngine()
-  function Row() {
-    const blocks = useStore(store, (s) => s.blocks)
-    const b = blocks[0]
-    if (!b) return null
-    return (
-      <BlockRow
-        block={b}
-        formId="f"
-        groupHandle={null}
-        openMenuOnMount={false}
-        onAddBelow={vi.fn()}
-        onInsertBelow={vi.fn()}
-        onBackspaceAtStart={vi.fn()}
-        onBackspaceDelete={vi.fn()}
-        onDeleteBlock={vi.fn()}
-        onAnswerAction={vi.fn()}
-        onArrow={vi.fn()}
-        onRowShift={vi.fn()}
-      />
-    )
-  }
-  render(
-    <BuilderStoreContext.Provider value={store}>
-      <FocusEngineProvider value={engine}>
-        <DndContext>
-          <SortableContext items={['t']}>
-            <Row />
-          </SortableContext>
-        </DndContext>
-      </FocusEngineProvider>
-    </BuilderStoreContext.Provider>,
-  )
-  return { store, engine }
-}
-
-// type — эмулирует набор в textarea ПОСИМВОЛЬНО (дописывает к текущему значению),
-// каретка в конец. Посимвольность важна: инлайн-слеш триггерится, только когда «/»
-// стоит прямо перед кареткой (§3.5), — вставка всей строки разом это не воспроизводит.
-function type(value: string) {
-  const ta = document.querySelector('textarea')!
-  let cur = ta.value
-  for (const ch of value.slice(cur.length)) {
-    cur += ch
-    fireEvent.change(ta, {
-      target: { value: cur, selectionStart: cur.length, selectionEnd: cur.length },
-    })
-  }
-}
-
-describe('инлайн-слеш (§3.5, TD-33)', () => {
-  it('«/» открывает меню; литерал остаётся в тексте, каретка не покидает строку', () => {
-    const { store } = reactiveRow()
-    const ta = document.querySelector('textarea')!
-    ta.focus()
-    type('/')
-    expect(plainText(store.getState().blocks[0]!.text)).toBe('/') // «/» в тексте, не проглочен
-    expect(document.body.textContent).toContain('Короткий ответ') // меню открыто
-    expect(document.activeElement).toBe(ta) // фокус в textarea, а не в поповере
-  })
-
-  it('набор после «/» фильтрует пункты', () => {
-    reactiveRow()
-    type('/email')
-    const menu = document.querySelector('[role="listbox"]')!.textContent ?? ''
-    expect(menu).toContain('Email')
-    expect(menu).not.toContain('Дата')
-  })
-
-  it('несовпадение («и/или») закрывает меню, текст сохраняется', () => {
-    const { store } = reactiveRow('и')
-    type('и/или')
-    expect(plainText(store.getState().blocks[0]!.text)).toBe('и/или')
-    expect(document.querySelector('[role="listbox"]')).toBeNull() // меню закрыто
-  })
-
-  it('Esc закрывает меню, «/» остаётся в тексте', () => {
-    const { store } = reactiveRow()
-    type('/')
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Escape', code: 'Escape' })
-    expect(document.querySelector('[role="listbox"]')).toBeNull()
-    expect(plainText(store.getState().blocks[0]!.text)).toBe('/')
-  })
-
-  it('выбор вырезает «/»+фильтр и конвертирует (Вопрос: подпись+поле)', () => {
-    const { store } = reactiveRow()
-    type('/email')
-    // ArrowDown не нужен — активен первый пункт (q_email, раздел «Вопросы»).
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
-    const blocks = store.getState().blocks
-    expect(blocks.map((b) => b.type)).toEqual(['title', 'email'])
-    expect(plainText(blocks[0]!.text)).toBe('') // «/email» вырезан целиком
-  })
-
-  it('текст перед «/» становится подписью поля', () => {
-    const { store } = reactiveRow('Возраст')
-    type('Возраст/')
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
-    const blocks = store.getState().blocks
-    expect(blocks[0]!.type).toBe('title')
-    expect(plainText(blocks[0]!.text)).toBe('Возраст') // «/» вырезан, текст-подпись сохранён
-  })
-})
+// Инлайн-слеш (§3.5, TD-33) переехал в `richLine.test.tsx` — целиком, теми же шестью
+// проверками. Причина: с этапа 14.3 они требуют посимвольного набора в contenteditable
+// (дописать символ в текстовый узел, подвинуть каретку, послать `input`), а такой
+// хелпер — это уже про поверхность, а не про контракт фокуса. Держать его в двух
+// наборах значило бы держать две его версии.
 
 describe('Cmd+. — меню действий блока (§3.3)', () => {
   it('открывает поповер с действиями (дублировать/сменить тип/удалить)', () => {

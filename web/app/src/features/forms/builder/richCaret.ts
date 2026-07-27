@@ -1,10 +1,10 @@
-// ПРОБА ЭТАПА 14.0. Реализация адаптера каретки поверх contenteditable — та самая
+// Реализация адаптера каретки поверх contenteditable (фаза 14, этап 14.3) — та самая
 // замена, ради возможности которой в фазе 13 вводился `caret.ts` (§2.6
-// `DESIGN-canvas-rework.md`). Если проба удалась, поток клавиш строки и фокус-движок
-// остаются нетронутыми: они говорят только с интерфейсом `CaretAdapter`.
+// `DESIGN-canvas-rework.md`). Обещание адаптера выполнено: поток клавиш строки и
+// фокус-движок не переписывались — они говорят только с интерфейсом `CaretAdapter`.
 
-import type { CaretAdapter } from '../caret'
-import { caretOffset, pointAt } from './spans'
+import type { CaretAdapter } from './caret'
+import { caretOffset, pointAt } from './richText'
 
 const win = (el: HTMLElement) => el.ownerDocument.defaultView
 const plainLen = (el: HTMLElement) => (el.textContent ?? '').length

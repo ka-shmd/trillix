@@ -1,33 +1,25 @@
-// ПРОБА ЭТАПА 14.0 (DEV-PLAN, фаза 14). Модель богатого текста и её перевод в DOM и
-// обратно. Проба отвечает на один вопрос: живёт ли contenteditable за адаптером каретки,
-// не ломая клавиатурный поток фазы 13 и не роняя каретку на ре-рендере полотна. В
-// поставку каталог `spike/` не входит: подтвердится — переезжает в контракт (этап 14.1)
-// и в `@fields`, не подтвердится — удаляется целиком вместе с решением.
+import { MARKS, type Mark, type Span } from '@entities/formSchema'
+
+// Редакторская сторона богатого текста (фаза 14, этап 14.3): операции над моделью и
+// перевод модели в DOM и обратно. Сам ФОРМАТ живёт в контракте
+// (`@entities/formSchema` ↔ `internal/domain/spans.go`) — здесь только то, что нужно
+// редактору и не нужно ни рендереру, ни серверу. Поэтому модуль в билдере, а не в
+// `web/shared`: тащить разрезание спанов в бюджет рендерера незачем, он их только
+// печатает.
 //
-// Формат — §2.2 спеки `docs/DESIGN-rich-text.md`: булевы марки списком, значимые своими
-// полями. Здесь взяты по одной каждого рода (`b` и `color`) — ровно чтобы проверить, что
-// обе механики работают; остальные пять марок фазы добавляются строкой в MARKS и полем
-// в Style, и это само по себе часть проверяемого (§1 спеки: следующая марка стоит три
-// строки).
-
-// Булевы марки. Проба несёт одну; список открыт по построению.
-export const MARKS = ['b'] as const
-export type Mark = (typeof MARKS)[number]
-
-export interface Span {
-  t: string
-  m?: Mark[]
-  color?: string
-}
+// Обоснование формата и инвариантов — `docs/DESIGN-rich-text.md` §2.
 
 // Style — оформление куска без самого текста. Отдельный тип, потому что все операции
 // (сравнение, склейка, наложение) работают именно с ним, а не со спаном целиком.
+// Ссылка живёт здесь же: в плоской модели она — такой же атрибут куска, как цвет.
 export interface Style {
   m?: Mark[]
   color?: string
+  bg?: string
+  href?: string
 }
 
-const styleOf = (s: Span): Style => ({ m: s.m, color: s.color })
+const styleOf = (s: Span): Style => ({ m: s.m, color: s.color, bg: s.bg, href: s.href })
 
 // Марки хранятся отсортированными: канон делает сравнение стилей дешёвым (строковое
 // равенство после join) и избавляет от «те же марки в другом порядке — другой спан»,
@@ -40,6 +32,8 @@ const canonMarks = (m: Mark[] | undefined): Mark[] | undefined => {
 
 export const sameStyle = (a: Style, b: Style): boolean =>
   (a.color ?? '') === (b.color ?? '') &&
+  (a.bg ?? '') === (b.bg ?? '') &&
+  (a.href ?? '') === (b.href ?? '') &&
   (canonMarks(a.m) ?? []).join(',') === (canonMarks(b.m) ?? []).join(',')
 
 const mkSpan = (t: string, st: Style): Span => {
@@ -47,10 +41,10 @@ const mkSpan = (t: string, st: Style): Span => {
   const m = canonMarks(st.m)
   if (m) s.m = m
   if (st.color) s.color = st.color
+  if (st.bg) s.bg = st.bg
+  if (st.href) s.href = st.href
   return s
 }
-
-export const plainText = (spans: Span[]): string => spans.map((s) => s.t).join('')
 
 // normalize приводит к канону: пустые куски выброшены, соседние с одинаковым стилем
 // склеены. Это обязанность РЕДАКТОРА, а не валидатора (§2.3 спеки): схема с двумя
@@ -120,38 +114,83 @@ export const toggleMark = (spans: Span[], from: number, to: number, mark: Mark):
   }))
 }
 
+// cutRange — вырезать полуинтервал [from, to) плоского текста, сохранив оформление
+// остатка. Нужно инлайн-слешу: «/» и набранный фильтр могли оказаться внутри
+// размеченного куска, и склейка строк заново («до» + «после») стёрла бы разметку всей
+// подписи. Разрезание — то же, что в restyle, только середина выбрасывается.
+export function cutRange(spans: Span[], from: number, to: number): Span[] {
+  if (to <= from) return spans
+  const out: Span[] = []
+  let pos = 0
+  for (const s of spans) {
+    const start = pos
+    const end = pos + s.t.length
+    pos = end
+    if (end <= from || start >= to) {
+      out.push(s)
+      continue
+    }
+    const st = styleOf(s)
+    const cutL = Math.max(from - start, 0)
+    const cutR = Math.min(to - start, s.t.length)
+    if (cutL > 0) out.push(mkSpan(s.t.slice(0, cutL), st))
+    if (cutR < s.t.length) out.push(mkSpan(s.t.slice(cutR), st))
+  }
+  return normalize(out)
+}
+
+// Значимые марки: пустое значение СНИМАЕТ марку (mkSpan не пишет пустых полей).
 export const setColor = (spans: Span[], from: number, to: number, color?: string): Span[] =>
   restyle(spans, from, to, (st) => ({ ...st, color }))
 
+export const setBg = (spans: Span[], from: number, to: number, bg?: string): Span[] =>
+  restyle(spans, from, to, (st) => ({ ...st, bg }))
+
+export const setHref = (spans: Span[], from: number, to: number, href?: string): Span[] =>
+  restyle(spans, from, to, (st) => ({ ...st, href }))
+
 // ---------- DOM ↔ модель ----------
+
+// markClass — вид булевой марки задаёт КЛАСС, а не атрибут. Те же классы печатает
+// `RichText` в `@fields/BlockField`, а сам вид живёт в `fields.css` — один на три
+// поверхности. Правило в CSS кабинета означало бы, что опубликованная форма теряет
+// жирный (рендерер про стили кабинета не знает) — так уже было в пробе 14.0.
+export const markClass = (m: Mark): string => `rf-${m}`
 
 // spansToDom печатает модель в поверхность. Кусок без стиля — голый текстовый узел (а не
 // <span> с пустыми атрибутами): так DOM остаётся минимальным, а браузер при наборе не
 // плодит обёрток вокруг обёрток.
-// markClass — вид булевой марки задаёт КЛАСС, а не атрибут: так вид описывается одной
-// строкой CSS и в фазе переезжает в `fields.css` (`rf-b`/`rf-i`/…) общим на три
-// поверхности, как требует §3.1 спеки.
-export const markClass = (m: Mark): string => `rf-${m}`
-
+//
+// Значения марок хранятся в data-атрибутах, а вид — в инлайн-стиле. Разделение не
+// косметика: браузер нормализует `style.color` при ЧТЕНИИ («#c026d3» → «rgb(192, 38,
+// 211)»), и модель, собранная обратно из стиля, приезжала бы в схему в форме, которую
+// валидатор `^#[0-9a-f]{6}$` обязан отвергнуть.
 export function spansToDom(root: HTMLElement, spans: Span[]): void {
   root.textContent = ''
   const doc = root.ownerDocument
   for (const s of spans) {
     const st = styleOf(s)
-    if (!st.m?.length && !st.color) {
+    if (!st.m?.length && !st.color && !st.bg && !st.href) {
       root.appendChild(doc.createTextNode(s.t))
       continue
     }
     const el = doc.createElement('span')
     if (st.m?.length) el.className = st.m.map(markClass).join(' ')
     if (st.color) {
-      // Значение марки хранится в data-атрибуте, а вид — в инлайн-стиле. Разделение
-      // не косметика: браузер нормализует `style.color` при ЧТЕНИИ («#c026d3» →
-      // «rgb(192, 38, 211)»), и модель, собранная обратно из стиля, приезжала бы в
-      // схему в форме, которую валидатор `^#[0-9a-f]{6}$` обязан отвергнуть.
-      // data-атрибут возвращается тем же, чем записан.
       el.dataset.color = st.color
       el.style.color = st.color
+    }
+    if (st.bg) {
+      el.dataset.bg = st.bg
+      el.style.backgroundColor = st.bg
+    }
+    // Ссылка внутри РЕДАКТИРУЕМОЙ строки — не <a>: кликабельная ссылка посреди
+    // contenteditable уводит со страницы по случайному клику и мешает выделению.
+    // Адрес живёт в data-атрибуте, вид — классом `rf-link`; настоящий <a> рисует
+    // `RichText` у респондента.
+    if (st.href) {
+      el.dataset.href = st.href
+      el.classList.add('rf-link')
     }
     el.textContent = s.t
     root.appendChild(el)
@@ -178,9 +217,10 @@ export function spansFromDom(root: HTMLElement): Span[] {
       }
       const own: Style = {
         m: [...(inherited.m ?? []), ...MARKS.filter((mk) => child.classList.contains(markClass(mk)))],
-        // Только data-атрибут: `style.color` браузер отдаёт нормализованным (см.
-        // комментарий в spansToDom), и модель поехала бы в схему в форме rgb().
+        // Только data-атрибуты: инлайн-стиль браузер отдаёт нормализованным.
         color: child.dataset.color || inherited.color,
+        bg: child.dataset.bg || inherited.bg,
+        href: child.dataset.href || inherited.href,
       }
       walk(child, own)
     }

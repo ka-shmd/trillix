@@ -1,34 +1,29 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi, afterEach } from 'vitest'
 
-// Проба включает свою поверхность только себе: по умолчанию флаг выключен, чтобы
-// остальной набор (в т.ч. восемь textarea-зависимых проверок focusContract) оставался
-// зелёным. См. комментарий в `flag.ts`.
-vi.mock('./flag', () => ({ RICH_TEXT_SPIKE: true }))
-
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
 import { type FormSchema, plainText, textFromString } from '@entities/formSchema'
-import { createBuilderStore } from '../store'
-import { BuilderStoreContext } from '../storeContext'
-import { createFocusEngine, FocusEngineProvider } from '../focusEngine'
-import { BlockRow } from '../BlockRow'
+import { createBuilderStore } from './store'
+import { BuilderStoreContext } from './storeContext'
+import { createFocusEngine, FocusEngineProvider } from './focusEngine'
+import { BlockRow } from './BlockRow'
 import { richCaret, setCaret, setSelection } from './richCaret'
-import { spansFromDom } from './spans'
+import { spansFromDom } from './richText'
 
-// ПРОБА ЭТАПА 14.0 — поверхность строки. Здесь проверяется главное утверждение пробы:
-// подстановка contenteditable вместо <textarea> НЕ переписывает клавиатурный поток
-// фазы 13. Восемь сценариев ниже — те самые, что упали в `focusContract.test.tsx`
-// после подстановки: они падали на хелперах, ищущих `document.querySelector('textarea')`,
-// а не на поведении. Здесь то же поведение предъявлено на новой поверхности; остальные
-// 319 тестов набора прошли без правок вовсе.
+// Текстовая поверхность строки полотна (фаза 14, этап 14.3). Главное утверждение,
+// которое здесь предъявляется: замена <textarea> на contenteditable НЕ переписала
+// клавиатурный поток фазы 13. Инлайн-слеш (§3.5) живёт здесь целиком — он переехал из
+// `focusContract.test.tsx`, потому что требует посимвольного набора в contenteditable,
+// а такой хелпер уже про поверхность, а не про контракт фокуса.
 //
 // Чего этот файл НЕ доказывает (и что обязан проверить человек в браузере): реальный
-// IME, вставку из внешних редакторов и отсутствие лага на 30 строках. happy-dom держит
-// Selection/Range, но лэйаута у него нет (`getClientRects` отдаёт нули).
+// IME, вставку из внешних редакторов, отсутствие лага на 30 строках и то, как марка
+// ВЫГЛЯДИТ. happy-dom держит Selection/Range, но лэйаута у него нет (`getClientRects`
+// отдаёт нули), и правила `fields.css` в тестах не применяются.
 
 afterEach(cleanup)
 
@@ -253,15 +248,91 @@ describe('каретка переживает ре-рендер полотна �
 })
 
 describe('марки поверх модели', () => {
-  it('Mod+B кладёт жирный на выделение и сохраняет плоский текст', () => {
+  it('Mod+B кладёт жирный на выделение и ДОВОЗИТ его до стора', () => {
     const { store } = reactiveRow('абвгд')
     const el = line()
     el.focus()
     setSelection(el, 1, 3)
     fireEvent.keyDown(el, { key: 'b', code: 'KeyB', ctrlKey: true })
     expect(spansFromDom(line())).toEqual([{ t: 'а' }, { t: 'бв', m: ['b'] }, { t: 'гд' }])
-    // Плоский текст форматирование не меняет — в сторе он прежний.
+    // Главное отличие этапа 14.3 от пробы: разметка попадает в документ, а не живёт
+    // только в DOM. Не доехала бы — её не увидели бы ни автосейв, ни отмена.
+    expect(store.getState().blocks[0]!.text).toEqual([
+      { t: 'а' },
+      { t: 'бв', m: ['b'] },
+      { t: 'гд' },
+    ])
+    // Плоский текст форматирование не меняет.
     expect(plainText(store.getState().blocks[0]!.text)).toBe('абвгд')
+  })
+
+  // Список марок открыт по построению (§1 спеки): добавление марки — строка в MARKS,
+  // строка в fields.css, кнопка в панель. Проверяем, что все четыре ходят одним путём,
+  // а не четырьмя ветками в обработчике.
+  it.each([
+    ['Mod+B', { code: 'KeyB', ctrlKey: true }, 'b'],
+    ['Mod+I', { code: 'KeyI', ctrlKey: true }, 'i'],
+    ['Mod+U', { code: 'KeyU', ctrlKey: true }, 'u'],
+    ['Mod+Shift+S', { code: 'KeyS', ctrlKey: true, shiftKey: true }, 's'],
+  ])('%s ставит марку %s', (_name, chord, mark) => {
+    const { store } = reactiveRow('абвгд')
+    const el = line()
+    el.focus()
+    setSelection(el, 1, 3)
+    fireEvent.keyDown(el, chord)
+    expect(store.getState().blocks[0]!.text).toEqual([
+      { t: 'а' },
+      { t: 'бв', m: [mark] },
+      { t: 'гд' },
+    ])
+  })
+
+  it('две марки на одном выделении складываются, а не вытесняют друг друга', () => {
+    const { store } = reactiveRow('абвгд')
+    const el = line()
+    el.focus()
+    setSelection(el, 1, 3)
+    fireEvent.keyDown(el, { code: 'KeyB', ctrlKey: true })
+    setSelection(line(), 1, 3)
+    fireEvent.keyDown(line(), { code: 'KeyI', ctrlKey: true })
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', m: ['b', 'i'] })
+  })
+
+  // Ресинк из стора обязан вернуть разметку: undo — это внешняя правка, и поверхность
+  // перепечатывается из модели. Без сравнения по значению здесь была бы либо потеря
+  // марок (перепечатка на каждый символ), либо их застревание (ресинка нет вовсе).
+  it('undo возвращает поверхность к состоянию до наложения марки', () => {
+    const { store } = reactiveRow('абвгд')
+    const el = line()
+    el.focus()
+    setSelection(el, 1, 3)
+    fireEvent.keyDown(el, { code: 'KeyB', ctrlKey: true })
+    expect(spansFromDom(line())).toHaveLength(3)
+
+    // act — не ритуал: undo меняет стор синхронно, но перерисовку React откладывает, и
+    // без него проверялся бы DOM, до которого правка ещё не доехала.
+    act(() => {
+      store.getState().undo()
+    })
+    expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
+    expect(spansFromDom(line())).toEqual([{ t: 'абвгд' }])
+  })
+
+  // Вырезание «/»+фильтра идёт по координатам текста, а не склейкой строк: иначе
+  // выбор пункта меню стирал бы разметку всей подписи.
+  it('слеш-меню вырезает свой текст, не трогая разметку остального', () => {
+    const { store } = reactiveRow('абвгд')
+    const el = line()
+    el.focus()
+    setSelection(el, 0, 2)
+    fireEvent.keyDown(el, { code: 'KeyB', ctrlKey: true })
+    // Набираем «/» в конце и выбираем первый пункт меню.
+    setCaret(line(), 5)
+    typeRich('абвгд/')
+    fireEvent.keyDown(line(), { key: 'Enter', code: 'Enter' })
+    const title = store.getState().blocks[0]!
+    expect(title.type).toBe('title')
+    expect(title.text).toEqual([{ t: 'аб', m: ['b'] }, { t: 'вгд' }])
   })
 
   // Найдено владельцем при первой браузерной проверке: Mod+B занят вендоренным
