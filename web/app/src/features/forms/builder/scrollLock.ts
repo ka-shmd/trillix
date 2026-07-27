@@ -26,17 +26,40 @@ export function lockScroll(from: HTMLElement): () => void {
     (el): el is HTMLElement => el !== null,
   )
 
+  // Ширина исчезающей полосы прокрутки. У обычного элемента она внутри его бокса, и
+  // разницы offsetWidth/clientWidth достаточно. У КОРНЕВОГО элемента — нет: полоса окна
+  // лежит вне его бокса, и та же разница даёт ноль. Именно поэтому первая версия
+  // компенсации не работала и экран дёргался — считалось ноль, компенсировать было
+  // «нечего». Для корня ширину даёт только innerWidth минус clientWidth.
+  const gapOf = (el: HTMLElement): number =>
+    el === doc.documentElement
+      ? (doc.defaultView?.innerWidth ?? el.clientWidth) - el.clientWidth
+      : el.offsetWidth - el.clientWidth
+
+  // Компенсация корневой полосы уходит на body: паддинг на <html> сам сдвигает всё
+  // содержимое документа — то самое дёрганье, только в другую сторону.
+  const padTargetOf = (el: HTMLElement): HTMLElement =>
+    el === doc.documentElement ? doc.body : el
+
+  const padded = new Set<HTMLElement>()
   const restore = targets.map((el) => {
     const prevOverflow = el.style.overflow
-    const prevPadding = el.style.paddingRight
-    // Компенсация ширины полосы прокрутки: без неё контент прыгает вбок ровно в тот
-    // момент, когда автор целится мышью в панель.
-    const gap = el.offsetWidth - el.clientWidth
     el.style.overflow = 'hidden'
-    if (gap > 0) el.style.paddingRight = `${gap}px`
+
+    const gap = gapOf(el)
+    const padTarget = padTargetOf(el)
+    // Паддинг ставится один раз на элемент: у корня и body цель компенсации общая, и
+    // без этой защиты body получил бы двойной отступ — дёрганье вдвое сильнее.
+    const pad = gap > 0 && !padded.has(padTarget) ? padTarget : null
+    const prevPadding = pad?.style.paddingRight
+    if (pad) {
+      padded.add(pad)
+      pad.style.paddingRight = `${gap}px`
+    }
+
     return () => {
       el.style.overflow = prevOverflow
-      el.style.paddingRight = prevPadding
+      if (pad) pad.style.paddingRight = prevPadding ?? ''
     }
   })
 

@@ -584,3 +584,51 @@ describe('замок прокрутки на время панели', () => {
     expect(fireEvent.wheel(document.body)).toBe(true)
   })
 })
+
+// Компенсация исчезающей полосы прокрутки. Дефект найден владельцем в браузере
+// 2026-07-27: экран дёргался вбок в момент появления панели. Причина — ширина полосы
+// считалась как offsetWidth − clientWidth, а у КОРНЕВОГО элемента полоса лежит вне его
+// бокса, и эта разница даёт ноль: компенсировать было «нечего».
+describe('замок прокрутки: компенсация полосы', () => {
+  const fake = (el: Element, prop: string, value: number) =>
+    Object.defineProperty(el, prop, { value, configurable: true })
+
+  afterEach(() => {
+    document.body.style.paddingRight = ''
+  })
+
+  it('ширина корневой полосы берётся из innerWidth, а компенсация уходит на body', () => {
+    fake(document.documentElement, 'clientWidth', 780)
+    window.innerWidth = 800
+
+    const unlock = lockScroll(document.body)
+    expect(document.body.style.paddingRight).toBe('20px')
+    // На сам <html> паддинг не ставится: он сдвинул бы всё содержимое документа —
+    // то же дёрганье, только в другую сторону.
+    expect(document.documentElement.style.paddingRight).toBe('')
+
+    unlock()
+    expect(document.body.style.paddingRight).toBe('')
+  })
+
+  it('без полосы прокрутки паддинг не появляется вовсе', () => {
+    fake(document.documentElement, 'clientWidth', 800)
+    window.innerWidth = 800
+
+    const unlock = lockScroll(document.body)
+    expect(document.body.style.paddingRight).toBe('')
+    unlock()
+  })
+
+  it('body не получает двойной отступ, когда корень и body заперты оба', () => {
+    fake(document.documentElement, 'clientWidth', 780)
+    window.innerWidth = 800
+    fake(document.body, 'offsetWidth', 800)
+    fake(document.body, 'clientWidth', 780)
+
+    const unlock = lockScroll(document.body)
+    expect(document.body.style.paddingRight).toBe('20px')
+    unlock()
+    expect(document.body.style.paddingRight).toBe('')
+  })
+})
