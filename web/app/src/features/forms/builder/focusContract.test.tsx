@@ -88,6 +88,29 @@ describe('контракт фокус-целей строк (§2.1)', () => {
     }
   })
 
+  // Имя строки — единственное, чем за неё можно взяться снаружи: у contenteditable нет
+  // ни `placeholder`, ни своего `<label>`, и до этапа 14.5 поверхность была безымянной
+  // для скринридера (а e2e держались за исчезнувший `textarea`). У `text` имя обязано
+  // совпадать под фокусом и без него — там мигает видимая подсказка, а не имя.
+  it('текстовая строка называет себя, и у `text` имя не зависит от фокуса', () => {
+    const { engine } = setup({
+      schemaVersion: 3,
+      blocks: [
+        { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
+        { id: 'cons', groupId: 'g2', type: 'consent', text: textFromString('Согласен') },
+        { id: 'para', groupId: 'g3', type: 'text', text: [] },
+      ],
+    })
+    const named = (name: string) =>
+      document.querySelector(`[data-rich-line][aria-label="${name}"]`)
+    expect(named('Заголовок вопроса')).not.toBeNull()
+    expect(named('Текст согласия')).not.toBeNull()
+    // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
+    expect(named('Текст, или «/» для поля')).not.toBeNull()
+    engine.focusBlock('para', 'end')
+    expect(el().getAttribute('aria-label')).toBe('Текст, или «/» для поля')
+  })
+
   it('край каретки: start → в начало, end → в конец текста', () => {
     const { engine } = setup({
       schemaVersion: 3,

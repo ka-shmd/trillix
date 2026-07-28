@@ -65,6 +65,12 @@ export interface RichLineProps {
   // Богатый текст блока из стора — источник правды между правками.
   value: Span[]
   placeholder?: string
+  // Доступное имя строки — отдельно от видимой подсказки и НЕ равно ей: у контентной
+  // строки подсказка появляется только под фокусом (иначе полотно пестрит серым), а
+  // имя, которое то есть, то нет, для скринридера равно отсутствию имени. Пока строка
+  // была <textarea>, имя давал `placeholder` — contenteditable такой любезности не
+  // делает, и до этой строки у поверхности не было имени вовсе.
+  label?: string
   className?: string
   // Каретка приходит в координатах ПЛОСКОГО текста — ровно то, что раньше давал
   // selectionStart у textarea, поэтому инлайн-слеш в BlockRow не переписывается.
@@ -78,6 +84,7 @@ export interface RichLineProps {
 export function RichLine({
   value,
   placeholder,
+  label,
   className,
   onChange,
   onKeyDown,
@@ -257,6 +264,7 @@ export function RichLine({
       contentEditable
       suppressContentEditableWarning
       role="textbox"
+      aria-label={label}
       tabIndex={0}
       className={className}
       onInput={() => {

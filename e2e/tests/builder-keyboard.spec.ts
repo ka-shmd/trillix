@@ -68,10 +68,11 @@ test('билдер без мыши: форма собирается клавиа
 
   await page.goto(`/forms/${form.slug}/edit`)
 
-  // Заголовки вопросов на полотне — textarea (`rf-label`), их текст лежит в value:
-  // getByText такую строку не видит, поэтому берём по порядку документа. Счётчик
-  // заодно служит воротами: пока строка не появилась, печатать в неё рано.
-  const canvasTitles = page.locator('textarea.rf-label')
+  // Заголовки вопросов на полотне — contenteditable с этапа 14.3 (богатый текст), а
+  // не textarea; берём их по ИМЕНИ роли textbox (`aria-label` в `RichLine`) — это же
+  // имя слышит скринридер, так что селектор заодно держит доступность строки.
+  // Счётчик служит воротами: пока строка не появилась, печатать в неё рано.
+  const canvasTitles = page.getByRole('textbox', { name: 'Заголовок вопроса' })
 
   // 3. Каретка — в название формы (focus, а не клик), Enter уводит на полотно. Форма
   // пустая, поэтому Enter здесь создаёт первую строку (focusFirstOrCreate).
@@ -110,8 +111,9 @@ test('билдер без мыши: форма собирается клавиа
   // Ряд виден на полотне: заголовки стоят на одной высоте, второй правее первого.
   // Проверяем геометрией, а не классом — у полотна своя раскладка (flex-wrap + 50%),
   // общий `.rf-row` есть только у превью и рендерера, и совпасть они обязаны видом.
-  await expect(canvasTitles.nth(0)).toHaveValue(nameQ)
-  await expect(canvasTitles.nth(1)).toHaveValue(mailQ)
+  // Текст строки — в содержимом узла, а не в `value`: у contenteditable его нет.
+  await expect(canvasTitles.nth(0)).toHaveText(nameQ)
+  await expect(canvasTitles.nth(1)).toHaveText(mailQ)
   // poll, а не разовый замер: перенос в ряд — обычный ре-рендер React, и координаты
   // сразу после нажатия клавиши могут быть ещё старыми (столбик). Ждём, а не гадаем.
   await expect.poll(() => sideBySide(canvasTitles.nth(0), canvasTitles.nth(1))).toBe(true)

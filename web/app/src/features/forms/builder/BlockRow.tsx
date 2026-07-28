@@ -195,7 +195,10 @@ export function BlockRow({
       ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
         'Текст, или «/» — чтобы добавить вопрос'
       : 'Текст, или «/» для поля'
-  const captionPh =
+  // Как строка называется — для скринридера и для e2e. У всех типов, кроме `text`,
+  // это же и видимая подсказка; у `text` подсказка появляется только под фокусом
+  // (см. textPh выше), а ИМЯ строки мигать не должно.
+  const captionName =
     block.type === 'title'
       ? 'Заголовок вопроса'
       : block.type === 'label'
@@ -204,9 +207,8 @@ export function BlockRow({
           ? 'Заголовок раздела'
           : block.type === 'consent'
             ? 'Текст согласия'
-            : labelFocused
-              ? textPh
-              : undefined
+            : textPh
+  const captionPh = block.type === 'text' ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
   // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
@@ -550,6 +552,7 @@ export function BlockRow({
                 }}
                 value={block.text ?? []}
                 placeholder={captionPh}
+                label={captionName}
                 onChange={onLabelChange}
                 onFocus={() => {
                   setLabelFocused(true)
