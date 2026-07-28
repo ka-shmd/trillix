@@ -35,6 +35,7 @@ import {
   toggleMark,
 } from './richText'
 import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
+import type { UpdateKind } from './store'
 import { FormatBar } from './FormatBar'
 import { lockScroll } from './scrollLock'
 import './richLine.css'
@@ -75,7 +76,11 @@ export interface RichLineProps {
   className?: string
   // Каретка приходит в координатах ПЛОСКОГО текста — ровно то, что раньше давал
   // selectionStart у textarea, поэтому инлайн-слеш в BlockRow не переписывается.
-  onChange: (value: Span[], caret: number) => void
+  //
+  // `kind` отличает команду форматирования от набора. Плоский текст она не меняет, но
+  // в историю обязана лечь своим шагом: иначе Ctrl+Z после покраски сносит и её, и всю
+  // подпись, набранную до неё, — правки одного блока подряд коалесцируются.
+  onChange: (value: Span[], caret: number, kind?: UpdateKind) => void
   onKeyDown: (e: KeyboardEvent<HTMLElement>) => void
   onFocus: () => void
   onBlur: (e: FocusEvent<HTMLElement>) => void
@@ -240,7 +245,7 @@ export function RichLine({
     last.current = spans
     // Плоский текст форматирование не меняет, но модель — меняет: отдаём наружу, иначе
     // разметка не доедет ни до автосейва, ни до истории отмены.
-    onChange(spans, range.to)
+    onChange(spans, range.to, 'format')
     // Форматирование меняет и модель, и «что нажато» в панели. Пересчитываем сразу, а
     // не ждём `selectionchange`: восстановление выделения его не гарантирует. Спаны
     // отдаём готовыми — читать поверхность второй раз за кадр незачем.

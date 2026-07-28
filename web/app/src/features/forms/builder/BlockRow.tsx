@@ -44,6 +44,7 @@ import { filterMenuItems, type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
+import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { textCaret } from './caret'
 import { RichLine } from './RichLine'
@@ -383,8 +384,8 @@ export function BlockRow({
   // Принимает уже разобранную МОДЕЛЬ и позицию каретки в плоском тексте, а не событие:
   // логика слеша живёт в координатах текста и о поверхности ничего не знает — ровно
   // поэтому переход textarea → contenteditable её не переписал.
-  function onLabelChange(spans: Span[], pos: number) {
-    updateBlock(block.id, { text: spans })
+  function onLabelChange(spans: Span[], pos: number, kind?: UpdateKind) {
+    updateBlock(block.id, { text: spans }, kind)
     const value = plainText(spans)
     if (slash) {
       if (pos <= slash.start || value[slash.start] !== '/') return closeSlash()

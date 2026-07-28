@@ -46,6 +46,11 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
 export type BlockPatch = Partial<Pick<Block, 'text' | 'required' | 'settings'>>
 
+// Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
+// как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
+// форматирования; отсутствие — обычный набор.
+export type UpdateKind = 'format'
+
 // Snapshot — снимок документа (blocks + поля формы-уровня) для стеков undo/redo.
 // dirty — производный UI, в снапшот не входит. Фокус — не стейт стора (живёт в
 // фокус-движке полотна, §2.5), поэтому откат его не касается. Новое поле документа
@@ -118,7 +123,7 @@ export type BuilderActions = {
   // «Отдельные поля». Тип из requiresCaption получает свой заголовок, если приземлился
   // не под ждущей подписью; возвращается id для каретки — заголовка либо поля.
   addFieldAfter: (afterId: string | null, type: BlockType) => string
-  updateBlock: (id: string, patch: BlockPatch) => void
+  updateBlock: (id: string, patch: BlockPatch, kind?: UpdateKind) => void
   removeBlock: (id: string) => void
   // removeGroup удаляет всю группу блока (подпись владеет группой): trash по подписи
   // сносит подпись + контент + поле. На несуществующем блоке — no-op.
@@ -657,7 +662,14 @@ const snapshot = (s: BuilderState): Snapshot => ({
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
 // (text/settings-placeholder) в один блок делят шаг истории; патч с required (или
 // иным дискретным полем) — свой шаг (тег null).
-function updateBlockTag(id: string, patch: BlockPatch): string | null {
+//
+// Форматирование (`kind: 'format'`) коалесится ОТДЕЛЬНО от набора, хотя патч у них
+// один и тот же — `{ text }`. Общий тег означал бы, что «набрал подпись, выделил слово,
+// покрасил» — это один шаг, и первый же Ctrl+Z сносил бы вместе с цветом всю набранную
+// подпись. Внутри самого жеста коалесценция нужна и остаётся: выборщик цвета шлёт
+// правку на каждом кадре перетаскивания, и 60 шагов истории в секунду — не история.
+function updateBlockTag(id: string, patch: BlockPatch, kind?: UpdateKind): string | null {
+  if (kind === 'format') return `ub:${id}:format`
   const keys = Object.keys(patch)
   const textOnly = keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings')
   return textOnly ? `ub:${id}:${keys.sort().join('+')}` : null
@@ -898,8 +910,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         return focus
       },
 
-      updateBlock: (id, patch) =>
-        commit(updateBlockTag(id, patch), (s) => {
+      updateBlock: (id, patch, kind) =>
+        commit(updateBlockTag(id, patch, kind), (s) => {
           const i = s.blocks.findIndex((b) => b.id === id)
           const src = s.blocks[i]
           // Блока нет — правку не к чему применить, и это не редкость: сюда
