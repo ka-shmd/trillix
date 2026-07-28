@@ -16,7 +16,15 @@
 // позицию панели на кадрах прокрутки.
 export function lockScroll(from: HTMLElement): () => void {
   const doc = from.ownerDocument
-  const stop = (e: Event) => e.preventDefault()
+  // Сама панель из-под замка выведена: её содержимое (выборщик цвета в поповере) может
+  // не поместиться в окно, и колесо там должно работать — иначе замок, который стоит
+  // ради панели, же её и делает недоступной. Позицию панели прокрутка внутри неё не
+  // сдвигает, так что причины запирать это колесо нет.
+  const stop = (e: Event) => {
+    const t = e.target
+    if (t instanceof Element && t.closest('[data-format-bar]')) return
+    e.preventDefault()
+  }
   // passive: false обязателен — иначе браузер игнорирует preventDefault у wheel и
   // touchmove, и замок молча не работает. capture — чтобы успеть раньше вложенных
   // обработчиков любого внутреннего скроллера.

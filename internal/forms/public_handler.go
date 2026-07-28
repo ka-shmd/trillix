@@ -125,7 +125,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Рендерер знает только текущий формат — старая опубликованная версия
-	// апгрейдится до v2 на отдаче (иммутабельный снапшот в БД не трогаем).
+	// апгрейдится до v3 на отдаче (иммутабельный снапшот в БД не трогаем).
 	schema, err := domain.CanonicalV3(pf.Schema)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), err))

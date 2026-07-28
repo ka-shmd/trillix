@@ -95,6 +95,11 @@ export function restyle(spans: Span[], from: number, to: number, f: (st: Style) 
 // частично размеченное выделение доводится до однородного одним нажатием).
 export function hasMarkThroughout(spans: Span[], from: number, to: number, mark: Mark): boolean {
   if (to <= from) return false
+  // Диапазон вне текста не покрыт НИ ОДНИМ куском, а «нет контрпримера» для пустого
+  // обхода означало бы «марка стоит везде» — и переключатель пошёл бы её снимать.
+  // Сейчас такой диапазон недостижим (from/to приходят из живого выделения), но
+  // инвариант держался только на этом, а стоит одну строку.
+  if (from >= spans.reduce((n, s) => n + s.t.length, 0)) return false
   let pos = 0
   for (const s of spans) {
     const start = pos

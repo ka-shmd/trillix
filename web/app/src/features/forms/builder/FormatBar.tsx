@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Bold, Italic, Link2, Link2Off, Strikethrough, Underline } from 'lucide-react'
 import { type Mark, isHttpUrl } from '@entities/formSchema'
@@ -50,6 +50,11 @@ const MARK_BUTTONS: ReadonlyArray<[Mark, typeof Bold, string]> = [
   ['s', Strikethrough, 'Зачёркнутый'],
 ]
 
+// Панель встаёт НАД выделением; у самого верха окна места нет — тогда под ним. Прижать
+// её к потолку (`Math.max(8, …)`, как было) значило бы положить панель поверх текста,
+// который она форматирует.
+const BAR_H = 44
+
 export function FormatBar({
   rect,
   active,
@@ -64,9 +69,22 @@ export function FormatBar({
 }: FormatBarProps) {
   // keepFocus — единственная причина, по которой панель вообще работает (правило 1).
   const keepFocus = (e: React.MouseEvent) => e.preventDefault()
+  const ref = useRef<HTMLDivElement>(null)
+
+  // Правый край — единственная координата, которую нельзя посчитать заранее: ширина
+  // панели зависит от того, открыто ли поле адреса. Правим её после раскладки и прямо
+  // в DOM: состояние здесь означало бы второй рендер на каждое движение выделения, а
+  // считать нечего — панель уже измерена браузером.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const room = el.ownerDocument.documentElement.clientWidth - el.offsetWidth - 8
+    el.style.left = `${Math.max(8, Math.min(rect.left, room))}px`
+  })
 
   return createPortal(
     <div
+      ref={ref}
       data-format-bar=""
       role="toolbar"
       aria-label="Форматирование текста"
@@ -74,7 +92,7 @@ export function FormatBar({
       style={{
         position: 'fixed',
         left: Math.max(8, rect.left),
-        top: Math.max(8, rect.top - 44),
+        top: rect.top - BAR_H >= 8 ? rect.top - BAR_H : rect.bottom + 8,
         zIndex: 50,
       }}
       className="flex items-center gap-0.5 rounded-md border bg-popover p-1 shadow-md"

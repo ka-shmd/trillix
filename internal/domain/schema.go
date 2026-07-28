@@ -216,8 +216,8 @@ type FormSchema struct {
 	RedirectURL   string  `json:"redirectUrl"`
 }
 
-// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. v1-
-// документы (по schemaVersion 0/1) сперва апгрейдятся до v2 (upgradeV1toV2) —
+// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. Старые
+// документы (по schemaVersion 0/1/2) сперва апгрейдятся цепочкой до текущей версии —
 // читатель приводит формат на лету, БД не мигрируется (ARCHITECTURE 3.4).
 //
 // Лишние поля запрещены (DisallowUnknownFields) — расхождение контракта ловится
