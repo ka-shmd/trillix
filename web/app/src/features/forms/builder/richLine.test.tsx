@@ -6,7 +6,7 @@ import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, plainText, textFromString } from '@entities/formSchema'
+import { type FormSchema, MAX_SPANS, type Span, plainText, textFromString } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -31,11 +31,13 @@ const line = () => document.querySelector('[data-rich-line]') as HTMLElement
 
 // reactiveRow — строка, подписанная на стор (как в focusContract.test.tsx): value
 // поверхности обязан отражать набор, иначе вырезание «/» и конверсию не проверить.
-function reactiveRow(text = '', type: 'text' | 'title' = 'text') {
+function reactiveRow(text: string | Span[] = '', type: 'text' | 'title' = 'text') {
   const store = createBuilderStore()
   const schema: FormSchema = {
     schemaVersion: 3,
-    blocks: [{ id: 't', groupId: 'g1', type, text: textFromString(text) }],
+    blocks: [
+      { id: 't', groupId: 'g1', type, text: typeof text === 'string' ? textFromString(text) : text },
+    ],
   }
   store.getState().hydrate(schema)
   const engine = createFocusEngine()
@@ -539,6 +541,33 @@ describe('панель форматирования', () => {
     // Поповер после выбора остаётся открытым — цвет подбирают, а не угадывают с раза.
     fireEvent.click(barBtn('Убрать цвет текста'))
     expect(store.getState().blocks[0]!.text).toEqual([{ t: 'абвгд' }])
+  })
+})
+
+// Лимит числа кусков — единственный из лимитов схемы, до которого можно доехать одним
+// редактором: набор кусков не плодит (канон склеивает соседей), а марка на середину
+// куска режет его на три. Раньше перебор уезжал в автосейв и возвращался оттуда как
+// «ошибка сохранения» — без причины и без указания, какая правка её вызвала.
+describe('лимит кусков оформления', () => {
+  // Ровно предельный документ: MAX_SPANS кусков по два символа, через один жирные.
+  const atLimit = (): Span[] =>
+    Array.from({ length: MAX_SPANS }, (_, i) => (i % 2 ? { t: 'аб', m: ['b' as const] } : { t: 'вг' }))
+
+  it('форматирование, переваливающее лимит, не применяется', () => {
+    const { store } = reactiveRow(atLimit())
+    // Половина первого куска: разрез добавит спан, то есть выведет за предел.
+    selectText(0, 1)
+    fireEvent.keyDown(line(), { code: 'KeyI', ctrlKey: true })
+
+    expect(store.getState().blocks[0]!.text).toEqual(atLimit())
+  })
+
+  it('форматирование, не выводящее за предел, применяется как обычно', () => {
+    const { store } = reactiveRow(atLimit().slice(0, MAX_SPANS - 2))
+    selectText(0, 1)
+    fireEvent.keyDown(line(), { code: 'KeyI', ctrlKey: true })
+
+    expect(store.getState().blocks[0]!.text?.[0]).toEqual({ t: 'в', m: ['i'] })
   })
 })
 

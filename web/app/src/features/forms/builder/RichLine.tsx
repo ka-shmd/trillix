@@ -21,7 +21,8 @@ import {
   type FocusEvent,
   type KeyboardEvent,
 } from 'react'
-import { MARKS, type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
+import { toast } from 'sonner'
+import { MARKS, MAX_SPANS, type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
 import { chords, markChord } from './shortcuts'
 import {
   hasMarkThroughout,
@@ -223,6 +224,17 @@ export function RichLine({
     const range = el.ownerDocument.activeElement === el ? selectionRange(el) : sel
     if (!range) return
     const spans = f(spansFromDom(el), range.from, range.to)
+    // Число кусков ограничено схемой, и упереться в лимит может только ФОРМАТИРОВАНИЕ:
+    // набор его не увеличивает вовсе (канон склеивает соседей с одинаковым стилем), а
+    // каждая марка на середину куска режет его на три. Пропустить перебор дальше значит
+    // отдать его автосейву, который получит 422 и покажет автору «ошибка сохранения» —
+    // ни причины, ни того, какая именно правка её вызвала.
+    if (spans.length > MAX_SPANS) {
+      toast.error(`В одной строке не больше ${MAX_SPANS} кусков оформления`, {
+        description: 'Часть текста придётся оформить единообразно.',
+      })
+      return
+    }
     spansToDom(el, spans)
     setSelection(el, range.from, range.to)
     last.current = spans
