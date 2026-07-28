@@ -15,6 +15,7 @@ import {
   canShareRow,
   requiresCaption,
   COLUMN_RIGHT,
+  sameRichText,
 } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
@@ -44,6 +45,11 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // Редактируемые поля блока. id/groupId/type через updateBlock не меняются: id
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
 export type BlockPatch = Partial<Pick<Block, 'text' | 'required' | 'settings'>>
+
+// Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
+// как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
+// форматирования; отсутствие — обычный набор.
+export type UpdateKind = 'format'
 
 // Snapshot — снимок документа (blocks + поля формы-уровня) для стеков undo/redo.
 // dirty — производный UI, в снапшот не входит. Фокус — не стейт стора (живёт в
@@ -117,7 +123,7 @@ export type BuilderActions = {
   // «Отдельные поля». Тип из requiresCaption получает свой заголовок, если приземлился
   // не под ждущей подписью; возвращается id для каретки — заголовка либо поля.
   addFieldAfter: (afterId: string | null, type: BlockType) => string
-  updateBlock: (id: string, patch: BlockPatch) => void
+  updateBlock: (id: string, patch: BlockPatch, kind?: UpdateKind) => void
   removeBlock: (id: string) => void
   // removeGroup удаляет всю группу блока (подпись владеет группой): trash по подписи
   // сносит подпись + контент + поле. На несуществующем блоке — no-op.
@@ -202,7 +208,7 @@ function newBlock(type: BlockType): Block {
     id: newBlockId(),
     groupId: '', // проставит regroup
     type,
-    text: '',
+    text: [],
     required: false,
     settings: {},
   }
@@ -656,7 +662,14 @@ const snapshot = (s: BuilderState): Snapshot => ({
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
 // (text/settings-placeholder) в один блок делят шаг истории; патч с required (или
 // иным дискретным полем) — свой шаг (тег null).
-function updateBlockTag(id: string, patch: BlockPatch): string | null {
+//
+// Форматирование (`kind: 'format'`) коалесится ОТДЕЛЬНО от набора, хотя патч у них
+// один и тот же — `{ text }`. Общий тег означал бы, что «набрал подпись, выделил слово,
+// покрасил» — это один шаг, и первый же Ctrl+Z сносил бы вместе с цветом всю набранную
+// подпись. Внутри самого жеста коалесценция нужна и остаётся: выборщик цвета шлёт
+// правку на каждом кадре перетаскивания, и 60 шагов истории в секунду — не история.
+function updateBlockTag(id: string, patch: BlockPatch, kind?: UpdateKind): string | null {
+  if (kind === 'format') return `ub:${id}:format`
   const keys = Object.keys(patch)
   const textOnly = keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings')
   return textOnly ? `ub:${id}:${keys.sort().join('+')}` : null
@@ -771,7 +784,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const converted: Block = {
             ...newBlock(type),
             id,
-            text: carriesText(type) ? src.text : '',
+            text: carriesText(type) ? src.text : [],
             required: isAnswerableType(type) ? src.required : false,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
@@ -792,7 +805,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const src = s.blocks[i]
           if (!src) return null
           const [gStart, gEnd] = groupSpan(s.blocks, i)
-          const field: Block = { ...newBlock(type), text: '' }
+          const field: Block = { ...newBlock(type), text: [] }
           if (gStart === gEnd) {
             // Одиночный блок (своя группа) → он становится подписью, поле под ним.
             // Фокус на подпись (у неё textarea, автор правит текст вопроса дальше).
@@ -897,8 +910,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         return focus
       },
 
-      updateBlock: (id, patch) =>
-        commit(updateBlockTag(id, patch), (s) => {
+      updateBlock: (id, patch, kind) =>
+        commit(updateBlockTag(id, patch, kind), (s) => {
           const i = s.blocks.findIndex((b) => b.id === id)
           const src = s.blocks[i]
           // Блока нет — правку не к чему применить, и это не редкость: сюда
@@ -908,11 +921,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // даже когда ни один блок не совпал, — и давал шаг истории, в котором
           // ничего не меняется (Ctrl+Z «съедал» нажатие), dirty и лишний PATCH.
           if (!src) return null
-          // Патч ничего не меняет — тот же no-op. Сравниваем по ссылке: text и
-          // required примитивны, а settings приходит новым объектом только тогда,
-          // когда его действительно пересобрали.
+          // Патч ничего не меняет — тот же no-op. Сравнение по ссылке годится для
+          // required (примитив) и settings (приходит новым объектом только когда его
+          // действительно пересобрали), но НЕ для text: с фазы 14 это массив спанов,
+          // и каждый набранный символ приносит свежий массив с тем же содержимым.
+          // По ссылке такой патч выглядел бы изменением — и «правка, которая ничего
+          // не меняет» перестала бы быть no-op: лишний шаг истории (Ctrl+Z съедает
+          // нажатие), dirty и лишний PATCH на каждый отложенный колбэк.
           const keys = Object.keys(patch) as (keyof BlockPatch)[]
-          if (keys.every((k) => Object.is(src[k], patch[k]))) return null
+          const same = (k: keyof BlockPatch) =>
+            k === 'text'
+              ? sameRichText(src.text, patch.text)
+              : Object.is(src[k], patch[k])
+          if (keys.every(same)) return null
           const blocks = s.blocks.slice()
           blocks[i] = { ...src, ...patch }
           return { blocks }

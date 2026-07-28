@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type ClipboardEvent,
   type FocusEvent,
   type KeyboardEvent,
@@ -31,10 +30,12 @@ import {
   isCaptionType,
   isChoiceType,
   isContentType,
+  plainText,
   SCALE_LOWER_BOUND,
   SCALE_UPPER_BOUND,
   scaleRange,
   supportsPlaceholder,
+  type Span,
 } from '@entities/formSchema'
 import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
@@ -43,8 +44,12 @@ import { filterMenuItems, type MenuItem } from './blockTypes'
 import { noLayoutAnimation } from './dnd'
 import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
+import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { textCaret } from './caret'
+import { RichLine } from './RichLine'
+import { richCaret } from './richCaret'
+import { cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
@@ -153,7 +158,10 @@ export function BlockRow({
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
-  const labelRef = useRef<HTMLTextAreaElement>(null)
+  // Текстовая поверхность строки: <textarea> либо (проба 14.0) contenteditable. Тип
+  // union, потому что поток строки с ней говорит только через адаптер каретки и о её
+  // природе не знает — ровно ради этого адаптер и вводился (§2.6 спеки фазы 13).
+  const labelRef = useRef<HTMLTextAreaElement | HTMLDivElement>(null)
   // Инлайн-слеш (§3.5): «/» остаётся литералом в тексте, меню открывается поверх и
   // фильтруется продолжением набора. slash — null (закрыто) либо {start, query}:
   // start — индекс «/» в тексте, query — набранное после него (до каретки). Строку,
@@ -188,7 +196,10 @@ export function BlockRow({
       ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
         'Текст, или «/» — чтобы добавить вопрос'
       : 'Текст, или «/» для поля'
-  const captionPh =
+  // Как строка называется — для скринридера и для e2e. У всех типов, кроме `text`,
+  // это же и видимая подсказка; у `text` подсказка появляется только под фокусом
+  // (см. textPh выше), а ИМЯ строки мигать не должно.
+  const captionName =
     block.type === 'title'
       ? 'Заголовок вопроса'
       : block.type === 'label'
@@ -197,9 +208,8 @@ export function BlockRow({
           ? 'Заголовок раздела'
           : block.type === 'consent'
             ? 'Текст согласия'
-            : labelFocused
-              ? textPh
-              : undefined
+            : textPh
+  const captionPh = block.type === 'text' ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
   const isImage = block.type === 'image'
   // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
@@ -237,7 +247,8 @@ export function BlockRow({
   // при ре-рендере, поэтому не кэшируем сам адаптер.
   const caret = useCallback(() => {
     const el = labelRef.current
-    return el ? textCaret(el) : null
+    if (!el) return null
+    return el instanceof HTMLTextAreaElement ? textCaret(el) : richCaret(el)
   }, [])
 
   // Регистрация фокус-цели строки в фокус-движке (§2.5): текстовые строки дают цель
@@ -251,8 +262,11 @@ export function BlockRow({
 
   // Биндинги по e.code (§3.1): физическая клавиша не зависит от раскладки. «/» не
   // перехватывается — уходит в текст литералом (§3.5), меню ведёт onLabelChange.
-  function onLabelKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    const c = textCaret(e.currentTarget)
+  function onLabelKeyDown(e: KeyboardEvent<HTMLElement>) {
+    // Адаптер строки, а не textCaret(e.currentTarget): поверхность может быть и
+    // contenteditable (проба 14.0), а поток о ней знать не должен.
+    const c = caret()
+    if (!c) return
     // Открытый инлайн-слеш забирает навигацию: ↑/↓ — по пунктам, Enter — выбор,
     // Esc — закрыть (текст остаётся). Backspace отдаём нативному вводу (удаляет символ,
     // onLabelChange пересчитает/закроет фильтр) — иначе на «/» в начале строки
@@ -349,11 +363,14 @@ export function BlockRow({
   // предыдущим набором в один шаг истории (тег ub:id:text), поэтому лишнего шага
   // undo вырезание не добавляет. changeBlockType/makeQuestion читают уже очищенный
   // текст из стора (подпись поля = то, что осталось), см. pickType.
+  //
+  // Вырезание идёт через `restyle` по координатам плоского текста, а не склейкой строк:
+  // «/» и фильтр могли быть набраны внутри размеченного куска, и подъём строки заново
+  // стёр бы оформление всей подписи.
   function pickSlash(item: MenuItem) {
     if (slash) {
-      const value = block.text ?? ''
       const end = slash.start + 1 + slash.query.length
-      updateBlock(block.id, { text: value.slice(0, slash.start) + value.slice(end) })
+      updateBlock(block.id, { text: cutRange(block.text ?? [], slash.start, end) })
     }
     pickType(item)
   }
@@ -364,18 +381,20 @@ export function BlockRow({
   // кареткой открывает его на ЛЮБОМ неотвечаемом блоке (isContent: подписи title/label,
   // heading, абзац text), а не только на абзаце. Не открывает на consent: тот текст
   // несёт, но отвечаем — «/» там литерал. Печать всегда идёт в текст.
-  function onLabelChange(e: ChangeEvent<HTMLTextAreaElement>) {
-    const value = e.target.value
-    const caret = e.target.selectionStart ?? value.length
-    updateBlock(block.id, { text: value })
+  // Принимает уже разобранную МОДЕЛЬ и позицию каретки в плоском тексте, а не событие:
+  // логика слеша живёт в координатах текста и о поверхности ничего не знает — ровно
+  // поэтому переход textarea → contenteditable её не переписал.
+  function onLabelChange(spans: Span[], pos: number, kind?: UpdateKind) {
+    updateBlock(block.id, { text: spans }, kind)
+    const value = plainText(spans)
     if (slash) {
-      if (caret <= slash.start || value[slash.start] !== '/') return closeSlash()
-      const query = value.slice(slash.start + 1, caret)
+      if (pos <= slash.start || value[slash.start] !== '/') return closeSlash()
+      const query = value.slice(slash.start + 1, pos)
       if (/\s/.test(query) || filterMenuItems(query).length === 0) return closeSlash()
       setSlash({ start: slash.start, query })
       setSlashActive(0)
-    } else if (isContent && caret > 0 && value[caret - 1] === '/') {
-      setSlash({ start: caret - 1, query: '' })
+    } else if (isContent && pos > 0 && value[pos - 1] === '/') {
+      setSlash({ start: pos - 1, query: '' })
       setSlashActive(0)
     }
   }
@@ -528,11 +547,13 @@ export function BlockRow({
               {isConsent && (
                 <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
               )}
-              <textarea
-                ref={labelRef}
-                rows={1}
-                value={block.text ?? ''}
+              <RichLine
+                elRef={(el) => {
+                  labelRef.current = el
+                }}
+                value={block.text ?? []}
                 placeholder={captionPh}
+                label={captionName}
                 onChange={onLabelChange}
                 onFocus={() => {
                   setLabelFocused(true)
@@ -543,10 +564,7 @@ export function BlockRow({
                   textFocus.onBlur(e)
                 }}
                 onKeyDown={onLabelKeyDown}
-                // block: textarea по умолчанию inline-block и оставляет под собой
-                // ~7px базлайн-просвета (line-box строки-подписи выше textarea) — он
-                // раздувал ритм подпись→поле (13.3). display:block его убирает.
-                className={`block w-full resize-none bg-transparent outline-none placeholder:text-muted-foreground/60 ${captionCls}`}
+                className={`block w-full bg-transparent outline-none ${captionCls}`}
               />
             </div>
           </div>

@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -121,10 +122,10 @@ func TestForms_CRUDFlow(t *testing.T) {
 		t.Fatalf("неожиданная форма: %+v", created)
 	}
 
-	// GET → отдаёт draft_schema, канонизированный до v2 (CanonicalV2 на отдаче).
+	// GET → отдаёт draft_schema, канонизированный до текущей версии (CanonicalV3 на отдаче).
 	detail := getFormDetail(t, c, srv, created.ID, http.StatusOK)
-	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != 2 || len(got.Blocks) != 0 {
-		t.Fatalf("draftSchema = %s, ожидался пустой каркас v2", detail.DraftSchema)
+	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 0 {
+		t.Fatalf("draftSchema = %s, ожидался пустой канонический каркас", detail.DraftSchema)
 	}
 
 	// Переименование.
@@ -227,7 +228,7 @@ func TestForms_Duplicate(t *testing.T) {
 	// Черновик копии = черновик оригинала (канонизированный, апгрейд v1→v2:
 	// вопрос разложен на подпись title + поле b1).
 	got := parseSchema(t, getFormDetail(t, alice, srv, dup.ID, http.StatusOK).DraftSchema)
-	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема копии не совпадает с оригиналом: %+v", got)
 	}
 
@@ -349,10 +350,10 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	// v1→v2), вопрос разложен на подпись + поле. Порядок ключей задаёт JSONB (не
 	// Go-маршалинг), поэтому сверяем разбором.
 	got := parseSchema(t, getFormDetail(t, c, srv, form.ID, http.StatusOK).DraftSchema)
-	if got.SchemaVersion != 2 || len(got.Blocks) != 2 {
+	if got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 2 {
 		t.Fatalf("канонизация не проставила schemaVersion/группу: %+v", got)
 	}
-	if got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" {
+	if got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" {
 		t.Fatalf("подпись сохранена неверно: %+v", got.Blocks[0])
 	}
 	if b := got.Blocks[1]; b.ID != "b1" || b.Type != "short_text" || !b.Required {
@@ -520,9 +521,9 @@ func TestForms_PublicFetch(t *testing.T) {
 	if pub.Token == "" || etag == "" {
 		t.Fatalf("нет token (%q) или ETag (%q)", pub.Token, etag)
 	}
-	// Наружу уходит v2: welded-вопрос v1 разложен на подпись title + поле b1.
+	// Наружу уходит канон (v3): welded-вопрос v1 разложен на подпись title + поле b1.
 	got := parseSchema(t, pub.Schema)
-	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || got.Blocks[0].Text != "Имя" || got.Blocks[1].ID != "b1" {
+	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" || got.Blocks[1].ID != "b1" {
 		t.Fatalf("схема опубликованной версии неверна: %+v", got)
 	}
 
@@ -537,6 +538,66 @@ func TestForms_PublicFetch(t *testing.T) {
 	// существование не скрываем (шаг 4, решение владельца — любую закрытую показываем).
 	unpublishForm(t, owner, srv, form.ID, http.StatusOK)
 	getPublic(t, anon, srv, form.Slug, http.StatusGone)
+}
+
+// Демо-критерий этапа 14.2: форма с РАЗМЕЧЕННЫМ текстом, собранная запросом к API,
+// доезжает до публичной ручки без потерь — марки, цвет, фон и ссылка целы, а в данные
+// (og:description публичной страницы) уходит плоский текст без разметки.
+//
+// Проверяется весь путь целиком: PATCH черновика → ValidateSchema → JSONB → публикация
+// → снапшот версии → GET /public/v1. На каждом шаге текст мог схлопнуться в строку или
+// потерять поле спана, и юнит на валидаторе этого не увидел бы.
+func TestForms_RichTextSurvivesRoundTrip(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner-rich@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, owner, srv, "Опрос с оформлением")
+
+	schema := `{"schemaVersion":3,"blocks":[
+		{"id":"t1","groupId":"g1","type":"title","text":[
+			{"t":"Ваше "},
+			{"t":"имя","m":["b","i"],"color":"#c026d3","bg":"#ffff00"},
+			{"t":" — см. политику","href":"https://trillix.ru/privacy"}
+		],"settings":{}},
+		{"id":"b1","groupId":"g1","type":"short_text","required":true,"settings":{}}
+	]}`
+	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, owner, srv, form.ID, http.StatusOK)
+
+	pub, _ := getPublicOK(t, anon, srv, form.Slug)
+	got := parseSchema(t, pub.Schema)
+	if got.SchemaVersion != domain.SchemaVersion {
+		t.Fatalf("наружу ушла версия %d, ждали %d", got.SchemaVersion, domain.SchemaVersion)
+	}
+	if len(got.Blocks) != 2 {
+		t.Fatalf("ждали подпись + поле, получили %+v", got.Blocks)
+	}
+	want := []domain.Span{
+		{T: "Ваше "},
+		{T: "имя", M: []domain.Mark{domain.MarkBold, domain.MarkItalic}, Color: "#c026d3", BG: "#ffff00"},
+		{T: " — см. политику", Href: "https://trillix.ru/privacy"},
+	}
+	if !reflect.DeepEqual(got.Blocks[0].Text, want) {
+		t.Fatalf("богатый текст доехал искажённым:\nждали %+v\nполучили %+v", want, got.Blocks[0].Text)
+	}
+
+	// В данные разметка не протекает: og:description публичной HTML-страницы —
+	// плоский текст подписи.
+	r := do(t, anon, http.MethodGet, srv.URL+"/r/"+form.Slug, "", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("страница формы: статус %d", r.StatusCode)
+	}
+	body := body2(t, r)
+	if !strings.Contains(body, "Ваше имя — см. политику") {
+		t.Fatalf("og:description без плоского текста подписи: %s", body)
+	}
+	for _, marker := range []string{`"m":`, "#c026d3", "trillix.ru/privacy", "<b>"} {
+		if strings.Contains(body, marker) {
+			t.Fatalf("разметка протекла в og:description (%q): %s", marker, body)
+		}
+	}
 }
 
 // HTML-страница формы /r/{slug} (OG-мета от Go): опубликованная → 200 text/html с

@@ -184,8 +184,8 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 
 // ogDescriptionFromSchema собирает подзаголовок превью из формы: тексты первых
 // блоков-подписей (title/label) через « · ». Отдельного поля описания у формы нет,
-// поэтому берём осмысленный тизер из её содержимого. ValidateSchema приводит v1→v2
-// на лету (подпись переехала из поля в отдельный блок); разбор отказоустойчив —
+// поэтому берём осмысленный тизер из её содержимого. ValidateSchema приводит старые
+// версии к текущей на лету (v1→v2→v3); разбор отказоустойчив —
 // сбой даёт пустое описание, а не 500.
 func ogDescriptionFromSchema(schema json.RawMessage) string {
 	s, err := domain.ValidateSchema(schema)
@@ -197,7 +197,9 @@ func ogDescriptionFromSchema(schema json.RawMessage) string {
 		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
 			continue
 		}
-		text := strings.TrimSpace(b.Text)
+		// Плоский текст: og:description читают краулеры и соцсети, разметке там места
+		// нет (фаза 14).
+		text := strings.TrimSpace(domain.PlainText(b.Text))
 		if text == "" {
 			continue
 		}

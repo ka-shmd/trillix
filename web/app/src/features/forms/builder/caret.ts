@@ -17,6 +17,11 @@ export interface CaretAdapter {
   caretAtEnd(): boolean
   // Подгон высоты textarea под контент (автовысота, без скролла); у <input> — no-op.
   autosize(): void
+  // Плоский текст поверхности и позиция каретки в НЁМ (индекс в plain text, не в DOM).
+  // Нужно инлайн-слешу: он ищет «/» прямо перед кареткой (§3.5). У textarea это
+  // value+selectionStart, у contenteditable — обход текстовых узлов; поток строки
+  // о разнице знать не должен, поэтому спрашивает адаптер, а не элемент.
+  text(): { value: string; caret: number }
 }
 
 // Текстовая поверхность строки: многострочный <textarea> (подписи, абзацы) или
@@ -41,5 +46,6 @@ export function textCaret(el: TextEl): CaretAdapter {
       el.style.height = 'auto'
       el.style.height = `${el.scrollHeight}px`
     },
+    text: () => ({ value: el.value, caret: el.selectionStart ?? el.value.length }),
   }
 }

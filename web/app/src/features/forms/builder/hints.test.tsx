@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import type { FormSchema } from '@entities/formSchema'
+import { type FormSchema, textFromString } from '@entities/formSchema'
 import { isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
@@ -108,11 +108,11 @@ function hintText(): string {
 }
 
 const QUESTION: FormSchema = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   blocks: [
-    { id: 'cap', groupId: 'g1', type: 'title', text: 'Как вас зовут?' },
+    { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Как вас зовут?') },
     { id: 'inp', groupId: 'g1', type: 'short_text' },
-    { id: 'para', groupId: 'g2', type: 'text', text: 'Просто абзац' },
+    { id: 'para', groupId: 'g2', type: 'text', text: textFromString('Просто абзац') },
   ],
 }
 
@@ -158,7 +158,7 @@ describe('чипы у сфокусированной строки (§7)', () => 
 
   it('вариант choice: клавиши списка, а не блока', () => {
     const { focus } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         {
           id: 'ch',
@@ -178,9 +178,9 @@ describe('чипы у сфокусированной строки (§7)', () => 
     // двигают с подписи), значит и пункта в подсказке быть не должно. Голая шкала —
     // другое дело, но её теперь и не существует: заголовок этому типу обязателен.
     const { focus } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Оценка' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Оценка') },
         { id: 'sc', groupId: 'g1', type: 'scale' },
       ],
     })
@@ -192,9 +192,9 @@ describe('чипы у сфокусированной строки (§7)', () => 
 
   it('подписи вопроса перенос строки не обещан — Alt+↑↓ двигает вопрос', () => {
     const { focus } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Имя' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Имя') },
         { id: 'inp', groupId: 'g1', type: 'short_text' },
       ],
     })
@@ -206,7 +206,7 @@ describe('чипы у сфокусированной строки (§7)', () => 
 
   it('картинке обещан файловый диалог, шкале — нет (разные контексты)', () => {
     const { focus } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'img', groupId: 'g1', type: 'image' },
         { id: 'sc', groupId: 'g2', type: 'scale' },
@@ -238,7 +238,7 @@ describe('чипы у сфокусированной строки (§7)', () => 
     // по списку. Проверяем именно промежуточное состояние: после focusout с целью
     // внутри своей же строки набор обязан остаться.
     const { focus } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         {
           id: 'ch',

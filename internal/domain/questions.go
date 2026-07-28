@@ -75,16 +75,19 @@ func groupCaptions(blocks []Block) map[string]string {
 	caps := make(map[string]string)
 	hasTitle := make(map[string]bool)
 	for _, b := range blocks {
+		// Подпись уходит в заголовки CSV, шаги воронки и подписи сводки — то есть в
+		// ДАННЫЕ, куда разметка не протекает никогда (фаза 14): берём плоский текст.
+		text := PlainText(b.Text)
 		switch b.Type {
 		case BlockTitle:
-			if strings.TrimSpace(b.Text) != "" && !hasTitle[b.GroupID] {
-				caps[b.GroupID] = b.Text
+			if strings.TrimSpace(text) != "" && !hasTitle[b.GroupID] {
+				caps[b.GroupID] = text
 				hasTitle[b.GroupID] = true
 			}
 		case BlockLabel:
 			if !hasTitle[b.GroupID] {
-				if _, ok := caps[b.GroupID]; !ok && strings.TrimSpace(b.Text) != "" {
-					caps[b.GroupID] = b.Text
+				if _, ok := caps[b.GroupID]; !ok && strings.TrimSpace(text) != "" {
+					caps[b.GroupID] = text
 				}
 			}
 		}
@@ -118,8 +121,10 @@ func questionLabel(blk Block, groupCaption string, ordinal int) string {
 	if strings.TrimSpace(groupCaption) != "" {
 		return groupCaption
 	}
-	if strings.TrimSpace(blk.Text) != "" {
-		return blk.Text
+	// Собственный текст блока (у consent — текст согласия) тоже уходит в данные —
+	// значит плоским (фаза 14).
+	if own := PlainText(blk.Text); strings.TrimSpace(own) != "" {
+		return own
 	}
 	if strings.TrimSpace(blk.Settings.Placeholder) != "" {
 		return blk.Settings.Placeholder

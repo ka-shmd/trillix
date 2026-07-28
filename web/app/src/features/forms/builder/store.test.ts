@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formSchemaSchema, type FormSchema } from '@entities/formSchema'
+import { formSchemaSchema, type FormSchema, plainText, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
 import { createBuilderStore, planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
@@ -58,12 +58,12 @@ describe('createBuilderStore', () => {
     const [first, second] = store.getState().blocks
     store.getState().markSaved()
 
-    store.getState().updateBlock(first!.id, { text: 'Имя' })
+    store.getState().updateBlock(first!.id, { text: textFromString('Имя') })
 
     const s = store.getState()
-    expect(s.blocks[0]?.text).toBe('Имя')
+    expect(plainText(s.blocks[0]?.text)).toBe('Имя')
     expect(s.blocks[1]?.id).toBe(second!.id)
-    expect(s.blocks[1]?.text).toBe('')
+    expect(plainText(s.blocks[1]?.text)).toBe('')
     expect(s.dirty).toBe(true)
   })
 
@@ -125,7 +125,7 @@ describe('createBuilderStore', () => {
     const store = createBuilderStore()
     store.getState().addBlock('text') // абзац как черновая строка
     const id = store.getState().blocks[0]!.id
-    store.getState().updateBlock(id, { text: 'Ваше имя' })
+    store.getState().updateBlock(id, { text: textFromString('Ваше имя') })
     store.getState().markSaved()
 
     const focus = store.getState().makeQuestion(id, 'short_text')
@@ -135,9 +135,9 @@ describe('createBuilderStore', () => {
     // Набранный текст стал подписью (id сохранён), под ней — поле.
     expect(s.blocks[0]?.id).toBe(id)
     expect(s.blocks[0]?.type).toBe('title')
-    expect(s.blocks[0]?.text).toBe('Ваше имя')
+    expect(plainText(s.blocks[0]?.text)).toBe('Ваше имя')
     expect(s.blocks[1]?.type).toBe('short_text')
-    expect(s.blocks[1]?.text).toBe('')
+    expect(plainText(s.blocks[1]?.text)).toBe('')
     // Одна группа на подпись и поле; фокус — на подпись (у неё textarea).
     expect(s.blocks[0]?.groupId).toBe(s.blocks[1]?.groupId)
     expect(focus).toBe(id)
@@ -153,7 +153,7 @@ describe('createBuilderStore', () => {
     const s = store.getState()
     expect(s.blocks).toHaveLength(3) // поле a + [title, email]
     expect(s.blocks[1]?.type).toBe('title')
-    expect(s.blocks[1]?.text).toBe('')
+    expect(plainText(s.blocks[1]?.text)).toBe('')
     expect(s.blocks[2]?.type).toBe('email')
     expect(s.blocks[1]?.groupId).toBe(s.blocks[2]?.groupId)
     expect(focus).toBe(s.blocks[1]?.id)
@@ -361,7 +361,7 @@ describe('createBuilderStore', () => {
   it('changeBlockType — конверсия на месте (голое поле/лэйаут), id стабилен', () => {
     const store = createBuilderStore()
     store.getState().addBlock('text')
-    store.getState().updateBlock(store.getState().blocks[0]!.id, { text: 'Пропадёт у поля' })
+    store.getState().updateBlock(store.getState().blocks[0]!.id, { text: textFromString('Пропадёт у поля') })
     const id = store.getState().blocks[0]!.id
 
     const returned = store.getState().changeBlockType(id, 'single_choice')
@@ -370,7 +370,7 @@ describe('createBuilderStore', () => {
     expect(s.blocks).toHaveLength(1) // не разбивает — один блок на месте
     expect(s.blocks[0]?.id).toBe(id)
     expect(s.blocks[0]?.type).toBe('single_choice')
-    expect(s.blocks[0]?.text).toBe('') // поле текст не несёт — сброшен
+    expect(plainText(s.blocks[0]?.text)).toBe('') // поле текст не несёт — сброшен
     expect(s.blocks[0]?.settings?.options).toEqual([]) // варианты набирает автор
     expect(returned).toBe(id)
   })
@@ -383,7 +383,7 @@ describe('createBuilderStore', () => {
 
     // Так приходит отложенный колбэк, переживший свой блок: загрузка картинки
     // дописывает imageKey уже после того, как блок удалили.
-    store.getState().updateBlock('нет-такого', { text: 'привет' })
+    store.getState().updateBlock('нет-такого', { text: textFromString('привет') })
 
     const after = store.getState()
     expect(after.dirty).toBe(false)
@@ -395,11 +395,11 @@ describe('createBuilderStore', () => {
   it('updateBlock без фактического изменения — no-op', () => {
     const store = createBuilderStore()
     const id = store.getState().addBlockAfter(null, 'title')
-    store.getState().updateBlock(id, { text: 'Имя' })
+    store.getState().updateBlock(id, { text: textFromString('Имя') })
     store.getState().markSaved()
     const before = store.getState()
 
-    store.getState().updateBlock(id, { text: 'Имя' })
+    store.getState().updateBlock(id, { text: textFromString('Имя') })
     store.getState().updateBlock(id, { required: false })
 
     const after = store.getState()
@@ -674,7 +674,7 @@ describe('createBuilderStore', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     const schema: FormSchema = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       // groupId уже канонический (g_<id поля>) — regroup его не меняет.
       blocks: [{ id: 'x', groupId: 'g_x', type: 'email' }],
     }
@@ -699,7 +699,7 @@ describe('createBuilderStore', () => {
 
   it('hydrate загружает submitLabel из схемы', () => {
     const store = createBuilderStore()
-    store.getState().hydrate({ schemaVersion: 2, blocks: [], submitLabel: 'Отправить ответ' })
+    store.getState().hydrate({ schemaVersion: 3, blocks: [], submitLabel: 'Отправить ответ' })
     expect(store.getState().submitLabel).toBe('Отправить ответ')
   })
 
@@ -740,7 +740,7 @@ describe('createBuilderStore', () => {
   it('hydrate загружает поля экрана «после отправки» из схемы', () => {
     const store = createBuilderStore()
     store.getState().hydrate({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [],
       thankYouText: 'Спасибо!',
       redirectUrl: 'https://example.com',
@@ -757,15 +757,15 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
-  it('toSchema отдаёт валидный по контракту v2 документ (вопрос-группа)', () => {
+  it('toSchema отдаёт валидный по контракту документ (вопрос-группа)', () => {
     const store = createBuilderStore()
     store.getState().addBlock('title')
     store.getState().addBlock('short_text')
     store.getState().addBlock('single_choice')
-    store.getState().updateBlock(store.getState().blocks[0]!.id, { text: 'Имя' })
+    store.getState().updateBlock(store.getState().blocks[0]!.id, { text: textFromString('Имя') })
 
     const schema = store.getState().toSchema()
-    expect(schema.schemaVersion).toBe(2)
+    expect(schema.schemaVersion).toBe(SCHEMA_VERSION)
     expect(schema.blocks).toHaveLength(3)
     // Выход стора обязан проходить ту же Zod-проверку, что и на сервере.
     expect(formSchemaSchema.safeParse(schema).success).toBe(true)
@@ -851,12 +851,12 @@ describe('createBuilderStore — undo/redo', () => {
     const store = createBuilderStore()
     store.getState().addBlock('title')
     const id = store.getState().blocks[0]!.id
-    store.getState().updateBlock(id, { text: 'И' })
-    store.getState().updateBlock(id, { text: 'Им' })
-    store.getState().updateBlock(id, { text: 'Имя' })
+    store.getState().updateBlock(id, { text: textFromString('И') })
+    store.getState().updateBlock(id, { text: textFromString('Им') })
+    store.getState().updateBlock(id, { text: textFromString('Имя') })
 
     store.getState().undo()
-    expect(store.getState().blocks[0]!.text).toBe('')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('')
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
   })
@@ -879,7 +879,7 @@ describe('createBuilderStore — undo/redo', () => {
   it('hydrate очищает историю', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
-    store.getState().hydrate({ schemaVersion: 2, blocks: [], submitLabel: '' })
+    store.getState().hydrate({ schemaVersion: 3, blocks: [], submitLabel: '' })
     expect(store.getState().past).toEqual([])
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
@@ -1024,11 +1024,11 @@ describe('createBuilderStore — undo/redo', () => {
     store.getState().addBlock('title')
     store.getState().addBlock('short_text')
     const titleId = store.getState().blocks[0]!.id
-    store.getState().updateBlock(titleId, { text: 'Имя' })
+    store.getState().updateBlock(titleId, { text: textFromString('Имя') })
 
     const focus = store.getState().undo() // откат правки текста подписи
     expect(focus).toBe(titleId)
-    expect(store.getState().blocks[0]?.text).toBe('')
+    expect(plainText(store.getState().blocks[0]?.text)).toBe('')
   })
 
   it('undo удаления в хвосте фокусирует соседа; undo единственной вставки → null', () => {
@@ -1207,7 +1207,7 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
   it('hydrate снимает инертный бит (левого соседа нет)', () => {
     const store = createBuilderStore()
     const schema = formSchemaSchema.parse({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', settings: { column: 'right' } }],
     } satisfies FormSchema)
     store.getState().hydrate(schema)
@@ -1355,13 +1355,13 @@ describe('createBuilderStore — поле не живёт без подписи 
     const store = createBuilderStore()
     store.getState().addBlock('title')
     const titleId = store.getState().blocks[0]!.id
-    store.getState().updateBlock(titleId, { text: 'Откуда узнали?' })
+    store.getState().updateBlock(titleId, { text: textFromString('Откуда узнали?') })
 
     const focus = store.getState().addFieldAfter(titleId, 'multi_choice')
 
     expect(types(store)).toEqual(['title', 'multi_choice'])
     const [title, field] = store.getState().blocks
-    expect(title!.text).toBe('Откуда узнали?') // текст заголовка цел
+    expect(plainText(title!.text)).toBe('Откуда узнали?') // текст заголовка цел
     expect(focus).toBe(field!.id) // каретка на само поле — заголовок уже написан
     expect(title!.groupId).toBe(field!.groupId)
   })
@@ -1370,7 +1370,7 @@ describe('createBuilderStore — поле не живёт без подписи 
     const store = createBuilderStore()
     store.getState().addBlock('label')
     const labelId = store.getState().blocks[0]!.id
-    store.getState().updateBlock(labelId, { text: 'Город' })
+    store.getState().updateBlock(labelId, { text: textFromString('Город') })
 
     // Тип без обязательного заголовка идёт тем же путём: конверсия на месте
     // уронила бы текст подписи, а «Отдельные поля» существуют ровно ради того,
@@ -1378,7 +1378,7 @@ describe('createBuilderStore — поле не живёт без подписи 
     store.getState().makeField(labelId, 'email')
 
     expect(types(store)).toEqual(['label', 'email'])
-    expect(store.getState().blocks[0]!.text).toBe('Город')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Город')
     expect(store.getState().blocks[0]!.groupId).toBe(store.getState().blocks[1]!.groupId)
   })
 
@@ -1386,13 +1386,13 @@ describe('createBuilderStore — поле не живёт без подписи 
     const store = createBuilderStore()
     store.getState().addBlock('text')
     const loneId = store.getState().blocks[0]!.id
-    store.getState().updateBlock(loneId, { text: 'Откуда узнали?' })
+    store.getState().updateBlock(loneId, { text: textFromString('Откуда узнали?') })
 
     const focus = store.getState().makeField(loneId, 'single_choice')
 
     // Абзац стал подписью (текст сохранён), поле встало под ним — это makeQuestion.
     expect(types(store)).toEqual(['title', 'single_choice'])
-    expect(store.getState().blocks[0]!.text).toBe('Откуда узнали?')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Откуда узнали?')
     expect(focus).toBe(loneId)
   })
 
@@ -1410,14 +1410,14 @@ describe('createBuilderStore — поле не живёт без подписи 
     const store = createBuilderStore()
     store.getState().addFieldAfter(null, 'single_choice') // [title, single_choice]
     const titleId = store.getState().blocks[0]!.id
-    store.getState().updateBlock(titleId, { text: 'Откуда узнали?' })
+    store.getState().updateBlock(titleId, { text: textFromString('Откуда узнали?') })
     const choiceId = store.getState().blocks[1]!.id
     const only = store.getState().addOption(choiceId, 'Соцсети')
 
     store.getState().removeOption(choiceId, only)
 
     expect(types(store)).toEqual(['title'])
-    expect(store.getState().blocks[0]!.text).toBe('Откуда узнали?')
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Откуда узнали?')
   })
 
   it('удаление последнего варианта — ОДИН шаг истории (undo возвращает вопрос целиком)', () => {

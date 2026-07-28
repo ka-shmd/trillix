@@ -8,8 +8,12 @@ import {
   MAX_PLACEHOLDER_LEN,
   MAX_REDIRECT_URL_LEN,
   MAX_SUBMIT_LABEL_LEN,
+  MAX_SPANS,
   MAX_TEXT_LEN,
   MAX_THANK_YOU_TEXT_LEN,
+  plainText,
+  sameRichText,
+  textFromString,
 } from '@entities/formSchema'
 
 // Зеркало internal/domain/schema_test.go (модель v2, фаза 8.7): вопрос — группа
@@ -21,7 +25,7 @@ describe('formSchemaSchema — валидные', () => {
   const valid: Record<string, unknown> = {
     'пустой каркас без schemaVersion': { blocks: [] },
     'все отвечаемые типы (голые поля, свои группы)': {
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'b1', groupId: 'g1', type: 'short_text', required: true, settings: {} },
         { id: 'b2', groupId: 'g2', type: 'long_text', settings: {} },
@@ -41,30 +45,30 @@ describe('formSchemaSchema — валидные', () => {
       ],
     },
     'вопрос как группа title + поле': {
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 't1', groupId: 'g1', type: 'title', text: 'Ваше имя' },
+        { id: 't1', groupId: 'g1', type: 'title', text: [{ t: 'Ваше имя' }] },
         { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     },
     'контент между подписью и полем': {
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'l1', groupId: 'g1', type: 'label', text: 'Логотип' },
+        { id: 'l1', groupId: 'g1', type: 'label', text: [{ t: 'Логотип' }] },
         { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
         { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     },
     'секционный heading своей группой': {
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'h1', groupId: 'g1', type: 'heading', text: 'О компании' },
+        { id: 'h1', groupId: 'g1', type: 'heading', text: [{ t: 'О компании' }] },
         { id: 'b1', groupId: 'g2', type: 'short_text', settings: {} },
       ],
     },
     'consent несёт собственный текст': {
-      schemaVersion: 2,
-      blocks: [{ id: 'c', groupId: 'g1', type: 'consent', text: 'Согласен на обработку данных', required: true }],
+      schemaVersion: 3,
+      blocks: [{ id: 'c', groupId: 'g1', type: 'consent', text: [{ t: 'Согласен на обработку данных' }], required: true }],
     },
     'картинка без ключа — черновик': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: {} }],
@@ -149,17 +153,17 @@ describe('formSchemaSchema — невалидные', () => {
       blocks: [{ id: 'b', type: 'short_text', label: 'x' }],
     },
     'text у отвечаемого не-consent': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', text: 'нельзя', settings: {} }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', text: [{ t: 'нельзя' }], settings: {} }],
     },
     'text у image': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'image', text: 'нельзя', settings: {} }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'image', text: [{ t: 'нельзя' }], settings: {} }],
     },
     'пустой groupId': {
       blocks: [{ id: 'b', groupId: '', type: 'short_text', settings: {} }],
     },
     'группа разорвана чужим блоком': {
       blocks: [
-        { id: 'a', groupId: 'g1', type: 'title', text: 'A' },
+        { id: 'a', groupId: 'g1', type: 'title', text: [{ t: 'A' }] },
         { id: 'b', groupId: 'g2', type: 'short_text', settings: {} },
         { id: 'c', groupId: 'g1', type: 'email', settings: {} },
       ],
@@ -228,7 +232,9 @@ describe('formSchemaSchema — невалидные', () => {
       ],
     },
     'слишком длинный текст подписи': {
-      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: 'я'.repeat(MAX_TEXT_LEN + 1) }],
+      blocks: [
+        { id: 't', groupId: 'g1', type: 'title', text: [{ t: 'я'.repeat(MAX_TEXT_LEN + 1) }] },
+      ],
     },
     'слишком длинный submitLabel': { blocks: [], submitLabel: 'я'.repeat(MAX_SUBMIT_LABEL_LEN + 1) },
     'слишком длинный placeholder': {
@@ -280,4 +286,99 @@ describe('formSchemaSchema — невалидные', () => {
       expect(formSchemaSchema.safeParse(doc).success).toBe(false)
     })
   }
+})
+
+// Богатый текст (фаза 14, схема v3). Зеркало internal/domain/spans_test.go — оба
+// набора правятся одним PR: разъехавшиеся стороны означают 422 там, где фронт
+// показывает «сохранено».
+describe('богатый текст блока', () => {
+  const doc = (text: unknown) => ({
+    schemaVersion: 3,
+    blocks: [
+      { id: 't', groupId: 'g', type: 'title', text },
+      { id: 'f', groupId: 'g', type: 'short_text', settings: {} },
+    ],
+  })
+
+  const valid: Record<string, unknown> = {
+    'простой кусок': [{ t: 'Ваше имя' }],
+    'все булевы марки': [{ t: 'а', m: ['b', 'i', 'u', 's'] }],
+    'цвет и фон': [{ t: 'а', color: '#c026d3', bg: '#ffff00' }],
+    'ссылка': [{ t: 'политика', href: 'https://trillix.ru/privacy' }],
+    'несколько кусков с разным оформлением': [
+      { t: 'жир', m: ['b'] },
+      { t: 'но' },
+      { t: '!', color: '#000000' },
+    ],
+    'пустой массив — недособранный черновик': [],
+    'два подряд одинаковых куска — склейка НЕ обязанность валидатора': [{ t: 'а' }, { t: 'б' }],
+  }
+  for (const [name, text] of Object.entries(valid)) {
+    it(`валидно: ${name}`, () => {
+      expect(formSchemaSchema.safeParse(doc(text)).success).toBe(true)
+    })
+  }
+
+  const invalid: Record<string, unknown> = {
+    'пустой кусок': [{ t: '' }],
+    'пустой кусок в середине': [{ t: 'а' }, { t: '' }, { t: 'б' }],
+    'строка вместо массива': 'просто строка',
+    'лишнее поле спана': [{ t: 'а', bold: true }],
+    'неизвестная марка': [{ t: 'а', m: ['blink'] }],
+    'повторяющаяся марка': [{ t: 'а', m: ['b', 'b'] }],
+    'цвет словом': [{ t: 'а', color: 'red' }],
+    'цвет в rgb()': [{ t: 'а', color: 'rgb(1,2,3)' }],
+    'цвет в верхнем регистре': [{ t: 'а', color: '#C026D3' }],
+    'цвет тремя цифрами': [{ t: 'а', color: '#abc' }],
+    'фон по тому же правилу': [{ t: 'а', bg: 'salmon' }],
+    // Инвариант 4: единственная марка с угрозой безопасности.
+    'ссылка javascript:': [{ t: 'а', href: 'javascript:alert(1)' }],
+    'ссылка data:': [{ t: 'а', href: 'data:text/html,x' }],
+    'ссылка относительная': [{ t: 'а', href: '/privacy' }],
+    'суммарная длина сверх лимита': [
+      { t: 'я'.repeat(MAX_TEXT_LEN) },
+      { t: 'лишний', m: ['b'] },
+    ],
+    'кусков больше лимита': Array.from({ length: MAX_SPANS + 1 }, () => ({ t: 'я' })),
+  }
+  for (const [name, text] of Object.entries(invalid)) {
+    it(`невалидно: ${name}`, () => {
+      expect(formSchemaSchema.safeParse(doc(text)).success).toBe(false)
+    })
+  }
+
+  // Лимит числа кусков ловит ровно то, чего не ловит лимит длины: MAX_SPANS + 1
+  // односимвольных кусков короче MAX_TEXT_LEN, то есть по длине документ законен.
+  it('лимит числа кусков ловит то, чего не ловит лимит длины', () => {
+    const many = Array.from({ length: MAX_SPANS + 1 }, () => ({ t: 'я' }))
+    expect(many.length).toBeLessThan(MAX_TEXT_LEN)
+    expect(formSchemaSchema.safeParse(doc(many)).success).toBe(false)
+    expect(formSchemaSchema.safeParse(doc(many.slice(0, MAX_SPANS))).success).toBe(true)
+  })
+})
+
+describe('plainText / textFromString / sameRichText', () => {
+  it('plainText склеивает куски и не отдаёт разметку', () => {
+    expect(plainText([{ t: 'жир', m: ['b'] }, { t: 'но' }])).toBe('жирно')
+    expect(plainText([{ t: 'сюда', href: 'https://a.ru' }])).toBe('сюда')
+    expect(plainText(undefined)).toBe('')
+  })
+
+  it('textFromString: пустая строка даёт пустой массив, не кусок с пустотой', () => {
+    expect(textFromString('')).toEqual([])
+    expect(textFromString('абв')).toEqual([{ t: 'абв' }])
+  })
+
+  // Сравнение по значению, а не по ссылке: каждый набранный символ приносит свежий
+  // массив с тем же содержимым, и по ссылке no-op в updateBlock перестал бы работать
+  // (лишний шаг истории, dirty, лишний PATCH).
+  it('sameRichText сравнивает по значению', () => {
+    expect(sameRichText(textFromString('а'), textFromString('а'))).toBe(true)
+    expect(sameRichText(undefined, [])).toBe(true)
+    expect(sameRichText(textFromString('а'), textFromString('б'))).toBe(false)
+    expect(sameRichText([{ t: 'а' }], [{ t: 'а', m: ['b'] }])).toBe(false)
+    expect(sameRichText([{ t: 'а', m: ['b'] }], [{ t: 'а', m: ['i'] }])).toBe(false)
+    expect(sameRichText([{ t: 'а', color: '#000000' }], [{ t: 'а' }])).toBe(false)
+    expect(sameRichText([{ t: 'а' }], [{ t: 'а' }, { t: 'б' }])).toBe(false)
+  })
 })

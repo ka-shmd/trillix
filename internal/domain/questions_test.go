@@ -65,8 +65,8 @@ func TestQuestionOrder_LabelFromFreshestVersionWithBlock(t *testing.T) {
 // перебивает label; связь — по groupId.
 func TestQuestionOrder_CaptionFromGroupTitle(t *testing.T) {
 	got := QuestionOrder([]VersionedSchema{vs(1,
-		Block{ID: "l1", GroupID: "g1", Type: BlockLabel, Text: "мелкая"},
-		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: "Крупная подпись"},
+		Block{ID: "l1", GroupID: "g1", Type: BlockLabel, Text: TextFromString("мелкая")},
+		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: TextFromString("Крупная подпись")},
 		Block{ID: "b1", GroupID: "g1", Type: BlockShortText},
 	)})
 	if got[0].Label != "Крупная подпись" {
@@ -79,7 +79,7 @@ func TestQuestionOrder_CaptionFromGroupTitle(t *testing.T) {
 func TestQuestionOrder_CaptionByGroupNotPosition(t *testing.T) {
 	got := QuestionOrder([]VersionedSchema{vs(1,
 		Block{ID: "b1", GroupID: "g1", Type: BlockShortText},
-		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: "Имя"},
+		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: TextFromString("Имя")},
 	)})
 	if got[0].Label != "Имя" {
 		t.Fatalf("подпись = %q, ждали «Имя» (по группе, а не по позиции)", got[0].Label)
@@ -114,7 +114,7 @@ func TestQuestionOrder_GeneratedFromTypeAndOrdinal(t *testing.T) {
 // title не нужно.
 func TestQuestionOrder_ConsentOwnTextAsCaption(t *testing.T) {
 	got := QuestionOrder([]VersionedSchema{vs(1,
-		Block{ID: "c1", GroupID: "g1", Type: BlockConsent, Text: "Соглашаюсь с обработкой данных"},
+		Block{ID: "c1", GroupID: "g1", Type: BlockConsent, Text: TextFromString("Соглашаюсь с обработкой данных")},
 	)})
 	if got[0].Label != "Соглашаюсь с обработкой данных" {
 		t.Fatalf("подпись = %q, ждали текст согласия", got[0].Label)

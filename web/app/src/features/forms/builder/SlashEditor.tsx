@@ -35,6 +35,8 @@ import {
   isAnswerableType,
   isCaptionType,
   MAX_SUBMIT_LABEL_LEN,
+  plainText,
+  textFromString,
 } from '@entities/formSchema'
 import { groupBlocks, groupCanShareRow, packRows } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
@@ -365,7 +367,7 @@ export function SlashEditor({
     // строку литералом «/»: инлайн-слеш открыт с монтирования на позиции 0 (§3.5),
     // «/» остаётся в тексте, как при наборе «/» в самой строке.
     const seed = opts.openMenu ? '/' : opts.seed
-    if (seed) updateBlock(id, { text: seed })
+    if (seed) updateBlock(id, { text: textFromString(seed) })
     if (opts.openMenu) setMenuForId(id)
     engine.focusBlock(id)
   }
@@ -422,6 +424,14 @@ export function SlashEditor({
   // кареткой. Предыдущий блок — картинка → удаляем её, а текущий блок с кареткой
   // остаётся на месте (у image нет textarea, встать каретке некуда). Иначе — пустой
   // текущий блок схлопываем в предыдущий с переносом фокуса.
+  //
+  // «Пусто» считается по ПЛОСКОМУ тексту, а не сравнением поля с пустой строкой:
+  // с фазы 14 text — массив спанов, и `(text ?? '') === ''` для него ложно ВСЕГДА
+  // (пустой массив не равен пустой строке). Тип это пропускает — `Span[] | ''`
+  // пересекается с `''`, поэтому tsc сравнение не запрещает, — и весь жест молча
+  // переставал работать: пустая строка не схлопывалась ни в какой ситуации.
+  const isBlank = (b: Block) => plainText(b.text) === ''
+
   function handleBackspaceAtStart(id: string) {
     const i = blocks.findIndex((b) => b.id === id)
     const cur = blocks[i]
@@ -432,7 +442,7 @@ export function SlashEditor({
       // обычному тексту: под удалённой картинкой должен остаться чистый текстовый блок,
       // а не пустое поле-вопрос. Непустой блок сохраняем как есть.
       removeBlock(prev.id)
-      if ((cur.text ?? '') === '' && cur.type !== 'text') changeBlockType(cur.id, 'text')
+      if (isBlank(cur) && cur.type !== 'text') changeBlockType(cur.id, 'text')
       return
     }
     // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
@@ -440,7 +450,7 @@ export function SlashEditor({
     // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
     // блока нет — полотно пустеет, каретка на заголовок (не в body). Инпут плейсхолдера
     // перескакиваем (stopNeighbor): каретка встаёт на подпись, а не в поле.
-    if ((cur.text ?? '') === '') {
+    if (isBlank(cur)) {
       const prevStop = stopNeighbor(blocks, i, 'up')
       if (isCaptionType(cur.type)) removeGroup(id)
       else removeBlock(id)

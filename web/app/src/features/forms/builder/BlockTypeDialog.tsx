@@ -1,6 +1,12 @@
 import { useMemo, useState } from 'react'
 import { ArrowRight, Search } from 'lucide-react'
-import { type Block, type BlockType, carriesText, isChoiceType } from '@entities/formSchema'
+import {
+  type Block,
+  type BlockType,
+  carriesText,
+  isChoiceType,
+  textFromString,
+} from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
 import { chords } from './shortcuts'
@@ -161,7 +167,7 @@ function sampleBlock(type: BlockType): Block {
     id: 'sample',
     groupId: 'sample',
     type,
-    text,
+    text: textFromString(text),
   }
   if (isChoiceType(type)) {
     return {

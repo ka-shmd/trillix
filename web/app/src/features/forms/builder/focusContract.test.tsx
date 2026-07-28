@@ -1,19 +1,21 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
 import { cleanup, fireEvent, render } from '@testing-library/react'
-import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import type { FormSchema } from '@entities/formSchema'
+import { type FormSchema, textFromString } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
+import { richCaret } from './richCaret'
 
 // Контракт фокуса полотна (§2.1, §2.4): каждая строка регистрирует фокус-цель, и
-// focusBlock(id, edge) ставит document.activeElement на её поверхность — textarea
-// подписи, инпут плейсхолдера/варианта или объектную остановку. Рендерим НАСТОЯЩИЕ
+// focusBlock(id, edge) ставит document.activeElement на её поверхность — текстовую
+// строку подписи (contenteditable с этапа 14.3), инпут плейсхолдера/варианта или
+// объектную остановку. Рендерим НАСТОЯЩИЕ
 // BlockRow под happy-dom и проверяем activeElement. Так демо-критерий этапа
 // («каретка нигде не в body») закрыт быстрым юнитом, а не только e2e.
 
@@ -63,13 +65,13 @@ function setup(schema: FormSchema) {
 const el = () => document.activeElement as HTMLElement
 
 describe('контракт фокус-целей строк (§2.1)', () => {
-  it('подпись/контент/consent — фокус на textarea своего текста', () => {
+  it('подпись/контент/consent — фокус на текстовую поверхность своего текста', () => {
     const { engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'title', groupId: 'g1', type: 'title', text: 'Вопрос' },
-        { id: 'head', groupId: 'g2', type: 'heading', text: 'Раздел' },
-        { id: 'cons', groupId: 'g3', type: 'consent', text: 'Согласен', required: true },
+        { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
+        { id: 'head', groupId: 'g2', type: 'heading', text: textFromString('Раздел') },
+        { id: 'cons', groupId: 'g3', type: 'consent', text: textFromString('Согласен'), required: true },
       ],
     })
     for (const [id, text] of [
@@ -78,25 +80,53 @@ describe('контракт фокус-целей строк (§2.1)', () => {
       ['cons', 'Согласен'],
     ]) {
       engine.focusBlock(id!, 'end')
-      expect(el().tagName).toBe('TEXTAREA')
-      expect((el() as HTMLTextAreaElement).value).toBe(text)
+      // С этапа 14.3 текстовая поверхность — contenteditable, а не <textarea>. Сам
+      // контракт от этого не изменился: движок ставит фокус на поверхность строки, и
+      // проверяется именно это, а не тег.
+      expect(el().dataset.richLine).toBeDefined()
+      expect(el().textContent).toBe(text)
     }
+  })
+
+  // Имя строки — единственное, чем за неё можно взяться снаружи: у contenteditable нет
+  // ни `placeholder`, ни своего `<label>`, и до этапа 14.5 поверхность была безымянной
+  // для скринридера (а e2e держались за исчезнувший `textarea`). У `text` имя обязано
+  // совпадать под фокусом и без него — там мигает видимая подсказка, а не имя.
+  it('текстовая строка называет себя, и у `text` имя не зависит от фокуса', () => {
+    const { engine } = setup({
+      schemaVersion: 3,
+      blocks: [
+        { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
+        { id: 'cons', groupId: 'g2', type: 'consent', text: textFromString('Согласен') },
+        { id: 'para', groupId: 'g3', type: 'text', text: [] },
+      ],
+    })
+    const named = (name: string) =>
+      document.querySelector(`[data-rich-line][aria-label="${name}"]`)
+    expect(named('Заголовок вопроса')).not.toBeNull()
+    expect(named('Текст согласия')).not.toBeNull()
+    // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
+    expect(named('Текст, или «/» для поля')).not.toBeNull()
+    engine.focusBlock('para', 'end')
+    expect(el().getAttribute('aria-label')).toBe('Текст, или «/» для поля')
   })
 
   it('край каретки: start → в начало, end → в конец текста', () => {
     const { engine } = setup({
-      schemaVersion: 2,
-      blocks: [{ id: 'title', groupId: 'g1', type: 'title', text: 'Привет' }],
+      schemaVersion: 3,
+      blocks: [{ id: 'title', groupId: 'g1', type: 'title', text: textFromString('Привет') }],
     })
     engine.focusBlock('title', 'start')
-    expect((el() as HTMLTextAreaElement).selectionStart).toBe(0)
+    expect(richCaret(el()).text().caret).toBe(0)
+    expect(richCaret(el()).caretAtStart()).toBe(true)
     engine.focusBlock('title', 'end')
-    expect((el() as HTMLTextAreaElement).selectionStart).toBe(6)
+    expect(richCaret(el()).text().caret).toBe(6)
+    expect(richCaret(el()).caretAtEnd()).toBe(true)
   })
 
   it('текстовые поля — фокус на инпут плейсхолдера', () => {
     const { engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'st', groupId: 'g1', type: 'short_text', settings: {} },
         { id: 'lt', groupId: 'g2', type: 'long_text', settings: {} },
@@ -113,7 +143,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('choice — фокус на инпут варианта: start → первый, end → последний', () => {
     const { engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         {
           id: 'ch',
@@ -131,7 +161,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('image/date/scale — фокус на объектную остановку (tabIndex -1)', () => {
     const { engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'img', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
         { id: 'dt', groupId: 'g2', type: 'date', settings: {} },
@@ -149,7 +179,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 describe('поведение объектной остановки (§2.2)', () => {
   function objectStop() {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'sc', groupId: 'g1', type: 'scale', settings: { scaleMin: 1, scaleMax: 5 } }],
     })
     engine.focusBlock('sc')
@@ -195,9 +225,9 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
     // Проверяем именно адресата: строка просит родителя увести каретку наверх
     // (дальше её ведёт stopNeighbor — см. navigation.test.ts).
     const { engine, handlers, store } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Ваш выбор' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Ваш выбор') },
         {
           id: 'ch',
           groupId: 'g1',
@@ -218,7 +248,7 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
 describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-26)', () => {
   it('пустой плейсхолдер → поле удаляется, как объект и как последний вариант', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
@@ -231,7 +261,7 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
 
   it('плейсхолдер с текстом — Backspace правит текст (не уходит вверх)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: { placeholder: 'Иван' } }],
     })
     engine.focusBlock('st', 'end')
@@ -247,8 +277,8 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
 describe('Enter / Shift+Enter на текстовой строке (§3.2)', () => {
   function textRow() {
     const ctx = setup({
-      schemaVersion: 2,
-      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' }],
+      schemaVersion: 3,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
     })
     ctx.engine.focusBlock('t', 'end')
     return ctx
@@ -268,11 +298,11 @@ describe('Enter / Shift+Enter на текстовой строке (§3.2)', () 
 
   it('Alt+Shift+↓ на подписи — перенос группы целиком (moveGroup)', () => {
     const { store, engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 't1', groupId: 'g1', type: 'title', text: 'A' },
+        { id: 't1', groupId: 'g1', type: 'title', text: textFromString('A') },
         { id: 'f1', groupId: 'g1', type: 'short_text', settings: {} },
-        { id: 't2', groupId: 'g2', type: 'title', text: 'B' },
+        { id: 't2', groupId: 'g2', type: 'title', text: textFromString('B') },
         { id: 'f2', groupId: 'g2', type: 'email', settings: {} },
       ],
     })
@@ -285,7 +315,7 @@ describe('Enter / Shift+Enter на текстовой строке (§3.2)', () 
 describe('клавиатура вариантов choice (§3.2, Д5)', () => {
   function choiceRow(options: { id: string; label: string }[]) {
     const ctx = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options } }],
     })
     return ctx
@@ -331,9 +361,9 @@ describe('клавиатура вариантов choice (§3.2, Д5)', () => {
 describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
   it('на подписи — зовёт onDeleteBlock с id (родитель сносит группу)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' },
+        { id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     })
@@ -344,7 +374,7 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
 
   it('на варианте choice — зовёт onDeleteBlock с id блока (не варианта)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
       ],
@@ -358,9 +388,9 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
 describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', () => {
   it('с подписи — зовёт onAnswerAction с id (родитель прыгает к контролу)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' },
+        { id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     })
@@ -371,7 +401,7 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
 
   it('на картинке — открывает файловый диалог (клик по скрытому input)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'img', groupId: 'g1', type: 'image', settings: {} }],
     })
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
@@ -384,126 +414,17 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
   })
 })
 
-// Инлайн-слеш (§3.5, TD-33): «/» — литерал в тексте, меню фильтруется набором,
-// несовпадение/Esc закрывают с сохранением текста, выбор вырезает «/»+фильтр и
-// применяет тип. В отличие от статичного setup здесь строка ПОДПИСАНА на стор
-// (reactiveRow), чтобы value textarea отражал набор — иначе вырезание и конверсия
-// (читают текущий block.text) не проверить. Один текстовый (text) блок.
-function reactiveRow(text = '') {
-  const store = createBuilderStore()
-  store.getState().hydrate({
-    schemaVersion: 2,
-    blocks: [{ id: 't', groupId: 'g1', type: 'text', text }],
-  })
-  const engine = createFocusEngine()
-  function Row() {
-    const blocks = useStore(store, (s) => s.blocks)
-    const b = blocks[0]
-    if (!b) return null
-    return (
-      <BlockRow
-        block={b}
-        formId="f"
-        groupHandle={null}
-        openMenuOnMount={false}
-        onAddBelow={vi.fn()}
-        onInsertBelow={vi.fn()}
-        onBackspaceAtStart={vi.fn()}
-        onBackspaceDelete={vi.fn()}
-        onDeleteBlock={vi.fn()}
-        onAnswerAction={vi.fn()}
-        onArrow={vi.fn()}
-        onRowShift={vi.fn()}
-      />
-    )
-  }
-  render(
-    <BuilderStoreContext.Provider value={store}>
-      <FocusEngineProvider value={engine}>
-        <DndContext>
-          <SortableContext items={['t']}>
-            <Row />
-          </SortableContext>
-        </DndContext>
-      </FocusEngineProvider>
-    </BuilderStoreContext.Provider>,
-  )
-  return { store, engine }
-}
-
-// type — эмулирует набор в textarea ПОСИМВОЛЬНО (дописывает к текущему значению),
-// каретка в конец. Посимвольность важна: инлайн-слеш триггерится, только когда «/»
-// стоит прямо перед кареткой (§3.5), — вставка всей строки разом это не воспроизводит.
-function type(value: string) {
-  const ta = document.querySelector('textarea')!
-  let cur = ta.value
-  for (const ch of value.slice(cur.length)) {
-    cur += ch
-    fireEvent.change(ta, {
-      target: { value: cur, selectionStart: cur.length, selectionEnd: cur.length },
-    })
-  }
-}
-
-describe('инлайн-слеш (§3.5, TD-33)', () => {
-  it('«/» открывает меню; литерал остаётся в тексте, каретка не покидает строку', () => {
-    const { store } = reactiveRow()
-    const ta = document.querySelector('textarea')!
-    ta.focus()
-    type('/')
-    expect(store.getState().blocks[0]!.text).toBe('/') // «/» в тексте, не проглочен
-    expect(document.body.textContent).toContain('Короткий ответ') // меню открыто
-    expect(document.activeElement).toBe(ta) // фокус в textarea, а не в поповере
-  })
-
-  it('набор после «/» фильтрует пункты', () => {
-    reactiveRow()
-    type('/email')
-    const menu = document.querySelector('[role="listbox"]')!.textContent ?? ''
-    expect(menu).toContain('Email')
-    expect(menu).not.toContain('Дата')
-  })
-
-  it('несовпадение («и/или») закрывает меню, текст сохраняется', () => {
-    const { store } = reactiveRow('и')
-    type('и/или')
-    expect(store.getState().blocks[0]!.text).toBe('и/или')
-    expect(document.querySelector('[role="listbox"]')).toBeNull() // меню закрыто
-  })
-
-  it('Esc закрывает меню, «/» остаётся в тексте', () => {
-    const { store } = reactiveRow()
-    type('/')
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Escape', code: 'Escape' })
-    expect(document.querySelector('[role="listbox"]')).toBeNull()
-    expect(store.getState().blocks[0]!.text).toBe('/')
-  })
-
-  it('выбор вырезает «/»+фильтр и конвертирует (Вопрос: подпись+поле)', () => {
-    const { store } = reactiveRow()
-    type('/email')
-    // ArrowDown не нужен — активен первый пункт (q_email, раздел «Вопросы»).
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
-    const blocks = store.getState().blocks
-    expect(blocks.map((b) => b.type)).toEqual(['title', 'email'])
-    expect(blocks[0]!.text).toBe('') // «/email» вырезан целиком
-  })
-
-  it('текст перед «/» становится подписью поля', () => {
-    const { store } = reactiveRow('Возраст')
-    type('Возраст/')
-    fireEvent.keyDown(document.querySelector('textarea')!, { key: 'Enter', code: 'Enter' })
-    const blocks = store.getState().blocks
-    expect(blocks[0]!.type).toBe('title')
-    expect(blocks[0]!.text).toBe('Возраст') // «/» вырезан, текст-подпись сохранён
-  })
-})
+// Инлайн-слеш (§3.5, TD-33) переехал в `richLine.test.tsx` — целиком, теми же шестью
+// проверками. Причина: с этапа 14.3 они требуют посимвольного набора в contenteditable
+// (дописать символ в текстовый узел, подвинуть каретку, послать `input`), а такой
+// хелпер — это уже про поверхность, а не про контракт фокуса. Держать его в двух
+// наборах значило бы держать две его версии.
 
 describe('Cmd+. — меню действий блока (§3.3)', () => {
   it('открывает поповер с действиями (дублировать/сменить тип/удалить)', () => {
     const { engine } = setup({
-      schemaVersion: 2,
-      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: 'Вопрос' }],
+      schemaVersion: 3,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
     })
     engine.focusBlock('t', 'end')
     fireEvent.keyDown(el(), { key: '.', code: 'Period', metaKey: true })
@@ -515,7 +436,7 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
 
   it('на варианте choice — открывает меню всего блока', () => {
     const { engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
       ],
@@ -536,9 +457,9 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на подписи вопроса зовёт перенос — цель выбирает полотно', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'c1', groupId: 'g1', type: 'title', text: 'Имя' },
+        { id: 'c1', groupId: 'g1', type: 'title', text: textFromString('Имя') },
         { id: 'f1', groupId: 'g1', type: 'short_text' },
       ],
     })
@@ -551,7 +472,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на инпуте плейсхолдера работает: у голого поля это единственная поверхность', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
@@ -561,7 +482,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на объектной остановке (date) переносит ВОПРОС, а не строку', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [{ id: 'd', groupId: 'g1', type: 'date', settings: {} }],
     })
     engine.focusBlock('d')
@@ -571,7 +492,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на варианте choice ставит в ряд ВАРИАНТ; каретка едет с ним', () => {
     const { engine, store, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         {
           id: 'ch',
@@ -596,7 +517,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на варианте dropdown жест уходит ВОПРОСУ: рядов у нативного списка нет', () => {
     const { engine, store, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
         {
           id: 'dd',

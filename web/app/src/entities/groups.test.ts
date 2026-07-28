@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
-import type { Block, BlockType, Option } from '@entities/formSchema'
+import { type Block, type BlockType, type Option, textFromString } from '@entities/formSchema'
 
 // packRows/packOptionRows (@fields/groups) — раскладчик рядов (спека §5/§5.1), общий
 // для превью, рендерера и полотна. Тест живёт рядом с formSchema.test.ts: у
@@ -13,7 +13,7 @@ const field = (id: string, right = false, type: BlockType = 'short_text'): Block
   ...(right ? { settings: { column: 'right' } } : {}),
 })
 
-const caption = (id: string, groupId: string): Block => ({ id, groupId, type: 'title', text: 'Q' })
+const caption = (id: string, groupId: string): Block => ({ id, groupId, type: 'title', text: textFromString('Q') })
 
 const rows = (blocks: Block[]): string[][] =>
   packRows(groupBlocks(blocks)).map((row) => row.map((g) => g.id))
@@ -57,7 +57,7 @@ describe('packRows', () => {
 
   it('группа без отвечаемого блока партнёром не становится', () => {
     const blocks = [
-      { id: 'h', groupId: 'h', type: 'heading' as BlockType, text: 'Раздел' },
+      { id: 'h', groupId: 'h', type: 'heading' as BlockType, text: textFromString('Раздел') },
       field('b', true),
     ]
     expect(rows(blocks)).toEqual([['h'], ['b']])

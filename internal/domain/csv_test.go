@@ -20,12 +20,12 @@ func grp(caption string, b Block) []Block {
 	if caption == "" {
 		return []Block{b}
 	}
-	return []Block{{ID: "t_" + b.ID, GroupID: g, Type: BlockTitle, Text: caption}, b}
+	return []Block{{ID: "t_" + b.ID, GroupID: g, Type: BlockTitle, Text: TextFromString(caption)}, b}
 }
 
 // content — самостоятельный контентный блок (heading/text) своей группой.
 func content(id string, t BlockType, text string) []Block {
-	return []Block{{ID: id, GroupID: "g_" + id, Type: t, Text: text}}
+	return []Block{{ID: id, GroupID: "g_" + id, Type: t, Text: TextFromString(text)}}
 }
 
 // vsg — VersionedSchema из групп: склеивает их в плоский список блоков.

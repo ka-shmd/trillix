@@ -21,16 +21,23 @@ import (
 // отдельным блоком, поэтому у поля своего текста нет — кроме consent, у которого
 // текст согласия интринсик контрола (рендерится рядом с галочкой).
 
-// SchemaVersion — текущая версия формата. v1-документы апгрейдятся на чтении
-// (ValidateSchema, upgradeV1toV2) без миграции БД.
-const SchemaVersion = 2
+// SchemaVersion — текущая версия формата. Старые документы апгрейдятся на чтении
+// цепочкой v1→v2→v3 (ValidateSchema) без миграции БД.
+const SchemaVersion = 3
 
 // Лимиты схемы. Верхние границы — защита от раздутого документа; длины строк
 // считаются в рунах. Заведомо просторны для нормальной анкеты, но конечны.
 const (
-	MaxBlocks         = 200
-	MaxOptions        = 100
-	MaxTextLen        = 2000 // текст подписи/контента (title/label/heading/text/consent)
+	MaxBlocks  = 200
+	MaxOptions = 100
+	// MaxTextLen — суммарная длина текста блока по всем спанам (title/label/heading/
+	// text/consent). Число то же, что было у строки в v2: текст не стал длиннее от
+	// того, что его покрасили.
+	MaxTextLen = 2000
+	// MaxSpans — число кусков в тексте одного блока. Второй лимит обязателен: без
+	// него MaxTextLen перестал быть лимитом документа в тот момент, когда строка
+	// стала массивом (см. validateSpans).
+	MaxSpans          = 200
 	MaxOptionLabelLen = 500
 	MaxIDLen          = 64
 	MaxSubmitLabelLen = 100
@@ -181,11 +188,14 @@ type BlockSettings struct {
 // 3.4): вопрос — группа блоков подряд с общим groupId, в которой не более одного
 // отвечаемого блока. Text несут только carriesText-типы; у отвечаемых полей
 // (кроме consent) он пуст — подпись живёт в блоке title/label той же группы.
+//
+// Text — богатый текст (v3): плоский массив спанов, см. spans.go. Плоскую строку для
+// данных даёт PlainText.
 type Block struct {
 	ID       string        `json:"id"`
 	GroupID  string        `json:"groupId"`
 	Type     BlockType     `json:"type"`
-	Text     string        `json:"text,omitempty"`
+	Text     []Span        `json:"text,omitempty"`
 	Required bool          `json:"required,omitempty"`
 	Settings BlockSettings `json:"settings"`
 }
@@ -206,8 +216,8 @@ type FormSchema struct {
 	RedirectURL   string  `json:"redirectUrl"`
 }
 
-// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. v1-
-// документы (по schemaVersion 0/1) сперва апгрейдятся до v2 (upgradeV1toV2) —
+// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. Старые
+// документы (по schemaVersion 0/1/2) сперва апгрейдятся цепочкой до текущей версии —
 // читатель приводит формат на лету, БД не мигрируется (ARCHITECTURE 3.4).
 //
 // Лишние поля запрещены (DisallowUnknownFields) — расхождение контракта ловится
@@ -227,12 +237,22 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return FormSchema{}, schemaErr("не удалось разобрать схему: %v", err)
 	}
+	// Апгрейд ЦЕПОЧКОЙ, а не отдельным конвертером на каждую пару версий: v1
+	// поднимается до v2, v2 — до v3, и добавление v4 будет означать одну новую
+	// функцию и одну строку здесь, а не N² переходов.
 	switch probe.SchemaVersion {
 	case SchemaVersion:
-		// уже v2
-	case 0, 1:
-		// v1 (или дефолт БД '{"blocks":[]}' без версии) — апгрейд на чтении.
-		upgraded, err := upgradeV1toV2(raw)
+		// уже v3
+	case 0, 1, 2:
+		if probe.SchemaVersion < 2 {
+			// v1 (или дефолт БД '{"blocks":[]}' без версии).
+			upgraded, err := upgradeV1toV2(raw)
+			if err != nil {
+				return FormSchema{}, err
+			}
+			raw = upgraded
+		}
+		upgraded, err := upgradeV2toV3(raw)
 		if err != nil {
 			return FormSchema{}, err
 		}
@@ -252,8 +272,8 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("лишние данные после схемы")
 	}
 
-	// После апгрейда schemaVersion всегда 2; отсутствие трактуем как текущую
-	// (апгрейд из v1 её проставляет, но пустой дефолт мог прийти уже v2).
+	// После апгрейда schemaVersion всегда 3; отсутствие трактуем как текущую
+	// (апгрейд её проставляет, но пустой дефолт мог прийти уже канонический).
 	if s.SchemaVersion == 0 {
 		s.SchemaVersion = SchemaVersion
 	}
@@ -293,11 +313,11 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	return s, nil
 }
 
-// CanonicalV2 приводит сырую схему к каноническому v2-JSON: апгрейд v1→v2 и
-// валидация. Нужна на отдаче фронту, который знает только текущий формат (рендерер
-// читает опубликованную версию, кабинет — черновик, и обе в БД могут быть ещё v1).
-// Идемпотентна на уже-v2. Ошибка означает битую схему в БД — наружу как есть.
-func CanonicalV2(raw json.RawMessage) (json.RawMessage, error) {
+// CanonicalV3 приводит сырую схему к каноническому v3-JSON: апгрейд цепочкой
+// v1→v2→v3 и валидация. Нужна на отдаче фронту, который знает только текущий формат
+// (рендерер читает опубликованную версию, кабинет — черновик, и обе в БД могут быть
+// ещё v1/v2). Идемпотентна на уже-v3. Ошибка означает битую схему в БД — наружу как есть.
+func CanonicalV3(raw json.RawMessage) (json.RawMessage, error) {
 	s, err := ValidateSchema(raw)
 	if err != nil {
 		return nil, err
@@ -351,12 +371,12 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if !b.Type.valid() {
 		return schemaErr("%s: неизвестный тип %q", at, b.Type)
 	}
-	if n := utf8.RuneCountInString(b.Text); n > MaxTextLen {
-		return schemaErr("%s: text длиннее %d символов", at, MaxTextLen)
+	if err := validateSpans(b.Text); err != nil {
+		return schemaErr("%s: %s", at, err)
 	}
 	// Собственный text — только у carriesText-типов (подписи, контент, consent);
 	// у прочих подпись живёт отдельным блоком.
-	if !b.Type.carriesText() && b.Text != "" {
+	if !b.Type.carriesText() && len(b.Text) > 0 {
 		return schemaErr("%s: тип %q не несёт собственного текста", at, b.Type)
 	}
 	if n := utf8.RuneCountInString(b.Settings.Placeholder); n > MaxPlaceholderLen {

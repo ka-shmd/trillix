@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, within } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import type { Block, FormSchema } from '@entities/formSchema'
+import { type Block, type FormSchema, textFromString } from '@entities/formSchema'
 import { isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
@@ -84,12 +84,12 @@ const controls = (id: string) =>
     .filter((l): l is string => l !== null)
 
 const QUESTION: FormSchema = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   blocks: [
-    { id: 'cap', groupId: 'g1', type: 'title', text: 'Как вас зовут?' },
+    { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Как вас зовут?') },
     { id: 'inp', groupId: 'g1', type: 'short_text' },
     { id: 'bare', groupId: 'g2', type: 'email' },
-    { id: 'para', groupId: 'g3', type: 'text', text: 'Абзац' },
+    { id: 'para', groupId: 'g3', type: 'text', text: textFromString('Абзац') },
   ],
 }
 
@@ -145,9 +145,9 @@ describe('звёздочка обязательности', () => {
 
 describe('значки варианта', () => {
   const CHOICE: FormSchema = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     blocks: [
-      { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+      { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
       {
         id: 'ch',
         groupId: 'g1',
@@ -173,9 +173,9 @@ describe('значки варианта', () => {
 
   it('редактор показывает тот же глиф, что респондент: чекбокс у «нескольких»', () => {
     setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Что берёте?' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Что берёте?') },
         {
           id: 'ch',
           groupId: 'g1',
@@ -203,9 +203,9 @@ describe('значки варианта', () => {
 
   it('мусорка последнего варианта уносит блок, а каретку — наверх', () => {
     const { store, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
         { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
       ],
     })
@@ -222,9 +222,9 @@ describe('значки варианта', () => {
 // не является, в схеме его нет, и весь его смысл — что набор продолжается подряд.
 describe('призрак в конце списка вариантов', () => {
   const EMPTY_CHOICE: FormSchema = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     blocks: [
-      { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+      { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
       { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [] } },
     ],
   }
@@ -272,9 +272,9 @@ describe('призрак в конце списка вариантов', () => {
 
   it('при готовых вариантах призрак стоит последним и блок не трогает', () => {
     const { store, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Откуда узнали?' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
         {
           id: 'ch',
           groupId: 'g1',
@@ -296,9 +296,9 @@ describe('призрак в конце списка вариантов', () => {
 describe('Alt+↑↓ на строке ответа', () => {
   it('шкала внутри вопроса не двигается и не отдаёт жест обходу', () => {
     const { store, engine, handlers } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: 'Оценка' },
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Оценка') },
         { id: 'sc', groupId: 'g1', type: 'scale', settings: { scaleMin: 1, scaleMax: 5 } },
       ],
     })
@@ -315,9 +315,9 @@ describe('Alt+↑↓ на строке ответа', () => {
 
   it('голое поле (дата без подписи) двигается как обычный блок', () => {
     const { store, engine } = setup({
-      schemaVersion: 2,
+      schemaVersion: 3,
       blocks: [
-        { id: 'para', groupId: 'g1', type: 'text', text: 'Абзац' },
+        { id: 'para', groupId: 'g1', type: 'text', text: textFromString('Абзац') },
         { id: 'dt', groupId: 'g2', type: 'date', settings: {} },
       ],
     })
