@@ -95,6 +95,25 @@ test('билдер без мыши: форма собирается клавиа
   await expect(canvasTitles).toHaveCount(1)
   await page.keyboard.type(nameQ)
 
+  // 4b. Форматирование с клавиатуры (фаза 14). Единственная автоматика, которая ходит
+  // по границе «браузер ↔ наша модель»: юниты держат модель, разметку и канон спанов,
+  // но не то, КАК марка нарисована, — и фаза 14 теряла жирный ровно там дважды (сперва
+  // не было CSS-правила вовсе, потом оно лежало в стилях кабинета, то есть публичная
+  // форма жирный не показывала).
+  //
+  // Выделяем последнее слово заголовка стрелками с Shift — мышь в этом сценарии не
+  // участвует. Панель форматирования при этом всплывает, но её не трогаем: она
+  // держится на позиционировании портала, и клик по ней через Playwright проверял бы
+  // координаты, а не марку.
+  const boldWord = nameQ.slice(nameQ.lastIndexOf(' ') + 1)
+  for (let i = 0; i < boldWord.length; i++) {
+    await page.keyboard.press('Shift+ArrowLeft')
+  }
+  await page.keyboard.press(`${MOD}+KeyB`)
+  // На полотне жирным стало ровно выделенное, а не вся подпись: марка разрезала спан
+  // по границам выделения.
+  await expect(canvasTitles.nth(0).locator('.rf-b')).toHaveText(boldWord)
+
   // 5. Enter с заголовка кладёт новую строку ПОСЛЕ всей группы (не внутрь вопроса) —
   // на ней собираем второй вопрос тем же жестом.
   await page.keyboard.press('Enter')
@@ -155,9 +174,20 @@ test('билдер без мыши: форма собирается клавиа
   const formPage = await desktop.newPage()
   await formPage.goto(link)
 
+  // Поле находится по ПОЛНОЙ подписи — это заодно доказательство, что разметка не
+  // протекла в доступное имя: оно собирается из плоского текста, а не из спанов.
   const nameField = formPage.getByLabel(nameQ)
   const mailField = formPage.getByLabel(mailQ)
   await expect(nameField).toBeVisible()
+
+  // Жирное доехало до респондента И НАРИСОВАНО. Класс — это только модель; правило
+  // `.rf-b` живёт в общем fields.css, и единственное доказательство, что оно доехало до
+  // ПУБЛИЧНОЙ формы (а не осталось в стилях кабинета, как было в этапе 14.1), —
+  // насыщенность, снятая с живого элемента прод-сборки.
+  const boldOnForm = formPage.locator('.rf-b').first()
+  await expect(boldOnForm).toHaveText(boldWord)
+  const weight = await boldOnForm.evaluate((el) => getComputedStyle(el).fontWeight)
+  expect(Number(weight)).toBeGreaterThanOrEqual(600)
 
   // Обёртка ряда достаётся ТОЛЬКО ряду из двоих (packRows): ровно одна на форму —
   // третий вопрос в неё попасть не должен.
@@ -209,4 +239,23 @@ test('билдер без мыши: форма собирается клавиа
   await expect(dialog.getByText(nameA)).toBeVisible()
   await expect(dialog.getByText(mailA)).toBeVisible()
   await expect(dialog.getByText(srcA, { exact: true })).toBeVisible()
+
+  // 12. В данные разметка не протекает (сквозной критерий фазы 14): в сводке ответов
+  // подпись вопроса — плоская строка, и в CSV колонка называется тем же текстом, без
+  // единого следа спанов. Тянем выгрузку запросом, а не скачиванием: предмет — её
+  // содержимое, а ход «ссылка → файл» держит full-loop.
+  // Подпись вопроса в карточке ответа — плоская строка целиком, и ни одного носителя
+  // марки в диалоге нет: сводка берёт `plainText`, а не спаны.
+  await expect(dialog.getByText(nameQ, { exact: true })).toBeVisible()
+  await expect(dialog.locator('.rf-b')).toHaveCount(0)
+
+  await page.keyboard.press('Escape') // оверлей диалога перекрывает ссылку экспорта
+  await expect(dialog).toBeHidden()
+
+  const csvHref = await page.getByRole('link', { name: 'Экспорт CSV' }).getAttribute('href')
+  const csv = await (await page.request.get(csvHref!)).text()
+  expect(csv).toContain(nameQ)
+  // Разметка в CSV выглядела бы либо тегом, либо сырым спаном — обе формы ловим здесь,
+  // потому что обе означают одно: выгрузку открыли в Excel и увидели мусор.
+  expect(csv).not.toMatch(/<span|rf-b|"m":/)
 })
