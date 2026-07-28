@@ -572,6 +572,21 @@ describe('ссылка (панель + Mod+K)', () => {
     },
   )
 
+  // Адрес люди копируют и диктуют без схемы. Дописываем её за автора — но только тому,
+  // что похоже на хост: иначе набранное слово («трилликс», проверка выше) молча
+  // становилось бы ссылкой в никуда.
+  it('адрес без схемы получает https://', () => {
+    const { store } = reactiveRow('абвгд')
+    selectText(1, 3)
+    fireEvent.keyDown(line(), { code: 'KeyK', ctrlKey: true })
+    fireEvent.change(linkInput(), { target: { value: '  trillix.ru/privacy  ' } })
+    fireEvent.keyDown(linkInput(), { key: 'Enter' })
+    expect(store.getState().blocks[0]!.text?.[1]).toEqual({
+      t: 'бв',
+      href: 'https://trillix.ru/privacy',
+    })
+  })
+
   it('«Убрать ссылку» снимает её и возвращает документ к одному куску', () => {
     const { store } = reactiveRow('абвгд')
     selectText(1, 3)

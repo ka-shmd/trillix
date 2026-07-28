@@ -62,7 +62,7 @@ export function BlockField({
     }
     // text — статический абзац. Пустой блок держит место (одна строка rf-text), а не
     // схлопывается: недособранный черновик остаётся видимым пустым пространством.
-    return <ContentBlock block={block} required={captionRequired} />
+    return <ContentBlock block={block} required={captionRequired} inert={disabled} />
   }
 
   const errorId = error ? `${block.id}-error` : undefined
@@ -97,7 +97,15 @@ export function BlockControl({ block }: { block: Block }) {
 // ContentBlock — неотвечаемый блок: подпись группы (title крупная / label мелкая),
 // заголовок раздела (heading), абзац (text) или картинка (image). Звёздочку
 // обязательности несёт подпись, если у поля группы стоит required.
-function ContentBlock({ block, required }: { block: Block; required?: boolean }) {
+function ContentBlock({
+  block,
+  required,
+  inert,
+}: {
+  block: Block
+  required?: boolean
+  inert?: boolean
+}) {
   if (block.type === 'image') {
     const key = block.settings?.imageKey
     return key ? (
@@ -110,7 +118,7 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
   if (block.type === 'title' || block.type === 'label') {
     return (
       <div className={block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label'}>
-        {text ? <RichText spans={block.text} /> : 'Без названия'}
+        {text ? <RichText spans={block.text} inert={inert} /> : 'Без названия'}
         {required && (
           <span className="rf-required" aria-hidden="true">
             {' '}
@@ -123,11 +131,11 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
   if (block.type === 'heading') {
     return (
       <div className="rf-heading">
-        {text ? <RichText spans={block.text} /> : 'Заголовок раздела'}
+        {text ? <RichText spans={block.text} inert={inert} /> : 'Заголовок раздела'}
       </div>
     )
   }
-  return <p className="rf-text">{text ? <RichText spans={block.text} /> : ' '}</p>
+  return <p className="rf-text">{text ? <RichText spans={block.text} inert={inert} /> : ' '}</p>
 }
 
 // RichText — вывод богатого текста блока (фаза 14, §3.1 спеки). Один `.map`: кусок без
@@ -144,7 +152,12 @@ function ContentBlock({ block, required }: { block: Block; required?: boolean })
 //   3. Цвет уходит в style, а не в className: значение свободное (ADR §10), React его
 //      экранирует, а `#rrggbb` из схемы не оставляет места ни для url(...), ни для
 //      наследия expression.
-export function RichText({ spans }: { spans: Span[] | undefined }) {
+//
+// `inert` — блок показывают, но форма не живая (превью билдера). Ссылка тогда рисуется
+// ровно так же (вид трёх поверхностей обязан совпадать), но никуда не ведёт: клик по
+// ней в превью уводил бы АВТОРА с полотна посреди сборки формы. У респондента
+// (`disabled={false}`) ссылка живая — она для него и делалась.
+export function RichText({ spans, inert }: { spans: Span[] | undefined; inert?: boolean }) {
   if (!spans?.length) return null
   return (
     <>
@@ -160,6 +173,7 @@ export function RichText({ spans }: { spans: Span[] | undefined }) {
               href={s.href}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={inert ? (e) => e.preventDefault() : undefined}
             >
               {s.t}
             </a>
@@ -299,7 +313,7 @@ function FieldControl({ block, label, value, onChange, disabled, invalid, errorI
           />
           <span className="rf-consent">
             {plainText(block.text).trim() ? (
-              <RichText spans={block.text} />
+              <RichText spans={block.text} inert={disabled} />
             ) : (
               'Текст согласия'
             )}

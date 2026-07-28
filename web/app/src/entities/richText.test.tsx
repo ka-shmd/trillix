@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach } from 'vitest'
 import { BlockField, RichText } from '@fields/BlockField'
 import { type Block, type Span } from '@entities/formSchema'
@@ -140,6 +140,22 @@ describe('BlockField рисует богатый текст всех текст�
     const c = render(<BlockField block={block} />).container
     expect(c.querySelector('input[type="checkbox"]')).not.toBeNull()
     expect(c.querySelector('.rf-consent a')?.getAttribute('href')).toBe('https://a.ru/p')
+  })
+
+  // Превью билдера рисуется тем же кодом, что и живая форма (BlockField, disabled по
+  // умолчанию) — и ссылка в нём обязана выглядеть ссылкой, но никуда не вести: клик по
+  // ней уводил бы АВТОРА с полотна посреди сборки формы.
+  it('в превью ссылка выглядит ссылкой, но клик не уводит; у респондента — уводит', () => {
+    const block = { id: 'b', groupId: 'g', type: 'text', text: rich } as Block
+
+    const preview = render(<BlockField block={block} />).container
+    const a = preview.querySelector('a')!
+    expect(a.getAttribute('href')).toBe('https://a.ru')
+    expect(fireEvent.click(a)).toBe(false) // дефолт погашен — перехода нет
+
+    cleanup()
+    const live = render(<BlockField block={block} disabled={false} />).container
+    expect(fireEvent.click(live.querySelector('a')!)).toBe(true)
   })
 
   it('пустой текст даёт прежний плейсхолдер, а не пустое место', () => {

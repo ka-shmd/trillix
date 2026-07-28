@@ -313,6 +313,22 @@ function ColorButton({
 // правила React: начальное значение черновика приходит из пропа, и синхронизировать его
 // эффектом (`setState` внутри `useEffect`) нельзя — это каскадные ре-рендеры. Компонент
 // монтируется вместе с открытием поля, поэтому `useState` берёт значение сам.
+// withScheme — «example.com» → «https://example.com». Адрес люди диктуют и копируют без
+// схемы, а валидатор (тот же, что у redirectUrl) требует абсолютный http(s). Без этого
+// поле держало кнопку неактивной, не объясняя, чего ему не хватает.
+//
+// Два условия, и оба нужны:
+//   • схемы нет вовсе — `javascript:` и `mailto:` уже схемы, превращать их в
+//     `https://javascript:…` нельзя; как есть они проверку не пройдут, и это верный
+//     исход;
+//   • в хосте есть точка — иначе любое НАБРАННОЕ СЛОВО становилось бы адресом
+//     («трилликс» → `https://трилликс` — формально валидный URL с хостом), и опечатка
+//     молча превращалась бы в ссылку в никуда.
+const withScheme = (s: string): string => {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s
+  return s.split(/[/?#]/, 1)[0]!.includes('.') ? `https://${s}` : s
+}
+
 function LinkEditor({
   href,
   onSubmit,
@@ -323,10 +339,11 @@ function LinkEditor({
   onCancel: () => void
 }) {
   const [draft, setDraft] = useState(href ?? '')
-  const valid = draft === '' || isHttpUrl(draft)
+  const trimmed = draft.trim()
+  const valid = trimmed === '' || isHttpUrl(withScheme(trimmed))
   const submit = () => {
     if (!valid) return
-    onSubmit(draft === '' ? undefined : draft)
+    onSubmit(trimmed === '' ? undefined : withScheme(trimmed))
   }
 
   return (
