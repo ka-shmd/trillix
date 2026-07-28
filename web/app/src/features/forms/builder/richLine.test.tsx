@@ -245,6 +245,22 @@ describe('каретка переживает ре-рендер полотна �
     fireEvent.input(el)
     expect(richCaret(line()).text().caret).toBe(3)
   })
+
+  // Строку, стёртую дочиста, обязано быть видно пустой — и в сторе, и на поверхности.
+  // Браузер оставляет на её месте служебный <br> (без него contenteditable схлопывается
+  // по высоте); пока он читался пробелом, ресинк писал этот пробел обратно настоящим, и
+  // опустошить строку было нельзя вовсе — вместе с подсказкой, которая ждёт `:empty`.
+  it('стёртая дочиста строка остаётся пустой, а не возвращается с пробелом', () => {
+    const { store } = reactiveRow('а')
+    const el = line()
+    el.focus()
+    el.textContent = ''
+    el.appendChild(el.ownerDocument.createElement('br'))
+    fireEvent.input(el)
+
+    expect(store.getState().blocks[0]!.text).toEqual([])
+    expect(line().textContent).toBe('')
+  })
 })
 
 describe('марки поверх модели', () => {

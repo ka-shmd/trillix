@@ -131,12 +131,47 @@ describe('DOM ↔ модель', () => {
     expect(spansFromDom(el)).toEqual([{ t: 'а', color: '#c026d3' }])
   })
 
-  it('<br> из вставки становится пробелом — строка полотна однострочная', () => {
+  it('<br> ПОСРЕДИ текста становится пробелом — строка полотна однострочная', () => {
     const el = div()
     el.appendChild(document.createTextNode('а'))
     el.appendChild(document.createElement('br'))
     el.appendChild(document.createTextNode('б'))
     expect(plainText(spansFromDom(el))).toBe('а б')
+  })
+
+  // Дефект, из-за которого строку было НЕ ОПУСТОШИТЬ: стерев последний символ, автор
+  // получал обратно пробел. Хвостовой <br> вставляет сам браузер (иначе пустой
+  // contenteditable схлопывается по высоте) — это служебный узел, а не перенос.
+  it('хвостовой <br> из опустевшей строки не даёт ни пробела, ни спана', () => {
+    const el = div()
+    el.appendChild(document.createElement('br'))
+    expect(spansFromDom(el)).toEqual([])
+  })
+
+  it('хвостовой <br> после текста текст не удлиняет', () => {
+    const el = div()
+    el.appendChild(document.createTextNode('а'))
+    el.appendChild(document.createElement('br'))
+    expect(spansFromDom(el)).toEqual([{ t: 'а' }])
+  })
+
+  // Пробел на месте переноса наследует стиль своего места, иначе он не склеится с
+  // соседями и один жирный кусок поедет тремя.
+  it('перенос между двумя жирными кусками склеивается в один спан', () => {
+    const el = div()
+    const mk = (t: string) => {
+      const s = document.createElement('span')
+      s.className = 'rf-b'
+      s.textContent = t
+      return s
+    }
+    const wrap = document.createElement('span')
+    wrap.className = 'rf-b'
+    wrap.appendChild(mk('а'))
+    wrap.appendChild(document.createElement('br'))
+    wrap.appendChild(mk('б'))
+    el.appendChild(wrap)
+    expect(spansFromDom(el)).toEqual([{ t: 'а б', m: ['b'] }])
   })
 })
 

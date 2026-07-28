@@ -224,19 +224,32 @@ export function spansToDom(root: HTMLElement, spans: Span[]): void {
 // spansFromDom читает поверхность обратно в модель. Стиль наследуется вглубь: браузер при
 // наборе на границе умеет вкладывать <span> в <span>, и плоская модель обязана это
 // пережить, а не считать вложенность ошибкой.
+//
+// <br> разбирается ОТЛОЖЕННО, и это не мелочь. Строка однострочная, поэтому перенос
+// посреди текста — пробел; но ХВОСТОВОЙ <br> ставит сам браузер, когда автор стёр
+// строку дочиста (без него пустой contenteditable схлопывается по высоте), и он не
+// перенос вовсе. Пока он читался пробелом, опустошить строку было нельзя: `commit`
+// клал в стор пробел, ресинк видел расхождение плоского текста с DOM и писал этот
+// пробел обратно уже настоящим, а подсказка пустой строки (`:empty`) не возвращалась.
+// Поэтому решение принимается после обхода, когда видно, есть ли за <br> ещё текст.
 export function spansFromDom(root: HTMLElement): Span[] {
+  // `{ br }` — место, где стоял <br>, вместе со стилем, действовавшим на этом месте;
+  // чем оно станет, решается ниже.
+  const raw: (Span | { br: Style })[] = []
+  const isBr = (p: Span | { br: Style }): p is { br: Style } => 'br' in p
   const out: Span[] = []
   const walk = (node: Node, inherited: Style): void => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3) {
-        out.push(mkSpan(child.textContent ?? '', inherited))
+        const t = child.textContent ?? ''
+        // Пустые текстовые узлы не копим: их и так выбросил бы канон, но здесь они
+        // вдобавок мешали бы увидеть, что <br> — хвостовой.
+        if (t !== '') raw.push(mkSpan(t, inherited))
         continue
       }
       if (!(child instanceof HTMLElement)) continue
-      // <br> — единственный элемент без текста, который сюда попадает (перенос строки
-      // из вставки). Строка полотна однострочная, поэтому перенос превращается в пробел.
       if (child.tagName === 'BR') {
-        out.push(mkSpan(' ', inherited))
+        raw.push({ br: inherited })
         continue
       }
       const own: Style = {
@@ -250,6 +263,16 @@ export function spansFromDom(root: HTMLElement): Span[] {
     }
   }
   walk(root, {})
+
+  // Хвостовые <br> — служебные, их не существует для модели. Остальные — пробелы, и
+  // стиль они берут тот, что был в силе на их месте: иначе пробел между двумя жирными
+  // кусками не склеился бы с соседями и текст поехал бы на три спана вместо одного.
+  let end = raw.length
+  while (end > 0 && isBr(raw[end - 1]!)) end--
+  for (let i = 0; i < end; i++) {
+    const piece = raw[i]!
+    out.push(isBr(piece) ? mkSpan(' ', piece.br) : piece)
+  }
   return normalize(out)
 }
 
