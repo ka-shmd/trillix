@@ -111,31 +111,7 @@ export function hasMarkThroughout(spans: Span[], from: number, to: number, mark:
   return true
 }
 
-// hrefThroughout — адрес, общий для ВСЕГО выделения, иначе undefined. Панель показывает
-// ссылку нажатой только когда она одна на весь диапазон: у выделения, накрывшего две
-// разные ссылки, «текущего адреса» не существует, и подставлять первый попавшийся в
-// поле правки значило бы тихо переписать вторую.
-export function hrefThroughout(spans: Span[], from: number, to: number): string | undefined {
-  if (to <= from) return undefined
-  let pos = 0
-  let seen: string | undefined
-  let first = true
-  for (const s of spans) {
-    const start = pos
-    const end = pos + s.t.length
-    pos = end
-    if (end <= from || start >= to) continue
-    if (first) {
-      seen = s.href
-      first = false
-    } else if (s.href !== seen) {
-      return undefined
-    }
-  }
-  return seen
-}
-
-export const toggleMark = (spans: Span[], from: number, to: number, mark: Mark): Span[] => {
+export const toggleMark =(spans: Span[], from: number, to: number, mark: Mark): Span[] => {
   const on = !hasMarkThroughout(spans, from, to, mark)
   return restyle(spans, from, to, (st) => ({
     ...st,
@@ -226,6 +202,22 @@ export function spansToDom(root: HTMLElement, spans: Span[]): void {
   }
 }
 
+// styleOfEl — оформление элемента поверхности вместе с унаследованным. Наследование
+// вглубь — не поблажка, а требование: браузер при наборе на границе вкладывает <span> в
+// <span>, и плоская модель обязана это пережить. Снять цвет вложенным элементом нельзя
+// (пустой data-атрибут читается как «не задано»), и это верно: сами мы вложенности не
+// печатаем — `spansToDom` кладёт куски рядом, — а браузер, клонируя узел, клонирует и
+// значение вместе с ним.
+function styleOfEl(el: HTMLElement, inherited: Style): Style {
+  return {
+    m: [...(inherited.m ?? []), ...MARKS.filter((mk) => el.classList.contains(markClass(mk)))],
+    // Только data-атрибуты: инлайн-стиль браузер отдаёт нормализованным.
+    color: el.dataset.color || inherited.color,
+    bg: el.dataset.bg || inherited.bg,
+    href: el.dataset.href || inherited.href,
+  }
+}
+
 // spansFromDom читает поверхность обратно в модель. Стиль наследуется вглубь: браузер при
 // наборе на границе умеет вкладывать <span> в <span>, и плоская модель обязана это
 // пережить, а не считать вложенность ошибкой.
@@ -257,14 +249,7 @@ export function spansFromDom(root: HTMLElement): Span[] {
         raw.push({ br: inherited })
         continue
       }
-      const own: Style = {
-        m: [...(inherited.m ?? []), ...MARKS.filter((mk) => child.classList.contains(markClass(mk)))],
-        // Только data-атрибуты: инлайн-стиль браузер отдаёт нормализованным.
-        color: child.dataset.color || inherited.color,
-        bg: child.dataset.bg || inherited.bg,
-        href: child.dataset.href || inherited.href,
-      }
-      walk(child, own)
+      walk(child, styleOfEl(child, inherited))
     }
   }
   walk(root, {})
@@ -279,6 +264,57 @@ export function spansFromDom(root: HTMLElement): Span[] {
     out.push(isBr(piece) ? mkSpan(' ', piece.br) : piece)
   }
   return normalize(out)
+}
+
+// activeStyle — что стоит на ВСЁМ полуинтервале [from, to): булевы марки и общий адрес
+// ссылки. Ровно то, что нужно панели форматирования, и ничего больше.
+//
+// Читает DOM НАПРЯМУЮ, а не через `spansFromDom`. Это не микрооптимизация: панель
+// пересчитывается на каждый `selectionchange`, то есть на каждом кадре протяжки мышью,
+// а сборка модели ради двух ответов означала обход дерева, канон со склейкой соседей и
+// N новых объектов — всё немедленно выброшенное, — плюс пять отдельных проходов по
+// готовому массиву (по одному на марку и один на ссылку). Здесь один обход и ни одной
+// аллокации на кусок текста.
+//
+// Координаты — те же, что у `caretOffset`: длина считается по текстовым узлам, <br>
+// пропускается. Иначе панель отвечала бы про другой диапазон, чем тот, к которому
+// применится команда.
+export function activeStyle(
+  root: HTMLElement,
+  from: number,
+  to: number,
+): { marks: ReadonlySet<Mark>; href?: string } {
+  // Марки выбывают по контрпримеру: стартуем со всех и вычёркиваем те, которых нет на
+  // очередном куске. Пустое пересечение — единственный честный ответ для диапазона, не
+  // накрывшего ни одного куска.
+  const marks = new Set<Mark>(MARKS)
+  let href: string | undefined
+  let first = true
+  let pos = 0
+
+  const walk = (node: Node, inherited: Style): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === 3) {
+        const start = pos
+        pos += (child.textContent ?? '').length
+        // Строгое пересечение: кусок, лишь примыкающий к границе выделения, в него не
+        // входит и на «нажатость» кнопки влиять не должен.
+        if (pos <= from || start >= to) continue
+        for (const m of marks) if (!inherited.m?.includes(m)) marks.delete(m)
+        if (first) {
+          href = inherited.href
+          first = false
+        } else if (href !== inherited.href) {
+          href = undefined
+        }
+        continue
+      }
+      if (!(child instanceof HTMLElement) || child.tagName === 'BR') continue
+      walk(child, styleOfEl(child, inherited))
+    }
+  }
+  walk(root, {})
+  return { marks: first ? new Set<Mark>() : marks, href: first ? undefined : href }
 }
 
 // ---------- каретка в координатах плоского текста ----------

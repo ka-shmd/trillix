@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import { plainText, type Span } from '@entities/formSchema'
 import {
+  activeStyle,
   caretOffset,
   hasMarkThroughout,
   markClass,
@@ -172,6 +173,62 @@ describe('DOM ↔ модель', () => {
     wrap.appendChild(mk('б'))
     el.appendChild(wrap)
     expect(spansFromDom(el)).toEqual([{ t: 'а б', m: ['b'] }])
+  })
+})
+
+// То, что панель форматирования спрашивает у поверхности на каждом кадре протяжки
+// мышью. Читается прямо из DOM: собирать ради двух ответов модель — обход дерева, канон
+// и N выброшенных объектов на каждое движение.
+describe('что стоит на всём выделении', () => {
+  // Документ: «аб» жирный, «вг» жирный со ссылкой, «де» без всего.
+  const surface = () => {
+    const el = div()
+    spansToDom(el, [
+      { t: 'аб', m: ['b'] },
+      { t: 'вг', m: ['b'], href: 'https://a.ru' },
+      { t: 'де' },
+    ])
+    return el
+  }
+
+  it('марка на всех кусках диапазона — активна; хоть на одном нет — нет', () => {
+    expect([...activeStyle(surface(), 0, 4).marks]).toEqual(['b'])
+    expect([...activeStyle(surface(), 0, 5).marks]).toEqual([])
+  })
+
+  it('адрес отдаётся, только если он один на весь диапазон', () => {
+    expect(activeStyle(surface(), 2, 4).href).toBe('https://a.ru')
+    // Накрыли кусок со ссылкой и кусок без неё — «текущего адреса» не существует, и
+    // подставлять первый попавшийся в поле правки значило бы тихо переписать соседний.
+    expect(activeStyle(surface(), 0, 4).href).toBeUndefined()
+  })
+
+  it('кусок, лишь примыкающий к границе, в выделение не входит', () => {
+    // [4,6) — это «де» целиком; «вг» слева только касается границы.
+    expect(activeStyle(surface(), 4, 6).href).toBeUndefined()
+    expect([...activeStyle(surface(), 4, 6).marks]).toEqual([])
+  })
+
+  it('диапазон, не накрывший ни одного куска, не активирует ничего', () => {
+    expect([...activeStyle(surface(), 9, 12).marks]).toEqual([])
+    expect(activeStyle(div(), 0, 3).href).toBeUndefined()
+  })
+
+  it('ответ совпадает с тем, что даёт модель', () => {
+    const el = surface()
+    const spans = spansFromDom(el)
+    for (const [from, to] of [
+      [0, 2],
+      [0, 4],
+      [1, 5],
+      [2, 6],
+    ] as const) {
+      const viaDom = [...activeStyle(el, from, to).marks].sort()
+      const viaModel = (['b', 'i', 'u', 's'] as const).filter((m) =>
+        hasMarkThroughout(spans, from, to, m),
+      )
+      expect(viaDom).toEqual([...viaModel].sort())
+    }
   })
 })
 

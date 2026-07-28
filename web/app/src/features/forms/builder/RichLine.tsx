@@ -22,11 +22,10 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { toast } from 'sonner'
-import { MARKS, MAX_SPANS, type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
+import { MAX_SPANS, type Mark, type Span, plainText, sameRichText } from '@entities/formSchema'
 import { chords, markChord } from './shortcuts'
 import {
-  hasMarkThroughout,
-  hrefThroughout,
+  activeStyle,
   setBg,
   setColor,
   setHref,
@@ -115,9 +114,12 @@ export function RichLine({
   // Выделение отслеживается на документе: внутри contenteditable его меняют и мышь, и
   // клавиатура, и события у них разные — один `selectionchange` покрывает оба.
   //
-  // `known` — спаны, которые вызывающий только что записал в DOM (команда
-  // форматирования). Без них пришлось бы читать поверхность второй раз за тот же кадр.
-  const syncSelection = useCallback((known?: Span[]) => {
+  // Модель здесь НЕ собирается. Это место работает на каждом кадре протяжки мышью, а
+  // панели нужны два ответа — какие марки стоят на всём выделении и один ли на нём
+  // адрес; `activeStyle` читает их прямо с поверхности одним обходом. Сборка спанов
+  // ради этого означала бы канон, N новых объектов и пять проходов по массиву — всё
+  // немедленно выброшенное.
+  const syncSelection = useCallback(() => {
     const el = ref.current
     if (!el || el.ownerDocument.activeElement !== el) return
     const range = selectionRange(el)
@@ -127,14 +129,12 @@ export function RichLine({
       setLinkOpen(false)
       return
     }
-    const spans = known ?? spansFromDom(el)
+    const style = activeStyle(el, range.from, range.to)
     const next = {
       ...range,
       rect,
-      // По MARKS, а не перечислением четырёх: новая марка не должна требовать правки
-      // ни панели, ни этого места.
-      active: new Set(MARKS.filter((m) => hasMarkThroughout(spans, range.from, range.to, m))),
-      href: hrefThroughout(spans, range.from, range.to),
+      active: style.marks,
+      href: style.href,
     }
     // Тот же снимок — тот же объект. Это не микрооптимизация: выборщик цвета зовёт
     // команду форматирования на каждом кадре перетаскивания, а диапазон и марки при
@@ -247,9 +247,10 @@ export function RichLine({
     // разметка не доедет ни до автосейва, ни до истории отмены.
     onChange(spans, range.to, 'format')
     // Форматирование меняет и модель, и «что нажато» в панели. Пересчитываем сразу, а
-    // не ждём `selectionchange`: восстановление выделения его не гарантирует. Спаны
-    // отдаём готовыми — читать поверхность второй раз за кадр незачем.
-    syncSelection(spans)
+    // не ждём `selectionchange`: восстановление выделения его не гарантирует. Поверхность
+    // к этому моменту уже перепечатана и выделение восстановлено, поэтому читается она,
+    // а не передаётся снимок модели.
+    syncSelection()
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
