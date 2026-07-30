@@ -1,4 +1,18 @@
 import { z } from 'zod'
+import { BLOCK_TYPES } from './blocks/contract'
+// Импортируется только то, чем пользуется САМ этот файл; предикаты, которые он лишь
+// отдаёт наружу, идут реэкспортом ниже (иначе линтер справедливо считает их неиспользованными).
+import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/index'
+import {
+  MAX_BLOCKS,
+  MAX_FORM_TITLE_LEN,
+  MAX_REDIRECT_URL_LEN,
+  MAX_SPANS,
+  MAX_SUBMIT_LABEL_LEN,
+  MAX_TEXT_LEN,
+  MAX_THANK_YOU_TEXT_LEN,
+} from './blocks/limits'
+import { OWNED_SETTINGS, idSchema, settingsSchema } from './blocks/settings'
 
 // Схема формы — единый контракт двух сторон. Зеркало Go-типов и ValidateSchema
 // из internal/domain/schema.go: любая правка формата (тип блока, лимит, поле)
@@ -7,45 +21,45 @@ import { z } from 'zod'
 // Общий источник для кабинета (web/app) и рендерера (web/renderer): оба
 // импортируют его как `@entities/formSchema`. Дублировать типы руками запрещено —
 // TS-типы выводятся через z.infer.
+//
+// Фаза 16 разнесла СВОЙСТВА типов по файлам (`blocks/<type>.ts`, реестр —
+// `blocks/index.ts`), а этот файл оставила тем, чем он и был: правилами ДОКУМЕНТА
+// (уникальность id, смежность групп, потолок блоков, инварианты заголовка формы) плюс
+// точкой входа контракта. Всё, что раньше отсюда импортировали приложения, отсюда же
+// и импортируется — реэкспорты ниже; переезд файлов ни одного потребителя не тронул.
 
-// Лимиты — те же числа, что в Go. Длины строк на фронте считаются в UTF-16
-// code units (JS), в Go — в рунах; для ASCII-id и обычного текста расхождение
-// несущественно, а серверная проверка в любом случае финальна.
 // Текущая версия формата. v4 (фаза 15) добавила блок заголовка формы; апгрейд
 // старых документов живёт только на бэке (domain.ValidateSchema, цепочка
 // v1→v2→v3→v4), фронту всегда приезжает канон текущей версии.
 export const SCHEMA_VERSION = 4
-export const MAX_BLOCKS = 200
-export const MAX_OPTIONS = 100
-// Суммарная длина текста блока по всем спанам (title/label/heading/text/consent).
-// Зеркалит MaxTextLen в Go. Число то же, что было у строки в v2: текст не стал длиннее
-// от того, что его покрасили.
-export const MAX_TEXT_LEN = 2000
-// Число спанов в тексте одного блока. Зеркалит MaxSpans. Второй лимит обязателен: без
-// него MAX_TEXT_LEN перестал быть лимитом документа в тот момент, когда строка стала
-// массивом (2000 кусков по одному символу прошли бы проверку длины).
-export const MAX_SPANS = 200
-// Длина заголовка ФОРМЫ (блок form_title), в рунах. Не MAX_TEXT_LEN: заголовок
-// уезжает зеркалом в forms.title, оттуда — в <title>, og:title и в потолок
-// поискового запроса, поэтому у него свой, более тесный лимит. Зеркалит
-// MaxFormTitleLen в Go.
-export const MAX_FORM_TITLE_LEN = 200
-export const MAX_OPTION_LABEL_LEN = 500
-export const MAX_ID_LEN = 64
-export const MAX_SUBMIT_LABEL_LEN = 100
-export const MAX_PLACEHOLDER_LEN = 200
-// Ключ объекта картинки в бакете (uuid/<sha256>.ext ~ 105 симв.).
-export const MAX_IMAGE_KEY_LEN = 200
-// Экран «после отправки»: текст благодарности владельца и ссылка перехода.
-export const MAX_THANK_YOU_TEXT_LEN = 2000
-export const MAX_REDIRECT_URL_LEN = 2000
-// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода, и на
-// телефоне больше десяти в строку не помещается (нужно число — есть тип number).
-// Низ — 0: NPS считается от нуля. Диапазон новой шкалы — 1–5.
-export const SCALE_LOWER_BOUND = 0
-export const SCALE_UPPER_BOUND = 10
-export const DEFAULT_SCALE_MIN = 1
-export const DEFAULT_SCALE_MAX = 5
+
+// Лимиты, схема настроек и предикаты типов — из реестра (blocks/). Реэкспорт, а не
+// повторное объявление: два объявления одного лимита — это два лимита.
+export * from './blocks/limits'
+export { type BlockType } from './blocks/contract'
+export {
+  BLOCK_KINDS,
+  blockKind,
+  canShareRow,
+  carriesText,
+  isAnswerableType,
+  isCaptionType,
+  isChoiceType,
+  isContentType,
+  isSingleChoiceType,
+  requiresCaption,
+  supportsPlaceholder,
+} from './blocks/index'
+export {
+  COLUMN_LEFT,
+  COLUMN_RIGHT,
+  columnSchema,
+  optionSchema,
+  settingsSchema,
+  type Option,
+  type Settings,
+} from './blocks/settings'
+export { scaleRange } from './blocks/scale'
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
@@ -69,105 +83,23 @@ export const isHttpUrl = (raw: string): boolean => {
   return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
 }
 
-// Типы блоков (ARCHITECTURE 3.4, модель v2). Три семьи: отвечаемые поля (собирают
-// ответ), подписи ('title'/'label' — текст вопроса в группе) и контент
-// ('heading'/'text'/'image' — оформление). Подписи и контент неотвечаемы
-// (исключены из ValidateAnswers/CSV/таблицы). 'consent' — отвечаемый, но несёт
-// собственный текст согласия рядом с галочкой.
-export const blockTypeSchema = z.enum([
-  // отвечаемые
-  'short_text',
-  'long_text',
-  'email',
-  'phone',
-  'number',
-  'scale',
-  'single_choice',
-  'dropdown',
-  'multi_choice',
-  'date',
-  'consent',
-  // подписи
-  'title',
-  'label',
-  // контент
-  'heading',
-  'text',
-  'image',
-  // заголовок ФОРМЫ (фаза 15): первая строка документа, <h1> у респондента.
-  // Отдельный тип, а не 'title': тот — подпись ВОПРОСА, из которой аналитика берёт
-  // имя колонки CSV и шага воронки.
-  'form_title',
-])
-export type BlockType = z.infer<typeof blockTypeSchema>
-
-// Типы, чьи настройки несут список опций. dropdown отличается от single_choice
-// ТОЛЬКО контролом (список против радиокнопок): та же модель опций, тот же формат
-// ответа — id варианта строкой.
-const CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown', 'multi_choice'])
-export const isChoiceType = (t: BlockType): boolean => CHOICE_TYPES.has(t)
-
-// Выбор ровно одного варианта (ответ — строка-id) против множественного (массив).
-// Отдельный предикат, а не сравнение с single_choice: забытый здесь dropdown
-// молча уехал бы в ветку multi и ждал массив.
-const SINGLE_CHOICE_TYPES: ReadonlySet<BlockType> = new Set(['single_choice', 'dropdown'])
-export const isSingleChoiceType = (t: BlockType): boolean => SINGLE_CHOICE_TYPES.has(t)
-
-// Типы, у которых респондент вводит текст — для них можно задать плейсхолдер.
-const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
-  'short_text',
-  'long_text',
-  'email',
-  'phone',
-  'number',
-])
-export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
-
-// Типы, которые без подписи не задумывались (решение владельца 2026-07-26): список
-// вариантов или шкала без вопроса — не вопрос, а мусор на полотне.
+// Тип блока. Список значений — из реестра (blocks/contract.ts, BLOCK_TYPES): значение
+// enum и файл типа появляются вместе, поэтому «тип есть в схеме, но про него ничего не
+// известно» невозможно по построению.
 //
-// С фазы 15 это правило ВСТАВКИ и только оно (§4.4 спеки «Свобода блока»): вставка
-// такого типа либо входит в группу ждущей подписи, либо приезжает со своим
-// заголовком, но ПЕРЕНОСОМ голую строку получить можно — и она законна, редактор
-// показывает ей «Добавьте заголовок». Прежний вывод «строкой такого поля нельзя
-// управлять отдельно» отменён вместе с замком: кластер значков есть у каждой строки.
-//
-// Это правило РЕДАКТОРА, а не схемы: зеркала в Go нет, и валидации нет ни здесь, ни
-// там — блок без подписи остаётся валидным. Причина та же, что у бита ряда (§13
-// EDITOR.md): кросс-блочное условие в валидаторе ловило бы 422 на undo и на
-// промежуточных состояниях драга.
-const CAPTION_REQUIRED_TYPES: ReadonlySet<BlockType> = new Set([
-  'single_choice',
-  'dropdown',
-  'multi_choice',
-  'scale',
-])
-export const requiresCaption = (t: BlockType): boolean => CAPTION_REQUIRED_TYPES.has(t)
+// Три семьи: отвечаемые поля (собирают ответ), подписи ('title'/'label' — текст вопроса
+// в группе) и контент ('heading'/'text'/'image' — оформление). Подписи и контент
+// неотвечаемы (исключены из ValidateAnswers/CSV/таблицы). 'consent' — отвечаемый, но
+// несёт собственный текст согласия рядом с галочкой. Семью объявляет файл типа, а
+// предикаты (isCaptionType/isContentType/carriesText/isChoiceType/…) ВЫВОДЯТСЯ из
+// реестра: до фазы 16 это были семь независимых наборов, и тип, забытый в наборе, молча
+// трактовался как соседний.
+export const blockTypeSchema = z.enum(BLOCK_TYPES)
 
-// Типу разрешено делить ряд (ADR §10) — ВСЕМ, кроме заголовка формы. Решение
-// владельца 2026-07-29 отменило прежний whitelist коротких контролов (фаза 13.6):
-// его довод был про читаемость половинной колонки, то есть про вид, за который
-// отвечает автор формы и который он видит в превью, — а заодно whitelist ронял
-// случаи, о которых ничего не говорил (лэйаут-блок в ряд не вставал вовсе).
-//
-// Заголовок формы исключён по УСТРОЙСТВУ, а не по виду: он рисуется вне потока
-// вопросов (<h1> перед .rf-form), соседей по ряду у него не бывает. Зеркалит Go
-// canShareRow().
-export const canShareRow = (t: BlockType): boolean => t !== 'form_title'
 
-// Значения бита колонки (спека §11): элемент стоит в левой или правой колонке
-// ДВУХКОЛОНОЧНОЙ СЕКЦИИ, отсутствие ключа = полная ширина и конец секции. Секция
-// сущностью схемы не является — её выводит раскладчик, как groupId выводит regroup.
-//
-// COLUMN_LEFT добавлен решением владельца 2026-07-29 (ADR §10): пока канон хранил
-// только отклонение, левая колонка была невыразима — второй элемент БЕЗ ключа не
-// продолжает её, а закрывает ряд. Зеркалит Go ColumnLeft/ColumnRight.
-export const COLUMN_LEFT = 'left'
-export const COLUMN_RIGHT = 'right'
-// Канон — форма ЯВНАЯ (§11.4): стор проставляет 'left' всем участникам левой колонки.
-// Неявная форма (левый элемент без ключа) остаётся ЧИТАЕМОЙ — так выглядят формы,
-// собранные до этапа, и промежуточный результат жеста «поставь справа от того».
-export const columnSchema = z.union([z.literal(COLUMN_LEFT), z.literal(COLUMN_RIGHT)])
+
+
+
 
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
@@ -190,38 +122,8 @@ export const isValidPhone = (raw: string): boolean => {
 // required у согласия молча перестал бы работать.
 export const CONSENT_YES = 'yes'
 
-// Блоки-подписи группы ('title'/'label'): их text — подпись вопроса. title
-// крупная, label мелкая — только вид. Зеркалит Go isCaption().
-const CAPTION_TYPES: ReadonlySet<BlockType> = new Set(['title', 'label'])
-export const isCaptionType = (t: BlockType): boolean => CAPTION_TYPES.has(t)
 
-// Неотвечаемые (контентные) блоки: подписи ('title'/'label'), оформление
-// ('heading'/'text'/'image') и заголовок формы. Зеркалит Go isContent(). Забыть
-// здесь новый тип — значит молча сделать его отвечаемым: у формы появится колонка
-// в выгрузке и шаг воронки, которых автор не создавал.
-const CONTENT_TYPES: ReadonlySet<BlockType> = new Set([
-  'title',
-  'label',
-  'heading',
-  'text',
-  'image',
-  'form_title',
-])
-export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
-export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
-// Типы с собственным полем text: подписи, контентные абзацы/заголовки и consent
-// (текст согласия рядом с галочкой). У прочих отвечаемых и у image поле text
-// обязано быть пустым. Зеркалит Go carriesText().
-const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
-  'title',
-  'label',
-  'heading',
-  'text',
-  'consent',
-  'form_title',
-])
-export const carriesText = (t: BlockType): boolean => CARRIES_TEXT_TYPES.has(t)
 
 // Богатый текст блока (v3): плоский массив спанов вместо строки. Формат — ADR §10
 // ARCHITECTURE, обоснование и инварианты — docs/DESIGN-rich-text.md §2. Зеркало —
@@ -305,52 +207,8 @@ export const sameRichText = (a: Span[] | undefined, b: Span[] | undefined): bool
 // автосейва шумит на ровном месте. Зеркалит TextFromString в Go.
 export const textFromString = (s: string): Span[] => (s === '' ? [] : [{ t: s }])
 
-// Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
-// навязываем — id генерируется клиентом, важны непустота и уникальность.
-const idSchema = z.string().min(1).max(MAX_ID_LEN)
 
-// Вариант выбора у choice-блока.
-export const optionSchema = z.strictObject({
-  id: idSchema,
-  label: z.string().max(MAX_OPTION_LABEL_LEN),
-  // Тот же бит колонки, что у блока (спека §5.1): те же два значения и тот же
-  // раскладчик. Открыта ли секция — не валидируется, как и у блока: флаг инертен,
-  // а не невалиден. У опций dropdown инертен всегда (список живёт в нативном
-  // select) — и потому не запрещён.
-  column: columnSchema.optional(),
-})
-export type Option = z.infer<typeof optionSchema>
 
-// Типоспецифичные настройки: пока только options у choice-типов. Пустой объект —
-// валидное состояние non-choice блока. Лишние ключи запрещены (strictObject).
-const settingsSchema = z.strictObject({
-  options: z.array(optionSchema).max(MAX_OPTIONS).optional(),
-  // Плейсхолдер поля ввода (текстовые типы). У остальных игнорируется.
-  placeholder: z.string().max(MAX_PLACEHOLDER_LEN).optional(),
-  // Картинка (тип image): ключ объекта в бакете. У остальных типов запрещён
-  // (superRefine ниже), как options у не-choice.
-  imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
-  // Диапазон шкалы (тип scale). Оба конца или ни одного (superRefine ниже);
-  // «ни одного» — недособранный черновик, как choice без опций.
-  scaleMin: z.number().int().optional(),
-  scaleMax: z.number().int().optional(),
-  // Колонка двухколоночной секции (спека §11): 'left'/'right' = «я в этой колонке
-  // текущей секции», отсутствие ключа = полная ширина и КОНЕЦ секции. Ширина не
-  // хранится вовсе, её выводит раскладчик. Запрещён только заголовку формы
-  // (superRefine ниже); кросс-блочное условие «секция открыта» намеренно не
-  // валидируется — инертный флаг легален, иначе undo и промежуточные состояния
-  // драга ловили бы 422.
-  column: columnSchema.optional(),
-})
-
-// scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
-// Зеркалит scaleRange в Go. Общий для контрола поля и валидации.
-export const scaleRange = (block: Block): { min: number; max: number } => {
-  const { scaleMin, scaleMax } = block.settings ?? {}
-  return scaleMin !== undefined && scaleMax !== undefined
-    ? { min: scaleMin, max: scaleMax }
-    : { min: DEFAULT_SCALE_MIN, max: DEFAULT_SCALE_MAX }
-}
 
 // Один блок формы (v2). groupId связывает блоки одного вопроса. Пустой text и
 // choice без опций допустимы — нормальное недособранное состояние черновика,
@@ -374,18 +232,9 @@ export const blockSchema = z
         path: ['text'],
       })
     }
-    // imageKey — только у image (как options только у choice).
-    if (b.type !== 'image' && b.settings?.imageKey) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `тип ${b.type} не имеет картинки`,
-        path: ['settings', 'imageKey'],
-      })
-    }
-    // column: 'right' — у любого типа, кроме заголовка формы (canShareRow). Ряд —
-    // свойство РАСКЛАДКИ, а не типа: что именно встанет в ряд, решает раскладчик, и
-    // поблочная проверка его условий не видит — как не видит и кросс-блочного.
-    // Зеркалит Go.
+    // column — у любого типа, кроме заголовка формы (canShareRow). Ряд — свойство
+    // РАСКЛАДКИ, а не типа: что именно встанет в ряд, решает раскладчик, и поблочная
+    // проверка его условий не видит — как не видит и кросс-блочного. Зеркалит Go.
     if (b.settings?.column && !canShareRow(b.type)) {
       ctx.addIssue({
         code: 'custom',
@@ -393,49 +242,38 @@ export const blockSchema = z
         path: ['settings', 'column'],
       })
     }
-    // Диапазон шкалы — только у scale (как options у choice).
-    const { scaleMin, scaleMax } = b.settings ?? {}
-    if (b.type !== 'scale') {
-      if (scaleMin !== undefined || scaleMax !== undefined) {
-        ctx.addIssue({ code: 'custom', message: `тип ${b.type} не имеет шкалы`, path: ['settings', 'scaleMin'] })
-      }
-    } else if (scaleMin !== undefined || scaleMax !== undefined) {
-      if (scaleMin === undefined || scaleMax === undefined) {
-        ctx.addIssue({ code: 'custom', message: 'шкала: нужны оба конца диапазона', path: ['settings'] })
-      } else if (scaleMin < SCALE_LOWER_BOUND || scaleMax > SCALE_UPPER_BOUND) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `шкала: диапазон вне [${SCALE_LOWER_BOUND}, ${SCALE_UPPER_BOUND}]`,
-          path: ['settings'],
-        })
-      } else if (scaleMin >= scaleMax) {
-        ctx.addIssue({ code: 'custom', message: 'шкала: минимум не меньше максимума', path: ['settings'] })
-      }
+
+    const settings = b.settings
+    if (!settings) return
+    const kind = blockKind(b.type)
+
+    // Закреплённые за типом ключи настроек: у чужого типа их наличие — ошибка. До
+    // фазы 16 это были три рукописные ветви (картинка, шкала, опции), и четвёртая
+    // настройка означала бы четвёртую копию условия. Теперь владение объявляет сам тип
+    // (ownSettings в его файле), а инвентарь ключей — settings.ts.
+    //
+    // Сообщение дедуплицируется по СУЩЕСТВИТЕЛЬНОМУ, а не по ключу: пара
+    // scaleMin/scaleMax — одна настройка «шкала», и на чужом типе она обязана давать
+    // одно замечание, как давала до фазы.
+    const said = new Set<string>()
+    for (const { key, noun, present } of OWNED_SETTINGS) {
+      if (said.has(noun)) continue
+      if (!present(settings[key])) continue
+      if (kind.ownSettings.includes(key)) continue
+      said.add(noun)
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не имеет ${noun}`,
+        path: ['settings', key],
+      })
     }
 
-    const options = b.settings?.options
-    if (!isChoiceType(b.type)) {
-      if (options && options.length > 0) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `тип ${b.type} не имеет опций`,
-          path: ['settings', 'options'],
-        })
-      }
-      return
+    // Правила самого типа поверх формы настроек: диапазон шкалы, уникальность id
+    // вариантов. Живут в файле типа (blocks/scale.ts, blocks/choice.ts) — это свойство
+    // типа, а не документа.
+    for (const issue of kind.issues?.(settings) ?? []) {
+      ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path })
     }
-    if (!options) return
-    const seen = new Set<string>()
-    options.forEach((o, i) => {
-      if (seen.has(o.id)) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `повторяющийся id опции ${o.id}`,
-          path: ['settings', 'options', i, 'id'],
-        })
-      }
-      seen.add(o.id)
-    })
   })
 export type Block = z.infer<typeof blockSchema>
 

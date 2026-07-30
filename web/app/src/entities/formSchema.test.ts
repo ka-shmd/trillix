@@ -210,6 +210,28 @@ describe('formSchemaSchema — валидные', () => {
         })),
       ],
     },
+    // Три случая «инертного ключа настроек» (фаза 16, blocks/settings.ts OWNED_SETTINGS).
+    // У ключей РАЗНОЕ понятие пустоты, и это не небрежность, а совместимость: документы
+    // ниже валидны с самого появления настроек, и одна общая проверка «ключ есть → он
+    // чужой» начала бы их отвергать. Проверяются здесь, чтобы следующая уборка не
+    // «причесала» правило и не сломала молча уже сохранённые формы.
+    'пустой список опций у не-choice — ничего не задано': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { options: [] } }],
+    },
+    'пустой imageKey у не-image': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { imageKey: '' } }],
+    },
+    // Плейсхолдер — подсказка РЕДАКТОРА, а не правило схемы: у типов без ввода он
+    // игнорируется и не запрещается (в отличие от опций, картинки и шкалы).
+    'плейсхолдер у шкалы игнорируется, но валиден': {
+      blocks: [
+        { id: 'b', groupId: 'g1', type: 'scale', settings: { scaleMin: 1, scaleMax: 5, placeholder: 'x' } },
+      ],
+    },
+    // Значимый нуль: scaleMin: 0 — ЗАДАННОЕ значение (NPS), а не «не задано».
+    'шкала NPS от нуля': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'scale', settings: { scaleMin: 0, scaleMax: 10 } }],
+    },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
     'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
@@ -345,6 +367,19 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'шкала у не-scale': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 1, scaleMax: 5 } }],
+    },
+    // ЗНАЧИМЫЙ НУЛЬ у чужого типа: scaleMin: 0 — заданное значение (NPS считается от
+    // нуля), а не «ключа нет». Единственный сторож правила: у самой шкалы ключ
+    // закреплён, и понятие «наличия» там не проверяется вовсе, поэтому случай обязан
+    // стоять на НЕ-scale типе (найдено ревью этапа 16.1а). Ослабление проверки до
+    // Boolean(v) в blocks/settings.ts делает этот документ валидным на фронте, тогда как
+    // Go (ScaleMin *int) продолжает его отвергать: билдер считает черновик целым, а
+    // автосейв ловит 422 без привязки к полю.
+    'шкала-минимум ноль у не-scale': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 0 } }],
+    },
+    'шкала-максимум ноль у не-scale': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMax: 0 } }],
     },
     'column неизвестное значение': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'third' } }],

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -108,16 +109,25 @@ const (
 	BlockFormTitle BlockType = "form_title"
 )
 
-func (t BlockType) valid() bool {
-	switch t {
-	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
-		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
-		BlockTitle, BlockLabel, BlockHeading, BlockText, BlockImage, BlockFormTitle:
-		return true
-	default:
-		return false
-	}
+// blockTypes — все типы блоков одним списком, и он же источник valid().
+//
+// До фазы 16 состав перечисляли ДВА места: switch в valid() и (с этапа 16.1а) тест
+// паритета с реестром фронта. Второй список молча отставал от первого: тип, добавленный
+// в Go и забытый в тесте, паритет проходил — а фронт такой документ отвергал целиком
+// (z.enum), то есть опубликованная схема перестала бы разбираться у респондента. Найдено
+// ревью этапа 16.1а. Список остаётся рукописным (ADR §10: Go предикатный, реестр фронта
+// он импортировать не может), но он ОДИН.
+var blockTypes = []BlockType{
+	// отвечаемые
+	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
+	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
+	// подписи
+	BlockTitle, BlockLabel,
+	// контент и заголовок формы
+	BlockHeading, BlockText, BlockImage, BlockFormTitle,
 }
+
+func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
 
 // isChoice — у choice-типов настройки несут список опций; у остальных settings пуст.
 // dropdown отличается от single_choice ТОЛЬКО контролом на фронте: та же модель
