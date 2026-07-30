@@ -3,6 +3,7 @@ import {
   formSchemaSchema,
   isValidPhone,
   MAX_BLOCKS,
+  MAX_FORM_TITLE_LEN,
   MAX_IMAGE_KEY_LEN,
   MAX_OPTIONS,
   MAX_PLACEHOLDER_LEN,
@@ -14,6 +15,7 @@ import {
   plainText,
   sameRichText,
   textFromString,
+  SCHEMA_VERSION,
 } from '@entities/formSchema'
 
 // Зеркало internal/domain/schema_test.go (модель v2, фаза 8.7): вопрос — группа
@@ -25,7 +27,7 @@ describe('formSchemaSchema — валидные', () => {
   const valid: Record<string, unknown> = {
     'пустой каркас без schemaVersion': { blocks: [] },
     'все отвечаемые типы (голые поля, свои группы)': {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'b1', groupId: 'g1', type: 'short_text', required: true, settings: {} },
         { id: 'b2', groupId: 'g2', type: 'long_text', settings: {} },
@@ -45,14 +47,14 @@ describe('formSchemaSchema — валидные', () => {
       ],
     },
     'вопрос как группа title + поле': {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 't1', groupId: 'g1', type: 'title', text: [{ t: 'Ваше имя' }] },
         { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
       ],
     },
     'контент между подписью и полем': {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'l1', groupId: 'g1', type: 'label', text: [{ t: 'Логотип' }] },
         { id: 'im', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
@@ -60,14 +62,14 @@ describe('formSchemaSchema — валидные', () => {
       ],
     },
     'секционный heading своей группой': {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'h1', groupId: 'g1', type: 'heading', text: [{ t: 'О компании' }] },
         { id: 'b1', groupId: 'g2', type: 'short_text', settings: {} },
       ],
     },
     'consent несёт собственный текст': {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'c', groupId: 'g1', type: 'consent', text: [{ t: 'Согласен на обработку данных' }], required: true }],
     },
     'картинка без ключа — черновик': {
@@ -115,6 +117,98 @@ describe('formSchemaSchema — валидные', () => {
     },
     'column right у первого варианта — инертен': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'multi_choice', settings: { options: [{ id: 'o1', label: 'Go', column: 'right' }] } }],
+    },
+    // Фаза 15 (спека §6.3): подпись — законный носитель бита. На первом блоке группы
+    // он значит «моя группа справа от предыдущей» (носитель переехал сюда апгрейдом
+    // v3→v4), внутри группы — «справа от предыдущего блока». Уровень задаёт место
+    // блока, а поблочная проверка его не видит — поэтому оба случая просто валидны.
+    'column right у подписи — кросс-групповой носитель': {
+      blocks: [
+        { id: 't1', groupId: 'g1', type: 'title', text: [{ t: 'Город' }], settings: {} },
+        { id: 'f1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 't2', groupId: 'g2', type: 'title', text: [{ t: 'Индекс' }], settings: { column: 'right' } },
+        { id: 'f2', groupId: 'g2', type: 'short_text', settings: {} },
+      ],
+    },
+    'column right у label внутри группы — ряд «подпись | поле»': {
+      blocks: [
+        { id: 't', groupId: 'g1', type: 'label', text: [{ t: 'Индекс' }], settings: {} },
+        { id: 'f', groupId: 'g1', type: 'short_text', settings: { column: 'right' } },
+      ],
+    },
+    // Двухколоночная секция (спека §11, решение владельца 2026-07-29): у ключа два
+    // значения. Явная форма — канон, неявная (левый элемент без ключа) читается тоже:
+    // так выглядят формы, собранные до этапа. Зеркало TestValidateSchema_Valid в Go.
+    'column left у обоих участников левой колонки': {
+      blocks: [
+        { id: 'l1', groupId: 'g1', type: 'short_text', settings: { column: 'left' } },
+        { id: 'l2', groupId: 'g2', type: 'email', settings: { column: 'left' } },
+        { id: 'r1', groupId: 'g3', type: 'phone', settings: { column: 'right' } },
+      ],
+    },
+    'column left у подписи': {
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: [{ t: 'Город' }], settings: { column: 'left' } }],
+    },
+    'column left у варианта': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да', column: 'left' }, { id: 'o2', label: 'Нет', column: 'right' }] },
+        },
+      ],
+    },
+    // Whitelist коротких контролов отменён (2026-07-29): бит законен у любого типа,
+    // включая длинный ответ, шкалу, выбор и лэйаут-блоки. Что читается в половину
+    // колонки — решает автор формы, а не схема.
+    'column right у long_text': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { column: 'right' } }],
+    },
+    'column right у single_choice': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { column: 'right' } }],
+    },
+    'column right у контентного text': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'text', text: [{ t: 'абзац' }], settings: { column: 'right' } }],
+    },
+    // Фаза 15: заголовок формы — блок документа (спека §3.2), зеркало
+    // TestValidateSchema_Valid в Go.
+    'form_title первой строкой': {
+      blocks: [
+        { id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }] },
+        { id: 't1', groupId: 'g1', type: 'title', text: [{ t: 'Имя' }] },
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+      ],
+    },
+    'form_title с разметкой': {
+      blocks: [
+        {
+          id: 'ft',
+          groupId: 'gft',
+          type: 'form_title',
+          text: [{ t: 'Анкета ', m: ['b'] }, { t: '2026', color: '#c026d3' }],
+        },
+      ],
+    },
+    'form_title пустой — черновик': {
+      blocks: [{ id: 'ft', groupId: 'gft', type: 'form_title', text: [] }],
+    },
+    'схема без form_title — как раньше': {
+      blocks: [{ id: 'b1', groupId: 'g1', type: 'short_text', settings: {} }],
+    },
+    // Форма ровно на потолке + синтезированный заголовок = 201 блок, и это валидно:
+    // потолок считает блоки АВТОРА. Иначе форма, собранная до фазы 15 на потолке,
+    // перестала бы сохраняться совсем.
+    'потолок блоков + заголовок формы': {
+      blocks: [
+        { id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }] },
+        ...Array.from({ length: MAX_BLOCKS }, (_, i) => ({
+          id: `b${i}`,
+          groupId: `g${i}`,
+          type: 'short_text',
+          settings: {},
+        })),
+      ],
     },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
@@ -252,22 +346,21 @@ describe('formSchemaSchema — невалидные', () => {
     'шкала у не-scale': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 1, scaleMax: 5 } }],
     },
-    // Фаза 13.6: бит ряда вне whitelist / вне допустимых значений.
-    'column у long_text (не whitelist)': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { column: 'right' } }],
-    },
-    'column у single_choice (не whitelist)': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { column: 'right' } }],
-    },
     'column неизвестное значение': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'third' } }],
     },
-    'column left не хранится (канон — только отклонение)': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'left' } }],
+    // Единственный тип вне рядов (решение владельца 2026-07-29, отменившее whitelist
+    // фазы 13.6): заголовок формы. Исключён по устройству, а не по виду — он рисуется
+    // вне потока вопросов, и соседей по ряду у него не бывает.
+    'column у form_title': {
+      blocks: [{ id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }], settings: { column: 'right' } }],
     },
-    'column left у варианта не хранится': {
+    'column третьего значения': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'middle' } }],
+    },
+    'column у варианта вне двух значений': {
       blocks: [
-        { id: 'b', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да', column: 'left' }] } },
+        { id: 'b', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да', column: 'center' }] } },
       ],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.
@@ -278,6 +371,48 @@ describe('formSchemaSchema — невалидные', () => {
     'слишком длинный redirectUrl': {
       blocks: [],
       redirectUrl: `https://example.com/${'a'.repeat(MAX_REDIRECT_URL_LEN)}`,
+    },
+    // Фаза 15: инварианты заголовка формы (спека §3.2), зеркало
+    // TestValidateSchema_Invalid в Go.
+    'два form_title': {
+      blocks: [
+        { id: 'f1', groupId: 'g1', type: 'form_title', text: [{ t: 'А' }] },
+        { id: 'f2', groupId: 'g2', type: 'form_title', text: [{ t: 'Б' }] },
+      ],
+    },
+    'form_title не первым блоком': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }] },
+      ],
+    },
+    'form_title в группе вопроса': {
+      blocks: [
+        { id: 'ft', groupId: 'g1', type: 'form_title', text: [{ t: 'Анкета' }] },
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+      ],
+    },
+    // Потолок остаётся потолком: 201 блок автора отвергается даже с заголовком.
+    'больше MAX_BLOCKS блоков автора (заголовок не спасает)': {
+      blocks: [
+        { id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }] },
+        ...Array.from({ length: MAX_BLOCKS + 1 }, (_, i) => ({
+          id: `b${i}`,
+          groupId: `g${i}`,
+          type: 'short_text',
+          settings: {},
+        })),
+      ],
+    },
+    'слишком длинный заголовок формы': {
+      blocks: [
+        {
+          id: 'ft',
+          groupId: 'gft',
+          type: 'form_title',
+          text: [{ t: 'я'.repeat(MAX_FORM_TITLE_LEN + 1) }],
+        },
+      ],
     },
   }
 
@@ -293,7 +428,7 @@ describe('formSchemaSchema — невалидные', () => {
 // показывает «сохранено».
 describe('богатый текст блока', () => {
   const doc = (text: unknown) => ({
-    schemaVersion: 3,
+    schemaVersion: SCHEMA_VERSION,
     blocks: [
       { id: 't', groupId: 'g', type: 'title', text },
       { id: 'f', groupId: 'g', type: 'short_text', settings: {} },

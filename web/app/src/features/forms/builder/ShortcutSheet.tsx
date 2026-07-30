@@ -1,14 +1,18 @@
-import type { ShortcutContext } from './shortcuts'
-import { commonFor, formatLabel, SHORTCUTS } from './shortcuts'
+import type { ShortcutContext, ShortcutFilters } from './shortcuts'
+import { commonFor, formatLabel, shortcutsFor } from './shortcuts'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 
-// ShortcutSheet — шпаргалка Mod+/ (§7, слой 3): полная карта клавиш ТЕКУЩЕГО
-// контекста плюс общий ярус, который у строки намеренно не показывается (чипы
-// перечисляют только специфичное — решение владельца 2026-07-25). Источник тот же
-// модуль shortcuts.ts, что читают обработчики: расхождение карты с поведением = баг.
+// ShortcutSheet — шпаргалка Mod+/: карта клавиш ТЕКУЩЕЙ строки плюс общий ярус.
+// С 2026-07-29 это ЕДИНСТВЕННАЯ поверхность карты (чипы у строки сняты, кроме
+// действия «дать полю заголовок»), поэтому печатает она не весь список контекста, а
+// то, что на этой строке работает: filters отсеивают пункты, которые здесь молчат
+// (Mod+Enter без поля ответа, Alt+↑↓ на подписи вопроса, Mod+Alt+T у собранного).
+// Источник тот же модуль shortcuts.ts, что читают обработчики: расхождение карты с
+// поведением = баг.
 //
-// ctx приходит снимком: открытие диалога уводит фокус с полотна, активная строка
-// гаснет — контекст полотно фиксирует в момент нажатия (см. SlashEditor).
+// Контекст и признаки приходят СНИМКОМ: открытие диалога уводит фокус с полотна и
+// гасит активную строку, а шпаргалка обязана показывать ту, из которой её позвали
+// (см. SlashEditor).
 
 const CONTEXT_TITLES: Record<ShortcutContext, string> = {
   text: 'Текстовая строка',
@@ -23,15 +27,18 @@ const CONTEXT_TITLES: Record<ShortcutContext, string> = {
 
 export function ShortcutSheet({
   ctx,
+  filters,
   open,
   onOpenChange,
 }: {
   // null — каретка вне полотна: показываем только то, что работает всегда.
   ctx: ShortcutContext | null
+  // Признаки строки, из которой позвали шпаргалку (снимок, как и ctx).
+  filters?: ShortcutFilters
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const here = ctx ? SHORTCUTS[ctx] : []
+  const here = ctx ? shortcutsFor(ctx, filters) : []
   const common = commonFor(ctx ?? 'canvas')
 
   return (

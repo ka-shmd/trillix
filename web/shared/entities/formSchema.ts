@@ -11,7 +11,10 @@ import { z } from 'zod'
 // Лимиты — те же числа, что в Go. Длины строк на фронте считаются в UTF-16
 // code units (JS), в Go — в рунах; для ASCII-id и обычного текста расхождение
 // несущественно, а серверная проверка в любом случае финальна.
-export const SCHEMA_VERSION = 3
+// Текущая версия формата. v4 (фаза 15) добавила блок заголовка формы; апгрейд
+// старых документов живёт только на бэке (domain.ValidateSchema, цепочка
+// v1→v2→v3→v4), фронту всегда приезжает канон текущей версии.
+export const SCHEMA_VERSION = 4
 export const MAX_BLOCKS = 200
 export const MAX_OPTIONS = 100
 // Суммарная длина текста блока по всем спанам (title/label/heading/text/consent).
@@ -22,6 +25,11 @@ export const MAX_TEXT_LEN = 2000
 // него MAX_TEXT_LEN перестал быть лимитом документа в тот момент, когда строка стала
 // массивом (2000 кусков по одному символу прошли бы проверку длины).
 export const MAX_SPANS = 200
+// Длина заголовка ФОРМЫ (блок form_title), в рунах. Не MAX_TEXT_LEN: заголовок
+// уезжает зеркалом в forms.title, оттуда — в <title>, og:title и в потолок
+// поискового запроса, поэтому у него свой, более тесный лимит. Зеркалит
+// MaxFormTitleLen в Go.
+export const MAX_FORM_TITLE_LEN = 200
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
@@ -86,6 +94,10 @@ export const blockTypeSchema = z.enum([
   'heading',
   'text',
   'image',
+  // заголовок ФОРМЫ (фаза 15): первая строка документа, <h1> у респондента.
+  // Отдельный тип, а не 'title': тот — подпись ВОПРОСА, из которой аналитика берёт
+  // имя колонки CSV и шага воронки.
+  'form_title',
 ])
 export type BlockType = z.infer<typeof blockTypeSchema>
 
@@ -111,16 +123,19 @@ const PLACEHOLDER_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const supportsPlaceholder = (t: BlockType): boolean => PLACEHOLDER_TYPES.has(t)
 
-// Типы, поле которых не существует без подписи (решение владельца 2026-07-26):
-// список вариантов или шкала без вопроса — не вопрос, а мусор на полотне. Отсюда
-// же следует, что строкой такого поля нельзя управлять отдельно (кластер значков
-// живёт на подписи): разлучать нечего, они всегда вместе.
+// Типы, которые без подписи не задумывались (решение владельца 2026-07-26): список
+// вариантов или шкала без вопроса — не вопрос, а мусор на полотне.
+//
+// С фазы 15 это правило ВСТАВКИ и только оно (§4.4 спеки «Свобода блока»): вставка
+// такого типа либо входит в группу ждущей подписи, либо приезжает со своим
+// заголовком, но ПЕРЕНОСОМ голую строку получить можно — и она законна, редактор
+// показывает ей «Добавьте заголовок». Прежний вывод «строкой такого поля нельзя
+// управлять отдельно» отменён вместе с замком: кластер значков есть у каждой строки.
 //
 // Это правило РЕДАКТОРА, а не схемы: зеркала в Go нет, и валидации нет ни здесь, ни
 // там — блок без подписи остаётся валидным. Причина та же, что у бита ряда (§13
 // EDITOR.md): кросс-блочное условие в валидаторе ловило бы 422 на undo и на
-// промежуточных состояниях драга. Держит правило стор билдера — вставка такого типа
-// либо входит в группу ждущей подписи, либо приезжает со своим заголовком.
+// промежуточных состояниях драга.
 const CAPTION_REQUIRED_TYPES: ReadonlySet<BlockType> = new Set([
   'single_choice',
   'dropdown',
@@ -129,23 +144,30 @@ const CAPTION_REQUIRED_TYPES: ReadonlySet<BlockType> = new Set([
 ])
 export const requiresCaption = (t: BlockType): boolean => CAPTION_REQUIRED_TYPES.has(t)
 
-// Типы, которым разрешено делить ряд с предыдущим вопросом (спека §5, ADR §10):
-// визуально короткие контролы. long_text/scale/choice-карточки в половину колонки
-// не читаются. Зеркалит Go canShareRow().
-const SHARE_ROW_TYPES: ReadonlySet<BlockType> = new Set([
-  'short_text',
-  'email',
-  'phone',
-  'number',
-  'date',
-  'dropdown',
-])
-export const canShareRow = (t: BlockType): boolean => SHARE_ROW_TYPES.has(t)
+// Типу разрешено делить ряд (ADR §10) — ВСЕМ, кроме заголовка формы. Решение
+// владельца 2026-07-29 отменило прежний whitelist коротких контролов (фаза 13.6):
+// его довод был про читаемость половинной колонки, то есть про вид, за который
+// отвечает автор формы и который он видит в превью, — а заодно whitelist ронял
+// случаи, о которых ничего не говорил (лэйаут-блок в ряд не вставал вовсе).
+//
+// Заголовок формы исключён по УСТРОЙСТВУ, а не по виду: он рисуется вне потока
+// вопросов (<h1> перед .rf-form), соседей по ряду у него не бывает. Зеркалит Go
+// canShareRow().
+export const canShareRow = (t: BlockType): boolean => t !== 'form_title'
 
-// Единственное значение бита ряда (спека §5): «встань в ряд с предыдущим».
-// Отсутствие ключа = свой ряд; 'left' канон не пишет и не принимает. Зеркалит
-// Go ColumnRight.
+// Значения бита колонки (спека §11): элемент стоит в левой или правой колонке
+// ДВУХКОЛОНОЧНОЙ СЕКЦИИ, отсутствие ключа = полная ширина и конец секции. Секция
+// сущностью схемы не является — её выводит раскладчик, как groupId выводит regroup.
+//
+// COLUMN_LEFT добавлен решением владельца 2026-07-29 (ADR §10): пока канон хранил
+// только отклонение, левая колонка была невыразима — второй элемент БЕЗ ключа не
+// продолжает её, а закрывает ряд. Зеркалит Go ColumnLeft/ColumnRight.
+export const COLUMN_LEFT = 'left'
 export const COLUMN_RIGHT = 'right'
+// Канон — форма ЯВНАЯ (§11.4): стор проставляет 'left' всем участникам левой колонки.
+// Неявная форма (левый элемент без ключа) остаётся ЧИТАЕМОЙ — так выглядят формы,
+// собранные до этапа, и промежуточный результат жеста «поставь справа от того».
+export const columnSchema = z.union([z.literal(COLUMN_LEFT), z.literal(COLUMN_RIGHT)])
 
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
@@ -173,9 +195,18 @@ export const CONSENT_YES = 'yes'
 const CAPTION_TYPES: ReadonlySet<BlockType> = new Set(['title', 'label'])
 export const isCaptionType = (t: BlockType): boolean => CAPTION_TYPES.has(t)
 
-// Неотвечаемые (контентные) блоки: подписи ('title'/'label') и оформление
-// ('heading'/'text'/'image'). Зеркалит Go isContent().
-const CONTENT_TYPES: ReadonlySet<BlockType> = new Set(['title', 'label', 'heading', 'text', 'image'])
+// Неотвечаемые (контентные) блоки: подписи ('title'/'label'), оформление
+// ('heading'/'text'/'image') и заголовок формы. Зеркалит Go isContent(). Забыть
+// здесь новый тип — значит молча сделать его отвечаемым: у формы появится колонка
+// в выгрузке и шаг воронки, которых автор не создавал.
+const CONTENT_TYPES: ReadonlySet<BlockType> = new Set([
+  'title',
+  'label',
+  'heading',
+  'text',
+  'image',
+  'form_title',
+])
 export const isContentType = (t: BlockType): boolean => CONTENT_TYPES.has(t)
 export const isAnswerableType = (t: BlockType): boolean => !isContentType(t)
 
@@ -188,6 +219,7 @@ const CARRIES_TEXT_TYPES: ReadonlySet<BlockType> = new Set([
   'heading',
   'text',
   'consent',
+  'form_title',
 ])
 export const carriesText = (t: BlockType): boolean => CARRIES_TEXT_TYPES.has(t)
 
@@ -281,11 +313,11 @@ const idSchema = z.string().min(1).max(MAX_ID_LEN)
 export const optionSchema = z.strictObject({
   id: idSchema,
   label: z.string().max(MAX_OPTION_LABEL_LEN),
-  // Тот же бит ряда, что у блока (спека §5.1): 'right' = «встань в ряд с
-  // предыдущим вариантом», отсутствие = свой ряд. Свободна ли ячейка слева — не
-  // валидируется, как и у блока: флаг инертен, а не невалиден. У опций dropdown
-  // инертен всегда (список живёт в нативном select) — и потому не запрещён.
-  column: z.literal(COLUMN_RIGHT).optional(),
+  // Тот же бит колонки, что у блока (спека §5.1): те же два значения и тот же
+  // раскладчик. Открыта ли секция — не валидируется, как и у блока: флаг инертен,
+  // а не невалиден. У опций dropdown инертен всегда (список живёт в нативном
+  // select) — и потому не запрещён.
+  column: columnSchema.optional(),
 })
 export type Option = z.infer<typeof optionSchema>
 
@@ -302,12 +334,13 @@ const settingsSchema = z.strictObject({
   // «ни одного» — недособранный черновик, как choice без опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
-  // Ряд из двух вопросов (спека §5): 'right' на отвечаемом блоке = «встань в ряд
-  // с предыдущим вопросом», отсутствие ключа = свой ряд. Ширина не хранится вовсе,
-  // её выводит раскладчик. Разрешён только whitelist-типам (superRefine ниже);
-  // кросс-блочное условие «слева есть свободная ячейка» намеренно не валидируется
-  // — инертный флаг легален, иначе undo и промежуточные состояния драга ловили бы 422.
-  column: z.literal(COLUMN_RIGHT).optional(),
+  // Колонка двухколоночной секции (спека §11): 'left'/'right' = «я в этой колонке
+  // текущей секции», отсутствие ключа = полная ширина и КОНЕЦ секции. Ширина не
+  // хранится вовсе, её выводит раскладчик. Запрещён только заголовку формы
+  // (superRefine ниже); кросс-блочное условие «секция открыта» намеренно не
+  // валидируется — инертный флаг легален, иначе undo и промежуточные состояния
+  // драга ловили бы 422.
+  column: columnSchema.optional(),
 })
 
 // scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт.
@@ -349,7 +382,10 @@ export const blockSchema = z
         path: ['settings', 'imageKey'],
       })
     }
-    // column: 'right' — только у whitelist-типов (спека §5).
+    // column: 'right' — у любого типа, кроме заголовка формы (canShareRow). Ряд —
+    // свойство РАСКЛАДКИ, а не типа: что именно встанет в ряд, решает раскладчик, и
+    // поблочная проверка его условий не видит — как не видит и кросс-блочного.
+    // Зеркалит Go.
     if (b.settings?.column && !canShareRow(b.type)) {
       ctx.addIssue({
         code: 'custom',
@@ -410,7 +446,9 @@ export const formSchemaSchema = z
     // Опционально: пустой дефолт БД без версии трактуется как текущая; сервер при
     // сохранении канонизирует. Стор билдера всегда шлёт SCHEMA_VERSION явно.
     schemaVersion: z.literal(SCHEMA_VERSION).optional(),
-    blocks: z.array(blockSchema).max(MAX_BLOCKS),
+    // Потолок проверяется в superRefine, а не .max(): заголовок формы в счёт не идёт
+    // (он часть скелета документа, а не элемент автора) — см. там же.
+    blocks: z.array(blockSchema),
     // Текст кнопки отправки (форма-уровень). Пусто → рендерер берёт DEFAULT_SUBMIT_LABEL.
     submitLabel: z.string().max(MAX_SUBMIT_LABEL_LEN).optional(),
     // Экран «после отправки» (форма-уровень, оба поля необязательны). Живут в схеме,
@@ -473,5 +511,52 @@ export const formSchemaSchema = z
         }
       }
     })
+
+    // Потолок блоков — зеркало Go: считаем блоки АВТОРА, заголовок формы не в счёт.
+    // Иначе форма, собранная до фазы 15 ровно на потолке, после синтеза заголовка
+    // получила бы 201 блок и перестала сохраняться совсем.
+    const authored = s.blocks.filter((b) => b.type !== 'form_title').length
+    if (authored > MAX_BLOCKS) {
+      ctx.addIssue({ code: 'custom', message: `больше ${MAX_BLOCKS} блоков`, path: ['blocks'] })
+    }
+
+    // Заголовок формы (фаза 15, зеркалит Go validateFormTitle): он один, он первая
+    // строка документа и он всегда одиночка. Отсутствие блока законно — версии,
+    // опубликованные до v4, заголовка в схеме не несут вовсе.
+    const titles = s.blocks.filter((b) => b.type === 'form_title')
+    if (titles.length > 1) {
+      ctx.addIssue({ code: 'custom', message: 'заголовок формы может быть только один', path: ['blocks'] })
+    }
+    const title = titles[0]
+    if (title) {
+      // «Первый» — не косметика: заголовок рисуется как <h1> формы, и блок посреди
+      // вопросов означал бы второй <h1> в середине страницы у респондента.
+      if (s.blocks[0]?.id !== title.id) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'заголовок формы должен быть первым блоком',
+          path: ['blocks'],
+        })
+      }
+      // Спред, а не .length: Go считает РУНЫ (utf8.RuneCountInString), и на
+      // суррогатных парах (эмодзи) .length дал бы вдвое больше — фронт запрещал бы
+      // то, что бэкенд принимает.
+      if ([...plainText(title.text)].length > MAX_FORM_TITLE_LEN) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `заголовок формы длиннее ${MAX_FORM_TITLE_LEN} символов`,
+          path: ['blocks'],
+        })
+      }
+      // Одиночка: попади form_title в группу поля, редактор показал бы заголовок
+      // формы подписью вопроса.
+      if (s.blocks.some((b) => b.id !== title.id && b.groupId === title.groupId)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'заголовок формы не входит в группу вопроса',
+          path: ['blocks'],
+        })
+      }
+    }
   })
 export type FormSchema = z.infer<typeof formSchemaSchema>

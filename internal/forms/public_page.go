@@ -58,6 +58,13 @@ const maxOGDescriptionLen = 200
 // заголовков вопросов (пустой тизер): описание страницы для поисковиков.
 const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
 
+// fallbackFormTitle — <title> вкладки и og:title формы, у которой автор заголовок
+// стёр (фаза 15). На самой странице заголовка тогда нет вовсе — так решил автор, —
+// но у вкладки и у превью ссылки пустоты не бывает технически, и вместо неё нужен
+// нейтральный текст. Служебное «Untitled form» из колонки сюда не попадает: его
+// автор не писал.
+const fallbackFormTitle = "Форма"
+
 // indexDoc — собранный index.html, разложенный вокруг плейсхолдера ogMetaMarker,
 // вместе с приметами файла на диске (mtime+размер), по которым замечаем подмену.
 type indexDoc struct {
@@ -151,7 +158,7 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		metaDesc = fallbackMetaDescription
 	}
 	data := ogMetaData{
-		Title:           pf.Title,
+		Title:           titleOrFallback(pf.Title),
 		Description:     desc,
 		MetaDescription: metaDesc,
 		OGImage:         h.ogImageURL,
@@ -180,6 +187,16 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
+}
+
+// titleOrFallback — заголовок для мест, где пустота невозможна (<title>, og:title,
+// экран «приём закрыт»). Пустой заголовок законен на самой странице (там <h1>
+// просто не рисуется), но вкладке и превью ссылки нужен текст.
+func titleOrFallback(title string) string {
+	if strings.TrimSpace(title) == "" {
+		return fallbackFormTitle
+	}
+	return title
 }
 
 // ogDescriptionFromSchema собирает подзаголовок превью из формы: тексты первых

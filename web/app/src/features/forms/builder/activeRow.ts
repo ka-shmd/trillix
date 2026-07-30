@@ -15,21 +15,25 @@ import type { ShortcutContext } from './shortcuts'
 // поверхностей у строки несколько (textarea подписи, инпут варианта, инпут
 // плейсхолдера, объектная остановка), и только сама поверхность знает свой контекст.
 
-// Название формы и пустое полотно — не блоки, id у них нет. Сентинелы дают им ту же
-// адресацию, что и строкам: подсказки различают «активна строка X» и «активен заголовок».
-export const TITLE_ROW = '@title'
+// Пустое полотно — не блок, id у него нет; сентинел даёт ему ту же адресацию, что и
+// строкам. Заголовок формы своего сентинела больше не имеет: с фазы 15 он блок
+// документа и адресуется собственным id, как любая строка.
 export const CANVAS_ROW = '@canvas'
 
 export interface ActiveRow {
-  // id блока либо сентинел TITLE_ROW/CANVAS_ROW.
+  // id блока либо сентинел CANVAS_ROW.
   id: string
   ctx: ShortcutContext
   // Есть ли в группе строки отвечаемый блок — от этого зависит, работает ли Mod+Enter
   // (см. shortcutsFor). Осмыслен только у ctx='text'.
   hasAnswer: boolean
-  // Двигает ли Alt+↑↓ саму эту строку (см. shortcutsFor): у строки ответа в
-  // озаглавленной группе — нет, у подписи вопроса — двигает вопрос, а не строку.
+  // Двигает ли Alt+↑↓ саму эту строку (см. shortcutsFor): у подписи собранного
+  // вопроса — нет, там жест двигает вопрос целиком.
   movesRow: boolean
+  // Строка НЕ первая в своей группе: Mod+Alt+→ тогда собирает ряд со своим
+  // заголовком, а не с предыдущим вопросом (фаза 15, §6.6). Меняет подпись пункта
+  // в карте — см. shortcutsFor.
+  insideQuestion: boolean
 }
 
 interface ActiveRowApi {
@@ -61,7 +65,8 @@ export function useActiveRowState(): { active: ActiveRow | null; api: ActiveRowA
           cur.id === row.id &&
           cur.ctx === row.ctx &&
           cur.hasAnswer === row.hasAnswer &&
-          cur.movesRow === row.movesRow
+          cur.movesRow === row.movesRow &&
+          cur.insideQuestion === row.insideQuestion
             ? cur // бэйл на ту же строку: лишний setState = лишний ре-рендер подсказок
             : row,
         ),
@@ -92,6 +97,7 @@ export function useRowFocus(
   ctx: ShortcutContext,
   hasAnswer = false,
   movesRow = true,
+  insideQuestion = false,
 ): { onFocus: () => void; onBlur: (e: FocusEvent<Element>) => void } {
   const api = useActiveRowApi()
   // Снятие при размонтировании: у удалённой строки focusout не приходит, и подсказки
@@ -104,7 +110,7 @@ export function useRowFocus(
   useEffect(() => () => api?.deactivate(idRef.current), [api])
   return useMemo(
     () => ({
-      onFocus: () => api?.activate({ id, ctx, hasAnswer, movesRow }),
+      onFocus: () => api?.activate({ id, ctx, hasAnswer, movesRow, insideQuestion }),
       onBlur: (e: FocusEvent<Element>) => {
         // Переход МЕЖДУ поверхностями одной строки (вариант → соседний вариант) —
         // не уход с неё. Без этой проверки focusout гасит активность, а следующий
@@ -117,6 +123,6 @@ export function useRowFocus(
         api?.deactivate(id)
       },
     }),
-    [api, id, ctx, hasAnswer, movesRow],
+    [api, id, ctx, hasAnswer, movesRow, insideQuestion],
   )
 }

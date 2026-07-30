@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -50,10 +51,11 @@ type fakeStore struct {
 	versions []Version
 
 	// Управление путём автосейва схемы.
-	schemaSaved  bool
-	schemaErr    error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
-	lastSchema   json.RawMessage
-	lastExpected time.Time
+	schemaSaved     bool
+	schemaErr       error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
+	lastSchema      json.RawMessage
+	lastMirrorTitle *string
+	lastExpected    time.Time
 
 	// Захват настроек закрытия последнего UpdateCloseSettings.
 	lastCloseSettings domain.CloseSettings
@@ -156,13 +158,9 @@ func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, _ uuid.UUI
 	return f.listRows, f.listErr
 }
 
-func (f *fakeStore) UpdateFormTitle(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error) {
-	f.updated = true
-	return Form{ID: id, WorkspaceID: workspaceID, Title: title}, nil
-}
-
-func (f *fakeStore) UpdateFormDraftSchema(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error) {
+func (f *fakeStore) UpdateFormDraftSchema(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, mirrorTitle *string, expectedUpdatedAt time.Time) (Form, error) {
 	f.lastSchema = schema
+	f.lastMirrorTitle = mirrorTitle
 	f.lastExpected = expectedUpdatedAt
 	if f.schemaErr != nil {
 		return Form{}, f.schemaErr
@@ -292,19 +290,6 @@ func TestGetBySlug_Member_Success(t *testing.T) {
 	}
 	if form.Slug != "abc123" {
 		t.Fatalf("slug = %q, ожидалось \"abc123\"", form.Slug)
-	}
-}
-
-func TestUpdateTitle_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
-
-	_, err := svc.UpdateTitle(context.Background(), domain.NewID(), domain.NewID(), "hacked")
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
-	}
-	if store.updated {
-		t.Fatal("чужая форма не должна обновляться")
 	}
 }
 
@@ -479,10 +464,13 @@ func TestNextCopyName(t *testing.T) {
 
 func TestCopyName_TruncatesToFitLimit(t *testing.T) {
 	// База впритык к лимиту: суффикс обязан сохраниться, итог — влезть в maxTitleLen.
+	// Лимит считается в РУНАХ (фаза 15): до неё он был в байтах, и кириллическое имя
+	// обрезалось вдвое раньше латинского — ровно этот кейс на кириллице и краснел бы,
+	// проверяй он байты.
 	base := strings.Repeat("я", maxTitleLen)
 	got := copyName(base, 1)
-	if len(got) > maxTitleLen {
-		t.Fatalf("итог %d байт > лимита %d", len(got), maxTitleLen)
+	if n := utf8.RuneCountInString(got); n > maxTitleLen {
+		t.Fatalf("итог %d рун > лимита %d", n, maxTitleLen)
 	}
 	if !strings.HasSuffix(got, " (копия)") {
 		t.Fatalf("суффикс потерян: %q", got)
@@ -610,19 +598,6 @@ func TestUnpublish_Success_CarriesVersion(t *testing.T) {
 }
 
 // --- Валидация ---
-
-func TestUpdateTitle_EmptyTitle_Rejected(t *testing.T) {
-	store := &fakeStore{form: Form{}, member: true}
-	svc := newTestService(store)
-
-	_, err := svc.UpdateTitle(context.Background(), domain.NewID(), domain.NewID(), "   ")
-	if !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("err = %v, want ErrValidation", err)
-	}
-	if store.updated {
-		t.Fatal("пустое название не должно доходить до БД")
-	}
-}
 
 // --- Автосейв схемы: валидация, доступ, оптимистичная блокировка ---
 
@@ -887,6 +862,95 @@ func TestList_SearchEscapesLikeWildcards(t *testing.T) {
 			}
 			if store.lastListSearch != tt.want {
 				t.Fatalf("в репозиторий ушёл поиск %q, ожидался %q", store.lastListSearch, tt.want)
+			}
+		})
+	}
+}
+
+// --- Заголовок формы: зеркало в колонку и публичный резолв (фаза 15) ---
+
+// Колонка forms.title — ПРОИЗВОДНАЯ от документа. Три случая, и все три разные:
+// документ не высказался (схема снята до фазы) — колонку не трогаем; высказался
+// текстом — пишем его; высказался пустотой — пишем служебное имя, потому что
+// колонка NOT NULL и дашборду нужно чем-то назвать строку списка.
+func TestUpdateDraftSchema_MirrorsTitleFromDocument(t *testing.T) {
+	cases := map[string]struct {
+		schema string
+		want   *string
+	}{
+		"документ не высказался — колонка не трогается": {
+			schema: `{"schemaVersion":4,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
+			want:   nil,
+		},
+		"заголовок с текстом — едет в колонку": {
+			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Анкета ","m":["b"]},{"t":"2026"}]}]}`,
+			want:   strptr("Анкета 2026"),
+		},
+		"заголовок стёрт — колонка получает служебное имя": {
+			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
+			want:   strptr(defaultFormTitle),
+		},
+		"пробелы вокруг заголовка обрезаются": {
+			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"  Анкета  "}]}]}`,
+			want:   strptr("Анкета"),
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeStore{form: Form{}, member: true}
+			svc := newTestService(store)
+			if _, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), json.RawMessage(tc.schema), time.Now()); err != nil {
+				t.Fatalf("UpdateDraftSchema: %v", err)
+			}
+			got := store.lastMirrorTitle
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("колонку тронули значением %q, а документ о заголовке не говорил", *got)
+			case tc.want != nil && got == nil:
+				t.Fatalf("зеркало не записано, ждали %q", *tc.want)
+			case tc.want != nil && *got != *tc.want:
+				t.Fatalf("зеркало = %q, ждали %q", *got, *tc.want)
+			}
+		})
+	}
+}
+
+// Публичная форма берёт заголовок из ОПУБЛИКОВАННОЙ версии, а не из живой колонки
+// (решение владельца: заголовок публикуется вместе со схемой). Колонка остаётся
+// фолбэком для версий, снятых до фазы, и НЕ спасает пустой заголовок — иначе
+// служебное «Untitled form» снова утекло бы респонденту.
+func TestPublicForm_TitleFromPublishedSchema(t *testing.T) {
+	cases := map[string]struct {
+		column string
+		schema string
+		want   string
+	}{
+		"версия до фазы (блока нет) — фолбэк на колонку": {
+			column: "Старое название",
+			schema: `{"schemaVersion":3,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
+			want:   "Старое название",
+		},
+		"версия с заголовком — колонка игнорируется": {
+			column: "Живое имя из колонки",
+			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опубликованный заголовок"}]}]}`,
+			want:   "Опубликованный заголовок",
+		},
+		"автор стёр заголовок — пусто, а не служебное имя": {
+			column: defaultFormTitle,
+			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
+			want:   "",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeStore{publicForm: PublicForm{Title: tc.column, Schema: json.RawMessage(tc.schema)}}
+			svc := newTestService(store)
+			pf, err := svc.PublicForm(context.Background(), "slug")
+			if err != nil {
+				t.Fatalf("PublicForm: %v", err)
+			}
+			if pf.Title != tc.want {
+				t.Fatalf("Title = %q, ждали %q", pf.Title, tc.want)
 			}
 		})
 	}

@@ -115,6 +115,18 @@ function ContentBlock({
     )
   }
   const text = plainText(block.text).trim()
+  // Заголовок формы (фаза 15) — <h1> страницы, а не строка вопроса. Пустой не
+  // рисуется вовсе (решение владельца): форма начинается с первого вопроса, а
+  // служебное «Untitled form» из колонки респонденту больше не достаётся. Заглушка
+  // «Без названия», как у пустой подписи, здесь была бы враньём — автор стёр
+  // заголовок намеренно.
+  if (block.type === 'form_title') {
+    return text ? (
+      <h1 className="rf-title">
+        <RichText spans={block.text} inert={inert} />
+      </h1>
+    ) : null
+  }
   if (block.type === 'title' || block.type === 'label') {
     return (
       <div className={block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label'}>
@@ -524,15 +536,16 @@ function ChoiceList({
   return (
     <div className="rf-options" role="group" aria-label="Варианты ответа" onBlur={onBlur}>
       {packOptionRows(options).map((row) => {
-        const first = row[0]!
+        const first = row[0]![0]!
         // Ряд из двоих — две ячейки .rf-cell по половине колонки; карточка внутри
-        // обнимает текст, но начинается там, где ячейка (правая — с середины).
-        // Ряд из одного в обёртку не заворачивается.
+        // обнимает текст, но начинается там, где ячейка (правая — с середины). В
+        // правой ячейке может стоять СТОПКА вариантов — тот же раскладчик, что у
+        // вопросов (§5). Ряд из одного в обёртку не заворачивается.
         return row.length > 1 ? (
           <div key={first.id} className="rf-row">
-            {row.map((o) => (
-              <div key={o.id} className="rf-cell">
-                {card(o, index.get(o.id)!)}
+            {row.map((cell) => (
+              <div key={cell[0]!.id} className="rf-cell">
+                {cell.map((o) => card(o, index.get(o.id)!))}
               </div>
             ))}
           </div>

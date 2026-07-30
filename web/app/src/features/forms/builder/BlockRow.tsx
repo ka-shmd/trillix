@@ -46,6 +46,7 @@ import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
+import { useCaptionGuard } from './captionGuard'
 import { textCaret } from './caret'
 import { RichLine } from './RichLine'
 import { richCaret } from './richCaret'
@@ -55,7 +56,7 @@ import { BlockActionMenu } from './BlockActionMenu'
 import { ImageField } from './ImageField'
 import { arrowDir, chords } from './shortcuts'
 import { useRowFocus } from './activeRow'
-import { RowHints } from './RowHints'
+import { CaptionChip } from './CaptionChip'
 
 export interface BlockRowProps {
   block: Block
@@ -69,19 +70,14 @@ export interface BlockRowProps {
   // groupHasAnswer — есть ли в группе строки отвечаемый блок. Нужен подсказкам: без
   // него Mod+Enter («к полю ответа») молчит, и обещать его нельзя (§7).
   groupHasAnswer?: boolean
-  // ownedByCaption — строка ответа в группе с подписью: ею управляет подпись (решение
-  // владельца 2026-07-26). У такой строки НЕТ кластера значков (удалить/добавить/
-  // перетащить) и нет своего Alt+↑↓: разлучать её с вопросом нечем и незачем — трэш
-  // и ручка на подписи сносят и двигают вопрос целиком. Голое поле (группа без
-  // подписи) значки сохраняет: управлять им больше некому.
-  ownedByCaption?: boolean
   // requiredFor — блок, чью обязательность представляет эта строка (носитель флага —
   // всегда отвечаемый блок, модель не меняется). У поля это оно само, у первой
   // подписи группы — поле её вопроса, у контента — ничего.
   //
   // Звёздочку рисует подпись, а не поле (решение владельца 2026-07-26): у превью и
-  // рендерера она и так на подписи (§6), а строка ответа теперь вообще не несёт
-  // управления. У группы без подписи звёздочка остаётся на самом поле — больше негде.
+  // рендерера она и так на подписи (§6). У группы без подписи звёздочка остаётся на
+  // самом поле — больше негде. Кому её показывать, решает GroupRow: он знает состав
+  // группы, а строка — только себя.
   requiredFor?: Block
   // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
   // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
@@ -93,6 +89,18 @@ export interface BlockRowProps {
   // зеркалится в правое поле (левый лёг бы в 28px-жёлоб между колонками и наехал
   // на соседнюю группу), тогл обязательности остаётся у правого края текста.
   mirrored?: boolean
+  // rowZone — зона жеста «встань в ряд со мной» на ЭТОЙ строке (фаза 15, §6.6):
+  // absolute-оверлей, который полотно зажигает, пока тащат подходящее поле её группы.
+  // Приходит готовым узлом: строка о droppable'ах и правилах dnd не знает, её дело —
+  // дать absolute-якорь (root уже relative). Вне потока и pointer-events-none — как
+  // и весь появляющийся по драгу декор (урок TD-22).
+  rowZone?: ReactNode
+  // needsCaption — строка ответа стоит без заголовка. С фазы 15 это ЗАКОННОЕ
+  // состояние (правило requiresCaption понижено до правила вставки, §4.4 спеки), и
+  // вместо сопротивления строка предлагает недостающее действие: чип «Mod+Alt+T —
+  // Заголовок», по которому можно и кликнуть. Считает GroupRow — состав группы знает
+  // он; исключены contentные типы и consent (его текст и есть строка вопроса).
+  needsCaption?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
   // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
@@ -133,11 +141,12 @@ export function BlockRow({
   formId,
   groupHandle,
   groupHasAnswer = false,
-  ownedByCaption = false,
   requiredFor,
   insideQuestion = false,
   firstOfForm = false,
   mirrored = false,
+  rowZone,
+  needsCaption = false,
   openMenuOnMount,
   onAddBelow,
   onInsertBelow,
@@ -149,6 +158,11 @@ export function BlockRow({
   onRowShift,
 }: BlockRowProps) {
   const engine = useFocusEngine()
+  // Обёртка структурных команд, называющая потерю заголовка (§4.3 спеки фазы 15):
+  // строка теперь двигается и удаляется отдельно от своего вопроса, и каждый такой
+  // жест может оставить поле без имени в выгрузке. Зовут её ровно те обработчики,
+  // которые правят СОСТАВ документа, — набор текста и смена типа сюда не входят.
+  const captionGuard = useCaptionGuard(engine)
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
   const moveGroup = useBuilderStore((s) => s.moveGroup)
@@ -158,6 +172,7 @@ export function BlockRow({
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
+  const addCaptionFor = useBuilderStore((s) => s.addCaptionFor)
   // Текстовая поверхность строки: <textarea> либо (проба 14.0) contenteditable. Тип
   // union, потому что поток строки с ней говорит только через адаптер каретки и о её
   // природе не знает — ровно ради этого адаптер и вводился (§2.6 спеки фазы 13).
@@ -183,8 +198,10 @@ export function BlockRow({
   // инпут плейсхолдера, объектная остановка) объявляют свой контекст сами.
   // movesRow: у подписи вопроса (она несёт групповую ручку) Alt+↑↓ двигает вопрос
   // целиком, а не строку, — пункт «Переместить блок» из подсказок выпадает, перенос
-  // вопроса остаётся обещан отдельным Alt+Shift+↑↓.
-  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer, !groupHandle)
+  // вопроса остаётся обещан отдельным Alt+Shift+↑↓. У ВСЕХ прочих строк, включая
+  // строку ответа собранного вопроса, жест двигает саму строку (фаза 15, §4.1).
+  const movesRow = !groupHandle
+  const textFocus = useRowFocus(block.id, 'text', groupHasAnswer, movesRow)
   // Плейсхолдер пустой строки — подсказка в самом месте каретки (§7, слой 1). У
   // подписей он от позиции не зависит (тип уже сказал, что это) и виден всегда; у
   // обычного текста зависит и показывается только под кареткой: неактивная пустая
@@ -328,7 +345,7 @@ export function BlockRow({
       onBackspaceAtStart(block.id)
     } else if (chords.moveItem(e)) {
       e.preventDefault()
-      moveBlock(block.id, arrowDir(e))
+      captionGuard(() => moveBlock(block.id, arrowDir(e)))
     } else if (chords.arrowUp(e) && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
@@ -399,6 +416,22 @@ export function BlockRow({
     }
   }
 
+  // Дать голой строке ответа заголовок (§4.4 спеки фазы 15) — одно действие на два
+  // входа: клавиша строки и клик по чипу. Каретка уходит на новую подпись: автор
+  // позвал этот жест, чтобы её написать.
+  function addCaption() {
+    const id = addCaptionFor(block.id)
+    if (id) engine.focusBlock(id, 'end')
+  }
+
+  function onRowKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Строке с заголовком жест не обещан (чипа нет) — и не делается: no-op без шага
+    // истории, а не тихое «ничего не произошло» после коммита.
+    if (!needsCaption || !chords.addCaption(e)) return
+    e.preventDefault()
+    addCaption()
+  }
+
   const iconBtn =
     'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
@@ -421,8 +454,14 @@ export function BlockRow({
       // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента
       // и совпадает с превью (ритм 13.3). Значки центрируются по top-1.5 = padding →
       // на первой строке текста. Меняешь padding — правь -my И top-1.5 значков.
+      // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
+      // строке (дать ей заголовок), а поверхностей у неё несколько — инпут
+      // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
+      // любой из них, и ни одна этот аккорд не перехватывает.
+      onKeyDown={onRowKeyDown}
       className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
+      {rowZone}
       {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
           строки, сам поповер порталится. onPickType — тот же pickType, что у слеш-меню
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
@@ -463,12 +502,11 @@ export function BlockRow({
           мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
           шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2).
 
-          Кластера НЕТ у строки ответа в озаглавленной группе (ownedByCaption): поле
-          неразрывно с подписью, и все три значка там означали бы действия, которых не
-          бывает, — удалить поле отдельно, вставить блок между подписью и полем,
-          утащить поле из своего вопроса. Вопросом управляет строка подписи; у
-          вариантов choice — свои кластеры (см. OptionCard). */}
-      {ownedByCaption ? null : (
+          Кластер есть у КАЖДОЙ строки, включая строку ответа в собранном вопросе
+          (фаза 15, §4.1 спеки): удалить поле отдельно, вставить блок между подписью
+          и полем, утащить поле из своего вопроса — законные действия, а не «действия,
+          которых не бывает», как считал снятый замок. У вариантов choice поверх этого
+          свои кластеры (см. OptionCard). */}
       <div
         // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
         // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
@@ -481,7 +519,11 @@ export function BlockRow({
         <button
           type="button"
           tabIndex={-1}
-          onClick={() => (isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id))}
+          onClick={() =>
+            captionGuard(() =>
+              isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
+            )
+          }
           aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
           className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
         >
@@ -513,21 +555,21 @@ export function BlockRow({
           <GripVertical className="size-4" />
         </button>
       </div>
-      )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
           рендерер, §6), а пишет в отвечаемый блок группы — носитель флага не менялся.
           У группы без подписи звёздочка остаётся на самом поле: показать её больше
           негде. Контент ответов не собирает — там её нет вовсе. */}
-      {requiredFor && !ownedByCaption ? (
-        <RequiredToggle block={requiredFor} lineH={rowLineH} />
-      ) : null}
+      {requiredFor ? <RequiredToggle block={requiredFor} lineH={rowLineH} /> : null}
 
-      {/* Чипы-подсказки сфокусированной строки (§7): только клавиши этой поверхности,
-          общие — в шпаргалке Mod+/. Рисуются всегда, содержимое выбирает сам RowHints
-          по активной строке (и ничего не рисует, когда каретка не здесь). */}
-      <RowHints rowId={block.id} lineH={rowLineH} />
+      {/* Единственная подсказка, оставшаяся у строки (решение владельца 2026-07-29):
+          голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
+          клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
+          себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
+      {needsCaption && (
+        <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />
+      )}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -587,10 +629,12 @@ export function BlockRow({
         <div className="min-w-0">
           <AnswerField
             block={block}
+            insideQuestion={insideQuestion}
             onArrow={onArrow}
             onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
             onOpenActions={() => setActionOpen(true)}
+            onMove={(dir) => captionGuard(() => moveBlock(block.id, dir))}
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
@@ -598,13 +642,13 @@ export function BlockRow({
         // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
         <ObjectStop
           block={block}
-          ownedByCaption={ownedByCaption}
+          insideQuestion={insideQuestion}
           onAddBelow={onAddBelow}
           onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
           onDeleteBlock={onDeleteBlock}
           onOpenActions={() => setActionOpen(true)}
-          onMove={(dir) => moveBlock(block.id, dir)}
+          onMove={(dir) => captionGuard(() => moveBlock(block.id, dir))}
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
           onRowShift={(dir) => onRowShift(block.id, dir)}
         >
@@ -665,7 +709,7 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
 // стрелками и focusBlock, но не Tab (полотно — один Tab-stop, §3.1 / срез roving).
 function ObjectStop({
   block,
-  ownedByCaption = false,
+  insideQuestion = false,
   children,
   onAddBelow,
   onBackspaceDelete,
@@ -677,9 +721,9 @@ function ObjectStop({
   onRowShift,
 }: {
   block: Block
-  // Строка ответа в озаглавленной группе (см. проп BlockRow): у неё нет своего
-  // переноса — вопрос двигают с подписи.
-  ownedByCaption?: boolean
+  // Строка не первая в группе: Mod+Alt+→ собирает ряд со своим заголовком, а не с
+  // предыдущим вопросом (§6.6) — карта обязана называть то, что клавиша делает.
+  insideQuestion?: boolean
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
   onBackspaceDelete: (id: string) => void
@@ -694,11 +738,17 @@ function ObjectStop({
   useRegisterFocusTarget(block.id, () => ref.current?.focus())
   // Контекст подсказок: у картинки Mod+Enter открывает файловый диалог, у date/scale
   // открывать нечего — это разные контексты карты, а не один «объект» (§7).
+  // Объектная остановка групповой ручки не несёт никогда (первая строка мульти-группы
+  // — всегда подпись, regroup ищет её от поля вверх через контент), поэтому Alt+↑↓
+  // здесь двигает саму строку: movesRow дефолтный.
+  // insideQuestion меняет ПОДПИСЬ пункта Mod+Alt+→ в карте: на не первой строке
+  // группы аккорд собирает ряд со своим заголовком, а не с предыдущим вопросом (§6.6).
   const rowFocus = useRowFocus(
     block.id,
     block.type === 'image' ? 'image' : 'object',
     false,
-    !ownedByCaption,
+    true,
+    insideQuestion,
   )
 
   // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
@@ -728,12 +778,10 @@ function ObjectStop({
       e.preventDefault()
       onRowShift(chords.rowRight(e) ? 'right' : 'left')
     } else if (chords.moveItem(e)) {
-      // Alt+↑↓ двигает саму строку — а у строки ответа в озаглавленной группе двигать
-      // нечего: она едет только вместе с вопросом (Alt+Shift+↑↓ или та же клавиша на
-      // подписи). Жест ГАСИМ, а не пропускаем: иначе он провалился бы в обычный обход
-      // стрелками и каретка уехала бы на соседнюю строку вместо «ничего не произошло».
+      // Alt+↑↓ двигает саму строку — включая строку ответа собранного вопроса (фаза
+      // 15, §4.1): поле уходит из вопроса и возвращается тем же жестом.
       e.preventDefault()
-      if (!ownedByCaption) onMove(arrowDir(e))
+      onMove(arrowDir(e))
     } else if (chords.arrowUp(e)) {
       e.preventDefault()
       onArrow(block.id, 'up')
@@ -851,13 +899,17 @@ function ScaleInline({ block }: { block: Block }) {
 
 function AnswerField({
   block,
+  insideQuestion = false,
   onArrow,
   onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
   onRowShift,
+  onMove,
 }: {
   block: Block
+  // Как у ObjectStop: не первая строка группы меняет подпись пункта Mod+Alt+→.
+  insideQuestion?: boolean
   onArrow?: (id: string, dir: 'up' | 'down') => void
   // Backspace в ПУСТОМ плейсхолдере — удалить поле (см. проп BlockRow). Внутри
   // объектной остановки (date) поля рисуются без обработчиков — там свой Backspace.
@@ -871,12 +923,17 @@ function AnswerField({
   // поверхность вопроса, поэтому жест обязан работать и здесь. Внутри объектной
   // остановки (date) поля рисуются без обработчиков — там жест ведёт ObjectStop.
   onRowShift?: (dir: 'left' | 'right') => void
+  // Alt+↑↓ — перенос САМОЙ строки (фаза 15, §4.1). Инпут плейсхолдера — поверхность
+  // строки ответа, и до фазы жест здесь не обрабатывался вовсе: уносить поле из
+  // вопроса было нечем, а голое поле двигали с его же единственной строки. Теперь
+  // это законный жест на любой строке ответа, поэтому и здесь.
+  onMove?: (dir: 'up' | 'down') => void
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
   // Контекст подсказок инпута плейсхолдера (§7). Клавиш у него почти нет — это
   // необязательный лист обхода, и чипы там показывают ровно одну строку.
-  const rowFocus = useRowFocus(block.id, 'field')
+  const rowFocus = useRowFocus(block.id, 'field', false, true, insideQuestion)
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   // Фокус-цель текстового поля — инпут плейсхолдера (§2.1). Только у placeholder-
   // типов; date рисуется превью и фокусируется как объект (цель — у ObjectStop).
@@ -913,6 +970,13 @@ function AnswerField({
     } else if (onRowShift && (chords.rowRight(e) || chords.rowLeft(e))) {
       e.preventDefault()
       onRowShift(chords.rowRight(e) ? 'right' : 'left')
+    } else if (onMove && chords.moveItem(e) && !chords.moveGroup(e)) {
+      // Проверяется ДО стрелок обхода: Alt+↑↓ — это тоже стрелка, и обход перехватил
+      // бы жест на краях текста. moveGroup исключён явно (в остальных поверхностях
+      // его отсекает порядок веток): Alt+Shift+↑↓ здесь не обрабатывается, и молча
+      // трактовать его как перенос строки значило бы соврать — карта такого не обещает.
+      e.preventDefault()
+      onMove(arrowDir(e))
     } else if (onArrow && chords.arrowUp(e) && c.caretAtStart()) {
       e.preventDefault()
       onArrow(block.id, 'up')
@@ -1266,33 +1330,37 @@ function OptionsInline({
             // .rf-cell — половина ряда (fields.css). Карточка внутри обнимает текст, но
             // правая начинается с середины: у респондента ровно так же. У ряда из одного
             // обёртка ни на что не влияет — правило CSS адресует только детей .rf-row.
-            const cells = row.map((o) => (
-              <div key={o.id} className="rf-cell">
-                <OptionCard
-                  block={block}
-                  option={o}
-                  // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
-                  // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
-                  index={index.get(o.id)!}
-                  mirrored={mirrored}
-                  inputRef={(el) => {
-                    optionRefs.current.set(o.id, el)
-                  }}
-                  onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
-                  onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
-                  rowFocus={rowFocus}
-                />
+            const cells = row.map((cell) => (
+              <div key={cell[0]!.id} className="rf-cell">
+                {cell.map((o) => (
+                  <OptionCard
+                    key={o.id}
+                    block={block}
+                    option={o}
+                    // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
+                    // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
+                    index={index.get(o.id)!}
+                    mirrored={mirrored}
+                    inputRef={(el) => {
+                      optionRefs.current.set(o.id, el)
+                    }}
+                    onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                    onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
+                    rowFocus={rowFocus}
+                  />
+                ))}
               </div>
             ))
             // Ряд из одного + идёт драг варианта → правая ячейка показывается как
             // цель дропа. Зона — вся ПОЛОВИНА ряда (не полоса у края, как у вопросов):
             // карточка варианта обнимает текст, поэтому «край ряда» у неё не там, где
             // читается граница, а ячейка занимает ровно то место, куда карточка встанет.
-            const showCell = row.length === 1 && optDrag !== null && optDrag !== row[0]!.id
+            const solo = row.length === 1 ? row[0]![0]! : null
+            const showCell = solo !== null && optDrag !== null && optDrag !== solo.id
             return row.length > 1 || showCell ? (
-              <div key={row[0]!.id} className="rf-row items-start">
+              <div key={row[0]![0]!.id} className="rf-row items-start">
                 {cells}
-                {showCell && <FreeCell optionId={row[0]!.id} />}
+                {showCell && <FreeCell optionId={solo!.id} />}
               </div>
             ) : (
               cells[0]

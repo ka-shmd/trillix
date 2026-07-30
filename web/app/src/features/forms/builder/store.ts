@@ -14,10 +14,18 @@ import {
   carriesText,
   canShareRow,
   requiresCaption,
+  COLUMN_LEFT,
   COLUMN_RIGHT,
   sameRichText,
 } from '@entities/formSchema'
-import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
+import {
+  groupBlocks,
+  groupCanShareRow,
+  groupMeta,
+  packGroupRows,
+  packOptionRows,
+  packRows,
+} from '@fields/groups'
 
 // Стор билдера — высокочастотный локальный документ формы (ARCHITECTURE §5.1):
 // каждая правка text — синхронная операция над стором, мгновенный UI, а
@@ -123,6 +131,12 @@ export type BuilderActions = {
   // «Отдельные поля». Тип из requiresCaption получает свой заголовок, если приземлился
   // не под ждущей подписью; возвращается id для каретки — заголовка либо поля.
   addFieldAfter: (afterId: string | null, type: BlockType) => string
+  // addCaptionFor даёт голой строке ответа заголовок: пустая подпись title встаёт
+  // ПРЯМО НАД полем и regroup склеивает их в вопрос (фаза 15, §4.4 спеки). Обратный
+  // жест к makeField «подсадить поле к ждущей подписи» — тот же вопрос, собранный с
+  // другого конца. Возвращает id новой подписи для каретки; null — строке заголовок
+  // не нужен (не отвечаемая, несёт свой текст, подпись уже есть) или блока нет.
+  addCaptionFor: (id: string) => string | null
   updateBlock: (id: string, patch: BlockPatch, kind?: UpdateKind) => void
   removeBlock: (id: string) => void
   // removeGroup удаляет всю группу блока (подпись владеет группой): trash по подписи
@@ -148,15 +162,32 @@ export type BuilderActions = {
   // заголовок (requiresCaption), дублируется вопросом целиком — иначе копия осталась
   // бы голым полем такого типа, а их не бывает.
   duplicateBlock: (id: string) => void
-  // placeInRow — команда ПЕРЕНОСА в правую ячейку ряда (спека §5), единственный вход
-  // и для жеста (дроп в правую треть ряда), и для Mod+Alt+→: группа activeGroupId
-  // встаёт вплотную ЗА targetGroupId и получает column='right'. Не режим и не
-  // тумблер. Ряд цели полон / цель не умеет делить ряд → флаг инертен, и вся команда
-  // откатывается (no-op, историю и dirty не трогает).
-  placeInRow: (activeGroupId: string, targetGroupId: string) => void
-  // takeOwnRow — обратная команда (Mod+Alt+←, обычный вертикальный дроп): вопрос
-  // возвращается своим рядом. Порядок блоков не меняется — снимается только бит.
+  // placeInRow — команда ПЕРЕНОСА в свободную ячейку ряда (спека §5), единственный
+  // вход и для жеста (дроп в левую/правую треть ряда), и для Mod+Alt+→: группа
+  // activeGroupId встаёт вплотную к targetGroupId с указанной стороны. Не режим и не
+  // тумблер. Бит всегда несёт ПРАВЫЙ участник, поэтому side решает лишь, кто им
+  // станет — активная группа (right) или сама цель (left). Ряд цели полон / пара не
+  // сложилась → флаг инертен, и вся команда откатывается (no-op, историю и dirty не
+  // трогает).
+  placeInRow: (activeGroupId: string, targetGroupId: string, side?: 'left' | 'right') => void
+  // placeBlockInRow — та же команда переноса на ВТОРОМ уровне (фаза 15, §6.6): поле
+  // встаёт в ряд со своей подписью внутри вопроса. Пара обязана быть «подпись +
+  // короткое поле» из одной группы, ячейка подписи — свободной; иначе no-op.
+  placeBlockInRow: (activeBlockId: string, targetBlockId: string) => void
+  // takeOwnRow — обратная команда (Mod+Alt+←, обычный вертикальный дроп): элемент
+  // возвращается своим рядом. Какой именно — решает место строки в группе: своя
+  // строка выходит из ряда внутри вопроса, голова уводит из ряда весь вопрос.
+  //
+  // Секция при этом остаётся ЦЕЛОЙ, если в колонке ушедшего был кто-то ещё: вопрос
+  // уезжает ПОД неё (полноширинный блок внутри секции разрезал бы её пополам, §11.3).
+  // Опустела колонка — секции не остаётся вовсе, и биты снимаются со всех её
+  // участников: иначе остаток приклеится к следующей секции ниже.
   takeOwnRow: (id: string) => void
+  // shiftColumn — ШАГ ПО ОСИ КОЛОНОК (§11.6): полная ширина ↔ левая колонка ↔ правая.
+  // Один вход для Mod+Alt+→ и Mod+Alt+←; чем шаг обернётся, зависит от того, где
+  // элемент стоит сейчас (rowPosition), а не от режима, который где-то хранится.
+  // Крайняя позиция оси в свою сторону — no-op.
+  shiftColumn: (id: string, dir: 'left' | 'right') => void
   // Те же две команды для варианта (спека §5.1: различий с блоками нет ни одного).
   placeOptionInRow: (blockId: string, activeOptionId: string, targetOptionId: string) => void
   takeOptionOwnRow: (blockId: string, optionId: string) => void
@@ -236,7 +267,10 @@ function newBlock(type: BlockType): Block {
 // группу и копит всё после себя) склеивала подряд идущие лэйаут-блоки в одну
 // группу — внутри склейки нет границ групп, и уронить туда перетаскиваемую группу
 // было нельзя. Одиночки дают границу после КАЖДОГО standalone-блока. heading в
-// вопрос не входит никогда (раздел — не подпись поля). Инварианты v2 держатся:
+// вопрос не входит никогда (раздел — не подпись поля). ЗАГОЛОВОК ФОРМЫ (form_title,
+// фаза 15) спецслучая здесь не требует: он не подпись и не мостовой контент
+// (text/image), поэтому ни одна из двух веток его не подберёт — он остаётся
+// одиночкой по построению, чего и требует инвариант схемы. Инварианты v2 держатся:
 // группа смежна, ≤1 отвечаемого. groupId детерминирован (id якоря: отвечаемого
 // блока, иначе самого блока-одиночки) — стабилен между правками. Возвращает НОВЫЙ
 // массив, только если хоть у одного блока groupId изменился (иначе тот же —
@@ -274,10 +308,11 @@ function regroup(blocks: Block[]): Block[] {
   return changed ? next : blocks
 }
 
-// carryLayout переносит бит ряда со старого блока на сконвертированный, если новый
-// тип умеет делить ряд; вне whitelist ключ молча роняется — иначе автосейв ловил бы
-// 422 на невалидном сочетании (спека §5). Мутирует dst (свежесозданный блок
-// конверсии, ещё не в сторе).
+// carryLayout переносит бит ряда со старого блока на сконвертированный. Проверка
+// «умеет ли новый тип делить ряд» осталась одна и вырожденная (всё, кроме заголовка
+// формы, — ADR §10), но остаётся здесь, а не выпиливается: она отвечает не за вид, а
+// за валидность документа, и автосейв ловил бы 422 на невалидном сочетании. Мутирует
+// dst (свежесозданный блок конверсии, ещё не в сторе).
 function carryLayout(src: Block, dst: Block): void {
   if (src.settings?.column === COLUMN_RIGHT && canShareRow(dst.type)) {
     dst.settings = { ...dst.settings, column: COLUMN_RIGHT }
@@ -301,68 +336,210 @@ function optionWithoutColumn(o: Option): Option {
   return next
 }
 
-// rowPartners — для каждого носителя бита: id блока-соседа, РЯДОМ С КОТОРЫМ он реально
-// стоит (носитель левого участника). Ключ — id носителя, а не groupId: groupId выводится
-// regroup и может смениться от чужой правки, id блока стабилен (на него же ссылаются
-// answers).
-function rowPartners(blocks: Block[]): Map<string, string> {
-  const m = new Map<string, string>()
-  for (const row of packRows(groupBlocks(blocks))) {
-    if (row.length < 2) continue
-    const left = row[0]!.blocks.find((b) => isAnswerableType(b.type))
-    const right = row[1]!.blocks.find((b) => b.settings?.column === COLUMN_RIGHT)
-    if (left && right) m.set(right.id, left.id)
+// rowGroups — группы, участвующие в РЯДАХ: документ без заголовка формы. Он рисуется
+// вне потока вопросов (splitFormTitle на всех трёх поверхностях), поэтому и колонку
+// делить не может — ADR §10 говорит это же прямым текстом («кроме заголовка формы»).
+//
+// Читать документ иначе, чем читает рендерер, стор не имеет права дважды: во-первых,
+// редактор собрал бы ряд «заголовок | первый вопрос», которого не показала бы ни одна
+// другая поверхность; во-вторых, канон пометил бы заголовок битом 'left' — а такого
+// документа схема не принимает (Zod и Go проверяют canShareRow), и автор получил бы
+// «ошибку сохранения» на форму, которую он даже не правил. Именно так и было: бит у
+// первого вопроса приезжает из старой формы, где он был инертен.
+//
+// Группа заголовка — всегда ровно один блок: regroup ведёт группу от поля вверх через
+// text/image до подписи, а form_title ни то ни другое.
+function rowGroups(blocks: Block[]): { id: string; blocks: Block[] }[] {
+  return groupBlocks(blocks).filter((g) => g.blocks[0]!.type !== 'form_title')
+}
+
+// sectionMates — для каждого элемента, стоящего В СЕКЦИИ: id блоков ОСТАЛЬНЫХ её
+// участников. Ключ — id блока, а не groupId: groupId выводится regroup и может
+// смениться от чужой правки, id блока стабилен (на него же ссылаются answers).
+//
+// Обходит оба уровня (§11.5, §6.2): секции из групп и ряды «подпись | поле» внутри
+// группы. Отсюда следуют ОБА правила уборки, и своего у стора нет ни одного:
+//
+//   • «бит инертен» = элемента нет в карте вовсе (раскладчик бит не применил);
+//   • «секция сменилась» = от прежней компании не осталось НИКОГО.
+//
+// Компания, а не «конкретный сосед» и не ключ секции: она устойчива к тому, к чему
+// обязана быть устойчива. Перестановка внутри секции компанию не меняет (те же лица);
+// приход нового участника не меняет её для остальных; а вот полноширинный блок,
+// вставленный в середину секции, разрывает её так, что у нижней части от прежней
+// компании не остаётся никого — и биты снимаются, как и раньше. Ключ по первому
+// элементу левой колонки этого не умел: перестановка самого первого элемента меняла
+// ключ и разваливала секцию.
+function sectionMates(blocks: Block[]): Map<string, Set<string>> {
+  const mates = new Map<string, Set<string>>()
+  const add = (participants: Block[][]) => {
+    const ids = participants.map((p) => p.map((b) => b.id))
+    ids.forEach((own, i) => {
+      const others = new Set(ids.filter((_, j) => j !== i).flat())
+      for (const id of own) mates.set(id, others)
+    })
   }
-  return m
+  const groups = rowGroups(blocks)
+  for (const row of packRows(groups)) {
+    if (row.length < 2) continue // не секция — полная ширина
+    add(row.flat().map((g) => g.blocks))
+  }
+  for (const g of groups) {
+    for (const row of packGroupRows(g.blocks)) {
+      if (row.length < 2) continue
+      add(row.flat().map((b) => [b]))
+    }
+  }
+  return mates
 }
 
 // То же для вариантов: сосед варианта — предыдущий вариант его ряда.
 function optionPartners(options: Option[]): Map<string, string> {
   const m = new Map<string, string>()
-  for (const row of packOptionRows(options)) {
-    if (row.length > 1) m.set(row[1]!.id, row[0]!.id)
+  for (const [leftCell, rightCell] of packOptionRows(options)) {
+    if (!rightCell) continue
+    let neighbor = leftCell![0]!.id
+    for (const o of rightCell) {
+      m.set(o.id, neighbor)
+      neighbor = o.id
+    }
   }
   return m
 }
 
-// normalizeColumns снимает биты ряда, которые перестали значить то, что значили (спека
-// §5) — и у блоков, и у вариантов. Снимаются два вида:
+// reanchorRowBits — бит, который БЫЛ кросс-групповым, остаётся кросс-групповым, даже
+// если правка увела его блок с головы группы (v4, §6.3: смысл ключа задаёт место).
 //
-//  1. ИНЕРТНЫЙ — флаг, которому некуда примениться: левого соседа нет, он не умеет
-//     делить ряд, его ячейка занята. Такой флаг легален в контракте (кросс-блочное
-//     условие намеренно не валидируется — иначе undo и промежуточные состояния драга
-//     ловили бы 422), но в сторе его чистят, чтобы он не воскрес: иначе вставка
-//     короткого вопроса выше молча затянула бы блок в чужой ряд.
-//  2. С ПОДМЕНЁННЫМ СОСЕДОМ — флаг остался рабочим, но сосед у него уже другой. Бит
-//     держится за КОНКРЕТНОГО соседа: «встань в ряд с этим вопросом», а не «встань в
-//     ряд с кем угодно, кто окажется выше». Без этого правила любой вертикальный
-//     перенос (Alt+Shift+↑↓, дроп группы, перестановка вариантов) приклеивал бы
-//     участника ряда к постороннему вопросу — ряд собирался бы сам, без просьбы.
-//     Проверяется только при известном prev (структурная правка); hydrate и undo/redo
-//     приезжают со своей историей и подмены не видят — им сравнивать не с чем и не нужно.
-//     placed — единственное исключение: элемент, которому бит поставили ИМЕННО СЕЙЧАС
-//     (placeInRow), меняет соседа по прямой просьбе, и снимать его бит нельзя, иначе
-//     перенос из одного ряда в свободную ячейку другого был бы no-op'ом.
+// Случай, ради которого это существует: голое поле стоит в ряду со своим соседом, и
+// автор даёт ему заголовок (Mod+Alt+T). Подпись становится головой группы, поле —
+// вторым блоком, и тот же ключ на нём начинает значить «встань справа от своей
+// подписи». Без пере-якорения вопрос молча выпрыгнул бы из ряда и перестроился
+// внутрь себя — правка заголовка переставила бы форму.
 //
-// Что именно стоит в ряду, решает ТОТ ЖЕ раскладчик, что рисует ряды (packRows/
-// packOptionRows): своё правило здесь разъехалось бы с рендером — это и был дефект
-// «помечен half — нарисован full».
-// Возвращает исходный массив, если снимать нечего (дешёвые no-op коммиты).
-function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Block[] {
-  const clear = new Set<string>() // id блоков, с которых снимаем бит
-  for (const row of packRows(groupBlocks(blocks))) {
-    for (const b of row[0]!.blocks) {
-      if (b.settings?.column === COLUMN_RIGHT) clear.add(b.id) // (1) инертный
+// Обратный случай (бит был внутригрупповым, блок стал головой — например, подпись
+// удалили) специально НЕ переносится: партнёр, ради которого бит ставили, исчез, и
+// дальше его судьбу решает обычная проверка инертности/смены соседа.
+function reanchorRowBits(blocks: Block[], prev?: Block[]): Block[] {
+  if (!prev) return blocks
+  const wasHead = new Set(groupBlocks(prev).map((g) => g.blocks[0]!.id))
+  const move = new Map<string, string>() // носитель → голова, на которую переезжает бит
+  for (const g of groupBlocks(blocks)) {
+    for (const b of g.blocks.slice(1)) {
+      if (b.settings?.column === COLUMN_RIGHT && wasHead.has(b.id)) move.set(b.id, g.blocks[0]!.id)
     }
   }
+  if (move.size === 0) return blocks
+  const heads = new Set(move.values())
+  return blocks.map((b) => {
+    if (move.has(b.id)) return withoutColumn(b)
+    // У головы бит уже мог быть свой — тогда переезжающий просто пропадает.
+    if (heads.has(b.id) && b.settings?.column !== COLUMN_RIGHT) {
+      return { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } }
+    }
+    return b
+  })
+}
+
+// normalizeSections приводит документ к КАНОНУ секции (спека §11.4). Две правки, обе
+// выводимые из раскладки — как groupId выводится regroup:
+//
+//  1. ЯВНАЯ ЛЕВАЯ КОЛОНКА. Элементу левой колонки, чей бит НЕ 'left', ставится 'left' —
+//     и когда бита нет, и когда там 'right'. Иначе левая колонка ломается на втором
+//     элементе: у неявной формы («'right' забрал предыдущего») открывший секцию несёт
+//     чужой бит или не несёт никакого, и вставка второго элемента в левую колонку давала
+//     бы документ, где открывший её ЗАКРЫВАЕТ секцию и уезжает из неё. Неявная форма
+//     остаётся читаемой (старые формы, промежуточный результат жеста), но не хранимой.
+//     Случай «в левой колонке лежит 'right'» даёт переезд между колонками: ушедший
+//     оставляет колонку пустой, и раскладчик забирает в неё первого из уцелевшей — с его
+//     прежним битом (найдено ревью этапа 15.6).
+//  2. КОЛОНОЧНЫЙ ПОРЯДОК. Внутри секции сперва вся левая колонка, потом вся правая.
+//     Иначе порядок DOM — а с ним Tab, скринридер и колонки CSV — скакал бы между
+//     колонками. Плата названа в спеке: перенос между колонками двигает элемент в
+//     документе, то есть меняет порядок колонок в выгрузке; автор видит это глазами, а
+//     Mod+Z откатывает.
+//
+// Секция — непрерывный пробег групп (автомат раскладчика идёт по потоку), поэтому
+// перестановка внутри неё блоки групп не разрывает. Идемпотентна: канон в себя же и
+// переходит. Возвращает исходный массив, если править нечего.
+function normalizeSections(blocks: Block[]): Block[] {
+  const all = groupBlocks(blocks)
+  const groups = rowGroups(blocks)
+  const stamp = new Set<string>() // головы групп левой колонки с неканоническим битом
+  const order: string[] = [] // groupId в каноническом порядке
+  let moved = false
+  for (const row of packRows(groups)) {
+    if (row.length < 2) {
+      order.push(...row.flat().map((g) => g.id))
+      continue
+    }
+    const [leftCell, rightCell] = row
+    for (const g of leftCell!) {
+      if (g.blocks[0]!.settings?.column !== COLUMN_LEFT) stamp.add(g.blocks[0]!.id)
+    }
+    const canonical = [...leftCell!, ...rightCell!].map((g) => g.id)
+    const asIs = row.flat().map((g) => g.id)
+    if (canonical.some((id, i) => id !== asIs[i])) moved = true
+    order.push(...canonical)
+  }
+  if (stamp.size === 0 && !moved) return blocks
+  const byId = new Map(groups.map((g) => [g.id, g]))
+  // Склейка идёт по ПОЛНОМУ списку групп: заголовок формы в рядах не участвует (его тут
+  // и нет в order), но и с места не двигается — на своём месте он остаётся тем же
+  // блоком, а канон переставляет только группы внутри секции.
+  let k = 0
+  const next = all.flatMap((g) => (byId.has(g.id) ? byId.get(order[k++]!)!.blocks : g.blocks))
+  return next.map((b) =>
+    stamp.has(b.id) ? { ...b, settings: { ...b.settings, column: COLUMN_LEFT } } : b,
+  )
+}
+
+// normalizeColumns снимает биты колонки, которые перестали значить то, что значили
+// (спека §11.5) — и у блоков, и у вариантов. Снимаются два вида:
+//
+//  1. ИНЕРТНЫЙ — раскладчик бит не применил: секции нет (одинокий 'left', 'right' без
+//     кого забрать), вторая колонка пуста, пара внутри вопроса не та. Такой флаг
+//     легален в контракте (кросс-блочное условие намеренно не валидируется — иначе
+//     undo и промежуточные состояния драга ловили бы 422), но в сторе его чистят,
+//     чтобы он не воскрес: иначе вставка вопроса выше молча затянула бы блок в чужую
+//     секцию.
+//  2. СЕКЦИЯ СМЕНИЛАСЬ — от прежней компании не осталось НИКОГО. Бит держится за
+//     компанию: «я в этой колонке ЭТОЙ секции», а не «в колонке чего угодно, что
+//     окажется рядом». Без этого правила любой вертикальный перенос (Alt+Shift+↑↓,
+//     дроп группы, перестановка вариантов) приклеивал бы элемент к посторонней секции.
+//     Проверяется только при известном prev (структурная правка); hydrate и undo/redo
+//     приезжают со своей раскладкой и подмены не видят — сравнивать им не с чем.
+//
+//     Компания устойчива именно к тому, к чему обязана: перестановка внутри секции её
+//     не меняет (те же лица), приход нового участника не меняет её для остальных, а
+//     полноширинный блок, вставленный в середину, разрывает секцию так, что у нижней
+//     части от прежней компании не остаётся никого — бит снимается, как и раньше.
+//     Исключение одно: placed — элемент, которому бит поставили ИМЕННО СЕЙЧАС
+//     (placeInRow), меняет секцию по прямой просьбе, иначе перенос из одной секции в
+//     другую был бы no-op'ом.
+//
+// Оба вида спрашиваются у ТОГО ЖЕ раскладчика, что рисует секции (sectionMates поверх
+// packRows/packGroupRows, отдельно packOptionRows): своё правило здесь разъехалось бы
+// с рендером — это и был дефект «помечен half — нарисован full».
+//
+// После уборки документ приводится к КАНОНУ (normalizeSections): левая колонка помечена
+// явно, порядок внутри секции колоночный.
+// Возвращает исходный массив, если править нечего (дешёвые no-op коммиты).
+function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Block[] {
+  const blocks = reanchorRowBits(input, prev)
+  const clear = new Set<string>() // id блоков, с которых снимаем бит
+  const now = sectionMates(blocks)
+  for (const b of blocks) {
+    if (b.settings?.column !== undefined && !now.has(b.id)) clear.add(b.id) // (1) инертный
+  }
   if (prev) {
-    // (2) сосед сменился. Носителей, которых в prev не было вовсе, не трогаем: это
-    // свежий бит от placeInRow, ему сравнивать не с чем.
-    const was = rowPartners(prev)
-    const now = rowPartners(blocks)
-    for (const [id, partner] of now) {
-      const before = was.get(id)
-      if (id !== placed && before !== undefined && before !== partner) clear.add(id)
+    const was = sectionMates(prev)
+    for (const b of blocks) {
+      if (b.settings?.column === undefined || b.id === placed) continue
+      const before = was.get(b.id)
+      const after = now.get(b.id)
+      if (before === undefined || after === undefined) continue
+      // (2) от прежней компании не осталось никого.
+      if (![...before].some((id) => after.has(id))) clear.add(b.id)
     }
   }
   // Варианты — тот же приём внутри каждого choice-блока.
@@ -372,8 +549,11 @@ function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Blo
     const options = b.settings?.options
     if (!options?.length) continue
     const ids = new Set<string>()
+    // Инертный бит варианта — тот, который раскладчик не применил: у элемента левой
+    // колонки (ряд им ОТКРЫТ, слева никого) он ни к чему не относится.
     for (const row of packOptionRows(options)) {
-      if (row[0]!.column === COLUMN_RIGHT) ids.add(row[0]!.id)
+      const opener = row[0]![0]!
+      if (opener.column === COLUMN_RIGHT) ids.add(opener.id)
     }
     const before = prevOptions.get(b.id)
     if (before) {
@@ -385,8 +565,8 @@ function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Blo
     }
     if (ids.size > 0) optClear.set(b.id, ids)
   }
-  if (clear.size === 0 && optClear.size === 0) return blocks
-  return blocks.map((b) => {
+  if (clear.size === 0 && optClear.size === 0) return normalizeSections(blocks)
+  const cleaned = blocks.map((b) => {
     const ids = optClear.get(b.id)
     const next = ids
       ? {
@@ -399,20 +579,37 @@ function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Blo
       : b
     return clear.has(b.id) ? withoutColumn(next) : next
   })
+  return normalizeSections(cleaned)
 }
 
-// Свободна ли правая ячейка ряда, в котором стоит группа gid (аналог для варианта —
-// ниже). Отдельного правила «цель должна быть свободна» и «в ряду максимум двое» в
-// сторе нет: есть один вопрос к ТОМУ ЖЕ раскладчику, который рисует ряды, — физика
-// ячеек. Ряд из одного = ячейка свободна.
-function rowHasFreeCell(blocks: Block[], gid: string): boolean {
-  const row = packRows(groupBlocks(blocks)).find((r) => r.some((g) => g.id === gid))
-  return row?.length === 1
-}
-
+// У ВАРИАНТОВ жест по-прежнему предлагает только пустую правую ячейку: раскладчик
+// стопку вариантов собрать умеет (ядро общее), но зона дропа у списка своя — ячейка
+// целиком, а не полоса у края, — и второго приглашения «под этот вариант» у неё нет.
+// Инертным бит от этого не станет: команда просто не выдаётся.
 function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
-  const row = packOptionRows(options).find((r) => r.some((o) => o.id === optionId))
+  const row = packOptionRows(options).find((r) => r.some((cell) => cell.some((o) => o.id === optionId)))
   return row?.length === 1
+}
+
+// На втором уровне (§6.4) стопки не бывает по построению: пара внутри вопроса — это
+// «подпись + поле ответа», а отвечаемый блок в группе не больше одного. Поэтому
+// вопрос прежний: свободна ли ячейка ряда, в котором стоит БЛОК id.
+function innerRowHasFreeCell(blocks: Block[], id: string): boolean {
+  const group = groupBlocks(blocks).find((g) => g.blocks.some((b) => b.id === id))
+  const row = group && packGroupRows(group.blocks).find((r) => r.some((cell) => cell.some((b) => b.id === id)))
+  return row?.length === 1
+}
+
+// rowBitOwner — какой бит двигает строка id: свой (внутригрупповой, если строка не
+// первая в группе) или группы (кросс-групповой, он на первом блоке). Одно правило на
+// клавиатуру, жест и уборку — уровень задаёт МЕСТО блока в группе (§6.3).
+function rowBitOwner(blocks: Block[], id: string): Block | null {
+  const group = groupBlocks(blocks).find((g) => g.blocks.some((b) => b.id === id))
+  if (!group) return null
+  const self = group.blocks.find((b) => b.id === id)!
+  return self.id !== group.blocks[0]!.id && self.settings?.column === COLUMN_RIGHT
+    ? self
+    : group.blocks[0]!
 }
 
 // groupAnswerable — отвечаемый блок группы gid (носитель бита ряда) или null.
@@ -423,9 +620,10 @@ function groupAnswerable(blocks: Block[], gid: string): Block | null {
 // groupIsComplete — в группе есть и подпись, и поле ответа: вопрос собран. В такую
 // группу нельзя добавить ни второй ответ, ни второй заголовок (решение владельца
 // 2026-07-26) — только лэйаут (text/image), он и есть тело вопроса. Правило
-// одинаково у всех входов: слеш-меню и «+» кладут такое ниже группы, дроп
-// перенаправляет туда же (planBlockDrop), а regroup второй подписи в группу не
-// пускает вовсе.
+// одинаково у ВСТАВОК: слеш-меню и «+» кладут такое ниже группы, а regroup второй
+// подписи в группу не пускает вовсе. Дроп мышью этому правилу с фазы 15 не подчинён
+// (§4.1 спеки): перенос — жест автора, который видит, что делает, а не умолчание
+// вставки, которое он не выбирал.
 function groupIsComplete(blocks: Block[], gid: string): boolean {
   let caption = false
   let answer = false
@@ -458,12 +656,39 @@ function swapGroupWithNeighbor(blocks: Block[], id: string, dir: 'up' | 'down'):
   const groups = groupBlocks(blocks)
   const gi = groups.findIndex((g) => g.id === cur.groupId)
   const gj = dir === 'up' ? gi - 1 : gi + 1
-  if (gj < 0 || gj >= groups.length) return null
+  // Группа заголовка (если она есть) — нулевая, и она граница, а не сосед по обмену.
+  if (gj < (blocks[0]?.type === 'form_title' ? 1 : 0) || gj >= groups.length) return null
   const tmp = groups[gi]!
   groups[gi] = groups[gj]!
   groups[gj] = tmp
   return groups.flatMap((g) => g.blocks)
 }
+
+// pinFormTitle — заголовок формы всегда остаётся ПЕРВЫМ блоком (фаза 15, инвариант
+// схемы). Нормализация, а не проверка в каждой команде: правило записано один раз для
+// ВСЕХ структурных путей — ровно по той же причине, что и уборка бита ряда
+// (normalizeColumns). Путь, который о нём забудет, — это документ, отвергнутый
+// валидатором на автосейве, то есть «ошибка сохранения» без причины у автора.
+//
+// Полотно прячет заголовок из списка групп (SlashEditor рисует его отдельной строкой),
+// поэтому команды переноса его не видят и без этой страховки выталкивают первый вопрос
+// выше него: `Alt+Shift+↑` на первом вопросе и `Alt+↑` на первом блоке давали ровно
+// это. Возвращает тот же массив, если двигать нечего (дешёвые no-op коммиты).
+function pinFormTitle(blocks: Block[]): Block[] {
+  const i = blocks.findIndex((b) => b.type === 'form_title')
+  if (i <= 0) return blocks
+  const next = blocks.slice()
+  const [title] = next.splice(i, 1)
+  next.unshift(title!)
+  return next
+}
+
+// canvasFloor — индекс первой строки, которой автор распоряжается. Приколотый
+// заголовок занимает нулевую, и для команд переноса он — граница полотна, а не сосед:
+// «двинуть вверх» на первой строке обязано быть no-op'ом (без шага истории и dirty),
+// как и на последней. Иначе жест выглядел бы сработавшим, а pinFormTitle молча
+// возвращал бы всё назад — правка, которой не было, но с dirty и лишним PATCH.
+const canvasFloor = (blocks: Block[]): number => (blocks[0]?.type === 'form_title' ? 1 : 0)
 
 // groupSpan — [начало, конец] непрерывного участка группы блока с индексом i.
 // Группа смежна (гарантирует regroup), поэтому участок односвязный.
@@ -476,119 +701,195 @@ function groupSpan(blocks: Block[], i: number): [number, number] {
   return [s, e]
 }
 
-// groupEndAfter — индекс вставки ПОСЛЕ всей группы afterId (в конец при null или
-// ненайденном). Отвечаемое поле/бандл вставляется сюда: инпут не встраивается между
-// подписью и контролом группы, а начинает новую группу ниже (фаза 8.7).
+// sectionSpanEnd — индекс ПОСЛЕДНЕГО блока секции, в которой стоит блок i; если он не
+// в секции — конец его группы. Секция смежна (автомат раскладчика идёт по потоку),
+// поэтому участок односвязный, как и у группы.
+//
+// Нужен всем путям вставки «ниже» (§11.6): полноширинный новичок, уронённый ВНУТРЬ
+// секции, её разрезает — у него нет бита, а элемент без бита секцию закрывает. Enter из
+// левой колонки создавал бы строку между колонками, и структура рассыпалась бы на
+// глазах (отчёт владельца 2026-07-29). Правильное место — ПОСЛЕ всей секции.
+function sectionSpanEnd(blocks: Block[], i: number): number {
+  const groups = rowGroups(blocks)
+  const gid = blocks[i]!.groupId
+  const row = packRows(groups).find((r) => r.some((cell) => cell.some((g) => g.id === gid)))
+  if (!row || row.length < 2) return groupSpan(blocks, i)[1]
+  const last = row.flat().at(-1)!.blocks.at(-1)!.id
+  return blocks.findIndex((b) => b.id === last)
+}
+
+// groupEndAfter — индекс вставки ПОСЛЕ всей группы afterId, а если она стоит в секции —
+// после всей СЕКЦИИ (в конец при null или ненайденном). Отвечаемое поле/бандл
+// вставляется сюда: инпут не встраивается между подписью и контролом группы, а
+// начинает новую группу ниже (фаза 8.7).
 function groupEndAfter(blocks: Block[], afterId: string | null): number {
   if (!afterId) return blocks.length
   const i = blocks.findIndex((b) => b.id === afterId)
   if (i < 0) return blocks.length
-  return groupSpan(blocks, i)[1] + 1
+  return sectionSpanEnd(blocks, i) + 1
 }
 
 // planBlockDrop — чистый расчёт блочного дропа: activeId переносится на позицию
-// overId (плоский сплайс, как arrayMove у sortable), но с правилом §4.4 спеки
-// (Д11): отвечаемый блок И подпись (решение владельца — шире спеки, подпись тоже
-// крадёт вопрос), уроненные МЕЖДУ строк чужой МУЛЬТИ-группы, приземляются сразу
-// ПОД ней. Дроп внутрь молча пересобирал группу вокруг пришельца (regroup
-// переклеивал подпись → колонки CSV и шаги воронки тихо переименовывались) —
-// теперь dnd согласован с правилом слеш-меню «инпут не втискивается в чужой
-// вопрос». Что остаётся свободным: подпись НАД голым полем (группа из одного
-// блока — жест «дать полю подпись»), контент text/image внутрь группы (он и есть
-// тело вопроса), перенос в границах СВОЕЙ группы.
-// frameIds — состав для драг-рамки (union-rect строк на полотне): при
-// перенаправлении — строки чужой группы, под которую уедет блок; иначе —
-// мульти-группа, в которую активный блок войдёт после дропа (пусто, если
-// останется одиночкой). changed=false — дроп вернул блок на своё же место
-// (стору коммитить нечего, но рамке состав всё ещё нужен).
+// overId (плоский сплайс, как arrayMove у sortable). Строка роняется в ЛЮБУЮ
+// позицию полотна, включая середину чужого вопроса: замок «отвечаемый блок и
+// подпись приземляются ПОД чужой мульти-группой» снят фазой 15 (§4.1 спеки).
+// Он охранял единственный реальный ущерб — кражу подписи (regroup отдаёт заголовок
+// пришельцу, прежнее поле остаётся голым, и колонка CSV молча переименовывается);
+// решение владельца — не запрещать, а делать громким: жертву видно во время драга
+// и её называет тост с отменой после (captionLoss, §4.3).
+//
+// frameIds — состав для драг-рамки (union-rect строк на полотне): мульти-группа, в
+// которую активный блок войдёт после дропа; пусто — блок останется одиночкой.
 export function planBlockDrop(
   blocks: Block[],
   activeId: string,
   overId: string,
-): { blocks: Block[]; changed: boolean; frameIds: string[]; redirected: boolean } | null {
+): { blocks: Block[]; frameIds: string[] } | null {
   const from = blocks.findIndex((b) => b.id === activeId)
   const to = blocks.findIndex((b) => b.id === overId)
   if (from < 0 || to < 0 || from === to) return null
   const active = blocks[from]!
-  const rest = blocks.slice()
-  rest.splice(from, 1)
-  let at = to // вставка на индекс overId в списке БЕЗ активного = arrayMove
-  let redirected = false
-  let frameIds: string[] = []
-  if (isAnswerableType(active.type) || isCaptionType(active.type)) {
-    // Мульти-группы ищутся по СТАРЫМ groupId остатка (группы смежны). Группа
-    // самого активного блока исключена: перенос внутри своей — свободен, а её
-    // groupId у остатка тот же, что у активного.
-    let gs = 0
-    while (gs < rest.length) {
-      let ge = gs
-      while (ge + 1 < rest.length && rest[ge + 1]!.groupId === rest[gs]!.groupId) ge++
-      // «Внутрь» = слот строго между строками группы: gs < at ≤ ge.
-      if (rest[gs]!.groupId !== active.groupId && ge > gs && at > gs && at <= ge) {
-        at = ge + 1
-        redirected = true
-        frameIds = rest.slice(gs, ge + 1).map((b) => b.id)
-        break
-      }
-      gs = ge + 1
-    }
-  }
-  const next = rest.slice()
-  next.splice(at, 0, active)
-  const changed = !next.every((b, i) => b === blocks[i])
-  if (!redirected) {
-    const predicted = regroup(next)
-    const gid = predicted.find((b) => b.id === activeId)!.groupId
-    const members = predicted.filter((b) => b.groupId === gid)
-    if (members.length > 1) frameIds = members.map((b) => b.id)
-  }
-  return { blocks: next, changed, frameIds, redirected }
+  const next = blocks.slice()
+  next.splice(from, 1)
+  next.splice(to, 0, active) // вставка на индекс overId в списке БЕЗ активного = arrayMove
+  const predicted = regroup(next)
+  const gid = predicted.find((b) => b.id === activeId)!.groupId
+  const members = predicted.filter((b) => b.groupId === gid)
+  return { blocks: next, frameIds: members.length > 1 ? members.map((b) => b.id) : [] }
 }
 
-// remapDropTarget — слой отклика того же правила §4.4: над какой строкой sortable
-// должен раскрыть щель, чтобы она совпала с реальной точкой приземления (иначе
-// строки чужой группы раздвигаются изнутри, а блок падает под неё — полотно врёт).
-// Возвращает id строки-подмены или null (цель легальна, подмена не нужна).
-// Направление имеет значение: arrayMove кладёт активный блок на индекс цели,
-// поэтому «сразу под группой» из-под верха — это её последняя строка, а снизу —
-// строка, следующая за группой (может оказаться самим активным блоком: over=self
-// у sortable — «остаться на месте», что и требуется).
-export function remapDropTarget(blocks: Block[], activeId: string, overId: string): string | null {
-  const ai = blocks.findIndex((b) => b.id === activeId)
-  const ti = blocks.findIndex((b) => b.id === overId)
-  if (ai < 0 || ti < 0 || ai === ti) return null
-  const active = blocks[ai]!
-  if (!isAnswerableType(active.type) && !isCaptionType(active.type)) return null
-  if (blocks[ti]!.groupId === active.groupId) return null
-  const [gs, ge] = groupSpan(blocks, ti)
-  if (ge === gs) return null // одиночка/голое поле — не мульти-группа
-  if (ai < gs && ti < ge) return blocks[ge]!.id
-  if (ai > ge && ti > gs) return blocks[ge + 1]!.id
-  return null
+// RowPosition — где вопрос стоит на ОСИ КОЛОНОК (§11.6). Не «состояние блока» (в
+// документе хранится один бит), а вывод из раскладки: что именно сделают Mod+Alt+←/→ на
+// этой строке. Пять значений, потому что пять разных исходов, и подсказка обязана
+// называть свой:
+//
+//   solo       — полная ширина, встать в ряд не с кем (первый вопрос полотна либо
+//                предыдущий занимает всю ширину сам, §6.5) → молчат оба шага;
+//   enter      — полная ширина, есть подходящий предыдущий → шаг ставит в ряд с ним, и
+//                клавиша выбирает колонку (вправо в правую, влево в левую);
+//   left       — левая колонка секции → вправо в правую колонку, влево из секции;
+//   rightSolo  — правая колонка, элемент в ней один → влево = выйти из секции (переезд
+//                оставил бы колонку пустой, а такой секции не бывает);
+//   rightStack — правая колонка со стопкой → влево = переехать в левую колонку.
+//
+// Спрашивается у ПЕРВОЙ строки группы: у остальных ось своя, короче (ряд внутри вопроса
+// — направленная пара «подпись | поле», §6.6), и решает её rowBitOwner.
+export type RowPosition = 'solo' | 'enter' | 'left' | 'rightSolo' | 'rightStack'
+
+export function rowPosition(blocks: Block[], id: string): RowPosition {
+  const groups = rowGroups(blocks)
+  const gi = groups.findIndex((g) => g.blocks.some((b) => b.id === id))
+  if (gi < 0) return 'solo'
+  const group = groups[gi]!
+  const row = packRows(groups).find((r) => r.some((c) => c.some((g) => g.id === group.id)))
+  if (row && row.length > 1) {
+    if (row[0]!.some((g) => g.id === group.id)) return 'left'
+    return row[1]!.length > 1 ? 'rightStack' : 'rightSolo'
+  }
+  const prev = groups[gi - 1]
+  const canEnter =
+    prev !== undefined && groupCanShareRow(prev.blocks) && groupCanShareRow(group.blocks)
+  return canEnter ? 'enter' : 'solo'
+}
+
+// needsCaptionFor — строке ответа не хватает заголовка (§4.4 спеки фазы 15): она
+// отвечаемая, своего текста не несёт (у consent текст и есть строка вопроса), и
+// подписи в её группе нет. Один предикат на два места, которые обязаны совпадать:
+// полотно решает им, показывать ли чип «дать заголовок», а шпаргалка — обещать ли
+// Mod+Alt+T. Разъедься они — карта соврала бы, а это баг (демо-критерий 13.5).
+export function needsCaptionFor(blocks: Block[], id: string): boolean {
+  const b = blocks.find((x) => x.id === id)
+  if (!b || !isAnswerableType(b.type) || carriesText(b.type)) return false
+  return !blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
+}
+
+// captionLoss — какие вопросы теряют заголовок от правки (§4.3 спеки фазы 15).
+// Цена свободы строки ответа: увели поле из вопроса, уронили чужое между подписью
+// и полем, удалили подпись — и заголовок, по которому вопрос звался в CSV и в
+// воронке, у поля пропал. ОТВЕТЫ при этом целы всегда (они ключуются id
+// отвечаемого блока), ломается отчёт — поэтому правило не запрещает операцию, а
+// делает её громкой: подсветка жертвы во время драга и тост с отменой после.
+//
+// Считается по двум раскладкам и только по ним: чистая функция, о тостах и
+// подсветке не знает — показывать ли их, решает полотно. Учитываются лишь
+// отвечаемые блоки, ЖИВЫЕ в обоих списках: удалённому терять нечего, ответы на
+// него всё равно осиротели.
+//
+// regroup зовётся на оба списка: во время драга сюда приходит СЫРОЙ прогноз
+// planBlockDrop (groupId там ещё старые), а после операции — уже разложенный
+// документ, для которого regroup идемпотентен и возвращает тот же массив.
+// Заголовок группы считает groupMeta — тот же код, что рисует подпись превью,
+// рендереру и сводке ответов (title перебивает label, пустой текст не в счёт).
+export function captionLoss(before: Block[], after: Block[]): { id: string; caption: string }[] {
+  const was = regroup(before)
+  const now = regroup(after)
+  const wasMeta = groupMeta(was)
+  const nowMeta = groupMeta(now)
+  const nowById = new Map(now.map((b) => [b.id, b]))
+  const lost: { id: string; caption: string }[] = []
+  for (const b of was) {
+    if (!isAnswerableType(b.type)) continue
+    const caption = wasMeta.get(b.groupId)?.caption ?? ''
+    if (caption === '') continue // терять было нечего
+    const survivor = nowById.get(b.id)
+    if (!survivor) continue
+    if ((nowMeta.get(survivor.groupId)?.caption ?? '') === '') lost.push({ id: b.id, caption })
+  }
+  return lost
 }
 
 // rowBoundaryTarget — РЯД АТОМАРЕН ДЛЯ ВЕРТИКАЛЬНОЙ ВСТАВКИ (спека §5). Полотно во
 // время драга остаётся двумерным (в столбик не сворачивается), и ровно в одной позиции
 // verticalListSortingStrategy врёт: цель «щель между участниками ряда». Уронённый туда
 // блок либо сам занимает левую ячейку правого участника, либо гасит его бит — в обоих
-// случаях ряд рвётся, а щель показывала не это. Лечится подменой цели границей ряда —
-// ТЕМ ЖЕ приёмом, что §4.4 для чужих мульти-групп, и с тем же выбором направления:
+// случаях ряд рвётся, а щель показывала не это. Лечится подменой цели границей ряда:
 // сверху — последняя строка ряда (блок ложится под ряд), снизу — строка за рядом.
+//
+// С фазы 15 это ЕДИНСТВЕННАЯ подмена цели на полотне: правило «отвечаемый блок и
+// подпись не приземляются внутрь чужой мульти-группы» снято вместе со своим слоем
+// отклика (remapDropTarget), и композиции двух подмен больше нет.
 //
 // Вставки ВНУТРЬ участника ряда это не касается: контент, добавленный в вопрос, ряд не
 // рвёт (участник остаётся тем же участником) — и остаётся легальным, как был.
-// Композиция с §4.4 обязательна и в этом порядке: remapDropTarget сам может вернуть
-// «под левым участником», а это и есть та самая щель.
 export function rowBoundaryTarget(blocks: Block[], activeId: string, overId: string): string | null {
   const ai = blocks.findIndex((b) => b.id === activeId)
   const ti = blocks.findIndex((b) => b.id === overId)
   if (ai < 0 || ti < 0 || ai === ti) return null
   const at = (id: string) => blocks.findIndex((b) => b.id === id)
-  for (const row of packRows(groupBlocks(blocks))) {
-    if (row.length < 2) continue
-    const rs = at(row[0]!.blocks[0]!.id) // первая строка ряда
-    const mid = at(row[1]!.blocks[0]!.id) // первая строка ПРАВОГО участника
-    const re = at(row[1]!.blocks[row[1]!.blocks.length - 1]!.id) // последняя строка ряда
+  // Пролёты рядов ОБОИХ уровней (§6.6): ряд из двух вопросов и ряд «подпись | поле»
+  // внутри вопроса — одна и та же ложь verticalListSortingStrategy и одно лечение.
+  // Пересечься они не могут: группа с внутренним рядом в кросс-групповой не встаёт
+  // (§6.5), поэтому порядок проверки пролётов ни на что не влияет.
+  //
+  //   rs — первая строка ряда, re — последняя, mids — первые строки КАЖДОГО участника
+  // после первого. Границ в ряду столько же, сколько участников минус один: правая
+  // колонка это стопка (§5), и щель между её элементами — та же ложь, что щель между
+  // колонками. Прочие цели внутри ряда легальны: вставка ВНУТРЬ участника (контент в
+  // вопрос) ряд не рвёт — участник остаётся тем же участником.
+  const groups = rowGroups(blocks)
+  const spans: { rs: number; re: number; mids: number[] }[] = []
+  for (const row of packRows(groups)) {
+    const participants = row.flat()
+    if (participants.length < 2) continue
+    const lastGroup = participants[participants.length - 1]!.blocks
+    spans.push({
+      rs: at(participants[0]!.blocks[0]!.id),
+      re: at(lastGroup[lastGroup.length - 1]!.id),
+      mids: participants.slice(1).map((g) => at(g.blocks[0]!.id)),
+    })
+  }
+  for (const g of groups) {
+    for (const row of packGroupRows(g.blocks)) {
+      const participants = row.flat()
+      if (participants.length < 2) continue
+      spans.push({
+        rs: at(participants[0]!.id),
+        re: at(participants[participants.length - 1]!.id),
+        mids: participants.slice(1).map((b) => at(b.id)),
+      })
+    }
+  }
+  for (const { rs, re, mids } of spans) {
     // Сначала «цель не в этом ряду» и только потом «активный из этого ряда»: обратный
     // порядок выходил из ЦИКЛА на первом же ряду, где нашёлся активный, и защита не
     // доставалась ни одному ряду ниже — участник верхнего ряда мог уронить блок в
@@ -596,10 +897,15 @@ export function rowBoundaryTarget(blocks: Block[], activeId: string, overId: str
     if (ti < rs || ti > re) continue
     if (ai >= rs && ai <= re) return null // цель в СВОЁМ ряду — перестановка свободна
     // Позиция вставки = индекс цели в исходном списке (арифметика planBlockDrop).
-    // Сверху щель между участниками даёт цель «последняя строка левого», снизу —
-    // «первая строка правого»; прочие цели внутри ряда легальны и ряд не рвут.
-    if (ai < rs) return ti === mid - 1 ? blocks[re]!.id : null
-    return ti === mid ? (blocks[re + 1]?.id ?? null) : null
+    // Сверху щель даёт цель «последняя строка участника ДО границы» → подменяем концом
+    // ряда (блок ложится под ряд); снизу — «первая строка участника ПОСЛЕ границы» →
+    // строкой за рядом.
+    for (const mid of mids) {
+      if (ai < rs) {
+        if (ti === mid - 1) return blocks[re]!.id
+      } else if (ti === mid) return blocks[re + 1]?.id ?? null
+    }
+    return null
   }
   return null
 }
@@ -710,7 +1016,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       placed?: string,
     ) {
       if (patch === null) return null
-      return { ...patch, blocks: normalizeColumns(regroup(patch.blocks), get().blocks, placed) }
+      // Порядок обязателен: сперва заголовок встаёт на своё место (pinFormTitle), и
+      // только потом считаются группы — перенос меняет соседство, а regroup выводит
+      // groupId именно из него.
+      return {
+        ...patch,
+        blocks: normalizeColumns(regroup(pinFormTitle(patch.blocks)), get().blocks, placed),
+      }
     }
 
     return {
@@ -755,7 +1067,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             i < 0
               ? s.blocks.length
               : isCaptionType(type) && groupIsComplete(s.blocks, s.blocks[i]!.groupId)
-                ? groupSpan(s.blocks, i)[1] + 1
+                ? sectionSpanEnd(s.blocks, i) + 1
                 : i + 1
           const blocks = s.blocks.slice()
           blocks.splice(at, 0, block)
@@ -814,25 +1126,27 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             const title: Block = {
               ...src,
               type: isCaptionType(src.type) ? src.type : 'title',
-              settings: {},
+              // Бит ряда ОСТАЁТСЯ на подписи: она встаёт на место src и остаётся
+              // головой группы, то есть носителем кросс-группового бита (v4, §6.3).
+              // «Дать вопросу подпись» не должно разваливать ряд. Умеет ли новая
+              // группа делить ряд, решит раскладчик: не умеет — normalizeColumns
+              // снимет бит как инертный. Остальные settings подписи не нужны.
+              settings: src.settings?.column === COLUMN_RIGHT ? { column: COLUMN_RIGHT } : {},
               required: false,
             }
             focus = title.id
-            // Бит ряда переезжает на НОВОЕ поле (носитель бита — отвечаемый блок, а
-            // подпись его не несёт): «дать вопросу подпись» не должно разваливать ряд.
-            // Тот же carryLayout, что у makeField и changeBlockType — иначе два пункта
-            // одного меню («Вопросы» и «Отдельные поля») вели бы себя противоположно.
-            carryLayout(src, field)
             const blocks = s.blocks.slice()
             blocks.splice(i, 1, title, field)
             return structural({ blocks })
           }
           // Блок ВНУТРИ группы → новый вопрос НИЖЕ группы: инпут не встраивается между
           // подписью и контролом, а начинает новую группу. Текущий блок — контент.
+          // Ниже СЕКЦИИ, а не только группы: полноширинный вопрос, вставленный между
+          // колонками, разрезал бы секцию (§11.6).
           const title = newBlock('title')
           focus = title.id
           const blocks = s.blocks.slice()
-          blocks.splice(gEnd + 1, 0, title, field)
+          blocks.splice(sectionSpanEnd(s.blocks, i) + 1, 0, title, field)
           return structural({ blocks })
         })
         return focus
@@ -870,7 +1184,12 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const field = newBlock(type)
           focus = field.id
           const blocks = s.blocks.slice()
-          blocks.splice(gEnd + 1, 0, field)
+          // У ОДИНОКОЙ ПОДПИСИ поле встаёт вплотную под ней — оно входит в ЕЁ группу
+          // (regroup склеит), и секцию это не рвёт: голова группы бит сохраняет. Во
+          // всех остальных случаях поле начинает новую группу, а значит должно уйти
+          // ниже всей секции (§11.6).
+          const at = gStart === gEnd ? gEnd + 1 : sectionSpanEnd(s.blocks, i) + 1
+          blocks.splice(at, 0, field)
           return structural({ blocks })
         })
         return focus
@@ -908,6 +1227,31 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return structural({ blocks })
         })
         return focus
+      },
+
+      addCaptionFor: (id) => {
+        // Пригодность решаем ДО commit: жест приходит с чипа и с клавиши, и на
+        // строке, которой заголовок не нужен, он обязан быть no-op'ом без шага
+        // истории и без dirty — иначе Ctrl+Z съел бы нажатие, которое ничего не
+        // сделало (тот же закон, что у границы moveBlock).
+        const s0 = get()
+        const src = s0.blocks.find((b) => b.id === id)
+        if (!src || !isAnswerableType(src.type) || carriesText(src.type)) return null
+        // Второго заголовка у вопроса не бывает (решение владельца 2026-07-26):
+        // подпись в группе уже есть — добавлять нечего.
+        if (s0.blocks.some((b) => b.groupId === src.groupId && isCaptionType(b.type))) return null
+        const title = newBlock('title')
+        commit(null, (s) => {
+          const i = s.blocks.findIndex((b) => b.id === id)
+          if (i < 0) return null
+          const blocks = s.blocks.slice()
+          // Строго НАД полем: regroup ищет подпись от поля вверх через контент, и
+          // вставленная вплотную она склеивается с ним в вопрос. Голое поле — группа
+          // из одного блока, поэтому чужой вопрос этим не задет.
+          blocks.splice(i, 0, title)
+          return structural({ blocks })
+        })
+        return title.id
       },
 
       updateBlock: (id, patch, kind) =>
@@ -969,7 +1313,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           }
           const j = dir === 'up' ? i - 1 : i + 1
           const b = s.blocks[j]
-          if (!b) return null // уже на границе — ничего не меняем
+          // Граница полотна снизу — конец списка, сверху — приколотый заголовок
+          // (canvasFloor): он сосед по списку, но не сосед по обмену.
+          if (!b || j < canvasFloor(s.blocks)) return null // на границе — ничего не меняем
           const blocks = s.blocks.slice()
           blocks[i] = b
           blocks[j] = a
@@ -987,13 +1333,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       reorderBlocks: (activeId, overId) =>
         commit(null, (s) => {
           // Плоский перенос одной строки через planBlockDrop: arrayMove — как
-          // sortable и показывает — плюс правило §4.4 (отвечаемый/подпись не
-          // приземляются внутрь чужой мульти-группы, а уезжают под неё).
-          // Принадлежность группам после переноса выводит regroup. Целостность
-          // мульти-группы при переносе ЕЁ САМОЙ охраняет не этот метод, а UI:
-          // подпись мульти-группы несёт групповую ручку → reorderGroups.
+          // sortable и показывает. Куда именно строка приземлится, метод не
+          // ограничивает (замок снят, §4.1 спеки фазы 15): принадлежность группам
+          // после переноса выводит regroup, а потерю заголовка называет полотно
+          // (captionLoss). Целостность мульти-группы при переносе ЕЁ САМОЙ охраняет
+          // не этот метод, а UI: подпись мульти-группы несёт групповую ручку →
+          // reorderGroups.
           const plan = planBlockDrop(s.blocks, activeId, overId)
-          return plan && plan.changed ? structural({ blocks: plan.blocks }) : null
+          return plan ? structural({ blocks: plan.blocks }) : null
         }),
 
       reorderGroups: (activeGroupId, overGroupId) =>
@@ -1028,53 +1375,201 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return structural({ blocks })
         }),
 
-      placeInRow: (activeGroupId, targetGroupId) =>
+      placeInRow: (activeGroupId, targetGroupId, side = 'right') =>
         commit(null, (s) => {
           if (activeGroupId === targetGroupId) return null
-          const active = groupAnswerable(s.blocks, activeGroupId)
-          // Один и тот же путь для жеста и для Mod+Alt+→: клавиатура зовёт его с
-          // предыдущей группой, и переезд вырождается в no-op сплайс.
-          //
-          // Отдельных правил «цель должна быть свободна от пары» и «в ряду максимум
-          // двое» нет — есть два вопроса к раскладчику, который рисует ряды: свободна
-          // ли ячейка ДО переезда (иначе новичок вытеснил бы из ряда третью группу, о
-          // которой никто не просил) и приземлился ли флаг ПОСЛЕ (цель не умеет делить
-          // ряд — normalizeColumns его снимет).
-          if (!active || !canShareRow(active.type)) return null
-          if (!rowHasFreeCell(s.blocks, targetGroupId)) return null
           const groups = groupBlocks(s.blocks)
           const from = groups.findIndex((g) => g.id === activeGroupId)
-          if (from < 0 || !groups.some((g) => g.id === targetGroupId)) return null
+          const targetGroup = groups.find((g) => g.id === targetGroupId)
+          if (from < 0 || !targetGroup) return null
+          // Группа с внутренним рядом занимает всю ширину и в секцию не встаёт (§6.5).
+          if (!groupCanShareRow(groups[from]!.blocks)) return null
+          if (!groupCanShareRow(targetGroup.blocks)) return null
+          // Заголовок формы колонку не делит (ADR §10). Полотно его в списке групп и не
+          // показывает, но команда обязана быть честной сама по себе: бит на заголовке —
+          // документ, который отвергнет валидатор.
+          if (!canShareRow(groups[from]!.blocks[0]!.type)) return null
+          if (!canShareRow(targetGroup.blocks[0]!.type)) return null
+
+          // side — КОЛОНКА, В КОТОРУЮ ВСТАЁТ АКТИВНЫЙ, а не «с какой стороны от цели».
+          // Так читается жест: зона слева — «в левую колонку», справа — «в правую», и
+          // для цели, уже стоящей в секции, это единственная осмысленная трактовка
+          // (её сосед по колонке уже есть, вопрос лишь в какую колонку добавить).
+          const activeHead = groups[from]!.blocks[0]!
+          const bit = side === COLUMN_LEFT ? COLUMN_LEFT : COLUMN_RIGHT
+          // Секция цели, если она есть: нужна, чтобы вставить активного В КОНЕЦ нужной
+          // колонки. Полагаться на нормализацию канона тут нельзя — она выводится из
+          // раскладки, а неверно вставленный 'left' ПОСЛЕ 'right' раскладчик прочтёт
+          // как начало новой секции (§11.3), и она уже не склеится.
+          // Раскладка — по документу без заголовка формы (rowGroups), а перестановка
+          // ниже — по полному списку групп: заголовок остаётся на своём месте.
+          const rows = packRows(rowGroups(s.blocks))
+          const row = rows.find((r) => r.some((cell) => cell.some((g) => g.id === targetGroupId)))
+          const inSection = row !== undefined && row.length > 1
+          // Куда вставлять: в конец колонки-получателя, а если секции ещё нет —
+          // вплотную к цели (тогда секция и создаётся этой командой).
+          const anchor = inSection
+            ? (side === COLUMN_LEFT ? row![0]! : row![1]!).at(-1)!.id
+            : targetGroupId
+          // Цель полноширинная → секция создаётся: она забирает противоположную
+          // колонку. Активный слева — цель становится правой, и наоборот.
+          const targetBit = inSection ? null : bit === COLUMN_LEFT ? COLUMN_RIGHT : COLUMN_LEFT
+          const targetHead = targetGroup.blocks[0]!
+
+          // Уходя, активный обязан ПОГАСИТЬ за собой умирающую секцию: если после его
+          // выреза в прежней секции одна из колонок пустеет, её остаток остаётся с
+          // битом, который уже ничего не значит. Сам раскладчик этого не увидит — рядом
+          // может оказаться новая секция, и остаток молча вольётся в её левую колонку
+          // (две соседние секции в явной форме неразличимы, §11.3). Поэтому гасим здесь,
+          // по прежней раскладке, где секция ещё видна целиком.
+          //
+          // ВНУТРИ СВОЕЙ ЖЕ СЕКЦИИ гасить нечего, и гасить нельзя: переезд между колонками
+          // (`shiftColumn`) оставляет прежнюю колонку пустой по построению, но остаток
+          // никуда не уходит — раскладчик сам вернёт секцию, забрав первого из уцелевшей
+          // колонки в левую (§11.3). Погасив его бит, команда вместо переезда разваливала
+          // бы секцию: при стопке справа один участник выпадал во всю ширину, а второй
+          // молча переезжал в левую колонку (найдено ревью).
+          const orphans = new Set<string>()
+          const oldRow = rows.find((r) => r.some((cell) => cell.some((g) => g.id === activeGroupId)))
+          if (oldRow && oldRow !== row && oldRow.length > 1) {
+            const rest = oldRow.map((cell) => cell.filter((g) => g.id !== activeGroupId))
+            if (rest.some((cell) => cell.length === 0)) {
+              for (const cell of rest) for (const g of cell) orphans.add(g.blocks[0]!.id)
+            }
+          }
+
           const [moved0] = groups.splice(from, 1)
-          // Позицию цели ищем ПОСЛЕ выреза активной группы: до него индексы сдвинуты.
-          groups.splice(groups.findIndex((g) => g.id === targetGroupId) + 1, 0, moved0!)
+          // Позицию якоря ищем ПОСЛЕ выреза активной группы: до него индексы сдвинуты.
+          const at = groups.findIndex((g) => g.id === anchor)
+          if (at < 0) return null
+          // В левую колонку вставляем ПЕРЕД якорем, только когда секция создаётся: там
+          // якорь — сама цель, и слева от неё активный и должен оказаться. Внутри уже
+          // существующей секции якорь — последний элемент колонки, и встаём за ним.
+          const before = !inSection && bit === COLUMN_LEFT
+          groups.splice(before ? at : at + 1, 0, moved0!)
+
           const moved = structural(
             {
               blocks: groups
                 .flatMap((g) => g.blocks)
-                .map((b) =>
-                  b.id === active.id ? { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } } : b,
-                ),
+                .map((b) => {
+                  if (b.id === activeHead.id) return { ...b, settings: { ...b.settings, column: bit } }
+                  if (targetBit !== null && b.id === targetHead.id) {
+                    return { ...b, settings: { ...b.settings, column: targetBit } }
+                  }
+                  return orphans.has(b.id) ? withoutColumn(b) : b
+                }),
             },
-            // Смена соседа здесь — по прямой просьбе, а не побочный эффект переноса.
-            active.id,
+            // Смена секции здесь — по прямой просьбе, а не побочный эффект переноса.
+            activeHead.id,
           )!
-          // Флаг не приземлился (цель не умеет делить ряд) — normalizeColumns его снял,
-          // а «перенос вплотную за цель» без ряда не то, о чём просили: откатываем весь
+          // Бит не приземлился (пара не сложилась) — normalizeColumns его снял, а
+          // «перенос вплотную к цели» без секции не то, о чём просили: откатываем весь
           // патч, чтобы не мусорить в истории.
-          const landed = groupAnswerable(moved.blocks, activeGroupId)
-          return landed?.settings?.column === COLUMN_RIGHT ? moved : null
+          const landed = moved.blocks.find((b) => b.id === activeHead.id)
+          return landed?.settings?.column !== undefined ? moved : null
         }),
 
       takeOwnRow: (id) =>
         commit(null, (s) => {
-          const src = s.blocks.find((b) => b.id === id)
-          if (!src) return null
-          const a = groupAnswerable(s.blocks, src.groupId)
-          if (!a || a.settings?.column !== COLUMN_RIGHT) return null
+          // Какой бит снимать, решает место строки в группе (rowBitOwner): своя строка
+          // выходит из ряда ВНУТРИ вопроса, голова — из ряда вопросов.
+          const owner = rowBitOwner(s.blocks, id)
+          if (!owner || owner.settings?.column === undefined) return null
+          const strip = (ids: Set<string>) =>
+            structural({ blocks: s.blocks.map((b) => (ids.has(b.id) ? withoutColumn(b) : b)) })
+          const groups = rowGroups(s.blocks)
+          const gi = groups.findIndex((g) => g.blocks[0]!.id === owner.id)
+          // Носитель не голова группы → бит внутригрупповой: поле выходит из ряда со
+          // своей подписью, порядок блоков не меняется (§6.6).
+          if (gi < 0) return strip(new Set([owner.id]))
+          const group = groups[gi]!
+          const row = packRows(groups).find((r) => r.some((c) => c.some((g) => g.id === group.id)))
+          // Бит есть, а секции нет — он инертен: просто снять (уборка сделала бы это и
+          // сама, но тогда команда вернула бы «правку», в которой ничего не менялось).
+          if (!row || row.length < 2) return strip(new Set([owner.id]))
+          const mine = row.find((c) => c.some((g) => g.id === group.id))!
+          if (mine.length === 1) {
+            // Колонка пустеет → секции больше нет. Гасим биты ВСЕХ её участников: у
+            // остатка бит уже ничего не значит, а раскладчик этого не увидит — ниже
+            // может стоять другая секция, и остаток молча вольётся в её колонку (§11.3).
+            const ids = new Set(row.flat().map((g) => g.blocks[0]!.id))
+            return strip(ids)
+          }
+          // Секция переживёт уход: полноширинный блок В СЕРЕДИНЕ разрезал бы её пополам,
+          // поэтому вопрос уезжает ПОД неё — туда же, куда Enter из колонки кладёт новую
+          // строку (sectionSpanEnd).
+          const rest = groupBlocks(s.blocks).filter((g) => g.id !== group.id)
+          const lastId = row.flat().filter((g) => g.id !== group.id).at(-1)!.id
+          const at = rest.findIndex((g) => g.id === lastId)
+          if (at < 0) return null
+          rest.splice(at + 1, 0, group)
           return structural({
-            blocks: s.blocks.map((b) => (b.id === a.id ? withoutColumn(b) : b)),
+            blocks: rest.flatMap((g) => g.blocks).map((b) => (b.id === owner.id ? withoutColumn(b) : b)),
           })
+        }),
+
+      shiftColumn: (id, dir) => {
+        const s = get()
+        const pos = rowPosition(s.blocks, id)
+        const groups = rowGroups(s.blocks)
+        const gi = groups.findIndex((g) => g.blocks.some((b) => b.id === id))
+        if (gi < 0) return
+        const gid = groups[gi]!.id
+        // Полная ширина: ВХОД в ряд с предыдущим, и сторона выбирается клавишей — вправо
+        // в правую колонку, влево в левую (§11.6). Цель одна и та же, предыдущая группа:
+        // если она стоит в секции, placeInRow сам якорится в конец нужной колонки, а если
+        // нет — секция этой командой и создаётся. Ряд из двоих собирается одним нажатием,
+        // как и до этапа.
+        if (pos === 'enter') {
+          return s.placeInRow(gid, groups[gi - 1]!.id, dir === 'right' ? COLUMN_RIGHT : COLUMN_LEFT)
+        }
+        if (pos === 'solo') return
+        const row = packRows(groups).find((r) => r.some((c) => c.some((g) => g.id === gid)))!
+        // Выход из секции — шаг влево из ЛЕВОЙ колонки и он же из правой, когда в ней
+        // элемент один: переехав, он оставил бы колонку пустой, а секции с пустой
+        // колонкой не бывает. Оба случая — takeOwnRow.
+        if (dir === 'left' && (pos === 'left' || pos === 'rightSolo')) return s.takeOwnRow(id)
+        if (dir === 'right' && pos !== 'left') return // правая колонка — правый край оси
+        // Смена колонки: элемент встаёт в КОНЕЦ противоположной стопки — туда же, куда
+        // его кладёт жест (placeInRow якорится за последним элементом колонки).
+        const other = pos === 'left' ? row[1]! : row[0]!
+        s.placeInRow(gid, other.at(-1)!.id, pos === 'left' ? COLUMN_RIGHT : COLUMN_LEFT)
+      },
+
+      placeBlockInRow: (activeId, targetId) =>
+        commit(null, (s) => {
+          if (activeId === targetId) return null
+          const groups = groupBlocks(s.blocks)
+          const group = groups.find((g) => g.blocks.some((b) => b.id === targetId))
+          const active = group?.blocks.find((b) => b.id === activeId)
+          const target = group?.blocks.find((b) => b.id === targetId)
+          // Ряд внутри вопроса — только пара «подпись + поле ответа» (§6.5), и оба
+          // обязаны быть из ОДНОЙ группы: между вопросами работает placeInRow.
+          // Whitelist типов не проверяется — отменён (ADR §10).
+          if (!group || !active || !target) return null
+          if (!isCaptionType(target.type) || !isAnswerableType(active.type)) return null
+          if (!innerRowHasFreeCell(s.blocks, targetId)) return null
+          // Как и у групп: поле переезжает ВПЛОТНУЮ за подпись (контент между ними
+          // разорвал бы пару) и получает бит. Порядок блоков документа при этом
+          // меняется — это перенос, а не пометка.
+          const rest = group.blocks.filter((b) => b.id !== activeId)
+          const at = rest.findIndex((b) => b.id === targetId) + 1
+          const reordered: Block[] = [
+            ...rest.slice(0, at),
+            { ...active, settings: { ...active.settings, column: COLUMN_RIGHT } },
+            ...rest.slice(at),
+          ]
+          const gi = groups.indexOf(group)
+          const moved = structural(
+            { blocks: groups.flatMap((g, i) => (i === gi ? reordered : g.blocks)) },
+            // Смена соседа здесь — по прямой просьбе, а не побочный эффект переноса.
+            activeId,
+          )!
+          // Бит не приземлился — normalizeColumns счёл его инертным; «перенос вплотную
+          // за подпись» без ряда не то, о чём просили.
+          const landed = moved.blocks.find((b) => b.id === activeId)
+          return landed?.settings?.column === COLUMN_RIGHT ? moved : null
         }),
 
       placeOptionInRow: (blockId, activeOptionId, targetOptionId) =>

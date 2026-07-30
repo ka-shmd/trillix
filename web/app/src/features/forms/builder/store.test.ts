@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { formSchemaSchema, type FormSchema, plainText, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
-import { createBuilderStore, planBlockDrop, remapDropTarget, rowBoundaryTarget } from './store'
+import { captionLoss, createBuilderStore, planBlockDrop, rowBoundaryTarget, rowPosition } from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -437,7 +437,10 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
-  it('reorderBlocks §4.4: инпут, уроненный внутрь чужой мульти-группы, приземляется под ней', () => {
+  // Фаза 15 (§4.1 спеки) сняла замок «отвечаемый блок и подпись приземляются ПОД
+  // чужой мульти-группой»: строка роняется куда угодно, а последствие (кража
+  // подписи) называется вслух — см. captionLoss ниже.
+  it('reorderBlocks: поле, уроненное между подписью и полем чужого вопроса, встаёт туда', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('text') // одиночка под группой
@@ -445,19 +448,18 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
     expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'text', 'email'])
 
-    // Тащим email на f1 — «между подписью и полем» чужого вопроса (Д11).
+    // Тащим email на f1 — «между подписью и полем» чужого вопроса.
     store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
 
     const s = store.getState().blocks
-    // Приземлился СРАЗУ ПОД группой (выше text-одиночки), не внутри неё.
-    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'email', 'text'])
-    // Подпись осталась у прежнего поля, email — голое поле со своей группой:
-    // колонки CSV и шаги воронки не переименованы.
+    expect(s.map((x) => x.type)).toEqual(['title', 'email', 'short_text', 'text'])
+    // Заголовок достался пришельцу (он ближайший снизу), прежнее поле осталось
+    // голым — ровно то, что описывает §4.3 спеки.
     expect(s[0]!.groupId).toBe(s[1]!.groupId)
     expect(s[2]!.groupId).not.toBe(s[0]!.groupId)
   })
 
-  it('reorderBlocks §4.4: подпись, уроненная между строк чужой мульти-группы, уезжает под неё', () => {
+  it('reorderBlocks: подпись, уроненная между строк чужого вопроса, забирает его поле', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('text')
@@ -467,13 +469,14 @@ describe('createBuilderStore', () => {
     store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
 
     const s = store.getState().blocks
-    expect(s.map((x) => x.type)).toEqual(['title', 'short_text', 'label', 'text'])
-    // Вопрос не перехвачен: группа по-прежнему «title + short_text».
-    expect(s[0]!.groupId).toBe(s[1]!.groupId)
-    expect(s[2]!.groupId).not.toBe(s[1]!.groupId)
+    expect(s.map((x) => x.type)).toEqual(['title', 'label', 'short_text', 'text'])
+    // Подпись ровно одна — ближайшая к полю (regroup): группа теперь «label + поле»,
+    // прежний заголовок остался одиночкой.
+    expect(s[1]!.groupId).toBe(s[2]!.groupId)
+    expect(s[0]!.groupId).not.toBe(s[1]!.groupId)
   })
 
-  it('§4.4 не мешает жесту «дать голому полю подпись» (группа из одного блока)', () => {
+  it('перенос не мешает жесту «дать голому полю подпись» (группа из одного блока)', () => {
     const store = createBuilderStore()
     store.getState().addBlock('email') // голое поле
     store.getState().addBlock('label')
@@ -494,42 +497,97 @@ describe('createBuilderStore', () => {
 
     // Подпись летит над голое поле: рамка обнимет будущую пару «подпись+поле».
     const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
-    expect(join?.redirected).toBe(false)
     expect(join?.frameIds).toEqual([b[1]!.id, b[0]!.id])
   })
 
-  it('planBlockDrop: при перенаправлении рамке отдаётся чужая группа; дроп-возврат — changed=false', () => {
+  it('planBlockDrop: дроп внутрь чужого вопроса — рамка обнимает будущую группу пришельца', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('email') // голое поле сразу под группой
     const b = store.getState().blocks
 
-    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — внутрь группы
-    expect(plan?.redirected).toBe(true)
-    expect(plan?.frameIds).toEqual([b[0]!.id, b[1]!.id])
-    // Легальная точка — под группой, где email и так стоит: коммитить нечего.
-    expect(plan?.changed).toBe(false)
+    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — между подписью и полем
+    expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'email', 'short_text'])
+    // Рамка = группа, в которую войдёт САМ активный блок: заголовок достаётся ему.
+    expect(plan!.frameIds).toEqual([b[0]!.id, b[2]!.id])
   })
 
-  it('remapDropTarget: щель раскрывается под чужой группой, а не внутри неё', () => {
-    const store = createBuilderStore()
-    store.getState().addBlock('email') // голое поле НАД группой
-    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'short_text') // title, f1
-    store.getState().addBlock('number') // голое поле ПОД группой
-    store.getState().addBlock('text') // контент в конце
-    const [top, title, f1, below, txt] = store.getState().blocks
-    const blocks = store.getState().blocks
+  // captionLoss (§4.3 спеки фазы 15) — цена свободы строки ответа: правка, после
+  // которой у живого поля не осталось заголовка. Функция чистая и считает по двум
+  // раскладкам; тост и подсветку показывает полотно.
+  describe('captionLoss', () => {
+    // Вопрос «Имя» и голое поле под ним — исходник трёх сценариев ниже.
+    const canvas = () => {
+      const store = createBuilderStore()
+      store.getState().addQuestionAfter(null, 'short_text') // title, short_text
+      const [title] = store.getState().blocks
+      store.getState().updateBlock(title!.id, { text: textFromString('Имя') })
+      store.getState().addBlock('email') // голое поле в конце
+      const [cap, field, bare] = store.getState().blocks
+      return { store, cap: cap!, field: field!, bare: bare! }
+    }
 
-    // Сверху: цель внутри группы → подмена на её последнюю строку (щель под группой).
-    expect(remapDropTarget(blocks, top!.id, title!.id)).toBe(f1!.id)
-    // Цель — последняя строка: дроп и так ляжет под группу, подмена не нужна.
-    expect(remapDropTarget(blocks, top!.id, f1!.id)).toBeNull()
-    // Снизу: цель внутри → строка сразу под группой (здесь — сам активный: «на месте»).
-    expect(remapDropTarget(blocks, below!.id, f1!.id)).toBe(below!.id)
-    // Снизу на подпись — легальный дроп НАД группой.
-    expect(remapDropTarget(blocks, below!.id, title!.id)).toBeNull()
-    // Контента правило не касается: text падает внутрь группы свободно.
-    expect(remapDropTarget(blocks, txt!.id, f1!.id)).toBeNull()
+    it('перенос: поле, уведённое из своего вопроса, остаётся без заголовка', () => {
+      const { store, field } = canvas()
+      const before = store.getState().blocks
+
+      store.getState().moveBlock(field.id, 'up') // поле уехало ВЫШЕ своей подписи
+
+      expect(captionLoss(before, store.getState().blocks)).toEqual([
+        { id: field.id, caption: 'Имя' },
+      ])
+    })
+
+    it('дроп: чужое поле между подписью и полем крадёт заголовок у прежнего', () => {
+      const { store, field, bare } = canvas()
+      const before = store.getState().blocks
+
+      // Прогноз драга: сырая раскладка planBlockDrop (groupId там ещё старые) —
+      // именно её полотно отдаёт в подсветку жертвы, не дожидаясь дропа.
+      const plan = planBlockDrop(before, bare.id, field.id)
+
+      expect(captionLoss(before, plan!.blocks)).toEqual([{ id: field.id, caption: 'Имя' }])
+    })
+
+    it('удаление подписи: её поле остаётся без заголовка', () => {
+      const { store, cap, field } = canvas()
+      const before = store.getState().blocks
+
+      store.getState().removeBlock(cap.id)
+
+      expect(captionLoss(before, store.getState().blocks)).toEqual([
+        { id: field.id, caption: 'Имя' },
+      ])
+    })
+
+    it('удалённому полю терять нечего: потери нет', () => {
+      const { store, field } = canvas()
+      const before = store.getState().blocks
+
+      store.getState().removeBlock(field.id)
+
+      expect(captionLoss(before, store.getState().blocks)).toEqual([])
+    })
+
+    it('перенос вопроса целиком заголовка не теряет', () => {
+      const { store, cap } = canvas()
+      const before = store.getState().blocks
+
+      store.getState().moveGroup(cap.id, 'down')
+
+      expect(captionLoss(before, store.getState().blocks)).toEqual([])
+    })
+
+    it('поле, у которого заголовка и не было, в потерю не попадает', () => {
+      const store = createBuilderStore()
+      store.getState().addBlock('text') // одиночный абзац
+      store.getState().addBlock('email') // голое поле под ним
+      const before = store.getState().blocks
+
+      store.getState().moveBlock(before[1]!.id, 'up')
+
+      expect(captionLoss(before, store.getState().blocks)).toEqual([])
+    })
   })
 
   it('rowBoundaryTarget: щель между участниками ряда подменяется границей ряда', () => {
@@ -589,6 +647,26 @@ describe('createBuilderStore', () => {
     expect(rowBoundaryTarget(blocks, txt!.id, rightTitle!.id)).toBe(txt!.id)
     // Строки самого ряда правилу не подчиняются — внутри ряда перестановка свободна.
     expect(rowBoundaryTarget(blocks, leftTitle!.id, rightTitle!.id)).toBeNull()
+  })
+
+  // Второй уровень (§6.6): щель между подписью и полем, стоящими в ряду ВНУТРИ
+  // вопроса, — та же ложь verticalListSortingStrategy и то же лечение.
+  it('rowBoundaryTarget: щель внутри ряда «подпись | поле» подменяется границей', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text') // контент НАД вопросом
+    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'short_text')
+    store.getState().addBlock('number') // голое поле ПОД вопросом
+    const [txt, caption, field, below] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    const blocks = store.getState().blocks
+
+    // Сверху щель даёт цель «подпись» → подмена на конец ряда, то есть на поле.
+    expect(rowBoundaryTarget(blocks, txt!.id, caption!.id)).toBe(field!.id)
+    // Снизу её даёт цель «поле» → строка за рядом (здесь — сам активный).
+    expect(rowBoundaryTarget(blocks, below!.id, field!.id)).toBe(below!.id)
+    // Прочие цели легальны, а строки самого ряда правилу не подчиняются.
+    expect(rowBoundaryTarget(blocks, below!.id, caption!.id)).toBeNull()
+    expect(rowBoundaryTarget(blocks, caption!.id, field!.id)).toBeNull()
   })
 
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
@@ -674,7 +752,7 @@ describe('createBuilderStore', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     const schema: FormSchema = {
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       // groupId уже канонический (g_<id поля>) — regroup его не меняет.
       blocks: [{ id: 'x', groupId: 'g_x', type: 'email' }],
     }
@@ -699,7 +777,7 @@ describe('createBuilderStore', () => {
 
   it('hydrate загружает submitLabel из схемы', () => {
     const store = createBuilderStore()
-    store.getState().hydrate({ schemaVersion: 3, blocks: [], submitLabel: 'Отправить ответ' })
+    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [], submitLabel: 'Отправить ответ' })
     expect(store.getState().submitLabel).toBe('Отправить ответ')
   })
 
@@ -740,7 +818,7 @@ describe('createBuilderStore', () => {
   it('hydrate загружает поля экрана «после отправки» из схемы', () => {
     const store = createBuilderStore()
     store.getState().hydrate({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [],
       thankYouText: 'Спасибо!',
       redirectUrl: 'https://example.com',
@@ -879,7 +957,7 @@ describe('createBuilderStore — undo/redo', () => {
   it('hydrate очищает историю', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
-    store.getState().hydrate({ schemaVersion: 3, blocks: [], submitLabel: '' })
+    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [], submitLabel: '' })
     expect(store.getState().past).toEqual([])
     store.getState().undo()
     expect(store.getState().blocks).toEqual([])
@@ -1061,13 +1139,20 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     for (const t of types) store.getState().addBlock(t)
     return store
   }
-  // Хранимый бит ряда — по блокам потока.
+  // Хранимый бит колонки — по блокам потока. С канона секции (§11.4) участник ЛЕВОЙ
+  // колонки помечен ЯВНО ('left'), а не отсутствием ключа: без этого левая колонка
+  // ломалась бы на втором элементе — первый закрывал бы секцию и уезжал из неё.
   const cols = (store: ReturnType<typeof createBuilderStore>) =>
     store.getState().blocks.map((b) => b.settings?.column ?? '-')
   // Ряды, которые из этих битов выведет рендер: стор и полотно обязаны совпадать
   // (расхождение «помечен — нарисован иначе» и было дефектом первой реализации).
+  // Число КОЛОНОК в каждом ряду. Размер стопки внутри колонки — отдельным помощником
+  // ниже: большинству тестов важно «ряд собран / не собран», а не глубина стопки.
   const rows = (store: ReturnType<typeof createBuilderStore>) =>
     packRows(groupBlocks(store.getState().blocks)).map((row) => row.length)
+  // Ряды колонками: [['a'], ['b', 'c']] — во втором ряду правая колонка из двух.
+  const cells = (store: ReturnType<typeof createBuilderStore>) =>
+    packRows(groupBlocks(store.getState().blocks)).map((row) => row.map((cell) => cell.length))
 
   // Ряд из двух полей: второе уезжает в правую ячейку первого.
   const paired = (...types: ('short_text' | 'email' | 'phone' | 'long_text')[]) => {
@@ -1079,7 +1164,7 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 
   it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {
     const store = paired('short_text', 'email')
-    expect(cols(store)).toEqual(['-', 'right'])
+    expect(cols(store)).toEqual(['left', 'right'])
     expect(rows(store)).toEqual([2])
 
     store.getState().undo()
@@ -1087,7 +1172,7 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     expect(rows(store)).toEqual([1, 1])
 
     store.getState().redo()
-    expect(cols(store)).toEqual(['-', 'right'])
+    expect(cols(store)).toEqual(['left', 'right'])
   })
 
   it('placeInRow переносит группу вплотную за цель (жест через блок)', () => {
@@ -1097,22 +1182,266 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 
     const s = store.getState()
     expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email', 'long_text'])
-    expect(cols(store)).toEqual(['-', 'right', '-'])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
   })
 
-  it('ряд цели полон / цель не умеет делить ряд — no-op, история и dirty целы', () => {
-    const store = fields('short_text', 'email', 'phone', 'long_text')
-    const [a, , c, d] = store.getState().blocks
-    store.getState().placeInRow(store.getState().blocks[1]!.groupId, a!.groupId)
+  // Условий отказа осталось два, и оба про РАСКЛАДКУ, а не про тип: ячейка цели
+  // занята и цель занимает всю ширину (в ней собран внутренний ряд). Прежнее «цель
+  // не из whitelist» снято вместе с whitelist'ом.
+  // Отказов осталось два, и оба про РАСКЛАДКУ: цель занимает всю ширину (в ней собран
+  // внутренний ряд) и «слева» на элементе правой стопки. «Ячейка занята» отказом быть
+  // перестало — правая колонка это стопка (решение владельца 2026-07-29).
+  it('цель во всю ширину — no-op, история и dirty целы', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [, , c] = store.getState().blocks
+    // Вопрос с ВНУТРЕННИМ рядом: такая группа занимает всю ширину (§6.5).
+    store.getState().addQuestionAfter(c!.id, 'short_text')
+    const [wideCaption, wideField] = store.getState().blocks.slice(-2)
+    store.getState().placeBlockInRow(wideField!.id, wideCaption!.id)
     const order = store.getState().blocks.map((b) => b.id)
     store.getState().markSaved()
 
-    store.getState().placeInRow(c!.groupId, a!.groupId) // ячейка ряда занята
-    store.getState().placeInRow(c!.groupId, d!.groupId) // цель не whitelist
+    store.getState().placeInRow(c!.groupId, wideCaption!.groupId)
     const s = store.getState()
     expect(s.dirty).toBe(false)
     expect(s.blocks.map((b) => b.id)).toEqual(order)
-    expect(rows(store)).toEqual([2, 1, 1])
+  })
+
+  // side — это КОЛОНКА, В КОТОРУЮ ВСТАЁТ АКТИВНЫЙ, а не «с какой стороны от цели». От
+  // любого участника секции можно добавить и в левую колонку, и в правую: у цели сосед
+  // по колонке уже есть, вопрос лишь в какую колонку добавить.
+  it('от участника секции можно добавить в ЛЮБУЮ колонку', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // секция [a | b], c и d ниже
+    expect(cells(store)).toEqual([[1, 1], [1], [1]])
+
+    // Целимся в b (он в ПРАВОЙ колонке), просим левую — c уходит в левую колонку.
+    store.getState().placeInRow(c!.groupId, b!.groupId, 'left')
+    expect(cells(store)).toEqual([[2, 1], [1]])
+    // Целимся в a (он в ЛЕВОЙ колонке), просим правую — d уходит в правую.
+    store.getState().placeInRow(d!.groupId, a!.groupId, 'right')
+    expect(cells(store)).toEqual([[2, 2]])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // То, ради чего этап и делается: слева картинка, справа несколько блоков.
+  it('несколько блоков в одну колонку — по одному, целясь в любого участника', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('image')
+    for (const t of ['text', 'short_text', 'email'] as const) store.getState().addBlock(t)
+    const [img, t1, t2, t3] = store.getState().blocks
+
+    store.getState().placeInRow(t1!.groupId, img!.groupId, 'right')
+    store.getState().placeInRow(t2!.groupId, img!.groupId, 'right')
+    store.getState().placeInRow(t3!.groupId, img!.groupId, 'right')
+    // Одна секция: слева картинка, справа стопка из трёх.
+    expect(cells(store)).toEqual([[1, 3]])
+    expect(store.getState().blocks.map((b) => b.type)).toEqual([
+      'image',
+      'text',
+      'short_text',
+      'email',
+    ])
+  })
+
+
+  // То, ради чего стопка и появилась: слева длинный ответ, справа несколько коротких.
+  it('несколько блоков в правой колонке: третий встаёт под вторым', () => {
+    const store = fields('long_text', 'short_text', 'email', 'phone')
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    store.getState().placeInRow(c!.groupId, b!.groupId)
+    store.getState().placeInRow(d!.groupId, c!.groupId)
+    expect(cells(store)).toEqual([[1, 3]])
+    expect(store.getState().blocks.map((x) => x.type)).toEqual([
+      'long_text',
+      'short_text',
+      'email',
+      'phone',
+    ])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // Перестановка ВНУТРИ ряда ряд не разваливает: состав участников тот же, нового ряда
+  // не собралось. Без этого исключения стопка была бы бессмысленной — Alt+Shift+↑↓ на
+  // её элементе сносил бы весь ряд.
+  it('перестановка внутри стопки ряд сохраняет', () => {
+    const store = fields('long_text', 'short_text', 'email')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    store.getState().placeInRow(c!.groupId, b!.groupId)
+    expect(cells(store)).toEqual([[1, 2]])
+
+    store.getState().moveGroup(c!.id, 'up')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['long_text', 'email', 'short_text'])
+    expect(cells(store)).toEqual([[1, 2]])
+  })
+
+  // А защита от приклеивания к ПОСТОРОННЕМУ вопросу цела: там прежний сосед в новом
+  // ряду не остаётся, и бит снимается, как и до появления стопок.
+  it('переезд участника ряда к чужому вопросу бит снимает', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [, b, c] = store.getState().blocks
+    store.getState().placeInRow(c!.groupId, b!.groupId) // ряд [b | c], первый сам по себе
+    expect(cells(store)).toEqual([[1], [1, 1]])
+
+    // c уезжает вверх, к a: прежнего соседа (b) в его новом ряду нет.
+    store.getState().moveGroup(c!.id, 'up')
+    store.getState().moveGroup(c!.id, 'up')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['phone', 'short_text', 'email'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
+  })
+
+  // ---- Ряд с обеих сторон и любым элементом (решение владельца 2026-07-29) ----
+
+  it('placeInRow слева ставит активного ПЕРЕД целью, а бит отдаёт цели', () => {
+    const store = fields('short_text', 'email')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 'left')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['email', 'short_text'])
+    // Бит всегда у ПРАВОГО участника — им стала цель, а не переехавший.
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(rows(store)).toEqual([2])
+  })
+
+  it('переезд слева забирает у активного его прежний бит', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b]
+    store.getState().placeInRow(b!.groupId, c!.groupId, 'left') // b уезжает влево от c
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'email', 'phone'])
+    // Иначе b утянул бы в ряд ещё и a: бит остался бы на нём вторым. Заодно видно, что
+    // a свою метку левой колонки ОТДАЛ: секция, из которой ушёл единственный правый,
+    // перестала существовать, и бит стал инертным.
+    expect(cols(store)).toEqual(['-', 'left', 'right'])
+    expect(rows(store)).toEqual([1, 2])
+  })
+
+  it('одинокий лэйаут-блок встаёт в ряд с вопросом', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('text')
+    const [field, text] = store.getState().blocks
+    store.getState().placeInRow(text!.groupId, field!.groupId)
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(rows(store)).toEqual([2])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // Лэйаут-блок СЛЕВА: у его группы нет отвечаемого блока, и пока «личность группы»
+  // искалась только среди отвечаемых, ссылка на соседа не записывалась — стор считал
+  // бит партнёра инертным и снимал его на первой же структурной правке (найдено при
+  // разборе стопок, 2026-07-29).
+  it('лэйаут-блок слева в ряду переживает структурную правку', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text')
+    store.getState().addBlock('short_text')
+    const [text, field] = store.getState().blocks
+    store.getState().placeInRow(field!.groupId, text!.groupId)
+    expect(rows(store)).toEqual([2])
+
+    // Любая структурная правка гоняет normalizeColumns с prev — ряд обязан выжить.
+    store.getState().addBlock('email')
+    expect(rows(store)).toEqual([2, 1])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+  })
+
+  // ---- Вставка «ниже» из секции (§11.6) ----
+
+  // Отчёт владельца 2026-07-29: «перенесли блок в ряд (левый), потом через Enter начали
+  // писать — структура разваливается, между элементами появляется текстовое поле».
+  // Причина: Enter вставлял блок после ГРУППЫ, а не после СЕКЦИИ, и полноширинный
+  // новичок (бита у него нет) резал секцию пополам.
+  it('Enter из колонки создаёт строку ПОСЛЕ секции, а не между колонками', () => {
+    const store = fields('short_text', 'email')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    expect(cells(store)).toEqual([[1, 1]])
+
+    // Enter зовёт addBlockAfterGroup с активной строкой — из ЛЕВОЙ колонки.
+    store.getState().addBlockAfterGroup(a!.id, 'text')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'email', 'text'])
+    // Секция цела, новичок — полноширинный ряд под ней.
+    expect(cells(store)).toEqual([[1, 1], [1]])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+  })
+
+  it('Enter из ПРАВОЙ колонки — то же место: после всей секции', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    store.getState().placeInRow(c!.groupId, b!.groupId, 'right') // стопка справа
+    expect(cells(store)).toEqual([[1, 2]])
+
+    store.getState().addBlockAfterGroup(b!.id, 'text')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual([
+      'short_text',
+      'email',
+      'phone',
+      'text',
+    ])
+    expect(cells(store)).toEqual([[1, 2], [1]])
+  })
+
+  it('вопрос-бандл из колонки тоже уходит под секцию', () => {
+    const store = fields('short_text', 'email')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+
+    store.getState().addQuestionAfter(a!.id, 'phone')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual([
+      'short_text',
+      'email',
+      'title',
+      'phone',
+    ])
+    // Бандл — ОДНА группа, поэтому второй ряд об одной ячейке.
+    expect(cells(store)).toEqual([[1, 1], [1]])
+  })
+
+  // ---- Канон и уборка секции (§11.4–11.5) ----
+
+  it('канон: левая колонка помечена явно и порядок внутри секции колоночный', () => {
+    const store = createBuilderStore()
+    const schema = formSchemaSchema.parse({
+      schemaVersion: SCHEMA_VERSION,
+      // Неявная форма плюс перемешанный порядок — так выглядит документ, собранный до
+      // этапа и правленный руками. Канон обязан привести его к явной форме.
+      blocks: [
+        { id: 'l1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'r1', groupId: 'g2', type: 'email', settings: { column: 'right' } },
+        { id: 'l2', groupId: 'g3', type: 'phone', settings: { column: 'left' } },
+      ],
+    } satisfies FormSchema)
+    store.getState().hydrate(schema)
+    // l2 стоял ПОСЛЕ правого — по §11.3 это начало новой секции, и она без пары:
+    // бит инертен, элемент во всю ширину.
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['l1', 'r1', 'l2'])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+  })
+
+  it('канон идемпотентен: повторная правка документ не двигает', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    const once = JSON.stringify(store.getState().toSchema())
+    store.getState().updateBlock(a!.id, { required: true })
+    store.getState().updateBlock(a!.id, { required: false })
+    expect(JSON.stringify(store.getState().toSchema())).toBe(once)
+  })
+
+  it('полноширинный блок в середине секции разрывает её, а нижняя часть теряет биты', () => {
+    const store = fields('short_text', 'email')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId)
+    expect(cols(store)).toEqual(['left', 'right'])
+
+    // Между участниками появляется абзац: у b от прежней компании (a) не остаётся
+    // никого — он оказался в секции с новичком, и бит снимается.
+    store.getState().addBlockAfter(a!.id, 'text')
+    expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'text', 'email'])
+    expect(cols(store)).toEqual(['-', '-', '-'])
   })
 
   it('takeOwnRow возвращает правого своим рядом', () => {
@@ -1129,21 +1458,21 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     expect(rows(store)).toEqual([1])
   })
 
-  it('смена типа левого вне whitelist снимает бит правого', () => {
+  // Whitelist коротких контролов отменён (решение владельца 2026-07-29, ADR §10):
+  // смена типа на длинный ответ ряд больше не разваливает — что читается в половину
+  // колонки, решает автор формы. Раньше это были два отдельных теста, по одному на
+  // каждого участника.
+  it('смена типа участника ряд не рвёт — ни слева, ни справа', () => {
     const store = paired('short_text', 'email')
-    const a = store.getState().blocks[0]!
+    const [a, b] = store.getState().blocks
 
-    store.getState().changeBlockType(a.id, 'phone') // внутри whitelist — ряд цел
-    expect(cols(store)).toEqual(['-', 'right'])
+    store.getState().changeBlockType(a!.id, 'long_text')
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(rows(store)).toEqual([2])
 
-    store.getState().changeBlockType(a.id, 'long_text') // вне whitelist
-    expect(cols(store)).toEqual(['-', '-'])
-  })
-
-  it('смена типа правого вне whitelist роняет его собственный бит', () => {
-    const store = paired('short_text', 'email')
-    store.getState().changeBlockType(store.getState().blocks[1]!.id, 'long_text')
-    expect(cols(store)).toEqual(['-', '-'])
+    store.getState().changeBlockType(b!.id, 'scale')
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(rows(store)).toEqual([2])
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 
@@ -1207,7 +1536,7 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
   it('hydrate снимает инертный бит (левого соседа нет)', () => {
     const store = createBuilderStore()
     const schema = formSchemaSchema.parse({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', settings: { column: 'right' } }],
     } satisfies FormSchema)
     store.getState().hydrate(schema)
@@ -1218,6 +1547,359 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
   it('toSchema после переноса в ряд проходит валидацию контракта', () => {
     const store = paired('short_text', 'email')
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // ---- v4: носитель бита — первый блок группы (§6.3) ----
+
+  it('placeInRow ставит бит на ГОЛОВУ группы, а не на её отвечаемый блок', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text') // подпись + поле
+    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email')
+    const [, , t2] = store.getState().blocks
+    store.getState().placeInRow(t2!.groupId, store.getState().blocks[0]!.groupId)
+    expect(cols(store)).toEqual(['left', '-', 'right', '-'])
+    expect(rows(store)).toEqual([2])
+  })
+
+  it('takeOwnRow снимает бит с головы мульти-группы', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text')
+    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email')
+    const [, , t2, f2] = store.getState().blocks
+    store.getState().placeInRow(t2!.groupId, store.getState().blocks[0]!.groupId)
+    store.getState().takeOwnRow(f2!.id) // зовётся с любой строки вопроса
+    expect(cols(store)).toEqual(['-', '-', '-', '-'])
+    expect(rows(store)).toEqual([1, 1])
+  })
+
+  // Случай, ради которого существует пере-якорение: заголовок, выданный полю,
+  // делает его вторым блоком группы — и тот же ключ на нём начал бы значить
+  // «встань справа от своей подписи». Ряд обязан пережить правку заголовка.
+  it('addCaptionFor правому участнику сохраняет ряд: бит переезжает на подпись', () => {
+    const store = paired('short_text', 'email')
+    const right = store.getState().blocks[1]!
+    store.getState().addCaptionFor(right.id)
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'title', 'email'])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+    expect(rows(store)).toEqual([2])
+  })
+
+  it('makeQuestion на правом участнике сохраняет ряд битом на подписи', () => {
+    const store = paired('short_text', 'short_text')
+    store.getState().makeQuestion(store.getState().blocks[1]!.id, 'short_text')
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+    expect(rows(store)).toEqual([2])
+  })
+
+  // Инертность второго уровня: бит на не первом блоке — внутригрупповой, и если
+  // раскладчик его не применил (пара не «подпись + поле»), стор его снимает — тем же
+  // правилом и тем же раскладчиком, что и на уровне групп.
+  it('hydrate снимает внутригрупповой бит, который раскладчик не применил', () => {
+    const store = createBuilderStore()
+    const schema = formSchemaSchema.parse({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 't', groupId: 'g', type: 'title', text: textFromString('Индекс') },
+        { id: 'd', groupId: 'g', type: 'text', text: textFromString('шесть цифр') },
+        { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 'right' } },
+      ],
+    } satisfies FormSchema)
+    store.getState().hydrate(schema)
+    expect(cols(store)).toEqual(['-', '-', '-'])
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('hydrate оставляет внутригрупповой бит рабочей пары «подпись + поле»', () => {
+    const store = createBuilderStore()
+    const schema = formSchemaSchema.parse({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 't', groupId: 'g', type: 'title', text: textFromString('Индекс') },
+        { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 'right' } },
+      ],
+    } satisfies FormSchema)
+    store.getState().hydrate(schema)
+    expect(cols(store)).toEqual(['-', 'right'])
+  })
+
+  // ---- Ряд ВНУТРИ вопроса: команды переноса (§6.6) ----
+
+  // Вопрос: подпись + поле. Ряд собирается на втором уровне и в кросс-групповой не
+  // превращается — обёртка ряда групп остаётся пустой.
+  const question = (type: 'short_text' | 'long_text' = 'short_text') => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, type)
+    return store
+  }
+
+  it('placeBlockInRow ставит поле в ряд со своей подписью', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    expect(cols(store)).toEqual(['-', 'right'])
+    expect(rows(store)).toEqual([1]) // кросс-групповой ряд не появился
+  })
+
+  it('placeBlockInRow переносит поле ВПЛОТНУЮ за подпись — контент между ними не рвёт пару', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    store.getState().addBlockAfter(caption!.id, 'text') // контент между подписью и полем
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['title', 'text', 'short_text'])
+
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['title', 'short_text', 'text'])
+    expect(cols(store)).toEqual(['-', 'right', '-'])
+  })
+
+  it('длинный ответ встаёт в ряд с подписью наравне с коротким (whitelist отменён)', () => {
+    const store = question('long_text')
+    const [caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    expect(cols(store)).toEqual(['-', 'right'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('ячейка подписи занята — второй блок в тот же ряд не лезет', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    const extra = store.getState().addBlockAfter(field!.id, 'text')
+    store.getState().markSaved()
+
+    store.getState().placeBlockInRow(extra, caption!.id)
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('takeOwnRow на поле в ряду разбирает ряд ВНУТРИ вопроса, а не уводит вопрос', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    store.getState().takeOwnRow(field!.id)
+    expect(cols(store)).toEqual(['-', '-'])
+
+    // Тот же вызов с подписи (головы группы) — команда уровня вопроса, и снимать ей
+    // нечего: вопрос и так стоит своим рядом.
+    store.getState().markSaved()
+    store.getState().takeOwnRow(caption!.id)
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('внутренний ряд переживает toSchema и обратную загрузку', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id)
+    const schema = formSchemaSchema.parse(store.getState().toSchema())
+
+    const other = createBuilderStore()
+    other.getState().hydrate(schema)
+    expect(other.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual(['-', 'right'])
+  })
+})
+
+describe('createBuilderStore — ось колонок Mod+Alt+←/→ (этап 15.6, §11.6)', () => {
+  // Ось одна: полная ширина ↔ левая колонка ↔ правая. Проверяем ОБА направления в каждой
+  // позиции и оба края: клавиша, которая делает шаг «в никуда», обязана молчать целиком —
+  // без правки, без истории, без dirty.
+  const fields = (n: number) => {
+    const store = createBuilderStore()
+    const types = ['short_text', 'email', 'phone'] as const
+    for (let i = 0; i < n; i++) store.getState().addBlock(types[i % 3]!)
+    return store
+  }
+  const cols = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.settings?.column ?? '-')
+  const ids = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.id)
+  const cells = (store: ReturnType<typeof createBuilderStore>) =>
+    packRows(groupBlocks(store.getState().blocks)).map((row) => row.map((cell) => cell.length))
+
+  it('rowPosition называет все пять позиций оси', () => {
+    const store = fields(3)
+    const [a, b, c] = store.getState().blocks
+    // Первый вопрос полотна: вставать в ряд не с кем.
+    expect(rowPosition(store.getState().blocks, a!.id)).toBe('solo')
+    expect(rowPosition(store.getState().blocks, b!.id)).toBe('enter')
+
+    store.getState().shiftColumn(b!.id, 'right')
+    expect(rowPosition(store.getState().blocks, a!.id)).toBe('left')
+    expect(rowPosition(store.getState().blocks, b!.id)).toBe('rightSolo')
+
+    store.getState().placeInRow(c!.groupId, b!.groupId, 'right')
+    expect(rowPosition(store.getState().blocks, b!.id)).toBe('rightStack')
+  })
+
+  it('шаг вправо из полной ширины открывает секцию с предыдущим', () => {
+    const store = fields(2)
+    const [, b] = store.getState().blocks
+
+    store.getState().shiftColumn(b!.id, 'right')
+
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(cells(store)).toEqual([[1, 1]])
+  })
+
+  it('шаг влево из полной ширины встаёт в ЛЕВУЮ колонку ряда с предыдущим', () => {
+    const store = fields(2)
+    const [a, b] = store.getState().blocks
+
+    store.getState().shiftColumn(b!.id, 'left')
+
+    // Клавиша выбирает колонку, а цель у обеих одна — предыдущий вопрос. Встав слева, b
+    // оказывается выше a в документе: колоночный порядок канона (§11.4) читается сверху
+    // вниз по колонкам, а не по экрану.
+    expect(ids(store)).toEqual([b!.id, a!.id])
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(cells(store)).toEqual([[1, 1]])
+  })
+
+  it('шаг влево из полной ширины ПОД секцией добавляет в её левую колонку', () => {
+    const store = fields(3)
+    const [a, b, c] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right') // секция [a | b], c ниже во всю ширину
+
+    store.getState().shiftColumn(c!.id, 'left')
+
+    // Цель — предыдущая группа (b, правая колонка), но встаём мы в КОНЕЦ левой: колонку
+    // выбрала клавиша, а не сторона цели.
+    expect(ids(store)).toEqual([a!.id, c!.id, b!.id])
+    expect(cols(store)).toEqual(['left', 'left', 'right'])
+    expect(cells(store)).toEqual([[2, 1]])
+  })
+
+  it('первый вопрос полотна — край оси в обе стороны', () => {
+    const store = fields(2)
+    const first = store.getState().blocks[0]!
+    store.getState().markSaved()
+
+    store.getState().shiftColumn(first.id, 'left')
+    store.getState().shiftColumn(first.id, 'right')
+
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('правая колонка — правый край оси: шаг вправо молчит', () => {
+    const store = fields(2)
+    const [, b] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right')
+    store.getState().markSaved()
+
+    store.getState().shiftColumn(b!.id, 'right')
+
+    expect(store.getState().dirty).toBe(false)
+    expect(cols(store)).toEqual(['left', 'right'])
+  })
+
+  it('шаг влево из правой колонки-одиночки выводит из секции: её не остаётся', () => {
+    const store = fields(2)
+    const [a, b] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right')
+
+    store.getState().shiftColumn(b!.id, 'left')
+
+    // Колонка опустела → секции нет вовсе, и бит снят с ОБОИХ: у оставшегося он ничего
+    // не значит, а раскладчик молча приклеил бы его к секции ниже.
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(ids(store)).toEqual([a!.id, b!.id])
+  })
+
+  it('шаг влево из стопки справа переводит элемент в левую колонку', () => {
+    const store = fields(3)
+    const [a, b, c] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right')
+    store.getState().placeInRow(c!.groupId, b!.groupId, 'right') // справа стопка [b, c]
+
+    store.getState().shiftColumn(c!.id, 'left')
+
+    // c встаёт в КОНЕЦ левой колонки — туда же, куда его кладёт жест.
+    expect(cells(store)).toEqual([[2, 1]])
+    expect(ids(store)).toEqual([a!.id, c!.id, b!.id])
+    expect(cols(store)).toEqual(['left', 'left', 'right'])
+  })
+
+  it('шаг вправо из левой колонки-одиночки меняет участников местами', () => {
+    const store = fields(2)
+    const [a, b] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right') // [a | b]
+
+    store.getState().shiftColumn(a!.id, 'right')
+
+    // Слева одна колонка не остаётся пустой, а меняется с правой: a уехал в правую
+    // колонку, значит b стал левым. Обмен — следствие канона, а не отдельная команда.
+    expect(ids(store)).toEqual([b!.id, a!.id])
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(cells(store)).toEqual([[1, 1]])
+  })
+
+  it('канон помечает левую колонку явно, даже если в ней лежал чужой бит', () => {
+    // Неявная форма приезжает двумя путями: из старой формы (там левый бита не несёт) и из
+    // переезда между колонками (там забранный в левую колонку несёт свой прежний 'right').
+    // Хранимой ни одна не остаётся: вставка второго элемента в такую левую колонку выгнала
+    // бы из секции того, кто её открыл.
+    const store = createBuilderStore()
+    store.getState().hydrate(
+      formSchemaSchema.parse({
+        schemaVersion: SCHEMA_VERSION,
+        blocks: [
+          { id: 'x1', groupId: 'g_x1', type: 'short_text', settings: { column: 'right' } },
+          { id: 'x2', groupId: 'g_x2', type: 'email', settings: { column: 'right' } },
+        ],
+      }),
+    )
+
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(cells(store)).toEqual([[1, 1]])
+    // Идемпотентность: канон — неподвижная точка, а не колебание между двумя формами.
+    const once = JSON.stringify(store.getState().toSchema())
+    const again = createBuilderStore()
+    again.getState().hydrate(formSchemaSchema.parse(store.getState().toSchema()))
+    expect(JSON.stringify(again.getState().toSchema())).toBe(once)
+  })
+
+  it('шаг вправо из левой колонки-одиночки не разваливает стопку справа', () => {
+    // Найдено ревью: гашение «сирот» в placeInRow срабатывало и на переезде ВНУТРИ своей
+    // же секции (левая колонка пустеет по построению), и вместо переезда команда роняла
+    // одного участника стопки во всю ширину, а второго молча переводила в левую колонку.
+    const store = fields(3)
+    const [a, b, c] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right')
+    store.getState().placeInRow(c!.groupId, b!.groupId, 'right') // [a | b, c]
+
+    store.getState().shiftColumn(a!.id, 'right')
+
+    // Левая колонка опустела → её забирает первый из уцелевшей (b), а a встаёт в конец
+    // правой. Никто не выпадает, секция цела.
+    expect(ids(store)).toEqual([b!.id, c!.id, a!.id])
+    expect(cols(store)).toEqual(['left', 'right', 'right'])
+    expect(cells(store)).toEqual([[1, 2]])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('шаг влево из левой колонки со стопкой уводит вопрос ПОД секцию', () => {
+    const store = fields(3)
+    const [a, b, c] = store.getState().blocks
+    store.getState().shiftColumn(b!.id, 'right')
+    store.getState().placeInRow(c!.groupId, a!.groupId, 'left') // слева стопка [a, c]
+
+    store.getState().shiftColumn(a!.id, 'left')
+
+    // Полноширинный блок в СЕРЕДИНЕ секции разрезал бы её пополам, поэтому вышедший
+    // уезжает под неё — туда же, куда Enter из колонки кладёт новую строку.
+    expect(ids(store)).toEqual([c!.id, b!.id, a!.id])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+    expect(cells(store)).toEqual([[1, 1], [1]])
+  })
+
+  it('вопрос с внутренним рядом в секцию не встаёт: шага вправо у него нет', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'email')
+    const [, caption, field] = store.getState().blocks
+    store.getState().placeBlockInRow(field!.id, caption!.id) // ряд ВНУТРИ вопроса
+    store.getState().markSaved()
+
+    expect(rowPosition(store.getState().blocks, caption!.id)).toBe('solo')
+    store.getState().shiftColumn(caption!.id, 'right')
+    expect(store.getState().dirty).toBe(false)
   })
 })
 
@@ -1233,8 +1915,9 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
   }
   const options = (store: ReturnType<typeof createBuilderStore>) =>
     store.getState().blocks[0]!.settings!.options!
+  // Ряд печатаем колонками; стопку в колонке — через «+» (см. groups.test.ts).
   const optRows = (store: ReturnType<typeof createBuilderStore>) =>
-    packOptionRows(options(store)).map((row) => row.map((o) => o.label))
+    packOptionRows(options(store)).map((row) => row.map((cell) => cell.map((o) => o.label).join('+')))
 
   it('placeOptionInRow — тот же бит и та же упаковка, что у вопросов', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
@@ -1334,12 +2017,84 @@ describe('createBuilderStore — reorderOptions (dnd вариантов, фаз�
 })
 
 // Правило «поле не живёт без подписи» (решение владельца 2026-07-26, предикат
-// requiresCaption): choice и шкала голыми не бывают, а блок без вариантов не
+// requiresCaption): choice и шкала приезжают с заголовком, а блок без вариантов не
 // существует вовсе. Правило держит стор — в Zod и Go зеркала нет намеренно
 // (кросс-блочное условие там ловило бы 422 на undo, как у бита ряда §5).
-describe('createBuilderStore — поле не живёт без подписи (requiresCaption)', () => {
+//
+// С фазы 15 это правило ВСТАВКИ и только оно (§4.4 спеки): переносом голую строку
+// выбора получить можно, и она законна — редактор показывает ей «Добавьте заголовок»
+// вместо сопротивления.
+// addCaptionFor (фаза 15, §4.4) — обратный жест к «подсадить поле к ждущей подписи»:
+// голой строке ответа дают заголовок, и вопрос собирается с другого конца. Зовут его
+// клавиша строки (Mod+Alt+T) и клик по чипу — оба через эту команду.
+describe('createBuilderStore — addCaptionFor', () => {
+  it('ставит пустую подпись НАД полем и склеивает их в вопрос', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text') // абзац выше — в вопрос попасть не должен
+    store.getState().addBlock('email')
+    const [para, field] = store.getState().blocks
+
+    const id = store.getState().addCaptionFor(field!.id)
+
+    const b = store.getState().blocks
+    expect(b.map((x) => x.type)).toEqual(['text', 'title', 'email'])
+    expect(b[1]!.id).toBe(id)
+    expect(b[1]!.groupId).toBe(b[2]!.groupId) // подпись + поле = вопрос
+    expect(b[0]!.groupId).not.toBe(b[1]!.groupId) // абзац остался одиночкой
+    expect(plainText(b[1]!.text)).toBe('') // текст пишет автор, не команда
+    expect(para!.id).toBe(b[0]!.id)
+  })
+
+  it('на строке с подписью — no-op без шага истории', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text')
+    const before = store.getState().blocks
+    const past = store.getState().past.length
+
+    expect(store.getState().addCaptionFor(before[1]!.id)).toBeNull()
+
+    // Ни блока, ни шага истории: иначе Ctrl+Z съел бы нажатие, которое ничего не
+    // сделало (тот же закон, что у границы moveBlock).
+    expect(store.getState().blocks).toBe(before)
+    expect(store.getState().past.length).toBe(past)
+  })
+
+  it('согласию и контенту заголовок не даётся — свой текст у них уже есть', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('consent')
+    store.getState().addBlock('text')
+    const [consent, text] = store.getState().blocks
+
+    const before = store.getState().blocks
+    const past = store.getState().past.length
+
+    expect(store.getState().addCaptionFor(consent!.id)).toBeNull()
+    expect(store.getState().addCaptionFor(text!.id)).toBeNull()
+    expect(store.getState().addCaptionFor('нет-такого')).toBeNull()
+
+    expect(store.getState().blocks).toBe(before)
+    expect(store.getState().past.length).toBe(past)
+  })
+})
+
+describe('createBuilderStore — тип с обязательным заголовком вставляется вопросом', () => {
   const types = (store: ReturnType<typeof createBuilderStore>) =>
     store.getState().blocks.map((b) => b.type)
+
+  it('перенос оставляет голую строку выбора — правило вставки её не воскрешает', () => {
+    const store = createBuilderStore()
+    store.getState().addFieldAfter(null, 'single_choice') // [title, single_choice]
+    const choiceId = store.getState().blocks[1]!.id
+
+    store.getState().moveBlock(choiceId, 'up') // строка ответа уехала выше подписи
+
+    expect(types(store)).toEqual(['single_choice', 'title'])
+    // Ни второго заголовка, ни отката: голое поле выбора — законное состояние
+    // документа, а не то, что стор чинит за автора. Вопрос распался — подпись
+    // осталась одиночкой в своей группе.
+    const [bare, orphan] = store.getState().blocks
+    expect(bare!.groupId).not.toBe(orphan!.groupId)
+  })
 
   it('addFieldAfter: в пустое место тип приезжает со своим заголовком, каретка на него', () => {
     const store = createBuilderStore()
@@ -1433,9 +2188,8 @@ describe('createBuilderStore — поле не живёт без подписи 
     expect(store.getState().blocks[1]!.settings!.options).toHaveLength(1)
   })
 
-  it('вопрос, потерявший поле, разваливает свой ряд', () => {
+  it('вопрос, потерявший поле, ряд НЕ разваливает: осиротевшая подпись — участник', () => {
     const store = createBuilderStore()
-    // Слева — короткий текст, справа в ряду — dropdown (оба из whitelist §5).
     store.getState().addQuestionAfter(null, 'short_text')
     const left = store.getState().blocks[1]!
     store.getState().addFieldAfter(left.id, 'dropdown')
@@ -1444,13 +2198,15 @@ describe('createBuilderStore — поле не живёт без подписи 
     store.getState().placeInRow(right.groupId, left.groupId)
     expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(1) // ряд собран
 
-    // Стёрли единственный вариант правого — поле ушло вместе с битом ряда, а
-    // оставшаяся подпись партнёром по ряду быть не может (нет отвечаемого блока).
+    // Стёрли единственный вариант правого — поле ушло, осталась голая подпись. До
+    // отмены whitelist'а (2026-07-29) ряд на этом разваливался: группа без
+    // отвечаемого блока участником не считалась. Теперь условие одно — «нет
+    // внутреннего ряда», и подпись остаётся полноправной ячейкой, унося бит с собой.
     store.getState().removeOption(right.id, only)
 
     expect(types(store)).toEqual(['title', 'short_text', 'title'])
-    expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(2)
-    expect(store.getState().blocks.some((b) => b.settings?.column)).toBe(false)
+    expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(1)
+    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual(['left', '-', 'right'])
   })
 
   it('голый заголовок прямо НАД следующим вопросом остаётся одиночкой', () => {
@@ -1543,7 +2299,7 @@ describe('createBuilderStore — целая группа не принимает
     expect(new Set(b.map((x) => x.groupId)).size).toBe(1)
   })
 
-  it('дроп подписи между строк чужого вопроса приземляет её под ним', () => {
+  it('правило вставки не распространяется на дроп: подпись падает в середину вопроса', () => {
     const { store, titleId } = question()
     store.getState().addBlockAfter(titleId, 'text') // [title, text, short_text]
     const store2 = store.getState()
@@ -1551,10 +2307,91 @@ describe('createBuilderStore — целая группа не принимает
     const b = store.getState().blocks
     const lone = b[3]!
 
-    // Целимся в середину чужой группы — правило §5 уводит подпись под неё.
+    // Целимся в середину чужой группы: вставка сюда не пускает, перенос — пускает
+    // (§4.1 спеки фазы 15), и подпись оказывается ближайшей к полю.
     const plan = planBlockDrop(b, lone.id, b[1]!.id)
 
-    expect(plan!.redirected).toBe(true)
-    expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'text', 'short_text', 'label'])
+    expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'label', 'text', 'short_text'])
+  })
+})
+
+describe('createBuilderStore — заголовок формы приколот первой строкой (фаза 15)', () => {
+  // Полотно прячет заголовок из списка групп (SlashEditor рисует его отдельной
+  // строкой), поэтому команды переноса его не видят. Без страховки в сторе первый
+  // вопрос уезжал ВЫШЕ заголовка, и документ переставал проходить валидацию — автор
+  // получал «ошибку сохранения» без причины на жест, который выглядел безобидным.
+  const withTitle = (): FormSchema => ({
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [
+      { id: 'ft_x', groupId: 'g_ft_x', type: 'form_title', text: textFromString('Анкета') },
+      { id: 'q1', groupId: 'g_a1', type: 'title', text: textFromString('Имя') },
+      { id: 'a1', groupId: 'g_a1', type: 'short_text', settings: {} },
+      { id: 'q2', groupId: 'g_a2', type: 'title', text: textFromString('Почта') },
+      { id: 'a2', groupId: 'g_a2', type: 'email', settings: {} },
+    ],
+  })
+
+  const loaded = () => {
+    const store = createBuilderStore()
+    store.getState().hydrate(formSchemaSchema.parse(withTitle()))
+    return store
+  }
+
+  it('Alt+Shift+↑ на первом вопросе — no-op, а не выталкивание заголовка', () => {
+    const store = loaded()
+
+    store.getState().moveGroup('q1', 'up')
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q1', 'a1', 'q2', 'a2'])
+    // Граница полотна не считается правкой: ни истории, ни dirty, ни лишнего PATCH.
+    expect(store.getState().dirty).toBe(false)
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('Alt+↑ на первой строке формы — no-op', () => {
+    const store = loaded()
+
+    store.getState().moveBlock('q1', 'up')
+
+    expect(store.getState().blocks[0]!.type).toBe('form_title')
+    expect(store.getState().dirty).toBe(false)
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('перенос вниз через заголовок не мешает — обычный обмен работает', () => {
+    const store = loaded()
+
+    store.getState().moveGroup('q1', 'down')
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q2', 'a2', 'q1', 'a1'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('дроп блока на позицию заголовка возвращает заголовок наверх', () => {
+    const store = loaded()
+
+    // Прямой вызов операции dnd: в UI зона заголовка недостижима (его нет в
+    // sortable-вселенной), но стор обязан оставаться честным сам по себе —
+    // страховка живёт в structural(), а не в каждой команде.
+    store.getState().reorderBlocks('q1', 'ft_x')
+
+    expect(store.getState().blocks[0]!.type).toBe('form_title')
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('заголовок формы не втягивается в секцию первым вопросом', () => {
+    // Бит у ПЕРВОГО вопроса приезжает из старой формы (в v3 он был инертен: рендерер
+    // считает ряды уже без заголовка). Стор обязан прочитать документ так же, как
+    // рендерер: заголовок вне потока вопросов, делить с ним колонку нельзя (ADR §10),
+    // и уж точно нельзя пометить его битом — схема такого не принимает.
+    const store = createBuilderStore()
+    const doc = withTitle()
+    doc.blocks[1]!.settings = { column: 'right' }
+    store.getState().hydrate(formSchemaSchema.parse(doc))
+
+    const blocks = store.getState().blocks
+    expect(blocks[0]!.settings?.column).toBeUndefined()
+    expect(blocks[1]!.settings?.column).toBeUndefined()
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 })

@@ -364,30 +364,6 @@ func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uui
 	return out, nil
 }
 
-// UpdateFormTitle меняет title в пределах воркспейса. pgx.ErrNoRows (форма чужая
-// или отсутствует) пробрасывается обёрнутым — service вернёт domain.ErrNotFound.
-func (Repo) UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error) {
-	row, err := postgres.New(db).UpdateFormTitle(ctx, postgres.UpdateFormTitleParams{
-		ID:          id,
-		WorkspaceID: workspaceID,
-		Title:       title,
-	})
-	if err != nil {
-		return Form{}, fmt.Errorf("update form title: %w", err)
-	}
-	return Form{
-		ID:                 row.ID,
-		WorkspaceID:        row.WorkspaceID,
-		Name:               ptrStr(row.Name),
-		Title:              row.Title,
-		Slug:               row.Slug,
-		Status:             row.Status,
-		PublishedVersionID: ptrUUID(row.PublishedVersionID),
-		CreatedAt:          row.CreatedAt.Time,
-		UpdatedAt:          row.UpdatedAt.Time,
-	}, nil
-}
-
 // UpdateFormName меняет внутреннее имя формы (дашборд) в пределах воркспейса.
 // pgx.ErrNoRows (чужая/нет формы) пробрасывается обёрнутым — service вернёт 404.
 func (Repo) UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error) {
@@ -504,11 +480,18 @@ func (Repo) ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uui
 // UPDATE проходит, только если updated_at совпадает с expectedUpdatedAt. Расхождение
 // (или удалённая параллельно форма) → 0 строк → pgx.ErrNoRows, которую service
 // трактует как конфликт (доступ он проверяет заранее отдельным чтением).
-func (Repo) UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error) {
+// mirrorTitle — заголовок-зеркало (фаза 15): nil означает «документ о заголовке не
+// высказался», и колонка остаётся как была.
+func (Repo) UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, mirrorTitle *string, expectedUpdatedAt time.Time) (Form, error) {
+	title := pgtype.Text{}
+	if mirrorTitle != nil {
+		title = pgtype.Text{String: *mirrorTitle, Valid: true}
+	}
 	row, err := postgres.New(db).UpdateFormDraftSchema(ctx, postgres.UpdateFormDraftSchemaParams{
 		ID:                id,
 		WorkspaceID:       workspaceID,
 		DraftSchema:       schema,
+		Title:             title,
 		ExpectedUpdatedAt: pgtype.Timestamptz{Time: expectedUpdatedAt, Valid: true},
 	})
 	if err != nil {

@@ -1,20 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 
-import { type Form, type FormDetail } from '../../../entities/form'
+import { type FormDetail } from '../../../entities/form'
 import { formKeys } from '../keys'
-import { renameDetailPatch } from '../queries'
 import { formLockToken } from './useAutosave'
 
-// Регрессия на гонку оптимистичной блокировки rename ↔ автосейв схемы:
-// переименование заголовка двигает forms.updated_at, и следующий PATCH схемы обязан
-// уйти со СВЕЖИМ токеном, иначе сервер вернёт 409 «Форма изменена в другой вкладке».
-// Токен — единый источник (кэш detail): rename пишет туда новый updatedAt
-// (renameDetailPatch), автосейв читает оттуда (formLockToken).
+// Токен оптимистичной блокировки автосейва читается из ЕДИНОГО источника — кэша
+// detail в Query, который двигают все мутации формы (автосейв схемы, публикация).
+// Читать его из приватного ref нельзя: разъехавшись с кэшем, автосейв ушлёт
+// устаревший updatedAt и словит 409 «Форма изменена в другой вкладке» на пустом месте.
+//
+// Гонка «rename заголовка ↔ автосейв», которую этот набор сторожил до фазы 15, больше
+// невозможна: заголовок стал блоком документа и едет тем же PATCH'ем схемы, второго
+// пути записи не осталось.
 
 const formId = 'form-1'
 const T0 = '2026-07-15T10:00:00.000Z'
-const T1 = '2026-07-15T10:00:05.000Z'
 
 const draftSchema = { blocks: [] } as FormDetail['draftSchema']
 
@@ -43,24 +44,6 @@ function seedDetail(qc: QueryClient) {
   })
 }
 
-// Ответ PATCH /forms/{id} на переименование: свежий updatedAt, но заглушечные
-// hasUnpublishedChanges/submissionCount (у ответов мутаций всегда false/0).
-const renamedForm: Form = {
-  id: formId,
-  name: null,
-  title: 'Новое имя',
-  slug: 'old-slug',
-  status: 'draft',
-  createdAt: T0,
-  updatedAt: T1,
-  publishedVersion: null,
-  publishedVersionId: null,
-  hasUnpublishedChanges: false,
-  submissionCount: 0,
-  visitCount: 0,
-  visitSubmittedCount: 0,
-}
-
 describe('formLockToken', () => {
   it('без кэша detail отдаёт fallback', () => {
     const qc = new QueryClient()
@@ -74,41 +57,3 @@ describe('formLockToken', () => {
   })
 })
 
-describe('гонка rename ↔ автосейв', () => {
-  it('переименование двигает токен блокировки, который прочтёт автосейв', () => {
-    const qc = new QueryClient()
-    seedDetail(qc)
-
-    // Токен до переименования — старый.
-    expect(formLockToken(qc, formId, T0)).toBe(T0)
-
-    // Переименование патчит detail так же, как useRenameForm.onSuccess.
-    qc.setQueryData<FormDetail>(formKeys.detail(formId), renameDetailPatch(renamedForm))
-
-    // Автосейв схемы теперь прочтёт СВЕЖИЙ токен → уйдёт с T1, а не устаревшим T0,
-    // и не словит 409.
-    expect(formLockToken(qc, formId, T0)).toBe(T1)
-  })
-
-  it('патч rename обновляет title, но не затирает поля, отсутствующие в rename', () => {
-    const qc = new QueryClient()
-    seedDetail(qc)
-
-    qc.setQueryData<FormDetail>(formKeys.detail(formId), renameDetailPatch(renamedForm))
-    const detail = qc.getQueryData<FormDetail>(formKeys.detail(formId))
-
-    expect(detail?.title).toBe('Новое имя')
-    expect(detail?.updatedAt).toBe(T1)
-    // draftSchema сохранён (в ответе мутации его нет).
-    expect(detail?.draftSchema).toBe(draftSchema)
-    // Заглушки из ответа мутации не протекли в кэш.
-    expect(detail?.hasUnpublishedChanges).toBe(true)
-    expect(detail?.submissionCount).toBe(3)
-  })
-
-  it('на пустом кэше detail патч rename — no-op (dashboard без открытой формы)', () => {
-    const qc = new QueryClient()
-    qc.setQueryData<FormDetail>(formKeys.detail(formId), renameDetailPatch(renamedForm))
-    expect(qc.getQueryData<FormDetail>(formKeys.detail(formId))).toBeUndefined()
-  })
-})

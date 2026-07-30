@@ -5,11 +5,12 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, textFromString } from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
+import { SlashEditor } from './SlashEditor'
 import { richCaret } from './richCaret'
 
 // Контракт фокуса полотна (§2.1, §2.4): каждая строка регистрирует фокус-цель, и
@@ -67,7 +68,7 @@ const el = () => document.activeElement as HTMLElement
 describe('контракт фокус-целей строк (§2.1)', () => {
   it('подпись/контент/consent — фокус на текстовую поверхность своего текста', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'head', groupId: 'g2', type: 'heading', text: textFromString('Раздел') },
@@ -94,7 +95,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
   // совпадать под фокусом и без него — там мигает видимая подсказка, а не имя.
   it('текстовая строка называет себя, и у `text` имя не зависит от фокуса', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'cons', groupId: 'g2', type: 'consent', text: textFromString('Согласен') },
@@ -113,7 +114,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('край каретки: start → в начало, end → в конец текста', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'title', groupId: 'g1', type: 'title', text: textFromString('Привет') }],
     })
     engine.focusBlock('title', 'start')
@@ -126,7 +127,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('текстовые поля — фокус на инпут плейсхолдера', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'st', groupId: 'g1', type: 'short_text', settings: {} },
         { id: 'lt', groupId: 'g2', type: 'long_text', settings: {} },
@@ -143,7 +144,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('choice — фокус на инпут варианта: start → первый, end → последний', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         {
           id: 'ch',
@@ -161,7 +162,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 
   it('image/date/scale — фокус на объектную остановку (tabIndex -1)', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'img', groupId: 'g1', type: 'image', settings: { imageKey: 'ws/x.png' } },
         { id: 'dt', groupId: 'g2', type: 'date', settings: {} },
@@ -179,7 +180,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
 describe('поведение объектной остановки (§2.2)', () => {
   function objectStop() {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'sc', groupId: 'g1', type: 'scale', settings: { scaleMin: 1, scaleMax: 5 } }],
     })
     engine.focusBlock('sc')
@@ -225,7 +226,7 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
     // Проверяем именно адресата: строка просит родителя увести каретку наверх
     // (дальше её ведёт stopNeighbor — см. navigation.test.ts).
     const { engine, handlers, store } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Ваш выбор') },
         {
@@ -248,7 +249,7 @@ describe('Backspace в первом пустом варианте (TD-30)', () =
 describe('Backspace на инпуте плейсхолдера (§2.1, решение владельца 2026-07-26)', () => {
   it('пустой плейсхолдер → поле удаляется, как объект и как последний вариант', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
@@ -261,7 +262,7 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
 
   it('плейсхолдер с текстом — Backspace правит текст (не уходит вверх)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: { placeholder: 'Иван' } }],
     })
     engine.focusBlock('st', 'end')
@@ -277,7 +278,7 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
 describe('Enter / Shift+Enter на текстовой строке (§3.2)', () => {
   function textRow() {
     const ctx = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
     })
     ctx.engine.focusBlock('t', 'end')
@@ -298,7 +299,7 @@ describe('Enter / Shift+Enter на текстовой строке (§3.2)', () 
 
   it('Alt+Shift+↓ на подписи — перенос группы целиком (moveGroup)', () => {
     const { store, engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 't1', groupId: 'g1', type: 'title', text: textFromString('A') },
         { id: 'f1', groupId: 'g1', type: 'short_text', settings: {} },
@@ -315,7 +316,7 @@ describe('Enter / Shift+Enter на текстовой строке (§3.2)', () 
 describe('клавиатура вариантов choice (§3.2, Д5)', () => {
   function choiceRow(options: { id: string; label: string }[]) {
     const ctx = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options } }],
     })
     return ctx
@@ -361,7 +362,7 @@ describe('клавиатура вариантов choice (§3.2, Д5)', () => {
 describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
   it('на подписи — зовёт onDeleteBlock с id (родитель сносит группу)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
@@ -374,7 +375,7 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
 
   it('на варианте choice — зовёт onDeleteBlock с id блока (не варианта)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
       ],
@@ -388,7 +389,7 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
 describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', () => {
   it('с подписи — зовёт onAnswerAction с id (родитель прыгает к контролу)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
@@ -401,7 +402,7 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
 
   it('на картинке — открывает файловый диалог (клик по скрытому input)', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'img', groupId: 'g1', type: 'image', settings: {} }],
     })
     const input = document.querySelector<HTMLInputElement>('input[type="file"]')!
@@ -423,7 +424,7 @@ describe('Cmd/Ctrl+Enter — действие над ответом (§3.2)', ()
 describe('Cmd+. — меню действий блока (§3.3)', () => {
   it('открывает поповер с действиями (дублировать/сменить тип/удалить)', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
     })
     engine.focusBlock('t', 'end')
@@ -436,7 +437,7 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
 
   it('на варианте choice — открывает меню всего блока', () => {
     const { engine } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
       ],
@@ -457,7 +458,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на подписи вопроса зовёт перенос — цель выбирает полотно', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'c1', groupId: 'g1', type: 'title', text: textFromString('Имя') },
         { id: 'f1', groupId: 'g1', type: 'short_text' },
@@ -472,7 +473,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на инпуте плейсхолдера работает: у голого поля это единственная поверхность', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
     })
     engine.focusBlock('st', 'start')
@@ -482,7 +483,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на объектной остановке (date) переносит ВОПРОС, а не строку', () => {
     const { engine, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'd', groupId: 'g1', type: 'date', settings: {} }],
     })
     engine.focusBlock('d')
@@ -492,7 +493,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на варианте choice ставит в ряд ВАРИАНТ; каретка едет с ним', () => {
     const { engine, store, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         {
           id: 'ch',
@@ -517,7 +518,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
 
   it('на варианте dropdown жест уходит ВОПРОСУ: рядов у нативного списка нет', () => {
     const { engine, store, handlers } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         {
           id: 'dd',
@@ -531,5 +532,114 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
     fireEvent.keyDown(el(), rowKey('right'))
     expect(handlers.onRowShift).toHaveBeenCalledWith('dd', 'right')
     expect(store.getState().blocks[0]!.settings!.options![1]).not.toHaveProperty('column')
+  })
+})
+
+// ОСЬ КОЛОНОК НА ЖИВОМ ПОЛОТНЕ (§12 таблица, строка «Mod+Alt+←/→»; этап 15.6).
+//
+// Выше жест проверялся на изолированных строках со шпионом вместо стора — там видно, что
+// клавиша зовёт команду, но не видно главного риска секции: шаг по оси ПЕРЕНОСИТ блок в
+// документе, а колонки — это отдельные контейнеры разметки. Уехав в другую колонку, строка
+// меняет DOM-родителя, то есть перемонтируется, и обещание «каретка едет с блоком» держится
+// уже не тем, что строку не тронули, а страховкой движка (`last` + `focusLost`). Поэтому
+// здесь рендерится настоящий SlashEditor с настоящим стором.
+describe('ось колонок: каретка едет с блоком через смену колонки (§11.6)', () => {
+  const editor = (...blocks: FormSchema['blocks']) => {
+    const store = createBuilderStore()
+    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
+    const engine = createFocusEngine()
+    render(
+      <BuilderStoreContext.Provider value={store}>
+        <SlashEditor formId="f" engine={engine} />
+      </BuilderStoreContext.Provider>,
+    )
+    return { store, engine }
+  }
+  const field = (id: string) => ({ id, groupId: `g_${id}`, type: 'short_text' as const, settings: {} })
+  // Чья строка под кареткой: id блока с ближайшего предка-строки (тем же признаком строку
+  // узнаёт и сам редактор — activeRow по data-block-id).
+  const caretBlock = () => el().closest('[data-block-id]')?.getAttribute('data-block-id') ?? null
+  const shift = (dir: 'left' | 'right') =>
+    fireEvent.keyDown(el(), {
+      key: dir === 'right' ? 'ArrowRight' : 'ArrowLeft',
+      code: dir === 'right' ? 'ArrowRight' : 'ArrowLeft',
+      ctrlKey: true,
+      altKey: true,
+    })
+  const cols = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.settings?.column ?? '-')
+
+  it('вход в ряд из полной ширины', () => {
+    const { store, engine } = editor(field('a'), field('b'))
+    engine.focusBlock('b', 'start')
+
+    shift('right')
+
+    expect(cols(store)).toEqual(['left', 'right'])
+    expect(caretBlock()).toBe('b')
+  })
+
+  it('переезд между колонками секции', () => {
+    const { store, engine } = editor(field('a'), field('b'), field('c'))
+    engine.focusBlock('b', 'start')
+    shift('right') // секция [a | b]
+    engine.focusBlock('c', 'start')
+    shift('right') // c в правую колонку: [a | b, c]
+    expect(cols(store)).toEqual(['left', 'right', 'right'])
+
+    shift('left') // c переезжает в левую колонку — это ДРУГАЯ ячейка разметки
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['a', 'c', 'b'])
+    expect(caretBlock()).toBe('c')
+  })
+
+  it('выход из секции: вопрос уезжает под неё, каретка следом', () => {
+    const { store, engine } = editor(field('a'), field('b'), field('c'))
+    engine.focusBlock('b', 'start')
+    shift('right') // [a | b]
+    engine.focusBlock('c', 'start')
+    shift('left') // c в левую колонку: [a, c | b]
+    expect(cols(store)).toEqual(['left', 'left', 'right'])
+
+    shift('left') // c выходит из секции — и уезжает ПОД неё
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['a', 'b', 'c'])
+    expect(cols(store)).toEqual(['left', 'right', '-'])
+    expect(caretBlock()).toBe('c')
+  })
+
+  it('Enter из колонки: новая строка ПОД секцией, каретка в ней', () => {
+    // Полноширинная строка в середине секции разрезала бы её пополам (§11.3), поэтому
+    // Enter из колонки кладёт новую строку под всей секцией — и каретка обязана уехать
+    // туда же, иначе автор печатает вслепую не там, где смотрит. Enter жмём на ПОДПИСИ:
+    // инпут плейсхолдера — необязательный лист обхода, Enter в нём не обрабатывается.
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'ca', groupId: 'ga', type: 'title', text: textFromString('Имя') },
+        { id: 'fa', groupId: 'ga', type: 'short_text', settings: {} },
+        { id: 'b', groupId: 'gb', type: 'email', settings: {} },
+      ],
+    })
+    const engine = createFocusEngine()
+    render(
+      <BuilderStoreContext.Provider value={store}>
+        <SlashEditor formId="f" engine={engine} />
+      </BuilderStoreContext.Provider>,
+    )
+    engine.focusBlock('b', 'start')
+    shift('right') // секция [вопрос | b]
+    expect(cols(store)).toEqual(['left', '-', 'right'])
+    engine.focusBlock('ca', 'end') // каретка в ЛЕВОЙ колонке
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+
+    const ids = store.getState().blocks.map((x) => x.id)
+    expect(ids.slice(0, 3)).toEqual(['ca', 'fa', 'b'])
+    expect(ids).toHaveLength(4)
+    const fresh = ids[3]! // новая строка последняя, то есть под всей секцией
+    expect(cols(store)).toEqual(['left', '-', 'right', '-'])
+    expect(caretBlock()).toBe(fresh)
   })
 })

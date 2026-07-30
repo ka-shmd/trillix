@@ -1543,10 +1543,10 @@ func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormClo
 
 const updateFormDraftSchema = `-- name: UpdateFormDraftSchema :one
 UPDATE forms
-SET draft_schema = $3, updated_at = now()
+SET draft_schema = $3, title = COALESCE($4, title), updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
-  AND updated_at = $4::timestamptz
+  AND updated_at = $5::timestamptz
 RETURNING id, workspace_id, name, title, slug, status, draft_schema, published_version_id, created_at, updated_at
 `
 
@@ -1554,6 +1554,7 @@ type UpdateFormDraftSchemaParams struct {
 	ID                uuid.UUID
 	WorkspaceID       uuid.UUID
 	DraftSchema       []byte
+	Title             pgtype.Text
 	ExpectedUpdatedAt pgtype.Timestamptz
 }
 
@@ -1574,11 +1575,19 @@ type UpdateFormDraftSchemaRow struct {
 // форма в воркспейсе И её updated_at совпадает с присланным клиентом. Иначе 0
 // строк — service различает «чужая/нет формы» (проверено заранее) от расхождения
 // версии (updated_at сдвинула другая вкладка → 409). updated_at двигаем вручную.
+//
+// title здесь — ЗЕРКАЛО заголовка из документа (фаза 15): источник заголовка —
+// блок form_title, колонку сервер пишет производной, чтобы её пятеро потребителей
+// (<title>, og:title, тело 410, письмо, дашборд) не менялись вовсе. NULL значит
+// «документ о заголовке не высказался» (схема снята до фазы) — колонку не трогаем.
+// Одним UPDATE, а не транзакцией из двух: зеркало обязано двигаться ровно тогда,
+// когда двигается схема, и промежуточного состояния между ними быть не должно.
 func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraftSchemaParams) (UpdateFormDraftSchemaRow, error) {
 	row := q.db.QueryRow(ctx, updateFormDraftSchema,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.DraftSchema,
+		arg.Title,
 		arg.ExpectedUpdatedAt,
 	)
 	var i UpdateFormDraftSchemaRow
@@ -1674,51 +1683,6 @@ type UpdateFormNotifyOnSubmissionRow struct {
 func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFormNotifyOnSubmissionParams) (UpdateFormNotifyOnSubmissionRow, error) {
 	row := q.db.QueryRow(ctx, updateFormNotifyOnSubmission, arg.ID, arg.WorkspaceID, arg.NotifyOnSubmission)
 	var i UpdateFormNotifyOnSubmissionRow
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Name,
-		&i.Title,
-		&i.Slug,
-		&i.Status,
-		&i.PublishedVersionID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const updateFormTitle = `-- name: UpdateFormTitle :one
-UPDATE forms
-SET title = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
-`
-
-type UpdateFormTitleParams struct {
-	ID          uuid.UUID
-	WorkspaceID uuid.UUID
-	Title       string
-}
-
-type UpdateFormTitleRow struct {
-	ID                 uuid.UUID
-	WorkspaceID        uuid.UUID
-	Name               pgtype.Text
-	Title              string
-	Slug               string
-	Status             string
-	PublishedVersionID pgtype.UUID
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-}
-
-// Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк
-// (service трактует это как «не найдена/чужая»). updated_at двигаем вручную.
-// title — ПУБЛИЧНЫЙ заголовок (первая строка билдера); имя дашборда — UpdateFormName.
-func (q *Queries) UpdateFormTitle(ctx context.Context, arg UpdateFormTitleParams) (UpdateFormTitleRow, error) {
-	row := q.db.QueryRow(ctx, updateFormTitle, arg.ID, arg.WorkspaceID, arg.Title)
-	var i UpdateFormTitleRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

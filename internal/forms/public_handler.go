@@ -107,8 +107,11 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, h.now().UTC()) {
 		w.Header().Set("Cache-Control", "no-store")
 		httpserver.WriteJSON(w, r, http.StatusGone, closedFormResponse{
-			Closed:        true,
-			Title:         pf.Title,
+			Closed: true,
+			// Экран «приём закрыт» — единственное место рендерера, где заголовок
+			// показывается БЕЗ схемы (её в 410 нет вовсе), поэтому пустоту здесь
+			// замещаем так же, как в <title> вкладки.
+			Title:         titleOrFallback(pf.Title),
 			ClosedMessage: closedMessageOrDefault(pf.ClosedMessage),
 		})
 		return
@@ -126,7 +129,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	// Рендерер знает только текущий формат — старая опубликованная версия
 	// апгрейдится до v3 на отдаче (иммутабельный снапшот в БД не трогаем).
-	schema, err := domain.CanonicalV3(pf.Schema)
+	schema, err := domain.CanonicalV4(pf.Schema)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), err))
 		return

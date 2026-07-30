@@ -22,8 +22,8 @@ import (
 // текст согласия интринсик контрола (рендерится рядом с галочкой).
 
 // SchemaVersion — текущая версия формата. Старые документы апгрейдятся на чтении
-// цепочкой v1→v2→v3 (ValidateSchema) без миграции БД.
-const SchemaVersion = 3
+// цепочкой v1→v2→v3→v4 (ValidateSchema) без миграции БД.
+const SchemaVersion = 4
 
 // Лимиты схемы. Верхние границы — защита от раздутого документа; длины строк
 // считаются в рунах. Заведомо просторны для нормальной анкеты, но конечны.
@@ -37,7 +37,12 @@ const (
 	// MaxSpans — число кусков в тексте одного блока. Второй лимит обязателен: без
 	// него MaxTextLen перестал быть лимитом документа в тот момент, когда строка
 	// стала массивом (см. validateSpans).
-	MaxSpans          = 200
+	MaxSpans = 200
+	// MaxFormTitleLen — длина заголовка ФОРМЫ (блок form_title). Не MaxTextLen:
+	// заголовок уезжает зеркалом в forms.title, оттуда — в <title>, og:title и в
+	// потолок поискового запроса, поэтому у него свой, более тесный лимит. Число
+	// то же, что у maxTitleLen в forms (и с фазы 15 — те же единицы, руны).
+	MaxFormTitleLen   = 200
 	MaxOptionLabelLen = 500
 	MaxIDLen          = 64
 	MaxSubmitLabelLen = 100
@@ -56,10 +61,19 @@ const (
 	MaxRedirectURLLen  = 2000
 )
 
-// ColumnRight — единственное значение бита ряда (спека §5): «встань в ряд с
-// предыдущим». Отсутствие ключа = свой ряд; "left" канон не пишет и не принимает.
-// Зеркалит COLUMN_RIGHT в formSchema.ts.
-const ColumnRight = "right"
+// Значения бита колонки (спека §11): элемент стоит в левой или в правой колонке
+// ДВУХКОЛОНОЧНОЙ СЕКЦИИ, а отсутствие ключа = полная ширина и конец секции. Секция
+// сущностью схемы не является — её выводит раскладчик, как groupId выводит regroup.
+//
+// ColumnLeft добавлен решением владельца 2026-07-29 (ADR §10). До него канон хранил
+// только отклонение ("right"), и это делало левую колонку невыразимой: второй элемент
+// БЕЗ ключа не продолжает её, а закрывает ряд. Расширение множества принимаемых
+// документов подъёма schemaVersion не требует — старые формы валидны как были.
+// Зеркалит COLUMN_LEFT/COLUMN_RIGHT в formSchema.ts.
+const (
+	ColumnLeft  = "left"
+	ColumnRight = "right"
+)
 
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
@@ -87,13 +101,18 @@ const (
 	BlockHeading BlockType = "heading"
 	BlockText    BlockType = "text"
 	BlockImage   BlockType = "image"
+	// Заголовок ФОРМЫ (фаза 15): первая строка документа, <h1> у респондента.
+	// Отдельный тип, а не BlockTitle: тот — подпись ВОПРОСА, из которой аналитика
+	// берёт имя колонки и шага воронки. Слить их значило бы навсегда объяснять,
+	// почему один title попадает в CSV, а другой нет.
+	BlockFormTitle BlockType = "form_title"
 )
 
 func (t BlockType) valid() bool {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
 		BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
-		BlockTitle, BlockLabel, BlockHeading, BlockText, BlockImage:
+		BlockTitle, BlockLabel, BlockHeading, BlockText, BlockImage, BlockFormTitle:
 		return true
 	default:
 		return false
@@ -121,33 +140,35 @@ func (t BlockType) isCaption() bool {
 	return t == BlockTitle || t == BlockLabel
 }
 
-// isContent — неотвечаемый блок: подписи (title/label) и контент (heading/text/
-// image). Не собирает ответ: исключён из ValidateAnswers, CSV и модели вопросов.
+// isContent — неотвечаемый блок: подписи (title/label), контент (heading/text/
+// image) и заголовок формы. Не собирает ответ: исключён из ValidateAnswers, CSV и
+// модели вопросов. Забыть здесь новый тип — значит молча сделать его отвечаемым:
+// у формы появится колонка в выгрузке и шаг воронки, которых автор не создавал.
 func (t BlockType) isContent() bool {
-	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockImage
+	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
+		t == BlockImage || t == BlockFormTitle
 }
 
 // isAnswerable — блок собирает ответ (все отвечаемые типы, включая consent).
 func (t BlockType) isAnswerable() bool { return !t.isContent() }
 
 // carriesText — тип несёт собственное поле text: подписи, контентные абзацы/
-// заголовки и consent (текст согласия рядом с галочкой). У прочих отвечаемых
-// (и у image) поле text обязано быть пустым.
+// заголовки, заголовок формы и consent (текст согласия рядом с галочкой). У прочих
+// отвечаемых (и у image) поле text обязано быть пустым.
 func (t BlockType) carriesText() bool {
-	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText || t == BlockConsent
+	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
+		t == BlockConsent || t == BlockFormTitle
 }
 
-// canShareRow — типу разрешено делить ряд с предыдущим вопросом (спека фазы 13 §5,
-// ADR §10): визуально короткие контролы. long_text/scale/choice-карточки в половину
-// колонки не читаются. Зеркалит canShareRow в formSchema.ts.
-func (t BlockType) canShareRow() bool {
-	switch t {
-	case BlockShortText, BlockEmail, BlockPhone, BlockNumber, BlockDate, BlockDropdown:
-		return true
-	default:
-		return false
-	}
-}
+// canShareRow — типу разрешено делить ряд (ADR §10). Разрешено ВСЕМ, кроме заголовка
+// формы: решение владельца 2026-07-29 отменило прежний whitelist коротких контролов
+// (short_text/email/phone/number/date/dropdown, фаза 13.6). Довод whitelist'а был про
+// читаемость половинной колонки — то есть про вид, за который отвечает автор формы, а
+// не схема; заодно он ронял случаи, о которых ничего не говорил (лэйаут-блок в ряд не
+// вставал вовсе). Заголовок формы исключён по устройству, а не по виду: он рисуется
+// вне потока вопросов, и соседей по ряду у него не бывает. Зеркалит canShareRow в
+// formSchema.ts.
+func (t BlockType) canShareRow() bool { return t != BlockFormTitle }
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.
@@ -238,12 +259,12 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("не удалось разобрать схему: %v", err)
 	}
 	// Апгрейд ЦЕПОЧКОЙ, а не отдельным конвертером на каждую пару версий: v1
-	// поднимается до v2, v2 — до v3, и добавление v4 будет означать одну новую
-	// функцию и одну строку здесь, а не N² переходов.
+	// поднимается до v2, v2 — до v3, v3 — до v4, и следующая версия будет означать
+	// одну новую функцию и одну строку здесь, а не N² переходов.
 	switch probe.SchemaVersion {
 	case SchemaVersion:
-		// уже v3
-	case 0, 1, 2:
+		// уже v4
+	case 0, 1, 2, 3:
 		if probe.SchemaVersion < 2 {
 			// v1 (или дефолт БД '{"blocks":[]}' без версии).
 			upgraded, err := upgradeV1toV2(raw)
@@ -252,7 +273,14 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 			}
 			raw = upgraded
 		}
-		upgraded, err := upgradeV2toV3(raw)
+		if probe.SchemaVersion < 3 {
+			upgraded, err := upgradeV2toV3(raw)
+			if err != nil {
+				return FormSchema{}, err
+			}
+			raw = upgraded
+		}
+		upgraded, err := upgradeV3toV4(raw)
 		if err != nil {
 			return FormSchema{}, err
 		}
@@ -272,7 +300,7 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("лишние данные после схемы")
 	}
 
-	// После апгрейда schemaVersion всегда 3; отсутствие трактуем как текущую
+	// После апгрейда schemaVersion всегда текущая; отсутствие трактуем как текущую
 	// (апгрейд её проставляет, но пустой дефолт мог прийти уже канонический).
 	if s.SchemaVersion == 0 {
 		s.SchemaVersion = SchemaVersion
@@ -281,8 +309,15 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("неизвестная schemaVersion %d", s.SchemaVersion)
 	}
 
-	if len(s.Blocks) > MaxBlocks {
-		return FormSchema{}, schemaErr("больше %d блоков", MaxBlocks)
+	// Потолок считает блоки, которые добавил АВТОР; заголовок формы в счёт не идёт —
+	// он часть скелета документа, а не элемент, который автор ставил. Иначе форма,
+	// собранная до фазы 15 ровно на потолке, после синтеза заголовка получала бы 201
+	// блок и переставала сохраняться совсем: автор открыл её, а автосейв молча
+	// отвечает 422 на документ, который дописал сам сервер.
+	if n := len(s.Blocks); n > MaxBlocks {
+		if _, spoke := FormTitle(s); !spoke || n > MaxBlocks+1 {
+			return FormSchema{}, schemaErr("больше %d блоков", MaxBlocks)
+		}
 	}
 	if n := utf8.RuneCountInString(s.SubmitLabel); n > MaxSubmitLabelLen {
 		return FormSchema{}, schemaErr("submitLabel длиннее %d символов", MaxSubmitLabelLen)
@@ -303,6 +338,9 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	if err := validateGroups(s.Blocks); err != nil {
 		return FormSchema{}, err
 	}
+	if err := validateFormTitle(s.Blocks); err != nil {
+		return FormSchema{}, err
+	}
 
 	seen := make(map[string]struct{}, len(s.Blocks))
 	for i := range s.Blocks {
@@ -313,16 +351,67 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	return s, nil
 }
 
-// CanonicalV3 приводит сырую схему к каноническому v3-JSON: апгрейд цепочкой
-// v1→v2→v3 и валидация. Нужна на отдаче фронту, который знает только текущий формат
+// CanonicalV4 приводит сырую схему к каноническому v4-JSON: апгрейд цепочкой
+// v1→v2→v3→v4 и валидация. Нужна на отдаче фронту, который знает только текущий формат
 // (рендерер читает опубликованную версию, кабинет — черновик, и обе в БД могут быть
-// ещё v1/v2). Идемпотентна на уже-v3. Ошибка означает битую схему в БД — наружу как есть.
-func CanonicalV3(raw json.RawMessage) (json.RawMessage, error) {
+// ещё v1/v2/v3). Идемпотентна на уже-v4. Ошибка означает битую схему в БД — наружу как есть.
+func CanonicalV4(raw json.RawMessage) (json.RawMessage, error) {
 	s, err := ValidateSchema(raw)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(s)
+}
+
+// FormTitle — заголовок формы из ДОКУМЕНТА: плоский текст блока form_title и
+// признак «документ о заголовке высказался» (фаза 15, спека §3.4).
+//
+// Два возврата, а не один, потому что «блока нет» и «блок пуст» — разные вещи, и
+// путать их нельзя. НЕТ блока — документ снят до фазы 15, заголовок живёт только в
+// колонке forms.title, и звать её обязательно. ПУСТ — автор стёр заголовок
+// намеренно, и колонку звать НЕЛЬЗЯ: оттуда респонденту утекло бы служебное
+// «Untitled form». Ровно эта утечка и была до фазы.
+func FormTitle(s FormSchema) (string, bool) {
+	for _, b := range s.Blocks {
+		if b.Type == BlockFormTitle {
+			return PlainText(b.Text), true
+		}
+	}
+	return "", false
+}
+
+// EnsureFormTitle возвращает схему с блоком заголовка: если документ о заголовке
+// ещё не говорил, блок дописывается ПЕРВЫМ с текстом title (фаза 15, спека §3.5).
+// Так заголовок переезжает из колонки в документ — на чтении черновика кабинетом,
+// а не миграцией БД: апгрейд формата видит только JSON, а заголовок лежит в
+// соседней таблице.
+//
+// Id детерминирован (ft_<id формы>, groupId — g_<id блока>, как выводит regroup на
+// клиенте): случайный id означал бы новый блок на каждый заход в билдер, лишний
+// дифф автосейва и лишний PATCH. Пустой title даёт блок с пустым текстом — это
+// законное состояние черновика, а не «заголовка нет».
+func EnsureFormTitle(s FormSchema, title, formID string) FormSchema {
+	if _, spoke := FormTitle(s); spoke {
+		return s
+	}
+	id := "ft_" + formID
+	block := Block{ID: id, GroupID: "g_" + id, Type: BlockFormTitle, Text: TextFromString(title)}
+	out := s
+	out.Blocks = append([]Block{block}, s.Blocks...)
+	return out
+}
+
+// CanonicalDraftV4 — канон черновика ДЛЯ КАБИНЕТА: апгрейд, синтез заголовка из
+// колонки (EnsureFormTitle) и обратно в JSON. Отдельно от CanonicalV4, потому что
+// синтез уместен ровно на одном пути: редактор обязан увидеть заголовок строкой
+// полотна. Публичный путь ходит через CanonicalV4 — там документ снят публикацией
+// и дописывать в него ничего нельзя.
+func CanonicalDraftV4(raw json.RawMessage, title, formID string) (json.RawMessage, error) {
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(EnsureFormTitle(s, title, formID))
 }
 
 // validateGroups проверяет структуру групп: у каждого блока непустой groupId,
@@ -351,6 +440,40 @@ func validateGroups(blocks []Block) error {
 			answerable[b.GroupID]++
 			if answerable[b.GroupID] > 1 {
 				return schemaErr("блок #%d: в группе %q больше одного отвечаемого блока", i, b.GroupID)
+			}
+		}
+	}
+	return nil
+}
+
+// validateFormTitle — инварианты заголовка формы (фаза 15, спека §3.2): он один,
+// он первая строка документа и он всегда одиночка. Отсутствие блока законно:
+// версии, опубликованные до v4, заголовка в схеме не несут вовсе, а редактор
+// синтезирует его из колонки при чтении черновика.
+//
+// «Первый» — не косметика: заголовок рисуется как <h1> формы, и блок, оказавшийся
+// посреди вопросов, означал бы второй <h1> в середине страницы у респондента.
+// «Одиночка» держит regroup честным: попади form_title в группу поля, редактор
+// стал бы показывать заголовок формы подписью вопроса.
+func validateFormTitle(blocks []Block) error {
+	seen := false
+	for i, b := range blocks {
+		if b.Type != BlockFormTitle {
+			continue
+		}
+		if seen {
+			return schemaErr("блок #%d: заголовок формы может быть только один", i)
+		}
+		seen = true
+		if i != 0 {
+			return schemaErr("блок #%d: заголовок формы должен быть первым блоком", i)
+		}
+		if n := utf8.RuneCountInString(PlainText(b.Text)); n > MaxFormTitleLen {
+			return schemaErr("блок #%d: заголовок формы длиннее %d символов", i, MaxFormTitleLen)
+		}
+		for j, other := range blocks {
+			if j != i && other.GroupID == b.GroupID {
+				return schemaErr("блок #%d: заголовок формы не входит в группу вопроса", i)
 			}
 		}
 	}
@@ -389,10 +512,13 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
-	// column — только "right" и только у whitelist-типов (спека §5). Канон хранит
-	// отклонение: "left" в документе не пишется, а значит и не принимается.
+	// column — "left"/"right" у любого типа, кроме заголовка формы (canShareRow).
+	// Секция — свойство РАСКЛАДКИ, а не типа: где именно окажется элемент, решает
+	// раскладчик (автомат по потоку, §11.3 спеки), и поблочная проверка его условий
+	// не видит — как не видит и кросс-блочного «секция открыта», которое здесь
+	// намеренно не проверяется (см. Column в BlockSettings).
 	if b.Settings.Column != "" {
-		if b.Settings.Column != ColumnRight {
+		if b.Settings.Column != ColumnLeft && b.Settings.Column != ColumnRight {
 			return schemaErr("%s: неизвестная колонка %q", at, b.Settings.Column)
 		}
 		if !b.Type.canShareRow() {
@@ -425,9 +551,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		if n := utf8.RuneCountInString(o.Label); n > MaxOptionLabelLen {
 			return schemaErr("%s: опция #%d: label длиннее %d символов", at, j, MaxOptionLabelLen)
 		}
-		// Тот же бит ряда, что у блока (спека §5.1): только "right". Есть ли слева
-		// свободная ячейка — не проверяется, как и у блока: флаг инертен, не невалиден.
-		if o.Column != "" && o.Column != ColumnRight {
+		// Тот же бит колонки, что у блока (спека §5.1): те же два значения и тот же
+		// раскладчик. Открыта ли секция — не проверяется, как и у блока: флаг инертен.
+		if o.Column != "" && o.Column != ColumnLeft && o.Column != ColumnRight {
 			return schemaErr("%s: опция #%d: неизвестная колонка %q", at, j, o.Column)
 		}
 	}

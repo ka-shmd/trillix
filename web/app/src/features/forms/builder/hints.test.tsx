@@ -4,20 +4,26 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, textFromString } from '@entities/formSchema'
-import { isAnswerableType, isCaptionType } from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import { carriesText, isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
-import { ActiveRowApiProvider, ActiveRowValueProvider, useActiveRowState } from './activeRow'
+import {
+  type ActiveRow,
+  ActiveRowApiProvider,
+  ActiveRowValueProvider,
+  useActiveRowState,
+} from './activeRow'
 import { BlockRow } from './BlockRow'
 import { BLOCK_COMMON, GLOBAL } from './shortcuts'
 import { ShortcutSheet } from './ShortcutSheet'
 
-// Подсказки полотна (§7): у сфокусированной строки видно ТОЛЬКО специфичные её
-// поверхности клавиши, общие вынесены в шпаргалку. Демо-критерий этапа —
-// «подсказки перечисляют ровно те клавиши, которые там работают», поэтому проверяем
-// не вёрстку, а состав: что обещано на подписи, варианте, объекте и поле.
+// Подсказки полотна. С 2026-07-29 (решение владельца) у строки не остаётся ни одного
+// чипа-подсказки, кроме ОДНОГО действия — дать голому полю заголовок: это не просто
+// напоминание о клавише, а единственный способ взять это действие мышью. Вся карта
+// клавиш живёт в шпаргалке Mod+/, и правило прежнее — «перечисляем ровно то, что на
+// этой строке работает», поэтому проверяем состав, а не вёрстку.
 
 afterEach(cleanup)
 
@@ -27,12 +33,17 @@ function CanvasBody({
   store,
   engine,
   blocks,
+  onActive,
 }: {
   store: ReturnType<typeof createBuilderStore>
   engine: ReturnType<typeof createFocusEngine>
   blocks: ReturnType<ReturnType<typeof createBuilderStore>['getState']>['blocks']
+  // Активная строка, как её объявила поверхность: часть контракта карты не доезжает
+  // до чипов (их потолок — три), а проверять нужно именно объявление.
+  onActive: (row: ActiveRow | null) => void
 }) {
   const activeRow = useActiveRowState()
+  onActive(activeRow.active)
   const handlers = {
     onAddBelow: vi.fn(),
     onInsertBelow: vi.fn(),
@@ -61,11 +72,12 @@ function CanvasBody({
                     groupHasAnswer={blocks.some(
                       (x) => x.groupId === b.groupId && isAnswerableType(x.type),
                     )}
-                    // И так же — признак «строкой управляет подпись»: от него
-                    // зависит, обещан ли перенос строки (Alt+↑↓).
-                    ownedByCaption={
+                    // Как в GroupRow: голой строке ответа не хватает заголовка —
+                    // от этого зависит чип «Mod+Alt+T» и его кликабельность.
+                    needsCaption={
                       isAnswerableType(b.type) &&
-                      blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
+                      !carriesText(b.type) &&
+                      !blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
                     }
                     openMenuOnMount={false}
                     {...handlers}
@@ -85,160 +97,105 @@ function setup(schema: FormSchema) {
   const store = createBuilderStore()
   store.getState().hydrate(schema)
   const blocks = store.getState().blocks
-  render(<CanvasBody store={store} engine={engine} blocks={blocks} />)
+  let active: ActiveRow | null = null
+  render(
+    <CanvasBody
+      store={store}
+      engine={engine}
+      blocks={blocks}
+      onActive={(row) => {
+        active = row
+      }}
+    />,
+  )
   // Фокус ставим внутри act: чипы появляются от setState в обработчике focus, и без
   // прокачки React проверка увидела бы полотно до перерисовки.
   const focus = (id: string, edge?: 'start' | 'end') =>
     act(() => engine.focusBlock(id, edge))
-  return { engine, focus }
+  return { engine, store, focus, activeRow: (): ActiveRow | null => active }
 }
 
-// chips — подписи клавиш, показанные сейчас у активной строки. Чипы помечены
-// aria-hidden (визуальная подсказка), поэтому ищем по DOM, а не ролью.
+// chips — ярлыки клавиш, показанные сейчас НА ПОЛОТНЕ (у активной строки). После
+// 2026-07-29 их бывает ноль или один.
 function chips(): string[] {
   return [...document.querySelectorAll('kbd')].map((k) => k.textContent ?? '')
 }
 
-// hints — тексты действий рядом с клавишами.
-function hintText(): string {
-  return [...document.querySelectorAll('[aria-hidden="true"]')]
-    .filter((n) => n.querySelector('kbd'))
-    .map((n) => n.textContent ?? '')
-    .join(' | ')
+// sheetText — что печатает шпаргалка, открытая из строки. Контекст и признаки строки
+// шпаргалке отдаёт полотно снимком (см. SlashEditor), поэтому в тесте передаём их
+// так же явно.
+function sheetText(ctx: Parameters<typeof ShortcutSheet>[0]['ctx'], filters = {}): string {
+  cleanup()
+  render(<ShortcutSheet ctx={ctx} filters={filters} open onOpenChange={() => {}} />)
+  return document.body.textContent ?? ''
 }
 
 const QUESTION: FormSchema = {
-  schemaVersion: 3,
+  schemaVersion: SCHEMA_VERSION,
   blocks: [
     { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Как вас зовут?') },
     { id: 'inp', groupId: 'g1', type: 'short_text' },
-    { id: 'para', groupId: 'g2', type: 'text', text: textFromString('Просто абзац') },
+    { id: 'bare', groupId: 'g2', type: 'email' },
+    { id: 'para', groupId: 'g3', type: 'text', text: textFromString('Просто абзац') },
   ],
 }
 
-describe('чипы у сфокусированной строки (§7)', () => {
-  it('подпись вопроса: только клавиши текстовой строки, общих нет', () => {
+describe('подсказки у строки: остался один чип', () => {
+  it('у собранного вопроса на полотне не показывается ничего', () => {
     const { focus } = setup(QUESTION)
-    focus('cap', 'end')
-    expect(chips()).toEqual(['Enter', '/', 'Ctrl+Enter'])
-    // Общий ярус (меню действий, удаление, ↑↓) у строки не показывается — он в
-    // шпаргалке. Иначе одинаковый хвост висит у каждой строки.
-    for (const s of [...BLOCK_COMMON, ...GLOBAL]) {
-      expect(chips(), s.label).not.toContain(s.label.replace('Mod', 'Ctrl'))
-    }
+    focus('cap', 'end') // подпись
+    expect(chips()).toEqual([])
+    focus('inp', 'end') // поле этого вопроса
+    expect(chips()).toEqual([])
+    focus('para', 'end') // одиночный абзац
+    expect(chips()).toEqual([])
   })
 
-  it('одиночный абзац: Mod+Enter не обещаем — прыгать не к чему', () => {
+  it('голой строке ответа предлагается заголовок — и это единственный чип', () => {
     const { focus } = setup(QUESTION)
-    focus('para', 'end')
-    expect(chips()).not.toContain('Ctrl+Enter')
-    expect(chips()).toContain('Enter')
+    focus('bare', 'end')
+    expect(chips()).toEqual(['Ctrl+Alt+T'])
+    // Чип — настоящая кнопка, а не aria-hidden украшение: его и ищем ролью, как
+    // увидел бы его скринридер.
+    expect(screen.getByLabelText('Добавить заголовок вопроса')).toBeTruthy()
   })
 
-  it('чипы принадлежат активной строке: одна строка — один набор', () => {
+  it('чип заголовка кликается мышью и не теряет фокус строки', () => {
+    const { focus, store } = setup(QUESTION)
+    focus('bare', 'end')
+
+    const chip = screen.getByLabelText('Добавить заголовок вопроса')
+    // mousedown обязан быть погашен: иначе фокус уходит со строки, чип гаснет ВМЕСТЕ
+    // с кнопкой, и click приходит уже мимо цели (механика TD-22).
+    const md = fireEvent.mouseDown(chip)
+    expect(md).toBe(false) // preventDefault сработал
+    act(() => {
+      chip.click()
+    })
+
+    const blocks = store.getState().blocks
+    const i = blocks.findIndex((b) => b.id === 'bare')
+    expect(blocks[i - 1]!.type).toBe('title')
+    expect(blocks[i - 1]!.groupId).toBe(blocks[i]!.groupId)
+  })
+
+  it('каретка ушла с полотна — чип гаснет', () => {
     const { focus } = setup(QUESTION)
-    focus('cap', 'end')
-    const first = chips()
-    focus('para', 'end')
-    // Чипы уехали к абзацу целиком, а не размножились по строкам.
-    expect(chips().length).toBeLessThanOrEqual(3)
-    expect(chips()).not.toEqual(first)
+    focus('bare', 'end')
+    expect(chips()).toEqual(['Ctrl+Alt+T'])
+
+    act(() => (document.activeElement as HTMLElement).blur())
+
+    expect(chips()).toEqual([])
+    expect(screen.queryByLabelText('Добавить заголовок вопроса')).toBeNull()
   })
 
-  it('инпут плейсхолдера: свои клавиши листа и ряд, а не текстовые', () => {
-    const { focus } = setup(QUESTION)
-    focus('inp', 'end')
-    // Лист обхода: Enter и «/» здесь не работают и не обещаются. Ряд (Mod+Alt+←/→)
-    // работает — у голого поля это единственная поверхность вопроса (§5).
-    expect(chips()).toEqual(['⌫ в пустом', 'Ctrl+Alt+→', 'Ctrl+Alt+←'])
-    // Пустой Backspace здесь удаляет поле (единое поведение поверхностей ответа),
-    // и подсказка обязана говорить именно это, а не «вернуться к подписи».
-    expect(hintText()).toContain('Удалить')
-  })
-
-  it('вариант choice: клавиши списка, а не блока', () => {
-    const { focus } = setup({
-      schemaVersion: 3,
-      blocks: [
-        {
-          id: 'ch',
-          groupId: 'g1',
-          type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Да' }] },
-        },
-      ],
-    })
-    focus('ch', 'end')
-    expect(chips()).toEqual(['Enter', '⌫ в пустом', 'Alt+↑↓'])
-    expect(hintText()).toContain('Новый вариант')
-  })
-
-  it('шкале внутри вопроса перенос строки не обещан — двигать её нельзя', () => {
-    // Alt+↑↓ на строке ответа в озаглавленной группе не делает ничего (вопрос
-    // двигают с подписи), значит и пункта в подсказке быть не должно. Голая шкала —
-    // другое дело, но её теперь и не существует: заголовок этому типу обязателен.
-    const { focus } = setup({
-      schemaVersion: 3,
-      blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Оценка') },
-        { id: 'sc', groupId: 'g1', type: 'scale' },
-      ],
-    })
-    focus('sc')
-    expect(chips()).not.toContain('Alt+↑↓')
-    // Перенос вопроса целиком остаётся в карте (Alt+Shift+↑↓) — просто в чипы не
-    // влезает: их потолок три. Состав карты проверяет shortcuts.test.ts.
-  })
-
-  it('подписи вопроса перенос строки не обещан — Alt+↑↓ двигает вопрос', () => {
-    const { focus } = setup({
-      schemaVersion: 3,
-      blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Имя') },
-        { id: 'inp', groupId: 'g1', type: 'short_text' },
-      ],
-    })
-    // groupHandle в этом полотне не рендерится (строки без обвязки GroupRow),
-    // поэтому проверяем сам контракт карты, а не разметку.
-    focus('cap', 'end')
-    expect(chips()).not.toContain('Alt+↑↓')
-  })
-
-  it('картинке обещан файловый диалог, шкале — нет (разные контексты)', () => {
-    const { focus } = setup({
-      schemaVersion: 3,
-      blocks: [
-        { id: 'img', groupId: 'g1', type: 'image' },
-        { id: 'sc', groupId: 'g2', type: 'scale' },
-      ],
-    })
-    focus('img')
-    expect(chips()).toContain('Ctrl+Enter')
-    expect(hintText()).toContain('Выбрать файл')
-    // На date/scale Cmd+Enter ищет input[type=file] и не находит — клавиши там нет,
-    // значит и подсказки быть не должно.
-    focus('sc')
-    expect(chips()).not.toContain('Ctrl+Enter')
-  })
-
-  it('шпаргалка Mod+/ показывает контекст строки И вынесенное общее', () => {
-    // Смысл разделения: чипы у строки короткие, потому что общее переехало сюда.
-    // Если шпаргалка перестанет печатать общий ярус, вынесенное пропадёт совсем.
-    render(<ShortcutSheet ctx="option" open onOpenChange={() => {}} />)
-    const text = document.body.textContent ?? ''
-    expect(text).toContain('Вариант ответа')
-    expect(text).toContain('Выйти из списка') // длинный пункт, в чипы не попавший
-    expect(text).toContain('Везде на полотне')
-    for (const s of BLOCK_COMMON) expect(text).toContain(s.hint)
-  })
-
-  it('переход между поверхностями одной строки чипы не гасит', () => {
+  it('переход между поверхностями одной строки чип не гасит', () => {
     // Вариант → соседний вариант: focusout приходит перед focusin, и безусловное
-    // снятие активности давало бы пустой кадр — чипы моргали бы на каждой стрелке
-    // по списку. Проверяем именно промежуточное состояние: после focusout с целью
-    // внутри своей же строки набор обязан остаться.
+    // снятие активности давало бы пустой кадр — чип моргал бы на каждой стрелке по
+    // списку. Проверяем именно промежуточное состояние.
     const { focus } = setup({
-      schemaVersion: 3,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [
         {
           id: 'ch',
@@ -256,15 +213,49 @@ describe('чипы у сфокусированной строки (§7)', () => 
     focus('ch', 'start')
     const [first, second] = [...document.querySelectorAll('input')]
     act(() => fireEvent.focusOut(first!, { relatedTarget: second }))
-    expect(chips()).toEqual(['Enter', '⌫ в пустом', 'Alt+↑↓'])
+
+    expect(chips()).toEqual(['Ctrl+Alt+T'])
   })
 
-  it('каретка ушла с полотна — чипы гаснут', () => {
-    const { focus } = setup(QUESTION)
+  it('строка объявляет о себе то же, что читает шпаргалка', () => {
+    // Признаки строки (движется ли она сама, есть ли в группе поле ответа) полотно
+    // снимает с активной строки и отдаёт шпаргалке — теперь единственной поверхности
+    // карты. Проверяем объявление: разметки у него больше нет.
+    const { focus, activeRow } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Оценка') },
+        { id: 'sc', groupId: 'g1', type: 'scale' },
+      ],
+    })
+    focus('sc')
+    // Замок «строка ответа в озаглавленной группе не двигается» снят фазой 15 (§4.1).
+    expect(activeRow()?.movesRow).toBe(true)
     focus('cap', 'end')
-    expect(chips().length).toBeGreaterThan(0)
-    act(() => (document.activeElement as HTMLElement).blur())
-    expect(chips()).toEqual([])
-    expect(screen.queryByText('Новый блок')).toBeNull()
+    expect(activeRow()?.hasAnswer).toBe(true)
+  })
+})
+
+describe('шпаргалка Mod+/ — единственная поверхность карты', () => {
+  it('печатает клавиши контекста и вынесенный общий ярус', () => {
+    const text = sheetText('option')
+    expect(text).toContain('Вариант ответа')
+    expect(text).toContain('Выйти из списка') // длинный пункт, в строку не влезавший
+    expect(text).toContain('Везде на полотне')
+    for (const s of BLOCK_COMMON) expect(text).toContain(s.hint)
+    for (const s of GLOBAL) expect(text).toContain(s.hint)
+  })
+
+  it('не обещает того, что на этой строке молчит', () => {
+    // Mod+Enter из подписи прыгает к полю ответа — а если поля нет, молчит.
+    expect(sheetText('text', { hasAnswer: true })).toContain('К полю ответа')
+    expect(sheetText('text', { hasAnswer: false })).not.toContain('К полю ответа')
+    // На подписи собранного вопроса Alt+↑↓ двигает вопрос целиком, а не строку.
+    expect(sheetText('text', { hasAnswer: true, movesRow: false })).not.toContain(
+      'Переместить блок',
+    )
+    // Заголовок предлагается только голой строке ответа: у собранной его не бывает.
+    expect(sheetText('field', { needsCaption: true })).toContain('Добавить заголовок')
+    expect(sheetText('field')).not.toContain('Добавить заголовок')
   })
 })

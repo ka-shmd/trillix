@@ -35,7 +35,6 @@ type formsService interface {
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error)
-	UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error)
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
@@ -138,13 +137,17 @@ type titleRequest struct {
 
 // patchRequest — тело PATCH /forms/{id}. Указатели различают «поле отсутствует»
 // (nil) от «прислано». За один запрос меняется ровно одно из
-// name/title/draftSchema/closeSettings: name — переименование с дашборда (внутреннее
-// имя, не трогает публичный заголовок); title — публичный заголовок (первая строка
-// билдера, без блокировки); draftSchema — автосейв билдера, требует updatedAt для
-// оптимистичной блокировки; closeSettings — настройки закрытия (страница настроек).
+// name/draftSchema/closeSettings: name — переименование с дашборда (внутреннее имя,
+// не трогает публичный заголовок); draftSchema — автосейв билдера, требует updatedAt
+// для оптимистичной блокировки; closeSettings — настройки закрытия (страница
+// настроек).
+//
+// ПУБЛИЧНОГО ЗАГОЛОВКА здесь больше нет (фаза 15): он стал блоком документа и
+// приезжает внутри draftSchema, а колонку forms.title сервер пишет зеркалом. Вторая
+// точка записи того же значения означала бы гарантированное расхождение колонки с
+// документом — какая из двух правок легла последней, столько заголовок и живёт.
 type patchRequest struct {
 	Name               *string            `json:"name"`
-	Title              *string            `json:"title"`
 	DraftSchema        *json.RawMessage   `json:"draftSchema"`
 	UpdatedAt          *time.Time         `json:"updatedAt"`
 	CloseSettings      *closeSettingsBody `json:"closeSettings"`
@@ -177,10 +180,20 @@ func toFormResponse(f Form) formResponse {
 // черновик схемы и живые настройки закрытия (их читает страница настроек кабинета).
 func toFormDetailResponse(f Form) formDetailResponse {
 	// Редактор кабинета знает только текущий формат — старый черновик апгрейдится
-	// до v3 на отдаче. Ошибка невозможна на валидных данных БД; на всякий случай
+	// до v4 на отдаче. Ошибка невозможна на валидных данных БД; на всякий случай
 	// отдаём сырьё, а не пустоту (лучше отладить, чем потерять черновик).
+	//
+	// Здесь же заголовок переезжает из колонки в документ (фаза 15, спека §3.5):
+	// у формы, собранной до фазы, блока form_title нет, и редактор дописывает его
+	// первой строкой из forms.title. Служебное имя новой формы («Untitled form»)
+	// в полотно не тащим — автор его не писал, и на полотне он увидит плейсхолдер,
+	// как видел в поле заголовка раньше.
+	title := f.Title
+	if title == defaultFormTitle {
+		title = ""
+	}
 	schema := f.DraftSchema
-	if up, err := domain.CanonicalV3(schema); err == nil {
+	if up, err := domain.CanonicalDraftV4(schema, title, f.ID.String()); err == nil {
 		schema = up
 	}
 	return formDetailResponse{
@@ -306,13 +319,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// Ровно одно из name/title/draftSchema/closeSettings за запрос — иначе непонятно,
 	// что менять.
 	set := 0
-	for _, present := range []bool{req.Name != nil, req.Title != nil, req.DraftSchema != nil, req.CloseSettings != nil, req.NotifyOnSubmission != nil} {
+	for _, present := range []bool{req.Name != nil, req.DraftSchema != nil, req.CloseSettings != nil, req.NotifyOnSubmission != nil} {
 		if present {
 			set++
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/title/draftSchema/closeSettings/notifyOnSubmission", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission", domain.ErrValidation))
 		return
 	}
 
@@ -327,8 +340,6 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		form, err = h.svc.UpdateDraftSchema(r.Context(), userID, formID, *req.DraftSchema, *req.UpdatedAt)
-	case req.Title != nil:
-		form, err = h.svc.UpdateTitle(r.Context(), userID, formID, *req.Title)
 	case req.Name != nil:
 		form, err = h.svc.UpdateName(r.Context(), userID, formID, *req.Name)
 	case req.CloseSettings != nil:

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 
-import { type FormSchema, textFromString } from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -26,14 +26,14 @@ afterEach(cleanup)
 
 function setup(blocks: FormSchema['blocks']) {
   const store = createBuilderStore()
-  store.getState().hydrate({ schemaVersion: 3, blocks })
+  store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   const engine = createFocusEngine()
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   render(
     <QueryClientProvider client={qc}>
       <BuilderStoreContext.Provider value={store}>
         <FocusEngineProvider value={engine}>
-          <SlashEditor formId="f" initialTitle="Опрос" engine={engine} />
+          <SlashEditor formId="f" engine={engine} />
         </FocusEngineProvider>
       </BuilderStoreContext.Provider>
     </QueryClientProvider>,

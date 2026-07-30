@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { fetchPublicForm, submitAnswers } from './api'
+import { SCHEMA_VERSION } from '@entities/formSchema'
 
 function stubFetch(response: Response) {
   vi.stubGlobal(
@@ -16,7 +17,7 @@ afterEach(() => {
 const validBody = JSON.stringify({
   title: 'Опрос',
   version: 2,
-  schema: { schemaVersion: 3, blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', required: true }] },
+  schema: { schemaVersion: SCHEMA_VERSION, blocks: [{ id: 'b1', groupId: 'g_b1', type: 'short_text', required: true }] },
   token: '1752307200000.sig',
 })
 

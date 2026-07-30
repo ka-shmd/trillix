@@ -13,6 +13,7 @@ import {
   Ruler,
   Pilcrow,
   Heading,
+  Heading1,
   Tag,
   Type,
 } from 'lucide-react'
@@ -38,4 +39,8 @@ export const typeIcons: Record<BlockType, ReactNode> = {
   label: <Tag className="size-4" />,
   heading: <Heading className="size-4" />,
   image: <Image className="size-4" />,
+  // Заголовок формы в меню вставки не появляется (он единственный и приколот
+  // первой строкой, §3.2 спеки фазы 15), но Record обязан покрывать ВСЕ типы:
+  // именно эта полнота и напомнила про него — tsc не дал забыть.
+  form_title: <Heading1 className="size-4" />,
 }

@@ -147,15 +147,6 @@ WHERE sqlc.narg(cursor_key)::bigint IS NULL
 ORDER BY t.sort_key DESC, t.id DESC
 LIMIT sqlc.arg(page_limit);
 
--- name: UpdateFormTitle :one
--- Возвращает строку только если форма принадлежит воркспейсу — иначе 0 строк
--- (service трактует это как «не найдена/чужая»). updated_at двигаем вручную.
--- title — ПУБЛИЧНЫЙ заголовок (первая строка билдера); имя дашборда — UpdateFormName.
-UPDATE forms
-SET title = $3, updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
-
 -- name: UpdateFormName :one
 -- Внутреннее имя формы (дашборд): переименование в кабинете и суффикс «(копия N)»
 -- при дубле. Публичный заголовок (title) не трогает. В пределах воркспейса; 0 строк
@@ -209,8 +200,15 @@ SELECT name, title FROM forms WHERE workspace_id = $1;
 -- форма в воркспейсе И её updated_at совпадает с присланным клиентом. Иначе 0
 -- строк — service различает «чужая/нет формы» (проверено заранее) от расхождения
 -- версии (updated_at сдвинула другая вкладка → 409). updated_at двигаем вручную.
+--
+-- title здесь — ЗЕРКАЛО заголовка из документа (фаза 15): источник заголовка —
+-- блок form_title, колонку сервер пишет производной, чтобы её пятеро потребителей
+-- (<title>, og:title, тело 410, письмо, дашборд) не менялись вовсе. NULL значит
+-- «документ о заголовке не высказался» (схема снята до фазы) — колонку не трогаем.
+-- Одним UPDATE, а не транзакцией из двух: зеркало обязано двигаться ровно тогда,
+-- когда двигается схема, и промежуточного состояния между ними быть не должно.
 UPDATE forms
-SET draft_schema = $3, updated_at = now()
+SET draft_schema = $3, title = COALESCE(sqlc.narg(title), title), updated_at = now()
 WHERE id = $1
   AND workspace_id = $2
   AND updated_at = sqlc.arg(expected_updated_at)::timestamptz

@@ -20,9 +20,15 @@ import (
 
 const (
 	// defaultFormTitle — форма создаётся с этим названием, пользователь
-	// переименовывает инлайн на дашборде.
+	// переименовывает инлайн на дашборде. С фазы 15 оно же — значение колонки-
+	// зеркала, когда автор стёр заголовок в документе: колонка NOT NULL, а
+	// респондент этого имени не видит (публичный путь спрашивает документ).
 	defaultFormTitle = "Untitled form"
-	maxTitleLen      = 200
+	// maxTitleLen — потолок названия формы в РУНАХ (до фазы 15 считался в байтах,
+	// и кириллица обрезалась вдвое раньше латиницы). Зеркалит domain.MaxFormTitleLen:
+	// заголовок из документа уезжает в эту же колонку, и разные потолки означали бы,
+	// что зеркало не может повторить документ.
+	maxTitleLen = 200
 
 	// DefaultPageLimit / MaxPageLimit — размер страницы списка форм. Запрошенный
 	// клиентом limit зажимается в [1, MaxPageLimit]; пустой → Default.
@@ -49,12 +55,11 @@ type Store interface {
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
 	GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error)
 	ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error)
-	UpdateFormTitle(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title string) (Form, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
-	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
+	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, mirrorTitle *string, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 	NextFormVersion(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int32, error)
 	InsertFormVersion(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error)
@@ -278,29 +283,6 @@ func (s *Service) GetBySlug(ctx context.Context, userID uuid.UUID, slug string) 
 	return s.formForUserBySlug(ctx, userID, slug)
 }
 
-// UpdateTitle переименовывает форму (после проверки доступа).
-func (s *Service) UpdateTitle(ctx context.Context, userID, formID uuid.UUID, title string) (Form, error) {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return Form{}, fmt.Errorf("%w: название формы не может быть пустым", domain.ErrValidation)
-	}
-	if err := validateTitleLen(title); err != nil {
-		return Form{}, err
-	}
-	form, err := s.formForUser(ctx, userID, formID)
-	if err != nil {
-		return Form{}, err
-	}
-	updated, err := s.repo.UpdateFormTitle(ctx, s.db, form.ID, form.WorkspaceID, title)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Form{}, domain.ErrNotFound
-		}
-		return Form{}, err
-	}
-	return updated, nil
-}
-
 // UpdateCloseSettings заменяет настройки закрытия формы (дата/лимит/текст «приём
 // закрыт»). Порядок как у UpdateTitle: валидация ввода (мусор → ErrValidation/422),
 // проверка доступа (чужая/нет формы → 404), затем UPDATE. Настройки — живые колонки
@@ -368,7 +350,22 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 		return Form{}, err
 	}
 
-	updated, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, canonical, expectedUpdatedAt)
+	// Зеркало заголовка (фаза 15, спека §3.3): источник — блок form_title документа,
+	// колонка forms.title производна от него. Документ не высказался (схема снята до
+	// фазы) → nil, колонку не трогаем. Высказался пустым (автор стёр заголовок) →
+	// колонка получает служебное имя: она NOT NULL, и дашборду нужно чем-то назвать
+	// строку списка. Респонденту это имя не достаётся — публичный путь спрашивает
+	// документ (FormTitle), а не колонку.
+	var mirror *string
+	if title, spoke := domain.FormTitle(parsed); spoke {
+		t := strings.TrimSpace(title)
+		if t == "" {
+			t = defaultFormTitle
+		}
+		mirror = &t
+	}
+
+	updated, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, canonical, mirror, expectedUpdatedAt)
 	if err != nil {
 		// Доступ уже подтверждён выше — 0 строк означает, что updated_at сдвинули
 		// параллельно (другая вкладка), а не отсутствие/чужую форму.
@@ -481,6 +478,19 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 			return PublicForm{}, domain.ErrNotFound
 		}
 		return PublicForm{}, err
+	}
+	// Заголовок публикуется вместе со схемой (фаза 15, решение владельца): у
+	// опубликованной версии он берётся из ЕЁ документа, а не из живой колонки —
+	// как и всё остальное на полотне. Колонка остаётся фолбэком навсегда: версии,
+	// снятые до фазы, блока form_title не несут, и заголовок у них только там.
+	//
+	// Разрешаем в одном месте на всех потребителей (страница с OG-метой, JSON
+	// рендерера, тело 410): резолвинг в каждом хендлере по отдельности — это три
+	// шанса разойтись в трактовке «пусто».
+	if parsed, err := domain.ValidateSchema(pf.Schema); err == nil {
+		if title, spoke := domain.FormTitle(parsed); spoke {
+			pf.Title = title
+		}
 	}
 	return pf, nil
 }
@@ -603,24 +613,26 @@ func copyIndex(base, s string) (int, bool) {
 }
 
 // copyName собирает «{база} (копия)» (n=1) или «{база} (копия N)» (n≥2), обрезая
-// базу по рунам под maxTitleLen (байт — как считает validateTitleLen).
+// базу под maxTitleLen. Считаем руны — теми же единицами, что validateTitleLen.
 func copyName(base string, n int) string {
 	suffix := " (копия)"
 	if n >= 2 {
 		suffix = " (копия " + strconv.Itoa(n) + ")"
 	}
-	if len(base)+len(suffix) > maxTitleLen {
-		r := []rune(base)
-		for len(r) > 0 && len(string(r))+len(suffix) > maxTitleLen {
-			r = r[:len(r)-1]
-		}
-		base = string(r)
+	sufLen := utf8.RuneCountInString(suffix)
+	if r := []rune(base); len(r)+sufLen > maxTitleLen {
+		base = string(r[:maxTitleLen-sufLen])
 	}
 	return base + suffix
 }
 
+// validateTitleLen — потолок названия на СОЗДАНИИ формы (POST /forms {title}).
+// Правка заголовка идёт только через документ (блок form_title, фаза 15), а
+// создание остаётся законным входом для колонки: блоков у формы в этот момент нет.
+// Считаем РУНЫ — как все лимиты схемы: до фазы 15 здесь были байты, и русское
+// название обрезалось вдвое раньше латинского.
 func validateTitleLen(title string) error {
-	if len(title) > maxTitleLen {
+	if utf8.RuneCountInString(title) > maxTitleLen {
 		return fmt.Errorf("%w: название формы длиннее %d символов", domain.ErrValidation, maxTitleLen)
 	}
 	return nil

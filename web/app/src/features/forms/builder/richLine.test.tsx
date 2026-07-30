@@ -6,7 +6,7 @@ import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, MAX_SPANS, type Span, plainText, textFromString } from '@entities/formSchema'
+import { type FormSchema, MAX_SPANS, type Span, plainText, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -34,7 +34,7 @@ const line = () => document.querySelector('[data-rich-line]') as HTMLElement
 function reactiveRow(text: string | Span[] = '', type: 'text' | 'title' = 'text') {
   const store = createBuilderStore()
   const schema: FormSchema = {
-    schemaVersion: 3,
+    schemaVersion: SCHEMA_VERSION,
     blocks: [
       { id: 't', groupId: 'g1', type, text: typeof text === 'string' ? textFromString(text) : text },
     ],

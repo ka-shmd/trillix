@@ -80,9 +80,6 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       const isUndo = chords.undo(e)
       const isRedo = chords.redo(e)
       if (!isUndo && !isRedo) return
-      // Поля со своей историей (название формы — серверный rename вне стора билдера)
-      // откатываются нативным undo браузера: их не перехватываем.
-      if ((e.target as HTMLElement | null)?.closest('[data-undo-native]')) return
       e.preventDefault()
       if (isUndo) undo()
       else redo()
@@ -170,7 +167,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {status === 'conflict' && <ConflictBanner />}
 
       {mode === 'edit' && (
-        <SlashEditor formId={detail.id} initialTitle={detail.title} engine={engine} />
+        <SlashEditor formId={detail.id} engine={engine} />
       )}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">

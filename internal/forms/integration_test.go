@@ -122,16 +122,27 @@ func TestForms_CRUDFlow(t *testing.T) {
 		t.Fatalf("неожиданная форма: %+v", created)
 	}
 
-	// GET → отдаёт draft_schema, канонизированный до текущей версии (CanonicalV3 на отдаче).
+	// GET → отдаёт draft_schema, канонизированный до текущей версии (CanonicalDraftV4).
+	// У новой формы блоков нет, но заголовок сервер СИНТЕЗИРУЕТ из колонки (фаза 15) —
+	// редактор обязан увидеть его строкой полотна. Служебное имя новой формы в
+	// документ не попадает: автор его не писал, и текст блока пуст.
 	detail := getFormDetail(t, c, srv, created.ID, http.StatusOK)
-	if got := parseSchema(t, detail.DraftSchema); got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 0 {
-		t.Fatalf("draftSchema = %s, ожидался пустой канонический каркас", detail.DraftSchema)
+	got := parseSchema(t, detail.DraftSchema)
+	if got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 1 {
+		t.Fatalf("draftSchema = %s, ожидался каркас с одним блоком заголовка", detail.DraftSchema)
+	}
+	if b := got.Blocks[0]; b.Type != domain.BlockFormTitle || domain.PlainText(b.Text) != "" {
+		t.Fatalf("синтезированный заголовок собран неверно: %+v", b)
 	}
 
-	// Переименование.
-	renamed := patchTitle(t, c, srv, created.ID, "Опрос клиентов", http.StatusOK)
-	if renamed.Title != "Опрос клиентов" {
-		t.Fatalf("title после переименования = %q", renamed.Title)
+	// Заголовок формы правится ДОКУМЕНТОМ (фаза 15): блок form_title в схеме, а
+	// колонка forms.title — его плоское зеркало. Проверяем весь путь целиком, до
+	// настоящей БД: ручки PATCH {title} больше нет вовсе.
+	titled := patchDraftSchema(t, c, srv, created.ID,
+		`{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опрос клиентов"}]}]}`,
+		detail.UpdatedAt, http.StatusOK)
+	if titled.Title != "Опрос клиентов" {
+		t.Fatalf("зеркало заголовка в колонке = %q", titled.Title)
 	}
 
 	// Список содержит форму.
@@ -179,8 +190,10 @@ func TestForms_WorkspaceIsolation(t *testing.T) {
 
 	// B читает форму A → 404.
 	getFormDetail(t, bob, srv, form.ID, http.StatusNotFound)
-	// B переименовывает форму A → 404 (и не меняет её).
-	patchTitle(t, bob, srv, form.ID, "взломано", http.StatusNotFound)
+	// B переименовывает форму A → 404 (и не меняет её). Публичный заголовок с фазы 15
+	// правится только документом, поэтому анти-IDOR по нему сторожит patchDraftSchema
+	// строкой ниже, а здесь остаётся внутреннее имя.
+	patchName(t, bob, srv, form.ID, "взломано", http.StatusNotFound)
 	// B сохраняет схему в форму A → 404 (проверка членства бьёт раньше блокировки:
 	// не 409, чтобы не раскрывать существование чужой формы).
 	patchDraftSchema(t, bob, srv, form.ID, `{"blocks":[]}`, "2020-01-01T00:00:00Z", http.StatusNotFound)
@@ -226,9 +239,18 @@ func TestForms_Duplicate(t *testing.T) {
 	}
 
 	// Черновик копии = черновик оригинала (канонизированный, апгрейд v1→v2:
-	// вопрос разложен на подпись title + поле b1).
+	// вопрос разложен на подпись title + поле b1). Первым идёт заголовок формы: он
+	// СИНТЕЗИРУЕТСЯ на чтении у каждой формы своей (id детерминирован от id формы),
+	// поэтому в сравнении участвуют блоки после него — копируется содержимое, а не
+	// эта служебная строка.
 	got := parseSchema(t, getFormDetail(t, alice, srv, dup.ID, http.StatusOK).DraftSchema)
-	if len(got.Blocks) != 2 || got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" || got.Blocks[1].ID != "b1" {
+	if len(got.Blocks) != 3 || got.Blocks[0].Type != domain.BlockFormTitle {
+		t.Fatalf("ожидались заголовок + два блока вопроса: %+v", got)
+	}
+	if domain.PlainText(got.Blocks[0].Text) != "Анкета" {
+		t.Fatalf("копия потеряла заголовок оригинала: %+v", got.Blocks[0])
+	}
+	if got.Blocks[1].Type != "title" || domain.PlainText(got.Blocks[1].Text) != "Имя" || got.Blocks[2].ID != "b1" {
 		t.Fatalf("схема копии не совпадает с оригиналом: %+v", got)
 	}
 
@@ -317,9 +339,11 @@ func TestForms_CloseSettings(t *testing.T) {
 			cleared.ResponseLimit, cleared.CloseAt, cleared.ClosedMessage)
 	}
 
-	// Два фасета за один PATCH → 422 (меняется ровно одно).
+	// Два фасета за один PATCH → 422 (меняется ровно одно). Оба фасета — ЖИВЫЕ: с
+	// удалённым title тело отвергал бы декодер как неизвестное поле, и правило «ровно
+	// одно» осталось бы непроверенным, а тест — зелёным по чужой причине.
 	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
-		`{"title":"Новый","closeSettings":{"closeAt":null,"responseLimit":5,"closedMessage":""}}`, csrf(t, alice, srv.URL))
+		`{"name":"Новый","closeSettings":{"closeAt":null,"responseLimit":5,"closedMessage":""}}`, csrf(t, alice, srv.URL))
 	if r.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
 	}
@@ -350,13 +374,17 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	// v1→v2), вопрос разложен на подпись + поле. Порядок ключей задаёт JSONB (не
 	// Go-маршалинг), поэтому сверяем разбором.
 	got := parseSchema(t, getFormDetail(t, c, srv, form.ID, http.StatusOK).DraftSchema)
-	if got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 2 {
+	// Три блока: синтезированный заголовок формы (фаза 15) + подпись и поле вопроса.
+	if got.SchemaVersion != domain.SchemaVersion || len(got.Blocks) != 3 {
 		t.Fatalf("канонизация не проставила schemaVersion/группу: %+v", got)
 	}
-	if got.Blocks[0].Type != "title" || domain.PlainText(got.Blocks[0].Text) != "Имя" {
-		t.Fatalf("подпись сохранена неверно: %+v", got.Blocks[0])
+	if got.Blocks[0].Type != domain.BlockFormTitle {
+		t.Fatalf("заголовок формы не первый: %+v", got.Blocks[0])
 	}
-	if b := got.Blocks[1]; b.ID != "b1" || b.Type != "short_text" || !b.Required {
+	if got.Blocks[1].Type != "title" || domain.PlainText(got.Blocks[1].Text) != "Имя" {
+		t.Fatalf("подпись сохранена неверно: %+v", got.Blocks[1])
+	}
+	if b := got.Blocks[2]; b.ID != "b1" || b.Type != "short_text" || !b.Required {
 		t.Fatalf("поле сохранено неверно: %+v", b)
 	}
 
@@ -455,10 +483,11 @@ func TestForms_HasUnpublishedChanges(t *testing.T) {
 		t.Fatal("сразу после публикации изменений быть не должно")
 	}
 
-	// Переименование не версионируется → бейдж не поднимается.
-	patchTitle(t, c, srv, form.ID, "Анкета 2", http.StatusOK)
+	// Внутреннее имя не версионируется → бейдж не поднимается. (Публичный заголовок с
+	// фазы 15 живёт в документе и бейдж поднимает — как любая правка полотна.)
+	patchName(t, c, srv, form.ID, "Анкета 2", http.StatusOK)
 	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
-		t.Fatal("переименование не должно давать неопубликованных изменений")
+		t.Fatal("переименование в дашборде не должно давать неопубликованных изменений")
 	}
 
 	// Правка черновика → расходится с версией → бейдж. updated_at сдвинут
@@ -1012,21 +1041,6 @@ func getFormDetailBySlug(t *testing.T, c *http.Client, srv *httptest.Server, slu
 	var d formDetailDTO
 	decode(t, r, &d)
 	return d
-}
-
-func patchTitle(t *testing.T, c *http.Client, srv *httptest.Server, id, title string, wantStatus int) formDTO {
-	t.Helper()
-	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"title":"`+title+`"}`, csrf(t, c, srv.URL))
-	if r.StatusCode != wantStatus {
-		t.Fatalf("PATCH форма: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
-	}
-	if wantStatus != http.StatusOK {
-		closeBody(t, r)
-		return formDTO{}
-	}
-	var f formDTO
-	decode(t, r, &f)
-	return f
 }
 
 // patchName шлёт PATCH {name} — внутреннее имя (дашборд). Публичный заголовок не трогает.

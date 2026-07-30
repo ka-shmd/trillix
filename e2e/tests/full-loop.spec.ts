@@ -11,6 +11,10 @@ import { test, expect, devices } from '@playwright/test'
 // чтобы тест не был привязан к конкретному хосту.
 const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
 
+// Командный модификатор карты шорткатов (`mod` в builder/shortcuts.ts): Cmd на маке,
+// Ctrl на остальных. Здесь нужен ровно один — отмена документа (Mod+Z).
+const MOD = process.platform === 'darwin' ? 'Meta' : 'Control'
+
 // Валидная маленькая PNG (2×2) для загрузки картинки блока — setInputFiles умеет
 // принимать буфер, поэтому фикстура-файл не нужна. Важно: с корректными CRC чанков —
 // сервер делает полный image.Decode (не только заголовок), битый CRC → 422. Байты
@@ -119,6 +123,28 @@ test('регистрация → форма → публикация → отв�
     .click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).click()
   await page.getByRole('textbox', { name: 'Текст согласия' }).fill(consentText)
+
+  // 3d. ФАЗА 15, мышиная сторона: у СТРОКИ ОТВЕТА собранного вопроса есть свой кластер
+  // значков, и её мусорка значит «эта строка», а не «вопрос целиком». До фазы у такой
+  // строки кластера не было вовсе (замок `ownedByCaption`): считалось, что действий,
+  // которых не бывает, показывать нельзя. Теперь бывает — и вопрос без поля законно
+  // распадается на текст, а Mod+Z возвращает всё назад.
+  //
+  // Проверяем на ПЕРВОМ вопросе (короткий ответ): наводим мышь на его поле, жмём
+  // мусорку строки — подпись остаётся, поле исчезает; откатываем.
+  const canvasRows = page.locator('[data-block-id]')
+  const rowsBefore = await canvasRows.count()
+  const firstAnswer = canvasRows.nth(1) // 0 — подпись первого вопроса, 1 — его поле
+  await firstAnswer.hover()
+  const rowTrash = firstAnswer.getByRole('button', { name: 'Удалить блок' })
+  await expect(rowTrash).toBeVisible()
+  await rowTrash.click()
+  await expect(canvasRows).toHaveCount(rowsBefore - 1)
+  // Подпись пережила удаление поля: удалили СТРОКУ, а не вопрос.
+  await expect(page.getByRole('textbox', { name: 'Заголовок вопроса' }).first()).toHaveText(question)
+  // Откат — тем же стеком документа (слушатель на весь экран билдера).
+  await page.keyboard.press(`${MOD}+KeyZ`)
+  await expect(canvasRows).toHaveCount(rowsBefore)
 
   // 4. Публикация: кнопка активна, только когда автосейв догнал редактор.
   const publish = page.getByRole('button', { name: 'Опубликовать' })

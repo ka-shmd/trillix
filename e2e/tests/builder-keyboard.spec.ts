@@ -18,6 +18,13 @@ import { login, seedAccount } from './helpers/session'
 //      `column` пережил автосейв, снапшот версии при публикации и рендерер.
 //   3. Мобильный столбик ряда — медиазапрос `.rf-row` живёт в общем fields.css, и
 //      только прод-сборка доказывает, что CSS доехал.
+//   4. ФАЗА 15 «Свобода блока», её сквозной критерий целиком: заголовок формы правится
+//      как обычная строка полотна (разметка `Mod+B`, откат `Mod+Z` тем же стеком) и
+//      доезжает до респондента, а `<title>` остаётся плоским; двухколоночная СЕКЦИЯ
+//      собирается осью `Mod+Alt+←/→` и держит стопку в колонке; `Enter` из колонки
+//      кладёт новую строку ПОД секцией, а не между колонками; подпись и поле встают в
+//      ряд ВНУТРИ вопроса. Всё это модель проверяет юнитами, но «доехало до прод-сборки
+//      и нарисовано» — только здесь.
 //
 // СЕССИЯ — не UI-регистрацией: `registerBurst` расходуется тремя старыми сценариями
 // в ноль (см. helpers/session.ts). Форма создаётся запросом к API: предмет теста —
@@ -39,7 +46,7 @@ async function sideBySide(left: Locator, right: Locator): Promise<boolean> {
   return Math.abs(a.y - b.y) < 8 && b.x >= a.x + a.width
 }
 
-test('билдер без мыши: форма собирается клавиатурой, ряд доезжает до респондента', async ({
+test('билдер без мыши: форма собирается клавиатурой, секция и ряды доезжают до респондента', async ({
   page,
   browser,
 }) => {
@@ -47,7 +54,9 @@ test('билдер без мыши: форма собирается клавиа
   const formTitle = `Опрос без мыши ${uniq}`
   const nameQ = 'Ваше имя'
   const mailQ = 'Рабочая почта'
+  const phoneQ = 'Телефон для связи'
   const srcQ = 'Как вы о нас узнали'
+  const cityQ = 'Город'
   const nameA = `Иван ${uniq}`
   const mailA = `ivan-${uniq}@example.com`
   const srcA = 'Друзья'
@@ -74,9 +83,29 @@ test('билдер без мыши: форма собирается клавиа
   // Счётчик служит воротами: пока строка не появилась, печатать в неё рано.
   const canvasTitles = page.getByRole('textbox', { name: 'Заголовок вопроса' })
 
-  // 3. Каретка — в название формы (focus, а не клик), Enter уводит на полотно. Форма
-  // пустая, поэтому Enter здесь создаёт первую строку (focusFirstOrCreate).
+  // 3. Каретка — в название формы (focus, а не клик).
   await page.getByLabel('Название формы').focus()
+
+  // 3b. ФАЗА 15: заголовок формы — ОБЫЧНАЯ СТРОКА полотна. Красим последнее слово тем
+  // же Mod+B, что и подпись вопроса, и откатываем тем же Mod+Z. До фазы это поле было
+  // неуправляемым специально — `Ctrl+Z` в нём принадлежал браузеру, а сам заголовок
+  // ехал в БД мимо автосейва и мимо публикации. Проверить это можно только здесь:
+  // юнит видит модель, но не то, чьему стеку достаётся клавиша в живом браузере.
+  const titleRow = page.locator('.rf-title[data-rich-line]')
+  const titleTail = formTitle.slice(formTitle.lastIndexOf(' ') + 1)
+  for (let i = 0; i < titleTail.length; i++) {
+    await page.keyboard.press('Shift+ArrowLeft')
+  }
+  await page.keyboard.press(`${MOD}+KeyB`)
+  await expect(titleRow.locator('.rf-b')).toHaveText(titleTail)
+  await page.keyboard.press(`${MOD}+KeyZ`)
+  await expect(titleRow.locator('.rf-b')).toHaveCount(0)
+  await page.keyboard.press(`${MOD}+Shift+KeyZ`)
+  await expect(titleRow.locator('.rf-b')).toHaveText(titleTail)
+
+  // Enter с заголовка уводит на полотно. Форма пустая, поэтому Enter здесь создаёт
+  // первую строку (focusFirstOrCreate).
+  await titleRow.focus()
   await page.keyboard.press('Enter')
 
   // 4. Первый вопрос: «/» остаётся в тексте литералом и открывает инлайн-меню,
@@ -137,14 +166,37 @@ test('билдер без мыши: форма собирается клавиа
   // сразу после нажатия клавиши могут быть ещё старыми (столбик). Ждём, а не гадаем.
   await expect.poll(() => sideBySide(canvasTitles.nth(0), canvasTitles.nth(1))).toBe(true)
 
-  // 7. Третий вопрос — с вариантами: Enter уводит с заголовка ряда на новую строку
-  // ниже (ряд для вставки атомарен), Mod+Enter с заголовка прыгает к полю ответа —
-  // тут это первый (пустой) вариант, Enter в варианте заводит следующий.
+  // 6b. СЕКЦИЯ (этап 15.6): в колонке живёт стопка. Enter с заголовка левой колонки
+  // кладёт новую строку ПОД всей секцией (полноширинная строка в её середине разрезала
+  // бы секцию пополам — на этом полотно и разваливалось до починки), а Mod+Alt+→ на
+  // третьем вопросе уводит его в ПРАВУЮ колонку, под второй.
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/Телефон')
+  await expect(page.getByRole('option', { name: 'Телефон' }).first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(3)
+  await page.keyboard.type(phoneQ)
+  await page.keyboard.press(`${MOD}+Alt+ArrowRight`)
+
+  // Стопка справа: телефон ПОД почтой (обе правее имени, одна колонка).
+  await expect
+    .poll(async () => {
+      const name = await canvasTitles.nth(0).boundingBox()
+      const mail = await canvasTitles.nth(1).boundingBox()
+      const phone = await canvasTitles.nth(2).boundingBox()
+      if (!name || !mail || !phone) return false
+      return phone.y > mail.y && Math.abs(phone.x - mail.x) < 4 && phone.x >= name.x + name.width
+    })
+    .toBe(true)
+
+  // 7. Четвёртый вопрос — с вариантами: Enter уводит из колонки на новую строку под
+  // секцией, Mod+Enter с заголовка прыгает к полю ответа — тут это первый (пустой)
+  // вариант, Enter в варианте заводит следующий.
   await page.keyboard.press('Enter')
   await page.keyboard.type('/Один')
   await expect(page.getByRole('option', { name: 'Один из списка' }).first()).toBeVisible()
   await page.keyboard.press('Enter')
-  await expect(canvasTitles).toHaveCount(3)
+  await expect(canvasTitles).toHaveCount(4)
   await page.keyboard.type(srcQ)
 
   // Mod+Enter с заголовка — к полю ответа группы; у choice это его единственный
@@ -157,6 +209,32 @@ test('билдер без мыши: форма собирается клавиа
   await page.keyboard.press('Enter')
   await page.keyboard.type('Реклама')
   await expect(page.getByLabel('Вариант 2')).toHaveValue('Реклама')
+
+  // 7b. РЯД ВНУТРИ ВОПРОСА (этап 15.4): та же клавиша на не первой строке группы
+  // собирает ряд не с предыдущим вопросом, а СО СВОЕЙ ПОДПИСЬЮ — уровень задаёт место
+  // строки в группе. Единственный вход к нему с клавиатуры — поверхность самого поля
+  // (инпут плейсхолдера), поэтому сперва Mod+Enter с заголовка.
+  // Выход из списка — двумя Enter: первый заводит пустой последний вариант, второй
+  // (в пустом) удаляет его и открывает строку ниже (§3.2, контракт фокуса §12).
+  await page.keyboard.press('Enter')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/Корот')
+  await expect(page.getByRole('option', { name: 'Короткий ответ' }).first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(5)
+  await page.keyboard.type(cityQ)
+  await page.keyboard.press(`${MOD}+Enter`) // к полю ответа своего вопроса
+  await page.keyboard.press(`${MOD}+Alt+ArrowRight`)
+
+  // Подпись и её поле — на одной высоте, поле правее. Геометрия, а не класс: у полотна
+  // своя раскладка, общий `.rf-row` есть только у превью и рендерера. Берём СТРОКИ
+  // полотна (`data-block-id` — корень BlockRow): у инпута плейсхолдера нет ни своего
+  // имени, ни постоянного плейсхолдера — надпись в нём появляется только под фокусом.
+  const canvasRows = page.locator('[data-block-id]')
+  const rowCount = await canvasRows.count()
+  await expect
+    .poll(() => sideBySide(canvasRows.nth(rowCount - 2), canvasRows.nth(rowCount - 1)))
+    .toBe(true)
 
   // 8. Публикация — тоже без мыши: кнопка активна, только когда автосейв догнал
   // редактор; фокусируем и жмём Enter.
@@ -184,19 +262,45 @@ test('билдер без мыши: форма собирается клавиа
   // `.rf-b` живёт в общем fields.css, и единственное доказательство, что оно доехало до
   // ПУБЛИЧНОЙ формы (а не осталось в стилях кабинета, как было в этапе 14.1), —
   // насыщенность, снятая с живого элемента прод-сборки.
-  const boldOnForm = formPage.locator('.rf-b').first()
+  const boldOnForm = formPage.locator('.rf-form .rf-b').first()
   await expect(boldOnForm).toHaveText(boldWord)
   const weight = await boldOnForm.evaluate((el) => getComputedStyle(el).fontWeight)
   expect(Number(weight)).toBeGreaterThanOrEqual(600)
 
-  // Обёртка ряда достаётся ТОЛЬКО ряду из двоих (packRows): ровно одна на форму —
-  // третий вопрос в неё попасть не должен.
-  const row = formPage.locator('.rf-row')
-  await expect(row).toHaveCount(1)
-  await expect(row.getByText(nameQ)).toBeVisible()
-  await expect(row.getByText(mailQ)).toBeVisible()
+  // ЗАГОЛОВОК ФОРМЫ (фаза 15) публикуется вместе со схемой и несёт свою разметку —
+  // раньше он ехал в БД мимо публикации и разметки не знал вовсе. А `<title>` вкладки
+  // остаётся ПЛОСКИМ: его собирает сервер из `plainText`, и протеки туда спаны, в
+  // выдаче поисковика оказался бы кусок HTML.
+  const titleOnForm = formPage.locator('h1.rf-title')
+  await expect(titleOnForm).toHaveText(formTitle)
+  await expect(titleOnForm.locator('.rf-b')).toHaveText(titleTail)
+  expect(await formPage.title()).toContain(formTitle)
+  expect(await formPage.title()).not.toMatch(/<span|rf-b/)
+
+  // СЕКЦИЯ (этап 15.6): обёртка ряда достаётся только ряду из двоих, и она одна на
+  // поток вопросов — второй `.rf-row` в форме есть, но он ВНУТРИ вопроса «Город»
+  // (уровень ниже, §13 EDITOR.md). Проверяем оба, разведя их по родителю.
+  const section = formPage.locator('.rf-form > .rf-row')
+  await expect(section).toHaveCount(1)
+  const cells = section.locator(':scope > .rf-cell')
+  await expect(cells).toHaveCount(2)
+  // Слева один вопрос, справа СТОПКА из двух — то, ради чего этап и делался.
+  await expect(cells.nth(0).locator('.rf-group')).toHaveCount(1)
+  await expect(cells.nth(1).locator('.rf-group')).toHaveCount(2)
+  await expect(section.getByText(nameQ)).toBeVisible()
+  await expect(section.getByText(phoneQ)).toBeVisible()
+
+  // Ряд ВНУТРИ вопроса (этап 15.4): подпись и поле в одной строке, обёртка — своя.
+  await expect(formPage.locator('.rf-group > .rf-row')).toHaveCount(1)
+  expect(await sideBySide(formPage.getByText(cityQ), formPage.getByLabel(cityQ))).toBe(true)
 
   expect(await sideBySide(nameField, mailField)).toBe(true)
+  // Стопка справа: телефон под почтой и в той же колонке.
+  const phoneField = formPage.getByLabel(phoneQ)
+  const mailBox = (await mailField.boundingBox())!
+  const phoneBox = (await phoneField.boundingBox())!
+  expect(phoneBox.y).toBeGreaterThan(mailBox.y)
+  expect(Math.abs(phoneBox.x - mailBox.x)).toBeLessThan(4)
 
   await nameField.fill(nameA)
   await mailField.fill(mailA)
@@ -228,6 +332,10 @@ test('билдер без мыши: форма собирается клавиа
   const mobileName = (await mobilePage.getByLabel(nameQ).boundingBox())!
   const mobileMail = (await mobilePage.getByLabel(mailQ).boundingBox())!
   expect(mobileMail.y).toBeGreaterThan(mobileName.y + mobileName.height)
+  // Ряд ВНУТРИ вопроса разваливается тем же правилом: подпись над своим полем.
+  const mobileCity = (await mobilePage.getByText(cityQ).boundingBox())!
+  const mobileCityField = (await mobilePage.getByLabel(cityQ).boundingBox())!
+  expect(mobileCityField.y).toBeGreaterThan(mobileCity.y)
   await mobile.close()
 
   // 11. Ответ доехал до кабинета: форма, собранная клавиатурой, даёт нормальные

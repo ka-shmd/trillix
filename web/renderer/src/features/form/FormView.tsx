@@ -1,9 +1,9 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta, packRows } from '@fields/groups'
+import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
@@ -11,6 +11,28 @@ import { uuidv7 } from './submissionId'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
 import { createVisitTracker, type VisitTracker } from './visits'
+
+// FocusReporter — обёртка блока, сообщающая «самую дальнюю точку визита» (аналитика
+// воронки). Отдельным компонентом, а не инлайном внутри рендера группы: обработчик,
+// который пишет ref, обязан жить в КОМПОНЕНТЕ. Внутри обычной функции, созданной во
+// время рендера, линт справедливо видит доступ к ref «во время рендера»
+// (react-hooks/refs) и доказать обратное не может — а вложенные функции рендера нужны,
+// потому что колонка ряда стала стопкой и группы рисуются из двух мест.
+//
+// onFocusCapture, а не onFocus: фокус приходит на вложенный input, а не на div. Проп
+// у BlockField не заводим — поля общие с превью билдера, и аналитике публичной
+// страницы там не место.
+function FocusReporter({
+  index,
+  onReach,
+  children,
+}: {
+  index: number
+  onReach: (index: number) => void
+  children: ReactNode
+}) {
+  return <div onFocusCapture={() => onReach(index)}>{children}</div>
+}
 
 // Задержки перед повторами при обрыве сети (мс). До 3 повторов с нарастающим
 // бэкоффом — DEV-PLAN фаза 5, шаг 6. Все повторы шлют один submission_id, поэтому
@@ -65,7 +87,11 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     saveAnswers(slug, form.version, answers)
   }, [slug, form.version, answers])
 
-  const blocks = form.schema.blocks
+  // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
+  // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
+  // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
+  // полем JSON (form.title), которое сервер резолвит из колонки.
+  const { title: formTitle, rest: blocks } = splitFormTitle(form.schema.blocks)
   // Подпись и обязательность на группу (v2): подпись → aria поля, обязательность →
   // звёздочка у блока-подписи.
   const groups = groupMeta(blocks)
@@ -86,6 +112,13 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   // Индекс, а не id, — сравнивать «дальше/ближе» можно только по порядку; наружу
   // всё равно уезжает id блока (переживёт многостраничные формы, ADR §10).
   const furthest = useRef(-1)
+  // «Самая дальняя точка визита» пишется из обработчика фокуса, а тот живёт в функции
+  // рендера группы (renderGroup ниже). Обёртка useCallback обязательна: правка ref'а
+  // прямо в теле такой функции — ошибка линта (react-hooks/refs), и правило право по
+  // существу — читать/писать ref во время рендера нельзя, можно только в обработчике.
+  const markFurthest = useCallback((index: number) => {
+    if (index > furthest.current) furthest.current = index
+  }, [])
 
   useEffect(() => {
     const tracker = visit.current
@@ -202,29 +235,26 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
 
   return (
     <main className="rf-page">
-      <h1 className="rf-title">{form.title.trim() || 'Форма'}</h1>
+      {formTitle ? (
+        <BlockField block={formTitle} />
+      ) : (
+        form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
+      )}
       <div className="rf-form">
         {packRows(groupBlocks(blocks)).map((row) => {
           // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
           // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
           // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
           // спека §5); обёртка ряда — только у ряда из двоих.
-          const groupNodes = row.map((group) => (
+          const renderGroup = (group: (typeof row)[number][number]) => (
             <div key={group.id} className="rf-group">
-              {group.blocks.map((block) => {
-                // Индекс блока в полном потоке — для «самой дальней точки визита»
-                // (furthest): группировка не меняет порядок, индекс берём из blocks.
-                const index = blocks.indexOf(block)
-                return (
-                  // onFocusCapture на обёртке, а не новый проп у BlockField: поля общие
-                  // с превью билдера, и заводить в них аналитику публичной страницы
-                  // нельзя. Capture — фокус приходит на вложенный input, а не на div.
-                  <div
-                    key={block.id}
-                    onFocusCapture={() => {
-                      if (index > furthest.current) furthest.current = index
-                    }}
-                  >
+              {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
+                  бок той же обёрткой .rf-row, что и два вопроса. Ряд из одного
+                  остаётся прямым ребёнком .rf-group. */}
+              {packGroupRows(group.blocks).map((innerRow) => {
+                const render = (block: (typeof innerRow)[number][number]) => (
+                  // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
+                  <FocusReporter key={block.id} index={blocks.indexOf(block)} onReach={markFurthest}>
                     <BlockField
                       block={block}
                       captionText={groups.get(block.groupId)?.caption}
@@ -235,19 +265,37 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
                       error={errors[block.id]}
                       disabled={locked}
                     />
+                  </FocusReporter>
+                )
+                return innerRow.length > 1 ? (
+                  <div key={innerRow[0]![0]!.id} className="rf-row">
+                    {innerRow.map((cell) => (
+                      <div key={cell[0]!.id} className="rf-cell">
+                        {cell.map(render)}
+                      </div>
+                    ))}
                   </div>
+                ) : (
+                  render(innerRow[0]![0]!)
                 )
               })}
             </div>
-          ))
-          const first = row[0]
+          )
+          // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
+          // справа помещается несколько коротких. Слева стопки не бывает — там всегда
+          // тот, кто открыл ряд.
+          const first = row[0]?.[0]
           if (!first) return null
           return row.length > 1 ? (
             <div key={first.id} className="rf-row">
-              {groupNodes}
+              {row.map((cell) => (
+                <div key={cell[0]!.id} className="rf-cell">
+                  {cell.map(renderGroup)}
+                </div>
+              ))}
             </div>
           ) : (
-            groupNodes[0]
+            renderGroup(first)
           )
         })}
       </div>

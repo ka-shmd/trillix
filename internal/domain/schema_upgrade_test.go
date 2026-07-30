@@ -2,11 +2,12 @@ package domain
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
 // blockByID — блок из уже разобранной канонической схемы (после ValidateSchema и
-// апгрейда цепочкой v1→v2→v3).
+// апгрейда цепочкой v1→v2→v3→v4).
 func blockByID(s FormSchema, id string) (Block, bool) {
 	for _, b := range s.Blocks {
 		if b.ID == id {
@@ -140,10 +141,15 @@ func TestUpgradeV2toV3_TextBecomesSpans(t *testing.T) {
 	if len(title.Text) != 1 || title.Text[0].T != "Ваше имя" || title.Text[0].M != nil {
 		t.Fatalf("текст подписи поднят неверно: %+v", title.Text)
 	}
-	// Всё, что не текст, переносится байт в байт.
+	// Всё, что не текст, переносится байт в байт. Кроме бита ряда: его двигает
+	// СЛЕДУЮЩЕЕ звено цепочки (v3→v4, свои тесты ниже), и ValidateSchema гоняет её
+	// целиком — поэтому здесь он ожидаемо оказывается уже на подписи.
 	f, _ := blockByID(s, "f")
-	if !f.Required || f.Settings.Placeholder != "Иван" || f.Settings.Column != ColumnRight {
+	if !f.Required || f.Settings.Placeholder != "Иван" {
 		t.Fatalf("поле потеряло настройки при апгрейде: %+v", f)
+	}
+	if title.Settings.Column != ColumnRight {
+		t.Fatalf("бит ряда не доехал до конца цепочки: %+v", title.Settings)
 	}
 	if s.SubmitLabel != "Готово" || s.ThankYouText != "Спасибо" || s.RedirectURL != "https://a.ru" {
 		t.Fatalf("поля формы-уровня потерялись: %+v", s)
@@ -184,19 +190,19 @@ func TestUpgrade_V1ReachesV3ThroughChain(t *testing.T) {
 	}
 }
 
-// CanonicalV3 идемпотентна: её выход, поданный ей же, даёт тот же байт-в-байт JSON.
+// CanonicalV4 идемпотентна: её выход, поданный ей же, даёт тот же байт-в-байт JSON.
 // Свойство держит отдачу фронту — иначе автосейв видел бы «изменения» на каждом
 // чтении и молотил бы PUT'ами.
-func TestCanonicalV3_Idempotent(t *testing.T) {
+func TestCanonicalV4_Idempotent(t *testing.T) {
 	raw := json.RawMessage(`{"schemaVersion":2,"blocks":[
 		{"id":"t","groupId":"g","type":"title","text":"Вопрос","settings":{}},
 		{"id":"f","groupId":"g","type":"email","settings":{}}
 	]}`)
-	once, err := CanonicalV3(raw)
+	once, err := CanonicalV4(raw)
 	if err != nil {
 		t.Fatalf("первый проход: %v", err)
 	}
-	twice, err := CanonicalV3(once)
+	twice, err := CanonicalV4(once)
 	if err != nil {
 		t.Fatalf("второй проход: %v", err)
 	}
@@ -205,11 +211,13 @@ func TestCanonicalV3_Idempotent(t *testing.T) {
 	}
 }
 
-// Версия из будущего отвергается, а не трактуется как текущая.
+// Версия из будущего отвергается, а не трактуется как текущая. Номер берётся от
+// текущей, а не пишется литералом: иначе тест пришлось бы чинить каждым бампом, и
+// однажды он проверял бы уже поддержанную версию.
 func TestValidateSchema_UnknownFutureVersion(t *testing.T) {
-	_, err := ValidateSchema(json.RawMessage(`{"schemaVersion":4,"blocks":[]}`))
-	if err == nil {
-		t.Fatal("v4 должна отвергаться")
+	raw := fmt.Sprintf(`{"schemaVersion":%d,"blocks":[]}`, SchemaVersion+1)
+	if _, err := ValidateSchema(json.RawMessage(raw)); err == nil {
+		t.Fatalf("v%d должна отвергаться", SchemaVersion+1)
 	}
 }
 
@@ -224,5 +232,162 @@ func TestUpgradeV1toV2_QuestionOrderCaption(t *testing.T) {
 	qs := QuestionOrder([]VersionedSchema{{Version: 1, Schema: s}})
 	if len(qs) != 1 || qs[0].ID != "b" || qs[0].Label != "Ваше имя" {
 		t.Fatalf("вопрос из v1 разобран неверно: %+v", qs)
+	}
+}
+
+// ---------- v3 → v4: заголовок формы как блок (фаза 15) ----------
+
+// Главное свойство перехода — то же, что у прошлых: форма, собранная ДО фазы,
+// после неё выглядит ровно как раньше. Проверяется не «разобралось», а что каждое
+// поле доехало: разметка текста, обязательность, плейсхолдер, поля формы-уровня.
+// Бит ряда — отдельная история: он не «доезжает», а переезжает (тесты ниже).
+func TestUpgradeV3toV4_KeepsEverything(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+		{"id":"t","groupId":"g","type":"title","text":[{"t":"Имя ","m":["b"]},{"t":"полностью","color":"#c026d3"}],"settings":{}},
+		{"id":"f","groupId":"g","type":"short_text","required":true,"settings":{"placeholder":"Иван","column":"right"}}
+	],"submitLabel":"Готово","thankYouText":"Спасибо","redirectUrl":"https://a.ru"}`)
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		t.Fatalf("апгрейд+валидация упали: %v", err)
+	}
+	if s.SchemaVersion != SchemaVersion {
+		t.Fatalf("schemaVersion = %d, ждали %d", s.SchemaVersion, SchemaVersion)
+	}
+	title, _ := blockByID(s, "t")
+	if len(title.Text) != 2 || title.Text[0].T != "Имя " || title.Text[0].M[0] != MarkBold || title.Text[1].Color != "#c026d3" {
+		t.Fatalf("разметка подписи не доехала: %+v", title.Text)
+	}
+	f, _ := blockByID(s, "f")
+	if !f.Required || f.Settings.Placeholder != "Иван" {
+		t.Fatalf("поле потеряло настройки: %+v", f)
+	}
+	if s.SubmitLabel != "Готово" || s.ThankYouText != "Спасибо" || s.RedirectURL != "https://a.ru" {
+		t.Fatalf("поля формы-уровня потерялись: %+v", s)
+	}
+	// Заголовок апгрейд НЕ синтезирует: он лежит в колонке соседней таблицы, которой
+	// у чистой функции нет. Блок дописывает EnsureFormTitle на чтении черновика.
+	if _, spoke := FormTitle(s); spoke {
+		t.Fatal("апгрейд дописал заголовок, хотя не должен")
+	}
+}
+
+// ---------- v3 → v4: носитель бита ряда (фаза 15, этап 15.4) ----------
+
+// Бит ряда с отвечаемого блока мульти-группы переезжает на первый блок группы.
+// Он не «сохраняется» и не «теряется» — он МЕНЯЕТ носителя, потому что у v4 смысл
+// ключа задаёт место блока в группе (спека §6.3).
+func TestUpgradeV3toV4_RowBitMovesToGroupHead(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+		{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Город"}],"settings":{}},
+		{"id":"f1","groupId":"g1","type":"short_text","settings":{}},
+		{"id":"t2","groupId":"g2","type":"title","text":[{"t":"Индекс"}],"settings":{}},
+		{"id":"d2","groupId":"g2","type":"text","text":[{"t":"шесть цифр"}],"settings":{}},
+		{"id":"f2","groupId":"g2","type":"short_text","settings":{"column":"right"}}
+	]}`)
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		t.Fatalf("апгрейд+валидация упали: %v", err)
+	}
+	head, _ := blockByID(s, "t2")
+	if head.Settings.Column != ColumnRight {
+		t.Fatalf("бит не доехал до первого блока группы: %+v", head.Settings)
+	}
+	field, _ := blockByID(s, "f2")
+	if field.Settings.Column != "" {
+		t.Fatalf("бит остался и на отвечаемом блоке — у v4 это значило бы «справа от своей подписи»: %+v", field.Settings)
+	}
+	// Контент между подписью и полем носителем не становится.
+	if mid, _ := blockByID(s, "d2"); mid.Settings.Column != "" {
+		t.Fatalf("бит уехал на контентный блок: %+v", mid.Settings)
+	}
+	// Соседняя группа без бита не приобретает его.
+	if other, _ := blockByID(s, "t1"); other.Settings.Column != "" {
+		t.Fatalf("бит появился у группы, которая его не несла: %+v", other.Settings)
+	}
+}
+
+// Голое поле — само себе первый блок группы: переносить нечего, поведение v3 не
+// меняется ни на байт (спека §6.3).
+func TestUpgradeV3toV4_BareFieldKeepsRowBit(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+		{"id":"f1","groupId":"g1","type":"email","settings":{}},
+		{"id":"f2","groupId":"g2","type":"short_text","settings":{"column":"right"}}
+	]}`)
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		t.Fatalf("апгрейд+валидация упали: %v", err)
+	}
+	if f, _ := blockByID(s, "f2"); f.Settings.Column != ColumnRight {
+		t.Fatalf("голое поле потеряло свой бит: %+v", f.Settings)
+	}
+}
+
+// Идемпотентность переноса: v4 читается v4 без второго переезда. Свойство держит
+// весь путь чтения — CanonicalV4 гоняет апгрейд на каждом чтении черновика, и
+// «переезжающий каждый раз» бит уносило бы всё выше по документу.
+func TestUpgradeV3toV4_RowBitMoveIdempotent(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+		{"id":"t","groupId":"g","type":"title","text":[{"t":"Индекс"}],"settings":{}},
+		{"id":"f","groupId":"g","type":"short_text","settings":{"column":"right"}}
+	]}`)
+	once, err := CanonicalV4(raw)
+	if err != nil {
+		t.Fatalf("первый проход: %v", err)
+	}
+	twice, err := CanonicalV4(once)
+	if err != nil {
+		t.Fatalf("второй проход: %v", err)
+	}
+	if string(once) != string(twice) {
+		t.Fatalf("перенос бита не идемпотентен:\n1: %s\n2: %s", once, twice)
+	}
+	s, err := ValidateSchema(twice)
+	if err != nil {
+		t.Fatalf("валидация после двух проходов: %v", err)
+	}
+	if head, _ := blockByID(s, "t"); head.Settings.Column != ColumnRight {
+		t.Fatalf("после двух проходов бит не на первом блоке: %+v", head.Settings)
+	}
+}
+
+// Ряд, собранный ещё в v1 (один блок = вопрос), доезжает через всю цепочку и
+// оказывается на подписи, которую v1→v2 сама же и породила.
+func TestUpgrade_RowBitSurvivesFullChain(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":1,"blocks":[
+		{"id":"a","type":"short_text","label":"Город","settings":{}},
+		{"id":"b","type":"short_text","label":"Индекс","settings":{"column":"right"}}
+	]}`)
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		t.Fatalf("цепочка апгрейдов упала: %v", err)
+	}
+	field, ok := blockByID(s, "b")
+	if !ok {
+		t.Fatal("отвечаемый блок потерял id — на него ссылаются answers")
+	}
+	if field.Settings.Column != "" {
+		t.Fatalf("бит остался на поле: %+v", field.Settings)
+	}
+	head, ok := blockByID(s, "t_b")
+	if !ok {
+		t.Fatalf("подпись, порождённая v1→v2, не найдена: %+v", s.Blocks)
+	}
+	if head.Settings.Column != ColumnRight {
+		t.Fatalf("ряд из v1 распался: бита нет на подписи: %+v", head.Settings)
+	}
+}
+
+// Документ, уже несущий заголовок, проходит апгрейд без потерь — v4 читается v4.
+func TestUpgradeV3toV4_KeepsExistingFormTitle(t *testing.T) {
+	raw := json.RawMessage(`{"schemaVersion":4,"blocks":[
+		{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Анкета"}]},
+		{"id":"f","groupId":"g","type":"short_text","settings":{}}
+	]}`)
+	s, err := ValidateSchema(raw)
+	if err != nil {
+		t.Fatalf("валидация упала: %v", err)
+	}
+	if text, spoke := FormTitle(s); !spoke || text != "Анкета" {
+		t.Fatalf("заголовок потерян: (%q, %v)", text, spoke)
 	}
 }

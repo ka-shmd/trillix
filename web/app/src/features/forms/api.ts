@@ -45,10 +45,6 @@ export function createForm(title?: string): Promise<Form> {
   })
 }
 
-// Переименование ПУБЛИЧНОГО заголовка (первая строка билдера). Его видит респондент.
-export function renameForm(id: string, title: string): Promise<Form> {
-  return apiRequest(`/forms/${id}`, { method: 'PATCH', body: { title }, schema: formSchema })
-}
 
 // Переименование ВНУТРЕННЕГО имени (дашборд). Не трогает публичный заголовок; пустая
 // строка сбрасывает имя (кабинет снова показывает заголовок). См. ADR §10.
