@@ -12,6 +12,7 @@ import {
   carriesText,
   canShareRow,
   requiresCaption,
+  supportsPlaceholder,
   COLUMN_LEFT,
   COLUMN_RIGHT,
   sameRichText,
@@ -51,7 +52,7 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 
 // Редактируемые поля блока. id/groupId/type через updateBlock не меняются: id
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
-export type BlockPatch = Partial<Pick<Block, 'text' | 'required' | 'settings'>>
+export type BlockPatch = Partial<Pick<Block, 'text' | 'name' | 'required' | 'settings'>>
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
 // как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
@@ -323,6 +324,19 @@ function regroup(blocks: Block[]): Block[] {
 function carryLayout(src: Block, dst: Block): void {
   if (src.settings?.column === COLUMN_RIGHT && canShareRow(dst.type)) {
     dst.settings = { ...dst.settings, column: COLUMN_RIGHT }
+  }
+}
+
+// carryPlaceholder переносит подсказку поля на сконвертированный блок, пока новый тип
+// её несёт (§5.4 спеки фазы 16). До этапа 16.4 плейсхолдер терялся даже на
+// short_text → email, хотя оба типа его показывают: автор менял тип соседнего поля и
+// молча лишался написанной подсказки. Условие — тот же предикат реестра, что решает,
+// показывать ли поверхность плейсхолдера, поэтому «тип, который его не носит»
+// невозможен по построению. Мутирует dst (как carryLayout).
+function carryPlaceholder(src: Block, dst: Block): void {
+  const placeholder = src.settings?.placeholder
+  if (placeholder && supportsPlaceholder(dst.type)) {
+    dst.settings = { ...dst.settings, placeholder }
   }
 }
 
@@ -983,8 +997,14 @@ const snapshot = (s: BuilderState): Snapshot => ({
 })
 
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
-// (text/settings-placeholder) в один блок делят шаг истории; патч с required (или
+// (text/settings-placeholder/name) в один блок делят шаг истории; патч с required (или
 // иным дискретным полем) — свой шаг (тег null).
+//
+// Имя вопроса (этап 16.4) — третье такое поле и первый потребитель склейки ВНЕ
+// settings: без него имя из двадцати символов стоило бы двадцати нажатий Mod+Z (§4.6
+// спеки). Тег строится из ключей патча, поэтому набор имени и набор подписи в один и
+// тот же блок в общий шаг НЕ сливаются — это разные поля, и общий шаг откатывал бы
+// вместе с именем всю набранную подпись.
 //
 // Форматирование (`kind: 'format'`) коалесится ОТДЕЛЬНО от набора, хотя патч у них
 // один и тот же — `{ text }`. Общий тег означал бы, что «набрал подпись, выделил слово,
@@ -994,7 +1014,8 @@ const snapshot = (s: BuilderState): Snapshot => ({
 function updateBlockTag(id: string, patch: BlockPatch, kind?: UpdateKind): string | null {
   if (kind === 'format') return `ub:${id}:format`
   const keys = Object.keys(patch)
-  const textOnly = keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings')
+  const textOnly =
+    keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings' || k === 'name')
   return textOnly ? `ub:${id}:${keys.sort().join('+')}` : null
 }
 
@@ -1114,12 +1135,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             ...newBlock(type),
             id,
             text: carriesText(type) ? src.text : [],
+            // Имя переживает смену типа (§5.4 спеки): его дал автор, и относится оно к
+            // вопросу, а не к тому, чем на него отвечают. Роняется ровно там, где ему
+            // нечего называть — новый тип не собирает ответов (и схема имя у такого
+            // запрещает).
+            name: isAnswerableType(type) ? src.name : undefined,
             required: isAnswerableType(type) ? src.required : false,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
           // short_text→email не должна молча разваливать ряд); вне whitelist они
           // роняются здесь — иначе автосейв ловил бы 422 (нормализация добьёт пару).
           carryLayout(src, converted)
+          carryPlaceholder(src, converted)
           return structural({
             blocks: s.blocks.map((b) => (b.id === id ? converted : b)),
           })

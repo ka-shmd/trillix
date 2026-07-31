@@ -439,6 +439,45 @@ describe('createBuilderStore', () => {
     expect(after.blocks).toBe(before.blocks)
   })
 
+  // §5.4 спеки: имя дал автор, и относится оно к вопросу, а не к тому, чем на него
+  // отвечают. Плейсхолдер терялся здесь же и по той же причине — одно правило чинит
+  // оба случая.
+  it('changeBlockType сохраняет имя и плейсхолдер, пока новый тип их несёт', () => {
+    const store = createBuilderStore()
+    const id = store.getState().addBlockAfter(null, 'short_text')
+    store.getState().updateBlock(id, { name: 'fio', settings: { placeholder: 'Иван' } })
+
+    store.getState().changeBlockType(id, 'email')
+
+    const b = store.getState().blocks[0]!
+    expect(b.name).toBe('fio')
+    expect(b.settings?.placeholder).toBe('Иван')
+  })
+
+  // Новый тип ответов не собирает — имени нечего называть, и схема его у такого типа
+  // запрещает: остаться оно не может даже «на всякий случай».
+  it('changeBlockType роняет имя на неотвечаемом типе', () => {
+    const store = createBuilderStore()
+    const id = store.getState().addBlockAfter(null, 'short_text')
+    store.getState().updateBlock(id, { name: 'fio' })
+
+    store.getState().changeBlockType(id, 'heading')
+
+    expect(store.getState().blocks[0]!.name).toBeUndefined()
+  })
+
+  // Шкала плейсхолдера не показывает — переносить его туда значило бы положить в
+  // документ ключ, которого автор на полотне не увидит и не сотрёт.
+  it('changeBlockType роняет плейсхолдер на типе, который его не носит', () => {
+    const store = createBuilderStore()
+    const id = store.getState().addBlockAfter(null, 'short_text')
+    store.getState().updateBlock(id, { settings: { placeholder: 'Иван' } })
+
+    store.getState().changeBlockType(id, 'scale')
+
+    expect(store.getState().blocks[0]!.settings?.placeholder).toBeUndefined()
+  })
+
   it('changeBlockType на несуществующем блоке — no-op', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
@@ -1043,6 +1082,34 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().blocks[0]!.required).toBe(true)
     store.getState().undo() // снимает required
     expect(store.getState().blocks[0]!.required).toBe(false)
+  })
+
+  // Демо-критерий этапа 16.4: имя из двадцати символов — один шаг Mod+Z, а не
+  // двадцать. Первый потребитель склейки ВНЕ settings (§4.6 спеки).
+  it('набор имени вопроса коалесится в один шаг отмены', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    const id = store.getState().blocks[0]!.id
+    for (const n of ['f', 'fi', 'fio']) store.getState().updateBlock(id, { name: n })
+
+    store.getState().undo()
+    expect(store.getState().blocks[0]!.name).toBeUndefined()
+    store.getState().undo()
+    expect(store.getState().blocks).toEqual([])
+  })
+
+  // Имя и подпись — разные поля одного вопроса, и общий шаг откатывал бы вместе с
+  // именем всю набранную подпись.
+  it('имя и текст в один блок — разные шаги отмены', () => {
+    const store = createBuilderStore()
+    store.getState().addQuestionAfter(null, 'short_text')
+    const [title, field] = store.getState().blocks
+    store.getState().updateBlock(title!.id, { text: textFromString('Как вас зовут?') })
+    store.getState().updateBlock(field!.id, { name: 'fio' })
+
+    store.getState().undo()
+    expect(store.getState().blocks[1]!.name).toBeUndefined()
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Как вас зовут?')
   })
 
   it('hydrate очищает историю', () => {
