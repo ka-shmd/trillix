@@ -6,8 +6,6 @@ import {
   type FormSchema,
   type Option,
   SCHEMA_VERSION,
-  DEFAULT_SCALE_MAX,
-  DEFAULT_SCALE_MIN,
   isChoiceType,
   isAnswerableType,
   isCaptionType,
@@ -26,6 +24,7 @@ import {
   packOptionRows,
   packRows,
 } from '@fields/groups'
+import { editorKind } from './kinds/index'
 
 // Стор билдера — высокочастотный локальный документ формы (ARCHITECTURE §5.1):
 // каждая правка text — синхронная операция над стором, мгновенный UI, а
@@ -227,13 +226,14 @@ export type BuilderActions = {
 
 export type BuilderStore = BuilderState & BuilderActions
 
-// newBlock создаёт валидный черновой блок: пустой text, выведенный позже groupId,
-// дефолты. Choice-тип стартует с ПУСТЫМ списком: в схеме живут только настоящие
-// варианты, а место для набора даёт «призрак» — пустая строка в конце списка,
-// которой в документе нет (BlockRow, GhostOption). Пустой вариант больше не
-// сохраняется и не публикуется, зато каретке всегда есть куда встать (§2.1).
-// Non-choice остаётся с пустыми settings (иначе ValidateSchema отвергнет опции
-// у не-choice).
+// newBlock создаёт валидный черновой блок: скелет (пустой text, выведенный позже
+// groupId, пустые настройки) плюс дефолты своего типа — они объявлены в файле типа
+// (kinds/<type>.tsx, поле defaults), а не перечислены здесь ветвями.
+//
+// Скелет остаётся с ПУСТЫМИ settings: тип, которому нечего в них положить, обязан
+// приехать без чужих ключей, иначе ValidateSchema отвергнет документ (опции у не-choice).
+// Слияние поверхностное — settings типа заменяют пустые целиком, вложенного мержа тут не
+// нужно и не должно быть: «дефолты» это готовый набор, а не патч.
 function newBlock(type: BlockType): Block {
   const base: Block = {
     id: newBlockId(),
@@ -243,16 +243,7 @@ function newBlock(type: BlockType): Block {
     required: false,
     settings: {},
   }
-  if (isChoiceType(type)) return { ...base, settings: { options: [] } }
-  // Согласие создаётся обязательным: это дефолт, а не правило типа (решение
-  // владельца) — владелец может выключить, если это маркетинг-opt-in.
-  if (type === 'consent') return { ...base, required: true }
-  // Шкала создаётся с диапазоном: схема без него валидна (недособранный черновик),
-  // но респонденту нужен готовый ряд делений, а не пустота.
-  if (type === 'scale') {
-    return { ...base, settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } }
-  }
-  return base
+  return { ...base, ...editorKind(type).defaults }
 }
 
 // regroup выводит groupId из раскладки. Правило (v2, фаза 8.7): группами считаются

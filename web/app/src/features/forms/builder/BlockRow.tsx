@@ -26,23 +26,19 @@ import { CSS } from '@dnd-kit/utilities'
 import { Asterisk, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
-  carriesText,
   isCaptionType,
-  isChoiceType,
+  isSingleChoiceType,
   isContentType,
   plainText,
-  SCALE_LOWER_BOUND,
-  SCALE_UPPER_BOUND,
-  scaleRange,
   supportsPlaceholder,
   type Span,
 } from '@entities/formSchema'
-import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { rowFacts } from './kinds/index'
+import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { noLayoutAnimation } from './dnd'
-import { typeIcons } from './blockTypeIcons'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
@@ -53,7 +49,6 @@ import { richCaret } from './richCaret'
 import { cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
-import { ImageField } from './ImageField'
 import { arrowDir, chords } from './shortcuts'
 import { useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
@@ -213,38 +208,28 @@ export function BlockRow({
       ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
         'Текст, или «/» — чтобы добавить вопрос'
       : 'Текст, или «/» для поля'
-  // Как строка называется — для скринридера и для e2e. У всех типов, кроме `text`,
-  // это же и видимая подсказка; у `text` подсказка появляется только под фокусом
-  // (см. textPh выше), а ИМЯ строки мигать не должно.
-  const captionName =
-    block.type === 'title'
-      ? 'Заголовок вопроса'
-      : block.type === 'label'
-        ? 'Подпись поля'
-        : block.type === 'heading'
-          ? 'Заголовок раздела'
-          : block.type === 'consent'
-            ? 'Текст согласия'
-            : textPh
-  const captionPh = block.type === 'text' ? (labelFocused ? captionName : undefined) : captionName
+  // Имя строки, её классы и глиф — факты типа (kinds/<type>.tsx, row). У абзаца имя
+  // ПОЗИЦИОННОЕ (name: null): пустая строка значит разное в разных местах документа,
+  // поэтому оно берётся из подсказки места — это отношение, а не свойство типа.
+  //
+  // row === null не бывает: единственный такой тип — заголовок формы, а его рисует
+  // FormTitleRow (SlashEditor отделяет его splitFormTitle ещё до списка строк).
+  const row = rowFacts(block.type)
+  const isTextRow = row?.surface === 'text'
+  const captionName = (isTextRow ? row.name : null) ?? textPh
+  // Подсказка абзаца видна только под фокусом, а ИМЯ строки мигать не должно.
+  const captionPh =
+    isTextRow && row.placeholderOnFocusOnly
+      ? labelFocused
+        ? captionName
+        : undefined
+      : captionName
   const isContent = isContentType(block.type)
-  const isImage = block.type === 'image'
-  // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
-  // нет отдельного превью-контрола: галочка стоит слева от самого текста.
-  const isConsent = block.type === 'consent'
-  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и
-  // consent. Поля ввода строки не несут — их подпись живёт отдельным блоком.
-  const hasTextLine = carriesText(block.type)
-  const captionCls =
-    block.type === 'title'
-      ? 'rf-label placeholder:font-semibold'
-      : block.type === 'label'
-        ? 'rf-label rf-label--sm placeholder:font-medium'
-        : block.type === 'heading'
-          ? 'rf-heading placeholder:font-semibold'
-          : block.type === 'consent'
-            ? 'rf-consent placeholder:font-normal'
-            : 'rf-text placeholder:font-normal'
+  const isConsent = isTextRow && row.mark === 'check'
+  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
+  // Поля ввода строки не несут — их подпись живёт отдельным блоком.
+  const hasTextLine = isTextRow
+  const captionCls = isTextRow ? row.className : ''
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
@@ -435,12 +420,11 @@ export function BlockRow({
   const iconBtn =
     'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
-  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (fields.css):
-  // вопрос rf-label — 28px (h-7), абзац rf-text и согласие rf-consent — 24px (h-6).
-  // Кластеры absolute и центрируют значок по своей высоте, поэтому только так они
-  // стоят на уровне текста. Жёсткое значение тут — баг: при h-8 (32px) значки висят
-  // ниже строки у всех типов сразу. Меняется вместе с line-height в fields.css.
-  const rowLineH = block.type === 'title' || block.type === 'heading' ? 'h-7' : 'h-6'
+  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
+  // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
+  // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
+  // они стоят на уровне текста.
+  const rowLineH = row?.lineH ?? 'h-6'
 
   return (
     <div
@@ -611,7 +595,7 @@ export function BlockRow({
             </div>
           </div>
         </SlashMenu>
-      ) : isChoiceType(block.type) ? (
+      ) : row?.surface === 'choice' ? (
         <div className="min-w-0">
           <OptionsInline
             block={block}
@@ -625,7 +609,7 @@ export function BlockRow({
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
-      ) : supportsPlaceholder(block.type) ? (
+      ) : row?.surface === 'placeholder' ? (
         <div className="min-w-0">
           <AnswerField
             block={block}
@@ -639,7 +623,9 @@ export function BlockRow({
           />
         </div>
       ) : (
-        // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
+        // Объектная остановка — фокусируемая строка с кольцом (§2.2): картинка, дата,
+        // шкала. Что стоит внутри, объявляет сам тип (row.Control), поэтому карты
+        // «тип → контрол» здесь больше нет.
         <ObjectStop
           block={block}
           insideQuestion={insideQuestion}
@@ -652,13 +638,7 @@ export function BlockRow({
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
           onRowShift={(dir) => onRowShift(block.id, dir)}
         >
-          {isImage ? (
-            <ImageField block={block} formId={formId} />
-          ) : block.type === 'scale' ? (
-            <ScaleInline block={block} />
-          ) : (
-            <AnswerField block={block} />
-          )}
+          {row?.surface === 'object' && <row.Control block={block} formId={formId} />}
         </ObjectStop>
       )}
     </div>
@@ -743,9 +723,13 @@ function ObjectStop({
   // здесь двигает саму строку: movesRow дефолтный.
   // insideQuestion меняет ПОДПИСЬ пункта Mod+Alt+→ в карте: на не первой строке
   // группы аккорд собирает ряд со своим заголовком, а не с предыдущим вопросом (§6.6).
+  // Контекст подсказок объявляет сам тип (row.hint): у картинки Mod+Enter открывает
+  // файловый диалог, у даты и шкалы открывать нечего — это разные контексты карты, а не
+  // один «объект» (§7).
+  const objectRow = rowFacts(block.type)
   const rowFocus = useRowFocus(
     block.id,
-    block.type === 'image' ? 'image' : 'object',
+    objectRow?.surface === 'object' ? objectRow.hint : 'object',
     false,
     true,
     insideQuestion,
@@ -831,72 +815,9 @@ function ObjectStop({
   )
 }
 
-// AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
-// автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит
-// респондент. date — статичное превью (в поле даты плейсхолдер не показывается).
-// ScaleInline — редактор шкалы: живое превью делений (тот же rf-scale, что увидит
-// респондент) плюс выбор диапазона.
-//
-// Концы выбираются из <select>, а не вводятся числом, намеренно: ValidateSchema
-// строго требует min < max в пределах [0,10], а свободный ввод даёт невалидные
-// промежуточные состояния (пустое поле, min>max посреди набора) — автосейв ловил бы
-// 422 на каждое нажатие. Список вариантов делает такое состояние невозможным.
-function ScaleInline({ block }: { block: Block }) {
-  const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const { min, max } = scaleRange(block)
-
-  const set = (next: { min?: number; max?: number }) => {
-    const m = next.min ?? min
-    const x = next.max ?? max
-    updateBlock(block.id, {
-      // Максимум не может опуститься до минимума: держим его хотя бы на шаг выше.
-      settings: { ...block.settings, scaleMin: m, scaleMax: Math.max(x, m + 1) },
-    })
-  }
-
-  const selectCls =
-    'h-7 rounded border border-muted-foreground/30 bg-transparent px-1.5 text-sm text-foreground'
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Только контрол, без FieldShell: подпись рисует строка заголовка выше —
-          оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой).
-          Просвет подпись→шкала (14px) даёт групповой контейнер, не свой mt (ритм 13.3). */}
-      <BlockControl block={block} />
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <label className="flex items-center gap-1.5">
-          от
-          <select
-            className={selectCls}
-            value={min}
-            onChange={(e) => set({ min: Number(e.target.value) })}
-          >
-            {[SCALE_LOWER_BOUND, SCALE_LOWER_BOUND + 1].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-1.5">
-          до
-          <select
-            className={selectCls}
-            value={max}
-            onChange={(e) => set({ max: Number(e.target.value) })}
-          >
-            {Array.from({ length: SCALE_UPPER_BOUND - min }, (_, i) => min + 1 + i).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-    </div>
-  )
-}
-
+// AnswerField — редактируемый плейсхолдер поля: автор вводит сюда текст, который увидит
+// респондент в пустом поле (settings.placeholder). Поверхность 'placeholder' и только она —
+// объектные остановки (картинка, дата, шкала) рисуют контрол своего типа (kinds/*).
 function AnswerField({
   block,
   insideQuestion = false,
@@ -988,40 +909,20 @@ function AnswerField({
       onBackspaceDelete(block.id)
     }
   }
-  // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
-  // место под глиф типа справа (см. index.css).
-  const cls = 'rf-input rf-input-typed'
+  // Плейсхолдер правится многострочно только у длинного ответа — факт его типа. От него
+  // же зависит положение глифа (к верхней строке, а не по центру высоты).
+  const fieldRow = rowFacts(block.type)
+  const multiline = fieldRow?.surface === 'placeholder' && !!fieldRow.multiline
 
-  // Глиф типа поля в правом углу — подсказка автору, ЧТО это за поле, когда
-  // подпись ещё не написана. Только в редакторе: у респондента тип виден по
-  // самому контролу, и в публичной форме Tally такого глифа нет (проверено
-  // замером). Берём typeIcons — тот же словарь, что в slash-меню и диалоге
-  // добавления, чтобы тип выглядел одинаково везде, где о нём говорят.
-  // pointer-events-none обязателен: иначе глиф съедает клик по правому краю поля.
-  const typeGlyph = (
-    <span
-      aria-hidden="true"
-      className={`pointer-events-none absolute right-2 text-muted-foreground/70 ${
-        block.type === 'long_text' ? 'top-2' : 'top-1/2 -translate-y-1/2'
-      }`}
-    >
-      {typeIcons[block.type]}
-    </span>
-  )
   // Обёртка — только якорь глифа; ширину берёт из .rf-field-wrap (index.css),
   // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (14px)
   // даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не нужен (был бы
   // двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
-    <div className={`rf-field-wrap ${wide ? 'rf-field-wrap--wide' : ''}`}>
+    <FieldWrap block={block} wide={wide} glyphTop={multiline}>
       {control}
-      {typeGlyph}
-    </div>
+    </FieldWrap>
   )
-
-  if (!supportsPlaceholder(block.type)) {
-    return wrap(<input type="date" disabled className={`${cls} pointer-events-none`} />)
-  }
   const focusProps = {
     onFocus: () => {
       setFocused(true)
@@ -1032,7 +933,7 @@ function AnswerField({
       rowFocus.onBlur(e)
     },
   }
-  if (block.type === 'long_text') {
+  if (multiline) {
     return wrap(
       <textarea
         ref={(el) => {
@@ -1045,7 +946,7 @@ function AnswerField({
         placeholder={hint}
         // block: убрать базлайн-просвет inline-block textarea (см. подпись выше) —
         // иначе под длинным полем копится ~7px и ритм 13.3 расходится.
-        className={`block ${cls}`}
+        className={`block ${FIELD_CLS}`}
         {...focusProps}
       />,
       true,
@@ -1060,7 +961,7 @@ function AnswerField({
       onChange={(e) => setPh(e.target.value)}
       onKeyDown={onFieldKeyDown}
       placeholder={hint}
-      className={cls}
+      className={FIELD_CLS}
       {...focusProps}
     />,
   )
@@ -1124,6 +1025,9 @@ function OptionsInline({
   const removeOption = useBuilderStore((s) => s.removeOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
+  // Умеет ли ЭТОТ список ряды вариантов — факт типа (kinds/<type>.tsx, row.optionRows).
+  const choiceRow = rowFacts(block.type)
+  const optionRows = choiceRow?.surface === 'choice' && choiceRow.optionRows
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
   // вариант — поэтому у списка свои чипы, а не текстовые.
   const rowFocus = useRowFocus(block.id, 'option')
@@ -1254,7 +1158,9 @@ function OptionsInline({
       // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
       // У dropdown рядов нет, и жест уходит вопросу (см. проп onRowShift).
       e.preventDefault()
-      if (block.type === 'dropdown') return onRowShift(chords.rowRight(e) ? 'right' : 'left')
+      // Ряды вариантов есть не у всякого списка (row.optionRows): у dropdown их нет —
+      // список живёт в нативном select, и жест уходит ВОПРОСУ.
+      if (!optionRows) return onRowShift(chords.rowRight(e) ? 'right' : 'left')
       const prev = options[i - 1]
       if (chords.rowLeft(e)) takeOptionOwnRow(block.id, optionId)
       else if (prev) placeOptionInRow(block.id, optionId, prev.id)
@@ -1373,7 +1279,7 @@ function OptionsInline({
               варианты перестают уезжать в опубликованную форму. */}
           <GhostOption
             ref={ghostRef}
-            multiple={block.type === 'multi_choice'}
+            multiple={!isSingleChoiceType(block.type)}
             onType={(text) => {
               pendingFocus.current = addOption(block.id, text)
             }}
@@ -1502,7 +1408,7 @@ function OptionCard({
   })
   const placeholder = `Вариант ${index + 1}`
   const key = optionKey(index)
-  const multiple = block.type === 'multi_choice'
+  const multiple = !isSingleChoiceType(block.type)
   return (
     // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
     // всей строкой блока, и от него крестики расцветали у всех вариантов разом при

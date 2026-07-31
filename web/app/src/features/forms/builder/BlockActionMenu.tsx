@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Asterisk, Copy, Replace, Trash2 } from 'lucide-react'
 import { type Block, isCaptionType } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
-import { typeIcons } from './blockTypeIcons'
+import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
   Command,
@@ -128,7 +128,7 @@ export function BlockActionMenu({
                         close()
                       }}
                     >
-                      {typeIcons[t.type]}
+                      {typeIcon(t.type)}
                       {t.label}
                     </CommandItem>
                   ))}

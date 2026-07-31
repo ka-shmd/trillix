@@ -10,7 +10,7 @@ import {
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
 import { chords } from './shortcuts'
-import { typeIcons } from './blockTypeIcons'
+import { typeIcon } from './blockTypeIcons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -113,7 +113,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
                       shown === b.key ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                     }`}
                   >
-                    <span className="text-muted-foreground">{typeIcons[b.type]}</span>
+                    <span className="text-muted-foreground">{typeIcon(b.type)}</span>
                     {b.label}
                   </button>
                 ))}
@@ -131,7 +131,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
             <>
               <div className="p-5">
                 <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">{typeIcons[activeMeta.type]}</span>
+                  <span className="text-muted-foreground">{typeIcon(activeMeta.type)}</span>
                   <h3 className="text-base font-semibold">{activeMeta.label}</h3>
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">{activeMeta.description}</p>

@@ -1,5 +1,7 @@
 import { type BlockType } from '@entities/formSchema'
 
+import { editorKind, orderedTypes } from './kinds/index'
+
 // Разделы меню добавления блока (v2, фаза 8.7):
 //   • «Вопросы» — бандл: подпись (title) + поле. Выбор создаёт озаглавленный вопрос
 //     (дефолт Tally: заголовок стоит).
@@ -27,63 +29,41 @@ export interface MenuItem {
   description: string
 }
 
-// Отвечаемые типы — их подписи/описания (единый источник). Стоят и в «Вопросах»
-// (бандлом), и в «Отдельных полях» (голыми).
-const FIELD_TYPES: { type: BlockType; label: string; description: string }[] = [
-  { type: 'short_text', label: 'Короткий ответ', description: 'Однострочный ответ — имя, короткая фраза, ссылка.' },
-  { type: 'long_text', label: 'Длинный ответ', description: 'Многострочный развёрнутый ответ.' },
-  { type: 'email', label: 'Email', description: 'Адрес электронной почты с проверкой формата.' },
-  { type: 'phone', label: 'Телефон', description: 'Номер телефона. Проверяется мягко — любой формат записи.' },
-  { type: 'number', label: 'Число', description: 'Числовой ответ — количество, возраст, сумма.' },
-  { type: 'scale', label: 'Шкала', description: 'Оценка по шкале — от 1 до 5, NPS 0–10 и подобное.' },
-  { type: 'single_choice', label: 'Один из списка', description: 'Выбор одного варианта из списка (радиокнопки).' },
-  { type: 'dropdown', label: 'Выпадающий список', description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.' },
-  { type: 'multi_choice', label: 'Несколько из списка', description: 'Выбор нескольких вариантов из списка (флажки).' },
-  { type: 'date', label: 'Дата', description: 'Выбор даты.' },
-  { type: 'consent', label: 'Согласие', description: 'Галочка согласия со своим текстом — обработка данных, оферта, рассылка.' },
-]
+// Уточнение описания под раздел: один и тот же тип в «Вопросах» приезжает с заголовком, в
+// «Отдельных полях» — голым, и автор обязан видеть разницу в самом пункте.
+const GROUP_SUFFIX: Record<BlockGroup, string> = {
+  question: ' С заголовком.',
+  field: ' Без заголовка — подпись сгенерируется из плейсхолдера.',
+  layout: '',
+}
 
-// Лэйаут-типы (подписи и контент) — по одному пункту.
-const LAYOUT_TYPES: { type: BlockType; label: string; description: string }[] = [
-  { type: 'title', label: 'Заголовок вопроса', description: 'Крупная подпись вопроса. Аналитика берёт из неё имя вопроса.' },
-  { type: 'label', label: 'Подпись', description: 'Мелкая подпись поля — для компактных вопросов и полей регистрации.' },
-  { type: 'heading', label: 'Заголовок раздела', description: 'Крупный заголовок секции формы. Не запрашивает ответ.' },
-  { type: 'text', label: 'Текст', description: 'Статический абзац — пояснение или инструкция. Не запрашивает ответ.' },
-  { type: 'image', label: 'Картинка', description: 'Изображение на полотне формы (PNG или JPEG). Не запрашивает ответ.' },
-]
+// Префикс ключа пункта: тип стоит в двух разделах, а key обязан быть уникальным. Записан
+// явно, а не выведен из первой буквы раздела: ключи уезжают в e2e и в тесты навигации
+// меню, и «q» из «question» — совпадение, на которое опираться не стоит.
+const GROUP_KEY: Record<BlockGroup, string> = { question: 'q', field: 'f', layout: 'l' }
 
-export const MENU_ITEMS: ReadonlyArray<MenuItem> = [
-  ...FIELD_TYPES.map(
-    (f): MenuItem => ({
-      key: `q_${f.type}`,
-      group: 'question',
-      type: f.type,
-      bundle: true,
-      label: f.label,
-      description: `${f.description} С заголовком.`,
+// MENU_ITEMS выводится из реестра типов (kinds/*): состав разделов объявляет сам тип
+// (menu в его файле), подписи и описания — оттуда же. До фазы 16 здесь лежали два ручных
+// списка (FIELD_TYPES и LAYOUT_TYPES), то есть третье место, где перечислены типы, — и
+// тип, забытый в них, просто не появлялся в меню, ничего не ломая заметно.
+//
+// Порядок сохранён прежний — вопросы, поля, лэйаут, а внутри раздела порядок
+// BLOCK_TYPES: на нём стоит плоский индекс клавиатурной навигации инлайн-меню.
+export const MENU_ITEMS: ReadonlyArray<MenuItem> = BLOCK_GROUP_ORDER.flatMap((group) =>
+  orderedTypes
+    .filter((type) => editorKind(type).menu[group])
+    .map((type): MenuItem => {
+      const kind = editorKind(type)
+      return {
+        key: `${GROUP_KEY[group]}_${type}`,
+        group,
+        type,
+        bundle: group === 'question',
+        label: kind.label,
+        description: `${kind.description}${GROUP_SUFFIX[group]}`,
+      }
     }),
-  ),
-  ...FIELD_TYPES.map(
-    (f): MenuItem => ({
-      key: `f_${f.type}`,
-      group: 'field',
-      type: f.type,
-      bundle: false,
-      label: f.label,
-      description: `${f.description} Без заголовка — подпись сгенерируется из плейсхолдера.`,
-    }),
-  ),
-  ...LAYOUT_TYPES.map(
-    (l): MenuItem => ({
-      key: `l_${l.type}`,
-      group: 'layout',
-      type: l.type,
-      bundle: false,
-      label: l.label,
-      description: l.description,
-    }),
-  ),
-]
+)
 
 // filterMenuItems — пункты меню типов, отфильтрованные подстрокой по названию
 // (единый фильтр для инлайн-слеша и «+»-диалога). Пустой запрос → весь список.
