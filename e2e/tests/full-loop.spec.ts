@@ -125,10 +125,13 @@ test('регистрация → форма → публикация → отв�
   await settingsPopup.getByRole('combobox', { name: 'Конец шкалы' }).click()
   await page.getByRole('option', { name: '7', exact: true }).click()
   await page.keyboard.press('Escape')
-  // Деления шкалы — кнопки внутри группы вопроса: было пять (1–5), стало семь.
-  await expect(
-    page.getByRole('group', { name: scaleQuestion }).getByRole('button'),
-  ).toHaveCount(7)
+  // Деления шкалы — кнопки внутри её группы НА ПОЛОТНЕ: было пять (1–5), стало семь.
+  // Считаем внутри строки, а не по имени вопроса: у одной и той же роли `group` имена
+  // на двух поверхностях разные. На странице респондента BlockField берёт в aria-label
+  // подпись вопроса (ниже так и ищем), а на полотне BlockControl подписи не знает —
+  // там имя вырождается в «Поле». Локатор по имени вопроса на полотне не находит
+  // ничего и падает по таймауту.
+  await expect(scaleRow.getByRole('group').getByRole('button')).toHaveCount(7)
 
   // У согласия своё имя строки: текст согласия правится строкой заголовка, потому
   // что он и есть label блока (галочка слева — как у респондента).
