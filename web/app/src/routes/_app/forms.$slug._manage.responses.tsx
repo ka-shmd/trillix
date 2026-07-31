@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { type Block, isAnswerableType } from '@entities/formSchema'
+import { type Block, isAnswerableType, plainText } from '@entities/formSchema'
 import { groupMeta } from '@fields/groups'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
@@ -254,7 +254,20 @@ function SubmissionPanel({
   )
 }
 
+// Как вопрос подписан в панели ответа. Имя вопроса (фаза 16, ADR §10) стоит первым —
+// той же ступенью, что в domain.questionLabel: колонка выгрузки и подпись в этой
+// панели обязаны называть вопрос ОДИНАКОВО. Разошедшись, два экрана одного кабинета
+// показывали бы владельцу разные формы — ровно то, о чём предупреждает ANALYTICS.md.
+//
+// Последней ступени («Тип N») здесь нет: она требует нумерации вопросов по всем
+// версиям формы, которой у экрана нет, — вместо неё честное «(без названия)».
 function blockTitle(b: Block, caption?: string): string {
-  return (caption ?? '').trim() || (b.settings?.placeholder ?? '').trim() || '(без названия)'
+  return (
+    (b.name ?? '').trim() ||
+    (caption ?? '').trim() ||
+    plainText(b.text).trim() ||
+    (b.settings?.placeholder ?? '').trim() ||
+    '(без названия)'
+  )
 }
 

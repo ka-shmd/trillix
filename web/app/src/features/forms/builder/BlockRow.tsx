@@ -1589,6 +1589,13 @@ function OptionCard({
   const updateOption = useBuilderStore((s) => s.updateOption)
   const [menuOpen, setMenuOpen] = useState(false)
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
+  // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
+  const inputEl = useRef<HTMLInputElement | null>(null)
+  // Действие из попапа само уводит каретку (дублирование — на копию, удаление — к
+  // соседу; оба считает список). Тот же флаг и та же причина, что у BlockActionMenu:
+  // возврат на свою карточку затёр бы поставленный мгновением раньше фокус.
+  const movedCaretRef = useRef(false)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: option.id,
     animateLayoutChanges: noLayoutAnimation,
@@ -1634,9 +1641,24 @@ function OptionCard({
             значило бы спрятать управление совсем. */}
         <OptionActionMenu
           open={menuOpen}
-          onOpenChange={setMenuOpen}
-          onDuplicate={onDuplicate}
-          onDelete={onRemove}
+          // Закрытие без действия (Esc, клик мимо) возвращает каретку на свою
+          // карточку. Без этого она падала в body — Radix ставит фокус на поповер при
+          // открытии, а возврат на якорь мы гасим сами, — и вся клавиатура полотна
+          // умирала до первого клика мышью (находка ревью 16.2б).
+          onOpenChange={(open) => {
+            setMenuOpen(open)
+            if (open) return
+            if (!movedCaretRef.current) inputEl.current?.focus()
+            movedCaretRef.current = false
+          }}
+          onDuplicate={() => {
+            movedCaretRef.current = true
+            onDuplicate()
+          }}
+          onDelete={() => {
+            movedCaretRef.current = true
+            onRemove()
+          }}
           anchor={
             <button
               type="button"
@@ -1694,7 +1716,10 @@ function OptionCard({
             карточка схлопнулась бы в точку. */}
         <span className="rf-option-edit" data-value={option.label || placeholder}>
           <input
-            ref={inputRef}
+            ref={(el) => {
+              inputEl.current = el
+              inputRef(el)
+            }}
             value={option.label}
             placeholder={placeholder}
             aria-label={placeholder}

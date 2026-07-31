@@ -1098,18 +1098,20 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().blocks).toEqual([])
   })
 
-  // Имя и подпись — разные поля одного вопроса, и общий шаг откатывал бы вместе с
-  // именем всю набранную подпись.
-  it('имя и текст в один блок — разные шаги отмены', () => {
+  // Имя и текст — разные поля, и общий шаг откатывал бы вместе с именем весь
+  // набранный текст. Проверяется на ОДНОМ блоке (согласие несёт и text, и name):
+  // на разных блоках теги расходятся по id, и ключевая часть тега не сторожится
+  // вовсе — тест был зелёным при любом её устройстве (находка ревью 16.4).
+  it('имя и текст в ОДИН блок — разные шаги отмены', () => {
     const store = createBuilderStore()
-    store.getState().addQuestionAfter(null, 'short_text')
-    const [title, field] = store.getState().blocks
-    store.getState().updateBlock(title!.id, { text: textFromString('Как вас зовут?') })
-    store.getState().updateBlock(field!.id, { name: 'fio' })
+    const id = store.getState().addBlockAfter(null, 'consent')
+    store.getState().updateBlock(id, { text: textFromString('Соглашаюсь с обработкой') })
+    store.getState().updateBlock(id, { name: 'consent' })
 
     store.getState().undo()
-    expect(store.getState().blocks[1]!.name).toBeUndefined()
-    expect(plainText(store.getState().blocks[0]!.text)).toBe('Как вас зовут?')
+    const after = store.getState().blocks[0]!
+    expect(after.name).toBeUndefined()
+    expect(plainText(after.text)).toBe('Соглашаюсь с обработкой')
   })
 
   it('hydrate очищает историю', () => {

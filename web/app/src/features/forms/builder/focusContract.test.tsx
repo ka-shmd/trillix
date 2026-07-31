@@ -473,6 +473,36 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     expect(el().dataset.richLine).toBeDefined()
   })
 
+  // То же правило у попапа ВАРИАНТА — и его пришлось чинить: попап варианта
+  // onOpenChange только закрывал слой, а возврат Radix на якорь гасил (как у попапа
+  // блока), поэтому Esc ронял каретку в body и вся клавиатура полотна умирала до
+  // первого клика мышью (находка ревью 16.2б). Комментарий в коде утверждал, что
+  // фокус ставит список, — верно для «дублировать»/«удалить», но не для закрытия без
+  // действия: там состав вариантов не меняется, и ставить фокус некому.
+  it('попап ВАРИАНТА: закрытие без действия возвращает каретку на карточку', () => {
+    const { engine } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'A' }] },
+        },
+      ],
+    })
+    engine.focusBlock('ch', 'start')
+    const optionInput = document.activeElement as HTMLInputElement
+
+    fireEvent.pointerDown(screen.getByLabelText('Настройки варианта'), { clientX: 5, clientY: 5 })
+    fireEvent.click(screen.getByLabelText('Настройки варианта'), { clientX: 5, clientY: 5 })
+    expect(document.body.textContent ?? '').toContain('Дублировать вариант')
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' })
+
+    expect(document.activeElement).toBe(optionInput)
+  })
+
   it('на варианте choice — открывает меню всего блока', () => {
     const { engine } = setup({
       schemaVersion: SCHEMA_VERSION,
