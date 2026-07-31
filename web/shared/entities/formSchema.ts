@@ -6,6 +6,7 @@ import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/
 import {
   MAX_BLOCKS,
   MAX_FORM_TITLE_LEN,
+  MAX_QUESTION_NAME_LEN,
   MAX_REDIRECT_URL_LEN,
   MAX_SPANS,
   MAX_SUBMIT_LABEL_LEN,
@@ -220,6 +221,11 @@ export const blockSchema = z
     groupId: idSchema,
     type: blockTypeSchema,
     text: richTextSchema.optional(),
+    // Имя вопроса (фаза 16, ADR §10) — необязательное ПЕРЕОПРЕДЕЛЕНИЕ строки, которой
+    // вопрос называется в данных (колонка CSV, шаг воронки, ключ сводки). Пусто = имя
+    // выводится, как выводилось (Go, domain.questionLabel). Верхний уровень, а не
+    // settings: свойство любого отвечаемого блока, а не типа.
+    name: z.string().max(MAX_QUESTION_NAME_LEN).optional(),
     required: z.boolean().optional(),
     settings: settingsSchema.optional(),
   })
@@ -230,6 +236,15 @@ export const blockSchema = z
         code: 'custom',
         message: `тип ${b.type} не несёт собственного текста`,
         path: ['text'],
+      })
+    }
+    // Имя — только у отвечаемых: у подписи и контента нет ответов, значит нет ни
+    // колонки CSV, ни шага воронки, которые оно называет. Зеркалит Go.
+    if (b.name && !isAnswerableType(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не собирает ответ и не имеет имени`,
+        path: ['name'],
       })
     }
     // column — у любого типа, кроме заголовка формы (canShareRow). Ряд — свойство

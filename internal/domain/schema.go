@@ -49,6 +49,11 @@ const (
 	MaxSubmitLabelLen = 100
 	MaxPlaceholderLen = 200
 	MaxImageKeyLen    = 200
+	// MaxQuestionNameLen — длина ИМЕНИ вопроса (Block.Name, фаза 16): строки, которой
+	// вопрос называется в данных — заголовок колонки CSV, подпись шага воронки, ключ
+	// сводки. Не MaxTextLen: это короткий идентификатор для аналитики, а не текст
+	// вопроса (тот живёт в подписи и ограничен своим лимитом).
+	MaxQuestionNameLen = 100
 	// Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода;
 	// на телефоне больше десяти в строку не помещается (нужно число — есть number).
 	// Низ — 0: NPS считается от нуля.
@@ -222,11 +227,16 @@ type BlockSettings struct {
 //
 // Text — богатый текст (v3): плоский массив спанов, см. spans.go. Плоскую строку для
 // данных даёт PlainText.
+// Name — имя вопроса (фаза 16, ADR §10): необязательное ПЕРЕОПРЕДЕЛЕНИЕ строки,
+// которой вопрос называется в данных. Пусто — имя выводится как раньше
+// (questionLabel). Верхний уровень, а не Settings: свойство любого отвечаемого
+// блока, а не типа.
 type Block struct {
 	ID       string        `json:"id"`
 	GroupID  string        `json:"groupId"`
 	Type     BlockType     `json:"type"`
 	Text     []Span        `json:"text,omitempty"`
+	Name     string        `json:"name,omitempty"`
 	Required bool          `json:"required,omitempty"`
 	Settings BlockSettings `json:"settings"`
 }
@@ -511,6 +521,15 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	// у прочих подпись живёт отдельным блоком.
 	if !b.Type.carriesText() && len(b.Text) > 0 {
 		return schemaErr("%s: тип %q не несёт собственного текста", at, b.Type)
+	}
+	// Имя — только у отвечаемых: у подписи и контента нет ответов, значит нет ни
+	// колонки CSV, ни шага воронки, которые оно называет. Пустая строка законна и
+	// означает «имя не задано» (канон её не хранит — omitempty).
+	if n := utf8.RuneCountInString(b.Name); n > MaxQuestionNameLen {
+		return schemaErr("%s: имя вопроса длиннее %d символов", at, MaxQuestionNameLen)
+	}
+	if b.Name != "" && !b.Type.isAnswerable() {
+		return schemaErr("%s: тип %q не собирает ответ и не имеет имени", at, b.Type)
 	}
 	if n := utf8.RuneCountInString(b.Settings.Placeholder); n > MaxPlaceholderLen {
 		return schemaErr("%s: placeholder длиннее %d символов", at, MaxPlaceholderLen)

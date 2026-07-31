@@ -25,6 +25,11 @@ export const MAX_SPANS = 200
 // зеркалом в forms.title, оттуда — в <title>, og:title и в потолок поискового запроса,
 // поэтому у него свой, более тесный лимит. Зеркалит MaxFormTitleLen.
 export const MAX_FORM_TITLE_LEN = 200
+// Длина ИМЕНИ вопроса (фаза 16): строки, которой вопрос называется в данных —
+// заголовок колонки CSV, подпись шага воронки, ключ сводки. Не MAX_TEXT_LEN: это
+// короткий идентификатор для аналитики, а не текст вопроса. Зеркалит
+// MaxQuestionNameLen.
+export const MAX_QUESTION_NAME_LEN = 100
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100
