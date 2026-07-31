@@ -162,6 +162,13 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
                                     //   | multi_choice | date | consent (несёт свой text)
                                     // подписи: title | label
                                     // контент: heading | text | image (неотвечаемые)
+      "name": "fio",                // ИМЯ вопроса (фаза 16, ≤100): переопределение
+                                    //   строки, которой вопрос называется в данных
+                                    //   (колонка CSV, шаг воронки, ключ сводки).
+                                    //   Опционально; пусто = имя выводится как
+                                    //   раньше (domain.questionLabel). Только у
+                                    //   отвечаемых — у подписи и контента колонки
+                                    //   не бывает
       "required": true,             // опционально, по умолчанию false
       "settings": {                 // опционально
         "options": [                // только у single_choice / dropdown / multi_choice
