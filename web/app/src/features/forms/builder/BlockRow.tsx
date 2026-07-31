@@ -23,9 +23,10 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
+  isAnswerableType,
   isCaptionType,
   isSingleChoiceType,
   isContentType,
@@ -38,7 +39,7 @@ import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
-import { noLayoutAnimation } from './dnd'
+import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
@@ -49,6 +50,8 @@ import { richCaret } from './richCaret'
 import { cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { arrowDir, chords } from './shortcuts'
 import { useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
@@ -185,6 +188,11 @@ export function BlockRow({
   const slashList = slash ? filterMenuItems(slash.query) : []
   // Меню действий блока (Cmd+. §3.3): открыто ли.
   const [actionOpen, setActionOpen] = useState(false)
+  // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
+  // после перетаскивания (см. обработчик грипа ниже).
+  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Пометка «действие попапа уже поставило каретку»: см. onOpenChange у BlockActionMenu.
+  const movedCaretRef = useRef(false)
   // Текстовая строка в фокусе. Нужно ровно одному: плейсхолдер обычного текста
   // виден только у активной строки, иначе полотно пестрит серым (§7, слой 1).
   const [labelFocused, setLabelFocused] = useState(false)
@@ -219,11 +227,7 @@ export function BlockRow({
   const captionName = (isTextRow ? row.name : null) ?? textPh
   // Подсказка абзаца видна только под фокусом, а ИМЯ строки мигать не должно.
   const captionPh =
-    isTextRow && row.placeholderOnFocusOnly
-      ? labelFocused
-        ? captionName
-        : undefined
-      : captionName
+    isTextRow && row.placeholderOnFocusOnly ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
   const isConsent = isTextRow && row.mark === 'check'
   // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
@@ -243,6 +247,26 @@ export function BlockRow({
   // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
   // свою высоту. Смещение соседей (scale=1) от этого не страдает.
   const style = { transform: CSS.Translate.toString(transform), transition }
+
+  // Слушатели драга грипа: у подписи мульти-группы — групповые (тащится вопрос
+  // целиком), у всех остальных — свои. Одна переменная на оба случая, потому что грип
+  // обязан и спредить их, и звать onPointerDown руками (см. кластер значков ниже).
+  const dragListeners = groupHandle ? groupHandle.listeners : listeners
+
+  // Кластер значков строки ВЫБОРА снят (фаза 16, решение владельца 6 — разворот
+  // решения 15.2, ADR §10 ARCHITECTURE). Управление списком живёт у карточек вариантов
+  // (у каждой свой кластер и свой попап), а самой строкой — у вопроса: подпись и есть
+  // её ручка, оттуда же попап меняет тип ответа и сносит вопрос. Так у списка перестаёт
+  // быть два этажа управления, различающиеся парой пикселей, и закрывается TD-44:
+  // строка выбора не покидает свой вопрос ни мышью, ни с клавиатуры — асимметрии
+  // «мышью можно, клавиатурой нельзя» больше нет.
+  //
+  // Условие про подпись обязательно: строка выбора БЕЗ подписи — сама себе вопрос
+  // (§4.2: субъект настроек голой строки — она сама), и снятый кластер оставил бы её
+  // без единого способа управления мышью. Наличие подписи для строки и означает
+  // requiredFor === undefined (звёздочку показывает подпись), поэтому спрашиваем ровно
+  // это, а не заводим второй проп о составе группы.
+  const ownedByQuestion = row?.surface === 'choice' && requiredFor?.id !== block.id
 
   // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
   // textarea). Строится от АКТУАЛЬНОГО элемента: identity textarea могла смениться
@@ -358,6 +382,37 @@ export function BlockRow({
     engine.focusBlock(focusId, 'end')
   }
 
+  // Субъект НАСТРОЕК попапа (фаза 16, §4.2 спеки). Механизм не изобретается, а
+  // обобщается: requiredFor — это ровно «строка представляет поле своего вопроса»
+  // (считает его GroupRow, который один знает состав группы). Отсюда правило целиком:
+  // кликнули по подписи собранного вопроса — правим его ПОЛЕ (тип, обязательность, а
+  // с 16.4 и имя); кликнули по голой строке ответа — её саму; по контенту или одинокой
+  // подписи — их самих, и типового раздела у них нет.
+  //
+  // Общие действия (удалить, дублировать) остаются адресованы СТРОКЕ, по которой
+  // кликнули, — и на подписи это значит «вопрос целиком», потому что подпись владеет
+  // группой во всех жестах (§4 EDITOR): мусорка сносит группу, драг тащит группу,
+  // дублирование копирует вопрос.
+  const settingsSubject = requiredFor ?? block
+
+  // Выбор типа ИЗ ПОПАПА адресован субъекту настроек и МЕНЯЕТ ЕГО ТИП — всегда, когда
+  // субъект отвечаемый: и на подписи (тип ответа вопроса), и на самой строке ответа.
+  // Через правило ВСТАВКИ (`makeQuestion`/`makeField`, «инпут не встраивается в чужую
+  // группу») попап идти не может: для блока внутри группы вставка кладёт новый блок
+  // НИЖЕ, не трогая исходный, — то есть «сменить тип» ничего не меняет, а плодит
+  // второй вопрос. Слеш-меню и «+» остаются вставкой: там автор добавляет, а не
+  // переназначает, и правило им не трогается (pickType выше).
+  //
+  // Лэйаут-типы остаются вставкой/конверсией самой строки: абзац не может быть ответом
+  // вопроса, и притворяться, что может, попап не должен.
+  function pickTypeForSettings(item: MenuItem) {
+    if (isAnswerableType(settingsSubject.type) && item.group !== 'layout') {
+      engine.focusBlock(changeBlockType(settingsSubject.id, item.type), 'end')
+      return
+    }
+    pickType(item)
+  }
+
   const closeSlash = () => setSlash(null)
 
   // Выбор типа из инлайн-слеша: сначала вырезаем из текста «/» и набранный фильтр
@@ -451,7 +506,19 @@ export function BlockRow({
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
       <BlockActionMenu
         open={actionOpen}
-        onOpenChange={setActionOpen}
+        // Закрытие попапа — тоже операция полотна, и каретка после неё обязана быть
+        // определена (§12). Возврат фокуса Radix'ом на якорь (нулевой span) мы гасим
+        // сами, поэтому по умолчанию каретка возвращается НА СВОЮ СТРОКУ — это верно и
+        // для Esc, и для клика мимо, и для действий, которые строку не покидают
+        // (обязательность). Действия, уводящие каретку сами (дублировать, удалить,
+        // сменить тип), помечаются movedCaretRef — иначе возврат на строку затёр бы их
+        // фокус, поставленный мгновением раньше.
+        onOpenChange={(open) => {
+          setActionOpen(open)
+          if (open) return
+          if (!movedCaretRef.current) engine.focusBlock(block.id, 'end')
+          movedCaretRef.current = false
+        }}
         block={block}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
         // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
@@ -461,9 +528,22 @@ export function BlockRow({
         onToggleRequired={() =>
           requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
         }
-        onDuplicate={() => duplicateBlock(block.id)}
-        onDelete={() => onDeleteBlock(block.id)}
-        onPickType={pickType}
+        // Каретка уходит на копию (§12): без этого после «Дублировать» активным
+        // элементом остаётся body — поповер закрылся, а возврат фокуса на его якорь
+        // мы гасим сами.
+        onDuplicate={() => {
+          const copy = duplicateBlock(block.id)
+          movedCaretRef.current = true
+          if (copy) engine.focusBlock(copy, 'end')
+        }}
+        onDelete={() => {
+          movedCaretRef.current = true
+          onDeleteBlock(block.id)
+        }}
+        onPickType={(item) => {
+          movedCaretRef.current = true
+          pickTypeForSettings(item)
+        }}
       />
 
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
@@ -491,54 +571,85 @@ export function BlockRow({
           и полем, утащить поле из своего вопроса — законные действия, а не «действия,
           которых не бывает», как считал снятый замок. У вариантов choice поверх этого
           свои кластеры (см. OptionCard). */}
-      <div
-        // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
-        // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
-        // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
-        // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
-        className={`absolute top-1.5 flex ${
-          mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
-        } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
-      >
-        <button
-          type="button"
-          tabIndex={-1}
-          onClick={() =>
-            captionGuard(() =>
-              isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
-            )
-          }
-          aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
-          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+      {!ownedByQuestion && (
+        <div
+          // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
+          // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
+          // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
+          // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
+          className={`absolute top-1.5 flex ${
+            mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
+          } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
         >
-          <Trash2 className="size-4" />
-        </button>
-        <button
-          type="button"
-          tabIndex={-1}
-          onClick={() => onInsertBelow(block.id)}
-          aria-label="Добавить блок ниже (выбрать тип)"
-          className={iconBtn}
-        >
-          <Plus className="size-4" />
-        </button>
-        <button
-          type="button"
-          {...(groupHandle ? groupHandle.attributes : attributes)}
-          {...(groupHandle ? groupHandle.listeners : listeners)}
-          // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
-          // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
-          tabIndex={-1}
-          aria-label={
-            groupHandle && isCaptionType(block.type)
-              ? 'Перетащить вопрос (группу)'
-              : 'Перетащить блок'
-          }
-          className={`${iconBtn} cursor-grab active:cursor-grabbing`}
-        >
-          <GripVertical className="size-4" />
-        </button>
-      </div>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() =>
+              captionGuard(() =>
+                isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
+              )
+            }
+            aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
+            className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+          >
+            <Trash2 className="size-4" />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => onInsertBelow(block.id)}
+            aria-label="Добавить блок ниже (выбрать тип)"
+            className={iconBtn}
+          >
+            <Plus className="size-4" />
+          </button>
+          <button
+            type="button"
+            {...(groupHandle ? groupHandle.attributes : attributes)}
+            {...dragListeners}
+            // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
+            // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
+            tabIndex={-1}
+            // Грип — два жеста на одной ручке (§4.1 спеки фазы 16): тащим — перенос,
+            // кликаем — настройки. Имя называет КЛИК: перетаскивание скринридеру и так
+            // недоступно (Tab сюда не заходит, перенос с клавиатуры — Alt+↑/↓), а
+            // подсказка про оба жеста живёт в title, который видит мышь.
+            aria-label={
+              groupHandle && isCaptionType(block.type) ? 'Настройки вопроса' : 'Настройки блока'
+            }
+            title="Настройки — клик, перенос — перетаскивание"
+            // ВАЖНО: свой onPointerDown стоит ПОСЛЕ спреда listeners, а значит перебивает
+            // одноимённый обработчик dnd-kit — именно им сенсор начинает драг. Поэтому
+            // вызываем его руками; забыть этот вызов = грип перестаёт таскать, и молча:
+            // ни типы, ни тесты про клик этого не видят.
+            onPointerDown={(e) => {
+              gripDownRef.current = { x: e.clientX, y: e.clientY }
+              dragListeners?.onPointerDown?.(e)
+            }}
+            onClick={(e) => {
+              // Хвостовой click после настоящего драга: браузер шлёт его по mouseup,
+              // и без этой проверки попап открывался бы после КАЖДОГО перетаскивания.
+              // Отличаем по тому же порогу, по которому сенсор решает «это драг»
+              // (DRAG_ACTIVATION_DISTANCE) — иначе два числа разъедутся и меню начнёт
+              // выскакивать «иногда».
+              const from = gripDownRef.current
+              gripDownRef.current = null
+              // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance сравнивает
+              // через >): при >= жест ровно на пороге пропадал бы молча — сенсор драг
+              // не начал, а guard уже съел клик.
+              if (
+                from &&
+                Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
+              )
+                return
+              setActionOpen(true)
+            }}
+            className={`${iconBtn} cursor-grab active:cursor-grabbing`}
+          >
+            <GripVertical className="size-4" />
+          </button>
+        </div>
+      )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
@@ -551,9 +662,7 @@ export function BlockRow({
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
           себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
-      {needsCaption && (
-        <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />
-      )}
+      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -679,7 +788,6 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
     </div>
   )
 }
-
 
 // ObjectStop — объектная остановка строки-объекта (image/date/scale): у неё нет
 // текстовой поверхности, поэтому «каретка стоит на объекте» — это фокус на самой
@@ -1023,6 +1131,7 @@ function OptionsInline({
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const reorderOptions = useBuilderStore((s) => s.reorderOptions)
   const removeOption = useBuilderStore((s) => s.removeOption)
+  const duplicateOption = useBuilderStore((s) => s.duplicateOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
   // Умеет ли ЭТОТ список ряды вариантов — факт типа (kinds/<type>.tsx, row.optionRows).
@@ -1043,7 +1152,13 @@ function OptionsInline({
   // Тот же порог активации, что у полотна: клик по ручке не должен начинать драг.
   // Клавиатурного сенсора здесь нет намеренно — у вариантов своя карта (Alt+↑↓,
   // Mod+Alt+←/→), и второй клавиатурный путь через ручку дублировал бы её.
-  const optSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  // Порог — та же константа, что у полотна и у обоих грипов: у списка вариантов свой
+  // изолированный DndContext, но смысл числа один, и литерал здесь означал бы, что
+  // правка константы рассинхронизирует слой вариантов (попап карточки начал бы
+  // выскакивать «иногда» после драга).
+  const optSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
+  )
   // Свободная ячейка спрашивается указателем и ПЕРВОЙ — как зона жеста у вопросов:
   // цель намеренная, в общий конкурс центров её пускать незачем.
   const optCollision: CollisionDetection = (args) => {
@@ -1252,6 +1367,13 @@ function OptionsInline({
                     }}
                     onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
                     onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
+                    onDuplicate={() => {
+                      // Каретка — на копию (§12), через тот же pendingFocus, что у
+                      // остальных операций списка: варианта ещё нет в DOM, фокус
+                      // ставится, когда массив приедет рендером.
+                      const copy = duplicateOption(block.id, o.id)
+                      if (copy) pendingFocus.current = copy
+                    }}
                     rowFocus={rowFocus}
                   />
                 ))}
@@ -1369,6 +1491,64 @@ function GhostOption({
   )
 }
 
+// OptionActionMenu — попап варианта (фаза 16, решение владельца 7). Состав из двух
+// пунктов и никаких настроек типа: у варианта их нет, а «в колонку» — свойство строки
+// (раскладку списка задаёт она), не карточки. Отдельный маленький компонент, а не
+// BlockActionMenu с флагами: у того субъект — блок, и половина его пунктов (сменить
+// тип, обязательность) варианту бессмысленна.
+function OptionActionMenu({
+  open,
+  onOpenChange,
+  anchor,
+  onDuplicate,
+  onDelete,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  anchor: ReactNode
+  onDuplicate: () => void
+  onDelete: () => void
+}) {
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverAnchor asChild>{anchor}</PopoverAnchor>
+      <PopoverContent
+        className="w-52 p-0"
+        align="start"
+        side="bottom"
+        // Фокус после действия ставит сам список (pendingFocus/onLeaveTop) — возврат
+        // Radix на якорь глушим, иначе каретка уезжает на кнопку значка (§12).
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
+        <Command>
+          <CommandList>
+            <CommandGroup>
+              <CommandItem
+                onSelect={() => {
+                  onDuplicate()
+                  onOpenChange(false)
+                }}
+              >
+                <Copy className="size-4" />
+                Дублировать вариант
+              </CommandItem>
+              <CommandItem
+                onSelect={() => {
+                  onDelete()
+                  onOpenChange(false)
+                }}
+              >
+                <Trash2 className="size-4" />
+                Удалить вариант
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
 // контекста. Значки — тот же кластер, что у строк полотна (удалить + перетащить),
 // только адресованы варианту: строка ответа своих значков лишилась, потому что ею
@@ -1383,6 +1563,7 @@ function OptionCard({
   inputRef,
   onKeyDown,
   onRemove,
+  onDuplicate,
   rowFocus,
 }: {
   block: Block
@@ -1399,9 +1580,14 @@ function OptionCard({
   // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
   // один знает соседей. Мусорка и Backspace в пустом ведут в одну точку.
   onRemove: () => void
+  // Дублирование варианта с исходом каретки на копию — тем же путём, что удаление:
+  // список знает и соседей, и движок.
+  onDuplicate: () => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: option.id,
     animateLayoutChanges: noLayoutAnimation,
@@ -1440,19 +1626,53 @@ function OptionCard({
         >
           <Trash2 className="size-4" />
         </button>
-        <button
-          type="button"
-          aria-label="Переместить вариант"
-          className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
-          {...attributes}
-          {...listeners}
-          // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
-          // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
-          // здесь решает, чей победит.
-          tabIndex={-1}
-        >
-          <GripVertical className="size-4" />
-        </button>
+        {/* Грип варианта — та же пара жестов, что у грипа строки (§4.1): тащим —
+            перенос, кликаем — настройки. Состав попапа — «удалить» и «дублировать»
+            (решение владельца 7): с решением 6 карточка варианта остаётся
+            единственным местом, где списком управляют, и оставить её без попапа
+            значило бы спрятать управление совсем. */}
+        <OptionActionMenu
+          open={menuOpen}
+          onOpenChange={setMenuOpen}
+          onDuplicate={onDuplicate}
+          onDelete={onRemove}
+          anchor={
+            <button
+              type="button"
+              aria-label="Настройки варианта"
+              title="Настройки — клик, перенос — перетаскивание"
+              className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+              {...attributes}
+              {...listeners}
+              // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
+              // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
+              // здесь решает, чей победит.
+              tabIndex={-1}
+              // Свой onPointerDown перебивает одноимённый обработчик dnd-kit (он идёт
+              // из спреда выше) — зовём его руками, иначе вариант перестаёт таскаться.
+              // Тот же порядок пропов уже съедал драг у грипа строки.
+              onPointerDown={(e) => {
+                gripDownRef.current = { x: e.clientX, y: e.clientY }
+                listeners?.onPointerDown?.(e)
+              }}
+              onClick={(e) => {
+                const from = gripDownRef.current
+                gripDownRef.current = null
+                // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance
+                // сравнивает через >): при >= жест ровно на пороге пропадал бы молча —
+                // сенсор драг не начал, а guard уже съел клик.
+                if (
+                  from &&
+                  Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
+                )
+                  return
+                setMenuOpen(true)
+              }}
+            >
+              <GripVertical className="size-4" />
+            </button>
+          }
+        />
       </div>
       <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
         {/* Что стоит перед текстом, решает тип — ровно как у респондента

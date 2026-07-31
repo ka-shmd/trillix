@@ -46,15 +46,22 @@ import {
   splitFormTitle,
 } from '@fields/groups'
 import { useBuilderStore } from './storeContext'
-import { captionLoss, needsCaptionFor, planBlockDrop, rowBoundaryTarget, rowPosition } from './store'
+import {
+  captionLoss,
+  needsCaptionFor,
+  planBlockDrop,
+  rowBoundaryTarget,
+  rowPosition,
+} from './store'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
-import { noLayoutAnimation } from './dnd'
+import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
 import { chords, formatLabel, type ShortcutContext, type ShortcutFilters } from './shortcuts'
+import { useGlobalChord } from './useGlobalChord'
 import { ShortcutSheet } from './ShortcutSheet'
 import {
   ActiveRowApiProvider,
@@ -191,24 +198,24 @@ export function SlashEditor({
     sheetOpenRef.current = sheet.open
   })
   const openSheet = () => setSheet({ open: true, ...snapshotRef.current })
-  useEffect(() => {
-    // globalThis.KeyboardEvent — нативное событие окна: имя KeyboardEvent в этом файле
-    // занято React-синтетическим (импорт сверху).
-    function onKey(e: globalThis.KeyboardEvent) {
-      if (!chords.cheatSheet(e)) return
-      // Mod+/ — тогл: повторное нажатие при открытой шпаргалке закрывает её, как Esc.
-      e.preventDefault()
-      if (sheetOpenRef.current) setSheet((s) => ({ ...s, open: false }))
-      else setSheet({ open: true, ...snapshotRef.current })
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  // globalThis.KeyboardEvent — нативное событие окна: имя KeyboardEvent в этом файле
+  // занято React-синтетическим (импорт сверху). Правило цели — в useGlobalChord: в
+  // поле попапа «/» остаётся литералом, а сама шпаргалка (диалог без полей) закрывается
+  // тем же аккордом, что открыла.
+  useGlobalChord((e: globalThis.KeyboardEvent) => {
+    if (!chords.cheatSheet(e)) return
+    // Mod+/ — тогл: повторное нажатие при открытой шпаргалке закрывает её, как Esc.
+    e.preventDefault()
+    if (sheetOpenRef.current) setSheet((s) => ({ ...s, open: false }))
+    else setSheet({ open: true, ...snapshotRef.current })
+  })
 
   // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
-  // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки.
+  // клавиатурный сенсор — доступное перемещение стрелками при захвате ручки. Порог —
+  // общая константа (dnd.ts): по нему же грип отличает клик-настройки от хвостового
+  // click'а после драга.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
 

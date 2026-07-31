@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
+import { type ComponentProps } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
@@ -21,7 +22,11 @@ afterEach(cleanup)
 
 // Полотно теста: настоящие BlockRow с тем же requiredFor, который им считает
 // GroupRow, — иначе тест проверял бы не то правило, что живёт в билдере.
-function setup(schema: FormSchema) {
+// Групповая ручка: её в полотне даёт GroupRow подписи мульти-группы (драг тащит весь
+// вопрос). В тестах подсовывается спаем — чтобы видеть, доходит ли до неё нажатие.
+type GroupHandle = NonNullable<ComponentProps<typeof BlockRow>['groupHandle']>
+
+function setup(schema: FormSchema, groupHandle: GroupHandle | null = null) {
   const store = createBuilderStore()
   store.getState().hydrate(schema)
   const engine = createFocusEngine()
@@ -56,7 +61,7 @@ function setup(schema: FormSchema) {
                 key={b.id}
                 block={b}
                 formId="f"
-                groupHandle={null}
+                groupHandle={isCaptionType(b.type) ? groupHandle : null}
                 requiredFor={requiredFor(b, i)}
                 // Как в GroupRow: голая строка ответа подсказывает, чего ей не
                 // хватает (§4.4 спеки фазы 15); consent исключён — его текст и есть
@@ -101,7 +106,7 @@ describe('кластер значков строки', () => {
     setup(QUESTION)
     expect(controls('inp')).toContain('Удалить блок')
     expect(controls('inp')).toContain('Добавить блок ниже (выбрать тип)')
-    expect(controls('inp')).toContain('Перетащить блок')
+    expect(controls('inp')).toContain('Настройки блока')
   })
 
   it('мусорка строки ответа сносит поле, а подпись оставляет', () => {
@@ -118,18 +123,164 @@ describe('кластер значков строки', () => {
   it('у подписи вопроса значки на месте — это ручка всего вопроса', () => {
     setup(QUESTION)
     expect(controls('cap')).toContain('Удалить вопрос (группу)')
-    expect(controls('cap')).toContain('Перетащить блок')
+    expect(controls('cap')).toContain('Настройки блока')
   })
 
   it('у голого поля значки остаются — управлять им больше некому', () => {
     setup(QUESTION)
     expect(controls('bare')).toContain('Удалить блок')
-    expect(controls('bare')).toContain('Перетащить блок')
+    expect(controls('bare')).toContain('Настройки блока')
   })
 
   it('у одиночного абзаца значки остаются', () => {
     setup(QUESTION)
     expect(controls('para')).toContain('Удалить блок')
+  })
+})
+
+// Грип — две роли на одной ручке (фаза 16, §4.1 спеки): тащим — перенос, кликаем —
+// настройки. Так ведёт себя Notion, и вход бесплатен: порог активации сенсора и так
+// стоял затем, «чтобы клик по ручке не начинал перетаскивание». Доделать пришлось одно —
+// НЕ считать настройками хвостовой click, который браузер шлёт по mouseup после
+// настоящего драга: без этого попап открывался бы после каждого перетаскивания.
+describe('грип: клик — настройки, перетаскивание — перенос', () => {
+  const grip = (id: string) => row(id).getByLabelText('Настройки блока')
+
+  // Жест мышью: нажали в точке from, отпустили (и кликнули) в точке to.
+  function gesture(el: HTMLElement, from: [number, number], to: [number, number]) {
+    fireEvent.pointerDown(el, { clientX: from[0], clientY: from[1] })
+    fireEvent.click(el, { clientX: to[0], clientY: to[1] })
+  }
+
+  it('клик без сдвига открывает настройки блока', () => {
+    setup(QUESTION)
+
+    gesture(grip('inp'), [10, 10], [10, 10])
+
+    // Попап порталится из строки — ищем по всему документу.
+    expect(screen.getByText('Дублировать')).toBeTruthy()
+  })
+
+  // Свой onPointerDown у грипа стоит после спреда listeners и потому ПЕРЕБИВАЕТ
+  // одноимённый обработчик dnd-kit — тот самый, которым сенсор начинает драг. Ошибка
+  // молчаливая: типы её не видят, тесты про клик тоже (клик работает как ни в чём не
+  // бывало), а блоки просто перестают таскаться. Проверяем на групповой ручке —
+  // слушатели у обоих случаев берутся из одной переменной.
+  it('нажатие на грип доходит до слушателей dnd-kit — драг не съеден', () => {
+    const onPointerDown = vi.fn()
+    setup(QUESTION, {
+      attributes: {},
+      listeners: { onPointerDown },
+    } as unknown as GroupHandle)
+
+    fireEvent.pointerDown(row('cap').getByLabelText('Настройки вопроса'), {
+      clientX: 10,
+      clientY: 10,
+    })
+
+    expect(onPointerDown).toHaveBeenCalledTimes(1)
+  })
+
+  it('click после перетаскивания настройки НЕ открывает', () => {
+    setup(QUESTION)
+
+    // Сдвиг больше порога активации сенсора — этот жест был драгом, а click у него
+    // хвостовой.
+    gesture(grip('inp'), [10, 10], [60, 24])
+
+    expect(screen.queryByText('Дублировать')).toBeNull()
+  })
+})
+
+// Субъект настроек (фаза 16, §4.2 спеки): попап, открытый с ПОДПИСИ собранного вопроса,
+// адресован полю этого вопроса — его тип, его обязательность. Общие действия остаются у
+// строки, а у подписи «строка» и значит «вопрос целиком»: она владеет группой во всех
+// прочих жестах.
+describe('субъект настроек: подпись правит поле своего вопроса', () => {
+  const openMenu = (id: string, label: string) => {
+    fireEvent.pointerDown(row(id).getByLabelText(label), { clientX: 10, clientY: 10 })
+    fireEvent.click(row(id).getByLabelText(label), { clientX: 10, clientY: 10 })
+  }
+
+  // Один и тот же тип стоит в двух разделах меню («Вопросы» — бандл с подписью,
+  // «Отдельные поля» — голое поле), поэтому выбираем ВНУТРИ раздела: без этого тест
+  // не отличал бы вставку вопроса от смены типа поля.
+  const pick = (section: string, label: string) => {
+    const group = screen.getByText(section).closest('[cmdk-group]') as HTMLElement
+    fireEvent.click(within(group).getByText(label))
+  }
+
+  it('смена типа с подписи меняет тип ПОЛЯ, а не плодит второй вопрос', () => {
+    const { store } = setup(QUESTION)
+
+    openMenu('cap', 'Настройки блока')
+    fireEvent.click(screen.getByText('Сменить тип'))
+    pick('Вопросы', 'Длинный ответ')
+
+    const blocks = store.getState().blocks
+    // Состав документа не изменился: тот же вопрос, у него сменился тип ответа.
+    expect(blocks.map((b) => b.id)).toEqual(['cap', 'inp', 'bare', 'para'])
+    expect(blocks.find((b) => b.id === 'inp')?.type).toBe('long_text')
+  })
+
+  it('дублирование с подписи копирует вопрос целиком', () => {
+    const { store } = setup(QUESTION)
+
+    openMenu('cap', 'Настройки блока')
+    fireEvent.click(screen.getByText('Дублировать'))
+
+    const types = store.getState().blocks.map((b) => b.type)
+    // Копия вопроса встала сразу за оригиналом: подпись + поле, а не одинокая подпись
+    // вплотную к чужому вопросу.
+    expect(types).toEqual(['title', 'short_text', 'title', 'short_text', 'email', 'text'])
+  })
+
+  // Находка ревью этапа: у строки ответа ВНУТРИ озаглавленного вопроса субъект — она
+  // сама, и попап обязан менять её тип. Через правило вставки этот путь шёл в
+  // makeQuestion/makeField, а те для блока внутри группы кладут новый блок НИЖЕ, не
+  // трогая исходный, — «сменить тип» не меняло ничего и плодило второй вопрос.
+  it('смена типа со строки ответа в вопросе меняет ЕЁ тип', () => {
+    const { store } = setup(QUESTION)
+
+    openMenu('inp', 'Настройки блока')
+    fireEvent.click(screen.getByText('Сменить тип'))
+    pick('Вопросы', 'Длинный ответ')
+
+    const blocks = store.getState().blocks
+    expect(blocks.map((b) => b.id)).toEqual(['cap', 'inp', 'bare', 'para'])
+    expect(blocks.find((b) => b.id === 'inp')?.type).toBe('long_text')
+  })
+
+  // Находка ревью этапа: «Сделать обязательным» каретку не двигает, и без общего
+  // правила закрытия она падала в body — попап размонтирован, возврат Radix на якорь
+  // погашен. Правило: действия, уводящие каретку, помечают себя, остальное (в том числе
+  // Esc и клик мимо) возвращает её на свою строку. Проверяем здесь, а не в
+  // focusContract: пункт обязательности показывается только строке, которая
+  // представляет поле вопроса (requiredFor), а его считает этот стенд.
+  it('«Сделать обязательным» возвращает каретку на строку, а не роняет в body', () => {
+    const { store } = setup(QUESTION)
+
+    openMenu('cap', 'Настройки блока')
+    fireEvent.click(screen.getByText('Сделать обязательным'))
+
+    expect(store.getState().blocks.find((b) => b.id === 'inp')?.required).toBe(true)
+    const caret = document.activeElement as HTMLElement
+    expect(caret.dataset.richLine).toBeDefined()
+    expect(caret.textContent).toBe('Как вас зовут?')
+  })
+
+  it('на голой строке ответа субъект — она сама', () => {
+    const { store } = setup(QUESTION)
+
+    openMenu('bare', 'Настройки блока')
+    fireEvent.click(screen.getByText('Сменить тип'))
+    // Тип без обязательного заголовка: у требующих его (шкала, списки) «отдельное
+    // поле» приезжает вопросом — это правило ВСТАВКИ фазы 13, не субъект настроек.
+    pick('Отдельные поля', 'Длинный ответ')
+
+    const blocks = store.getState().blocks
+    expect(blocks.find((b) => b.id === 'bare')?.type).toBe('long_text')
+    expect(blocks.map((b) => b.id)).toEqual(['cap', 'inp', 'bare', 'para'])
   })
 })
 
@@ -230,11 +381,58 @@ describe('значки варианта', () => {
     ],
   }
 
-  it('у каждого варианта своя мусорка и своя ручка, крестика больше нет', () => {
+  it('у каждого варианта своя мусорка и свой грип-настройки, крестика больше нет', () => {
     setup(CHOICE)
-    // У каждого варианта свой полный набор — поверх кластера самой строки.
+    // У каждого варианта свой полный набор. С фазы 16 грип варианта называет КЛИК
+    // («Настройки варианта»), потому что клик открывает попап, а перетаскивание
+    // осталось прежним жестом той же ручки.
     expect(controls('ch').filter((l) => l === 'Удалить вариант')).toHaveLength(2)
-    expect(controls('ch').filter((l) => l === 'Переместить вариант')).toHaveLength(2)
+    expect(controls('ch').filter((l) => l === 'Настройки варианта')).toHaveLength(2)
+  })
+
+  // Решение владельца 6 (разворот 15.2): у строки выбора в озаглавленном вопросе
+  // собственного кластера нет — ни мусорки, ни «+», ни грипа. Управление списком живёт
+  // у карточек вариантов, самой строкой управляет вопрос (её подпись).
+  it('у строки выбора в вопросе своего кластера нет', () => {
+    setup(CHOICE)
+    expect(controls('ch')).not.toContain('Удалить блок')
+    expect(controls('ch')).not.toContain('Настройки блока')
+    expect(controls('ch')).not.toContain('Добавить блок ниже (выбрать тип)')
+  })
+
+  // Попап варианта (решение владельца 7): два пункта, и оба нужны — с решением 6
+  // карточка стала единственным местом, где списком управляют.
+  it('клик по грипу варианта открывает попап, и «Дублировать» кладёт копию под ним', () => {
+    const { store } = setup(CHOICE)
+    const grip = row('ch').getAllByLabelText('Настройки варианта')[0]!
+
+    fireEvent.pointerDown(grip, { clientX: 10, clientY: 10 })
+    fireEvent.click(grip, { clientX: 10, clientY: 10 })
+    fireEvent.click(screen.getByText('Дублировать вариант'))
+
+    const options = store.getState().blocks.find((b) => b.id === 'ch')!.settings!.options!
+    expect(options.map((o) => o.label)).toEqual(['Соцсети', 'Соцсети', 'Реклама'])
+    // Копия — своя сущность: ответы ключуются id варианта, и общий id присвоил бы
+    // копии чужие ответы.
+    expect(options[1]!.id).not.toBe(options[0]!.id)
+  })
+
+  // Строка выбора БЕЗ подписи — сама себе вопрос (§4.2), и снятый кластер оставил бы
+  // её без единого способа управления мышью.
+  it('у голой строки выбора кластер остаётся', () => {
+    setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        {
+          id: 'lone',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Соцсети' }] },
+        },
+      ],
+    })
+    expect(controls('lone')).toContain('Удалить блок')
+    expect(controls('lone')).toContain('Настройки блока')
   })
 
   it('редактор показывает тот же глиф, что респондент: чекбокс у «нескольких»', () => {

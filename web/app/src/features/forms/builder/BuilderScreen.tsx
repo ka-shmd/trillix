@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -17,6 +17,7 @@ import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { useAutosave } from './useAutosave'
+import { useGlobalChord } from './useGlobalChord'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
@@ -70,24 +71,21 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
   // Горячие клавиши истории на весь экран билдера: Ctrl/Cmd+Z — отмена,
   // Ctrl/Cmd+Shift+Z и Ctrl+Y — повтор. Слушатель живёт вместе с экраном; на
-  // документ-уровне перехватываем и внутри textarea (нативный undo поля уступает
-  // отмене всего документа — так ведёт себя Notion/Tally). Пустой стек — no-op.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
-      // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
-      // undo контролируемого textarea (откат по одному символу).
-      const isUndo = chords.undo(e)
-      const isRedo = chords.redo(e)
-      if (!isUndo && !isRedo) return
-      e.preventDefault()
-      if (isUndo) undo()
-      else redo()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, engine])
+  // документ-уровне перехватываем и внутри textarea полотна (нативный undo поля
+  // уступает отмене всего документа — так ведёт себя Notion/Tally). Пустой стек —
+  // no-op. Исключение одно и его держит useGlobalChord: поле во всплывающем слое
+  // (настройки блока, поиск типа) правит СЕБЯ, а не документ.
+  useGlobalChord((e) => {
+    // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
+    // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
+    // undo контролируемого textarea (откат по одному символу).
+    const isUndo = chords.undo(e)
+    const isRedo = chords.redo(e)
+    if (!isUndo && !isRedo) return
+    e.preventDefault()
+    if (isUndo) undo()
+    else redo()
+  })
 
   return (
     <BuilderStoreContext.Provider value={store}>
@@ -166,9 +164,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' && (
-        <SlashEditor formId={detail.id} engine={engine} />
-      )}
+      {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
           <PreviewPane title={detail.title} />

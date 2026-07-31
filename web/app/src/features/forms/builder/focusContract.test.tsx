@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
@@ -433,6 +433,44 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     expect(text).toContain('Дублировать')
     expect(text).toContain('Сменить тип')
     expect(text).toContain('Удалить')
+  })
+
+  // Действие из попапа — тот же контракт, что у остального полотна: каретка после него
+  // детерминирована. Место опасное: поповер закрывается, а возврат фокуса на его якорь
+  // (позиционированный span) мы гасим сами — значит, если действие не поставит каретку,
+  // активным элементом станет body. Проверяем самое дешёвое к забыванию — дублирование:
+  // у удаления исход фокуса считает полотно (handleDeleteBlock), у смены типа — стор.
+  it('«Дублировать» уводит каретку на копию, а не в body', () => {
+    const { engine, store } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
+    })
+    engine.focusBlock('t', 'end')
+    fireEvent.keyDown(el(), { key: '.', code: 'Period', metaKey: true })
+    const focus = vi.spyOn(engine, 'focusBlock')
+
+    fireEvent.click(screen.getByText('Дублировать'))
+
+    // Строка копии в этом стенде не смонтируется (полотно рендерится из блоков,
+    // снятых на setup), поэтому проверяем ЗАПРОС фокуса — то, за что отвечает
+    // операция. Довести его до каретки на ещё не смонтированной строке — работа
+    // движка (pending), и она проверена своим тестом выше.
+    const copy = store.getState().blocks[1]!
+    expect(copy.id).not.toBe('t')
+    expect(focus).toHaveBeenCalledWith(copy.id, 'end')
+  })
+
+  it('закрытие попапа без действия (Esc) возвращает каретку на строку', () => {
+    const { engine } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
+    })
+    engine.focusBlock('t', 'end')
+    fireEvent.keyDown(el(), { key: '.', code: 'Period', metaKey: true })
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', code: 'Escape' })
+
+    expect(el().dataset.richLine).toBeDefined()
   })
 
   it('на варианте choice — открывает меню всего блока', () => {

@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest'
 
-import { formSchemaSchema, type FormSchema, plainText, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
+import {
+  formSchemaSchema,
+  type FormSchema,
+  plainText,
+  SCHEMA_VERSION,
+  textFromString,
+} from '@entities/formSchema'
 import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
 
-import { captionLoss, createBuilderStore, planBlockDrop, rowBoundaryTarget, rowPosition } from './store'
+import {
+  captionLoss,
+  createBuilderStore,
+  planBlockDrop,
+  rowBoundaryTarget,
+  rowPosition,
+} from './store'
 
 // Стор билдера — чистый TS, гоняем напрямую через getState(), без React. Модель v2
 // (фаза 8.7): вопрос — группа блоков, groupId выводит regroup из раскладки.
@@ -24,6 +36,23 @@ describe('createBuilderStore', () => {
     expect(s.blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
     expect(s.dirty).toBe(true)
     expect(s.blocks[0]?.id).not.toBe(s.blocks[1]?.id)
+  })
+
+  // Дефолты типа лежат литералом в файле типа (kinds/<type>.tsx) и живут весь срок
+  // вкладки. Спред копирует ссылку, поэтому без клона все блоки типа делили бы ОДИН
+  // объект настроек и один массив вариантов; первая же правка «на месте» испортила бы
+  // не блок, а дефолт типа — и следующий новый список приехал бы с чужими вариантами.
+  // Находка ревью этапа 16.1в; сегодня стор пишет настройки иммутабельно, поэтому
+  // сторож ловит именно возврат ловушки, а не текущую поломку.
+  it('два блока одного типа не делят объект настроек', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    store.getState().addBlock('single_choice')
+    const [first, second] = store.getState().blocks
+
+    expect(first?.settings).not.toBe(second?.settings)
+    expect(first?.settings?.options).not.toBe(second?.settings?.options)
+    expect(second?.settings?.options).toEqual(first?.settings?.options)
   })
 
   it('regroup: подпись и поле подряд делят groupId, два поля — разные группы', () => {
@@ -361,7 +390,9 @@ describe('createBuilderStore', () => {
   it('changeBlockType — конверсия на месте (голое поле/лэйаут), id стабилен', () => {
     const store = createBuilderStore()
     store.getState().addBlock('text')
-    store.getState().updateBlock(store.getState().blocks[0]!.id, { text: textFromString('Пропадёт у поля') })
+    store
+      .getState()
+      .updateBlock(store.getState().blocks[0]!.id, { text: textFromString('Пропадёт у поля') })
     const id = store.getState().blocks[0]!.id
 
     const returned = store.getState().changeBlockType(id, 'single_choice')
@@ -613,7 +644,8 @@ describe('createBuilderStore', () => {
 
   it('rowBoundaryTarget: участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
     const store = createBuilderStore()
-    for (const t of ['short_text', 'email', 'phone', 'number'] as const) store.getState().addBlock(t)
+    for (const t of ['short_text', 'email', 'phone', 'number'] as const)
+      store.getState().addBlock(t)
     const [a, b, c, d] = store.getState().blocks
     store.getState().placeInRow(b!.groupId, a!.groupId) // ряд [a, b]
     store.getState().placeInRow(d!.groupId, c!.groupId) // ряд [c, d]
@@ -685,6 +717,63 @@ describe('createBuilderStore', () => {
 
     store.getState().updateBlock(copy.id, { settings: { options: [{ id: 'o1', label: 'Z' }] } })
     expect(store.getState().blocks[0]?.settings?.options?.[0]?.label).toBe('A')
+  })
+
+  // Подпись — ручка вопроса во всех жестах: мусорка сносит группу, драг тащит группу,
+  // Alt+↑↓ двигает вопрос. «Дублировать» из её попапа обязано значить то же (фаза 16,
+  // §4.2): копия одной подписи легла бы вторым заголовком вплотную к своему вопросу —
+  // состояние, которое полотно запрещает как молчаливую подмену имени вопроса.
+  it('duplicateBlock на подписи копирует вопрос целиком', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    store.getState().addBlock('short_text')
+    const caption = store.getState().blocks[0]!
+
+    store.getState().duplicateBlock(caption.id)
+
+    const s = store.getState()
+    expect(s.blocks.map((b) => b.type)).toEqual(['title', 'short_text', 'title', 'short_text'])
+    // Копия — свой вопрос, а не продолжение исходного.
+    expect(s.blocks[2]!.groupId).not.toBe(s.blocks[0]!.groupId)
+    expect(s.blocks[2]!.groupId).toBe(s.blocks[3]!.groupId)
+  })
+
+  it('duplicateBlock на одинокой подписи копирует только её', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('title')
+    const caption = store.getState().blocks[0]!
+
+    store.getState().duplicateBlock(caption.id)
+
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['title', 'title'])
+  })
+
+  // Единственный вход — попап варианта (фаза 16, решение 7).
+  it('duplicateOption кладёт копию под оригиналом и даёт ей НОВЫЙ id', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const block = store.getState().blocks[0]!
+    const a = store.getState().addOption(block.id, 'Соцсети')
+    store.getState().addOption(block.id, 'Реклама')
+
+    const copy = store.getState().duplicateOption(block.id, a)
+
+    const options = store.getState().blocks[0]!.settings!.options!
+    expect(options.map((o) => o.label)).toEqual(['Соцсети', 'Соцсети', 'Реклама'])
+    // Ответы ключуются id варианта: копия с чужим id молча присвоила бы себе его ответы.
+    expect(copy).toBe(options[1]!.id)
+    expect(copy).not.toBe(a)
+  })
+
+  it('duplicateOption на чужом варианте — no-op', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const block = store.getState().blocks[0]!
+    store.getState().addOption(block.id, 'Соцсети')
+    const before = store.getState().blocks
+
+    expect(store.getState().duplicateOption(block.id, 'нет-такого')).toBeNull()
+    expect(store.getState().blocks).toBe(before)
   })
 
   it('addOption добавляет пустой вариант choice-блоку', () => {
@@ -777,7 +866,9 @@ describe('createBuilderStore', () => {
 
   it('hydrate загружает submitLabel из схемы', () => {
     const store = createBuilderStore()
-    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [], submitLabel: 'Отправить ответ' })
+    store
+      .getState()
+      .hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [], submitLabel: 'Отправить ответ' })
     expect(store.getState().submitLabel).toBe('Отправить ответ')
   })
 
@@ -1015,10 +1106,14 @@ describe('createBuilderStore — undo/redo', () => {
     store.getState().addBlock('text')
     const id = store.getState().blocks[0]!.id
     store.getState().makeQuestion(id, 'single_choice')
-    expect(store.getState().blocks.find((b) => b.type === 'single_choice')?.settings?.options).toEqual([])
+    expect(
+      store.getState().blocks.find((b) => b.type === 'single_choice')?.settings?.options,
+    ).toEqual([])
 
     store.getState().addFieldAfter(null, 'multi_choice')
-    expect(store.getState().blocks.find((b) => b.type === 'multi_choice')?.settings?.options).toEqual([])
+    expect(
+      store.getState().blocks.find((b) => b.type === 'multi_choice')?.settings?.options,
+    ).toEqual([])
 
     const textId = store.getState().addBlockAfter(null, 'text')
     store.getState().changeBlockType(textId, 'dropdown')
@@ -1134,7 +1229,9 @@ describe('createBuilderStore — undo/redo', () => {
 
 describe('createBuilderStore — ряды из двух вопросов (фаза 13.6)', () => {
   // Полотно из голых полей: каждое — своя группа.
-  const fields = (...types: ('short_text' | 'email' | 'phone' | 'long_text' | 'single_choice' | 'dropdown')[]) => {
+  const fields = (
+    ...types: ('short_text' | 'email' | 'phone' | 'long_text' | 'single_choice' | 'dropdown')[]
+  ) => {
     const store = createBuilderStore()
     for (const t of types) store.getState().addBlock(t)
     return store
@@ -1244,7 +1341,6 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
       'email',
     ])
   })
-
 
   // То, ради чего стопка и появилась: слева длинный ответ, справа несколько коротких.
   it('несколько блоков в правой колонке: третий встаёт под вторым', () => {
@@ -1529,7 +1625,11 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
   it('makeQuestion на правом участнике сохраняет ряд (бит переезжает на новое поле)', () => {
     const store = paired('short_text', 'short_text')
     store.getState().makeQuestion(store.getState().blocks[1]!.id, 'short_text')
-    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'title', 'short_text'])
+    expect(store.getState().blocks.map((b) => b.type)).toEqual([
+      'short_text',
+      'title',
+      'short_text',
+    ])
     expect(rows(store)).toEqual([2])
   })
 
@@ -1917,7 +2017,9 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
     store.getState().blocks[0]!.settings!.options!
   // Ряд печатаем колонками; стопку в колонке — через «+» (см. groups.test.ts).
   const optRows = (store: ReturnType<typeof createBuilderStore>) =>
-    packOptionRows(options(store)).map((row) => row.map((cell) => cell.map((o) => o.label).join('+')))
+    packOptionRows(options(store)).map((row) =>
+      row.map((cell) => cell.map((o) => o.label).join('+')),
+    )
 
   it('placeOptionInRow — тот же бит и та же упаковка, что у вопросов', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
@@ -2206,7 +2308,11 @@ describe('createBuilderStore — тип с обязательным заголо
 
     expect(types(store)).toEqual(['title', 'short_text', 'title'])
     expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(1)
-    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual(['left', '-', 'right'])
+    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual([
+      'left',
+      '-',
+      'right',
+    ])
   })
 
   it('голый заголовок прямо НАД следующим вопросом остаётся одиночкой', () => {
