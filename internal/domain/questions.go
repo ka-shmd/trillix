@@ -129,6 +129,22 @@ var blockTypeNames = map[BlockType]string{
 // меняет заголовок колонки и для РАНЕЕ собранных ответов. Это сегодняшнее поведение
 // подписей, оставленное осознанно (ADR §10).
 func questionLabel(blk Block, groupCaption string, ordinal int) string {
+	if named := authoredLabel(blk, groupCaption); named != "" {
+		return named
+	}
+	name := blockTypeNames[blk.Type]
+	if name == "" {
+		name = string(blk.Type)
+	}
+	return fmt.Sprintf("%s %d", name, ordinal+1)
+}
+
+// authoredLabel — та же цепочка без последней ступени: всё, что вопросу дал АВТОР.
+// Пустая строка значит «вопрос безымянен», и на этом стоит блокер публикации
+// (publish.go). Вынесено из questionLabel затем, чтобы у гейта и у вывода подписи не
+// было двух копий цепочки: разойдясь, они дали бы отказ публикации там, где колонка
+// названа, — или наоборот. Зеркало на фронте — builder/questionName.ts.
+func authoredLabel(blk Block, groupCaption string) string {
 	if name := strings.TrimSpace(blk.Name); name != "" {
 		return name
 	}
@@ -143,9 +159,5 @@ func questionLabel(blk Block, groupCaption string, ordinal int) string {
 	if strings.TrimSpace(blk.Settings.Placeholder) != "" {
 		return blk.Settings.Placeholder
 	}
-	name := blockTypeNames[blk.Type]
-	if name == "" {
-		name = string(blk.Type)
-	}
-	return fmt.Sprintf("%s %d", name, ordinal+1)
+	return ""
 }

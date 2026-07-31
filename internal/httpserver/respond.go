@@ -19,6 +19,10 @@ type errorBody struct {
 	Code    string            `json:"code"`
 	Message string            `json:"message"`
 	Fields  map[string]string `json:"fields,omitempty"`
+	// Blockers — причины отказа публикации (фаза 16). Отдельным полем, а не в fields:
+	// один блок может дать несколько блокеров (голый список выбора без заголовка —
+	// сразу два), и карта по block_id потеряла бы второй.
+	Blockers domain.PublishBlockers `json:"blockers,omitempty"`
 }
 
 // WriteJSON сериализует payload в JSON с заданным статусом. Ошибку кодирования
@@ -63,6 +67,14 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	var fields domain.AnswerErrors
 	if errors.As(err, &fields) {
 		WriteJSON(w, r, status, errorEnvelope{Error: errorBody{Code: code, Message: message, Fields: fields}})
+		return
+	}
+
+	// Блокеры публикации (фаза 16): тот же приём, что у AnswerErrors, — кабинет
+	// показывает список с переходом к блоку, а не одну строку ошибки.
+	var blockers domain.PublishBlockers
+	if errors.As(err, &blockers) {
+		WriteJSON(w, r, status, errorEnvelope{Error: errorBody{Code: code, Message: message, Blockers: blockers}})
 		return
 	}
 
