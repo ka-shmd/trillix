@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
@@ -11,6 +11,7 @@ import { useHeaderSlot } from '../../../shared/headerSlot'
 import { FormSettings } from './FormSettings'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
+import { publishBlockers } from './publishGate'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SlashEditor } from './SlashEditor'
 import { createFocusEngine } from './focusEngine'
@@ -65,6 +66,14 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   // несохранённых правок и последний автосейв успешен (иначе снапшот будет старым).
   const dirty = useStore(store, (s) => s.dirty)
   const canPublish = status === 'saved' && !dirty
+
+  // Блокеры публикации (фаза 16, этап 16.5) — зеркало доменного правила: тот же
+  // список, что вернул бы Publish, но ДО нажатия, чтобы автор не отправлял заведомо
+  // отказную публикацию и видел, где чинить. Считается по живому документу стора, а
+  // не по серверному черновику: автор чинит на полотне и должен видеть, как причина
+  // исчезает сразу, не дожидаясь автосейва.
+  const blocks = useStore(store, (s) => s.blocks)
+  const blockers = useMemo(() => publishBlockers(blocks), [blocks])
 
   const canUndo = useStore(store, (s) => s.past.length > 0)
   const canRedo = useStore(store, (s) => s.future.length > 0)
@@ -156,7 +165,12 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
               >
                 <Settings className="size-4" />
               </Button>
-              <PublishControls form={detail} canPublish={canPublish} />
+              <PublishControls
+                form={detail}
+                canPublish={canPublish}
+                blockers={blockers}
+                onJump={(id) => engine.focusBlock(id, 'end')}
+              />
             </div>
           </div>,
           headerSlot,

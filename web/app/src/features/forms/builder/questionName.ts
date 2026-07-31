@@ -3,14 +3,17 @@ import { groupMeta } from '@fields/groups'
 
 import { editorKind } from './kinds/index'
 
-// Выведенное имя вопроса — та строка, которой вопрос назовётся в данных (заголовок
-// колонки CSV, шаг воронки, ключ сводки), если автор не задал имя сам. Нужна ровно в
-// одном месте: плейсхолдером поля имени в попапе настроек, чтобы автор ВИДЕЛ вывод, а
-// не догадывался о нём (ADR §10, решение 3 — имя есть переопределение, а не копия).
+// Как вопрос называется в данных (заголовок колонки CSV, шаг воронки, ключ сводки).
+// ЗЕРКАЛО internal/domain/questions.go — правится тем же PR. Цепочка одна, а входов в
+// неё два, и разница между ними существенна:
 //
-// ЗЕРКАЛО domain.questionLabel (internal/domain/questions.go) без первой ступени:
-// явное имя здесь не рассматривается — вопрос как раз в том, что стоит на его месте.
-// Правится тем же PR, что и Go-сторона.
+//   • authoredQuestionName — «чем вопрос назван», ВКЛЮЧАЯ явное имя (зеркало
+//     domain.authoredLabel). Пусто = вопрос безымянен; на этом стоит блокер публикации
+//     (publishGate.ts).
+//   • derivedQuestionName — то же БЕЗ явного имени плюс последняя ступень «Тип N».
+//     Стоит плейсхолдером поля имени в попапе: автор должен видеть, что уйдёт в
+//     колонку, ПОКА поле пусто, — иначе «переопределение» означало бы «догадайся, что
+//     переопределяешь» (ADR §10, решение 3).
 //
 // Расхождение, о котором надо знать: последнюю ступень («Тип N») Go собирает своей
 // картой имён типов, а здесь берётся подпись типа из реестра редактора. Сегодня
@@ -19,7 +22,11 @@ import { editorKind } from './kinds/index'
 // вырожденным случаем — у вопроса нет ни заголовка, ни своего текста, ни подсказки, —
 // а второе объявление имён типов на фронте стоило бы дороже: этап 16.1 их оттуда как
 // раз и убирал.
-export function derivedQuestionName(blocks: Block[], block: Block): string {
+
+// inheritedName — цепочка без явного имени: подпись группы → свой текст → плейсхолдер.
+// Отдельной функцией, потому что оба входа выше используют её целиком, но по-разному:
+// склеить их в один вызов значило бы поставить имя плейсхолдером самому себе.
+function inheritedName(blocks: Block[], block: Block): string {
   // Подпись группы (title перебивает label) — тот же расчёт, которым живут превью и
   // рендерер, а не своя копия правила.
   const caption = groupMeta(blocks).get(block.groupId)?.caption ?? ''
@@ -29,6 +36,18 @@ export function derivedQuestionName(blocks: Block[], block: Block): string {
   if (own.trim() !== '') return own
   const placeholder = block.settings?.placeholder ?? ''
   if (placeholder.trim() !== '') return placeholder
+  return ''
+}
+
+export function authoredQuestionName(blocks: Block[], block: Block): string {
+  const name = (block.name ?? '').trim()
+  if (name !== '') return name
+  return inheritedName(blocks, block)
+}
+
+export function derivedQuestionName(blocks: Block[], block: Block): string {
+  const inherited = inheritedName(blocks, block)
+  if (inherited !== '') return inherited
   // «Тип N»: N — позиция среди ОТВЕЧАЕМЫХ блоков, как её считает QuestionOrder.
   // Черновик — одна версия, поэтому нумерация совпадает с серверной; на форме с
   // историей версий Go считает по объединению версий, и разойтись они могут только
