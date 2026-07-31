@@ -52,7 +52,8 @@ import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
-import { arrowDir, chords } from './shortcuts'
+import { chords } from './shortcuts'
+import { handleRowKeys, type ArrowDir } from './rowKeys'
 import { useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
 
@@ -320,48 +321,32 @@ export function BlockRow({
       }
       if (chords.backspace(e)) return
     }
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      setActionOpen(true)
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.answerAction(e)) {
-      // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2). Проверяем ДО простого Enter.
-      e.preventDefault()
-      onAnswerAction(block.id)
-    } else if (chords.moveGroup(e)) {
-      // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
-      // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
-      // меняется (regroup якорит по id), строка не перемонтируется.
-      e.preventDefault()
-      moveGroup(block.id, arrowDir(e))
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+    // Поверхность ТЕКСТА (§3.3 спеки фазы 16): стрелка и Backspace уходят со строки
+    // только с края каретки, печатный символ и «/» идут в сам текст — поэтому
+    // обработчиков printable/slash у неё нет (слеш-меню ведёт onLabelChange выше).
+    handleRowKeys(e, {
+      actionMenu: () => setActionOpen(true),
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2).
+      answerAction: () => onAnswerAction(block.id),
+      // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Каретка остаётся на месте: id
+      // блока стабилен, groupId от перестановки не меняется (regroup якорит по id),
+      // строка не перемонтируется.
+      moveGroup: (dir) => moveGroup(block.id, dir),
       // Mod+Alt+→/← — в ряд с предыдущим вопросом и обратно (§5). Каретка едет с
       // блоком по той же причине, что у moveGroup: id стабилен, ремаунта нет.
-      e.preventDefault()
-      onRowShift(block.id, chords.rowRight(e) ? 'right' : 'left')
-    } else if (chords.enter(e)) {
+      rowShift: (side) => onRowShift(block.id, side),
+      moveItem: (dir) => captionGuard(() => moveBlock(block.id, dir)),
+      arrow: (dir) => onArrow(block.id, dir),
+      arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
       // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
-      e.preventDefault()
-      onAddBelow(block.id, { inside: e.shiftKey })
-    } else if (chords.backspace(e) && c.caretAtStart()) {
+      enter: (ev) => onAddBelow(block.id, { inside: ev.shiftKey }),
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
-      // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
-      // гасим всегда — нативный Backspace в начале блока и так ничего не делает.
-      e.preventDefault()
-      onBackspaceAtStart(block.id)
-    } else if (chords.moveItem(e)) {
-      e.preventDefault()
-      captionGuard(() => moveBlock(block.id, arrowDir(e)))
-    } else if (chords.arrowUp(e) && c.caretAtStart()) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (chords.arrowDown(e) && c.caretAtEnd()) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    }
+      // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий.
+      backspace: () => onBackspaceAtStart(block.id),
+      backspaceHandles: () => c.caretAtStart(),
+    })
   }
 
   function pickType(item: MenuItem) {
@@ -844,56 +829,33 @@ function ObjectStop({
     insideQuestion,
   )
 
-  // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
-  // ниже) — как и в текстовой строке.
+  // Поверхность ОБЪЕКТА (§3.3 спеки фазы 16): своего текста у неё нет, поэтому стрелка
+  // уходит на соседнюю строку всегда, Backspace сносит блок сразу, а печатный символ и
+  // «/» засевают строку НИЖЕ. Порядок аккордов — общий (rowKeys.ts).
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.answerAction(e)) {
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: () => onDeleteBlock(block.id),
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
-      e.preventDefault()
-      ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click()
-    } else if (chords.moveGroup(e)) {
-      e.preventDefault()
-      onMoveGroup(arrowDir(e))
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+      answerAction: () => ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
+      moveGroup: onMoveGroup,
       // Mod+Alt+→/← — ряд (§5): у объектной остановки (date/scale/картинка в вопросе)
       // жест тот же, что на подписи — переносится ВОПРОС, а не строка.
-      e.preventDefault()
-      onRowShift(chords.rowRight(e) ? 'right' : 'left')
-    } else if (chords.moveItem(e)) {
+      rowShift: onRowShift,
       // Alt+↑↓ двигает саму строку — включая строку ответа собранного вопроса (фаза
       // 15, §4.1): поле уходит из вопроса и возвращается тем же жестом.
-      e.preventDefault()
-      onMove(arrowDir(e))
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (chords.arrowDown(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    } else if (chords.enter(e)) {
-      e.preventDefault()
-      onAddBelow(block.id)
-    } else if (e.key === '/') {
-      e.preventDefault()
-      onAddBelow(block.id, { openMenu: true })
-    } else if (chords.backspace(e)) {
-      e.preventDefault()
-      onBackspaceDelete(block.id)
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault()
-      onAddBelow(block.id, { seed: e.key })
-    }
+      moveItem: onMove,
+      arrow: (dir) => onArrow(block.id, dir),
+      enter: () => onAddBelow(block.id),
+      backspace: () => onBackspaceDelete(block.id),
+      slash: () => onAddBelow(block.id, { openMenu: true }),
+      printable: (key) => onAddBelow(block.id, { seed: key }),
+    })
   }
 
   function onPaste(e: ClipboardEvent<HTMLDivElement>) {
@@ -990,33 +952,24 @@ function AnswerField({
   // состояние: в неё подсаживают новый блок ответа. Left/Right и вертикаль внутри
   // длинного текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
-    const c = textCaret(e.currentTarget)
-    if (onOpenActions && chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (onDeleteBlock && chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (onRowShift && (chords.rowRight(e) || chords.rowLeft(e))) {
-      e.preventDefault()
-      onRowShift(chords.rowRight(e) ? 'right' : 'left')
-    } else if (onMove && chords.moveItem(e) && !chords.moveGroup(e)) {
-      // Проверяется ДО стрелок обхода: Alt+↑↓ — это тоже стрелка, и обход перехватил
-      // бы жест на краях текста. moveGroup исключён явно (в остальных поверхностях
-      // его отсекает порядок веток): Alt+Shift+↑↓ здесь не обрабатывается, и молча
-      // трактовать его как перенос строки значило бы соврать — карта такого не обещает.
-      e.preventDefault()
-      onMove(arrowDir(e))
-    } else if (onArrow && chords.arrowUp(e) && c.caretAtStart()) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    } else if (onBackspaceDelete && chords.backspace(e) && e.currentTarget.value === '') {
-      e.preventDefault()
-      onBackspaceDelete(block.id)
-    }
+    const el = e.currentTarget
+    const c = textCaret(el)
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: onDeleteBlock && (() => onDeleteBlock(block.id)),
+      rowShift: onRowShift,
+      // moveGroup поверхность НЕ объявляет — и потому цепочка глушит Alt+Shift+↑↓, а
+      // не пропускает его в moveItem. Раньше это держала рукописная заплата
+      // (`&& !chords.moveGroup(e)`); теперь правило общее (rowKeys.ts) и работает на
+      // всех поверхностях одинаково.
+      moveItem: onMove,
+      arrow: onArrow && ((dir) => onArrow(block.id, dir)),
+      // Стрелка уходит со строки только с края каретки: вертикаль внутри длинного
+      // плейсхолдера остаётся нативной.
+      arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
+      backspace: onBackspaceDelete && (() => onBackspaceDelete(block.id)),
+      backspaceHandles: () => el.value === '',
+    })
   }
   // Плейсхолдер правится многострочно только у длинного ответа — факт его типа. От него
   // же зависит положение глифа (к верхней строке, а не по центру высоты).
@@ -1215,96 +1168,97 @@ function OptionsInline({
   // действие «набери текст»; остальное сводится к соседям и к судьбе блока.
   function onGhostKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const last = options[options.length - 1]
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.enter(e)) {
-      // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
-      // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
-      // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
-      e.preventDefault()
+    // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
+    // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
+    // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
+    const leaveList = () => {
       onAddBelow(block.id)
       if (options.length === 0) removeBlock(block.id)
-    } else if (chords.backspace(e)) {
+    }
+    const toLastOption = () => optionRefs.current.get(last!.id)?.focus()
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Mod+Enter на призраке делает то же, что Enter: до этапа 16.6 он попадал в
+      // общую ветку `enter` (голый матчер модификаторы не исключает), и поведение
+      // сохранено — объявлено явно вместо того, чтобы держаться на порядке веток.
+      answerAction: leaveList,
+      enter: leaveList,
       // Стирать в призраке нечего: либо возвращаемся к последнему варианту, либо —
       // если их нет — уходит сам блок, как на любой пустой поверхности ответа.
-      e.preventDefault()
-      if (last) optionRefs.current.get(last.id)?.focus()
-      else onBackspaceDelete(block.id)
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      if (last) optionRefs.current.get(last.id)?.focus()
-      else onLeaveTop()
-    } else if (chords.arrowDown(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    }
+      backspace: () => (last ? toLastOption() : onBackspaceDelete(block.id)),
+      arrow: (dir) => {
+        if (dir === 'down') return onArrow(block.id, 'down')
+        if (last) toLastOption()
+        else onLeaveTop()
+      },
+    })
   }
 
-  // Биндинги по e.code (§3.1). i — индекс варианта в options.
+  // Поверхность СПИСКА ВАРИАНТОВ (§3.3 спеки фазы 16). i — индекс варианта в options.
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
     const isLast = i === options.length - 1
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.enter(e) && !e.metaKey && !e.ctrlKey && isLast && empty) {
-      // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
-      // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
-      // Строку заводим ДО удаления: последний вариант уносит с собой сам блок, и
-      // позицию «после группы» родителю было бы уже не от чего считать — новая
-      // строка улетела бы в конец полотна.
-      e.preventDefault()
-      onAddBelow(block.id)
-      removeOption(block.id, optionId)
-    } else if (chords.enter(e)) {
-      // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
-      // тот же жест «действие над ответом» (§3.2).
-      e.preventDefault()
+    // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него.
+    const addAfter = () => {
       pendingFocus.current = addOptionAfter(block.id, optionId)
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
-      // Mod+Alt+→/← — ряд вариантов (§5.1): та же механика и те же аккорды, что у
-      // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
-      // У dropdown рядов нет, и жест уходит вопросу (см. проп onRowShift).
-      e.preventDefault()
-      // Ряды вариантов есть не у всякого списка (row.optionRows): у dropdown их нет —
-      // список живёт в нативном select, и жест уходит ВОПРОСУ.
-      if (!optionRows) return onRowShift(chords.rowRight(e) ? 'right' : 'left')
-      const prev = options[i - 1]
-      if (chords.rowLeft(e)) takeOptionOwnRow(block.id, optionId)
-      else if (prev) placeOptionInRow(block.id, optionId, prev.id)
-      pendingFocus.current = optionId
-    } else if (chords.moveItem(e)) {
-      // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
-      e.preventDefault()
-      const dir = arrowDir(e)
+    }
+    const moveBy = (dir: ArrowDir) => {
       const target = dir === 'up' ? i - 1 : i + 1
       if (target >= 0 && target < options.length) {
         moveOption(block.id, optionId, dir)
         pendingFocus.current = optionId
       }
-    } else if (chords.backspace(e) && empty) {
-      e.preventDefault()
-      removeOptionAt(optionId, i)
-    } else if (chords.arrowDown(e)) {
-      // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
-      e.preventDefault()
-      const next = options[i + 1]
-      if (next) optionRefs.current.get(next.id)?.focus()
-      else onArrow(block.id, 'down')
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      const prev = options[i - 1]
-      if (prev) optionRefs.current.get(prev.id)?.focus()
-      else onLeaveTop()
     }
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Cmd/Ctrl+Enter — тот же жест «действие над ответом» (§3.2): новый вариант.
+      // Выходом из списка он не бывает — эта ветка ниже проверяет голый Enter.
+      answerAction: addAfter,
+      // Alt+Shift+↑↓ у варианта двигает ВАРИАНТ, как Alt+↑↓. Поведение сохранено с
+      // прошлого устройства (там оно держалось не решением, а отсутствием ветки
+      // moveGroup — Alt+Shift подходит под матчер Alt), но теперь объявлено вслух:
+      // цепочка иначе аккорд глушит. Кандидат на решение владельца — карта клавиш
+      // обещает здесь «перенести вопрос».
+      moveGroup: moveBy,
+      // Mod+Alt+→/← — ряд вариантов (§5.1): та же механика и те же аккорды, что у
+      // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
+      // Ряды есть не у всякого списка: у dropdown их нет (список живёт в нативном
+      // select), и жест уходит ВОПРОСУ.
+      rowShift: (side) => {
+        if (!optionRows) return onRowShift(side)
+        const prev = options[i - 1]
+        if (side === 'left') takeOptionOwnRow(block.id, optionId)
+        else if (prev) placeOptionInRow(block.id, optionId, prev.id)
+        pendingFocus.current = optionId
+      },
+      // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
+      moveItem: moveBy,
+      // Единый обход (§2.1): соседний вариант, а за краем списка — соседняя строка.
+      arrow: (dir) => {
+        const near = dir === 'up' ? options[i - 1] : options[i + 1]
+        if (near) return void optionRefs.current.get(near.id)?.focus()
+        if (dir === 'up') onLeaveTop()
+        else onArrow(block.id, 'down')
+      },
+      enter: () => {
+        // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
+        // ложится после всей группы (как «Enter в конце списка» в текстовых
+        // редакторах). Строку заводим ДО удаления: последний вариант уносит с собой
+        // сам блок, и позицию «после группы» родителю было бы уже не от чего считать —
+        // новая строка улетела бы в конец полотна.
+        if (isLast && empty) {
+          onAddBelow(block.id)
+          removeOption(block.id, optionId)
+          return
+        }
+        addAfter()
+      },
+      backspace: () => removeOptionAt(optionId, i),
+      backspaceHandles: () => empty,
+    })
   }
 
   // Дроп варианта (§5.1): на другой вариант — перестановка, в свободную ячейку ряда —
