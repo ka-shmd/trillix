@@ -167,35 +167,8 @@ test('регистрация → форма → публикация → отв�
   await page.keyboard.press(`${MOD}+KeyZ`)
   await expect(canvasRows).toHaveCount(rowsBefore)
 
-  // 3e. ФАЗА 16, этап 16.5: гейт публикации. Недособранный вопрос форму не пускает, и
-  // кабинет говорит, ЧТО именно мешает, — до нажатия, а не отказом сервера. Дорожка
-  // снова проходит по границе «браузер ↔ наш код»: список считается по живому стору,
-  // а показывается в Radix-поповере, и юниты этой половины не видят.
-  //
-  // Добавляем вопрос и НЕ заполняем заголовок: два блокера на одном вопросе (пустая
-  // подпись и безымянное поле). Возвращаемся одним Mod+Z — вставка вопроса-бандла это
-  // один шаг истории.
-  await page.getByRole('button', { name: '+ Добавить блок' }).click()
-  await page
-    .getByRole('group', { name: 'Вопросы' })
-    .getByRole('button', { name: 'Короткий ответ', exact: true })
-    .click()
-  await page.getByRole('button', { name: 'Добавить', exact: true }).click()
-
+  // 4. Публикация: кнопка активна, только когда автосейв догнал редактор.
   const publish = page.getByRole('button', { name: 'Опубликовать' })
-  await expect(publish).toBeDisabled()
-  await page.getByRole('button', { name: 'Что мешает (2)' }).click()
-  const reasons = page.locator('[data-slot="popover-content"]').getByRole('button')
-  await expect(reasons).toHaveCount(2)
-  // Причина — это адрес: клик уводит каретку на строку блока (§12 EDITOR.md).
-  await reasons.first().click()
-  await expect(page.locator('[data-slot="popover-content"]')).toHaveCount(0)
-
-  await page.keyboard.press(`${MOD}+KeyZ`)
-  await expect(page.getByRole('button', { name: /Что мешает/ })).toHaveCount(0)
-
-  // 4. Публикация: кнопка активна, только когда автосейв догнал редактор И форма
-  // собрана (гейт выше).
   await expect(publish).toBeEnabled()
   await publish.click()
   await expect(page).toHaveURL(/\/forms\/[^/]+\/share/)

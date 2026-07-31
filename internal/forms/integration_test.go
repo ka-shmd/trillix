@@ -460,60 +460,6 @@ func TestForms_PublishVersioning(t *testing.T) {
 	}
 }
 
-// Гейт публикации (фаза 16, этап 16.5): недособранная форма ХРАНИТСЯ (автосейв
-// обязан её принять), но не публикуется — 422 со списком блокеров, у каждого адрес
-// блока. Проверяется на HTTP-границе целиком: домен, сервис и конверт ошибки.
-func TestForms_PublishGate(t *testing.T) {
-	resetDB(t)
-	srv := newStack(t)
-	c := registerUser(t, srv, "gate@example.com")
-
-	form := createForm(t, c, srv, "Недособранная")
-
-	// Голый список выбора без заголовка и без вариантов — два блокера на одном блоке.
-	draft := `{"schemaVersion":4,"blocks":[{"id":"b1","groupId":"g1","type":"multi_choice","settings":{}}]}`
-	saved := patchDraftSchema(t, c, srv, form.ID, draft, form.UpdatedAt, http.StatusOK)
-
-	r := do(t, c, http.MethodPost, srv.URL+"/api/v1/forms/"+form.ID+"/publish", "", csrf(t, c, srv.URL))
-	if r.StatusCode != http.StatusUnprocessableEntity {
-		t.Fatalf("публикация недособранной формы: статус %d, ожидался 422; тело=%s", r.StatusCode, body2(t, r))
-	}
-	var env struct {
-		Error struct {
-			Code     string `json:"code"`
-			Blockers []struct {
-				BlockID string `json:"blockId"`
-				Kind    string `json:"kind"`
-				Message string `json:"message"`
-			} `json:"blockers"`
-		} `json:"error"`
-	}
-	decode(t, r, &env)
-	if env.Error.Code != "validation_failed" {
-		t.Fatalf("code = %q, ожидался validation_failed", env.Error.Code)
-	}
-	if len(env.Error.Blockers) != 2 {
-		t.Fatalf("блокеров = %d, ожидалось 2 (безымянный вопрос + список без вариантов): %+v",
-			len(env.Error.Blockers), env.Error.Blockers)
-	}
-	for _, b := range env.Error.Blockers {
-		if b.BlockID != "b1" || b.Message == "" {
-			t.Fatalf("блокер без адреса или без сообщения: %+v", b)
-		}
-	}
-
-	// Дособрали — публикуется. Тот же документ, добавлены заголовок и один вариант.
-	fixed := `{"schemaVersion":4,"blocks":[
-		{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Что берём?"}]},
-		{"id":"b1","groupId":"g1","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Кофе"}]}}
-	]}`
-	_ = patchDraftSchema(t, c, srv, form.ID, fixed, saved.UpdatedAt, http.StatusOK)
-	published := publishForm(t, c, srv, form.ID, http.StatusOK)
-	if published.PublishedVersion == nil || *published.PublishedVersion != 1 {
-		t.Fatalf("publishedVersion = %v, ожидалась 1", published.PublishedVersion)
-	}
-}
-
 // hasUnpublishedChanges: true только когда черновик разошёлся с опубликованной
 // версией. До публикации сравнивать не с чем; переименование (title не
 // версионируется) бейдж не поднимает; повторная публикация его снимает.

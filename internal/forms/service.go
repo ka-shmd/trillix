@@ -410,13 +410,6 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 	if err != nil {
 		return Form{}, err
 	}
-	// Гейт публикации (фаза 16, ADR §10): правило момента публикации, а не хранения —
-	// ValidateSchema выше принимает недособранный черновик намеренно. Кабинет считает
-	// тот же список зеркалом и до нажатия, но финальная инстанция здесь: публикация
-	// мимо кабинета проходит тем же путём.
-	if blockers := domain.PublishGate(parsed); len(blockers) > 0 {
-		return Form{}, blockers
-	}
 	snapshot, err := json.Marshal(parsed)
 	if err != nil {
 		return Form{}, fmt.Errorf("marshal schema: %w", err)
