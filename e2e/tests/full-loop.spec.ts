@@ -112,6 +112,24 @@ test('регистрация → форма → публикация → отв�
   // Имя подписи общее с первым вопросом — берём последний добавленный.
   await page.getByRole('textbox', { name: 'Заголовок вопроса' }).last().fill(scaleQuestion)
 
+  // 3c-бис. ФАЗА 16, этап 16.3: диапазон шкалы правится в ПОПАПЕ настроек, а не на
+  // полотне — на полотне остаётся только то, что увидит респондент. Дорожка проходит
+  // ровно по границе «браузер ↔ наш код», на которой юниты слепы: два жеста на одной
+  // ручке (клик — настройки, перетаскивание — перенос) и Radix-Select внутри
+  // Radix-поповера. Меняем конец шкалы на 7 и проверяем, что деления на полотне
+  // пересчитались.
+  const scaleRow = page.locator('[data-block-id]').filter({ has: page.getByRole('group') }).last()
+  await scaleRow.hover()
+  await scaleRow.getByRole('button', { name: 'Настройки блока' }).click()
+  const settingsPopup = page.locator('[data-slot="popover-content"]')
+  await settingsPopup.getByRole('combobox', { name: 'Конец шкалы' }).click()
+  await page.getByRole('option', { name: '7', exact: true }).click()
+  await page.keyboard.press('Escape')
+  // Деления шкалы — кнопки внутри группы вопроса: было пять (1–5), стало семь.
+  await expect(
+    page.getByRole('group', { name: scaleQuestion }).getByRole('button'),
+  ).toHaveCount(7)
+
   // У согласия своё имя строки: текст согласия правится строкой заголовка, потому
   // что он и есть label блока (галочка слева — как у респондента).
   await page.getByRole('button', { name: '+ Добавить блок' }).click()

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Asterisk, Copy, Replace, Trash2 } from 'lucide-react'
 import { type Block, isCaptionType } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { editorKind } from './kinds/index'
 import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
@@ -24,6 +25,7 @@ export function BlockActionMenu({
   open,
   onOpenChange,
   block,
+  subject,
   anchor,
   requiredFor,
   onToggleRequired,
@@ -34,6 +36,10 @@ export function BlockActionMenu({
   open: boolean
   onOpenChange: (open: boolean) => void
   block: Block
+  // subject — СУБЪЕКТ НАСТРОЕК (§4.2 спеки фазы 16): блок, чьи свойства правит попап.
+  // У подписи собранного вопроса это его поле, у прочих строк — они сами. Общие
+  // пункты остаются у block: на подписи «удалить» значит «удалить вопрос».
+  subject: Block
   // anchor — элемент, к которому Radix привязывает поповер (позиционированный span
   // в absolute-поле строки); asChild измеряет его.
   anchor: ReactNode
@@ -49,6 +55,9 @@ export function BlockActionMenu({
   // при закрытии, чтобы следующее открытие начиналось с корня.
   const [view, setView] = useState<'actions' | 'types'>('actions')
   const isGroup = isCaptionType(block.type)
+  // Типовой раздел объявляет САМ ТИП (kinds/<type>.tsx, поле Settings). Нет раздела —
+  // нет и разделителя: попап показывает одни общие пункты (§4.3 спеки).
+  const Settings = editorKind(subject.type).Settings
 
   const close = () => {
     setView('actions')
@@ -73,45 +82,55 @@ export function BlockActionMenu({
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         {view === 'actions' ? (
-          <Command>
-            <CommandList>
-              <CommandGroup>
-                {requiredFor && (
+          <>
+            {/* Типовой раздел стоит ВЫШЕ общих пунктов и ВНЕ Command: cmdk перехватывает
+                стрелки и Enter для навигации по пунктам, а внутри раздела те же клавиши
+                принадлежат контролам (открыть список, выбрать значение). */}
+            {Settings && (
+              <div className="border-b py-1">
+                <Settings block={subject} />
+              </div>
+            )}
+            <Command>
+              <CommandList>
+                <CommandGroup>
+                  {requiredFor && (
+                    <CommandItem
+                      onSelect={() => {
+                        onToggleRequired()
+                        close()
+                      }}
+                    >
+                      <Asterisk className="size-4" />
+                      {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                    </CommandItem>
+                  )}
+                  <CommandItem onSelect={() => setView('types')}>
+                    <Replace className="size-4" />
+                    Сменить тип
+                  </CommandItem>
                   <CommandItem
                     onSelect={() => {
-                      onToggleRequired()
+                      onDuplicate()
                       close()
                     }}
                   >
-                    <Asterisk className="size-4" />
-                    {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                    <Copy className="size-4" />
+                    Дублировать
                   </CommandItem>
-                )}
-                <CommandItem onSelect={() => setView('types')}>
-                  <Replace className="size-4" />
-                  Сменить тип
-                </CommandItem>
-                <CommandItem
-                  onSelect={() => {
-                    onDuplicate()
-                    close()
-                  }}
-                >
-                  <Copy className="size-4" />
-                  Дублировать
-                </CommandItem>
-                <CommandItem
-                  onSelect={() => {
-                    onDelete()
-                    close()
-                  }}
-                >
-                  <Trash2 className="size-4" />
-                  {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
-                </CommandItem>
-              </CommandGroup>
-            </CommandList>
-          </Command>
+                  <CommandItem
+                    onSelect={() => {
+                      onDelete()
+                      close()
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                    {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
+                  </CommandItem>
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </>
         ) : (
           <Command>
             <CommandInput placeholder="Тип поля…" />

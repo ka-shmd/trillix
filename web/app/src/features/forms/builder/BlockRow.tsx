@@ -520,6 +520,7 @@ export function BlockRow({
           movedCaretRef.current = false
         }}
         block={block}
+        subject={settingsSubject}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
         // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
         // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись

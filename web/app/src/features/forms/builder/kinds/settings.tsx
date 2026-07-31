@@ -1,0 +1,63 @@
+import { type ReactNode } from 'react'
+
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+
+// Готовые строки типового раздела настроек (§3.5 спеки фазы 16). Экономию даёт не
+// генератор форм по спеке, а вот этот набор: тип пишет свой раздел обычным JSX, но
+// строки у всех типов выглядят и ведут себя одинаково.
+//
+// Здесь ровно то, что уже понадобилось. `TextSetting`/`SwitchSetting` появятся вместе
+// со своим первым потребителем: набор без потребителя — это не заготовка, а код,
+// который никто не проверял.
+
+// SettingRow — подпись слева, контрол справа. Подпись — настоящий <label> только у
+// одиночного контрола; у пары (диапазон шкалы: «от» и «до») подписи свои у каждого
+// select'а, поэтому строка ограничивается текстом-заголовком.
+export function SettingRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+      <span className="text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-1.5">{children}</div>
+    </div>
+  )
+}
+
+// SelectSetting — выбор из закрытого списка. Именно select, а не свободный ввод: у
+// схемы строгий валидатор (диапазон шкалы — min < max в пределах [0,10]), и свободный
+// ввод даёт невалидные промежуточные состояния (пустое поле, min > max посреди набора),
+// на каждое из которых автосейв ловил бы 422. Список делает такое состояние
+// невозможным — правило `web/shared/fields/README.md`.
+export function SelectSetting({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  // Имя контрола для скринридера: у select'а в попапе нет видимой подписи, кроме
+  // короткого «от»/«до» рядом, и без имени он читался бы как «кнопка, 1».
+  label: string
+  value: number
+  options: number[]
+  onChange: (value: number) => void
+}) {
+  return (
+    <Select value={String(value)} onValueChange={(v) => onChange(Number(v))}>
+      <SelectTrigger size="sm" className="h-7 w-16" aria-label={label}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((n) => (
+          <SelectItem key={n} value={String(n)}>
+            {n}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}

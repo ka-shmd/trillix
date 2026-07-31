@@ -4,6 +4,7 @@ import { DEFAULT_SCALE_MAX, DEFAULT_SCALE_MIN } from '@entities/formSchema'
 
 import { type EditorKind } from './contract'
 import { ScaleControl } from './scaleControl'
+import { ScaleSettings } from './scaleSettings'
 
 export const scale: EditorKind = {
   menu: { question: true, field: true, layout: false },
@@ -14,4 +15,6 @@ export const scale: EditorKind = {
   // респонденту нужен готовый ряд делений, а не пустота.
   defaults: { settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } },
   row: { surface: 'object', lineH: 'h-6', Control: ScaleControl, hint: 'object' },
+  // Диапазон правится в попапе, а не на полотне: у респондента этого выбора нет.
+  Settings: ScaleSettings,
 }
