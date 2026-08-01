@@ -10,13 +10,19 @@
 
     /* @entities → общий каталог доменных Zod-схем web/shared/entities. Он лежит
        вне корня проекта, поэтому bare-импорт zod оттуда не находит node_modules
-       рендерера — маппим zod на локальный пакет явно. */
+       рендерера — маппим zod на локальный пакет явно.
+
+       react/react-dom маппятся на @types/*: рантайм рендерера — preact/compat
+       (алиас в vite.config.ts), самих пакетов react и react-dom в зависимостях
+       больше нет, но типизируемся мы по-прежнему против React-API — ровно этим
+       и куплена возможность не переписывать ни строки в src и @fields. */
     "paths": {
       "@entities/*": ["../shared/entities/*"],
       "@fields/*": ["../shared/fields/*"],
       "zod": ["./node_modules/zod"],
       "react": ["./node_modules/@types/react"],
-      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"]
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "react-dom/client": ["./node_modules/@types/react-dom/client"]
     },
 
     /* Bundler mode */
