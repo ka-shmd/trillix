@@ -32,8 +32,10 @@
 `phase17/plans-limits`; живой проверки не было, в `main` не влита.** Разрезает фазу 13
 [`POST-MVP.md`](POST-MVP.md) «Биллинг» надвое: тарифный контур сделан, платежи — отдельной
 будущей фазой (нет ИП, оферты и договора с провайдером; тарифы от них не зависят).
-**Денег фаза не принимает.** Спека — [`DESIGN-billing.md`](DESIGN-billing.md), семь ADR-строк
-§10 [`ARCHITECTURE.md`](ARCHITECTURE.md), шаги и демо — раздел фазы 17 в
+**Денег фаза не принимает.** Как этим пользоваться и как добавить гейт — хендбук
+[`BILLING.md`](BILLING.md) (скилл `billing-plan`, там же готовые SQL операций владельца);
+почему так — спека [`DESIGN-billing.md`](DESIGN-billing.md) и семь ADR-строк §10
+[`ARCHITECTURE.md`](ARCHITECTURE.md); шаги и демо — раздел фазы 17 в
 [`DEV-PLAN.md`](DEV-PLAN.md).
 
 Что теперь есть: миграция `0014` (`plans`, `subscriptions`, `workspace_usage`,
