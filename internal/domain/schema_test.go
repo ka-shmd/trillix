@@ -38,6 +38,10 @@ func TestValidateSchema_Valid(t *testing.T) {
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","type":"single_choice","label":"","required":false,"settings":{}}]}`,
 		"пустой label — валидный черновик":     `{"blocks":[{"id":"b","type":"short_text","label":"","required":false,"settings":{}}]}`,
 		"settings опущен":                      `{"blocks":[{"id":"b","type":"short_text","label":"x","required":false}]}`,
+		// Имя вопроса (фаза 16, этап 16.4) — необязательное переопределение у отвечаемого.
+		"имя у отвечаемого блока":    `{"schemaVersion":4,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","name":"fio","settings":{}}]}`,
+		"имя ровно в лимит":          `{"schemaVersion":4,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","name":"` + strings.Repeat("я", MaxQuestionNameLen) + `","settings":{}}]}`,
+		"пустое имя = имя не задано": `{"schemaVersion":4,"blocks":[{"id":"b1","groupId":"g1","type":"title","text":[{"t":"Вопрос"}],"name":""}]}`,
 		// v2: вопрос как группа блоков (фаза 8.7).
 		"v2: группа title+поле":       `{"schemaVersion":2,"blocks":[{"id":"t1","groupId":"g1","type":"title","text":"Имя"},{"id":"b1","groupId":"g1","type":"short_text","settings":{}}]}`,
 		"v2: голое поле без подписи":  `{"schemaVersion":2,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"placeholder":"you@ex.com"}}]}`,
@@ -128,6 +132,8 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		strings.Repeat("я", MaxPlaceholderLen+1) + `"}}]}`
 	longImageKey := `{"blocks":[{"id":"b","type":"image","label":"","settings":{"imageKey":"` +
 		strings.Repeat("a", MaxImageKeyLen+1) + `"}}]}`
+	longName := `{"schemaVersion":4,"blocks":[{"id":"b","groupId":"g1","type":"short_text","name":"` +
+		strings.Repeat("я", MaxQuestionNameLen+1) + `","settings":{}}]}`
 	longThankYou := `{"blocks":[],"thankYouText":"` + strings.Repeat("я", MaxThankYouTextLen+1) + `"}`
 	longRedirect := `{"blocks":[],"redirectUrl":"https://example.com/` +
 		strings.Repeat("a", MaxRedirectURLLen) + `"}`
@@ -144,17 +150,21 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"слишком длинный thankYouText": longThankYou,
 		"слишком длинный redirectUrl":  longRedirect,
 		"слишком длинный placeholder":  longPlaceholder,
-		"битый JSON":                   `{"blocks":`,
-		"хвост после документа":        `{"blocks":[]}{}`,
-		"неизвестная schemaVersion":    `{"schemaVersion":99,"blocks":[]}`,
-		"лишнее поле верхнего уровня":  `{"blocks":[],"extra":1}`,
-		"лишнее поле блока":            `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{},"foo":1}]}`,
-		"лишнее поле в settings":       `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"foo":1}}]}`,
-		"неизвестный тип блока":        `{"blocks":[{"id":"b","type":"slider","label":"x","settings":{}}]}`,
-		"пустой id блока":              `{"blocks":[{"id":"","type":"short_text","label":"x","settings":{}}]}`,
-		"дубль id блоков":              `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{}},{"id":"b","type":"email","label":"y","settings":{}}]}`,
-		"non-choice с опциями":         `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
-		"imageKey на не-image":         `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"imageKey":"ws/x.png"}}]}`,
+		"слишком длинное имя вопроса":  longName,
+		// Имя называет колонку CSV и шаг воронки — у неотвечаемого называть нечего.
+		"имя у подписи":               `{"schemaVersion":4,"blocks":[{"id":"t","groupId":"g1","type":"title","text":[{"t":"Вопрос"}],"name":"q1"}]}`,
+		"имя у контента":              `{"schemaVersion":4,"blocks":[{"id":"p","groupId":"g1","type":"text","text":[{"t":"Пояснение"}],"name":"q1"}]}`,
+		"битый JSON":                  `{"blocks":`,
+		"хвост после документа":       `{"blocks":[]}{}`,
+		"неизвестная schemaVersion":   `{"schemaVersion":99,"blocks":[]}`,
+		"лишнее поле верхнего уровня": `{"blocks":[],"extra":1}`,
+		"лишнее поле блока":           `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{},"foo":1}]}`,
+		"лишнее поле в settings":      `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"foo":1}}]}`,
+		"неизвестный тип блока":       `{"blocks":[{"id":"b","type":"slider","label":"x","settings":{}}]}`,
+		"пустой id блока":             `{"blocks":[{"id":"","type":"short_text","label":"x","settings":{}}]}`,
+		"дубль id блоков":             `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{}},{"id":"b","type":"email","label":"y","settings":{}}]}`,
+		"non-choice с опциями":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
+		"imageKey на не-image":        `{"blocks":[{"id":"b","type":"short_text","label":"x","settings":{"imageKey":"ws/x.png"}}]}`,
 		// alt удалён из контракта целиком (фаза 13): отвергается даже у image.
 		"alt удалён из контракта":       `{"blocks":[{"id":"b","type":"image","label":"","settings":{"imageKey":"ws/x.png","alt":"y"}}]}`,
 		"image с опциями":               `{"blocks":[{"id":"b","type":"image","label":"","settings":{"options":[{"id":"o","label":"z"}]}}]}`,

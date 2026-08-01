@@ -1,46 +1,20 @@
 import type { ReactNode } from 'react'
-import {
-  AlignLeft,
-  Calendar,
-  CheckSquare,
-  ShieldCheck,
-  ChevronDown,
-  CircleDot,
-  Hash,
-  Image,
-  Mail,
-  Phone,
-  Ruler,
-  Pilcrow,
-  Heading,
-  Heading1,
-  Tag,
-  Type,
-} from 'lucide-react'
+
 import { type BlockType } from '@entities/formSchema'
 
-// Иконка на тип блока — визуальная опора в slash-меню и диалоге добавления блока.
-// Ключи покрывают все типы. Отдельный модуль (не рядом с компонентами), чтобы не
-// ломать fast-refresh экспортом не-компонента.
-export const typeIcons: Record<BlockType, ReactNode> = {
-  text: <Pilcrow className="size-4" />,
-  short_text: <Type className="size-4" />,
-  long_text: <AlignLeft className="size-4" />,
-  email: <Mail className="size-4" />,
-  phone: <Phone className="size-4" />,
-  number: <Hash className="size-4" />,
-  scale: <Ruler className="size-4" />,
-  single_choice: <CircleDot className="size-4" />,
-  dropdown: <ChevronDown className="size-4" />,
-  multi_choice: <CheckSquare className="size-4" />,
-  date: <Calendar className="size-4" />,
-  consent: <ShieldCheck className="size-4" />,
-  title: <Type className="size-4" />,
-  label: <Tag className="size-4" />,
-  heading: <Heading className="size-4" />,
-  image: <Image className="size-4" />,
-  // Заголовок формы в меню вставки не появляется (он единственный и приколот
-  // первой строкой, §3.2 спеки фазы 15), но Record обязан покрывать ВСЕ типы:
-  // именно эта полнота и напомнила про него — tsc не дал забыть.
-  form_title: <Heading1 className="size-4" />,
-}
+import { EDITOR_KINDS } from './kinds/index'
+
+// Иконка на тип блока — визуальная опора в slash-меню, диалоге добавления и глифе поля на
+// полотне. Живёт в файле своего типа (kinds/*), рядом с его подписью и описанием; здесь
+// только доступ к ней.
+//
+// ФУНКЦИЯ, а не готовый Record, и это не стиль: словарь, собранный на инициализации
+// модуля, ломает импорты циклом. Глиф поля (kinds/fieldWrap) спрашивает иконку, fieldWrap
+// нужен контролу даты, контрол даты — файлу типа, а файлы типов собираются в реестр,
+// который читает этот модуль. При eager-сборке словаря реестр на этот момент ещё undefined
+// («Cannot convert undefined or null to object»). Обращение внутри функции происходит
+// после инициализации всех модулей — цикл перестаёт быть ловушкой.
+//
+// Отдельный модуль (не рядом с компонентами) сохранён: не-компонентный экспорт из файла
+// компонента ломает fast-refresh.
+export const typeIcon = (t: BlockType): ReactNode => EDITOR_KINDS[t].icon

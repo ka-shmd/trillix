@@ -61,6 +61,42 @@ func TestQuestionOrder_LabelFromFreshestVersionWithBlock(t *testing.T) {
 	}
 }
 
+// Имя вопроса (фаза 16, ADR §10) перебивает ВСЁ: заголовок пишется для респондента,
+// имя — для данных, и когда автор их развёл, колонка называется именем.
+func TestQuestionOrder_ExplicitNameWins(t *testing.T) {
+	got := QuestionOrder([]VersionedSchema{vs(1,
+		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: TextFromString("Как вас зовут?")},
+		Block{ID: "b1", GroupID: "g1", Type: BlockShortText, Name: "fio"},
+	)})
+	if got[0].Label != "fio" {
+		t.Fatalf("подпись = %q, ждали имя «fio» (имя перебивает заголовок)", got[0].Label)
+	}
+}
+
+// Имя из одних пробелов — не имя: вывод продолжается с подписи группы. Иначе колонка
+// в выгрузке называлась бы пустотой, а именно этого questionLabel и не допускает.
+func TestQuestionOrder_BlankNameFallsThrough(t *testing.T) {
+	got := QuestionOrder([]VersionedSchema{vs(1,
+		Block{ID: "t1", GroupID: "g1", Type: BlockTitle, Text: TextFromString("Как вас зовут?")},
+		Block{ID: "b1", GroupID: "g1", Type: BlockShortText, Name: "   "},
+	)})
+	if got[0].Label != "Как вас зовут?" {
+		t.Fatalf("подпись = %q, ждали заголовок (пробельное имя не считается)", got[0].Label)
+	}
+}
+
+// Имя, как и подпись, берётся из свежайшей версии, где блок есть: переименование
+// меняет заголовок колонки и для ранее собранных ответов (ADR §10 — осознанно).
+func TestQuestionOrder_NameFromFreshestVersionWithBlock(t *testing.T) {
+	got := QuestionOrder([]VersionedSchema{
+		vs(1, Block{ID: "b1", GroupID: "g1", Type: BlockShortText, Name: "q1"}),
+		vs(2, Block{ID: "b1", GroupID: "g1", Type: BlockShortText, Name: "fio"}),
+	})
+	if got[0].Label != "fio" {
+		t.Fatalf("подпись = %q, ждали свежее имя «fio»", got[0].Label)
+	}
+}
+
 // Подпись берётся из блока-подписи ГРУППЫ, а не из самого поля (v2). title
 // перебивает label; связь — по groupId.
 func TestQuestionOrder_CaptionFromGroupTitle(t *testing.T) {

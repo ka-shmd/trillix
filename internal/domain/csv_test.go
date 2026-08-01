@@ -71,6 +71,30 @@ func TestCSVBuilder_UnionColumnsAcrossVersions(t *testing.T) {
 	}
 }
 
+// Демо-критерий этапа 16.4: имя вписано → колонка выгрузки называется им, а не
+// заголовком вопроса. Проверяется на самой выгрузке, а не на questionLabel: путь
+// «имя → заголовок колонки» и есть то, ради чего этап делался, и он должен ломаться
+// целиком, если где-то по дороге потеряется поле.
+func TestCSVBuilder_HeaderUsesQuestionName(t *testing.T) {
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1,
+			grp("Как вас зовут?", Block{ID: "b1", Type: BlockShortText, Name: "fio"}),
+			grp("Ваш город", Block{ID: "b2", Type: BlockShortText}),
+		),
+	})
+
+	got := bld.Header()
+	want := []string{"ID ответа", "Отправлен", "Версия формы", "fio", "Ваш город"}
+	if len(got) != len(want) {
+		t.Fatalf("заголовок = %v, ожидался %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("колонка %d = %q, ожидалась %q (имя перебивает заголовок)", i, got[i], want[i])
+		}
+	}
+}
+
 // Неотвечаемый блок (text) не становится колонкой CSV — у него нет ответов.
 func TestCSVBuilder_ExcludesTextBlocks(t *testing.T) {
 	bld := NewCSVBuilder([]VersionedSchema{

@@ -1,8 +1,17 @@
 import { useState, type ReactNode } from 'react'
 import { Asterisk, Copy, Replace, Trash2 } from 'lucide-react'
-import { type Block, isCaptionType } from '@entities/formSchema'
+import {
+  MAX_QUESTION_NAME_LEN,
+  isAnswerableType,
+  isCaptionType,
+  type Block,
+} from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
-import { typeIcons } from './blockTypeIcons'
+import { derivedQuestionName } from './questionName'
+import { useBuilderStore } from './storeContext'
+import { editorKind } from './kinds/index'
+import { TextSetting } from './kinds/settings'
+import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
   Command,
@@ -20,10 +29,33 @@ import {
 // НЕТ и не будет (спека §5, фаза 13.6): половинность не переключается, она возникает
 // от соседства — вход только жест и Mod+Alt+←/→. Два вида в одном поповере:
 // «действия» и подменю «сменить тип» (тот же список типов, что «+»-диалог и слеш-меню).
+// QuestionNameSetting — имя вопроса: строка, которой он назовётся в данных (колонка
+// CSV, шаг воронки, ключ сводки). Поле пусто — в плейсхолдере стоит выведенное имя,
+// то есть буквально то, что уйдёт в выгрузку, если ничего не вводить (ADR §10,
+// решение 3: имя — переопределение, а не копия заголовка).
+//
+// Пустая строка кладётся как отсутствие ключа: канон не хранит «имя = ничего», и
+// стёртое до конца имя обязано вернуть форму ровно в то состояние, в котором она была
+// до ввода, — иначе автосейв возил бы пустой ключ, а Go его всё равно выбрасывал бы.
+function QuestionNameSetting({ block }: { block: Block }) {
+  const blocks = useBuilderStore((s) => s.blocks)
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  return (
+    <TextSetting
+      label="Имя"
+      value={block.name ?? ''}
+      placeholder={derivedQuestionName(blocks, block)}
+      maxLength={MAX_QUESTION_NAME_LEN}
+      onChange={(v) => updateBlock(block.id, { name: v === '' ? undefined : v })}
+    />
+  )
+}
+
 export function BlockActionMenu({
   open,
   onOpenChange,
   block,
+  subject,
   anchor,
   requiredFor,
   onToggleRequired,
@@ -34,6 +66,10 @@ export function BlockActionMenu({
   open: boolean
   onOpenChange: (open: boolean) => void
   block: Block
+  // subject — СУБЪЕКТ НАСТРОЕК (§4.2 спеки фазы 16): блок, чьи свойства правит попап.
+  // У подписи собранного вопроса это его поле, у прочих строк — они сами. Общие
+  // пункты остаются у block: на подписи «удалить» значит «удалить вопрос».
+  subject: Block
   // anchor — элемент, к которому Radix привязывает поповер (позиционированный span
   // в absolute-поле строки); asChild измеряет его.
   anchor: ReactNode
@@ -49,6 +85,13 @@ export function BlockActionMenu({
   // при закрытии, чтобы следующее открытие начиналось с корня.
   const [view, setView] = useState<'actions' | 'types'>('actions')
   const isGroup = isCaptionType(block.type)
+  // Имя — свойство любого отвечаемого блока, а не типа (ADR §10), поэтому строка общая
+  // и стоит выше типового раздела. У подписи, контента и заголовка формы её нет: имя
+  // называет колонку выгрузки, а её у них не бывает — схема имя у них и запрещает.
+  const named = isAnswerableType(subject.type)
+  // Типовой раздел объявляет САМ ТИП (kinds/<type>.tsx, поле Settings). Нет раздела —
+  // нет и разделителя: попап показывает одни общие пункты (§4.3 спеки).
+  const Settings = editorKind(subject.type).Settings
 
   const close = () => {
     setView('actions')
@@ -73,45 +116,56 @@ export function BlockActionMenu({
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         {view === 'actions' ? (
-          <Command>
-            <CommandList>
-              <CommandGroup>
-                {requiredFor && (
+          <>
+            {/* Настройки стоят ВЫШЕ общих пунктов и ВНЕ Command: cmdk перехватывает
+                стрелки и Enter для навигации по пунктам, а внутри раздела те же клавиши
+                принадлежат контролам (набор текста, открыть список, выбрать значение). */}
+            {(named || Settings) && (
+              <div className="border-b py-1">
+                {named && <QuestionNameSetting block={subject} />}
+                {Settings && <Settings block={subject} />}
+              </div>
+            )}
+            <Command>
+              <CommandList>
+                <CommandGroup>
+                  {requiredFor && (
+                    <CommandItem
+                      onSelect={() => {
+                        onToggleRequired()
+                        close()
+                      }}
+                    >
+                      <Asterisk className="size-4" />
+                      {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                    </CommandItem>
+                  )}
+                  <CommandItem onSelect={() => setView('types')}>
+                    <Replace className="size-4" />
+                    Сменить тип
+                  </CommandItem>
                   <CommandItem
                     onSelect={() => {
-                      onToggleRequired()
+                      onDuplicate()
                       close()
                     }}
                   >
-                    <Asterisk className="size-4" />
-                    {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                    <Copy className="size-4" />
+                    Дублировать
                   </CommandItem>
-                )}
-                <CommandItem onSelect={() => setView('types')}>
-                  <Replace className="size-4" />
-                  Сменить тип
-                </CommandItem>
-                <CommandItem
-                  onSelect={() => {
-                    onDuplicate()
-                    close()
-                  }}
-                >
-                  <Copy className="size-4" />
-                  Дублировать
-                </CommandItem>
-                <CommandItem
-                  onSelect={() => {
-                    onDelete()
-                    close()
-                  }}
-                >
-                  <Trash2 className="size-4" />
-                  {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
-                </CommandItem>
-              </CommandGroup>
-            </CommandList>
-          </Command>
+                  <CommandItem
+                    onSelect={() => {
+                      onDelete()
+                      close()
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                    {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
+                  </CommandItem>
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </>
         ) : (
           <Command>
             <CommandInput placeholder="Тип поля…" />
@@ -128,7 +182,7 @@ export function BlockActionMenu({
                         close()
                       }}
                     >
-                      {typeIcons[t.type]}
+                      {typeIcon(t.type)}
                       {t.label}
                     </CommandItem>
                   ))}

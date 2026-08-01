@@ -12,7 +12,10 @@ import { Button } from '@/components/ui/button'
 //     где живут ссылка, превью и управление.
 //
 // canPublish=false, пока есть несохранённые правки: публикация снимает снапшот
-// серверного черновика, поэтому сначала он должен догнать редактор (автосейв).
+// серверного черновика, поэтому сначала он должен догнать редактор (автосейв). Это
+// ЕДИНСТВЕННАЯ причина, по которой кнопка бывает неактивна: гейта публикации в
+// проекте нет (ADR §10, решение владельца 2026-07-31) — недособранная форма
+// публикуется, а безымянный вопрос получает сгенерированное имя.
 export function PublishControls({ form, canPublish }: { form: Form; canPublish: boolean }) {
   const publish = usePublishForm()
   const navigate = useNavigate()
@@ -40,7 +43,7 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
       </Button>
       {publish.isError && (
         <p className="text-right text-xs text-destructive" role="alert">
-          Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.
+          Не удалось опубликовать. Обновите страницу и попробуйте ещё раз.
         </p>
       )}
     </div>

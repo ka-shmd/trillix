@@ -64,6 +64,24 @@ for m in migrations/*.up.sql; do
 done
 ok_if_clean "все миграции ($(ls migrations/*.up.sql | wc -l)) упомянуты в SCHEMA.md"
 
+# --- 2б. Типы блоков ↔ сводная таблица в fields/README.md --------------------
+# Мутация: добавить тип в BLOCK_TYPES без строки в таблице (или убрать строку) →
+# краснеет. Таблица — карта для чтения, и устаревшая карта хуже отсутствующей:
+# «как добавить тип» — единственный документ, куда идут именно за полнотой списка.
+begin
+readme=web/shared/fields/README.md
+listed=$(grep -oE '^\| `[a-z_]+` \|' "$readme" | grep -oE '[a-z_]+' | sort -u)
+declared=$(sed -n '/^export const BLOCK_TYPES = \[/,/\] as const/p' \
+	web/shared/entities/blocks/contract.ts |
+	grep -vE '^\s*//' | grep -oE "'[a-z_]+'" | tr -d "'" | sort -u)
+for t in $declared; do
+	echo "$listed" | grep -qx "$t" || err "тип $t объявлен в BLOCK_TYPES, но его нет в сводной таблице" "файл: $readme"
+done
+for t in $listed; do
+	echo "$declared" | grep -qx "$t" || err "тип $t есть в сводной таблице, но его нет в BLOCK_TYPES" "файл: $readme"
+done
+ok_if_clean "все типы блоков ($(echo "$declared" | wc -w)) есть в сводной таблице fields/README.md"
+
 # --- 3. env-переменные: всё читаемое и задаваемое задокументировано ----------
 # Пункт Definition of Done «новые env-переменные в четырёх местах» до сих пор
 # держался только галочкой в чек-листе.

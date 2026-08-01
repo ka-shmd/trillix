@@ -6,14 +6,13 @@ import {
   type FormSchema,
   type Option,
   SCHEMA_VERSION,
-  DEFAULT_SCALE_MAX,
-  DEFAULT_SCALE_MIN,
   isChoiceType,
   isAnswerableType,
   isCaptionType,
   carriesText,
   canShareRow,
   requiresCaption,
+  supportsPlaceholder,
   COLUMN_LEFT,
   COLUMN_RIGHT,
   sameRichText,
@@ -26,6 +25,7 @@ import {
   packOptionRows,
   packRows,
 } from '@fields/groups'
+import { editorKind } from './kinds/index'
 
 // Стор билдера — высокочастотный локальный документ формы (ARCHITECTURE §5.1):
 // каждая правка text — синхронная операция над стором, мгновенный UI, а
@@ -52,7 +52,7 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 
 // Редактируемые поля блока. id/groupId/type через updateBlock не меняются: id
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
-export type BlockPatch = Partial<Pick<Block, 'text' | 'required' | 'settings'>>
+export type BlockPatch = Partial<Pick<Block, 'text' | 'name' | 'required' | 'settings'>>
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
 // как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
@@ -161,7 +161,10 @@ export type BuilderActions = {
   // duplicateBlock кладёт копию блока сразу за оригиналом. Поле, которому обязателен
   // заголовок (requiresCaption), дублируется вопросом целиком — иначе копия осталась
   // бы голым полем такого типа, а их не бывает.
-  duplicateBlock: (id: string) => void
+  // duplicateBlock вставляет копию сразу за оригиналом и ВОЗВРАЩАЕТ id её первой
+  // строки — для каретки (§12). Подпись собранного вопроса и поле, которому обязателен
+  // заголовок, дублируются вопросом целиком; остальное — по одному блоку.
+  duplicateBlock: (id: string) => string | null
   // placeInRow — команда ПЕРЕНОСА в свободную ячейку ряда (спека §5), единственный
   // вход и для жеста (дроп в левую/правую треть ряда), и для Mod+Alt+→: группа
   // activeGroupId встаёт вплотную к targetGroupId с указанной стороны. Не режим и не
@@ -199,6 +202,10 @@ export type BuilderActions = {
   // рождается под текущим, а не в конце — дефект Д5) и возвращает его id для фокуса.
   // На non-choice/ненайденном варианте — no-op (возвращённый id тогда не всплывёт).
   addOptionAfter: (blockId: string, optionId: string) => string
+  // duplicateOption копирует вариант СРАЗУ ПОД оригиналом и возвращает id копии для
+  // каретки (§12). Единственный вход — попап варианта (фаза 16, решение 7): у карточки
+  // это второе действие рядом с «удалить».
+  duplicateOption: (blockId: string, optionId: string) => string | null
   updateOption: (blockId: string, optionId: string, label: string) => void
   // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
   // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
@@ -227,13 +234,22 @@ export type BuilderActions = {
 
 export type BuilderStore = BuilderState & BuilderActions
 
-// newBlock создаёт валидный черновой блок: пустой text, выведенный позже groupId,
-// дефолты. Choice-тип стартует с ПУСТЫМ списком: в схеме живут только настоящие
-// варианты, а место для набора даёт «призрак» — пустая строка в конце списка,
-// которой в документе нет (BlockRow, GhostOption). Пустой вариант больше не
-// сохраняется и не публикуется, зато каретке всегда есть куда встать (§2.1).
-// Non-choice остаётся с пустыми settings (иначе ValidateSchema отвергнет опции
-// у не-choice).
+// newBlock создаёт валидный черновой блок: скелет (пустой text, выведенный позже
+// groupId, пустые настройки) плюс дефолты своего типа — они объявлены в файле типа
+// (kinds/<type>.tsx, поле defaults), а не перечислены здесь ветвями.
+//
+// Скелет остаётся с ПУСТЫМИ settings: тип, которому нечего в них положить, обязан
+// приехать без чужих ключей, иначе ValidateSchema отвергнет документ (опции у не-choice).
+// Слияние поверхностное — settings типа заменяют пустые целиком, вложенного мержа тут не
+// нужно и не должно быть: «дефолты» это готовый набор, а не патч.
+//
+// Дефолты КЛОНИРУЮТСЯ, а не спредятся ссылкой (находка ревью этапа 16.1в). Поверхностный
+// спред копирует ссылку на settings типа — литерал уровня модуля, живущий весь срок
+// вкладки: все блоки типа получали ОДИН объект настроек и один массив options на всех.
+// Сегодня это ничего не ломает (весь стор пишет настройки иммутабельно, присваивая новый
+// объект), но цена первой же правки «на месте» — испорченный ДЕФОЛТ ТИПА: следующий
+// новый блок приедет с чужими вариантами внутри, и отвергнет документ уже ValidateSchema,
+// далеко от места ошибки. Клон стоит наносекунды и снимает весь класс.
 function newBlock(type: BlockType): Block {
   const base: Block = {
     id: newBlockId(),
@@ -243,16 +259,8 @@ function newBlock(type: BlockType): Block {
     required: false,
     settings: {},
   }
-  if (isChoiceType(type)) return { ...base, settings: { options: [] } }
-  // Согласие создаётся обязательным: это дефолт, а не правило типа (решение
-  // владельца) — владелец может выключить, если это маркетинг-opt-in.
-  if (type === 'consent') return { ...base, required: true }
-  // Шкала создаётся с диапазоном: схема без него валидна (недособранный черновик),
-  // но респонденту нужен готовый ряд делений, а не пустота.
-  if (type === 'scale') {
-    return { ...base, settings: { scaleMin: DEFAULT_SCALE_MIN, scaleMax: DEFAULT_SCALE_MAX } }
-  }
-  return base
+  const defaults = editorKind(type).defaults
+  return { ...base, ...(defaults ? structuredClone(defaults) : null) }
 }
 
 // regroup выводит groupId из раскладки. Правило (v2, фаза 8.7): группами считаются
@@ -316,6 +324,19 @@ function regroup(blocks: Block[]): Block[] {
 function carryLayout(src: Block, dst: Block): void {
   if (src.settings?.column === COLUMN_RIGHT && canShareRow(dst.type)) {
     dst.settings = { ...dst.settings, column: COLUMN_RIGHT }
+  }
+}
+
+// carryPlaceholder переносит подсказку поля на сконвертированный блок, пока новый тип
+// её несёт (§5.4 спеки фазы 16). До этапа 16.4 плейсхолдер терялся даже на
+// short_text → email, хотя оба типа его показывают: автор менял тип соседнего поля и
+// молча лишался написанной подсказки. Условие — тот же предикат реестра, что решает,
+// показывать ли поверхность плейсхолдера, поэтому «тип, который его не носит»
+// невозможен по построению. Мутирует dst (как carryLayout).
+function carryPlaceholder(src: Block, dst: Block): void {
+  const placeholder = src.settings?.placeholder
+  if (placeholder && supportsPlaceholder(dst.type)) {
+    dst.settings = { ...dst.settings, placeholder }
   }
 }
 
@@ -587,7 +608,9 @@ function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Bloc
 // целиком, а не полоса у края, — и второго приглашения «под этот вариант» у неё нет.
 // Инертным бит от этого не станет: команда просто не выдаётся.
 function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
-  const row = packOptionRows(options).find((r) => r.some((cell) => cell.some((o) => o.id === optionId)))
+  const row = packOptionRows(options).find((r) =>
+    r.some((cell) => cell.some((o) => o.id === optionId)),
+  )
   return row?.length === 1
 }
 
@@ -596,7 +619,9 @@ function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
 // вопрос прежний: свободна ли ячейка ряда, в котором стоит БЛОК id.
 function innerRowHasFreeCell(blocks: Block[], id: string): boolean {
   const group = groupBlocks(blocks).find((g) => g.blocks.some((b) => b.id === id))
-  const row = group && packGroupRows(group.blocks).find((r) => r.some((cell) => cell.some((b) => b.id === id)))
+  const row =
+    group &&
+    packGroupRows(group.blocks).find((r) => r.some((cell) => cell.some((b) => b.id === id)))
   return row?.length === 1
 }
 
@@ -851,7 +876,11 @@ export function captionLoss(before: Block[], after: Block[]): { id: string; capt
 //
 // Вставки ВНУТРЬ участника ряда это не касается: контент, добавленный в вопрос, ряд не
 // рвёт (участник остаётся тем же участником) — и остаётся легальным, как был.
-export function rowBoundaryTarget(blocks: Block[], activeId: string, overId: string): string | null {
+export function rowBoundaryTarget(
+  blocks: Block[],
+  activeId: string,
+  overId: string,
+): string | null {
   const ai = blocks.findIndex((b) => b.id === activeId)
   const ti = blocks.findIndex((b) => b.id === overId)
   if (ai < 0 || ti < 0 || ai === ti) return null
@@ -935,7 +964,9 @@ function mutateOptions(
   // у кого сменился сосед, иначе Alt+↑↓ приклеивал бы вариант к чужому ряду.
   return {
     blocks: normalizeColumns(
-      blocks.map((b) => (b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b)),
+      blocks.map((b) =>
+        b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b,
+      ),
       blocks,
       placed,
     ),
@@ -966,8 +997,14 @@ const snapshot = (s: BuilderState): Snapshot => ({
 })
 
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
-// (text/settings-placeholder) в один блок делят шаг истории; патч с required (или
+// (text/settings-placeholder/name) в один блок делят шаг истории; патч с required (или
 // иным дискретным полем) — свой шаг (тег null).
+//
+// Имя вопроса (этап 16.4) — третье такое поле и первый потребитель склейки ВНЕ
+// settings: без него имя из двадцати символов стоило бы двадцати нажатий Mod+Z (§4.6
+// спеки). Тег строится из ключей патча, поэтому набор имени и набор подписи в один и
+// тот же блок в общий шаг НЕ сливаются — это разные поля, и общий шаг откатывал бы
+// вместе с именем всю набранную подпись.
 //
 // Форматирование (`kind: 'format'`) коалесится ОТДЕЛЬНО от набора, хотя патч у них
 // один и тот же — `{ text }`. Общий тег означал бы, что «набрал подпись, выделил слово,
@@ -977,7 +1014,8 @@ const snapshot = (s: BuilderState): Snapshot => ({
 function updateBlockTag(id: string, patch: BlockPatch, kind?: UpdateKind): string | null {
   if (kind === 'format') return `ub:${id}:format`
   const keys = Object.keys(patch)
-  const textOnly = keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings')
+  const textOnly =
+    keys.length > 0 && keys.every((k) => k === 'text' || k === 'settings' || k === 'name')
   return textOnly ? `ub:${id}:${keys.sort().join('+')}` : null
 }
 
@@ -1097,12 +1135,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             ...newBlock(type),
             id,
             text: carriesText(type) ? src.text : [],
+            // Имя переживает смену типа (§5.4 спеки): его дал автор, и относится оно к
+            // вопросу, а не к тому, чем на него отвечают. Роняется ровно там, где ему
+            // нечего называть — новый тип не собирает ответов (и схема имя у такого
+            // запрещает).
+            name: isAnswerableType(type) ? src.name : undefined,
             required: isAnswerableType(type) ? src.required : false,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
           // short_text→email не должна молча разваливать ряд); вне whitelist они
           // роняются здесь — иначе автосейв ловил бы 422 (нормализация добьёт пару).
           carryLayout(src, converted)
+          carryPlaceholder(src, converted)
           return structural({
             blocks: s.blocks.map((b) => (b.id === id ? converted : b)),
           })
@@ -1274,9 +1318,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // нажатие), dirty и лишний PATCH на каждый отложенный колбэк.
           const keys = Object.keys(patch) as (keyof BlockPatch)[]
           const same = (k: keyof BlockPatch) =>
-            k === 'text'
-              ? sameRichText(src.text, patch.text)
-              : Object.is(src[k], patch[k])
+            k === 'text' ? sameRichText(src.text, patch.text) : Object.is(src[k], patch[k])
           if (keys.every(same)) return null
           const blocks = s.blocks.slice()
           blocks[i] = { ...src, ...patch }
@@ -1358,22 +1400,43 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
 
-      duplicateBlock: (id) =>
+      duplicateBlock: (id) => {
+        // Возвращаем id первой строки КОПИИ — иначе после «Дублировать» из попапа
+        // каретке некуда встать: поповер закрылся, возврат фокуса на его якорь мы
+        // гасим сами (иначе фокус уходит на позиционированный span), и активным
+        // элементом остаётся body. Контракт §12: каждая операция полотна кончается
+        // детерминированным фокусом, и «копия появилась, а каретка нигде» — ровно тот
+        // класс дефектов, ради которого контракт заведён.
+        let focus: string | null = null
         commit(null, (s) => {
           const i = s.blocks.findIndex((b) => b.id === id)
           const src = s.blocks[i]
           if (!src) return null
-          // Поле, которому обязателен заголовок, дублируется ВОПРОСОМ целиком: копия
-          // одного такого поля осталась бы голой — состояния, которого не бывает.
+          // Вопросом целиком дублируются два случая.
+          //
+          // 1. Поле, которому обязателен заголовок: копия одного такого поля осталась бы
+          //    голой — состояния, которого не бывает.
+          // 2. ПОДПИСЬ, стоящая во главе собранного вопроса (фаза 16, §4.2 спеки):
+          //    подпись — ручка вопроса во всех остальных жестах (мусорка сносит группу,
+          //    драг тащит группу, Alt+↑↓ двигает вопрос), и «дублировать» из её попапа
+          //    обязано значить то же. Копия одной подписи была бы вторым заголовком
+          //    вплотную к своему вопросу — ровно то состояние, которое EDITOR §3
+          //    запрещает как молчаливую подмену имени вопроса.
+          //
           // Остальные блоки дублируются по одному, как раньше.
-          const [from, to] = requiresCaption(src.type) ? groupSpan(s.blocks, i) : [i, i]
+          const span = groupSpan(s.blocks, i)
+          const headsQuestion = isCaptionType(src.type) && span[0] === i && span[1] > span[0]
+          const [from, to] = requiresCaption(src.type) || headsQuestion ? span : [i, i]
           const copies = s.blocks
             .slice(from, to + 1)
             .map((b): Block => ({ ...cloneBlock(b), id: newBlockId() }))
+          focus = copies[0]!.id
           const blocks = s.blocks.slice()
           blocks.splice(to + 1, 0, ...copies)
           return structural({ blocks })
-        }),
+        })
+        return focus
+      },
 
       placeInRow: (activeGroupId, targetGroupId, side = 'right') =>
         commit(null, (s) => {
@@ -1430,7 +1493,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // бы секцию: при стопке справа один участник выпадал во всю ширину, а второй
           // молча переезжал в левую колонку (найдено ревью).
           const orphans = new Set<string>()
-          const oldRow = rows.find((r) => r.some((cell) => cell.some((g) => g.id === activeGroupId)))
+          const oldRow = rows.find((r) =>
+            r.some((cell) => cell.some((g) => g.id === activeGroupId)),
+          )
           if (oldRow && oldRow !== row && oldRow.length > 1) {
             const rest = oldRow.map((cell) => cell.filter((g) => g.id !== activeGroupId))
             if (rest.some((cell) => cell.length === 0)) {
@@ -1453,7 +1518,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
               blocks: groups
                 .flatMap((g) => g.blocks)
                 .map((b) => {
-                  if (b.id === activeHead.id) return { ...b, settings: { ...b.settings, column: bit } }
+                  if (b.id === activeHead.id)
+                    return { ...b, settings: { ...b.settings, column: bit } }
                   if (targetBit !== null && b.id === targetHead.id) {
                     return { ...b, settings: { ...b.settings, column: targetBit } }
                   }
@@ -1500,12 +1566,17 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // поэтому вопрос уезжает ПОД неё — туда же, куда Enter из колонки кладёт новую
           // строку (sectionSpanEnd).
           const rest = groupBlocks(s.blocks).filter((g) => g.id !== group.id)
-          const lastId = row.flat().filter((g) => g.id !== group.id).at(-1)!.id
+          const lastId = row
+            .flat()
+            .filter((g) => g.id !== group.id)
+            .at(-1)!.id
           const at = rest.findIndex((g) => g.id === lastId)
           if (at < 0) return null
           rest.splice(at + 1, 0, group)
           return structural({
-            blocks: rest.flatMap((g) => g.blocks).map((b) => (b.id === owner.id ? withoutColumn(b) : b)),
+            blocks: rest
+              .flatMap((g) => g.blocks)
+              .map((b) => (b.id === owner.id ? withoutColumn(b) : b)),
           })
         }),
 
@@ -1578,13 +1649,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             s.blocks,
             blockId,
             (opts) => {
-            if (activeOptionId === targetOptionId) return opts
-            const from = opts.findIndex((o) => o.id === activeOptionId)
-            if (from < 0 || !opts.some((o) => o.id === targetOptionId)) return opts
-            // Тот же вопрос к раскладчику, что у блока: занятую ячейку не отбираем.
-            if (!optionRowHasFreeCell(opts, targetOptionId)) return opts
-            const next = opts.slice()
-            const [moved] = next.splice(from, 1)
+              if (activeOptionId === targetOptionId) return opts
+              const from = opts.findIndex((o) => o.id === activeOptionId)
+              if (from < 0 || !opts.some((o) => o.id === targetOptionId)) return opts
+              // Тот же вопрос к раскладчику, что у блока: занятую ячейку не отбираем.
+              if (!optionRowHasFreeCell(opts, targetOptionId)) return opts
+              const next = opts.slice()
+              const [moved] = next.splice(from, 1)
               next.splice(next.findIndex((o) => o.id === targetOptionId) + 1, 0, {
                 ...moved!,
                 column: COLUMN_RIGHT,
@@ -1630,6 +1701,24 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           }),
         )
         return opt.id
+      },
+
+      duplicateOption: (blockId, optionId) => {
+        let copyId: string | null = null
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) => {
+            const i = opts.findIndex((o) => o.id === optionId)
+            if (i < 0) return opts // вариант не найден — тот же массив (no-op)
+            // Копия — своя сущность: НОВЫЙ id при том же тексте. Ответы ключуются id
+            // варианта, и копия с чужим id молча присвоила бы себе его ответы.
+            const copy: Option = { id: newOptionId(), label: opts[i]!.label }
+            copyId = copy.id
+            const next = opts.slice()
+            next.splice(i + 1, 0, copy)
+            return next
+          }),
+        )
+        return copyId
       },
 
       updateOption: (blockId, optionId, label) =>

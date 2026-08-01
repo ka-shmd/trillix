@@ -23,26 +23,23 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
-  carriesText,
+  isAnswerableType,
   isCaptionType,
-  isChoiceType,
+  isSingleChoiceType,
   isContentType,
   plainText,
-  SCALE_LOWER_BOUND,
-  SCALE_UPPER_BOUND,
-  scaleRange,
   supportsPlaceholder,
   type Span,
 } from '@entities/formSchema'
-import { BlockControl } from '@fields/BlockField'
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
-import { noLayoutAnimation } from './dnd'
-import { typeIcons } from './blockTypeIcons'
+import { rowFacts } from './kinds/index'
+import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
+import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
@@ -53,8 +50,10 @@ import { richCaret } from './richCaret'
 import { cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
-import { ImageField } from './ImageField'
-import { arrowDir, chords } from './shortcuts'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
+import { chords } from './shortcuts'
+import { handleRowKeys, type ArrowDir } from './rowKeys'
 import { useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
 
@@ -190,6 +189,11 @@ export function BlockRow({
   const slashList = slash ? filterMenuItems(slash.query) : []
   // Меню действий блока (Cmd+. §3.3): открыто ли.
   const [actionOpen, setActionOpen] = useState(false)
+  // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
+  // после перетаскивания (см. обработчик грипа ниже).
+  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Пометка «действие попапа уже поставило каретку»: см. onOpenChange у BlockActionMenu.
+  const movedCaretRef = useRef(false)
   // Текстовая строка в фокусе. Нужно ровно одному: плейсхолдер обычного текста
   // виден только у активной строки, иначе полотно пестрит серым (§7, слой 1).
   const [labelFocused, setLabelFocused] = useState(false)
@@ -213,38 +217,24 @@ export function BlockRow({
       ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
         'Текст, или «/» — чтобы добавить вопрос'
       : 'Текст, или «/» для поля'
-  // Как строка называется — для скринридера и для e2e. У всех типов, кроме `text`,
-  // это же и видимая подсказка; у `text` подсказка появляется только под фокусом
-  // (см. textPh выше), а ИМЯ строки мигать не должно.
-  const captionName =
-    block.type === 'title'
-      ? 'Заголовок вопроса'
-      : block.type === 'label'
-        ? 'Подпись поля'
-        : block.type === 'heading'
-          ? 'Заголовок раздела'
-          : block.type === 'consent'
-            ? 'Текст согласия'
-            : textPh
-  const captionPh = block.type === 'text' ? (labelFocused ? captionName : undefined) : captionName
+  // Имя строки, её классы и глиф — факты типа (kinds/<type>.tsx, row). У абзаца имя
+  // ПОЗИЦИОННОЕ (name: null): пустая строка значит разное в разных местах документа,
+  // поэтому оно берётся из подсказки места — это отношение, а не свойство типа.
+  //
+  // row === null не бывает: единственный такой тип — заголовок формы, а его рисует
+  // FormTitleRow (SlashEditor отделяет его splitFormTitle ещё до списка строк).
+  const row = rowFacts(block.type)
+  const isTextRow = row?.surface === 'text'
+  const captionName = (isTextRow ? row.name : null) ?? textPh
+  // Подсказка абзаца видна только под фокусом, а ИМЯ строки мигать не должно.
+  const captionPh =
+    isTextRow && row.placeholderOnFocusOnly ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
-  const isImage = block.type === 'image'
-  // Согласие правится строкой заголовка (текст согласия = label), поэтому у него
-  // нет отдельного превью-контрола: галочка стоит слева от самого текста.
-  const isConsent = block.type === 'consent'
-  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и
-  // consent. Поля ввода строки не несут — их подпись живёт отдельным блоком.
-  const hasTextLine = carriesText(block.type)
-  const captionCls =
-    block.type === 'title'
-      ? 'rf-label placeholder:font-semibold'
-      : block.type === 'label'
-        ? 'rf-label rf-label--sm placeholder:font-medium'
-        : block.type === 'heading'
-          ? 'rf-heading placeholder:font-semibold'
-          : block.type === 'consent'
-            ? 'rf-consent placeholder:font-normal'
-            : 'rf-text placeholder:font-normal'
+  const isConsent = isTextRow && row.mark === 'check'
+  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
+  // Поля ввода строки не несут — их подпись живёт отдельным блоком.
+  const hasTextLine = isTextRow
+  const captionCls = isTextRow ? row.className : ''
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
@@ -258,6 +248,26 @@ export function BlockRow({
   // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
   // свою высоту. Смещение соседей (scale=1) от этого не страдает.
   const style = { transform: CSS.Translate.toString(transform), transition }
+
+  // Слушатели драга грипа: у подписи мульти-группы — групповые (тащится вопрос
+  // целиком), у всех остальных — свои. Одна переменная на оба случая, потому что грип
+  // обязан и спредить их, и звать onPointerDown руками (см. кластер значков ниже).
+  const dragListeners = groupHandle ? groupHandle.listeners : listeners
+
+  // Кластер значков строки ВЫБОРА снят (фаза 16, решение владельца 6 — разворот
+  // решения 15.2, ADR §10 ARCHITECTURE). Управление списком живёт у карточек вариантов
+  // (у каждой свой кластер и свой попап), а самой строкой — у вопроса: подпись и есть
+  // её ручка, оттуда же попап меняет тип ответа и сносит вопрос. Так у списка перестаёт
+  // быть два этажа управления, различающиеся парой пикселей, и закрывается TD-44:
+  // строка выбора не покидает свой вопрос ни мышью, ни с клавиатуры — асимметрии
+  // «мышью можно, клавиатурой нельзя» больше нет.
+  //
+  // Условие про подпись обязательно: строка выбора БЕЗ подписи — сама себе вопрос
+  // (§4.2: субъект настроек голой строки — она сама), и снятый кластер оставил бы её
+  // без единого способа управления мышью. Наличие подписи для строки и означает
+  // requiredFor === undefined (звёздочку показывает подпись), поэтому спрашиваем ровно
+  // это, а не заводим второй проп о составе группы.
+  const ownedByQuestion = row?.surface === 'choice' && requiredFor?.id !== block.id
 
   // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
   // textarea). Строится от АКТУАЛЬНОГО элемента: identity textarea могла смениться
@@ -311,48 +321,32 @@ export function BlockRow({
       }
       if (chords.backspace(e)) return
     }
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      setActionOpen(true)
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.answerAction(e)) {
-      // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2). Проверяем ДО простого Enter.
-      e.preventDefault()
-      onAnswerAction(block.id)
-    } else if (chords.moveGroup(e)) {
-      // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Проверяем ДО Alt-переноса блока.
-      // Каретка остаётся на месте: id блока стабилен, groupId от перестановки не
-      // меняется (regroup якорит по id), строка не перемонтируется.
-      e.preventDefault()
-      moveGroup(block.id, arrowDir(e))
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+    // Поверхность ТЕКСТА (§3.3 спеки фазы 16): стрелка и Backspace уходят со строки
+    // только с края каретки, печатный символ и «/» идут в сам текст — поэтому
+    // обработчиков printable/slash у неё нет (слеш-меню ведёт onLabelChange выше).
+    handleRowKeys(e, {
+      actionMenu: () => setActionOpen(true),
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2).
+      answerAction: () => onAnswerAction(block.id),
+      // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Каретка остаётся на месте: id
+      // блока стабилен, groupId от перестановки не меняется (regroup якорит по id),
+      // строка не перемонтируется.
+      moveGroup: (dir) => moveGroup(block.id, dir),
       // Mod+Alt+→/← — в ряд с предыдущим вопросом и обратно (§5). Каретка едет с
       // блоком по той же причине, что у moveGroup: id стабилен, ремаунта нет.
-      e.preventDefault()
-      onRowShift(block.id, chords.rowRight(e) ? 'right' : 'left')
-    } else if (chords.enter(e)) {
+      rowShift: (side) => onRowShift(block.id, side),
+      moveItem: (dir) => captionGuard(() => moveBlock(block.id, dir)),
+      arrow: (dir) => onArrow(block.id, dir),
+      arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
       // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
-      e.preventDefault()
-      onAddBelow(block.id, { inside: e.shiftKey })
-    } else if (chords.backspace(e) && c.caretAtStart()) {
+      enter: (ev) => onAddBelow(block.id, { inside: ev.shiftKey }),
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
-      // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий. Дефолт
-      // гасим всегда — нативный Backspace в начале блока и так ничего не делает.
-      e.preventDefault()
-      onBackspaceAtStart(block.id)
-    } else if (chords.moveItem(e)) {
-      e.preventDefault()
-      captionGuard(() => moveBlock(block.id, arrowDir(e)))
-    } else if (chords.arrowUp(e) && c.caretAtStart()) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (chords.arrowDown(e) && c.caretAtEnd()) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    }
+      // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий.
+      backspace: () => onBackspaceAtStart(block.id),
+      backspaceHandles: () => c.caretAtStart(),
+    })
   }
 
   function pickType(item: MenuItem) {
@@ -371,6 +365,37 @@ export function BlockRow({
           : changeBlockType(block.id, item.type)
     setSlash(null)
     engine.focusBlock(focusId, 'end')
+  }
+
+  // Субъект НАСТРОЕК попапа (фаза 16, §4.2 спеки). Механизм не изобретается, а
+  // обобщается: requiredFor — это ровно «строка представляет поле своего вопроса»
+  // (считает его GroupRow, который один знает состав группы). Отсюда правило целиком:
+  // кликнули по подписи собранного вопроса — правим его ПОЛЕ (тип, обязательность, а
+  // с 16.4 и имя); кликнули по голой строке ответа — её саму; по контенту или одинокой
+  // подписи — их самих, и типового раздела у них нет.
+  //
+  // Общие действия (удалить, дублировать) остаются адресованы СТРОКЕ, по которой
+  // кликнули, — и на подписи это значит «вопрос целиком», потому что подпись владеет
+  // группой во всех жестах (§4 EDITOR): мусорка сносит группу, драг тащит группу,
+  // дублирование копирует вопрос.
+  const settingsSubject = requiredFor ?? block
+
+  // Выбор типа ИЗ ПОПАПА адресован субъекту настроек и МЕНЯЕТ ЕГО ТИП — всегда, когда
+  // субъект отвечаемый: и на подписи (тип ответа вопроса), и на самой строке ответа.
+  // Через правило ВСТАВКИ (`makeQuestion`/`makeField`, «инпут не встраивается в чужую
+  // группу») попап идти не может: для блока внутри группы вставка кладёт новый блок
+  // НИЖЕ, не трогая исходный, — то есть «сменить тип» ничего не меняет, а плодит
+  // второй вопрос. Слеш-меню и «+» остаются вставкой: там автор добавляет, а не
+  // переназначает, и правило им не трогается (pickType выше).
+  //
+  // Лэйаут-типы остаются вставкой/конверсией самой строки: абзац не может быть ответом
+  // вопроса, и притворяться, что может, попап не должен.
+  function pickTypeForSettings(item: MenuItem) {
+    if (isAnswerableType(settingsSubject.type) && item.group !== 'layout') {
+      engine.focusBlock(changeBlockType(settingsSubject.id, item.type), 'end')
+      return
+    }
+    pickType(item)
   }
 
   const closeSlash = () => setSlash(null)
@@ -435,12 +460,11 @@ export function BlockRow({
   const iconBtn =
     'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
-  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (fields.css):
-  // вопрос rf-label — 28px (h-7), абзац rf-text и согласие rf-consent — 24px (h-6).
-  // Кластеры absolute и центрируют значок по своей высоте, поэтому только так они
-  // стоят на уровне текста. Жёсткое значение тут — баг: при h-8 (32px) значки висят
-  // ниже строки у всех типов сразу. Меняется вместе с line-height в fields.css.
-  const rowLineH = block.type === 'title' || block.type === 'heading' ? 'h-7' : 'h-6'
+  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
+  // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
+  // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
+  // они стоят на уровне текста.
+  const rowLineH = row?.lineH ?? 'h-6'
 
   return (
     <div
@@ -467,8 +491,21 @@ export function BlockRow({
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
       <BlockActionMenu
         open={actionOpen}
-        onOpenChange={setActionOpen}
+        // Закрытие попапа — тоже операция полотна, и каретка после неё обязана быть
+        // определена (§12). Возврат фокуса Radix'ом на якорь (нулевой span) мы гасим
+        // сами, поэтому по умолчанию каретка возвращается НА СВОЮ СТРОКУ — это верно и
+        // для Esc, и для клика мимо, и для действий, которые строку не покидают
+        // (обязательность). Действия, уводящие каретку сами (дублировать, удалить,
+        // сменить тип), помечаются movedCaretRef — иначе возврат на строку затёр бы их
+        // фокус, поставленный мгновением раньше.
+        onOpenChange={(open) => {
+          setActionOpen(open)
+          if (open) return
+          if (!movedCaretRef.current) engine.focusBlock(block.id, 'end')
+          movedCaretRef.current = false
+        }}
         block={block}
+        subject={settingsSubject}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
         // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
         // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись
@@ -477,9 +514,22 @@ export function BlockRow({
         onToggleRequired={() =>
           requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
         }
-        onDuplicate={() => duplicateBlock(block.id)}
-        onDelete={() => onDeleteBlock(block.id)}
-        onPickType={pickType}
+        // Каретка уходит на копию (§12): без этого после «Дублировать» активным
+        // элементом остаётся body — поповер закрылся, а возврат фокуса на его якорь
+        // мы гасим сами.
+        onDuplicate={() => {
+          const copy = duplicateBlock(block.id)
+          movedCaretRef.current = true
+          if (copy) engine.focusBlock(copy, 'end')
+        }}
+        onDelete={() => {
+          movedCaretRef.current = true
+          onDeleteBlock(block.id)
+        }}
+        onPickType={(item) => {
+          movedCaretRef.current = true
+          pickTypeForSettings(item)
+        }}
       />
 
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
@@ -507,54 +557,85 @@ export function BlockRow({
           и полем, утащить поле из своего вопроса — законные действия, а не «действия,
           которых не бывает», как считал снятый замок. У вариантов choice поверх этого
           свои кластеры (см. OptionCard). */}
-      <div
-        // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
-        // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
-        // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
-        // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
-        className={`absolute top-1.5 flex ${
-          mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
-        } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
-      >
-        <button
-          type="button"
-          tabIndex={-1}
-          onClick={() =>
-            captionGuard(() =>
-              isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
-            )
-          }
-          aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
-          className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+      {!ownedByQuestion && (
+        <div
+          // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
+          // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
+          // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
+          // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
+          className={`absolute top-1.5 flex ${
+            mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
+          } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
         >
-          <Trash2 className="size-4" />
-        </button>
-        <button
-          type="button"
-          tabIndex={-1}
-          onClick={() => onInsertBelow(block.id)}
-          aria-label="Добавить блок ниже (выбрать тип)"
-          className={iconBtn}
-        >
-          <Plus className="size-4" />
-        </button>
-        <button
-          type="button"
-          {...(groupHandle ? groupHandle.attributes : attributes)}
-          {...(groupHandle ? groupHandle.listeners : listeners)}
-          // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
-          // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
-          tabIndex={-1}
-          aria-label={
-            groupHandle && isCaptionType(block.type)
-              ? 'Перетащить вопрос (группу)'
-              : 'Перетащить блок'
-          }
-          className={`${iconBtn} cursor-grab active:cursor-grabbing`}
-        >
-          <GripVertical className="size-4" />
-        </button>
-      </div>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() =>
+              captionGuard(() =>
+                isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
+              )
+            }
+            aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
+            className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+          >
+            <Trash2 className="size-4" />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => onInsertBelow(block.id)}
+            aria-label="Добавить блок ниже (выбрать тип)"
+            className={iconBtn}
+          >
+            <Plus className="size-4" />
+          </button>
+          <button
+            type="button"
+            {...(groupHandle ? groupHandle.attributes : attributes)}
+            {...dragListeners}
+            // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
+            // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
+            tabIndex={-1}
+            // Грип — два жеста на одной ручке (§4.1 спеки фазы 16): тащим — перенос,
+            // кликаем — настройки. Имя называет КЛИК: перетаскивание скринридеру и так
+            // недоступно (Tab сюда не заходит, перенос с клавиатуры — Alt+↑/↓), а
+            // подсказка про оба жеста живёт в title, который видит мышь.
+            aria-label={
+              groupHandle && isCaptionType(block.type) ? 'Настройки вопроса' : 'Настройки блока'
+            }
+            title="Настройки — клик, перенос — перетаскивание"
+            // ВАЖНО: свой onPointerDown стоит ПОСЛЕ спреда listeners, а значит перебивает
+            // одноимённый обработчик dnd-kit — именно им сенсор начинает драг. Поэтому
+            // вызываем его руками; забыть этот вызов = грип перестаёт таскать, и молча:
+            // ни типы, ни тесты про клик этого не видят.
+            onPointerDown={(e) => {
+              gripDownRef.current = { x: e.clientX, y: e.clientY }
+              dragListeners?.onPointerDown?.(e)
+            }}
+            onClick={(e) => {
+              // Хвостовой click после настоящего драга: браузер шлёт его по mouseup,
+              // и без этой проверки попап открывался бы после КАЖДОГО перетаскивания.
+              // Отличаем по тому же порогу, по которому сенсор решает «это драг»
+              // (DRAG_ACTIVATION_DISTANCE) — иначе два числа разъедутся и меню начнёт
+              // выскакивать «иногда».
+              const from = gripDownRef.current
+              gripDownRef.current = null
+              // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance сравнивает
+              // через >): при >= жест ровно на пороге пропадал бы молча — сенсор драг
+              // не начал, а guard уже съел клик.
+              if (
+                from &&
+                Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
+              )
+                return
+              setActionOpen(true)
+            }}
+            className={`${iconBtn} cursor-grab active:cursor-grabbing`}
+          >
+            <GripVertical className="size-4" />
+          </button>
+        </div>
+      )}
 
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
@@ -567,9 +648,7 @@ export function BlockRow({
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
           себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
-      {needsCaption && (
-        <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />
-      )}
+      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -611,7 +690,7 @@ export function BlockRow({
             </div>
           </div>
         </SlashMenu>
-      ) : isChoiceType(block.type) ? (
+      ) : row?.surface === 'choice' ? (
         <div className="min-w-0">
           <OptionsInline
             block={block}
@@ -625,7 +704,7 @@ export function BlockRow({
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
-      ) : supportsPlaceholder(block.type) ? (
+      ) : row?.surface === 'placeholder' ? (
         <div className="min-w-0">
           <AnswerField
             block={block}
@@ -639,7 +718,9 @@ export function BlockRow({
           />
         </div>
       ) : (
-        // image/date/scale — объектная остановка: фокусируемая строка с кольцом (§2.2).
+        // Объектная остановка — фокусируемая строка с кольцом (§2.2): картинка, дата,
+        // шкала. Что стоит внутри, объявляет сам тип (row.Control), поэтому карты
+        // «тип → контрол» здесь больше нет.
         <ObjectStop
           block={block}
           insideQuestion={insideQuestion}
@@ -652,13 +733,7 @@ export function BlockRow({
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
           onRowShift={(dir) => onRowShift(block.id, dir)}
         >
-          {isImage ? (
-            <ImageField block={block} formId={formId} />
-          ) : block.type === 'scale' ? (
-            <ScaleInline block={block} />
-          ) : (
-            <AnswerField block={block} />
-          )}
+          {row?.surface === 'object' && <row.Control block={block} formId={formId} />}
         </ObjectStop>
       )}
     </div>
@@ -699,7 +774,6 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
     </div>
   )
 }
-
 
 // ObjectStop — объектная остановка строки-объекта (image/date/scale): у неё нет
 // текстовой поверхности, поэтому «каретка стоит на объекте» — это фокус на самой
@@ -743,64 +817,45 @@ function ObjectStop({
   // здесь двигает саму строку: movesRow дефолтный.
   // insideQuestion меняет ПОДПИСЬ пункта Mod+Alt+→ в карте: на не первой строке
   // группы аккорд собирает ряд со своим заголовком, а не с предыдущим вопросом (§6.6).
+  // Контекст подсказок объявляет сам тип (row.hint): у картинки Mod+Enter открывает
+  // файловый диалог, у даты и шкалы открывать нечего — это разные контексты карты, а не
+  // один «объект» (§7).
+  const objectRow = rowFacts(block.type)
   const rowFocus = useRowFocus(
     block.id,
-    block.type === 'image' ? 'image' : 'object',
+    objectRow?.surface === 'object' ? objectRow.hint : 'object',
     false,
     true,
     insideQuestion,
   )
 
-  // Биндинги по e.code (§3.1). «/» остаётся символьным (открыть меню типов у строки
-  // ниже) — как и в текстовой строке.
+  // Поверхность ОБЪЕКТА (§3.3 спеки фазы 16): своего текста у неё нет, поэтому стрелка
+  // уходит на соседнюю строку всегда, Backspace сносит блок сразу, а печатный символ и
+  // «/» засевают строку НИЖЕ. Порядок аккордов — общий (rowKeys.ts).
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
     // Перехватываем клавиши, только когда фокус на самой остановке, а не во
     // внутреннем контроле (select шкалы, кнопки картинки) — тем нужны свои клавиши.
     if (e.target !== e.currentTarget) return
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.answerAction(e)) {
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: () => onDeleteBlock(block.id),
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
-      e.preventDefault()
-      ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click()
-    } else if (chords.moveGroup(e)) {
-      e.preventDefault()
-      onMoveGroup(arrowDir(e))
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
+      answerAction: () => ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
+      moveGroup: onMoveGroup,
       // Mod+Alt+→/← — ряд (§5): у объектной остановки (date/scale/картинка в вопросе)
       // жест тот же, что на подписи — переносится ВОПРОС, а не строка.
-      e.preventDefault()
-      onRowShift(chords.rowRight(e) ? 'right' : 'left')
-    } else if (chords.moveItem(e)) {
+      rowShift: onRowShift,
       // Alt+↑↓ двигает саму строку — включая строку ответа собранного вопроса (фаза
       // 15, §4.1): поле уходит из вопроса и возвращается тем же жестом.
-      e.preventDefault()
-      onMove(arrowDir(e))
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (chords.arrowDown(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    } else if (chords.enter(e)) {
-      e.preventDefault()
-      onAddBelow(block.id)
-    } else if (e.key === '/') {
-      e.preventDefault()
-      onAddBelow(block.id, { openMenu: true })
-    } else if (chords.backspace(e)) {
-      e.preventDefault()
-      onBackspaceDelete(block.id)
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault()
-      onAddBelow(block.id, { seed: e.key })
-    }
+      moveItem: onMove,
+      arrow: (dir) => onArrow(block.id, dir),
+      enter: () => onAddBelow(block.id),
+      backspace: () => onBackspaceDelete(block.id),
+      slash: () => onAddBelow(block.id, { openMenu: true }),
+      printable: (key) => onAddBelow(block.id, { seed: key }),
+    })
   }
 
   function onPaste(e: ClipboardEvent<HTMLDivElement>) {
@@ -831,72 +886,9 @@ function ObjectStop({
   )
 }
 
-// AnswerField — поле ответа под вопросом. Для текстовых типов оно редактируемое:
-// автор вводит сюда текст-плейсхолдер (settings.placeholder), который увидит
-// респондент. date — статичное превью (в поле даты плейсхолдер не показывается).
-// ScaleInline — редактор шкалы: живое превью делений (тот же rf-scale, что увидит
-// респондент) плюс выбор диапазона.
-//
-// Концы выбираются из <select>, а не вводятся числом, намеренно: ValidateSchema
-// строго требует min < max в пределах [0,10], а свободный ввод даёт невалидные
-// промежуточные состояния (пустое поле, min>max посреди набора) — автосейв ловил бы
-// 422 на каждое нажатие. Список вариантов делает такое состояние невозможным.
-function ScaleInline({ block }: { block: Block }) {
-  const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const { min, max } = scaleRange(block)
-
-  const set = (next: { min?: number; max?: number }) => {
-    const m = next.min ?? min
-    const x = next.max ?? max
-    updateBlock(block.id, {
-      // Максимум не может опуститься до минимума: держим его хотя бы на шаг выше.
-      settings: { ...block.settings, scaleMin: m, scaleMax: Math.max(x, m + 1) },
-    })
-  }
-
-  const selectCls =
-    'h-7 rounded border border-muted-foreground/30 bg-transparent px-1.5 text-sm text-foreground'
-
-  return (
-    <div className="flex flex-col gap-2">
-      {/* Только контрол, без FieldShell: подпись рисует строка заголовка выше —
-          оболочка дублировала бы её (вопрос стоял бы и над блоком, и над шкалой).
-          Просвет подпись→шкала (14px) даёт групповой контейнер, не свой mt (ритм 13.3). */}
-      <BlockControl block={block} />
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <label className="flex items-center gap-1.5">
-          от
-          <select
-            className={selectCls}
-            value={min}
-            onChange={(e) => set({ min: Number(e.target.value) })}
-          >
-            {[SCALE_LOWER_BOUND, SCALE_LOWER_BOUND + 1].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex items-center gap-1.5">
-          до
-          <select
-            className={selectCls}
-            value={max}
-            onChange={(e) => set({ max: Number(e.target.value) })}
-          >
-            {Array.from({ length: SCALE_UPPER_BOUND - min }, (_, i) => min + 1 + i).map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-    </div>
-  )
-}
-
+// AnswerField — редактируемый плейсхолдер поля: автор вводит сюда текст, который увидит
+// респондент в пустом поле (settings.placeholder). Поверхность 'placeholder' и только она —
+// объектные остановки (картинка, дата, шкала) рисуют контрол своего типа (kinds/*).
 function AnswerField({
   block,
   insideQuestion = false,
@@ -960,68 +952,39 @@ function AnswerField({
   // состояние: в неё подсаживают новый блок ответа. Left/Right и вертикаль внутри
   // длинного текста остаются нативными (caret-проверка на краю).
   function onFieldKeyDown(e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
-    const c = textCaret(e.currentTarget)
-    if (onOpenActions && chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (onDeleteBlock && chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (onRowShift && (chords.rowRight(e) || chords.rowLeft(e))) {
-      e.preventDefault()
-      onRowShift(chords.rowRight(e) ? 'right' : 'left')
-    } else if (onMove && chords.moveItem(e) && !chords.moveGroup(e)) {
-      // Проверяется ДО стрелок обхода: Alt+↑↓ — это тоже стрелка, и обход перехватил
-      // бы жест на краях текста. moveGroup исключён явно (в остальных поверхностях
-      // его отсекает порядок веток): Alt+Shift+↑↓ здесь не обрабатывается, и молча
-      // трактовать его как перенос строки значило бы соврать — карта такого не обещает.
-      e.preventDefault()
-      onMove(arrowDir(e))
-    } else if (onArrow && chords.arrowUp(e) && c.caretAtStart()) {
-      e.preventDefault()
-      onArrow(block.id, 'up')
-    } else if (onArrow && chords.arrowDown(e) && c.caretAtEnd()) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    } else if (onBackspaceDelete && chords.backspace(e) && e.currentTarget.value === '') {
-      e.preventDefault()
-      onBackspaceDelete(block.id)
-    }
+    const el = e.currentTarget
+    const c = textCaret(el)
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: onDeleteBlock && (() => onDeleteBlock(block.id)),
+      rowShift: onRowShift,
+      // moveGroup поверхность НЕ объявляет — и потому цепочка глушит Alt+Shift+↑↓, а
+      // не пропускает его в moveItem. Раньше это держала рукописная заплата
+      // (`&& !chords.moveGroup(e)`); теперь правило общее (rowKeys.ts) и работает на
+      // всех поверхностях одинаково.
+      moveItem: onMove,
+      arrow: onArrow && ((dir) => onArrow(block.id, dir)),
+      // Стрелка уходит со строки только с края каретки: вертикаль внутри длинного
+      // плейсхолдера остаётся нативной.
+      arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
+      backspace: onBackspaceDelete && (() => onBackspaceDelete(block.id)),
+      backspaceHandles: () => el.value === '',
+    })
   }
-  // Вид поля — общий rf-input (единый с превью/рендерером); rf-input-typed даёт
-  // место под глиф типа справа (см. index.css).
-  const cls = 'rf-input rf-input-typed'
+  // Плейсхолдер правится многострочно только у длинного ответа — факт его типа. От него
+  // же зависит положение глифа (к верхней строке, а не по центру высоты).
+  const fieldRow = rowFacts(block.type)
+  const multiline = fieldRow?.surface === 'placeholder' && !!fieldRow.multiline
 
-  // Глиф типа поля в правом углу — подсказка автору, ЧТО это за поле, когда
-  // подпись ещё не написана. Только в редакторе: у респондента тип виден по
-  // самому контролу, и в публичной форме Tally такого глифа нет (проверено
-  // замером). Берём typeIcons — тот же словарь, что в slash-меню и диалоге
-  // добавления, чтобы тип выглядел одинаково везде, где о нём говорят.
-  // pointer-events-none обязателен: иначе глиф съедает клик по правому краю поля.
-  const typeGlyph = (
-    <span
-      aria-hidden="true"
-      className={`pointer-events-none absolute right-2 text-muted-foreground/70 ${
-        block.type === 'long_text' ? 'top-2' : 'top-1/2 -translate-y-1/2'
-      }`}
-    >
-      {typeIcons[block.type]}
-    </span>
-  )
   // Обёртка — только якорь глифа; ширину берёт из .rf-field-wrap (index.css),
   // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (14px)
   // даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не нужен (был бы
   // двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
-    <div className={`rf-field-wrap ${wide ? 'rf-field-wrap--wide' : ''}`}>
+    <FieldWrap block={block} wide={wide} glyphTop={multiline}>
       {control}
-      {typeGlyph}
-    </div>
+    </FieldWrap>
   )
-
-  if (!supportsPlaceholder(block.type)) {
-    return wrap(<input type="date" disabled className={`${cls} pointer-events-none`} />)
-  }
   const focusProps = {
     onFocus: () => {
       setFocused(true)
@@ -1032,7 +995,7 @@ function AnswerField({
       rowFocus.onBlur(e)
     },
   }
-  if (block.type === 'long_text') {
+  if (multiline) {
     return wrap(
       <textarea
         ref={(el) => {
@@ -1045,7 +1008,7 @@ function AnswerField({
         placeholder={hint}
         // block: убрать базлайн-просвет inline-block textarea (см. подпись выше) —
         // иначе под длинным полем копится ~7px и ритм 13.3 расходится.
-        className={`block ${cls}`}
+        className={`block ${FIELD_CLS}`}
         {...focusProps}
       />,
       true,
@@ -1060,7 +1023,7 @@ function AnswerField({
       onChange={(e) => setPh(e.target.value)}
       onKeyDown={onFieldKeyDown}
       placeholder={hint}
-      className={cls}
+      className={FIELD_CLS}
       {...focusProps}
     />,
   )
@@ -1122,8 +1085,12 @@ function OptionsInline({
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const reorderOptions = useBuilderStore((s) => s.reorderOptions)
   const removeOption = useBuilderStore((s) => s.removeOption)
+  const duplicateOption = useBuilderStore((s) => s.duplicateOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const options = useMemo(() => block.settings?.options ?? [], [block.settings?.options])
+  // Умеет ли ЭТОТ список ряды вариантов — факт типа (kinds/<type>.tsx, row.optionRows).
+  const choiceRow = rowFacts(block.type)
+  const optionRows = choiceRow?.surface === 'choice' && choiceRow.optionRows
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
   // вариант — поэтому у списка свои чипы, а не текстовые.
   const rowFocus = useRowFocus(block.id, 'option')
@@ -1139,7 +1106,13 @@ function OptionsInline({
   // Тот же порог активации, что у полотна: клик по ручке не должен начинать драг.
   // Клавиатурного сенсора здесь нет намеренно — у вариантов своя карта (Alt+↑↓,
   // Mod+Alt+←/→), и второй клавиатурный путь через ручку дублировал бы её.
-  const optSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  // Порог — та же константа, что у полотна и у обоих грипов: у списка вариантов свой
+  // изолированный DndContext, но смысл числа один, и литерал здесь означал бы, что
+  // правка константы рассинхронизирует слой вариантов (попап карточки начал бы
+  // выскакивать «иногда» после драга).
+  const optSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
+  )
   // Свободная ячейка спрашивается указателем и ПЕРВОЙ — как зона жеста у вопросов:
   // цель намеренная, в общий конкурс центров её пускать незачем.
   const optCollision: CollisionDetection = (args) => {
@@ -1195,94 +1168,97 @@ function OptionsInline({
   // действие «набери текст»; остальное сводится к соседям и к судьбе блока.
   function onGhostKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     const last = options[options.length - 1]
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.enter(e)) {
-      // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
-      // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
-      // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
-      e.preventDefault()
+    // Выход из списка — как раньше Enter в пустом последнем варианте: новая строка
+    // после группы. Вариантов так и не появилось — блок уходит вместе с призраком
+    // (каретку уже забрала новая строка, поэтому уводить её отсюда не нужно).
+    const leaveList = () => {
       onAddBelow(block.id)
       if (options.length === 0) removeBlock(block.id)
-    } else if (chords.backspace(e)) {
+    }
+    const toLastOption = () => optionRefs.current.get(last!.id)?.focus()
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Mod+Enter на призраке делает то же, что Enter: до этапа 16.6 он попадал в
+      // общую ветку `enter` (голый матчер модификаторы не исключает), и поведение
+      // сохранено — объявлено явно вместо того, чтобы держаться на порядке веток.
+      answerAction: leaveList,
+      enter: leaveList,
       // Стирать в призраке нечего: либо возвращаемся к последнему варианту, либо —
       // если их нет — уходит сам блок, как на любой пустой поверхности ответа.
-      e.preventDefault()
-      if (last) optionRefs.current.get(last.id)?.focus()
-      else onBackspaceDelete(block.id)
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      if (last) optionRefs.current.get(last.id)?.focus()
-      else onLeaveTop()
-    } else if (chords.arrowDown(e)) {
-      e.preventDefault()
-      onArrow(block.id, 'down')
-    }
+      backspace: () => (last ? toLastOption() : onBackspaceDelete(block.id)),
+      arrow: (dir) => {
+        if (dir === 'down') return onArrow(block.id, 'down')
+        if (last) toLastOption()
+        else onLeaveTop()
+      },
+    })
   }
 
-  // Биндинги по e.code (§3.1). i — индекс варианта в options.
+  // Поверхность СПИСКА ВАРИАНТОВ (§3.3 спеки фазы 16). i — индекс варианта в options.
   function onOptionKeyDown(e: KeyboardEvent<HTMLInputElement>, optionId: string, i: number) {
     const empty = e.currentTarget.value === ''
     const isLast = i === options.length - 1
-    if (chords.actionMenu(e)) {
-      e.preventDefault()
-      onOpenActions()
-    } else if (chords.deleteBlock(e)) {
-      // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
-      e.preventDefault()
-      onDeleteBlock(block.id)
-    } else if (chords.enter(e) && !e.metaKey && !e.ctrlKey && isLast && empty) {
-      // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
-      // ложится после всей группы (как «Enter в конце списка» в текстовых редакторах).
-      // Строку заводим ДО удаления: последний вариант уносит с собой сам блок, и
-      // позицию «после группы» родителю было бы уже не от чего считать — новая
-      // строка улетела бы в конец полотна.
-      e.preventDefault()
-      onAddBelow(block.id)
-      removeOption(block.id, optionId)
-    } else if (chords.enter(e)) {
-      // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него. Cmd/Ctrl+Enter —
-      // тот же жест «действие над ответом» (§3.2).
-      e.preventDefault()
+    // Новый вариант сразу ПОСЛЕ текущего (Д5), фокус на него.
+    const addAfter = () => {
       pendingFocus.current = addOptionAfter(block.id, optionId)
-    } else if (chords.rowRight(e) || chords.rowLeft(e)) {
-      // Mod+Alt+→/← — ряд вариантов (§5.1): та же механика и те же аккорды, что у
-      // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
-      // У dropdown рядов нет, и жест уходит вопросу (см. проп onRowShift).
-      e.preventDefault()
-      if (block.type === 'dropdown') return onRowShift(chords.rowRight(e) ? 'right' : 'left')
-      const prev = options[i - 1]
-      if (chords.rowLeft(e)) takeOptionOwnRow(block.id, optionId)
-      else if (prev) placeOptionInRow(block.id, optionId, prev.id)
-      pendingFocus.current = optionId
-    } else if (chords.moveItem(e)) {
-      // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
-      e.preventDefault()
-      const dir = arrowDir(e)
+    }
+    const moveBy = (dir: ArrowDir) => {
       const target = dir === 'up' ? i - 1 : i + 1
       if (target >= 0 && target < options.length) {
         moveOption(block.id, optionId, dir)
         pendingFocus.current = optionId
       }
-    } else if (chords.backspace(e) && empty) {
-      e.preventDefault()
-      removeOptionAt(optionId, i)
-    } else if (chords.arrowDown(e)) {
-      // Единый обход (§2.1): следующий вариант, а за последним — соседняя строка.
-      e.preventDefault()
-      const next = options[i + 1]
-      if (next) optionRefs.current.get(next.id)?.focus()
-      else onArrow(block.id, 'down')
-    } else if (chords.arrowUp(e)) {
-      e.preventDefault()
-      const prev = options[i - 1]
-      if (prev) optionRefs.current.get(prev.id)?.focus()
-      else onLeaveTop()
     }
+    handleRowKeys(e, {
+      actionMenu: onOpenActions,
+      // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
+      deleteBlock: () => onDeleteBlock(block.id),
+      // Cmd/Ctrl+Enter — тот же жест «действие над ответом» (§3.2): новый вариант.
+      // Выходом из списка он не бывает — эта ветка ниже проверяет голый Enter.
+      answerAction: addAfter,
+      // Alt+Shift+↑↓ у варианта двигает ВАРИАНТ, как Alt+↑↓. Поведение сохранено с
+      // прошлого устройства (там оно держалось не решением, а отсутствием ветки
+      // moveGroup — Alt+Shift подходит под матчер Alt), но теперь объявлено вслух:
+      // цепочка иначе аккорд глушит. Кандидат на решение владельца — карта клавиш
+      // обещает здесь «перенести вопрос».
+      moveGroup: moveBy,
+      // Mod+Alt+→/← — ряд вариантов (§5.1): та же механика и те же аккорды, что у
+      // вопросов. Каретка едет с вариантом (фокус на тот же optionId — id стабилен).
+      // Ряды есть не у всякого списка: у dropdown их нет (список живёт в нативном
+      // select), и жест уходит ВОПРОСУ.
+      rowShift: (side) => {
+        if (!optionRows) return onRowShift(side)
+        const prev = options[i - 1]
+        if (side === 'left') takeOptionOwnRow(block.id, optionId)
+        else if (prev) placeOptionInRow(block.id, optionId, prev.id)
+        pendingFocus.current = optionId
+      },
+      // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
+      moveItem: moveBy,
+      // Единый обход (§2.1): соседний вариант, а за краем списка — соседняя строка.
+      arrow: (dir) => {
+        const near = dir === 'up' ? options[i - 1] : options[i + 1]
+        if (near) return void optionRefs.current.get(near.id)?.focus()
+        if (dir === 'up') onLeaveTop()
+        else onArrow(block.id, 'down')
+      },
+      enter: () => {
+        // Выход из списка: пустой последний вариант удаляем, новая текстовая строка
+        // ложится после всей группы (как «Enter в конце списка» в текстовых
+        // редакторах). Строку заводим ДО удаления: последний вариант уносит с собой
+        // сам блок, и позицию «после группы» родителю было бы уже не от чего считать —
+        // новая строка улетела бы в конец полотна.
+        if (isLast && empty) {
+          onAddBelow(block.id)
+          removeOption(block.id, optionId)
+          return
+        }
+        addAfter()
+      },
+      backspace: () => removeOptionAt(optionId, i),
+      backspaceHandles: () => empty,
+    })
   }
 
   // Дроп варианта (§5.1): на другой вариант — перестановка, в свободную ячейку ряда —
@@ -1346,6 +1322,13 @@ function OptionsInline({
                     }}
                     onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
                     onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
+                    onDuplicate={() => {
+                      // Каретка — на копию (§12), через тот же pendingFocus, что у
+                      // остальных операций списка: варианта ещё нет в DOM, фокус
+                      // ставится, когда массив приедет рендером.
+                      const copy = duplicateOption(block.id, o.id)
+                      if (copy) pendingFocus.current = copy
+                    }}
                     rowFocus={rowFocus}
                   />
                 ))}
@@ -1373,7 +1356,7 @@ function OptionsInline({
               варианты перестают уезжать в опубликованную форму. */}
           <GhostOption
             ref={ghostRef}
-            multiple={block.type === 'multi_choice'}
+            multiple={!isSingleChoiceType(block.type)}
             onType={(text) => {
               pendingFocus.current = addOption(block.id, text)
             }}
@@ -1463,6 +1446,64 @@ function GhostOption({
   )
 }
 
+// OptionActionMenu — попап варианта (фаза 16, решение владельца 7). Состав из двух
+// пунктов и никаких настроек типа: у варианта их нет, а «в колонку» — свойство строки
+// (раскладку списка задаёт она), не карточки. Отдельный маленький компонент, а не
+// BlockActionMenu с флагами: у того субъект — блок, и половина его пунктов (сменить
+// тип, обязательность) варианту бессмысленна.
+function OptionActionMenu({
+  open,
+  onOpenChange,
+  anchor,
+  onDuplicate,
+  onDelete,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  anchor: ReactNode
+  onDuplicate: () => void
+  onDelete: () => void
+}) {
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverAnchor asChild>{anchor}</PopoverAnchor>
+      <PopoverContent
+        className="w-52 p-0"
+        align="start"
+        side="bottom"
+        // Фокус после действия ставит сам список (pendingFocus/onLeaveTop) — возврат
+        // Radix на якорь глушим, иначе каретка уезжает на кнопку значка (§12).
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
+        <Command>
+          <CommandList>
+            <CommandGroup>
+              <CommandItem
+                onSelect={() => {
+                  onDuplicate()
+                  onOpenChange(false)
+                }}
+              >
+                <Copy className="size-4" />
+                Дублировать вариант
+              </CommandItem>
+              <CommandItem
+                onSelect={() => {
+                  onDelete()
+                  onOpenChange(false)
+                }}
+              >
+                <Trash2 className="size-4" />
+                Удалить вариант
+              </CommandItem>
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
 // контекста. Значки — тот же кластер, что у строк полотна (удалить + перетащить),
 // только адресованы варианту: строка ответа своих значков лишилась, потому что ею
@@ -1477,6 +1518,7 @@ function OptionCard({
   inputRef,
   onKeyDown,
   onRemove,
+  onDuplicate,
   rowFocus,
 }: {
   block: Block
@@ -1493,16 +1535,28 @@ function OptionCard({
   // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
   // один знает соседей. Мусорка и Backspace в пустом ведут в одну точку.
   onRemove: () => void
+  // Дублирование варианта с исходом каретки на копию — тем же путём, что удаление:
+  // список знает и соседей, и движок.
+  onDuplicate: () => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
+  // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
+  const inputEl = useRef<HTMLInputElement | null>(null)
+  // Действие из попапа само уводит каретку (дублирование — на копию, удаление — к
+  // соседу; оба считает список). Тот же флаг и та же причина, что у BlockActionMenu:
+  // возврат на свою карточку затёр бы поставленный мгновением раньше фокус.
+  const movedCaretRef = useRef(false)
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: option.id,
     animateLayoutChanges: noLayoutAnimation,
   })
   const placeholder = `Вариант ${index + 1}`
   const key = optionKey(index)
-  const multiple = block.type === 'multi_choice'
+  const multiple = !isSingleChoiceType(block.type)
   return (
     // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
     // всей строкой блока, и от него крестики расцветали у всех вариантов разом при
@@ -1534,19 +1588,68 @@ function OptionCard({
         >
           <Trash2 className="size-4" />
         </button>
-        <button
-          type="button"
-          aria-label="Переместить вариант"
-          className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
-          {...attributes}
-          {...listeners}
-          // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
-          // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
-          // здесь решает, чей победит.
-          tabIndex={-1}
-        >
-          <GripVertical className="size-4" />
-        </button>
+        {/* Грип варианта — та же пара жестов, что у грипа строки (§4.1): тащим —
+            перенос, кликаем — настройки. Состав попапа — «удалить» и «дублировать»
+            (решение владельца 7): с решением 6 карточка варианта остаётся
+            единственным местом, где списком управляют, и оставить её без попапа
+            значило бы спрятать управление совсем. */}
+        <OptionActionMenu
+          open={menuOpen}
+          // Закрытие без действия (Esc, клик мимо) возвращает каретку на свою
+          // карточку. Без этого она падала в body — Radix ставит фокус на поповер при
+          // открытии, а возврат на якорь мы гасим сами, — и вся клавиатура полотна
+          // умирала до первого клика мышью (находка ревью 16.2б).
+          onOpenChange={(open) => {
+            setMenuOpen(open)
+            if (open) return
+            if (!movedCaretRef.current) inputEl.current?.focus()
+            movedCaretRef.current = false
+          }}
+          onDuplicate={() => {
+            movedCaretRef.current = true
+            onDuplicate()
+          }}
+          onDelete={() => {
+            movedCaretRef.current = true
+            onRemove()
+          }}
+          anchor={
+            <button
+              type="button"
+              aria-label="Настройки варианта"
+              title="Настройки — клик, перенос — перетаскивание"
+              className="flex size-5 cursor-grab items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground active:cursor-grabbing"
+              {...attributes}
+              {...listeners}
+              // Значки — не остановки обхода: каретка ходит по вариантам, а не по их
+              // кнопкам. Ставим ПОСЛЕ спреда: attributes несут свой tabIndex, и порядок
+              // здесь решает, чей победит.
+              tabIndex={-1}
+              // Свой onPointerDown перебивает одноимённый обработчик dnd-kit (он идёт
+              // из спреда выше) — зовём его руками, иначе вариант перестаёт таскаться.
+              // Тот же порядок пропов уже съедал драг у грипа строки.
+              onPointerDown={(e) => {
+                gripDownRef.current = { x: e.clientX, y: e.clientY }
+                listeners?.onPointerDown?.(e)
+              }}
+              onClick={(e) => {
+                const from = gripDownRef.current
+                gripDownRef.current = null
+                // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance
+                // сравнивает через >): при >= жест ровно на пороге пропадал бы молча —
+                // сенсор драг не начал, а guard уже съел клик.
+                if (
+                  from &&
+                  Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
+                )
+                  return
+                setMenuOpen(true)
+              }}
+            >
+              <GripVertical className="size-4" />
+            </button>
+          }
+        />
       </div>
       <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
         {/* Что стоит перед текстом, решает тип — ровно как у респондента
@@ -1567,7 +1670,10 @@ function OptionCard({
             карточка схлопнулась бы в точку. */}
         <span className="rf-option-edit" data-value={option.label || placeholder}>
           <input
-            ref={inputRef}
+            ref={(el) => {
+              inputEl.current = el
+              inputRef(el)
+            }}
             value={option.label}
             placeholder={placeholder}
             aria-label={placeholder}

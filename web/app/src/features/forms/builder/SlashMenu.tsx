@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { BLOCK_GROUP_LABELS, type MenuItem } from './blockTypes'
-import { typeIcons } from './blockTypeIcons'
+import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 
 // SlashMenu — инлайн-меню выбора типа поля (§3.5, TD-33). Открывается по «/» прямо в
@@ -80,7 +80,7 @@ export function SlashMenu({
                       i === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                     }`}
                   >
-                    <span className="text-muted-foreground">{typeIcons[item.type]}</span>
+                    <span className="text-muted-foreground">{typeIcon(item.type)}</span>
                     {item.label}
                   </button>
                 </div>
