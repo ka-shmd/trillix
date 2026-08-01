@@ -149,14 +149,27 @@ func TestDownscale(t *testing.T) {
 }
 
 func TestEncodeCanonical_ФорматПоСодержимому(t *testing.T) {
-	t.Run("прозрачная остаётся PNG", func(t *testing.T) {
-		// Полностью прозрачная (нулевая RGBA): JPEG стёр бы альфу.
-		ext, ct, _, err := encodeCanonical(image.NewRGBA(image.Rect(0, 0, 64, 64)))
+	t.Run("полупрозрачная остаётся PNG, даже когда PNG крупно проигрывает", func(t *testing.T) {
+		// Фикстура выбрана так, чтобы тест МОГ покраснеть. Пустая прозрачная
+		// картинка для этого не годится: на ней PNG меньше JPEG и без гарда альфы,
+		// поэтому удаление гарда такой тест не ловит (проверено мутацией — проходил).
+		// Здесь наоборот: полупрозрачный шум, на котором PNG проигрывает JPEG в
+		// разы, и единственная причина остаться PNG — что терять альфу нельзя.
+		img := image.NewNRGBA(image.Rect(0, 0, 400, 400))
+		rng := rand.New(rand.NewSource(1))
+		for y := range 400 {
+			for x := range 400 {
+				img.SetNRGBA(x, y, color.NRGBA{
+					R: uint8(rng.Intn(256)), G: uint8(rng.Intn(256)), B: uint8(rng.Intn(256)), A: 128,
+				})
+			}
+		}
+		ext, ct, _, err := encodeCanonical(img)
 		if err != nil {
 			t.Fatalf("encodeCanonical: %v", err)
 		}
 		if ext != ".png" || ct != "image/png" {
-			t.Fatalf("ext=%q ct=%q, ожидался PNG: альфу терять нельзя", ext, ct)
+			t.Fatalf("ext=%q ct=%q, ожидался PNG: JPEG не умеет альфу и залил бы прозрачное фоном", ext, ct)
 		}
 	})
 
