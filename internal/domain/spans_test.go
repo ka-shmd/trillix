@@ -8,7 +8,7 @@ import (
 )
 
 // Богатый текст блока (фаза 14, схема v3). Инварианты формата — §2.3
-// docs/DESIGN-rich-text.md; зеркало на фронте — formSchema.test.ts, оба набора
+// docs/design/rich-text.md; зеркало на фронте — formSchema.test.ts, оба набора
 // правятся одним PR.
 
 func TestPlainText(t *testing.T) {

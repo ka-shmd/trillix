@@ -1,6 +1,6 @@
 // Загрузка картинки блока с прогрессом. XHR, а не fetch: нужен upload.onprogress
 // для прогресс-бара (fetch прогресс отправки тела надёжно не даёт — docs/
-// DESIGN-s3-media.md §6a). Синхронный HTTP-путь: ответ 201 и есть завершение,
+// docs/design/s3-media.md §6a). Синхронный HTTP-путь: ответ 201 и есть завершение,
 // статус-поллинга нет.
 
 import { CSRF_HEADER, csrfToken } from '../../../shared/api/csrf'

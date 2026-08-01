@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ColorPicker } from './ColorPicker'
 
-// Панель форматирования (фаза 14, этап 14.4, §3.3 `docs/DESIGN-rich-text.md`): всплывает
+// Панель форматирования (фаза 14, этап 14.4, §3.3 `docs/design/rich-text.md`): всплывает
 // над непустым выделением внутри текстовой строки полотна.
 //
 // Два правила, нарушение которых ломает панель ТИХО:

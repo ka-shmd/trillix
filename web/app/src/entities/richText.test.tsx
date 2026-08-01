@@ -5,7 +5,7 @@ import { afterEach } from 'vitest'
 import { BlockField, RichText } from '@fields/BlockField'
 import { type Block, type Span } from '@entities/formSchema'
 
-// Вывод богатого текста (этап 14.2, §3.1 docs/DESIGN-rich-text.md). Проверяется тот
+// Вывод богатого текста (этап 14.2, §3.1 docs/design/rich-text.md). Проверяется тот
 // самый код, который исполняет ПУБЛИЧНЫЙ РЕНДЕРЕР: `RichText` живёт в общем
 // `web/shared/fields`, а тест — здесь, потому что DOM-окружение (happy-dom +
 // @testing-library) узаконено только в кабинете (web/CLAUDE.md), и у web/shared своего

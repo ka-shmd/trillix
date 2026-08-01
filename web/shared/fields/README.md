@@ -228,7 +228,7 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
 ## Картинка (`image`) и медиа
 
 `image` — контентный (неотвечаемый) тип, как `text`, но с бинарным содержимым в
-объектном хранилище (S3; полный дизайн — `docs/DESIGN-s3-media.md`). Что важно для
+объектном хранилище (S3; полный дизайн — `docs/design/s3-media.md`). Что важно для
 полотна:
 
 - **Схема:** `settings.imageKey` (ключ объекта в бакете, не URL). Хранится ключ —
@@ -236,7 +236,7 @@ Tailwind только на layout/dnd/hover; визуал поля берётс�
   картинка декоративна, рендерер ставит жёсткий `alt=""` (ADR §10, фаза 13).
 - **URL:** `mediaSrc(key)` (`@fields/media`) → относительный `/media/<key>`, одинаков
   для кабинета и рендерера (раздаётся same-origin: в проде Caddy, в dev vite-proxy;
-  `docs/DESIGN-s3-media.md` §8). Покрывается CSP `img-src 'self'`.
+  `docs/design/s3-media.md` §8). Покрывается CSP `img-src 'self'`.
 - **Рендер (все три поверхности):** `BlockField` рисует `<img class="rf-image">` по
   `mediaSrc` (пустой ключ → ничего). `rf-image` — в `fields.css`. Превью и рендерер
   едут автоматически; **редактор** рисует свой `ImageField` (зона загрузки, прогресс,
