@@ -34,7 +34,7 @@
 - **PostgreSQL 16** — 15 миграций (`0001`…`0015_submissions_cabinet_count_index`).
   Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui.
-- **web/renderer** — публичный рендерер: react + zod, **бюджет 95 КиБ gzip** (сейчас 82.40 КиБ).
+- **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас 32.82 КиБ).
 - **e2e** — четыре Playwright-сценария против prod-local: `full-loop`, `builder-keyboard`,
   `form-settings`, `visits-funnel`.
 - **Эксплуатация** — бэкапы БД в Yandex (`deploy/backup.sh` в cron, восстановление

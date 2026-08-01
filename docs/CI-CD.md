@@ -64,7 +64,7 @@ docs-only. Тяжёлое ниже — в отдельном `ci-code.yml` по�
 Postgres поднимается testcontainers'ом).
 
 **Job `web`** (матрица `app` / `renderer`): `tsc --noEmit`, `eslint`, `vitest`, сборка.
-У рендерера дополнительно: **бюджет бандла 95 КиБ gzip** (`scripts/check-bundle.mjs`)
+У рендерера дополнительно: **бюджет бандла 45 КиБ gzip** (`scripts/check-bundle.mjs`)
 и **Lighthouse mobile Performance ≥ 90**.
 
 Локально то же самое:
