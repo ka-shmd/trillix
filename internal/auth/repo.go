@@ -76,6 +76,16 @@ func (Repo) AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceI
 	return nil
 }
 
+func (Repo) CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, planCode string) error {
+	if err := postgres.New(db).CreateSubscription(ctx, postgres.CreateSubscriptionParams{
+		WorkspaceID: workspaceID,
+		PlanCode:    planCode,
+	}); err != nil {
+		return fmt.Errorf("create subscription: %w", err)
+	}
+	return nil
+}
+
 func (Repo) CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error {
 	if err := postgres.New(db).CreateSession(ctx, postgres.CreateSessionParams{
 		TokenHash: tokenHash,

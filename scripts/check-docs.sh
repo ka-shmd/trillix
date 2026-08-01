@@ -224,6 +224,25 @@ else
 	ok "инвариант 4: ни одного dangerouslySetInnerHTML/innerHTML в web/"
 fi
 
+# --- 6. Единая точка лимитов тарифа -----------------------------------------
+# `if plan == "free"` вне internal/entitlements запрещён (internal/CLAUDE.md,
+# ADR §10). Причина не в красоте: рассыпанные по коду проверки означают, что
+# через полгода на вопрос «что входит в Pro» отвечает только греп, а страница
+# тарифов начинает врать в сторону, которую никто не заметит до жалобы.
+# Мутация: вписать `if plan == "free"` в любой сервис → краснеет.
+# Ищем сравнение с кодом плана в любую сторону; сам пакет entitlements и тесты
+# исключены — там сравнение с планом законно (это и есть точка решения).
+begin
+hits=$(grep -rn --include='*.go' \
+	--exclude-dir=entitlements --exclude='*_test.go' \
+	-E '(plan|planCode|PlanCode|plan_code)\s*[!=]=\s*"(free|pro|legacy_free)"|"(free|pro|legacy_free)"\s*[!=]=\s*(plan|planCode|PlanCode)' \
+	cmd internal 2>/dev/null || true)
+if [ -n "$hits" ]; then
+	err "Проверка плана мимо internal/entitlements: единая точка лимитов обходится" "$hits"
+else
+	ok "нет сравнений с кодом плана вне internal/entitlements"
+fi
+
 echo
 if [ $fail -ne 0 ]; then
 	echo "Проверка документов НЕ пройдена — почини расхождение и повтори."

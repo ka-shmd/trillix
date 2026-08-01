@@ -5,9 +5,29 @@
 -- Приём ответа. id генерирует клиент (UUIDv7) — повторная отправка после сетевого
 -- сбоя даёт тот же id и упирается в PK: ON CONFLICT DO NOTHING делает ретрай
 -- идемпотентным (0 затронутых строк = ответ уже принят, для клиента это успех).
-INSERT INTO submissions (id, form_id, form_version_id, answers, meta)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING;
+--
+-- Расход тарифа (workspace_usage) инкрементится ТЕМ ЖЕ утверждением (фаза 17):
+-- одно утверждение атомарно само по себе, поэтому быстрый путь приёма остаётся
+-- без явной транзакции, а счётчик не разъезжается с фактом при падении между
+-- двумя запросами. Инкремент читает ins: ретрай не дал строки — расход не вырос.
+--
+-- over_quota ($6) решается ДО вставки, по счётчику из GetEntitlements. Мягкий
+-- лимит сознательно НЕ сериализуется (в отличие от жёсткого капа формы с
+-- advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
+-- приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
+WITH ins AS (
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING 1 AS one
+), counted AS (
+    INSERT INTO workspace_usage (workspace_id, period, submissions)
+    SELECT sqlc.arg(workspace_id)::uuid, sqlc.arg(period)::date, 1 FROM ins
+    ON CONFLICT (workspace_id, period)
+    DO UPDATE SET submissions = workspace_usage.submissions + 1
+    RETURNING 1 AS one
+)
+SELECT one FROM ins;
 
 -- name: ListSubmissionsFirstPage :many
 -- Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
@@ -18,7 +38,7 @@ ON CONFLICT (id) DO NOTHING;
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -28,7 +48,7 @@ LIMIT $2;
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < sqlc.arg(cursor_id)::uuid
 ORDER BY s.id DESC
 LIMIT $2;
@@ -41,9 +61,26 @@ DELETE FROM submissions
 WHERE id = $1 AND form_id = $2;
 
 -- name: CountSubmissions :one
--- Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
--- idx_submissions_form_id (index-only на form_id).
+-- ВСЕ ответы формы, включая сверхлимитные. Потребитель ровно один — жёсткий кап
+-- формы (response_limit) в приёме ответа: кап считает принятое, а тариф на него
+-- не влияет. Кабинету нужен другой счёт — CountSubmissionsForCabinet ниже.
 SELECT count(*) FROM submissions WHERE form_id = $1;
+
+-- name: CountSubmissionsForCabinet :one
+-- Два числа одной поездкой: видимые ответы и скрытые тарифом (0014). Второе —
+-- для плашки «N ответов скрыто»: молча спрятать данные, которые человек собрал,
+-- нельзя, иначе скрытие читается как потеря.
+SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
+       count(*) FILTER (WHERE over_quota)::bigint AS hidden
+FROM submissions WHERE form_id = $1;
+
+-- name: RevealHiddenSubmissions :execrows
+-- Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,
+-- который их вмещает. Одной транзакцией и без исключений: скрытие обратимо, иначе
+-- обещание «сохранены и откроются после апгрейда» было бы враньём.
+UPDATE submissions s SET over_quota = false
+FROM forms f
+WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota;
 
 -- name: LockFormForSubmit :exec
 -- Транзакционный advisory-lock по форме для жёсткого капа лимита ответов (фаза 8.5

@@ -31,6 +31,7 @@ type fakeStore struct {
 	createdUser      bool
 	createdWorkspace bool
 	createdMember    bool
+	createdPlanCode  string // план подписки личного воркспейса ("" — подписки не завели)
 	createdSession   bool
 	deletedSession   bool
 
@@ -113,6 +114,11 @@ func (f *fakeStore) CreateWorkspace(_ context.Context, _ postgres.DBTX, id uuid.
 
 func (f *fakeStore) AddWorkspaceMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, _ string) error {
 	f.createdMember = true
+	return nil
+}
+
+func (f *fakeStore) CreateSubscription(_ context.Context, _ postgres.DBTX, _ uuid.UUID, planCode string) error {
+	f.createdPlanCode = planCode
 	return nil
 }
 
@@ -236,6 +242,11 @@ func TestRegister_Success(t *testing.T) {
 	}
 	if !store.createdVerifyToken {
 		t.Error("при регистрации не создан токен подтверждения email")
+	}
+	// Воркспейса без подписки не бывает (0014): иначе проверка лимита получает
+	// ветку «а если строки нет», и однажды эта ветка разрешит лишнее.
+	if store.createdPlanCode != defaultPlanCode {
+		t.Errorf("подписка личного воркспейса: план %q, ждали %q", store.createdPlanCode, defaultPlanCode)
 	}
 }
 

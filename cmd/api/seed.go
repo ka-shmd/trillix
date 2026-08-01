@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -221,7 +223,15 @@ func seedExportForm(ctx context.Context, pool *pgxpool.Pool, formsSvc *forms.Ser
 			if i < seedExportV1Share {
 				versionID, answers = v1ID, exportAnswersV1()
 			}
-			if _, e := repo.InsertSubmission(ctx, tx, domain.NewID(), form.ID, versionID, answers, meta); e != nil {
+			if _, e := repo.InsertSubmission(ctx, tx, submissions.NewSubmission{
+				ID:          domain.NewID(),
+				FormID:      form.ID,
+				VersionID:   versionID,
+				Answers:     answers,
+				Meta:        meta,
+				WorkspaceID: form.WorkspaceID,
+				Period:      entitlements.PeriodStart(time.Now()),
+			}); e != nil {
 				return e
 			}
 		}

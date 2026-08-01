@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -28,6 +29,23 @@ func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error)
 func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Version, error) {
 	return f.versions, f.err
 }
+
+func (f fakeForms) Get(context.Context, uuid.UUID, uuid.UUID) (forms.Form, error) {
+	return forms.Form{ID: f.form.FormID, WorkspaceID: f.form.WorkspaceID}, f.err
+}
+
+// fakePlans — управляемый тариф. allowed=false = «воронка закрыта планом».
+type fakePlans struct {
+	allowed bool
+	err     error
+}
+
+func (p fakePlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.Key) (entitlements.Decision, error) {
+	return entitlements.Decision{Allowed: p.allowed}, p.err
+}
+
+// openPlans — тариф, который воронку не закрывает (обычный случай тестов не про гейт).
+func openPlans() fakePlans { return fakePlans{allowed: true} }
 
 type upsertCall struct {
 	id, formID, versionID uuid.UUID
@@ -69,7 +87,7 @@ func openForm() forms.PublicForm {
 }
 
 func newSvc(f forms.PublicForm, store *fakeStore) *Service {
-	svc := NewService(nil, fakeForms{form: f}, store)
+	svc := NewService(nil, fakeForms{form: f}, openPlans(), store)
 	svc.now = func() time.Time { return now }
 	return svc
 }
@@ -114,7 +132,7 @@ func TestRecord_VersionMismatchRejected(t *testing.T) {
 // приватное не раскрывается.
 func TestRecord_NotFoundPropagates(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, store)
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store)
 	svc.now = func() time.Time { return now }
 
 	if err := svc.Record(context.Background(), "abc", validVisit()); !errors.Is(err, domain.ErrNotFound) {
@@ -270,7 +288,7 @@ func TestRecord_TruncatesMetaOnRuneBoundary(t *testing.T) {
 // id формы из URL правом доступа не является (инвариант 1).
 func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	store := &fakeStore{byLastBlock: []domain.LastBlockCount{{BlockID: "b1", Visits: 5}}}
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, store)
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store)
 
 	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -291,7 +309,7 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 	svc := NewService(nil, fakeForms{versions: []forms.Version{{
 		Number: 1,
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":false,"settings":{}}]}`),
-	}}}, store)
+	}}}, openPlans(), store)
 
 	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
 	if err != nil {
@@ -309,5 +327,31 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 	if f.Steps[0].Reached != 80 || f.Steps[0].DroppedHere != 68 {
 		t.Errorf("шаг = %d дошли / %d отвал, ждали 80/68 (отправивший не отвал)",
 			f.Steps[0].Reached, f.Steps[0].DroppedHere)
+	}
+}
+
+// Воронка закрыта тарифом → ErrPlanRequired (402), а не пустая воронка и не 403:
+// у отказа по деньгам свой код, по нему кабинет рисует плашку апгрейда.
+func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
+	svc := NewService(nil, fakeForms{versions: []forms.Version{{
+		Number: 1,
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	}}}, fakePlans{allowed: false}, &fakeStore{})
+
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
+	}
+}
+
+// Чужая форма закрыта тарифом ИЛИ нет — снаружи это должно быть неразличимо:
+// авторизация идёт ПЕРВОЙ, поэтому посторонний получает 404, а не 402 (иначе код
+// ответа рассказывал бы о существовании формы и о плане чужого воркспейса).
+func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{})
+
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали domain.ErrNotFound (гейт тарифа не должен опережать авторизацию)", err)
 	}
 }

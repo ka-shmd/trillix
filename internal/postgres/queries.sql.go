@@ -49,13 +49,35 @@ const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
 
-// Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
-// idx_submissions_form_id (index-only на form_id).
+// ВСЕ ответы формы, включая сверхлимитные. Потребитель ровно один — жёсткий кап
+// формы (response_limit) в приёме ответа: кап считает принятое, а тариф на него
+// не влияет. Кабинету нужен другой счёт — CountSubmissionsForCabinet ниже.
 func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countSubmissions, formID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countSubmissionsForCabinet = `-- name: CountSubmissionsForCabinet :one
+SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
+       count(*) FILTER (WHERE over_quota)::bigint AS hidden
+FROM submissions WHERE form_id = $1
+`
+
+type CountSubmissionsForCabinetRow struct {
+	Visible int64
+	Hidden  int64
+}
+
+// Два числа одной поездкой: видимые ответы и скрытые тарифом (0014). Второе —
+// для плашки «N ответов скрыто»: молча спрятать данные, которые человек собрал,
+// нельзя, иначе скрытие читается как потеря.
+func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UUID) (CountSubmissionsForCabinetRow, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsForCabinet, formID)
+	var i CountSubmissionsForCabinetRow
+	err := row.Scan(&i.Visible, &i.Hidden)
+	return i, err
 }
 
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
@@ -277,6 +299,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const createSubscription = `-- name: CreateSubscription :exec
+INSERT INTO subscriptions (workspace_id, plan_code)
+VALUES ($1, $2)
+`
+
+type CreateSubscriptionParams struct {
+	WorkspaceID uuid.UUID
+	PlanCode    string
+}
+
+// Подписка личного воркспейса — четвёртая строка транзакции регистрации
+// (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
+// лимита обрастает веткой «а если строки нет».
+func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscriptionParams) error {
+	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.PlanCode)
+	return err
+}
+
 const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
@@ -493,6 +533,89 @@ func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) er
 	return err
 }
 
+const getEntitlements = `-- name: GetEntitlements :one
+
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used
+FROM subscriptions s
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = s.workspace_id AND u.period = $2
+WHERE s.workspace_id = $1
+`
+
+type GetEntitlementsParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	SubmissionsUsed int64
+}
+
+// Запросы модуля entitlements. Схема — migrations/0014_billing. Генерация: `make sqlc`.
+// Состояние тарифа воркспейса на период — ОДНОЙ поездкой: запрос стоит на
+// горячем пути приёма ответа, и делить его на «план» и «расход» значило бы
+// удвоить эту цену. LEFT JOIN — расхода за период может ещё не быть (первый
+// ответ месяца); coalesce делает «строки нет» и «ноль» одним случаем.
+func (q *Queries) GetEntitlements(ctx context.Context, arg GetEntitlementsParams) (GetEntitlementsRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlements, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+	)
+	return i, err
+}
+
+const getEntitlementsForUser = `-- name: GetEntitlementsForUser :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used
+FROM subscriptions s
+JOIN plans p ON p.code = s.plan_code
+JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = $3
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = s.workspace_id AND u.period = $2
+WHERE s.workspace_id = $1
+`
+
+type GetEntitlementsForUserParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+	UserID      uuid.UUID
+}
+
+type GetEntitlementsForUserRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	SubmissionsUsed int64
+}
+
+// То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
+// членству (инвариант 1: id воркспейса из URL правом доступа не является).
+// Не член → 0 строк → 404, существование чужого воркспейса не раскрывается.
+func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlementsForUserParams) (GetEntitlementsForUserRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsForUser, arg.WorkspaceID, arg.Period, arg.UserID)
+	var i GetEntitlementsForUserRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+	)
+	return i, err
+}
+
 const getForm = `-- name: GetForm :one
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
@@ -501,7 +624,11 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -572,7 +699,11 @@ const getFormBySlug = `-- name: GetFormBySlug :one
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -668,7 +799,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
@@ -680,6 +811,7 @@ WHERE f.slug = $1
 
 type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
+	WorkspaceID        uuid.UUID
 	Title              string
 	Version            int32
 	Schema             []byte
@@ -701,11 +833,14 @@ type GetPublicFormBySlugRow struct {
 // submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
 // лишний скан submissions на каждом открытии не нужен. published_version_id —
 // источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
+// workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
+// брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
 	var i GetPublicFormBySlugRow
 	err := row.Scan(
 		&i.FormID,
+		&i.WorkspaceID,
 		&i.Title,
 		&i.Version,
 		&i.Schema,
@@ -847,9 +982,19 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 
 const insertSubmission = `-- name: InsertSubmission :execrows
 
-INSERT INTO submissions (id, form_id, form_version_id, answers, meta)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING
+WITH ins AS (
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING 1 AS one
+), counted AS (
+    INSERT INTO workspace_usage (workspace_id, period, submissions)
+    SELECT $7::uuid, $8::date, 1 FROM ins
+    ON CONFLICT (workspace_id, period)
+    DO UPDATE SET submissions = workspace_usage.submissions + 1
+    RETURNING 1 AS one
+)
+SELECT one FROM ins
 `
 
 type InsertSubmissionParams struct {
@@ -858,6 +1003,9 @@ type InsertSubmissionParams struct {
 	FormVersionID uuid.UUID
 	Answers       []byte
 	Meta          []byte
+	OverQuota     bool
+	WorkspaceID   uuid.UUID
+	Period        pgtype.Date
 }
 
 // Запросы модуля submissions. Схема — migrations/0004_submissions. Генерация:
@@ -865,6 +1013,16 @@ type InsertSubmissionParams struct {
 // Приём ответа. id генерирует клиент (UUIDv7) — повторная отправка после сетевого
 // сбоя даёт тот же id и упирается в PK: ON CONFLICT DO NOTHING делает ретрай
 // идемпотентным (0 затронутых строк = ответ уже принят, для клиента это успех).
+//
+// Расход тарифа (workspace_usage) инкрементится ТЕМ ЖЕ утверждением (фаза 17):
+// одно утверждение атомарно само по себе, поэтому быстрый путь приёма остаётся
+// без явной транзакции, а счётчик не разъезжается с фактом при падении между
+// двумя запросами. Инкремент читает ins: ретрай не дал строки — расход не вырос.
+//
+// over_quota ($6) решается ДО вставки, по счётчику из GetEntitlements. Мягкий
+// лимит сознательно НЕ сериализуется (в отличие от жёсткого капа формы с
+// advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
+// приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
 func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSubmission,
 		arg.ID,
@@ -872,6 +1030,9 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		arg.FormVersionID,
 		arg.Answers,
 		arg.Meta,
+		arg.OverQuota,
+		arg.WorkspaceID,
+		arg.Period,
 	)
 	if err != nil {
 		return 0, err
@@ -990,7 +1151,7 @@ SELECT id, workspace_id, name, title, slug, status, published_version_id, publis
     FROM forms f
     LEFT JOIN form_versions fv ON fv.id = f.published_version_id
     LEFT JOIN LATERAL (
-        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id
+        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
     ) c ON true
     LEFT JOIN LATERAL (
         SELECT count(*) AS visit_count,
@@ -1149,7 +1310,7 @@ const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
 ORDER BY s.id DESC
 LIMIT $2
@@ -1199,7 +1360,7 @@ const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -1380,6 +1541,23 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const revealHiddenSubmissions = `-- name: RevealHiddenSubmissions :execrows
+UPDATE submissions s SET over_quota = false
+FROM forms f
+WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota
+`
+
+// Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,
+// который их вмещает. Одной транзакцией и без исключений: скрытие обратимо, иначе
+// обещание «сохранены и откроются после апгрейда» было бы враньём.
+func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revealHiddenSubmissions, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setFormClosed = `-- name: SetFormClosed :one

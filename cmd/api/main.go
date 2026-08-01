@@ -14,6 +14,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/config"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -247,20 +248,25 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки и приём
+	// ответа. Собирается до обоих потребителей, живёт на том же пуле.
+	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
+
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
-	visitsSvc := visits.NewService(pool, formsSvc, visits.Repo{})
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
+	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, submissions.Repo{}, cfg.AppOrigin)
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log, pool,
 		authHandler.Routes, authHandler.OAuthRoutes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
-		visitsPublic.Routes, visitsHandler.Routes)
+		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

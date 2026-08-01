@@ -11,6 +11,7 @@ sql:
       - "internal/submissions/queries.sql"
       - "internal/visits/queries.sql"
       - "internal/mail/queries.sql"
+      - "internal/entitlements/queries.sql"
     gen:
       go:
         # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).

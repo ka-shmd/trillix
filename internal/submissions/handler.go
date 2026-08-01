@@ -78,6 +78,10 @@ type listResponse struct {
 	Submissions []submissionResponse `json:"submissions"`
 	NextCursor  *string              `json:"nextCursor"`
 	Total       int64                `json:"total"`
+	// Hidden — сколько ответов скрыто квотой тарифа (0014). Ноль у всех, кто в
+	// лимит укладывается. Кабинет рисует по нему плашку со словами «сохранены и
+	// откроются после перехода на Pro»: спрятать данные молча нельзя.
+	Hidden int64 `json:"hidden"`
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -110,7 +114,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			Answers:     s.Answers,
 		}
 	}
-	resp := listResponse{Submissions: items, Total: page.Total}
+	resp := listResponse{Submissions: items, Total: page.Total, Hidden: page.Hidden}
 	if page.NextCursor != nil {
 		enc := encodeCursor(*page.NextCursor)
 		resp.NextCursor = &enc

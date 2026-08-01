@@ -22,6 +22,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -63,8 +64,9 @@ func resetDB(t *testing.T) {
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), submissions.Repo{}, "http://app.test")
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
 
 	mux := http.NewServeMux()
 	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, false).Routes(mux)
@@ -322,7 +324,69 @@ func formOwner(t *testing.T, slug string) (formID, userID uuid.UUID) {
 
 func funnelService() *visits.Service {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	return visits.NewService(testPool, formsSvc, visits.Repo{})
+	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+}
+
+// setFunnelGate закрывает/открывает воронку на плане воркспейса формы — тем же
+// UPDATE, каким владелец включит гейт на проде (гейты приезжают выключенными).
+func setFunnelGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', $1::jsonb)
+		 WHERE code = (SELECT s.plan_code FROM subscriptions s
+		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		value, slug); err != nil {
+		t.Fatalf("set funnel gate: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', 'true')`); err != nil {
+			t.Fatalf("reset funnel gate: %v", err)
+		}
+	})
+}
+
+// Воронка закрыта тарифом: чтение отказано (ErrPlanRequired → 402), но ВИЗИТЫ
+// продолжают собираться. Это не мелочь, а условие апселла: если бесплатным не
+// собирать, в момент показа плашки показывать будет нечего.
+func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+	setFunnelGate(t, slug, false)
+
+	for i := 0; i < 3; i++ {
+		beacon(t, srv, slug, domain.NewID().String(), 0, "")
+	}
+
+	_, err := funnelService().Funnel(context.Background(), userID, formID)
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
+	}
+
+	var visitCount int
+	if e := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM form_visits WHERE form_id = $1`, formID).Scan(&visitCount); e != nil {
+		t.Fatalf("count visits: %v", e)
+	}
+	if visitCount != 3 {
+		t.Errorf("собрано визитов %d, ожидалось 3: гейт стоит на ЧТЕНИИ, а не на записи", visitCount)
+	}
+
+	// Открыли тариф — те же данные показываются, ничего не потеряно.
+	setFunnelGate(t, slug, true)
+	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	if err != nil {
+		t.Fatalf("Funnel после открытия тарифа: %v", err)
+	}
+	if f.Visits != 3 {
+		t.Errorf("воронка показала %d визитов, ожидалось 3", f.Visits)
+	}
 }
 
 // Сквозная воронка: визиты с разной дальней точкой раскладываются по шагам, а
