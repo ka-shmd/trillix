@@ -34,7 +34,7 @@ web/shared/entities/formSchema.ts)
 	msg="Тронут Zod-контракт схемы. Зеркальная сторона — internal/domain/schema.go и ValidateSchema: правятся в этом же PR, с тестами обеих сторон."
 	;;
 web/shared/fields/*)
-	msg="Тронуты общие компоненты полей: их видят три поверхности (редактор, превью билдера, рендерер). Tailwind и shadcn сюда не тащить — сломают бюджет рендерера 95 КиБ. Проверь бюджет: cd web/renderer && npm run build && npm run check:bundle"
+	msg="Тронуты общие компоненты полей: их видят три поверхности (редактор, превью билдера, рендерер). Tailwind и shadcn сюда не тащить — сломают бюджет рендерера 45 КиБ. Проверь бюджет: cd web/renderer && npm run build && npm run check:bundle"
 	;;
 deploy/caddy/Caddyfile | deploy/compose.prod.yml)
 	msg="Тронут прод-конфиг. Зелёный деплой не означает, что конфиг применился (TD-27): сверяй ЖИВОЙ конфиг через админ-API Caddy, а не факт успешного reload."
