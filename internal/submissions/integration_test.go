@@ -61,7 +61,7 @@ func resetDB(t *testing.T) {
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)

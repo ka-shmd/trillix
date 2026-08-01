@@ -26,6 +26,9 @@ func TestWriteError_Mapping(t *testing.T) {
 		{"forbidden", domain.ErrForbidden, http.StatusForbidden, "forbidden"},
 		{"not found", domain.ErrNotFound, http.StatusNotFound, "not_found"},
 		{"rate limited", domain.ErrRateLimited, http.StatusTooManyRequests, "rate_limited"},
+		// Отказ по тарифу — свой код и свой статус: кабинет отличает «нужен план»
+		// от «нет прав» (403) и от «нет формы» (404), и рисует плашку апгрейда.
+		{"plan required", domain.ErrPlanRequired, http.StatusPaymentRequired, "plan_required"},
 		{"wrapped validation", fmt.Errorf("%w: bad email", domain.ErrValidation), http.StatusUnprocessableEntity, "validation_failed"},
 		{"unknown -> 500", errors.New("boom"), http.StatusInternalServerError, "internal"},
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -29,10 +30,23 @@ var utmKeys = [...]string{"utm_source", "utm_medium", "utm_campaign", "utm_conte
 // *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// Get авторизует доступ автора к форме и отдаёт её — воронке нужен
+	// workspace_id, чтобы спросить у тарифа право на просмотр (фаза 17).
+	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
 	// Versions авторизует доступ (чужая/несуществующая → domain.ErrNotFound,
 	// анти-IDOR) и отдаёт опубликованные версии: их схемы дают воронке порядок и
 	// подписи вопросов — тот же список, что у выгрузки и сводки.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+}
+
+// Plans — коллаборатор из модуля entitlements: единственная точка «можно ли»
+// (ADR §10). Реализация — *entitlements.Service.
+//
+// Гейт стоит на ЧТЕНИИ воронки, а не на записи визита: визиты собираются для
+// всех планов без исключения. Иначе в момент апселла показывать было бы нечего
+// и плашка «откройте Pro» рекламировала бы пустоту.
+type Plans interface {
+	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
 }
 
 // Store — доступ к данным visits, объявленный на стороне потребителя.
@@ -62,12 +76,13 @@ type Visit struct {
 type Service struct {
 	db    postgres.DBTX
 	forms Forms
+	plans Plans
 	repo  Store
 	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, repo Store) *Service {
-	return &Service{db: db, forms: forms, repo: repo, now: time.Now}
+func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store) *Service {
+	return &Service{db: db, forms: forms, plans: plans, repo: repo, now: time.Now}
 }
 
 // Record записывает визит. Порядок повторяет приём ответа: резолв формы (черновик/
@@ -146,6 +161,24 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
 func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.Funnel, error) {
+	// Порядок обязателен: сначала АВТОРИЗАЦИЯ (чужая форма → 404, приватное не
+	// раскрывается), только потом тариф (→ 402). Наоборот — и посторонний узнавал
+	// бы по коду ответа, существует ли форма и какой у чужого воркспейса план.
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsFunnel)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
+	if !d.Allowed {
+		// Данные собраны и никуда не делись — закрыт только показ разбивки.
+		// Число не дошедших кабинет берёт из счётчиков самой формы (они уже
+		// загружены на странице), поэтому в теле отказа его дублировать незачем.
+		return domain.Funnel{}, domain.ErrPlanRequired
+	}
+
 	versions, err := s.forms.Versions(ctx, userID, formID)
 	if err != nil {
 		return domain.Funnel{}, err

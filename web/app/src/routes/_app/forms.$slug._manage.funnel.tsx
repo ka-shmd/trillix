@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query'
 import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { funnelQueryOptions } from '../../features/funnel/queries'
-import { pluralViews } from '../../shared/format'
+import { pluralPeople, pluralViews } from '../../shared/format'
+import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 
 // Таб «Воронка» (/forms/$slug/funnel): на каком вопросе люди уходят.
@@ -34,6 +35,26 @@ function FunnelPage() {
 
   if (funnel.isPending) {
     return <p className="text-sm text-muted-foreground">Считаем воронку…</p>
+  }
+  // Воронка закрыта тарифом. Показываем НАСТОЯЩЕЕ число не дошедших — оно уже
+  // загружено вместе с формой (визиты собираются для всех планов, гейт стоит на
+  // показе разбивки). Плашка, рекламирующая пустоту, не продаёт ничего.
+  if (funnel.isError && funnel.error instanceof ApiError && funnel.error.code === 'plan_required') {
+    const notFinished = (form.data?.visitCount ?? 0) - (form.data?.visitSubmittedCount ?? 0)
+    return (
+      <div className="mx-auto mt-12 max-w-md text-center">
+        <h2 className="text-lg font-medium">
+          {notFinished > 0
+            ? `Не дошли до конца формы: ${notFinished} ${pluralPeople(notFinished)}`
+            : 'Воронка отвала'}
+        </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {notFinished > 0
+            ? 'Откройте тариф с аналитикой, чтобы увидеть, на каких именно вопросах они уходят.'
+            : 'Разбивка по вопросам доступна на тарифе с аналитикой. Визиты уже собираются — данные копятся и никуда не денутся.'}
+        </p>
+      </div>
+    )
   }
   if (funnel.isError) {
     return (

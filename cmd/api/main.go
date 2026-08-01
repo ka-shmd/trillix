@@ -248,14 +248,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки и приём
+	// ответа. Собирается до обоих потребителей, живёт на том же пуле.
+	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
+
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
-	visitsSvc := visits.NewService(pool, formsSvc, visits.Repo{})
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
-
-	// Единая точка лимитов тарифа (фаза 17): её спрашивают приём ответа и чтение
-	// аналитики. Собирается до потребителей, живёт на том же пуле.
-	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)
