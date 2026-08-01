@@ -230,7 +230,9 @@ WHERE id = $1 AND workspace_id = $2;
 -- submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
 -- лишний скан submissions на каждом открытии не нужен. published_version_id —
 -- источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+-- workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
+-- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
+SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)

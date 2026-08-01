@@ -5,9 +5,29 @@
 -- Приём ответа. id генерирует клиент (UUIDv7) — повторная отправка после сетевого
 -- сбоя даёт тот же id и упирается в PK: ON CONFLICT DO NOTHING делает ретрай
 -- идемпотентным (0 затронутых строк = ответ уже принят, для клиента это успех).
-INSERT INTO submissions (id, form_id, form_version_id, answers, meta)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING;
+--
+-- Расход тарифа (workspace_usage) инкрементится ТЕМ ЖЕ утверждением (фаза 17):
+-- одно утверждение атомарно само по себе, поэтому быстрый путь приёма остаётся
+-- без явной транзакции, а счётчик не разъезжается с фактом при падении между
+-- двумя запросами. Инкремент читает ins: ретрай не дал строки — расход не вырос.
+--
+-- over_quota ($6) решается ДО вставки, по счётчику из GetEntitlements. Мягкий
+-- лимит сознательно НЕ сериализуется (в отличие от жёсткого капа формы с
+-- advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
+-- приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
+WITH ins AS (
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING 1 AS one
+), counted AS (
+    INSERT INTO workspace_usage (workspace_id, period, submissions)
+    SELECT sqlc.arg(workspace_id)::uuid, sqlc.arg(period)::date, 1 FROM ins
+    ON CONFLICT (workspace_id, period)
+    DO UPDATE SET submissions = workspace_usage.submissions + 1
+    RETURNING 1 AS one
+)
+SELECT one FROM ins;
 
 -- name: ListSubmissionsFirstPage :many
 -- Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по

@@ -94,7 +94,7 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 		return Decision{}, fmt.Errorf("entitlements: ключ %q — аккаунт-уровневый, CheckWorkspace его не обслуживает", key)
 	}
 
-	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, s.periodStart())
+	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, s.PeriodStart())
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Воркспейса без подписки не бывает: её создаёт транзакция
@@ -110,7 +110,7 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 // Аккаунт-уровневые ключи в снимок не попадают: их разрешает план другого
 // воркспейса, и показывать их здесь значило бы врать.
 func (s *Service) Snapshot(ctx context.Context, workspaceID uuid.UUID) (Snapshot, error) {
-	period := s.periodStart()
+	period := s.PeriodStart()
 	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, period)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("entitlements: снимок воркспейса %s: %w", workspaceID, err)
@@ -135,13 +135,20 @@ func (s *Service) Snapshot(ctx context.Context, workspaceID uuid.UUID) (Snapshot
 	return snap, nil
 }
 
-// periodStart — первое число текущего месяца по Москве. Календарный месяц, а не
-// скользящие 30 дней (решение владельца): человек должен уметь предсказать,
-// когда лимит обнулится.
-func (s *Service) periodStart() time.Time {
-	t := s.now().In(moscow)
+// PeriodStart — начало расчётного периода, в который попадает t: первое число
+// его месяца по Москве. Календарный месяц, а не скользящие 30 дней (решение
+// владельца): человек должен уметь предсказать, когда лимит обнулится.
+//
+// Экспортирована и чистая, потому что период нужен не только проверке: приём
+// ответа инкрементит расход и обязан попасть в ТОТ ЖЕ период, что прочитала
+// проверка. Две независимые реализации разъехались бы на границе месяца.
+func PeriodStart(t time.Time) time.Time {
+	t = t.In(moscow)
 	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, moscow)
 }
+
+// PeriodStart — текущий период сервиса (по его же часам).
+func (s *Service) PeriodStart() time.Time { return PeriodStart(s.now()) }
 
 // decide — чистая функция решения: план (как данные) + расход → вердикт.
 // Вынесена из CheckWorkspace, чтобы её ветки проверялись табличными юнитами

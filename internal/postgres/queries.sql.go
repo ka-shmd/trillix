@@ -728,7 +728,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (u
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
-SELECT f.id AS form_id, f.title, fv.version, fv.schema, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
@@ -740,6 +740,7 @@ WHERE f.slug = $1
 
 type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
+	WorkspaceID        uuid.UUID
 	Title              string
 	Version            int32
 	Schema             []byte
@@ -761,11 +762,14 @@ type GetPublicFormBySlugRow struct {
 // submission_count считаем ТОЛЬКО при заданном лимите (иначе 0): у форм без лимита
 // лишний скан submissions на каждом открытии не нужен. published_version_id —
 // источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
+// workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
+// брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
 	var i GetPublicFormBySlugRow
 	err := row.Scan(
 		&i.FormID,
+		&i.WorkspaceID,
 		&i.Title,
 		&i.Version,
 		&i.Schema,
@@ -907,9 +911,19 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 
 const insertSubmission = `-- name: InsertSubmission :execrows
 
-INSERT INTO submissions (id, form_id, form_version_id, answers, meta)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING
+WITH ins AS (
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING 1 AS one
+), counted AS (
+    INSERT INTO workspace_usage (workspace_id, period, submissions)
+    SELECT $7::uuid, $8::date, 1 FROM ins
+    ON CONFLICT (workspace_id, period)
+    DO UPDATE SET submissions = workspace_usage.submissions + 1
+    RETURNING 1 AS one
+)
+SELECT one FROM ins
 `
 
 type InsertSubmissionParams struct {
@@ -918,6 +932,9 @@ type InsertSubmissionParams struct {
 	FormVersionID uuid.UUID
 	Answers       []byte
 	Meta          []byte
+	OverQuota     bool
+	WorkspaceID   uuid.UUID
+	Period        pgtype.Date
 }
 
 // Запросы модуля submissions. Схема — migrations/0004_submissions. Генерация:
@@ -925,6 +942,16 @@ type InsertSubmissionParams struct {
 // Приём ответа. id генерирует клиент (UUIDv7) — повторная отправка после сетевого
 // сбоя даёт тот же id и упирается в PK: ON CONFLICT DO NOTHING делает ретрай
 // идемпотентным (0 затронутых строк = ответ уже принят, для клиента это успех).
+//
+// Расход тарифа (workspace_usage) инкрементится ТЕМ ЖЕ утверждением (фаза 17):
+// одно утверждение атомарно само по себе, поэтому быстрый путь приёма остаётся
+// без явной транзакции, а счётчик не разъезжается с фактом при падении между
+// двумя запросами. Инкремент читает ins: ретрай не дал строки — расход не вырос.
+//
+// over_quota ($6) решается ДО вставки, по счётчику из GetEntitlements. Мягкий
+// лимит сознательно НЕ сериализуется (в отличие от жёсткого капа формы с
+// advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
+// приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
 func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSubmission,
 		arg.ID,
@@ -932,6 +959,9 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		arg.FormVersionID,
 		arg.Answers,
 		arg.Meta,
+		arg.OverQuota,
+		arg.WorkspaceID,
+		arg.Period,
 	)
 	if err != nil {
 		return 0, err

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -73,9 +74,21 @@ type Visits interface {
 	MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) error
 }
 
+// Plans — коллаборатор из модуля entitlements: единственная точка, где код
+// спрашивает «можно ли» (ADR §10). Реализация — *entitlements.Service.
+//
+// Приёму ответа он нужен НЕ для отказа: квота тарифа мягкая, ответ принимается
+// при любом состоянии подписки. Нужен факт «сверх квоты», чтобы пометить строку
+// (в кабинете владельца она скроется до апгрейда) и период — тот же, в который
+// ляжет инкремент расхода, иначе проверка и счёт разъехались бы на границе месяца.
+type Plans interface {
+	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
+	PeriodStart() time.Time
+}
+
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
-	InsertSubmission(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, answers, meta json.RawMessage) (int64, error)
+	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
@@ -130,6 +143,7 @@ type Service struct {
 	forms  Forms
 	visits Visits
 	mail   Mailer
+	plans  Plans
 	repo   Store
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
@@ -137,8 +151,8 @@ type Service struct {
 	now        func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, repo Store, appBaseURL string) *Service {
-	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, repo: repo, appBaseURL: appBaseURL, now: time.Now}
+func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, plans: plans, repo: repo, appBaseURL: appBaseURL, now: time.Now}
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -193,13 +207,35 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 
+	// Квота тарифа (фаза 17). Спрашивается ПЕРЕД вставкой и ни при каком исходе
+	// не отменяет приём: респондент не знает, что у владельца формы есть тариф,
+	// и отказ здесь потерял бы данные КЛИЕНТА за неоплату ВЛАДЕЛЬЦЕМ (ADR §10).
+	// Сбой самой проверки (нет подписки, битые limits) — тем более не повод: он
+	// уходит в лог, а ответ считается «в пределах квоты», то есть щедро.
+	in := NewSubmission{
+		ID:          id,
+		FormID:      pf.FormID,
+		VersionID:   pf.VersionID,
+		Answers:     answersJSON,
+		Meta:        metaJSON,
+		WorkspaceID: pf.WorkspaceID,
+		Period:      s.plans.PeriodStart(),
+	}
+	if d, e := s.plans.CheckWorkspace(ctx, pf.WorkspaceID, entitlements.SubmissionsPerMonth); e != nil {
+		httpserver.LoggerFrom(ctx).Error("quota not checked, submission accepted as within quota",
+			slog.String("workspace_id", pf.WorkspaceID.String()),
+			slog.String("error", e.Error()))
+	} else {
+		in.OverQuota = !d.Allowed
+	}
+
 	// inserted — была ли вставлена НОВАЯ строка (n > 0). false = идемпотентный ретрай
 	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
 	var inserted bool
 
 	// Без лимита — прежний путь без блокировки: одна вставка на пуле.
 	if pf.ResponseLimit == nil {
-		n, err := s.repo.InsertSubmission(ctx, s.db, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+		n, err := s.repo.InsertSubmission(ctx, s.db, in)
 		if err != nil {
 			return err
 		}
@@ -215,7 +251,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 			if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
 				return err
 			}
-			n, err := s.repo.InsertSubmission(ctx, tx, id, pf.FormID, pf.VersionID, answersJSON, metaJSON)
+			n, err := s.repo.InsertSubmission(ctx, tx, in)
 			if err != nil {
 				return err
 			}

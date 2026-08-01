@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -25,16 +26,38 @@ type Submission struct {
 // (postgres.DBTX: пул или транзакция); транзакций сам не открывает.
 type Repo struct{}
 
-// InsertSubmission пишет ответ. Возвращает число вставленных строк: 0 означает
-// конфликт по PK (клиент прислал уже принятый id при ретрае) — вызывающий трактует
-// это как идемпотентный успех, а не ошибку.
-func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, answers, meta json.RawMessage) (int64, error) {
+// NewSubmission — что кладём при приёме ответа. Структурой, а не восемью
+// позиционными аргументами: половина из них — uuid, и перепутать их местами
+// нельзя было бы заметить ни глазами, ни компилятором.
+type NewSubmission struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	VersionID uuid.UUID
+	Answers   json.RawMessage
+	Meta      json.RawMessage
+	// WorkspaceID и Period — адрес счётчика расхода тарифа (фаза 17): инкремент
+	// едет тем же утверждением, что вставка.
+	WorkspaceID uuid.UUID
+	Period      time.Time
+	// OverQuota — ответ пришёл сверх квоты плана. Не отказ: строка сохраняется,
+	// скрыт ответ только в кабинете владельца.
+	OverQuota bool
+}
+
+// InsertSubmission пишет ответ и инкрементит расход тарифа одним утверждением.
+// Возвращает число вставленных строк: 0 означает конфликт по PK (клиент прислал
+// уже принятый id при ретрае) — вызывающий трактует это как идемпотентный успех,
+// а не ошибку; расход при таком ретрае тоже не растёт.
+func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error) {
 	n, err := postgres.New(db).InsertSubmission(ctx, postgres.InsertSubmissionParams{
-		ID:            id,
-		FormID:        formID,
-		FormVersionID: versionID,
-		Answers:       answers,
-		Meta:          meta,
+		ID:            in.ID,
+		FormID:        in.FormID,
+		FormVersionID: in.VersionID,
+		Answers:       in.Answers,
+		Meta:          in.Meta,
+		OverQuota:     in.OverQuota,
+		WorkspaceID:   in.WorkspaceID,
+		Period:        pgtype.Date{Time: in.Period, Valid: true},
 	})
 	if err != nil {
 		return 0, fmt.Errorf("insert submission: %w", err)

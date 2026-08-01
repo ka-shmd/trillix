@@ -137,7 +137,7 @@ func TestPeriodStart_MoscowCalendarMonth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(nil, stubStore{}, func() time.Time { return tt.now })
-			if got := svc.periodStart().Format("2006-01-02"); got != tt.want {
+			if got := svc.PeriodStart().Format("2006-01-02"); got != tt.want {
 				t.Errorf("periodStart = %s, ждали %s", got, tt.want)
 			}
 		})

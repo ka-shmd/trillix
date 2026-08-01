@@ -83,11 +83,14 @@ type ListRow struct {
 // FormID — id самой формы: рендереру не отдаётся, но нужен приёму ответа (модуль
 // submissions привязывает submission к form_id и form_version_id).
 type PublicForm struct {
-	FormID    uuid.UUID
-	Title     string
-	Version   int32
-	Schema    json.RawMessage
-	VersionID uuid.UUID
+	FormID uuid.UUID
+	// WorkspaceID — владелец формы. Нужен приёму ответа: квота тарифа считается
+	// по воркспейсу (фаза 17). Рендереру не отдаётся.
+	WorkspaceID uuid.UUID
+	Title       string
+	Version     int32
+	Schema      json.RawMessage
+	VersionID   uuid.UUID
 	// Статус и живые настройки закрытия (фаза 8.5 шаг 4): вызывающий вычисляет
 	// FormClosed(Status, CloseAt, ResponseLimit, SubmissionCount, now) и решает —
 	// отдать форму или показать «приём закрыт». SubmissionCount заполнен только при
@@ -531,6 +534,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
 		FormID:             row.FormID,
+		WorkspaceID:        row.WorkspaceID,
 		Title:              row.Title,
 		Version:            row.Version,
 		Schema:             json.RawMessage(row.Schema),

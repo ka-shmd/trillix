@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -61,7 +62,8 @@ func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
 	visitsSvc := visits.NewService(testPool, formsSvc, visits.Repo{})
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), submissions.Repo{}, "http://app.test")
+	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()
@@ -317,5 +319,118 @@ func TestSubmit_UnknownSlug_404(t *testing.T) {
 	resp := postSubmission(t, srv, "nope", body)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("статус %d, ожидалось 404", resp.StatusCode)
+	}
+}
+
+// setQuota включает лимит ответов на плане воркспейса формы тем же UPDATE, каким
+// его включит владелец на проде (гейты приезжают выключенными, спека §8).
+func setQuota(t *testing.T, slug string, limit int) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{submissions_per_month}', to_jsonb($1::int))
+		 WHERE code = (SELECT s.plan_code FROM subscriptions s
+		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		limit, slug); err != nil {
+		t.Fatalf("set quota: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{submissions_per_month}', 'null')`); err != nil {
+			t.Fatalf("reset quota: %v", err)
+		}
+	})
+}
+
+func usage(t *testing.T, slug string) int64 {
+	t.Helper()
+	var n int64
+	err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(sum(u.submissions), 0)::bigint FROM workspace_usage u
+		 JOIN forms f ON f.workspace_id = u.workspace_id WHERE f.slug = $1`, slug).Scan(&n)
+	if err != nil {
+		t.Fatalf("usage: %v", err)
+	}
+	return n
+}
+
+func overQuotaCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM submissions WHERE over_quota`).Scan(&n); err != nil {
+		t.Fatalf("count over_quota: %v", err)
+	}
+	return n
+}
+
+// Главный сторож фазы: исчерпанная квота ТАРИФА не закрывает форму. Ответ сверх
+// лимита принимается (200), ложится в БД и лишь помечается over_quota — скрытие
+// живёт в кабинете владельца. Жёсткий кап формы (response_limit) — другая
+// семантика, он действительно отдаёт 410; спутать их нельзя (ADR §10).
+func TestSubmit_OverPlanQuota_StillAcceptsAndMarks(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	setQuota(t, slug, 2)
+
+	for i := 1; i <= 3; i++ {
+		body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Аня"}}`
+		resp := postSubmission(t, srv, slug, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("ответ №%d: статус %d, ожидался 201 — квота тарифа не имеет права отказывать", i, resp.StatusCode)
+		}
+	}
+
+	if got := countSubmissions(t); got != 3 {
+		t.Fatalf("в БД %d ответов, ожидалось 3: ни один ответ респондента не теряется", got)
+	}
+	if got := overQuotaCount(t); got != 1 {
+		t.Errorf("помечено сверхлимитными %d, ожидался 1 (третий)", got)
+	}
+	if got := usage(t, slug); got != 3 {
+		t.Errorf("расход = %d, ожидалось 3: считаются все принятые ответы, а не только влезшие в квоту", got)
+	}
+}
+
+// Идемпотентный ретрай не растит расход: инкремент читает результат вставки, а
+// повтор того же id строки не даёт. Иначе сетевой сбой у респондента съедал бы
+// чужую квоту.
+func TestSubmit_IdempotentRetry_DoesNotGrowUsage(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+
+	id := uuid.NewString()
+	body := `{"submission_id":"` + id + `","token":"` + freshToken() + `","answers":{"b1":"Аня"}}`
+	for i := 0; i < 3; i++ {
+		if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("ретрай №%d: статус %d, ожидался 201", i, resp.StatusCode)
+		}
+	}
+
+	if got := countSubmissions(t); got != 1 {
+		t.Fatalf("в БД %d строк, ожидалась 1 (идемпотентность)", got)
+	}
+	if got := usage(t, slug); got != 1 {
+		t.Errorf("расход = %d, ожидался 1: ретрай квоту не тратит", got)
+	}
+}
+
+// Приём в пределах квоты расход считает, но строки не метит.
+func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	setQuota(t, slug, 10)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Аня"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидался 201", resp.StatusCode)
+	}
+	if got := usage(t, slug); got != 1 {
+		t.Errorf("расход = %d, ожидался 1", got)
+	}
+	if got := overQuotaCount(t); got != 0 {
+		t.Errorf("помечено сверхлимитными %d, ожидалось 0", got)
 	}
 }
