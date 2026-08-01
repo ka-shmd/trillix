@@ -9,8 +9,10 @@ import (
 	"image"
 	"image/jpeg" // именованный импорт регистрирует JPEG-декодер для image.Decode/DecodeConfig
 	"image/png"  // и PNG-декодер
+	"math"
 
 	"github.com/google/uuid"
+	"golang.org/x/image/draw"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
@@ -21,6 +23,18 @@ const (
 	MaxImageBytes = 5 << 20 // 5 МиБ
 	// MaxImagePixels — гард площади до полного декода (decompression-bomb).
 	MaxImagePixels = 24_000_000 // 24 Мпикс
+	// MaxImageWidth — потолок ШИРИНЫ хранимой картинки. Число выведено из вида
+	// формы, а не выбрано на глаз: колонка — 700 CSS-px (`.rf-page` в
+	// web/shared/fields/fields.css: max-width 860 минус 2×80 паддинга), а
+	// `.rf-image` — это max-width:100%/height:auto, то есть отображение
+	// ограничивает ТОЛЬКО ширину, высота едет следом. 700×2 = 1400 покрывает
+	// экраны с DPR 2; мобильный случай уже: ~350 CSS-px при DPR 3 = 1050.
+	// Меняешь ширину колонки — меняй и это.
+	//
+	// Кап именно по ширине, а не по длинной стороне: у высокого портрета
+	// (1200×3000) кап длинной стороны срезал бы ширину до 640 и сделал картинку
+	// НЕДОразрешённой для той же колонки — оптимизация во вред.
+	MaxImageWidth = 1400
 	// jpegQuality — качество при ре-энкоде JPEG.
 	jpegQuality = 85
 )
@@ -73,9 +87,10 @@ func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []b
 	return key, nil
 }
 
-// decodeReencode проверяет, что вход — PNG/JPEG, гардит площадь и пере-кодирует в
-// канонические байты (снимая EXIF/GPS и нормализуя). Возвращает расширение,
-// content-type и новые байты. Любая проблема входа → ErrValidation (422).
+// decodeReencode проверяет, что вход — PNG/JPEG, гардит площадь, уменьшает картинку
+// до MaxImageWidth и пере-кодирует в канонические байты (снимая EXIF/GPS и
+// нормализуя). Возвращает расширение, content-type и новые байты. Любая проблема
+// входа → ErrValidation (422).
 func decodeReencode(data []byte) (ext, contentType string, out []byte, err error) {
 	// Тип по контенту, не по заголовку/имени файла.
 	sniff := detectImageType(data)
@@ -97,19 +112,64 @@ func decodeReencode(data []byte) (ext, contentType string, out []byte, err error
 		return "", "", nil, fmt.Errorf("%w: не удалось декодировать картинку", domain.ErrValidation)
 	}
 
-	var buf bytes.Buffer
-	switch sniff {
-	case "image/png":
-		if err := png.Encode(&buf, img); err != nil {
-			return "", "", nil, fmt.Errorf("encode png: %w", err)
-		}
-		return ".png", "image/png", buf.Bytes(), nil
-	default: // image/jpeg
-		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
-			return "", "", nil, fmt.Errorf("encode jpeg: %w", err)
-		}
-		return ".jpg", "image/jpeg", buf.Bytes(), nil
+	return encodeCanonical(downscale(img))
+}
+
+// downscale уменьшает картинку до MaxImageWidth по ширине, сохраняя пропорции.
+// Только уменьшает: то, что уже уже потолка (логотип, узкая высокая полоса),
+// возвращается нетронутым — апскейл добавил бы байт, не добавив деталей.
+func downscale(img image.Image) image.Image {
+	b := img.Bounds()
+	if b.Dx() <= MaxImageWidth {
+		return img
 	}
+	h := int(math.Round(float64(b.Dy()) * float64(MaxImageWidth) / float64(b.Dx())))
+	if h < 1 {
+		h = 1 // очень широкая полоса: высота не должна схлопнуться в ноль
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, MaxImageWidth, h))
+	// CatmullRom — интерполяция с резкостью, заметно лучше билинейной на
+	// сильном уменьшении (фото с телефона ужимается втрое и больше).
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
+	return dst
+}
+
+// encodeCanonical выбирает формат хранения ПО СОДЕРЖИМОМУ, а не по формату входа:
+// PNG, присланный поверх фотографии, иначе так и остался бы мегабайтным PNG.
+//
+//   - есть полупрозрачные пиксели → только PNG (JPEG не умеет альфу);
+//   - непрозрачная → кодируем обоими и берём меньший результат. Так фотография
+//     уезжает в JPEG, а плоская графика и логотипы остаются в PNG без потерь,
+//     и порога, который надо было бы подбирать на глаз, не появляется.
+func encodeCanonical(img image.Image) (ext, contentType string, out []byte, err error) {
+	// Уровень сжатия — дефолтный. BestCompression пробовался и отвергнут по
+	// замеру: на 1400×1050 он даёт байт в байт тот же размер (2707,5 КиБ на фото,
+	// 6,7 КиБ на плоской графике), а на графике вдвое медленнее — 27 мс против 13.
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		return "", "", nil, fmt.Errorf("encode png: %w", err)
+	}
+	if !isOpaque(img) {
+		return ".png", "image/png", pngBuf.Bytes(), nil
+	}
+
+	var jpegBuf bytes.Buffer
+	if err := jpeg.Encode(&jpegBuf, img, &jpeg.Options{Quality: jpegQuality}); err != nil {
+		return "", "", nil, fmt.Errorf("encode jpeg: %w", err)
+	}
+	if pngBuf.Len() <= jpegBuf.Len() {
+		return ".png", "image/png", pngBuf.Bytes(), nil
+	}
+	return ".jpg", "image/jpeg", jpegBuf.Bytes(), nil
+}
+
+// isOpaque сообщает, что у картинки нет полупрозрачных пикселей. Конкретные типы
+// stdlib (RGBA, NRGBA, YCbCr, Paletted, Gray) несут метод Opaque(); у типа без
+// него считаем, что альфа есть — ошибка в эту сторону стоит лишних байт PNG, в
+// обратную стёрла бы прозрачность.
+func isOpaque(img image.Image) bool {
+	o, ok := img.(interface{ Opaque() bool })
+	return ok && o.Opaque()
 }
 
 // detectImageType возвращает whitelist-тип (image/png|image/jpeg) по сигнатуре

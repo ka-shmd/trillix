@@ -48,10 +48,15 @@ export function BlockField({
   if (isContentType(block.type)) {
     // image: картинка по ключу. Без ключа (недособранный черновик) блок не
     // схлопывается, а держит место высотой с зону загрузки редактора (rf-image-empty).
+    // loading/decoding: форма с несколькими картинками иначе тянет их все разом и
+    // полным приоритетом. Эту ветку видят превью билдера и публичный рендерер
+    // (полотно редактора рисует картинку своим ImageField.tsx). Первую картинку из
+    // lazy не исключаем — прокидывать «я первый» пришлось бы через всех вызывающих,
+    // а картинка почти никогда не LCP-элемент: сверху формы стоит заголовок.
     if (block.type === 'image') {
       const key = block.settings?.imageKey
       return key ? (
-        <img className="rf-image" src={mediaSrc(key)} alt="" />
+        <img className="rf-image" src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
       ) : (
         <div className="rf-image-empty" aria-hidden="true" />
       )
@@ -105,7 +110,7 @@ function ContentBlock({
   if (block.type === 'image') {
     const key = block.settings?.imageKey
     return key ? (
-      <img className="rf-image" src={mediaSrc(key)} alt="" />
+      <img className="rf-image" src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
     ) : (
       <div className="rf-image-empty" aria-hidden="true" />
     )
