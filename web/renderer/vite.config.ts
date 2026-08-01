@@ -1,25 +1,45 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
 
 // @entities → общий каталог доменных Zod-схем web/shared/entities, единый с
 // кабинетом (см. web/shared/entities/formSchema.ts). Лежит вне корня проекта,
 // поэтому fs.allow расширяется на родительский web/.
 const entities = fileURLToPath(new URL('../shared/entities', import.meta.url))
 // @fields → общие компоненты полей; фаза 4 рендерит ими опубликованную форму.
-// react маппится на локальный пакет: общий код лежит вне node_modules рендерера.
 const fields = fileURLToPath(new URL('../shared/fields', import.meta.url))
-// react и zod маппятся на локальный пакет: общий код (@entities/@fields) лежит вне
-// node_modules рендерера, и его bare-импорты иначе не резолвятся при сборке.
-const reactPkg = fileURLToPath(new URL('./node_modules/react', import.meta.url))
+// preact и zod маппятся абсолютными путями на локальные пакеты: общий код
+// (@entities/@fields) лежит вне node_modules рендерера, и его bare-импорты иначе не
+// резолвятся при сборке.
+const preactPkg = fileURLToPath(new URL('./node_modules/preact', import.meta.url))
 const zodPkg = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 
-// Публичный рендерер на :5174. Прокси /public на API добавится в фазе 4.
+// Публичный рендерер на :5174.
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  // JSX — автоматический рантайм, задан здесь явно, а не унаследован из tsconfig.
+  // Без @vitejs/plugin-react трансформ делает встроенный oxc, и настройку он ищет в
+  // ближайшем к файлу tsconfig — а у web/shared/ такого нет (tsconfig.app.json
+  // подключает этот каталог через include, но лежит в web/renderer/). Дефолт oxc
+  // сейчас и так 'automatic', но полагаться на дефолт чужого трансформера в месте,
+  // где ошибка выглядит как «@fields не видят React», не стоит. Источник импорта
+  // рантайма остаётся дефолтным ('react/jsx-runtime') — его и уводит алиас ниже.
+  oxc: { jsx: { runtime: 'automatic' } },
   resolve: {
-    alias: { '@entities': entities, '@fields': fields, react: reactPkg, zod: zodPkg },
+    // Рендерер работает на Preact: React-API остаётся в исходниках, но рантайм —
+    // preact/compat (ARCHITECTURE §«Бандл», ADR). Алиас живёт ТОЛЬКО здесь: те же
+    // @fields/@entities кабинет рендерит настоящим React 19, туда preact нельзя.
+    // Ключи с подпутями не нужны: алиас @rollup/plugin-alias меняет совпавший
+    // префикс и оставляет хвост, поэтому react/jsx-runtime → <preact>/compat/
+    // jsx-runtime, react-dom/client → <preact>/compat/client (оба существуют), а
+    // 'react-dom' под ключ 'react' не попадает — совпадение только точное либо по
+    // границе '/'.
+    alias: {
+      '@entities': entities,
+      '@fields': fields,
+      react: preactPkg + '/compat',
+      'react-dom': preactPkg + '/compat',
+      zod: zodPkg,
+    },
   },
   // Имена ассетов — дефолтные хешированные (assets/index-[hash].js/css). HTML-страницу
   // формы /r/{slug} Go отдаёт из собранного index.html, где vite сам проставил эти

@@ -1,7 +1,6 @@
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import prettier from 'eslint-config-prettier'
 
@@ -16,11 +15,13 @@ export default tseslint.config(
     },
     plugins: {
       'react-hooks': reactHooks,
-      'react-refresh': reactRefresh,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // react-refresh здесь больше нет: рендерер работает на preact/compat, а
+      // @vitejs/plugin-react (и его fast refresh) убран — правило о границах
+      // HMR стерегло бы несуществующий механизм. Правила хуков остаются: они
+      // про сам React-API, который в исходниках никуда не делся.
       // Инвариант 4 (CLAUDE.md): пользовательский контент рендерится как текст.
       // Здесь он особенно горяч — это публичная страница чужой формы.
       // Через no-restricted-syntax, а не react/no-danger: eslint-plugin-react не
