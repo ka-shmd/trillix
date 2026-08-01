@@ -144,6 +144,9 @@ CREATE TABLE submissions (
     form_version_id UUID NOT NULL REFERENCES form_versions(id),
     answers         JSONB NOT NULL,              -- { "<block_id>": <значение> }
     meta            JSONB NOT NULL DEFAULT '{}', -- user_agent, referer (без IP в открытом виде)
+    -- Ответ пришёл сверх квоты тарифа (0014): СОХРАНЁН, но скрыт в кабинете
+    -- владельца до апгрейда. Не отказ приёма: респондент не знает про тариф.
+    over_quota      BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_submissions_form ON submissions (form_id, created_at DESC);
@@ -178,6 +181,44 @@ CREATE TABLE sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_sessions_expires ON sessions (expires_at);
+
+-- Тарифы (фаза 17, 0014, ADR §10). Субъект подписки — воркспейс: монетизируется
+-- его содержимое, а перевод денег на другую сущность задним числом — одна из
+-- самых дорогих миграций. Лимиты — ДАННЫМИ в plans.limits, а не колонками и не
+-- константами в коде: добавить возможность в платный тариф стоит строки данных,
+-- снять — одного UPDATE без выкатки. Ключи limits перечислены в Go
+-- (internal/entitlements), БД содержимое не проверяет — сторожем работает тест.
+CREATE TABLE plans (
+    code         TEXT PRIMARY KEY,               -- free | pro | legacy_free
+    title        TEXT NOT NULL,
+    price_kopeks INTEGER NOT NULL DEFAULT 0 CHECK (price_kopeks >= 0),
+    limits       JSONB NOT NULL,                 -- null у ключа = безлимит
+    is_public    BOOLEAN NOT NULL DEFAULT true,  -- false у legacy_free: в нём можно только остаться
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Ровно одна строка на воркспейс: история операций — журнал платежей будущей
+-- фазы, а не набор строк здесь. Воркспейса без подписки не бывает (создаётся
+-- транзакцией регистрации), иначе каждая проверка лимита обрастает веткой
+-- «а если строки нет».
+CREATE TABLE subscriptions (
+    workspace_id       UUID PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+    plan_code          TEXT NOT NULL REFERENCES plans(code),
+    status             TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'canceled')),
+    current_period_end TIMESTAMPTZ,              -- NULL у бесплатных планов
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Расход за период, а не COUNT(*) по submissions: счёт стоит на ГОРЯЧЕМ пути
+-- приёма ответа. period — первое число месяца по Europe/Moscow, считает
+-- приложение. Инкремент едет тем же утверждением, что вставка ответа (CTE).
+CREATE TABLE workspace_usage (
+    workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    period       DATE NOT NULL,
+    submissions  BIGINT NOT NULL DEFAULT 0 CHECK (submissions >= 0),
+    PRIMARY KEY (workspace_id, period)
+);
 ```
 
 Ответы (`answers`) хранятся как JSONB по ключу `block_id`, а не нормализованной таблицей `answer_values` — по тем же причинам, что и схема формы: ответ читается и пишется атомарно, аналитические запросы «внутрь» ответов в MVP сводятся к экспорту CSV, который собирается в приложении. Если позже понадобится тяжёлая аналитика — данные денормализуются в отдельную таблицу фоновым процессом, исходник в JSONB ничего не теряет.

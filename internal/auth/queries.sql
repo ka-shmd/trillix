@@ -19,6 +19,13 @@ RETURNING id, name, created_at;
 INSERT INTO workspace_members (workspace_id, user_id, role)
 VALUES ($1, $2, $3);
 
+-- Подписка личного воркспейса — четвёртая строка транзакции регистрации
+-- (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
+-- лимита обрастает веткой «а если строки нет».
+-- name: CreateSubscription :exec
+INSERT INTO subscriptions (workspace_id, plan_code)
+VALUES ($1, $2);
+
 -- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3);

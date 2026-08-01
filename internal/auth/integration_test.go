@@ -157,6 +157,73 @@ func TestAuthFlow_RegisterLoginMeLogout(t *testing.T) {
 	}
 }
 
+// Регистрация заводит подписку личного воркспейса той же транзакцией (0014,
+// фаза 17). Проверяется в настоящей БД, а не фейком: инвариант «воркспейса без
+// подписки не бывает» держится схемой и транзакцией, а не намерением сервиса.
+func TestRegister_CreatesSubscription(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+
+	if r := post(t, newClient(t), srv.URL+"/api/v1/auth/register",
+		`{"email":"plan@example.com","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
+		t.Fatalf("регистрация: статус %d, ожидалось 201", r.StatusCode)
+	}
+
+	var planCode, status string
+	err := testPool.QueryRow(context.Background(), `
+		SELECT s.plan_code, s.status
+		FROM subscriptions s
+		JOIN workspace_members m ON m.workspace_id = s.workspace_id
+		JOIN users u ON u.id = m.user_id
+		WHERE u.email = 'plan@example.com'`).Scan(&planCode, &status)
+	if err != nil {
+		t.Fatalf("подписка личного воркспейса не найдена: %v", err)
+	}
+	if planCode != "free" || status != "active" {
+		t.Fatalf("подписка = (%q, %q), ждали (free, active)", planCode, status)
+	}
+}
+
+// Каталог тарифов приезжает миграцией и приезжает ВЫКЛЮЧЕННЫМ (спека §8):
+// выкатка кода не запирает ничего никому, включение — отдельный UPDATE.
+// Тест сторожит именно это: сегодняшний ноль запретов.
+func TestPlans_SeededAndUnrestricted(t *testing.T) {
+	rows, err := testPool.Query(context.Background(),
+		`SELECT code, limits->>'submissions_per_month', limits->>'analytics_funnel', is_public FROM plans ORDER BY code`)
+	if err != nil {
+		t.Fatalf("select plans: %v", err)
+	}
+	defer rows.Close()
+
+	got := map[string]string{}
+	public := map[string]bool{}
+	for rows.Next() {
+		var code string
+		var isPublic bool
+		var perMonth, funnel *string
+		if err := rows.Scan(&code, &perMonth, &funnel, &isPublic); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if perMonth != nil {
+			t.Errorf("план %q приехал с включённым лимитом ответов (%s) — гейты должны включаться UPDATE'ом, а не миграцией", code, *perMonth)
+		}
+		if funnel == nil || *funnel != "true" {
+			t.Errorf("план %q приехал с закрытой воронкой — то же правило", code)
+		}
+		got[code] = "ok"
+		public[code] = isPublic
+	}
+	for _, code := range []string{"free", "pro", "legacy_free"} {
+		if _, ok := got[code]; !ok {
+			t.Errorf("в каталоге нет плана %q", code)
+		}
+	}
+	// legacy_free — грандфазеринг: выбрать его нельзя, в нём можно только остаться.
+	if public["legacy_free"] {
+		t.Error("legacy_free показывается в списке тарифов")
+	}
+}
+
 func TestRegister_DuplicateEmail_409(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)

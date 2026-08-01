@@ -73,6 +73,15 @@ type PasswordResetToken struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Plan struct {
+	Code        string
+	Title       string
+	PriceKopeks int32
+	Limits      []byte
+	IsPublic    bool
+	CreatedAt   pgtype.Timestamptz
+}
+
 type Session struct {
 	TokenHash []byte
 	UserID    uuid.UUID
@@ -87,6 +96,16 @@ type Submission struct {
 	Answers       []byte
 	Meta          []byte
 	CreatedAt     pgtype.Timestamptz
+	OverQuota     bool
+}
+
+type Subscription struct {
+	WorkspaceID      uuid.UUID
+	PlanCode         string
+	Status           string
+	CurrentPeriodEnd pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
 }
 
 type User struct {
@@ -115,4 +134,10 @@ type WorkspaceMember struct {
 	UserID      uuid.UUID
 	Role        string
 	CreatedAt   pgtype.Timestamptz
+}
+
+type WorkspaceUsage struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+	Submissions int64
 }

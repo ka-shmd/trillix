@@ -52,6 +52,11 @@ func TestLoginWithIdentity_NewUser(t *testing.T) {
 	if !store.createdUser || !store.createdWorkspace || !store.createdMember || !store.createdIdentity {
 		t.Fatalf("не все шаги регистрации выполнены: %+v", store)
 	}
+	// Включая подписку личного воркспейса (0014): регистрация через провайдера —
+	// такая же регистрация, и второго места, где «иногда подписки нет», не будет.
+	if store.createdPlanCode != defaultPlanCode {
+		t.Errorf("подписка личного воркспейса: план %q, ждали %q", store.createdPlanCode, defaultPlanCode)
+	}
 	// Вход через провайдера считается подтверждением email (баннер не показываем).
 	if !store.markVerifiedCalled || store.markVerifiedUser != user.ID {
 		t.Errorf("OAuth-аккаунт не помечен подтверждённым (called=%v user=%v)", store.markVerifiedCalled, store.markVerifiedUser)

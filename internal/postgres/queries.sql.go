@@ -277,6 +277,24 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const createSubscription = `-- name: CreateSubscription :exec
+INSERT INTO subscriptions (workspace_id, plan_code)
+VALUES ($1, $2)
+`
+
+type CreateSubscriptionParams struct {
+	WorkspaceID uuid.UUID
+	PlanCode    string
+}
+
+// Подписка личного воркспейса — четвёртая строка транзакции регистрации
+// (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
+// лимита обрастает веткой «а если строки нет».
+func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscriptionParams) error {
+	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.PlanCode)
+	return err
+}
+
 const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)

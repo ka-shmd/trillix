@@ -182,6 +182,9 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, p
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
 			return e
 		}
+		if e := s.repo.CreateSubscription(ctx, tx, wsID, defaultPlanCode); e != nil {
+			return e
+		}
 		if e := s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID); e != nil {
 			return e
 		}
