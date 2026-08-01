@@ -86,6 +86,17 @@ type Feature struct {
 // КАЖДЫЙ ключ отсюда: молчание плана не должно значить ни «разрешено», ни
 // «запрещено» — оно обязано краснеть (TestPlansCoverCatalog). Именно из
 // «забыли ключ → случайно раздали Pro бесплатно» берутся дорогие сюрпризы.
+// CatalogOrder — порядок возможностей для человека (страница «Тариф»). Отдельно
+// от Catalog, потому что обход map в Go рандомизирован: без явного порядка список
+// на странице прыгал бы при каждом запросе. Новый ключ добавляется в ОБА места —
+// иначе он не покажется, и это ловит тест.
+var CatalogOrder = []Key{
+	SubmissionsPerMonth,
+	AnalyticsFunnel,
+	AnalyticsSources,
+	Workspaces,
+}
+
 var Catalog = map[Key]Feature{
 	SubmissionsPerMonth: {Kind: Quota, Scope: WorkspaceScope, Meter: SubmissionsMeter, Title: "Ответов в месяц"},
 	Workspaces:          {Kind: Quota, Scope: AccountScope, Meter: NoMeter, Title: "Воркспейсов"},

@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { FileText, LogOut, Plus, Settings } from 'lucide-react'
+import { CreditCard, FileText, LogOut, Plus, Settings } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -40,6 +40,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
+  const planActive = pathname.startsWith('/settings/plan')
 
   return (
     <Sidebar>
@@ -71,6 +72,14 @@ export function AppSidebar({
                   <Link to="/forms">
                     <FileText className="size-4" />
                     <span>Формы</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={planActive} tooltip="Тариф">
+                  <Link to="/settings/plan">
+                    <CreditCard className="size-4" />
+                    <span>Тариф</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

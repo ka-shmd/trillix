@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -34,6 +35,10 @@ type Row struct {
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
 type Store interface {
 	Entitlements(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
+	// EntitlementsForUser — то же с проверкой членства ВНУТРИ запроса: у снимка
+	// для кабинета есть пользователь, и id воркспейса из URL правом доступа не
+	// является (инвариант 1).
+	EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, period time.Time) (Row, error)
 }
 
 var _ Store = Repo{}
@@ -106,13 +111,20 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	return decide(f, row, key)
 }
 
-// Snapshot — состояние тарифа целиком (страница «Тариф», плашки кабинета).
-// Аккаунт-уровневые ключи в снимок не попадают: их разрешает план другого
-// воркспейса, и показывать их здесь значило бы врать.
-func (s *Service) Snapshot(ctx context.Context, workspaceID uuid.UUID) (Snapshot, error) {
+// Snapshot — состояние тарифа воркспейса для кабинета: план, лимиты, расход,
+// дата обнуления. Одна поездка, из которой рисуются и прогресс-бар, и замки.
+//
+// Членство проверяет сам запрос (не член → 404): id воркспейса из URL правом
+// доступа не является. Аккаунт-уровневые ключи в снимок не попадают — их
+// разрешает план другого воркспейса, и показывать их здесь значило бы врать.
+func (s *Service) Snapshot(ctx context.Context, userID, workspaceID uuid.UUID) (Snapshot, error) {
 	period := s.PeriodStart()
-	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, period)
+	row, err := s.repo.EntitlementsForUser(ctx, s.db, workspaceID, userID, period)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Чужой или несуществующий воркспейс — неотличимы снаружи.
+			return Snapshot{}, domain.ErrNotFound
+		}
 		return Snapshot{}, fmt.Errorf("entitlements: снимок воркспейса %s: %w", workspaceID, err)
 	}
 

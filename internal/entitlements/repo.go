@@ -31,3 +31,22 @@ func (Repo) Entitlements(ctx context.Context, db postgres.DBTX, workspaceID uuid
 		SubmissionsUsed: row.SubmissionsUsed,
 	}, nil
 }
+
+// EntitlementsForUser — то же, но с проверкой членства внутри запроса: не член
+// получает pgx.ErrNoRows, а сервис превращает его в 404 (инвариант 1).
+func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, period time.Time) (Row, error) {
+	row, err := postgres.New(db).GetEntitlementsForUser(ctx, postgres.GetEntitlementsForUserParams{
+		WorkspaceID: workspaceID,
+		Period:      pgtype.Date{Time: period, Valid: true},
+		UserID:      userID,
+	})
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements of workspace %s for user %s: %w", workspaceID, userID, err)
+	}
+	return Row{
+		PlanCode:        row.PlanCode,
+		PlanTitle:       row.PlanTitle,
+		Limits:          row.Limits,
+		SubmissionsUsed: row.SubmissionsUsed,
+	}, nil
+}

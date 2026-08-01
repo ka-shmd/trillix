@@ -8,6 +8,7 @@ package entitlements_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 )
@@ -206,4 +208,74 @@ func setLimit(t *testing.T, plan, key, value string) {
 		plan, key, value); err != nil {
 		t.Fatalf("set limit: %v", err)
 	}
+}
+
+// Снимок тарифа для кабинета: числа те же, что в БД, а членство проверяет сам
+// запрос — чужой воркспейс неотличим от несуществующего (инвариант 1).
+func TestSnapshot_ReadsOwnWorkspace(t *testing.T) {
+	ctx := context.Background()
+	wsID := seedWorkspace(t, "free")
+	userID := seedMember(t, wsID)
+
+	setLimit(t, "free", "submissions_per_month", "10")
+	t.Cleanup(func() { setLimit(t, "free", "submissions_per_month", "null") })
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	setUsage(t, wsID, "2026-08-01", 7)
+
+	svc := entitlements.NewService(testPool, entitlements.Repo{}, func() time.Time { return now })
+	snap, err := svc.Snapshot(ctx, userID, wsID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.PlanCode != "free" {
+		t.Errorf("план = %q, ждали free", snap.PlanCode)
+	}
+	d := snap.Features[entitlements.SubmissionsPerMonth]
+	if d.Used != 7 || d.Limit == nil || *d.Limit != 10 || !d.Allowed {
+		t.Errorf("квота = %d/%v (allowed=%v), ждали 7/10 разрешено", d.Used, d.Limit, d.Allowed)
+	}
+	// Расход обнулится 1 сентября — это и показывает страница тарифа.
+	if got := snap.PeriodEnd.Format("2006-01-02"); got != "2026-09-01" {
+		t.Errorf("конец периода = %s, ждали 2026-09-01", got)
+	}
+	// Аккаунт-уровневые ключи в снимок воркспейса не попадают.
+	if _, ok := snap.Features[entitlements.Workspaces]; ok {
+		t.Error("аккаунт-уровневый ключ показан в снимке воркспейса")
+	}
+}
+
+func TestSnapshot_ForeignWorkspace_NotFound(t *testing.T) {
+	ctx := context.Background()
+	wsID := seedWorkspace(t, "free")
+	seedMember(t, wsID) // владелец есть, но спрашивать будет посторонний
+
+	stranger := seedWorkspace(t, "free")
+	strangerUser := seedMember(t, stranger)
+
+	svc := entitlements.NewService(testPool, entitlements.Repo{}, nil)
+	if _, err := svc.Snapshot(ctx, strangerUser, wsID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали domain.ErrNotFound (анти-IDOR)", err)
+	}
+}
+
+// seedMember заводит пользователя и делает его членом воркспейса.
+func seedMember(t *testing.T, wsID uuid.UUID) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `INSERT INTO users (id, email) VALUES ($1, $2)`,
+		id, "member-"+id.String()[:8]+"@example.com"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		wsID, id); err != nil {
+		t.Fatalf("insert member: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id); err != nil {
+			t.Fatalf("cleanup user: %v", err)
+		}
+	})
+	return id
 }

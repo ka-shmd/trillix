@@ -150,4 +150,26 @@ func (stubStore) Entitlements(context.Context, postgres.DBTX, uuid.UUID, time.Ti
 	return Row{}, nil
 }
 
+func (stubStore) EntitlementsForUser(context.Context, postgres.DBTX, uuid.UUID, uuid.UUID, time.Time) (Row, error) {
+	return Row{}, nil
+}
+
 func ptr(v int64) *int64 { return &v }
+
+// Каталог и его порядок обязаны совпадать по составу: ключ, забытый в
+// CatalogOrder, просто не покажется на странице тарифа — молча.
+func TestCatalogOrder_CoversCatalog(t *testing.T) {
+	if len(CatalogOrder) != len(Catalog) {
+		t.Fatalf("в CatalogOrder %d ключей, в Catalog %d", len(CatalogOrder), len(Catalog))
+	}
+	seen := map[Key]bool{}
+	for _, k := range CatalogOrder {
+		if _, ok := Catalog[k]; !ok {
+			t.Errorf("CatalogOrder называет неизвестный ключ %q", k)
+		}
+		if seen[k] {
+			t.Errorf("ключ %q повторяется в CatalogOrder", k)
+		}
+		seen[k] = true
+	}
+}

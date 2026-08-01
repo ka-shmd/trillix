@@ -256,6 +256,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
+	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)
@@ -265,7 +266,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	srv := httpserver.New(cfg.HTTPAddr, log, pool,
 		authHandler.Routes, authHandler.OAuthRoutes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
-		visitsPublic.Routes, visitsHandler.Routes)
+		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

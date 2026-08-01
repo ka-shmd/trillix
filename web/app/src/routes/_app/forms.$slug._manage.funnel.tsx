@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
 import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
@@ -53,6 +53,9 @@ function FunnelPage() {
             ? 'Откройте тариф с аналитикой, чтобы увидеть, на каких именно вопросах они уходят.'
             : 'Разбивка по вопросам доступна на тарифе с аналитикой. Визиты уже собираются — данные копятся и никуда не денутся.'}
         </p>
+        <Button asChild size="sm" className="mt-4">
+          <Link to="/settings/plan">Посмотреть тариф</Link>
+        </Button>
       </div>
     )
   }
