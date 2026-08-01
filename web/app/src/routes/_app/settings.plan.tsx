@@ -27,6 +27,20 @@ function PlanPage() {
     enabled: workspaceId !== undefined,
   })
 
+  // Сбой списка воркспейсов разбирается ОТДЕЛЬНО: без него workspaceId остаётся
+  // undefined, запрос тарифа не включается, а выключенный запрос в TanStack v5
+  // вечно `pending` — страница показывала бы «Загрузка тарифа…» без конца и без
+  // кнопки повтора. Найдено ревью фазы 17.
+  if (workspaces.isError) {
+    return (
+      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+        <p className="mb-3 text-sm">Не удалось загрузить воркспейс.</p>
+        <Button variant="outline" size="sm" onClick={() => workspaces.refetch()}>
+          Повторить
+        </Button>
+      </div>
+    )
+  }
   if (plan.isPending) {
     return <p className="text-sm text-muted-foreground">Загрузка тарифа…</p>
   }

@@ -73,10 +73,13 @@ func (p fakePlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.Key) 
 	if p.err != nil {
 		return entitlements.Decision{}, p.err
 	}
-	return entitlements.Decision{Allowed: p.allowed}, nil
+	return entitlements.Decision{Allowed: p.allowed, Period: p.period}, nil
 }
 
-func (p fakePlans) PeriodStart() time.Time { return p.period }
+// PeriodStart намеренно возвращает ДРУГОЙ период, чем решение: так тест ловит
+// «приём прочитал часы второй раз вместо периода из решения» — расхождение,
+// которое в проде случается только на границе месяца и молча.
+func (p fakePlans) PeriodStart() time.Time { return p.period.AddDate(0, -1, 0) }
 
 // okPlans — квота не исчерпана (обычный случай в тестах не про тарифы).
 func okPlans() fakePlans { return fakePlans{allowed: true} }
@@ -211,7 +214,8 @@ func TestSubmit_OverQuota_AcceptsAndMarks(t *testing.T) {
 	}
 	// Инкремент расхода обязан попасть в ТОТ ЖЕ период, что прочитала проверка.
 	if !store.lastInsert.Period.Equal(period) {
-		t.Errorf("период вставки = %v, ждали %v", store.lastInsert.Period, period)
+		t.Errorf("период вставки = %v, ждали %v (период РЕШЕНИЯ, а не второе чтение часов)",
+			store.lastInsert.Period, period)
 	}
 }
 

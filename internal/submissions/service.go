@@ -228,14 +228,20 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		Answers:     answersJSON,
 		Meta:        metaJSON,
 		WorkspaceID: pf.WorkspaceID,
-		Period:      s.plans.PeriodStart(),
 	}
 	if d, e := s.plans.CheckWorkspace(ctx, pf.WorkspaceID, entitlements.SubmissionsPerMonth); e != nil {
 		httpserver.LoggerFrom(ctx).Error("quota not checked, submission accepted as within quota",
 			slog.String("workspace_id", pf.WorkspaceID.String()),
 			slog.String("error", e.Error()))
+		// Проверки не было — период считаем сами; расход при несостоявшейся
+		// проверке всё равно best-effort.
+		in.Period = s.plans.PeriodStart()
 	} else {
 		in.OverQuota = !d.Allowed
+		// Период берём ИЗ РЕШЕНИЯ, а не читаем часы второй раз: два независимых
+		// чтения расходятся на границе месяца — проверка смотрит счётчик нового
+		// периода, а инкремент уезжает в закрытый старый.
+		in.Period = d.Period
 	}
 
 	// inserted — была ли вставлена НОВАЯ строка (n > 0). false = идемпотентный ретрай

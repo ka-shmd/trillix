@@ -55,6 +55,12 @@ type Decision struct {
 	Used    int64
 	// Limit — nil означает безлимит (и в plans.limits это null).
 	Limit *int64
+	// Period — расчётный период, ПО КОТОРОМУ принято это решение. Едет вместе с
+	// решением, а не вычисляется вызывающим заново: приём ответа инкрементит
+	// расход и обязан попасть в тот же период, что прочитала проверка. Два
+	// независимых чтения часов расходятся на границе месяца — редко, но
+	// беззвучно: счёт уезжает в закрытый месяц, а новый остаётся неполным.
+	Period time.Time
 }
 
 // Snapshot — картина тарифа для кабинета: одна поездка, из которой рисуются
@@ -99,7 +105,8 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 		return Decision{}, fmt.Errorf("entitlements: ключ %q — аккаунт-уровневый, CheckWorkspace его не обслуживает", key)
 	}
 
-	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, s.PeriodStart())
+	period := s.PeriodStart()
+	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, period)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Воркспейса без подписки не бывает: её создаёт транзакция
@@ -108,7 +115,12 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 		}
 		return Decision{}, err
 	}
-	return decide(f, row, key)
+	d, err := decide(f, row, key)
+	if err != nil {
+		return Decision{}, err
+	}
+	d.Period = period
+	return d, nil
 }
 
 // Snapshot — состояние тарифа воркспейса для кабинета: план, лимиты, расход,
