@@ -26,6 +26,14 @@ var (
 	// только на черновик → 404). Рендерер по этому коду показывает «приём закрыт».
 	ErrFormClosed = errors.New("form closed")
 
+	// ErrPlanRequired — возможность закрыта тарифом воркспейса (фаза 17).
+	// Маппится в 402 Payment Required. Ставится ТОЛЬКО на чтении (воронка,
+	// источники): приём ответа респондента не отказывает ни при каком состоянии
+	// подписки — там исчерпанная квота помечает строку, а не отвергает её
+	// (ADR §10). Тело ответа несёт настоящее число (сколько людей не дошло),
+	// чтобы плашка апгрейда не рекламировала пустоту.
+	ErrPlanRequired = errors.New("plan required")
+
 	// Аутентификация.
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")

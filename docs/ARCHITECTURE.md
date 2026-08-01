@@ -328,6 +328,10 @@ github.com/google/uuid           — UUID (v7 поддерживается; ал
 │   │   ├── handler.go           #   приватный API (чтение визитов и воронки)
 │   │   └── public_handler.go    #   публичный API (бикон визита)
 │   ├── workspaces/              # модуль: воркспейсы (в MVP только чтение — GET /workspaces)
+│   ├── entitlements/            # единственная точка «можно ли»: каталог возможностей + планы данными
+│   │   ├── catalog.go           #   КАКИЕ гейты бывают (код); что даёт план — данные (plans.limits)
+│   │   ├── service.go           #   CheckWorkspace → Decision, Snapshot для кабинета
+│   │   └── repo.go
 │   ├── media/                   # модуль: приём и хранение картинок форм (лейаут-блок image)
 │   ├── blob/                    # агностичный клиент S3-совместимого хранилища (ручной sigv4)
 │   ├── oauth/                   # вход через провайдеров: authorization code + PKCE (Яндекс ID)
