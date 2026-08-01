@@ -9,6 +9,7 @@ package submissions_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -127,6 +128,7 @@ type listResp struct {
 	} `json:"submissions"`
 	NextCursor *string `json:"nextCursor"`
 	Total      int64   `json:"total"`
+	Hidden     int64   `json:"hidden"`
 }
 
 func getList(t *testing.T, c *http.Client, srv *httptest.Server, formID, cursor string) listResp {
@@ -230,4 +232,121 @@ func TestListSubmissions_ForeignForm_404(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("чужая форма: статус %d, ожидалось 404", resp.StatusCode)
 	}
+}
+
+// Сверхлимитные ответы (over_quota, фаза 17) не видны владельцу до апгрейда: их нет
+// ни в таблице, ни в счётчике total, но их число названо вслух в hidden. Молчаливое
+// исчезновение собранных данных читается как потеря — это отдельное обещание.
+func TestListSubmissions_OverQuotaHiddenUntilRevealed(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	c, userID := authedClient(t, srv, "quota-"+uuid.NewString()[:8]+"@example.com")
+	slug := publishFormFor(t, userID, requiredNameSchema)
+	formID := uuid.MustParse(formIDBySlug(t, slug))
+
+	submitN(t, srv, slug, 3)
+	// Третий ответ помечаем сверхлимитным напрямую: механику пометки сторожат
+	// тесты приёма (шаг 3), здесь проверяется ПОСЛЕДСТВИЕ пометки в кабинете.
+	marked := markLastOverQuota(t, formID, 1)
+
+	got := getList(t, c, srv, formID.String(), "")
+	if got.Total != 2 {
+		t.Errorf("total = %d, ожидалось 2 (видимые)", got.Total)
+	}
+	if got.Hidden != 1 {
+		t.Errorf("hidden = %d, ожидался 1", got.Hidden)
+	}
+	if len(got.Submissions) != 2 {
+		t.Errorf("в выдаче %d строк, ожидалось 2", len(got.Submissions))
+	}
+	// Скрытой строки в выдаче быть не должно — она самая свежая, то есть без
+	// фильтра попала бы на первую же страницу.
+	for _, row := range got.Submissions {
+		if row.ID == marked[0].String() {
+			t.Errorf("сверхлимитный ответ %s показан владельцу", row.ID)
+		}
+	}
+	// Карточка формы обязана показывать то же число, что и таблица: «3 ответа» на
+	// карточке против двух в таблице читается как пропажа данных.
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	card, err := formsSvc.Get(context.Background(), userID, formID)
+	if err != nil {
+		t.Fatalf("get form: %v", err)
+	}
+	if card.SubmissionCount != 2 {
+		t.Errorf("счётчик карточки = %d, ожидалось 2 (как в таблице)", card.SubmissionCount)
+	}
+
+	// Апгрейд возвращает всё — той самой операцией, которой владелец меняет план.
+	n, err := submissions.Repo{}.RevealHidden(context.Background(), testPool, workspaceOf(t, formID))
+	if err != nil {
+		t.Fatalf("RevealHidden: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("открыто %d ответов, ожидался 1", n)
+	}
+	after := getList(t, c, srv, formID.String(), "")
+	if after.Total != 3 || after.Hidden != 0 {
+		t.Errorf("после апгрейда total/hidden = %d/%d, ожидалось 3/0", after.Total, after.Hidden)
+	}
+}
+
+// Экспорт CSV скрывает сверхлимитные наравне с таблицей (решение владельца): иначе
+// гейт обходится в один клик и гейтом не является.
+func TestExportCSV_HidesOverQuota(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	c, userID := authedClient(t, srv, "csv-"+uuid.NewString()[:8]+"@example.com")
+	slug := publishFormFor(t, userID, requiredNameSchema)
+	formID := uuid.MustParse(formIDBySlug(t, slug))
+
+	submitN(t, srv, slug, 3)
+	markLastOverQuota(t, formID, 2)
+
+	resp, err := c.Get(srv.URL + "/api/v1/forms/" + formID.String() + "/submissions/export")
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	// Заголовок + одна строка данных: две скрытых в выгрузку не попали.
+	lines := strings.Count(strings.TrimSpace(string(body)), "\n") + 1
+	if lines != 2 {
+		t.Errorf("в CSV %d строк (с заголовком), ожидалось 2: сверхлимитные не выгружаются\n%s", lines, body)
+	}
+}
+
+func workspaceOf(t *testing.T, formID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := testPool.QueryRow(context.Background(), `SELECT workspace_id FROM forms WHERE id = $1`, formID).Scan(&id); err != nil {
+		t.Fatalf("workspace of form: %v", err)
+	}
+	return id
+}
+
+// markLastOverQuota помечает n самых свежих ответов формы сверхлимитными и
+// возвращает их id — тесту нужно убедиться, что именно ЭТИ строки не показаны.
+func markLastOverQuota(t *testing.T, formID uuid.UUID, n int) []uuid.UUID {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(), `
+		UPDATE submissions SET over_quota = true
+		WHERE id IN (SELECT id FROM submissions WHERE form_id = $1 ORDER BY id DESC LIMIT $2)
+		RETURNING id`, formID, n)
+	if err != nil {
+		t.Fatalf("mark over quota: %v", err)
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if e := rows.Scan(&id); e != nil {
+			t.Fatalf("scan marked: %v", e)
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) != n {
+		t.Fatalf("помечено %d ответов, ожидалось %d", len(ids), n)
+	}
+	return ids
 }

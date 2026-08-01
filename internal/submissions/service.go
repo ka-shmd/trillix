@@ -91,7 +91,11 @@ type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
+	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
+	// жёсткому капу формы, у которого своя семантика.
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
+	// CountSubmissionsForCabinet — видимые и скрытые тарифом, одной поездкой.
+	CountSubmissionsForCabinet(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (visible, hidden int64, err error)
 	DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
 }
@@ -112,11 +116,16 @@ type Cursor struct {
 	ID uuid.UUID
 }
 
-// Page — страница ответов, курсор на следующую (nil на последней) и общий счётчик.
+// Page — страница ответов, курсор на следующую (nil на последней) и счётчики.
 type Page struct {
 	Submissions []Submission
 	NextCursor  *Cursor
-	Total       int64
+	// Total — сколько ответов ВИДНО (сверхлимитные не считаются): иначе карточка
+	// и таблица разошлись бы в числах.
+	Total int64
+	// Hidden — сколько скрыто квотой тарифа (0014). Кабинет показывает это числом
+	// в плашке: молча спрятать собранные человеком данные нельзя.
+	Hidden int64
 }
 
 var _ Store = Repo{}
@@ -343,7 +352,7 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 	}
 	limit = clampLimit(limit)
 
-	total, err := s.repo.CountSubmissions(ctx, s.db, formID)
+	total, hidden, err := s.repo.CountSubmissionsForCabinet(ctx, s.db, formID)
 	if err != nil {
 		return Page{}, err
 	}
@@ -361,7 +370,7 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 		return Page{}, err
 	}
 
-	page := Page{Submissions: rows, Total: total}
+	page := Page{Submissions: rows, Total: total, Hidden: hidden}
 	if len(rows) > limit {
 		last := rows[limit-1]
 		page.Submissions = rows[:limit]

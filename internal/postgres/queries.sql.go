@@ -49,13 +49,35 @@ const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
 
-// Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
-// idx_submissions_form_id (index-only на form_id).
+// ВСЕ ответы формы, включая сверхлимитные. Потребитель ровно один — жёсткий кап
+// формы (response_limit) в приёме ответа: кап считает принятое, а тариф на него
+// не влияет. Кабинету нужен другой счёт — CountSubmissionsForCabinet ниже.
 func (q *Queries) CountSubmissions(ctx context.Context, formID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countSubmissions, formID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countSubmissionsForCabinet = `-- name: CountSubmissionsForCabinet :one
+SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
+       count(*) FILTER (WHERE over_quota)::bigint AS hidden
+FROM submissions WHERE form_id = $1
+`
+
+type CountSubmissionsForCabinetRow struct {
+	Visible int64
+	Hidden  int64
+}
+
+// Два числа одной поездкой: видимые ответы и скрытые тарифом (0014). Второе —
+// для плашки «N ответов скрыто»: молча спрятать данные, которые человек собрал,
+// нельзя, иначе скрытие читается как потеря.
+func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UUID) (CountSubmissionsForCabinetRow, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsForCabinet, formID)
+	var i CountSubmissionsForCabinetRow
+	err := row.Scan(&i.Visible, &i.Hidden)
+	return i, err
 }
 
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
@@ -561,7 +583,11 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -632,7 +658,11 @@ const getFormBySlug = `-- name: GetFormBySlug :one
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -1080,7 +1110,7 @@ SELECT id, workspace_id, name, title, slug, status, published_version_id, publis
     FROM forms f
     LEFT JOIN form_versions fv ON fv.id = f.published_version_id
     LEFT JOIN LATERAL (
-        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id
+        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
     ) c ON true
     LEFT JOIN LATERAL (
         SELECT count(*) AS visit_count,
@@ -1239,7 +1269,7 @@ const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
 ORDER BY s.id DESC
 LIMIT $2
@@ -1289,7 +1319,7 @@ const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -1470,6 +1500,23 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const revealHiddenSubmissions = `-- name: RevealHiddenSubmissions :execrows
+UPDATE submissions s SET over_quota = false
+FROM forms f
+WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota
+`
+
+// Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,
+// который их вмещает. Одной транзакцией и без исключений: скрытие обратимо, иначе
+// обещание «сохранены и откроются после апгрейда» было бы враньём.
+func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revealHiddenSubmissions, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setFormClosed = `-- name: SetFormClosed :one

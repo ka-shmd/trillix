@@ -61,6 +61,9 @@ function ResponsesPage() {
 
   const submissions = list.data?.pages.flatMap((p) => p.submissions) ?? []
   const total = list.data?.pages[0]?.total ?? 0
+  // Ответы, скрытые квотой тарифа. Показываем ЧИСЛОМ и словами «сохранены»:
+  // человек собрал эти данные, и молчаливая пропажа читается как потеря.
+  const hidden = list.data?.pages[0]?.hidden ?? 0
   // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (подписи/контент)
   // ответов не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
   // Подпись колонки берётся из группы блока (title/label), поэтому считаем meta по
@@ -95,6 +98,20 @@ function ResponsesPage() {
           </Button>
         )}
       </div>
+
+      {hidden > 0 && (
+        <div
+          role="status"
+          className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 text-sm"
+        >
+          <p>
+            {hidden} {pluralAnswers(hidden)} скрыто — исчерпан лимит тарифа.
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Они сохранены и откроются сразу после перехода на тариф, который их вмещает.
+          </p>
+        </div>
+      )}
 
       {list.isPending ? (
         <p className="text-sm text-muted-foreground">Загрузка ответов…</p>

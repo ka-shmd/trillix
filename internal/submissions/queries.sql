@@ -38,7 +38,7 @@ SELECT one FROM ins;
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -48,7 +48,7 @@ LIMIT $2;
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
-WHERE s.form_id = $1
+WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < sqlc.arg(cursor_id)::uuid
 ORDER BY s.id DESC
 LIMIT $2;
@@ -61,9 +61,26 @@ DELETE FROM submissions
 WHERE id = $1 AND form_id = $2;
 
 -- name: CountSubmissions :one
--- Общее число ответов формы (счётчик «N ответов» в кабинете). Дёшево по
--- idx_submissions_form_id (index-only на form_id).
+-- ВСЕ ответы формы, включая сверхлимитные. Потребитель ровно один — жёсткий кап
+-- формы (response_limit) в приёме ответа: кап считает принятое, а тариф на него
+-- не влияет. Кабинету нужен другой счёт — CountSubmissionsForCabinet ниже.
 SELECT count(*) FROM submissions WHERE form_id = $1;
+
+-- name: CountSubmissionsForCabinet :one
+-- Два числа одной поездкой: видимые ответы и скрытые тарифом (0014). Второе —
+-- для плашки «N ответов скрыто»: молча спрятать данные, которые человек собрал,
+-- нельзя, иначе скрытие читается как потеря.
+SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
+       count(*) FILTER (WHERE over_quota)::bigint AS hidden
+FROM submissions WHERE form_id = $1;
+
+-- name: RevealHiddenSubmissions :execrows
+-- Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,
+-- который их вмещает. Одной транзакцией и без исключений: скрытие обратимо, иначе
+-- обещание «сохранены и откроются после апгрейда» было бы враньём.
+UPDATE submissions s SET over_quota = false
+FROM forms f
+WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota;
 
 -- name: LockFormForSubmit :exec
 -- Транзакционный advisory-lock по форме для жёсткого капа лимита ответов (фаза 8.5

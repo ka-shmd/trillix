@@ -19,11 +19,13 @@ export const submissionSchema = z.object({
 export type Submission = z.infer<typeof submissionSchema>
 
 // GET /forms/{id}/submissions: страница + непрозрачный курсор (null — последняя) +
-// общий счётчик ответов формы.
+// счётчики. total — сколько ВИДНО; hidden — сколько скрыто квотой тарифа (0014):
+// эти ответы сохранены и откроются после перехода на план, который их вмещает.
 export const submissionsPageSchema = z.object({
   submissions: z.array(submissionSchema),
   nextCursor: z.string().nullable(),
   total: z.number().int(),
+  hidden: z.number().int(),
 })
 
 export type SubmissionsPage = z.infer<typeof submissionsPageSchema>

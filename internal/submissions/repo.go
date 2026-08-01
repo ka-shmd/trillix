@@ -118,7 +118,33 @@ func (Repo) DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID u
 	return n, nil
 }
 
-// CountSubmissions — общее число ответов формы (счётчик кабинета).
+// CountSubmissionsForCabinet — видимые и скрытые тарифом ответы формы одной
+// поездкой (0014).
+func (Repo) CountSubmissionsForCabinet(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (visible, hidden int64, err error) {
+	row, err := postgres.New(db).CountSubmissionsForCabinet(ctx, formID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count submissions for cabinet: %w", err)
+	}
+	return row.Visible, row.Hidden, nil
+}
+
+// RevealHidden снимает пометку over_quota со всех ответов воркспейса — переход на
+// план, который их вмещает. Возвращает число открытых ответов.
+//
+// В интерфейсе Store его НЕТ: сервисного потребителя сегодня не существует —
+// смена плана делается операцией владельца в БД, а эндпоинт покупки приедет с
+// платежами (PROCESS §2: интерфейс вводится вместе с потребителем). Метод живёт
+// здесь, а не только в SQL, чтобы обратимость скрытия сторожил тест, а не вера.
+func (Repo) RevealHidden(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).RevealHiddenSubmissions(ctx, workspaceID)
+	if err != nil {
+		return 0, fmt.Errorf("reveal hidden submissions: %w", err)
+	}
+	return n, nil
+}
+
+// CountSubmissions — ВСЕ ответы формы, включая скрытые тарифом. Потребитель —
+// жёсткий кап формы; кабинету нужен CountSubmissionsForCabinet.
 func (Repo) CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).CountSubmissions(ctx, formID)
 	if err != nil {

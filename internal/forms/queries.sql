@@ -49,7 +49,11 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- канонизированными, так что сразу после публикации они равны). Заголовок в
     -- версию не входит — переименование бейдж не поднимает. coalesce: без версии → false.
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -72,7 +76,11 @@ WHERE f.id = $1;
 SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, f.published_version_id,
     fv.version AS published_version,
     coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
-    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id) AS submission_count,
+    -- Сверхлимитные ответы (over_quota, 0014) в счётчик КАБИНЕТА не входят: карточка
+    -- обязана показывать то же число, что и таблица ответов, иначе «6 ответов» на
+    -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
+    -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
+    (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -125,7 +133,7 @@ SELECT * FROM (
     FROM forms f
     LEFT JOIN form_versions fv ON fv.id = f.published_version_id
     LEFT JOIN LATERAL (
-        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id
+        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
     ) c ON true
     LEFT JOIN LATERAL (
         SELECT count(*) AS visit_count,
