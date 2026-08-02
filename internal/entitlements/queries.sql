@@ -45,3 +45,18 @@ JOIN workspace_members me ON me.workspace_id = o.workspace_id AND me.user_id = $
 LEFT JOIN workspace_usage u
        ON u.workspace_id = o.workspace_id AND u.period = $2
 WHERE o.workspace_id = $1 AND o.role = 'owner';
+
+-- Состояние тарифа АККАУНТА: то, у чего нет воркспейса-владельца, потому что
+-- воркспейса ещё нет (единственный такой ключ сегодня — сколько пространств
+-- можно завести). Расход считается здесь же подзапросом: «сколько уже держу» —
+-- это число строк владения, а не накопленное за период, поэтому workspace_usage
+-- в этом запросе не участвует вовсе.
+-- name: GetAccountEntitlements :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       (SELECT count(*) FROM workspace_members m
+         WHERE m.user_id = s.user_id AND m.role = 'owner')::bigint AS workspaces_owned
+FROM subscriptions s
+JOIN plans p ON p.code = s.plan_code
+WHERE s.user_id = $1;

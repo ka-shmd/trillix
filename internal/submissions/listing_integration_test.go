@@ -91,7 +91,7 @@ func publishFormFor(t *testing.T, userID uuid.UUID, schema string) string {
 	t.Helper()
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, userID, "Анкета")
+	form, err := formsSvc.Create(ctx, userID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}

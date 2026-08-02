@@ -35,7 +35,7 @@ func closableForm(t *testing.T) (slug string, userID, formID uuid.UUID, formsSvc
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	form, err := formsSvc.Create(ctx, user.ID, "Мероприятие")
+	form, err := formsSvc.Create(ctx, user.ID, "Мероприятие", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}

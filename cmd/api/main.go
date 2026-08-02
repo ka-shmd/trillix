@@ -228,9 +228,6 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	authHandler = authHandler.WithOAuth(authSvc, oauthProviders, oauthLimiter, cfg.FormTokenSecret)
 	log.Info("oauth providers configured", slog.Int("count", len(oauthProviders)))
 
-	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
-	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
-
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
@@ -248,9 +245,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки и приём
-	// ответа. Собирается до обоих потребителей, живёт на том же пуле.
+	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки, приём
+	// ответа и создание пространства. Собирается до всех потребителей, живёт на
+	// том же пуле.
 	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
+
+	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc)
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})

@@ -317,6 +317,34 @@ func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscription
 	return err
 }
 
+const createTeamWorkspace = `-- name: CreateTeamWorkspace :one
+INSERT INTO workspaces (id, name)
+VALUES ($1, $2)
+RETURNING id, name, created_at
+`
+
+type CreateTeamWorkspaceParams struct {
+	ID   uuid.UUID
+	Name string
+}
+
+type CreateTeamWorkspaceRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// КОМАНДНОЕ пространство: personal_user_id остаётся NULL — личное заводит
+// только транзакция регистрации (internal/auth), и оно у аккаунта ровно одно
+// (UNIQUE в 0016). Владельца добавляет отдельная строка членства в той же
+// транзакции: воркспейс без владельца — пространство, у которого нет плана.
+func (q *Queries) CreateTeamWorkspace(ctx context.Context, arg CreateTeamWorkspaceParams) (CreateTeamWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, createTeamWorkspace, arg.ID, arg.Name)
+	var i CreateTeamWorkspaceRow
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}
+
 const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
@@ -540,6 +568,41 @@ type EnqueueOutboxParams struct {
 func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) error {
 	_, err := q.db.Exec(ctx, enqueueOutbox, arg.ID, arg.Channel, arg.Payload)
 	return err
+}
+
+const getAccountEntitlements = `-- name: GetAccountEntitlements :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       (SELECT count(*) FROM workspace_members m
+         WHERE m.user_id = s.user_id AND m.role = 'owner')::bigint AS workspaces_owned
+FROM subscriptions s
+JOIN plans p ON p.code = s.plan_code
+WHERE s.user_id = $1
+`
+
+type GetAccountEntitlementsRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	WorkspacesOwned int64
+}
+
+// Состояние тарифа АККАУНТА: то, у чего нет воркспейса-владельца, потому что
+// воркспейса ещё нет (единственный такой ключ сегодня — сколько пространств
+// можно завести). Расход считается здесь же подзапросом: «сколько уже держу» —
+// это число строк владения, а не накопленное за период, поэтому workspace_usage
+// в этом запросе не участвует вовсе.
+func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) (GetAccountEntitlementsRow, error) {
+	row := q.db.QueryRow(ctx, getAccountEntitlements, userID)
+	var i GetAccountEntitlementsRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.WorkspacesOwned,
+	)
+	return i, err
 }
 
 const getEntitlements = `-- name: GetEntitlements :one
@@ -1434,7 +1497,8 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 
 const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
-SELECT w.id, w.name, w.created_at
+SELECT w.id, w.name, w.created_at,
+       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -1442,17 +1506,23 @@ ORDER BY w.created_at ASC
 `
 
 type ListWorkspacesByUserRow struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  pgtype.Timestamptz
+	IsPersonal bool
 }
 
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
 // workspace_members). Генерация: `make sqlc`.
-// Воркспейсы, в которых состоит пользователь. JOIN через workspace_members:
+// Пространства, в которых состоит пользователь. JOIN через workspace_members:
 // возвращаются только пространства с членством (инвариант доступа — id из URL
-// права не даёт). В MVP на пользователя ровно один (личный, созданный при
-// регистрации); порядок по created_at (старейший первым) — детерминированно.
+// права не даёт). Личное создаётся регистрацией и всегда первое: сортировка по
+// created_at ставит его в начало, потому что оно старше любого командного.
+//
+// is_personal вычисляется сравнением с personal_user_id, а не отдаётся сырым:
+// кабинету важно «личное ли оно ДЛЯ МЕНЯ», а не чьё оно вообще. IS NOT DISTINCT
+// FROM, а не «=»: у командного пространства personal_user_id равен NULL, и
+// обычное сравнение дало бы NULL вместо false — то есть непустой bool в Go.
 func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
@@ -1462,7 +1532,12 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 	var items []ListWorkspacesByUserRow
 	for rows.Next() {
 		var i ListWorkspacesByUserRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.IsPersonal,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

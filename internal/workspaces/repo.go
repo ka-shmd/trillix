@@ -10,16 +10,19 @@ import (
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
-// Workspace — воркспейс пользователя (доменное представление, без утечки
+// Workspace — пространство пользователя (доменное представление, без утечки
 // sqlc-типов в service/handler).
 type Workspace struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt time.Time
+	ID   uuid.UUID
+	Name string
+	// IsPersonal — личное пространство СПРАШИВАЮЩЕГО: создано его регистрацией,
+	// не удаляется, не покидается и не замораживается при даунгрейде (ADR §10).
+	IsPersonal bool
+	CreatedAt  time.Time
 }
 
 // Repo — доступ к данным workspaces поверх sqlc-запросов. Методы принимают
-// исполнителя (postgres.DBTX — пул или транзакция); в MVP только чтение.
+// исполнителя (postgres.DBTX — пул или транзакция).
 type Repo struct{}
 
 // ListByUser возвращает воркспейсы, в которых состоит пользователь (членство
@@ -31,7 +34,31 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) 
 	}
 	out := make([]Workspace, len(rows))
 	for i, r := range rows {
-		out[i] = Workspace{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt.Time}
+		out[i] = Workspace{ID: r.ID, Name: r.Name, IsPersonal: r.IsPersonal, CreatedAt: r.CreatedAt.Time}
 	}
 	return out, nil
+}
+
+// CreateTeam заводит КОМАНДНОЕ пространство (без пометки личного): личное
+// создаёт только транзакция регистрации, и оно у аккаунта ровно одно.
+func (Repo) CreateTeam(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+	row, err := postgres.New(db).CreateTeamWorkspace(ctx, postgres.CreateTeamWorkspaceParams{ID: id, Name: name})
+	if err != nil {
+		return Workspace{}, fmt.Errorf("create team workspace: %w", err)
+	}
+	return Workspace{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// AddOwner делает пользователя владельцем пространства. Владелец ровно один —
+// «не больше одного» держит уникальный индекс (0016), поэтому повторный вызов
+// на том же пространстве вернёт ошибку БД, а не создаст второго плательщика.
+func (Repo) AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error {
+	if err := postgres.New(db).CreateWorkspaceMember(ctx, postgres.CreateWorkspaceMemberParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		Role:        RoleOwner,
+	}); err != nil {
+		return fmt.Errorf("add workspace owner: %w", err)
+	}
+	return nil
 }

@@ -71,7 +71,7 @@ func publishSummaryForm(t *testing.T, userID uuid.UUID) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, userID, "Сводка")
+	form, err := formsSvc.Create(ctx, userID, "Сводка", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestSummary_NoVersions_EmptyButValid(t *testing.T) {
 	srv := fullStack(t)
 	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(context.Background(), ownerID, "черновик")
+	form, err := formsSvc.Create(context.Background(), ownerID, "черновик", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

@@ -1286,3 +1286,70 @@ func body2(t *testing.T, r *http.Response) string {
 	}
 	return string(b)
 }
+
+// Явный workspaceId — не пропуск: чужое пространство неотличимо от
+// несуществующего (404, не 403), и форма в нём не заводится.
+//
+// Анти-IDOR на новом параметре (DoD фазы 18): до него воркспейс выводился из
+// самого пользователя и подменить его было нечем — теперь есть.
+func TestForms_ForeignWorkspaceIsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	// Пространство Алисы: её личное, id берём из БД (кабинет Боба его не видит).
+	var aliceWS string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT w.id FROM workspaces w
+		   JOIN users u ON u.id = w.personal_user_id
+		  WHERE u.email = 'alice@example.com'`).Scan(&aliceWS); err != nil {
+		t.Fatalf("личное пространство Алисы: %v", err)
+	}
+	createForm(t, alice, srv, "Форма Алисы")
+
+	r := do(t, bob, http.MethodGet, srv.URL+"/api/v1/forms?workspaceId="+aliceWS, "", "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("список чужого пространства: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = do(t, bob, http.MethodPost, srv.URL+"/api/v1/forms",
+		`{"title":"Подсадная","workspaceId":"`+aliceWS+`"}`, csrf(t, bob, srv.URL))
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("создание в чужом пространстве: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// У Алисы по-прежнему ровно её собственная форма.
+	if got := listForms(t, alice, srv, ""); len(got.Forms) != 1 {
+		t.Fatalf("форм у Алисы = %d, ожидалась 1 — чужая запись просочилась", len(got.Forms))
+	}
+}
+
+// Свой workspaceId работает как раньше, а мусор вместо uuid — ошибка ввода, а
+// не молчаливый откат к личному пространству.
+func TestForms_OwnWorkspaceIDAndGarbage(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+	createForm(t, c, srv, "Своя форма")
+
+	var ownWS string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT w.id FROM workspaces w
+		   JOIN users u ON u.id = w.personal_user_id
+		  WHERE u.email = 'owner@example.com'`).Scan(&ownWS); err != nil {
+		t.Fatalf("своё пространство: %v", err)
+	}
+
+	if got := listForms(t, c, srv, "?workspaceId="+ownWS); len(got.Forms) != 1 {
+		t.Fatalf("форм = %d, ожидалась 1 при явном своём workspaceId", len(got.Forms))
+	}
+
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms?workspaceId=не-uuid", "", "")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("мусорный workspaceId: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+}
