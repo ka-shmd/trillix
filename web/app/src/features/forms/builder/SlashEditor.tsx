@@ -13,7 +13,6 @@ import {
   KeyboardSensor,
   MeasuringStrategy,
   PointerSensor,
-  closestCenter,
   pointerWithin,
   useDroppable,
   useSensor,
@@ -54,7 +53,12 @@ import {
 import { inviteRowId, previewCells } from './rowZones'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
-import { canvasSorting, DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
+import {
+  canvasSorting,
+  closestVertical,
+  DRAG_ACTIVATION_DISTANCE,
+  noLayoutAnimation,
+} from './dnd'
 import { BlockRow } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
@@ -158,7 +162,7 @@ export function SlashEditor({
   // «встань в ряд» (решение владельца 2026-08-02). Прежде зоны зажигались у каждой
   // группы, способной делить ряд, то есть практически по всему полотну: приглашений
   // было вдвое больше, чем вопросов, и ни одно не называло то место, куда автор целится.
-  // Ближайшую цель считает тот же closestCenter, что ведёт вертикальную вставку
+  // Ближайшую цель считает тот же closestVertical, что ведёт вертикальную вставку
   // (collisionDetection пишет её в ref), а в состояние переносит rAF-цикл рамок —
   // события драга молчат, пока строки доигрывают переход.
   const [nearGroup, setNearGroup] = useState<string | null>(null)
@@ -252,7 +256,7 @@ export function SlashEditor({
   // чужом контексте → overIndex −1 → dnd-kit гасит все трансформы (элемент замирал
   // под мышкой). Слои НЕ конкурируют за коллизии: collisionDetection фильтрует
   // droppable'ы по слою активного элемента — тащат группу → только группы, тащат
-  // блок → только строки. Без фильтра closestCenter метался между контейнером
+  // блок → только строки. Без фильтра выбор цели метался между контейнером
   // группы и её строками (джиттер).
   // Разбиение — общий groupBlocks (@fields/groups), тот же, которым пакуют группы
   // превью и рендерер. Здесь стояла его побайтовая копия: единый раскладчик, ради
@@ -333,7 +337,10 @@ export function SlashEditor({
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
-    const collisions = closestCenter({
+    // Цель вертикальной вставки выбирается closestVertical, а не closestCenter (dnd.ts):
+    // евклидово расстояние даёт участнику ряда постоянный горизонтальный штраф в
+    // полколонки, и ряд проигрывает конкурс любому полноширинному блоку поблизости.
+    const collisions = closestVertical({
       ...args,
       droppableContainers: args.droppableContainers.filter(
         (c) => !isRowZone(c.id) && groupIds.has(String(c.id)) === isGroupDrag,
@@ -351,7 +358,7 @@ export function SlashEditor({
           ? near
           : (blocks.find((b) => b.id === near)?.groupId ?? null)
     // Зоны жеста спрашиваются указателем, а не центрами: зона намеренная, попадание в
-    // неё однозначно, а closestCenter тянул бы её в общий конкурс со строками и мазал.
+    // неё однозначно, а конкурс по центрам тянул бы её к строкам и мазал.
     // Слоёв это не смешивает — зона отдельный вид droppable'а и из фильтра выше
     // исключена.
     const zones = args.droppableContainers.filter((c) => isRowZone(c.id))
@@ -382,7 +389,7 @@ export function SlashEditor({
     // щель показывала не это. Прежняя вторая подмена (отвечаемый/подпись не падают
     // внутрь чужой мульти-группы) снята фазой 15: дроп туда легален, а его цену
     // называют подсветка жертвы и тост (§4.1, §4.3). Подмена — перестановкой внутри
-    // списка closestCenter (там все кандидаты слоя): у dnd-kit over = collisions[0].
+    // списка коллизий (там все кандидаты слоя): у dnd-kit over = collisions[0].
     const rowFixed = rowBoundaryTarget(blocks, activeId, rawOver)
     if (!rowFixed) return collisions
     // Рамке тоже отдаём легальную цель: по сырой она обвела бы состав, который
