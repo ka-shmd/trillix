@@ -958,6 +958,47 @@ export function rowBoundaryTarget(
   return null
 }
 
+// rowBoundaryGroup — то же правило «ряд атомарен для вертикальной вставки» (§5), но на
+// ГРУППОВОМ слое, где его не было вовсе (найдено владельцем 2026-08-02: «таскаю группу
+// и не могу поставить её между обычным блоком и рядом — они склеиваются, как будто это
+// группа»).
+//
+// Причина ровно та же, что у блочного правила, но последствие грубее. `reorderGroups` —
+// голый arrayMove по группам, и цель «правая колонка ряда» при переносе сверху вниз
+// кладёт группу МЕЖДУ колонками. Дальше раскладчик читает получившийся список буквально
+// (§13): пришелец без бита закрывает секцию, левый участник выпадает во всю ширину, а
+// правый со своим `'right'` открывает НОВУЮ секцию и забирает в неё пришельца. Автор
+// целился в щель над рядом, а получил ряд с новым составом — «склеились».
+//
+// Лечение — то, что §5 уже обещает: **ряд для вертикальной вставки одна цель**. Тащат
+// сверху — кладём ПОД ряд (цель = последний участник), снизу — НАД ним (цель = первый).
+// Так ряд ведёт себя как один высокий блок, чем он для этого жеста и является.
+// Перестановка ВНУТРИ своего ряда правилу не подчиняется: там щель между колонками —
+// законная цель, ею меняют участников местами.
+export function rowBoundaryGroup(
+  blocks: Block[],
+  activeGroupId: string,
+  overGroupId: string,
+): string | null {
+  const groups = rowGroups(blocks)
+  const at = (id: string) => groups.findIndex((g) => g.id === id)
+  const ai = at(activeGroupId)
+  const ti = at(overGroupId)
+  if (ai < 0 || ti < 0 || ai === ti) return null
+  for (const row of packRows(groups)) {
+    // Участники ряда смежны в списке групп (ряды собираются из идущих подряд), поэтому
+    // границы пролёта — индексы первого и последнего.
+    const participants = row.flat()
+    if (participants.length < 2) continue
+    const rs = at(participants[0]!.id)
+    const re = at(participants[participants.length - 1]!.id)
+    if (ti < rs || ti > re) continue
+    if (ai >= rs && ai <= re) return null
+    return ai < rs ? groups[re]!.id : groups[rs]!.id
+  }
+  return null
+}
+
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного
 // (в т.ч. массива options) не задевала исходник из Query или дубликат.
 const cloneBlock = (b: Block): Block => structuredClone(b)

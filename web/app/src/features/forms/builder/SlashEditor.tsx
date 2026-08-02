@@ -47,6 +47,7 @@ import {
   captionLoss,
   needsCaptionFor,
   planBlockDrop,
+  rowBoundaryGroup,
   rowBoundaryTarget,
   rowPosition,
 } from './store'
@@ -363,8 +364,17 @@ export function SlashEditor({
         return hit
       }
     }
-    if (isGroupDrag || collisions.length === 0) return collisions
+    if (collisions.length === 0) return collisions
     const activeId = String(args.active.id)
+    // Групповой слой подчиняется тому же правилу «ряд — одна цель», что и блочный
+    // (§5): без него arrayMove по группам кладёт пришельца МЕЖДУ колонками, и
+    // раскладчик собирает из него ряд с новым составом.
+    if (isGroupDrag) {
+      const fixed = rowBoundaryGroup(blocks, activeId, String(collisions[0]!.id))
+      if (fixed === null) return collisions
+      const hit = collisions.find((c) => String(c.id) === fixed)
+      return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
+    }
     const rawOver = String(collisions[0]!.id)
     rawOverRef.current = rawOver
     // Единственная цель, которую полотно подменяет, — щель между участниками ряда:
