@@ -53,6 +53,17 @@ type FormVisit struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Invitation struct {
+	TokenHash   []byte
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+	InvitedBy   uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+	UsedAt      pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+}
+
 type Outbox struct {
 	ID            uuid.UUID
 	Channel       string
@@ -100,12 +111,12 @@ type Submission struct {
 }
 
 type Subscription struct {
-	WorkspaceID      uuid.UUID
 	PlanCode         string
 	Status           string
 	CurrentPeriodEnd pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	UserID           uuid.UUID
 }
 
 type User struct {
@@ -124,9 +135,10 @@ type UserIdentity struct {
 }
 
 type Workspace struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID             uuid.UUID
+	Name           string
+	CreatedAt      pgtype.Timestamptz
+	PersonalUserID pgtype.UUID
 }
 
 type WorkspaceMember struct {

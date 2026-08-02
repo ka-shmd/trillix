@@ -28,6 +28,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 // fullStack поднимает auth + приватный листинг + публичный приём поверх контейнерного
@@ -37,7 +38,10 @@ func fullStack(t *testing.T) *httptest.Server {
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
@@ -90,8 +94,11 @@ func authedClient(t *testing.T, srv *httptest.Server, email string) (*http.Clien
 func publishFormFor(t *testing.T, userID uuid.UUID, schema string) string {
 	t.Helper()
 	ctx := context.Background()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, userID, "Анкета")
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
+	form, err := formsSvc.Create(ctx, userID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}
@@ -268,7 +275,10 @@ func TestListSubmissions_OverQuotaHiddenUntilRevealed(t *testing.T) {
 	}
 	// Карточка формы обязана показывать то же число, что и таблица: «3 ответа» на
 	// карточке против двух в таблице читается как пропажа данных.
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	card, err := formsSvc.Get(context.Background(), userID, formID)
 	if err != nil {
 		t.Fatalf("get form: %v", err)

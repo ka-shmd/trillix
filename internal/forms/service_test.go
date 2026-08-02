@@ -24,9 +24,6 @@ type fakeStore struct {
 	form   Form
 	getErr error
 
-	member    bool
-	memberErr error
-
 	listRows []ListRow
 	listErr  error
 
@@ -67,6 +64,7 @@ type fakeStore struct {
 
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS     uuid.UUID
+	lastListWS       uuid.UUID
 	lastCreateTitle  string
 	lastCreateSlug   string
 	lastCreateName   *string
@@ -83,10 +81,6 @@ type fakeStore struct {
 
 func (f *fakeStore) GetPersonalWorkspace(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (uuid.UUID, error) {
 	return f.personalWS, f.personalErr
-}
-
-func (f *fakeStore) IsWorkspaceMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (bool, error) {
-	return f.member, f.memberErr
 }
 
 func (f *fakeStore) CreateForm(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, title, slug string) (Form, error) {
@@ -150,7 +144,8 @@ func (f *fakeStore) GetFormBySlug(_ context.Context, _ postgres.DBTX, slug strin
 	return form, nil
 }
 
-func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, _ uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+	f.lastListWS = workspaceID
 	f.lastListLimit = limit
 	f.lastListAfter = after != nil
 	f.lastListSort = sort
@@ -214,8 +209,28 @@ func (fakeTx) WithTx(_ context.Context, fn func(pgx.Tx) error) error {
 	return fn(nil)
 }
 
+// fakeAccess — права, подменённые вердиктом: юниты forms проверяют СВОЮ логику,
+// а матрица прав живёт и тестируется в workspaces.
+type fakeAccess struct {
+	err        error
+	gotActions []domain.Action
+}
+
+func (a *fakeAccess) Can(_ context.Context, _, _ uuid.UUID, action domain.Action) error {
+	a.gotActions = append(a.gotActions, action)
+	return a.err
+}
+
 func newTestService(store *fakeStore) *Service {
-	return NewService(nil, fakeTx{}, store)
+	return NewService(nil, fakeTx{}, store, &fakeAccess{})
+}
+
+// newDeniedService — сервис, у которого проверка прав отвечает «нельзя».
+// Отказ берётся ErrNotFound: так Can отвечает НЕ УЧАСТНИКУ, а именно это
+// проверяют анти-IDOR-тесты ниже (участник без нужной роли получает 403 — это
+// проверяется в workspaces, где живёт матрица).
+func newDeniedService(store *fakeStore) *Service {
+	return NewService(nil, fakeTx{}, store, &fakeAccess{err: domain.ErrNotFound})
 }
 
 func strptr(s string) *string { return &s }
@@ -223,8 +238,8 @@ func strptr(s string) *string { return &s }
 // --- Анти-IDOR: доступ к чужой форме неотличим от отсутствующей (404) ---
 
 func TestGet_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.Get(context.Background(), domain.NewID(), domain.NewID())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -244,7 +259,7 @@ func TestGet_FormMissing_ReturnsNotFound(t *testing.T) {
 
 func TestGet_Member_Success(t *testing.T) {
 	wsID := domain.NewID()
-	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}, member: true}
+	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}}
 	svc := newTestService(store)
 
 	form, err := svc.Get(context.Background(), domain.NewID(), domain.NewID())
@@ -257,8 +272,8 @@ func TestGet_Member_Success(t *testing.T) {
 }
 
 func TestGetBySlug_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.GetBySlug(context.Background(), domain.NewID(), "abc123")
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -278,7 +293,7 @@ func TestGetBySlug_FormMissing_ReturnsNotFound(t *testing.T) {
 
 func TestGetBySlug_Member_Success(t *testing.T) {
 	wsID := domain.NewID()
-	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}, member: true}
+	store := &fakeStore{form: Form{WorkspaceID: wsID, Title: "My form"}}
 	svc := newTestService(store)
 
 	form, err := svc.GetBySlug(context.Background(), domain.NewID(), "abc123")
@@ -296,8 +311,8 @@ func TestGetBySlug_Member_Success(t *testing.T) {
 // --- Настройки закрытия формы (фаза 8.5 шаг 4) ---
 
 func TestUpdateCloseSettings_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.UpdateCloseSettings(context.Background(), domain.NewID(), domain.NewID(), domain.CloseSettings{})
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -309,7 +324,7 @@ func TestUpdateCloseSettings_NotMember_ReturnsNotFound(t *testing.T) {
 }
 
 func TestUpdateCloseSettings_InvalidLimit_ReturnsValidationBeforeStore(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
 	svc := newTestService(store)
 
 	bad := int32(0)
@@ -324,7 +339,7 @@ func TestUpdateCloseSettings_InvalidLimit_ReturnsValidationBeforeStore(t *testin
 }
 
 func TestUpdateCloseSettings_Member_PassesSettingsThrough(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
 	svc := newTestService(store)
 
 	limit := int32(100)
@@ -344,8 +359,8 @@ func TestUpdateCloseSettings_Member_PassesSettingsThrough(t *testing.T) {
 }
 
 func TestDelete_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	err := svc.Delete(context.Background(), domain.NewID(), domain.NewID())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -359,8 +374,8 @@ func TestDelete_NotMember_ReturnsNotFound(t *testing.T) {
 // --- Дубликация формы ---
 
 func TestDuplicate_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.Duplicate(context.Background(), domain.NewID(), domain.NewID())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -376,8 +391,7 @@ func TestDuplicate_CleanTitle_SuffixInName(t *testing.T) {
 	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя"}]}`)
 	store := &fakeStore{
 		// У оригинала имя не задано (name=nil) — база берётся из title.
-		form:   Form{WorkspaceID: wsID, Title: "Анкета", Slug: "old-slug", Status: "published", DraftSchema: schema},
-		member: true,
+		form: Form{WorkspaceID: wsID, Title: "Анкета", Slug: "old-slug", Status: "published", DraftSchema: schema},
 	}
 	svc := newTestService(store)
 
@@ -411,8 +425,7 @@ func TestDuplicate_NumbersBySiblings(t *testing.T) {
 	wsID := domain.NewID()
 	name := "Анкета (копия)"
 	store := &fakeStore{
-		form:   Form{WorkspaceID: wsID, Name: &name, Title: "Анкета", DraftSchema: json.RawMessage(`{"blocks":[]}`)},
-		member: true,
+		form: Form{WorkspaceID: wsID, Name: &name, Title: "Анкета", DraftSchema: json.RawMessage(`{"blocks":[]}`)},
 		// В воркспейсе уже есть оригинал и первая копия → следующая должна стать «(копия 2)».
 		formNames: []FormName{{Title: "Анкета"}, {Name: strptr("Анкета (копия)"), Title: "Анкета"}},
 	}
@@ -480,8 +493,8 @@ func TestCopyName_TruncatesToFitLimit(t *testing.T) {
 // --- Внутреннее имя (переименование на дашборде) ---
 
 func TestUpdateName_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "новое имя")
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -493,7 +506,7 @@ func TestUpdateName_NotMember_ReturnsNotFound(t *testing.T) {
 }
 
 func TestUpdateName_Empty_ResetsToNil(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: true}
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
 	svc := newTestService(store)
 
 	form, err := svc.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "   ")
@@ -509,8 +522,8 @@ func TestUpdateName_Empty_ResetsToNil(t *testing.T) {
 // --- Публикация ---
 
 func TestPublish_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -524,7 +537,7 @@ func TestPublish_NotMember_ReturnsNotFound(t *testing.T) {
 func TestPublish_InvalidDraft_Rejected(t *testing.T) {
 	// Черновик с неизвестным типом блока — ValidateSchema отвергает до снапшота.
 	bad := json.RawMessage(`{"blocks":[{"id":"b","type":"slider","label":"x"}]}`)
-	store := &fakeStore{form: Form{DraftSchema: bad}, member: true}
+	store := &fakeStore{form: Form{DraftSchema: bad}}
 	svc := newTestService(store)
 
 	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
@@ -540,7 +553,6 @@ func TestPublish_Success_SnapshotsAndSetsVersion(t *testing.T) {
 	draft := json.RawMessage(`{"blocks":[]}`)
 	store := &fakeStore{
 		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: draft},
-		member:      true,
 		nextVersion: 1,
 	}
 	svc := newTestService(store)
@@ -564,8 +576,8 @@ func TestPublish_Success_SnapshotsAndSetsVersion(t *testing.T) {
 }
 
 func TestUnpublish_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	_, err := svc.Unpublish(context.Background(), domain.NewID(), domain.NewID())
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -579,8 +591,7 @@ func TestUnpublish_NotMember_ReturnsNotFound(t *testing.T) {
 func TestUnpublish_Success_CarriesVersion(t *testing.T) {
 	v := int32(2)
 	store := &fakeStore{
-		form:   Form{WorkspaceID: domain.NewID(), Status: "published", PublishedVersion: &v},
-		member: true,
+		form: Form{WorkspaceID: domain.NewID(), Status: "published", PublishedVersion: &v},
 	}
 	svc := newTestService(store)
 
@@ -602,7 +613,7 @@ func TestUnpublish_Success_CarriesVersion(t *testing.T) {
 // --- Автосейв схемы: валидация, доступ, оптимистичная блокировка ---
 
 func TestUpdateDraftSchema_InvalidSchema_Rejected(t *testing.T) {
-	store := &fakeStore{form: Form{}, member: true}
+	store := &fakeStore{form: Form{}}
 	svc := newTestService(store)
 
 	// Неизвестный тип блока — ValidateSchema отвергает до всякого доступа к БД.
@@ -617,8 +628,8 @@ func TestUpdateDraftSchema_InvalidSchema_Rejected(t *testing.T) {
 }
 
 func TestUpdateDraftSchema_NotMember_ReturnsNotFound(t *testing.T) {
-	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}, member: false}
-	svc := newTestService(store)
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newDeniedService(store)
 
 	ok := json.RawMessage(`{"blocks":[]}`)
 	_, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), ok, time.Now())
@@ -632,7 +643,7 @@ func TestUpdateDraftSchema_NotMember_ReturnsNotFound(t *testing.T) {
 
 func TestUpdateDraftSchema_StaleUpdatedAt_ReturnsConflict(t *testing.T) {
 	// Доступ есть, но условный UPDATE не нашёл строки (updated_at сдвинут) → ErrNoRows.
-	store := &fakeStore{form: Form{}, member: true, schemaErr: pgx.ErrNoRows}
+	store := &fakeStore{form: Form{}, schemaErr: pgx.ErrNoRows}
 	svc := newTestService(store)
 
 	ok := json.RawMessage(`{"blocks":[]}`)
@@ -643,7 +654,7 @@ func TestUpdateDraftSchema_StaleUpdatedAt_ReturnsConflict(t *testing.T) {
 }
 
 func TestUpdateDraftSchema_Valid_CanonicalizesAndPassesExpected(t *testing.T) {
-	store := &fakeStore{form: Form{}, member: true}
+	store := &fakeStore{form: Form{}}
 	svc := newTestService(store)
 
 	expected := time.Now().Truncate(time.Microsecond)
@@ -674,7 +685,7 @@ func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
 	store := &fakeStore{personalWS: wsID}
 	svc := newTestService(store)
 
-	form, err := svc.Create(context.Background(), domain.NewID(), "  ")
+	form, err := svc.Create(context.Background(), domain.NewID(), "  ", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -686,6 +697,47 @@ func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
 	}
 	if len(store.lastCreateSlug) != domain.SlugLen {
 		t.Fatalf("slug %q неверной длины", store.lastCreateSlug)
+	}
+}
+
+// Явно названное пространство используется вместо личного — но только после
+// проверки членства: id из запроса правом доступа не является.
+func TestCreate_ExplicitWorkspaceRequiresMembership(t *testing.T) {
+	personal, explicit := domain.NewID(), domain.NewID()
+
+	store := &fakeStore{personalWS: personal}
+	svc := newTestService(store)
+	if _, err := svc.Create(context.Background(), domain.NewID(), "Форма", &explicit); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if store.lastCreateWS != explicit {
+		t.Fatalf("форма создана в %v, ожидалось названное пространство %v", store.lastCreateWS, explicit)
+	}
+
+	// Не член — 404 (не 403): существование чужого пространства не раскрываем.
+	denied := &fakeStore{personalWS: personal}
+	svcDenied := newDeniedService(denied)
+	_, err := svcDenied.Create(context.Background(), domain.NewID(), "Форма", &explicit)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, ожидался domain.ErrNotFound", err)
+	}
+	if denied.created {
+		t.Error("форма создана в пространстве, членом которого пользователь не является")
+	}
+}
+
+// Список без параметра идёт в личное пространство — так работают ссылки,
+// не знающие про workspaceId.
+func TestList_DefaultsToPersonalWorkspace(t *testing.T) {
+	personal := domain.NewID()
+	store := &fakeStore{personalWS: personal}
+	svc := newTestService(store)
+
+	if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{Limit: 10}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if store.lastListWS != personal {
+		t.Fatalf("список прочитан из %v, ожидалось личное %v", store.lastListWS, personal)
 	}
 }
 
@@ -897,7 +949,7 @@ func TestUpdateDraftSchema_MirrorsTitleFromDocument(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			store := &fakeStore{form: Form{}, member: true}
+			store := &fakeStore{form: Form{}}
 			svc := newTestService(store)
 			if _, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), json.RawMessage(tc.schema), time.Now()); err != nil {
 				t.Fatalf("UpdateDraftSchema: %v", err)
@@ -951,6 +1003,56 @@ func TestPublicForm_TitleFromPublishedSchema(t *testing.T) {
 			}
 			if pf.Title != tc.want {
 				t.Fatalf("Title = %q, ждали %q", pf.Title, tc.want)
+			}
+		})
+	}
+}
+
+// Связка «операция → ДЕЙСТВИЕ» — то, ради чего заведена матрица прав, и до
+// ревью фазы 18 её не сторожило ничто: юниты подменяли Can заглушкой, а
+// интеграционные не различали ролей, потому что права на формы у них
+// совпадают. Подмени действие в любой строке ниже — покраснеет здесь.
+func TestOperations_AskTheRightAction(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Service) error
+		want domain.Action
+	}{
+		{"Get", func(s *Service) error {
+			_, err := s.Get(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormRead},
+		{"Delete", func(s *Service) error {
+			return s.Delete(context.Background(), domain.NewID(), domain.NewID())
+		}, domain.ActionFormDelete},
+		{"UpdateName", func(s *Service) error {
+			_, err := s.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "имя")
+			return err
+		}, domain.ActionFormWrite},
+		{"Publish", func(s *Service) error {
+			_, err := s.Publish(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormWrite},
+		{"Versions", func(s *Service) error {
+			_, err := s.Versions(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormRead},
+		{"GetForAction — что просили, то и спросили", func(s *Service) error {
+			_, err := s.GetForAction(context.Background(), domain.NewID(), domain.NewID(),
+				domain.ActionSubmissionDelete)
+			return err
+		}, domain.ActionSubmissionDelete},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			access := &fakeAccess{}
+			svc := NewService(nil, fakeTx{}, &fakeStore{form: Form{WorkspaceID: domain.NewID()}}, access)
+			_ = tc.call(svc)
+			if len(access.gotActions) == 0 {
+				t.Fatalf("%s не спросил права вовсе", tc.name)
+			}
+			if access.gotActions[0] != tc.want {
+				t.Fatalf("%s спросил %q, ждали %q", tc.name, access.gotActions[0], tc.want)
 			}
 		})
 	}

@@ -30,6 +30,12 @@ type Row struct {
 	Limits    []byte // plans.limits как есть
 	// SubmissionsUsed — расход за период (0, если строки usage ещё нет).
 	SubmissionsUsed int64
+	// WorkspacesOwned — сколько пространств аккаунт держит СЕЙЧАС (счётчик
+	// аккаунт-уровневых ключей; у воркспейс-уровневых строк всегда 0).
+	WorkspacesOwned int64
+	// MembersCount — сколько человек в пространстве СЕЙЧАС. Считается только
+	// там, где спрашивают про места: приём ответа за этим не ходит.
+	MembersCount int64
 }
 
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
@@ -39,6 +45,14 @@ type Store interface {
 	// для кабинета есть пользователь, и id воркспейса из URL правом доступа не
 	// является (инвариант 1).
 	EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, period time.Time) (Row, error)
+	// AccountEntitlements — план самого аккаунта и его счётчики. Периода нет:
+	// аккаунт-уровневое считается «здесь и сейчас», а не за расчётный месяц.
+	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error)
+	// EntitlementsWithMembers — то же, что Entitlements, плюс счётчик участников.
+	// ОТДЕЛЬНЫМ запросом, а не колонкой в основном: тот стоит на горячем пути
+	// приёма ответа, и подсчёт участников там был бы платой за то, что нужно
+	// одному редкому действию — приглашению.
+	EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
 }
 
 var _ Store = Repo{}
@@ -106,7 +120,13 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	}
 
 	period := s.PeriodStart()
-	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, period)
+	// Запрос выбирается счётчиком возможности: горячий путь приёма ответа не
+	// платит за подсчёт участников, который нужен только приглашению.
+	fetch := s.repo.Entitlements
+	if f.Meter == MembersMeter {
+		fetch = s.repo.EntitlementsWithMembers
+	}
+	row, err := fetch(ctx, s.db, workspaceID, period)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Воркспейса без подписки не бывает: её создаёт транзакция
@@ -121,6 +141,35 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	}
 	d.Period = period
 	return d, nil
+}
+
+// CheckAccount отвечает, разрешена ли возможность подписке самого аккаунта.
+//
+// Второй метод, а не параметр первого: аккаунт-уровневый лимит воркспейсом
+// невыразим — нового пространства ещё нет, а старое к нему отношения не имеет
+// (ADR §10). Сводить обратно к одной функции ради красоты нельзя: она приняла
+// бы id воркспейса там, где его не существует.
+func (s *Service) CheckAccount(ctx context.Context, userID uuid.UUID, key Key) (Decision, error) {
+	f, ok := Catalog[key]
+	if !ok {
+		return Decision{}, fmt.Errorf("entitlements: неизвестный ключ %q", key)
+	}
+	if f.Scope != AccountScope {
+		return Decision{}, fmt.Errorf("entitlements: ключ %q — воркспейс-уровневый, CheckAccount его не обслуживает", key)
+	}
+
+	row, err := s.repo.AccountEntitlements(ctx, s.db, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Аккаунта без подписки не бывает: её создаёт транзакция регистрации
+			// (0014, субъект переехал на аккаунт в 0016).
+			return Decision{}, fmt.Errorf("entitlements: у аккаунта %s нет подписки: %w", userID, err)
+		}
+		return Decision{}, err
+	}
+	// Период в решении не заполняется: у аккаунт-уровневого счётчика его нет —
+	// место освобождается удалением пространства, а не первым числом месяца.
+	return decide(f, row, key)
 }
 
 // Snapshot — состояние тарифа воркспейса для кабинета: план, лимиты, расход,
@@ -190,8 +239,15 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 	}
 
 	used := int64(0)
-	if f.Meter == SubmissionsMeter {
+	switch f.Meter {
+	case SubmissionsMeter:
 		used = row.SubmissionsUsed
+	case WorkspacesMeter:
+		used = row.WorkspacesOwned
+	case MembersMeter:
+		used = row.MembersCount
+	case NoMeter:
+		// Расход не считается: у Toggle его нет по смыслу.
 	}
 
 	switch f.Kind {

@@ -105,7 +105,7 @@ func checkKind(kind entitlements.Kind, raw json.RawMessage) error {
 // период, чужой месяц в него не подмешивается.
 func TestCheckWorkspace_ReadsPlanAndUsage(t *testing.T) {
 	ctx := context.Background()
-	wsID := seedWorkspace(t, "free")
+	wsID, ownerID := seedWorkspace(t, "free")
 
 	// Лимиты приезжают выключенными (спека §8) — включаем сотню для этого теста
 	// тем же UPDATE, каким её включит владелец на проде.
@@ -139,7 +139,7 @@ func TestCheckWorkspace_ReadsPlanAndUsage(t *testing.T) {
 
 	// Смена плана меняет вердикт БЕЗ перезапуска и без выкатки — главное
 	// обещание фазы, проверенное там, где оно живёт.
-	if _, err := testPool.Exec(ctx, `UPDATE subscriptions SET plan_code = 'pro' WHERE workspace_id = $1`, wsID); err != nil {
+	if _, err := testPool.Exec(ctx, `UPDATE subscriptions SET plan_code = 'pro' WHERE user_id = $1`, ownerID); err != nil {
 		t.Fatalf("смена плана: %v", err)
 	}
 	d, err = svc.CheckWorkspace(ctx, wsID, entitlements.SubmissionsPerMonth)
@@ -172,23 +172,35 @@ func TestCheckWorkspace_NoSubscriptionIsError(t *testing.T) {
 	}
 }
 
-func seedWorkspace(t *testing.T, plan string) uuid.UUID {
+// seedWorkspace заводит воркспейс с владельцем и подпиской ВЛАДЕЛЬЦА: с 0016
+// план пространства — это план его единственного участника с role='owner', и
+// подписка выписывается на аккаунт, а не на воркспейс. Возвращает пару
+// «воркспейс, владелец»: второй нужен там, где меняют план или спрашивают
+// снимок от его имени.
+func seedWorkspace(t *testing.T, plan string) (uuid.UUID, uuid.UUID) {
 	t.Helper()
-	id := uuid.New()
 	ctx := context.Background()
-	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'test')`, id); err != nil {
+	wsID := uuid.New()
+	ownerID := seedUser(t)
+	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'test')`, wsID); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if _, err := testPool.Exec(ctx,
-		`INSERT INTO subscriptions (workspace_id, plan_code) VALUES ($1, $2)`, id, plan); err != nil {
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		wsID, ownerID); err != nil {
+		t.Fatalf("insert owner: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO subscriptions (user_id, plan_code) VALUES ($1, $2)`,
+		ownerID, plan); err != nil {
 		t.Fatalf("insert subscription: %v", err)
 	}
 	t.Cleanup(func() {
-		if _, err := testPool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, id); err != nil {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, wsID); err != nil {
 			t.Fatalf("cleanup workspace: %v", err)
 		}
 	})
-	return id
+	return wsID, ownerID
 }
 
 func setUsage(t *testing.T, wsID uuid.UUID, period string, n int64) {
@@ -214,8 +226,7 @@ func setLimit(t *testing.T, plan, key, value string) {
 // запрос — чужой воркспейс неотличим от несуществующего (инвариант 1).
 func TestSnapshot_ReadsOwnWorkspace(t *testing.T) {
 	ctx := context.Background()
-	wsID := seedWorkspace(t, "free")
-	userID := seedMember(t, wsID)
+	wsID, ownerID := seedWorkspace(t, "free")
 
 	setLimit(t, "free", "submissions_per_month", "10")
 	t.Cleanup(func() { setLimit(t, "free", "submissions_per_month", "null") })
@@ -223,7 +234,7 @@ func TestSnapshot_ReadsOwnWorkspace(t *testing.T) {
 	setUsage(t, wsID, "2026-08-01", 7)
 
 	svc := entitlements.NewService(testPool, entitlements.Repo{}, func() time.Time { return now })
-	snap, err := svc.Snapshot(ctx, userID, wsID)
+	snap, err := svc.Snapshot(ctx, ownerID, wsID)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -246,11 +257,8 @@ func TestSnapshot_ReadsOwnWorkspace(t *testing.T) {
 
 func TestSnapshot_ForeignWorkspace_NotFound(t *testing.T) {
 	ctx := context.Background()
-	wsID := seedWorkspace(t, "free")
-	seedMember(t, wsID) // владелец есть, но спрашивать будет посторонний
-
-	stranger := seedWorkspace(t, "free")
-	strangerUser := seedMember(t, stranger)
+	wsID, _ := seedWorkspace(t, "free") // владелец есть, но спрашивать будет посторонний
+	_, strangerUser := seedWorkspace(t, "free")
 
 	svc := entitlements.NewService(testPool, entitlements.Repo{}, nil)
 	if _, err := svc.Snapshot(ctx, strangerUser, wsID); !errors.Is(err, domain.ErrNotFound) {
@@ -258,19 +266,13 @@ func TestSnapshot_ForeignWorkspace_NotFound(t *testing.T) {
 	}
 }
 
-// seedMember заводит пользователя и делает его членом воркспейса.
-func seedMember(t *testing.T, wsID uuid.UUID) uuid.UUID {
+// seedUser заводит пользователя (владельца пространства или постороннего).
+func seedUser(t *testing.T) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
-	ctx := context.Background()
-	if _, err := testPool.Exec(ctx, `INSERT INTO users (id, email) VALUES ($1, $2)`,
+	if _, err := testPool.Exec(context.Background(), `INSERT INTO users (id, email) VALUES ($1, $2)`,
 		id, "member-"+id.String()[:8]+"@example.com"); err != nil {
 		t.Fatalf("insert user: %v", err)
-	}
-	if _, err := testPool.Exec(ctx,
-		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
-		wsID, id); err != nil {
-		t.Fatalf("insert member: %v", err)
 	}
 	t.Cleanup(func() {
 		if _, err := testPool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id); err != nil {

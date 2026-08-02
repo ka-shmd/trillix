@@ -28,6 +28,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/token"
 	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var (
@@ -60,7 +61,10 @@ func resetDB(t *testing.T) {
 // Лимитер пермиссивный (инвариант 6).
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
@@ -79,13 +83,16 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	form, err := formsSvc.Create(ctx, user.ID, "Анкета")
+	form, err := formsSvc.Create(ctx, user.ID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}
@@ -322,14 +329,16 @@ func TestSubmit_UnknownSlug_404(t *testing.T) {
 	}
 }
 
-// setQuota включает лимит ответов на плане воркспейса формы тем же UPDATE, каким
-// его включит владелец на проде (гейты приезжают выключенными, спека §8).
+// setQuota включает лимит ответов на плане, по которому работает воркспейс формы:
+// с 0016 это план ВЛАДЕЛЬЦА пространства, отсюда джойн через members. UPDATE —
+// тот же, каким гейт включит владелец на проде (приезжают выключенными, спека §8).
 func setQuota(t *testing.T, slug string, limit int) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE plans SET limits = jsonb_set(limits, '{submissions_per_month}', to_jsonb($1::int))
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
-		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
 		limit, slug); err != nil {
 		t.Fatalf("set quota: %v", err)
 	}

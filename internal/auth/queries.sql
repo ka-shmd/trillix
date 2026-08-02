@@ -10,20 +10,22 @@ SELECT id, email, password_hash, created_at, email_verified_at
 FROM users
 WHERE email = $1;
 
--- name: CreateWorkspace :one
-INSERT INTO workspaces (id, name)
-VALUES ($1, $2)
+-- Личное пространство регистрации: personal_user_id — и пометка «личное», и
+-- ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
+-- name: CreatePersonalWorkspace :one
+INSERT INTO workspaces (id, name, personal_user_id)
+VALUES ($1, $2, $3)
 RETURNING id, name, created_at;
 
 -- name: CreateWorkspaceMember :exec
 INSERT INTO workspace_members (workspace_id, user_id, role)
 VALUES ($1, $2, $3);
 
--- Подписка личного воркспейса — четвёртая строка транзакции регистрации
--- (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
--- лимита обрастает веткой «а если строки нет».
+-- Подписка АККАУНТА — четвёртая строка транзакции регистрации (0014, фаза 17;
+-- субъект переехал на аккаунт в 0016). Аккаунта без подписки не бывает: иначе
+-- каждая проверка лимита обрастает веткой «а если строки нет».
 -- name: CreateSubscription :exec
-INSERT INTO subscriptions (workspace_id, plan_code)
+INSERT INTO subscriptions (user_id, plan_code)
 VALUES ($1, $2);
 
 -- name: CreateSession :exec

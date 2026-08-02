@@ -170,14 +170,14 @@ func TestRegister_CreatesSubscription(t *testing.T) {
 	}
 
 	var planCode, status string
+	// Подписка — у АККАУНТА (0016), поэтому ищется по пользователю напрямую.
 	err := testPool.QueryRow(context.Background(), `
 		SELECT s.plan_code, s.status
 		FROM subscriptions s
-		JOIN workspace_members m ON m.workspace_id = s.workspace_id
-		JOIN users u ON u.id = m.user_id
+		JOIN users u ON u.id = s.user_id
 		WHERE u.email = 'plan@example.com'`).Scan(&planCode, &status)
 	if err != nil {
-		t.Fatalf("подписка личного воркспейса не найдена: %v", err)
+		t.Fatalf("подписка аккаунта не найдена: %v", err)
 	}
 	if planCode != "free" || status != "active" {
 		t.Fatalf("подписка = (%q, %q), ждали (free, active)", planCode, status)

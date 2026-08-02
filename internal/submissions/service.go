@@ -46,6 +46,7 @@ type Forms interface {
 	// чужая или несуществующая → domain.ErrNotFound (анти-IDOR, приватное не
 	// раскрывается). Листингу нужен только факт доступа, не поля формы.
 	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
+	GetForAction(ctx context.Context, userID, formID uuid.UUID, action domain.Action) (forms.Form, error)
 	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
 	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
@@ -495,11 +496,16 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID) (domain
 	return builder.Result(), nil
 }
 
-// DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация через
-// forms.Get (чужая/нет формы → 404), затем удаление в пределах формы. Отсутствие
-// ответа (или он из другой формы) → domain.ErrNotFound.
+// DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация
+// (чужая/нет формы → 404), затем удаление в пределах формы. Отсутствие ответа
+// (или он из другой формы) → domain.ErrNotFound.
+//
+// Спрашивается ActionSubmissionDelete, а НЕ право читать форму: удаление ответа
+// респондента — отдельное действие в матрице прав, и запрет на него обязан
+// действовать. Спроси здесь «прочитать форму» — снятая ячейка молча ничего не
+// изменит (найдено ревью фазы 18).
 func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error {
-	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
 		return err
 	}
 	n, err := s.repo.DeleteSubmission(ctx, s.db, submissionID, formID)

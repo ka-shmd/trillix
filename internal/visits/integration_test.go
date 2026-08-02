@@ -30,6 +30,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/token"
 	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var (
@@ -63,7 +64,10 @@ func resetDB(t *testing.T) {
 // Лимитеры пермиссивные (инвариант 6: лимит не ослабляется, а подменяется).
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
@@ -84,13 +88,16 @@ func publishedForm(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 
 	user, _, err := authSvc.Register(ctx, "vis-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	form, err := formsSvc.Create(ctx, user.ID, "Анкета")
+	form, err := formsSvc.Create(ctx, user.ID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}
@@ -323,7 +330,10 @@ func formOwner(t *testing.T, slug string) (formID, userID uuid.UUID) {
 }
 
 func funnelService() *visits.Service {
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 }
 
@@ -338,7 +348,8 @@ func setFunnelGate(t *testing.T, slug string, allowed bool) {
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', $1::jsonb)
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
-		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
 		value, slug); err != nil {
 		t.Fatalf("set funnel gate: %v", err)
 	}

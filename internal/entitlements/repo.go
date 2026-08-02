@@ -48,5 +48,40 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 		PlanTitle:       row.PlanTitle,
 		Limits:          row.Limits,
 		SubmissionsUsed: row.SubmissionsUsed,
+		MembersCount:    row.MembersCount,
+	}, nil
+}
+
+// AccountEntitlements — план аккаунта и его счётчики (сколько пространств уже
+// держит). pgx.ErrNoRows пробрасывается: «у аккаунта нет подписки» — нарушенный
+// инвариант регистрации, а не пустой ответ.
+func (Repo) AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error) {
+	row, err := postgres.New(db).GetAccountEntitlements(ctx, userID)
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements of account %s: %w", userID, err)
+	}
+	return Row{
+		PlanCode:        row.PlanCode,
+		PlanTitle:       row.PlanTitle,
+		Limits:          row.Limits,
+		WorkspacesOwned: row.WorkspacesOwned,
+	}, nil
+}
+
+// EntitlementsWithMembers — состояние тарифа плюс счётчик участников (гейт мест).
+func (Repo) EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error) {
+	row, err := postgres.New(db).GetEntitlementsWithMembers(ctx, postgres.GetEntitlementsWithMembersParams{
+		WorkspaceID: workspaceID,
+		Period:      pgtype.Date{Time: period, Valid: true},
+	})
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements with members of workspace %s: %w", workspaceID, err)
+	}
+	return Row{
+		PlanCode:        row.PlanCode,
+		PlanTitle:       row.PlanTitle,
+		Limits:          row.Limits,
+		SubmissionsUsed: row.SubmissionsUsed,
+		MembersCount:    row.MembersCount,
 	}, nil
 }

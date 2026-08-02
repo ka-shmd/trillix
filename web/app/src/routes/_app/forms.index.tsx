@@ -20,9 +20,11 @@ import { Skeleton } from '@/components/ui/skeleton'
 // параметры поиска: обязательные search-параметры типы роутера требуют у КАЖДОЙ
 // ссылки. Мусор из адреса (его правят руками) гасит catch: неизвестная сортировка
 // читается как умолчание, а не роняет экран.
+// w — текущее пространство (пусто = личное), см. shared/currentWorkspace.
 const formsSearchSchema = z.object({
   q: z.string().optional().catch(undefined),
   sort: formsSortSchema.optional().catch(undefined),
+  w: z.string().optional().catch(undefined),
 })
 
 // Дашборд форм (/forms): грид карточек с курсорной подгрузкой, поиск, сортировка,
@@ -34,13 +36,14 @@ export const Route = createFileRoute('/_app/forms/')({
 
 function FormsDashboard() {
   const navigate = useNavigate()
-  const { q = '', sort = DEFAULT_FORMS_SORT } = Route.useSearch()
+  const { q = '', sort = DEFAULT_FORMS_SORT, w = '' } = Route.useSearch()
   const create = useCreateForm()
-  const query = useInfiniteQuery(formsListQueryOptions({ q, sort }))
+  const query = useInfiniteQuery(formsListQueryOptions({ q, sort, workspaceId: w }))
 
   function handleCreate() {
-    create.mutate(undefined, {
-      onSuccess: (form) => navigate({ to: '/forms/$slug/edit', params: { slug: form.slug } }),
+    create.mutate({ workspaceId: w || undefined }, {
+      onSuccess: (form) =>
+        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
     })
   }
 

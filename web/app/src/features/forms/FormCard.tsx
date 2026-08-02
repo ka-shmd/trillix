@@ -94,7 +94,8 @@ export function FormCard({ form }: { form: Form }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
-                <Link to="/forms/$slug/responses" params={{ slug: form.slug }}>
+                <Link to="/forms/$slug/responses" search={(prev) => prev}
+                params={{ slug: form.slug }}>
                   Ответы ({form.submissionCount})
                 </Link>
               </DropdownMenuItem>

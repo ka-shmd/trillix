@@ -15,14 +15,17 @@ import {
 // listForms — страница списка. q — поиск по отображаемому имени (name ?? title),
 // sort — порядок; курсор непрозрачен и несёт в себе порядок, которым выдан,
 // поэтому листать с ним другую сортировку сервер не даст (422).
+// workspaceId — в каком пространстве смотрим; не передан = личное (сервер
+// подставляет его сам, поэтому старые ссылки без параметра работают как раньше).
 export function listForms(
   cursor?: string,
-  opts?: { q?: string; sort?: FormsSort },
+  opts?: { q?: string; sort?: FormsSort; workspaceId?: string },
 ): Promise<FormsPage> {
   const params = new URLSearchParams()
   if (cursor) params.set('cursor', cursor)
   if (opts?.q) params.set('q', opts.q)
   if (opts?.sort && opts.sort !== 'updated') params.set('sort', opts.sort)
+  if (opts?.workspaceId) params.set('workspaceId', opts.workspaceId)
   const query = params.toString()
   return apiRequest(`/forms${query ? `?${query}` : ''}`, { schema: formsPageSchema })
 }
@@ -37,10 +40,13 @@ export function getFormBySlug(slug: string): Promise<FormDetail> {
   })
 }
 
-export function createForm(title?: string): Promise<Form> {
+export function createForm(title?: string, workspaceId?: string): Promise<Form> {
   return apiRequest('/forms', {
     method: 'POST',
-    body: title ? { title } : {},
+    body: {
+      ...(title ? { title } : {}),
+      ...(workspaceId ? { workspaceId } : {}),
+    },
     schema: formSchema,
   })
 }

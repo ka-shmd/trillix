@@ -13,12 +13,16 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 const (
@@ -38,8 +42,11 @@ const (
 func publishTwoVersions(t *testing.T, userID uuid.UUID) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, userID, "CSV")
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
+	form, err := formsSvc.Create(ctx, userID, "CSV", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -188,8 +195,11 @@ func TestExportCSV_NoVersions_EmptyButValid(t *testing.T) {
 	srv := fullStack(t)
 	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
 	ctx := context.Background()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, ownerID, "черновик")
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
+	form, err := formsSvc.Create(ctx, ownerID, "черновик", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

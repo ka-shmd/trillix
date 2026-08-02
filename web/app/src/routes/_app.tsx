@@ -7,6 +7,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
 import { HeaderSlotContext } from '../shared/headerSlot'
+import { useCurrentWorkspaceId } from '../shared/currentWorkspace'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
 // сессии → редирект на /login (защищённый маршрут не показывает контент).
@@ -26,6 +27,10 @@ function AppLayout() {
   const { data: user } = useQuery(meQueryOptions)
   const logout = useLogout()
   const create = useCreateForm()
+  // Форма создаётся в том пространстве, в котором человек сейчас работает,
+  // а не всегда в личном: кнопка живёт в оболочке, поэтому пространство берётся
+  // из адреса (пусто = личное).
+  const workspaceId = useCurrentWorkspaceId()
   // DOM-узел слота действий в шапке; страницы порталят в него свои кнопки.
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null)
 
@@ -33,8 +38,11 @@ function AppLayout() {
   if (!user) return null
 
   function handleCreate() {
-    create.mutate(undefined, {
-      onSuccess: (form) => navigate({ to: '/forms/$slug/edit', params: { slug: form.slug } }),
+    create.mutate({ workspaceId: workspaceId || undefined }, {
+      onSuccess: (form) =>
+        // search сохраняется: иначе редактор откроется «вне пространства», и
+        // следующая созданная оттуда форма уедет в личное.
+        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
     })
   }
 

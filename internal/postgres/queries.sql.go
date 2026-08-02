@@ -28,6 +28,28 @@ func (q *Queries) ConsumeEmailVerificationToken(ctx context.Context, tokenHash [
 	return user_id, err
 }
 
+const consumeInvitation = `-- name: ConsumeInvitation :one
+UPDATE invitations
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING workspace_id, email, role
+`
+
+type ConsumeInvitationRow struct {
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+}
+
+// Потребление токена атомарным UPDATE: повтор получает 0 строк, поэтому одной
+// ссылкой нельзя войти дважды, и гонка двух вкладок не создаёт двух членств.
+func (q *Queries) ConsumeInvitation(ctx context.Context, tokenHash []byte) (ConsumeInvitationRow, error) {
+	row := q.db.QueryRow(ctx, consumeInvitation, tokenHash)
+	var i ConsumeInvitationRow
+	err := row.Scan(&i.WorkspaceID, &i.Email, &i.Role)
+	return i, err
+}
+
 const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -129,6 +151,17 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
+SELECT count(*)::bigint FROM workspace_members WHERE workspace_id = $1
+`
+
+func (q *Queries) CountWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceMembers, workspaceID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createEmailVerificationToken = `-- name: CreateEmailVerificationToken :exec
@@ -266,6 +299,36 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return err
 }
 
+const createInvitation = `-- name: CreateInvitation :exec
+INSERT INTO invitations (token_hash, workspace_id, email, role, invited_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type CreateInvitationParams struct {
+	TokenHash   []byte
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+	InvitedBy   uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+}
+
+// Приглашение и письмо кладутся ОДНОЙ транзакцией (transactional outbox): либо
+// есть и ссылка, и письмо в очереди, либо ничего. Повторное приглашение тому же
+// адресу заменяет непринятое (частичный UNIQUE в 0017) — ON CONFLICT сносит
+// прежний токен, чтобы годной осталась ровно одна ссылка.
+func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationParams) error {
+	_, err := q.db.Exec(ctx, createInvitation,
+		arg.TokenHash,
+		arg.WorkspaceID,
+		arg.Email,
+		arg.Role,
+		arg.InvitedBy,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const createPasswordResetToken = `-- name: CreatePasswordResetToken :exec
 INSERT INTO password_reset_tokens (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -281,6 +344,33 @@ type CreatePasswordResetTokenParams struct {
 func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) error {
 	_, err := q.db.Exec(ctx, createPasswordResetToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
 	return err
+}
+
+const createPersonalWorkspace = `-- name: CreatePersonalWorkspace :one
+INSERT INTO workspaces (id, name, personal_user_id)
+VALUES ($1, $2, $3)
+RETURNING id, name, created_at
+`
+
+type CreatePersonalWorkspaceParams struct {
+	ID             uuid.UUID
+	Name           string
+	PersonalUserID pgtype.UUID
+}
+
+type CreatePersonalWorkspaceRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Личное пространство регистрации: personal_user_id — и пометка «личное», и
+// ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
+func (q *Queries) CreatePersonalWorkspace(ctx context.Context, arg CreatePersonalWorkspaceParams) (CreatePersonalWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, createPersonalWorkspace, arg.ID, arg.Name, arg.PersonalUserID)
+	var i CreatePersonalWorkspaceRow
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
 }
 
 const createSession = `-- name: CreateSession :exec
@@ -300,20 +390,20 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createSubscription = `-- name: CreateSubscription :exec
-INSERT INTO subscriptions (workspace_id, plan_code)
+INSERT INTO subscriptions (user_id, plan_code)
 VALUES ($1, $2)
 `
 
 type CreateSubscriptionParams struct {
-	WorkspaceID uuid.UUID
-	PlanCode    string
+	UserID   uuid.UUID
+	PlanCode string
 }
 
-// Подписка личного воркспейса — четвёртая строка транзакции регистрации
-// (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
-// лимита обрастает веткой «а если строки нет».
+// Подписка АККАУНТА — четвёртая строка транзакции регистрации (0014, фаза 17;
+// субъект переехал на аккаунт в 0016). Аккаунта без подписки не бывает: иначе
+// каждая проверка лимита обрастает веткой «а если строки нет».
 func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscriptionParams) error {
-	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.PlanCode)
+	_, err := q.db.Exec(ctx, createSubscription, arg.UserID, arg.PlanCode)
 	return err
 }
 
@@ -355,9 +445,21 @@ type CreateWorkspaceParams struct {
 	Name string
 }
 
-func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error) {
+type CreateWorkspaceRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Обычное пространство: personal_user_id остаётся NULL. «Личное» — не отдельный
+// вид, а технический признак ровно с двумя следствиями: заводится вместе с
+// аккаунтом (его нельзя удалить и покинуть) и не замораживается. Всё
+// остальное — приглашения, роли, места, права — у пространств одинаковое.
+// Владельца добавляет отдельная строка членства в той же транзакции:
+// пространство без владельца — пространство без плана.
+func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (CreateWorkspaceRow, error) {
 	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Name)
-	var i Workspace
+	var i CreateWorkspaceRow
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
 }
@@ -434,6 +536,43 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteMember = `-- name: DeleteMember :execrows
+DELETE FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
+`
+
+type DeleteMemberParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Удаление участника. role <> 'owner' в условии — сторож последнего владельца
+// на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
+func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMember, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
+DELETE FROM invitations
+WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL
+`
+
+type DeletePendingInvitationParams struct {
+	WorkspaceID uuid.UUID
+	Lower       string
+}
+
+// Снимает непринятое приглашение адресу перед выдачей нового (и обслуживает
+// отзыв приглашения владельцем).
+func (q *Queries) DeletePendingInvitation(ctx context.Context, arg DeletePendingInvitationParams) error {
+	_, err := q.db.Exec(ctx, deletePendingInvitation, arg.WorkspaceID, arg.Lower)
+	return err
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -533,17 +672,120 @@ func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) er
 	return err
 }
 
+const getAccessContext = `-- name: GetAccessContext :one
+SELECT m.role,
+       (w.personal_user_id IS NOT NULL)::bool AS is_personal,
+       o.user_id AS owner_id,
+       CASE WHEN m.role = 'owner' THEN 1
+            ELSE 1 + (SELECT count(*) FROM workspace_members m2
+                       WHERE m2.workspace_id = m.workspace_id AND m2.role <> 'owner'
+                         AND (m2.created_at, m2.user_id) <= (m.created_at, m.user_id))
+       END::bigint AS member_rank,
+       (SELECT count(*) FROM workspaces w2
+          JOIN workspace_members o2 ON o2.workspace_id = w2.id AND o2.role = 'owner'
+         WHERE o2.user_id = o.user_id
+           AND w2.personal_user_id IS NULL
+           AND (w2.created_at, w2.id) <= (w.created_at, w.id))::bigint AS team_rank
+FROM workspace_members m
+JOIN workspaces w ON w.id = m.workspace_id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
+WHERE m.workspace_id = $1 AND m.user_id = $2
+`
+
+type GetAccessContextParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+type GetAccessContextRow struct {
+	Role       string
+	IsPersonal bool
+	OwnerID    uuid.UUID
+	MemberRank int64
+	TeamRank   int64
+}
+
+// Всё, что нужно для решения о доступе, ОДНОЙ поездкой: роль спрашивающего,
+// личное ли пространство, кто владелец, и два ранга для заморозки.
+//
+// Два ранга нужны заморозке, и оба по одному правилу «место занимают самые
+// старые» — иначе после даунгрейда состав доступного менялся бы от запроса к
+// запросу:
+//   - team_rank — какое это по счёту ДОПОЛНИТЕЛЬНОЕ пространство владельца;
+//   - member_rank — какой по счёту участник ЭТОГО пространства спрашивает.
+//     Владелец всегда первый: он плательщик, и отрезать его от собственных форм
+//     нельзя ни при каком тарифе.
+func (q *Queries) GetAccessContext(ctx context.Context, arg GetAccessContextParams) (GetAccessContextRow, error) {
+	row := q.db.QueryRow(ctx, getAccessContext, arg.WorkspaceID, arg.UserID)
+	var i GetAccessContextRow
+	err := row.Scan(
+		&i.Role,
+		&i.IsPersonal,
+		&i.OwnerID,
+		&i.MemberRank,
+		&i.TeamRank,
+	)
+	return i, err
+}
+
+const getAccountEntitlements = `-- name: GetAccountEntitlements :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       (SELECT count(*) FROM workspace_members m
+         WHERE m.user_id = s.user_id AND m.role = 'owner')::bigint AS workspaces_owned
+FROM subscriptions s
+JOIN plans p ON p.code = s.plan_code
+WHERE s.user_id = $1
+`
+
+type GetAccountEntitlementsRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	WorkspacesOwned int64
+}
+
+// Состояние тарифа АККАУНТА: то, у чего нет воркспейса-владельца, потому что
+// воркспейса ещё нет (единственный такой ключ сегодня — сколько пространств
+// можно завести). Расход считается здесь же подзапросом: «сколько уже держу» —
+// это число строк владения, а не накопленное за период, поэтому workspace_usage
+// в этом запросе не участвует вовсе.
+func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) (GetAccountEntitlementsRow, error) {
+	row := q.db.QueryRow(ctx, getAccountEntitlements, userID)
+	var i GetAccountEntitlementsRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.WorkspacesOwned,
+	)
+	return i, err
+}
+
+const getEmailByUserID = `-- name: GetEmailByUserID :one
+SELECT email FROM users WHERE id = $1
+`
+
+func (q *Queries) GetEmailByUserID(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getEmailByUserID, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}
+
 const getEntitlements = `-- name: GetEntitlements :one
 
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
 `
 
 type GetEntitlementsParams struct {
@@ -558,7 +800,18 @@ type GetEntitlementsRow struct {
 	SubmissionsUsed int64
 }
 
-// Запросы модуля entitlements. Схема — migrations/0014_billing. Генерация: `make sqlc`.
+// Запросы модуля entitlements. Схема — migrations/0014_billing и 0016.
+// Генерация: `make sqlc`.
+//
+// С 0016 подписка принадлежит АККАУНТУ, а воркспейс работает по плану своего
+// владельца — единственного участника с role='owner' (ADR §10). Отсюда лишний
+// JOIN в обоих запросах: колонки-копии владельца в workspaces нет намеренно, она
+// разъезжалась бы при передаче владения. Цена джойна нулевая — workspace_id
+// является префиксом первичного ключа workspace_members.
+//
+// role='owner' здесь — резолв ПЛАТЕЛЬЩИКА, а не решение о доступе: правило
+// «право спрашивается по действию, а не по роли» (internal/CLAUDE.md) касается
+// Go-кода авторизации и этих запросов не затрагивает.
 // Состояние тарифа воркспейса на период — ОДНОЙ поездкой: запрос стоит на
 // горячем пути приёма ответа, и делить его на «план» и «расход» значило бы
 // удвоить эту цену. LEFT JOIN — расхода за период может ещё не быть (первый
@@ -579,13 +832,15 @@ const getEntitlementsForUser = `-- name: GetEntitlementsForUser :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
-       coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members mm WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
-JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = $3
+JOIN workspace_members me ON me.workspace_id = o.workspace_id AND me.user_id = $3
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
 `
 
 type GetEntitlementsForUserParams struct {
@@ -599,11 +854,19 @@ type GetEntitlementsForUserRow struct {
 	PlanTitle       string
 	Limits          []byte
 	SubmissionsUsed int64
+	MembersCount    int64
 }
 
 // То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
-// членству (инвариант 1: id воркспейса из URL правом доступа не является).
-// Не член → 0 строк → 404, существование чужого воркспейса не раскрывается.
+// членству СПРАШИВАЮЩЕГО (инвариант 1: id воркспейса из URL правом доступа не
+// является). Не член → 0 строк → 404, существование чужого воркспейса не
+// раскрывается. Расход по-прежнему считается на воркспейс, а не на аккаунт:
+// умножить лимит несколькими пространствами нельзя (на Pro лимита ответов нет,
+// на Free воркспейс ровно один) — ADR §10.
+// Счётчик участников входит СЮДА, но не в GetEntitlements: снимок рисуется раз
+// на открытие страницы тарифа, а GetEntitlements стоит на горячем пути приёма
+// ответа. Без него страница показывала бы «Участников 0 из N» при полном
+// пространстве — цифра противоречила бы отказу на кнопке «Пригласить».
 func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlementsForUserParams) (GetEntitlementsForUserRow, error) {
 	row := q.db.QueryRow(ctx, getEntitlementsForUser, arg.WorkspaceID, arg.Period, arg.UserID)
 	var i GetEntitlementsForUserRow
@@ -612,6 +875,51 @@ func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlement
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.MembersCount,
+	)
+	return i, err
+}
+
+const getEntitlementsWithMembers = `-- name: GetEntitlementsWithMembers :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
+`
+
+type GetEntitlementsWithMembersParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsWithMembersRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	SubmissionsUsed int64
+	MembersCount    int64
+}
+
+// То же состояние плюс счётчик участников — для гейта мест. Отдельным запросом,
+// а не колонкой в GetEntitlements: тот стоит на горячем пути приёма ответа, и
+// подсчёт участников был бы там платой за то, что нужно одному редкому
+// действию — приглашению.
+func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitlementsWithMembersParams) (GetEntitlementsWithMembersRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsWithMembers, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsWithMembersRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+		&i.MembersCount,
 	)
 	return i, err
 }
@@ -772,13 +1080,63 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getInvitation = `-- name: GetInvitation :one
+SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
+FROM invitations i
+JOIN workspaces w ON w.id = i.workspace_id
+WHERE i.token_hash = $1
+`
+
+type GetInvitationRow struct {
+	WorkspaceID   uuid.UUID
+	Email         string
+	Role          string
+	ExpiresAt     pgtype.Timestamptz
+	UsedAt        pgtype.Timestamptz
+	WorkspaceName string
+}
+
+// Приглашение по токену — для экрана «вас приглашают». Отдаёт заодно название
+// пространства: показать его нужно ДО принятия, а членства ещё нет.
+func (q *Queries) GetInvitation(ctx context.Context, tokenHash []byte) (GetInvitationRow, error) {
+	row := q.db.QueryRow(ctx, getInvitation, tokenHash)
+	var i GetInvitationRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Email,
+		&i.Role,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.WorkspaceName,
+	)
+	return i, err
+}
+
+const getMemberRole = `-- name: GetMemberRole :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2
+`
+
+type GetMemberRoleParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Роль участника: основа проверки прав (Can). Нет строки → не участник, и это
+// 404, а не 403 — существование чужого пространства не раскрывается.
+func (q *Queries) GetMemberRole(ctx context.Context, arg GetMemberRoleParams) (string, error) {
+	row := q.db.QueryRow(ctx, getMemberRole, arg.WorkspaceID, arg.UserID)
+	var role string
+	err := row.Scan(&role)
+	return role, err
+}
+
 const getPersonalWorkspace = `-- name: GetPersonalWorkspace :one
 
-SELECT workspace_id
-FROM workspace_members
-WHERE user_id = $1
-ORDER BY created_at ASC
-LIMIT 1
+SELECT id
+FROM workspaces
+WHERE personal_user_id = $1
 `
 
 // Запросы модуля forms. Схема — migrations/0003_forms. Генерация: `make sqlc`.
@@ -789,13 +1147,16 @@ LIMIT 1
 // и так знает версию (при публикации — из InsertFormVersion, иначе переносит из
 // заранее прочитанной формы), а коррелированный подзапрос в RETURNING sqlc считает
 // NOT NULL, из-за чего скан NULL (черновик) на них падал бы.
-// Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
-// «Текущий воркспейс» дашборда, куда кладутся и откуда читаются формы.
-func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getPersonalWorkspace, userID)
-	var workspace_id uuid.UUID
-	err := row.Scan(&workspace_id)
-	return workspace_id, err
+// ЛИЧНОЕ пространство пользователя — то, куда попадают формы, когда пространство
+// не названо явно. С 0016 оно помечено колонкой, а не выводится из «самого
+// раннего членства»: членство в чужом пространстве старше собственной
+// регистрации невозможно сегодня, но станет возможным ошибкой в любой момент,
+// а цена такой ошибки — формы, уехавшие в чужую папку.
+func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtype.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getPersonalWorkspace, personalUserID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
@@ -948,6 +1309,41 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 	return i, err
 }
 
+const getUserIDByEmail = `-- name: GetUserIDByEmail :one
+SELECT id FROM users WHERE email = lower($1)
+`
+
+func (q *Queries) GetUserIDByEmail(ctx context.Context, lower string) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getUserIDByEmail, lower)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getWorkspaceByID = `-- name: GetWorkspaceByID :one
+SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+FROM workspaces WHERE id = $1
+`
+
+type GetWorkspaceByIDRow struct {
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  pgtype.Timestamptz
+	IsPersonal bool
+}
+
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorkspaceByIDRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceByID, id)
+	var i GetWorkspaceByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.IsPersonal,
+	)
+	return i, err
+}
+
 const insertFormVersion = `-- name: InsertFormVersion :one
 INSERT INTO form_versions (id, form_id, version, schema)
 VALUES ($1, $2, $3, $4)
@@ -1038,27 +1434,6 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const isWorkspaceMember = `-- name: IsWorkspaceMember :one
-SELECT EXISTS (
-    SELECT 1 FROM workspace_members
-    WHERE workspace_id = $1 AND user_id = $2
-)
-`
-
-type IsWorkspaceMemberParams struct {
-	WorkspaceID uuid.UUID
-	UserID      uuid.UUID
-}
-
-// Проверка права доступа к ресурсу: состоит ли пользователь в воркспейсе формы.
-// Основа анти-IDOR — id формы из URL не доказывает право (ARCHITECTURE §4.3).
-func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isWorkspaceMember, arg.WorkspaceID, arg.UserID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const listFormNames = `-- name: ListFormNames :many
@@ -1261,6 +1636,41 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 	return items, nil
 }
 
+const listPendingInvitations = `-- name: ListPendingInvitations :many
+SELECT email, role, expires_at
+FROM invitations
+WHERE workspace_id = $1 AND used_at IS NULL AND expires_at > now()
+ORDER BY created_at ASC
+`
+
+type ListPendingInvitationsRow struct {
+	Email     string
+	Role      string
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Непринятые и не истёкшие приглашения — их видно на той же странице, что и
+// участников: «позвали, но ещё не вошёл» — это состояние пространства.
+func (q *Queries) ListPendingInvitations(ctx context.Context, workspaceID uuid.UUID) ([]ListPendingInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingInvitations, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPendingInvitationsRow
+	for rows.Next() {
+		var i ListPendingInvitationsRow
+		if err := rows.Scan(&i.Email, &i.Role, &i.ExpiresAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingOutbox = `-- name: ListPendingOutbox :many
 SELECT id, channel, payload, attempts
 FROM outbox
@@ -1407,31 +1817,91 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
+const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
+SELECT m.user_id, u.email, m.role, m.created_at
+FROM workspace_members m
+JOIN users u ON u.id = m.user_id
+WHERE m.workspace_id = $1
+ORDER BY (m.role = 'owner') DESC, m.created_at ASC
+`
+
+type ListWorkspaceMembersRow struct {
+	UserID    uuid.UUID
+	Email     string
+	Role      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Участники пространства: кто и в какой роли. Владелец первым (сортировка по
+// роли), дальше по времени вступления — порядок детерминированный.
+func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceMembersRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceMembers, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceMembersRow
+	for rows.Next() {
+		var i ListWorkspaceMembersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Role,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
-SELECT w.id, w.name, w.created_at
+SELECT w.id, w.name, w.created_at,
+       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1
 ORDER BY w.created_at ASC
 `
 
+type ListWorkspacesByUserRow struct {
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  pgtype.Timestamptz
+	IsPersonal bool
+}
+
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
 // workspace_members). Генерация: `make sqlc`.
-// Воркспейсы, в которых состоит пользователь. JOIN через workspace_members:
+// Пространства, в которых состоит пользователь. JOIN через workspace_members:
 // возвращаются только пространства с членством (инвариант доступа — id из URL
-// права не даёт). В MVP на пользователя ровно один (личный, созданный при
-// регистрации); порядок по created_at (старейший первым) — детерминированно.
-func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
+// права не даёт). Личное создаётся регистрацией и всегда первое: сортировка по
+// created_at ставит его в начало, потому что оно старше любого другого.
+//
+// is_personal вычисляется сравнением с personal_user_id, а не отдаётся сырым:
+// кабинету важно «личное ли оно ДЛЯ МЕНЯ», а не чьё оно вообще. IS NOT DISTINCT
+// FROM, а не «=»: у неличного пространства personal_user_id равен NULL, и
+// обычное сравнение дало бы NULL вместо false — то есть непустой bool в Go.
+func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workspace
+	var items []ListWorkspacesByUserRow
 	for rows.Next() {
-		var i Workspace
-		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
+		var i ListWorkspacesByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.IsPersonal,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1541,6 +2011,21 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const purgeExpiredInvitations = `-- name: PurgeExpiredInvitations :execrows
+DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL
+`
+
+// Фоновая чистка: истёкшие и уже использованные приглашения не нужны никому —
+// ни ссылка, ни история (кто кого звал, видно по членству). Индекс
+// idx_invitations_expires заведён ровно под этот запрос.
+func (q *Queries) PurgeExpiredInvitations(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeExpiredInvitations)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revealHiddenSubmissions = `-- name: RevealHiddenSubmissions :execrows

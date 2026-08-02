@@ -188,23 +188,11 @@ type Repo struct{}
 
 // GetPersonalWorkspace возвращает id личного воркспейса пользователя.
 func (Repo) GetPersonalWorkspace(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (uuid.UUID, error) {
-	wsID, err := postgres.New(db).GetPersonalWorkspace(ctx, userID)
+	wsID, err := postgres.New(db).GetPersonalWorkspace(ctx, pgtype.UUID{Bytes: userID, Valid: true})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("get personal workspace: %w", err)
 	}
 	return wsID, nil
-}
-
-// IsWorkspaceMember сообщает, состоит ли пользователь в воркспейсе (анти-IDOR).
-func (Repo) IsWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (bool, error) {
-	ok, err := postgres.New(db).IsWorkspaceMember(ctx, postgres.IsWorkspaceMemberParams{
-		WorkspaceID: workspaceID,
-		UserID:      userID,
-	})
-	if err != nil {
-		return false, fmt.Errorf("is workspace member: %w", err)
-	}
-	return ok, nil
 }
 
 func (Repo) CreateForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string) (Form, error) {

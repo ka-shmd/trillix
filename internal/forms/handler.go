@@ -30,7 +30,7 @@ type Middleware = func(http.Handler) http.Handler
 
 // formsService — интерфейс сервиса, нужный транспорту (реализация — *Service).
 type formsService interface {
-	Create(ctx context.Context, userID uuid.UUID, title string) (Form, error)
+	Create(ctx context.Context, userID uuid.UUID, title string, workspaceID *uuid.UUID) (Form, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -133,6 +133,9 @@ type listResponse struct {
 
 type titleRequest struct {
 	Title string `json:"title"`
+	// workspaceId — в каком пространстве заводим форму. Отсутствует = личное:
+	// кабинет присылает его, только когда работает не в личном.
+	WorkspaceID *string `json:"workspaceId"`
 }
 
 // patchRequest — тело PATCH /forms/{id}. Указатели различают «поле отсутствует»
@@ -224,12 +227,17 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit := parseLimit(r.URL.Query().Get("limit"))
+	wsID, ok := parseWorkspaceQuery(w, r)
+	if !ok {
+		return
+	}
 
 	page, err := h.svc.List(r.Context(), userID, ListOptions{
-		Search: r.URL.Query().Get("q"),
-		Sort:   sort,
-		After:  after,
-		Limit:  limit,
+		Search:      r.URL.Query().Get("q"),
+		Sort:        sort,
+		After:       after,
+		Limit:       limit,
+		WorkspaceID: wsID,
 	})
 	if err != nil {
 		httpserver.WriteError(w, r, err)
@@ -257,7 +265,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	form, err := h.svc.Create(r.Context(), userID, req.Title)
+	wsID, ok := parseWorkspaceID(w, r, req.WorkspaceID)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Create(r.Context(), userID, req.Title, wsID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -454,6 +466,29 @@ func parseFormID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 
 // decodeTitle читает необязательное тело {title}. Пустое тело допустимо (создание
 // формы без названия → дефолт на сервисе).
+// parseWorkspaceQuery читает ?workspaceId= списка. Отсутствие — законно и
+// означает личное пространство; мусор вместо uuid — ошибка ввода, а не молчаливый
+// откат к личному: иначе опечатка в id показала бы чужой на вид, но свой список.
+func parseWorkspaceQuery(w http.ResponseWriter, r *http.Request) (*uuid.UUID, bool) {
+	raw := r.URL.Query().Get("workspaceId")
+	if raw == "" {
+		return nil, true
+	}
+	return parseWorkspaceID(w, r, &raw)
+}
+
+func parseWorkspaceID(w http.ResponseWriter, r *http.Request, raw *string) (*uuid.UUID, bool) {
+	if raw == nil {
+		return nil, true
+	}
+	id, err := uuid.Parse(*raw)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: workspaceId не uuid", domain.ErrValidation))
+		return nil, false
+	}
+	return &id, true
+}
+
 func decodeTitle(w http.ResponseWriter, r *http.Request) (titleRequest, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
 	body, err := io.ReadAll(r.Body)

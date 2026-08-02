@@ -21,6 +21,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 // Демо-пользователь и объём сидирования. Учётка чисто dev-фикстура (пароль —
@@ -76,7 +77,9 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	authSvc := seedAuthService(pool)
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{},
+		workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{},
+			entitlements.NewService(pool, entitlements.Repo{}, time.Now), nil, ""))
 
 	// Создать демо-пользователя или найти уже существующего.
 	user, _, err := authSvc.Register(ctx, seedEmail, seedPassword)
@@ -105,7 +108,7 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 
 	for i := 1; i <= seedFormsN; i++ {
 		title := fmt.Sprintf("Демо-форма №%02d", i)
-		if _, err := formsSvc.Create(ctx, user.ID, title); err != nil {
+		if _, err := formsSvc.Create(ctx, user.ID, title, nil); err != nil {
 			return fmt.Errorf("create seed form %d: %w", i, err)
 		}
 	}
@@ -189,7 +192,7 @@ func exportSchemaV2() domain.FormSchema {
 // напрямую в submissions одной транзакцией (быстро; путь приёма с антиспамом здесь
 // не нужен). Опции выбираются случайно — CSV показывает разные подписи.
 func seedExportForm(ctx context.Context, pool *pgxpool.Pool, formsSvc *forms.Service, userID uuid.UUID, log *slog.Logger) error {
-	form, err := formsSvc.Create(ctx, userID, "CSV-демо (экспорт)")
+	form, err := formsSvc.Create(ctx, userID, "CSV-демо (экспорт)", nil)
 	if err != nil {
 		return fmt.Errorf("create form: %w", err)
 	}

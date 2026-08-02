@@ -79,6 +79,12 @@ const (
 	// слать письма пачками на свой же ящик).
 	verifyRatePerSec = 1.0 / 12.0
 	verifyBurst      = 5
+	// inviteRatePerSec/inviteBurst — приглашения: письмо уходит на ПРОИЗВОЛЬНЫЙ
+	// адрес, поэтому ведро строже, чем у ручек, пишущих только своему владельцу.
+	// Пять подряд (собрать команду за раз), дальше по одному в две минуты.
+	inviteRatePerSec = 1.0 / 120.0
+	inviteBurst      = 5
+
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
 
@@ -228,10 +234,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	authHandler = authHandler.WithOAuth(authSvc, oauthProviders, oauthLimiter, cfg.FormTokenSecret)
 	log.Info("oauth providers configured", slog.Int("count", len(oauthProviders)))
 
-	workspacesSvc := workspaces.NewService(pool, workspaces.Repo{})
-	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth)
+	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки, приём
+	// ответа и создание пространства. Собирается до всех потребителей.
+	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
 
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
+	// Права в пространстве (фаза 18): их спрашивает forms — поэтому workspaces
+	// собирается раньше него. Обратной зависимости нет: workspaces знает про
+	// тариф, но не про формы.
+	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
+	// Приглашение — единственная ручка, шлющая письмо на произвольный адрес:
+	// ведро по пользователю, темп как у повторного подтверждения почты.
+	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
+
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
 	if err != nil {
@@ -248,15 +264,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки и приём
-	// ответа. Собирается до обоих потребителей, живёт на том же пуле.
-	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
-
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
-	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, authHandler.RequireAuth)
+	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)
@@ -301,6 +313,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("expired password reset tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "invitation-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := workspacesSvc.PurgeExpiredInvitations(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("spent invitations purged", slog.Int64("count", n))
 			}
 			return nil
 		},
