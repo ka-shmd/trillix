@@ -32,13 +32,19 @@ import {
 // терял остальные. Смена параметров = другой ключ = листание с первой страницы,
 // что заодно снимает риск уехать курсором прежней сортировки (сервер такой курсор
 // отвергает).
-export function formsListQueryOptions(params: { q: string; sort: FormsSort }) {
+export function formsListQueryOptions(params: {
+  q: string
+  sort: FormsSort
+  // workspaceId: '' означает личное пространство (параметр не уходит на сервер).
+  workspaceId: string
+}) {
   // Пробелы по краям сервер всё равно срезает, поэтому нормализуем и здесь: иначе
   // « анкета » и «анкета» — две записи кэша с заведомо одинаковым содержимым.
   const q = params.q.trim()
   return infiniteQueryOptions({
-    queryKey: formKeys.listWith({ q, sort: params.sort }),
-    queryFn: ({ pageParam }) => listForms(pageParam, { q, sort: params.sort }),
+    queryKey: formKeys.listWith({ workspaceId: params.workspaceId, q, sort: params.sort }),
+    queryFn: ({ pageParam }) =>
+      listForms(pageParam, { q, sort: params.sort, workspaceId: params.workspaceId || undefined }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })
@@ -56,10 +62,12 @@ export function formDetailQueryOptions(slug: string) {
 
 // Все мутации инвалидируют список (web/CLAUDE.md: забытая инвалидация — баг).
 
+// workspaceId — куда кладём форму; пусто = личное пространство.
 export function useCreateForm() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (title?: string) => createForm(title),
+    mutationFn: (vars: { title?: string; workspaceId?: string } | undefined) =>
+      createForm(vars?.title, vars?.workspaceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
   })
 }

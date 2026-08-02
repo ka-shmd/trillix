@@ -18,6 +18,7 @@ import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthLinkAccountRouteImport } from './routes/_auth/link-account'
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
+import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
@@ -69,6 +70,11 @@ const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
   getParentRoute: () => AuthRoute,
+} as any)
+const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
+  id: '/workspaces/',
+  path: '/workspaces/',
+  getParentRoute: () => AppRoute,
 } as any)
 const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   id: '/forms/',
@@ -124,6 +130,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof AuthResetPasswordRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/forms/': typeof AppFormsIndexRoute
+  '/workspaces/': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof AuthResetPasswordRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/forms': typeof AppFormsIndexRoute
+  '/workspaces': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
@@ -161,6 +169,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
   '/_app/forms/': typeof AppFormsIndexRoute
+  '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/_manage/funnel': typeof AppFormsSlugManageFunnelRoute
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/settings/plan'
     | '/forms/'
+    | '/workspaces/'
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/funnel'
@@ -197,6 +207,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/settings/plan'
     | '/forms'
+    | '/workspaces'
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/funnel'
@@ -216,6 +227,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/settings/plan'
     | '/_app/forms/'
+    | '/_app/workspaces/'
     | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/_manage/funnel'
@@ -294,6 +306,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/forgot-password'
       preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
+    }
+    '/_app/workspaces/': {
+      id: '/_app/workspaces/'
+      path: '/workspaces'
+      fullPath: '/workspaces/'
+      preLoaderRoute: typeof AppWorkspacesIndexRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/forms/': {
       id: '/_app/forms/'
@@ -375,6 +394,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
+  AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
 }
@@ -383,6 +403,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
+  AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
 }
