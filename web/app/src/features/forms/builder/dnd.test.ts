@@ -3,7 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { closestCenter, type ClientRect, type CollisionDetection } from '@dnd-kit/core'
 import { verticalListSortingStrategy } from '@dnd-kit/sortable'
 
-import { canvasSorting, closestVertical } from './dnd'
+import { type BlockType } from '@entities/formSchema'
+import { groupBlocks } from '@fields/groups'
+
+import { canvasSorting, closestVertical, dropSide } from './dnd'
+import { createBuilderStore } from './store'
 
 // Стратегия расступания строк (2026-08-02). Проверяется РЕЗУЛЬТАТ, а не формула: пока
 // элемент тащат, две строки не имеют права оказаться в одном месте. Это ровно то, что
@@ -238,5 +242,60 @@ describe('closestVertical', () => {
   it('вне ряда ведёт себя как обычный ближайший: полноширинные цели не путаются', () => {
     expect(pick(closestVertical, 'textA', 60)).toBe('textB')
     expect(pick(closestVertical, 'textA', 290)).toBe('q2caption')
+  })
+})
+
+// Сторона, по которую встанет элемент, — то, что показывает линия дропа. Проверяется не
+// формулой, а САМИМ стором: предсказание сверяется с тем, где элемент оказался после
+// команды. Иначе ошибка не ловится ничем — линия, нарисованная всегда снизу, при
+// переносе вверх спокойно показывала место, к которому не имела отношения.
+describe('dropSide', () => {
+  const canvasOf = (types: readonly BlockType[]) => {
+    const store = createBuilderStore()
+    for (const t of types) store.getState().addBlock(t)
+    return store
+  }
+
+  const neighbours = (ids: string[], activeId: string) => {
+    const i = ids.indexOf(activeId)
+    return { before: ids[i - 1] ?? null, after: ids[i + 1] ?? null }
+  }
+
+  it('блочный слой: предсказание совпадает с тем, куда блок реально встал', () => {
+    for (const [ai, ti] of [
+      [0, 2],
+      [3, 1],
+      [1, 3],
+      [2, 0],
+    ] as const) {
+      const store = canvasOf(['text', 'short_text', 'email', 'number'])
+      const before = store.getState().blocks.map((b) => b.id)
+      const active = before[ai]!
+      const target = before[ti]!
+      const side = dropSide(before, active, target)
+
+      store.getState().reorderBlocks(active, target)
+      const after = store.getState().blocks.map((b) => b.id)
+      const n = neighbours(after, active)
+      expect(side === 'above' ? n.after : n.before).toBe(target)
+    }
+  })
+
+  it('групповой слой: то же для порядка ГРУПП', () => {
+    for (const [ai, ti] of [
+      [0, 2],
+      [2, 0],
+    ] as const) {
+      const store = canvasOf(['text', 'short_text', 'email'])
+      const order = () => groupBlocks(store.getState().blocks).map((g) => g.id)
+      const before = order()
+      const active = before[ai]!
+      const target = before[ti]!
+      const side = dropSide(before, active, target)
+
+      store.getState().reorderGroups(active, target)
+      const n = neighbours(order(), active)
+      expect(side === 'above' ? n.after : n.before).toBe(target)
+    }
   })
 })

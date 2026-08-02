@@ -57,6 +57,7 @@ import {
   canvasSorting,
   closestVertical,
   DRAG_ACTIVATION_DISTANCE,
+  dropSide,
   noLayoutAnimation,
 } from './dnd'
 import { BlockRow } from './BlockRow'
@@ -411,14 +412,34 @@ export function SlashEditor({
     // Цель «сам активный элемент» — не цель: dnd-kit отдаёт её, пока курсор над самим
     // собой, и линия просто ехала бы за блоком, ничего не показывая.
     const over = overId === activeId ? null : (rawOverRef.current ?? overId)
-    // Куда блок ЛЯЖЕТ относительно цели, решает направление переноса: arrayMove
-    // вставляет на индекс цели, то есть вниз по документу — ПОД неё, вверх — НАД.
-    // Линия обязана это знать: нарисованная всегда снизу, при переносе вверх она
-    // стояла под целью, тогда как блок приземлялся над ней (найдено владельцем).
-    const from = blocks.findIndex((b) => b.id === activeId)
-    const to = over === null ? -1 : blocks.findIndex((b) => b.id === over)
-    setDropLine(measureDropLine(root, over, from >= 0 && to >= 0 && to < from ? 'above' : 'below'))
-    if (!root || !overId || groupIds.has(activeId)) {
+    // Линия живёт на ОБОИХ слоях. Прежде она умела только блочный и искала цель по
+    // data-block-id: при переносе ГРУППЫ цель — groupId, поиск не находил ничего, и
+    // линии не было вовсе — автор не мог понять, поняло ли полотно, что он выносит
+    // вопрос из ряда (найдено владельцем). Поэтому и слой, и порядок, и геометрия
+    // берутся у своего слоя: у группы это её строки целиком.
+    const isGroup = groupIds.has(activeId)
+    const order = isGroup ? groups.map((g) => g.id) : blocks.map((b) => b.id)
+    // У группы цель — её строки целиком, а у группы, стоящей в РЯДУ, — строки всего
+    // ряда: вопрос всё равно ляжет над рядом или под ним целиком (rowBoundaryGroup),
+    // а колонки бывают разной высоты, и линия, отмеренная от края одной из них, встала
+    // бы внутрь ряда.
+    const ownRows = (id: string) =>
+      isGroup ? (groups.find((g) => g.id === id)?.blocks.map((b) => b.id) ?? []) : [id]
+    const targetRows = (id: string) => {
+      const row = isGroup
+        ? rows.find((r) => r.length > 1 && r.some((c) => c.some((g) => g.id === id)))
+        : undefined
+      return row ? row.flat().flatMap((g) => g.blocks.map((b) => b.id)) : ownRows(id)
+    }
+    setDropLine(
+      measureDropLine(
+        root,
+        over === null || isRowZone(over) ? [] : targetRows(over),
+        ownRows(activeId),
+        dropSide(order, activeId, over ?? activeId),
+      ),
+    )
+    if (!root || !overId || isGroup) {
       setFrame(null)
       setWarnFrame(null)
       return
@@ -1009,31 +1030,39 @@ type Rect = { x: number; y: number; w: number; h: number }
 // полноширинной — её заменил дублёр, который показывает готовый результат. Зона =
 // ложная цель для замера, и на ней линии просто нет.
 //
-// СТОРОНА цели — не украшение: `arrayMove` вставляет блок НА индекс цели, поэтому
+// СТОРОНА цели — не украшение: `arrayMove` вставляет элемент НА индекс цели, поэтому
 // перенос вниз по документу кладёт его ПОД цель, а вверх — НАД ней. Линия, всегда
-// нарисованная снизу, при переносе вверх стояла под целью, тогда как блок приземлялся
-// над ней, и показывала место, к которому не имела отношения. Мерится живой rect: цель
-// к этому кадру уже сдвинута sortable, и её живая граница — ровно край открывшейся
-// щели, то есть та самая черта, по которую блок и встанет.
+// нарисованная снизу, при переносе вверх стояла под целью, тогда как элемент
+// приземлялся над ней.
+//
+// Отступ от края цели — ПОЛОВИНА ВЫСОТЫ САМОГО ЭЛЕМЕНТА, а не фиксированные 13px.
+// Щель, которую открывает sortable, ровно с него высотой, и её середина — то место,
+// куда элемент встанет; постоянный отступ отмерял от края цели одинаково в обе
+// стороны, то есть в щели оказывался то у верхнего её края, то у нижнего, и линия
+// стояла то над местом приземления, то под ним в зависимости от направления переноса
+// (найдено владельцем). Мерится живой DOM: цель к этому кадру уже сдвинута, и её
+// граница — настоящий край открывшейся щели.
+//
+// targetIds/activeIds — строки СВОЕГО слоя: у блока это он сам, у группы все её строки.
+// Пустой список целей (её нет, либо цель — зона жеста, у которой свой отклик, §5.1) —
+// линии нет.
 function measureDropLine(
   root: HTMLElement | null,
-  overId: string | null,
+  targetIds: string[],
+  activeIds: string[],
   side: 'above' | 'below',
 ): Rect | null {
-  if (!root || !overId || isRowZone(overId)) return null
+  if (!root || targetIds.length === 0) return null
   const list = root.querySelector<HTMLElement>('ol')
   if (!list) return null
+  const target = measureUnion(root, targetIds)
+  if (!target) return null
   const cr = root.getBoundingClientRect()
   const lr = list.getBoundingClientRect()
-  const el = root.querySelector<HTMLElement>(`[data-block-id="${overId}"]`)
-  if (!el) return null
-  const r = el.getBoundingClientRect()
-  // Линия стоит в просвете между вопросами, а не впритык к границе цели: ровно на
-  // столько её и отодвигают в обе стороны, чтобы «над» и «под» читались зеркально.
-  const inGap = 13
+  const half = (measureUnion(root, activeIds)?.h ?? 0) / 2
   return {
     x: lr.left - cr.left,
-    y: (side === 'above' ? r.top - inGap : r.bottom + inGap) - cr.top,
+    y: side === 'above' ? target.y - half : target.y + target.h + half,
     w: lr.width,
     h: 0,
   }
