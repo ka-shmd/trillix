@@ -322,14 +322,16 @@ func TestSubmit_UnknownSlug_404(t *testing.T) {
 	}
 }
 
-// setQuota включает лимит ответов на плане воркспейса формы тем же UPDATE, каким
-// его включит владелец на проде (гейты приезжают выключенными, спека §8).
+// setQuota включает лимит ответов на плане, по которому работает воркспейс формы:
+// с 0016 это план ВЛАДЕЛЬЦА пространства, отсюда джойн через members. UPDATE —
+// тот же, каким гейт включит владелец на проде (приезжают выключенными, спека §8).
 func setQuota(t *testing.T, slug string, limit int) {
 	t.Helper()
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE plans SET limits = jsonb_set(limits, '{submissions_per_month}', to_jsonb($1::int))
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
-		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
 		limit, slug); err != nil {
 		t.Fatalf("set quota: %v", err)
 	}

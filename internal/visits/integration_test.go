@@ -338,7 +338,8 @@ func setFunnelGate(t *testing.T, slug string, allowed bool) {
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', $1::jsonb)
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
-		               JOIN forms f ON f.workspace_id = s.workspace_id WHERE f.slug = $2)`,
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
 		value, slug); err != nil {
 		t.Fatalf("set funnel gate: %v", err)
 	}

@@ -122,7 +122,7 @@ func (f *fakeStore) AddWorkspaceMember(_ context.Context, _ postgres.DBTX, _, _ 
 	return nil
 }
 
-func (f *fakeStore) CreateSubscription(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID, planCode string) error {
+func (f *fakeStore) CreateSubscription(_ context.Context, _ postgres.DBTX, userID uuid.UUID, planCode string) error {
 	f.createdPlanCode = planCode
 	f.subscriptionUserID = userID
 	return nil
