@@ -5,7 +5,7 @@ import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
 
 import { ColorPicker } from './ColorPicker'
-import { nextCoverY } from './coverDrag'
+import { coverOverflowPx, nextCoverY } from './coverDrag'
 import { uploadImage } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -124,7 +124,12 @@ export function CoverArea({ formId }: { formId: string }) {
   // которой выборщик цвета нагрузил TD-32, и повторять её вторым потребителем незачем.
   const [moving, setMoving] = useState(false)
   const [draftY, setDraftY] = useState<number | null>(null)
-  const drag = useRef<{ pointerY: number; startY: number; y: number } | null>(null)
+  // overflow — ход жеста в пикселях (на сколько картинка перерастает полосу). Меряется
+  // ОДИН раз, на нажатии: в середине протяжки ни размер полосы, ни размер картинки не
+  // меняются, а замер на каждом кадре стоил бы принудительного пересчёта раскладки.
+  const drag = useRef<{ pointerY: number; startY: number; y: number; overflow: number } | null>(
+    null,
+  )
 
   if (!cover) return null
 
@@ -151,15 +156,27 @@ export function CoverArea({ formId }: { formId: string }) {
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!moving || !cover?.imageKey) return
+    const band = bandRef.current
+    const img = band?.querySelector('img')
     e.currentTarget.setPointerCapture(e.pointerId)
-    drag.current = { pointerY: e.clientY, startY: coverY(cover), y: coverY(cover) }
+    drag.current = {
+      pointerY: e.clientY,
+      startY: coverY(cover),
+      y: coverY(cover),
+      overflow: coverOverflowPx(
+        img?.naturalWidth ?? 0,
+        img?.naturalHeight ?? 0,
+        band?.offsetWidth ?? 0,
+        band?.offsetHeight ?? 0,
+      ),
+    }
     setDraftY(coverY(cover))
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current
     if (!d) return
-    d.y = nextCoverY(d.startY, d.pointerY, e.clientY, bandRef.current?.offsetHeight ?? 0)
+    d.y = nextCoverY(d.startY, d.pointerY, e.clientY, d.overflow)
     setDraftY(d.y)
   }
 
@@ -167,11 +184,14 @@ export function CoverArea({ formId }: { formId: string }) {
   // pointerup React может не успеть перерисоваться, и состояние отстанет на кадр —
   // жест тогда сохранил бы предпоследнее положение. Отставание состояния от жеста —
   // тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
+  //
+  // Округление — ровно здесь: схема принимает только целые проценты, а во время жеста
+  // значение дробное, чтобы картинка ехала плавно.
   function onPointerUp() {
     const d = drag.current
     if (!d) return
     drag.current = null
-    setCoverY(d.y)
+    setCoverY(Math.round(d.y))
     setDraftY(null)
   }
 
