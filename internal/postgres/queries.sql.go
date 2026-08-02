@@ -300,20 +300,25 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createSubscription = `-- name: CreateSubscription :exec
-INSERT INTO subscriptions (workspace_id, plan_code)
-VALUES ($1, $2)
+INSERT INTO subscriptions (workspace_id, user_id, plan_code)
+VALUES ($1, $2, $3)
 `
 
 type CreateSubscriptionParams struct {
 	WorkspaceID uuid.UUID
+	UserID      pgtype.UUID
 	PlanCode    string
 }
 
-// Подписка личного воркспейса — четвёртая строка транзакции регистрации
-// (0014, фаза 17). Воркспейса без подписки не бывает: иначе каждая проверка
-// лимита обрастает веткой «а если строки нет».
+// Подписка АККАУНТА — четвёртая строка транзакции регистрации (0014, фаза 17;
+// субъект переехал на аккаунт в 0016). Аккаунта без подписки не бывает: иначе
+// каждая проверка лимита обрастает веткой «а если строки нет».
+//
+// workspace_id заполняется до снятия колонки (0016 аддитивна, PK пока на ней):
+// у личного пространства это оно само, и пока колонка есть, она обязана быть
+// заполненной. Уходит вместе с ней следующим релизом.
 func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscriptionParams) error {
-	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.PlanCode)
+	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.UserID, arg.PlanCode)
 	return err
 }
 
@@ -345,19 +350,28 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createWorkspace = `-- name: CreateWorkspace :one
-INSERT INTO workspaces (id, name)
-VALUES ($1, $2)
+INSERT INTO workspaces (id, name, personal_user_id)
+VALUES ($1, $2, $3)
 RETURNING id, name, created_at
 `
 
 type CreateWorkspaceParams struct {
-	ID   uuid.UUID
-	Name string
+	ID             uuid.UUID
+	Name           string
+	PersonalUserID pgtype.UUID
 }
 
-func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error) {
-	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Name)
-	var i Workspace
+type CreateWorkspaceRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Личное пространство регистрации: personal_user_id — и пометка «личное», и
+// ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
+func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (CreateWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Name, arg.PersonalUserID)
+	var i CreateWorkspaceRow
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
 }
@@ -539,11 +553,12 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
 `
 
 type GetEntitlementsParams struct {
@@ -558,7 +573,18 @@ type GetEntitlementsRow struct {
 	SubmissionsUsed int64
 }
 
-// Запросы модуля entitlements. Схема — migrations/0014_billing. Генерация: `make sqlc`.
+// Запросы модуля entitlements. Схема — migrations/0014_billing и 0016.
+// Генерация: `make sqlc`.
+//
+// С 0016 подписка принадлежит АККАУНТУ, а воркспейс работает по плану своего
+// владельца — единственного участника с role='owner' (ADR §10). Отсюда лишний
+// JOIN в обоих запросах: колонки-копии владельца в workspaces нет намеренно, она
+// разъезжалась бы при передаче владения. Цена джойна нулевая — workspace_id
+// является префиксом первичного ключа workspace_members.
+//
+// role='owner' здесь — резолв ПЛАТЕЛЬЩИКА, а не решение о доступе: правило
+// «право спрашивается по действию, а не по роли» (internal/CLAUDE.md) касается
+// Go-кода авторизации и этих запросов не затрагивает.
 // Состояние тарифа воркспейса на период — ОДНОЙ поездкой: запрос стоит на
 // горячем пути приёма ответа, и делить его на «план» и «расход» значило бы
 // удвоить эту цену. LEFT JOIN — расхода за период может ещё не быть (первый
@@ -580,12 +606,13 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
-JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = $3
+JOIN workspace_members me ON me.workspace_id = o.workspace_id AND me.user_id = $3
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
 `
 
 type GetEntitlementsForUserParams struct {
@@ -602,8 +629,11 @@ type GetEntitlementsForUserRow struct {
 }
 
 // То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
-// членству (инвариант 1: id воркспейса из URL правом доступа не является).
-// Не член → 0 строк → 404, существование чужого воркспейса не раскрывается.
+// членству СПРАШИВАЮЩЕГО (инвариант 1: id воркспейса из URL правом доступа не
+// является). Не член → 0 строк → 404, существование чужого воркспейса не
+// раскрывается. Расход по-прежнему считается на воркспейс, а не на аккаунт:
+// умножить лимит несколькими пространствами нельзя (на Pro лимита ответов нет,
+// на Free воркспейс ровно один) — ADR §10.
 func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlementsForUserParams) (GetEntitlementsForUserRow, error) {
 	row := q.db.QueryRow(ctx, getEntitlementsForUser, arg.WorkspaceID, arg.Period, arg.UserID)
 	var i GetEntitlementsForUserRow
@@ -1416,21 +1446,27 @@ WHERE m.user_id = $1
 ORDER BY w.created_at ASC
 `
 
+type ListWorkspacesByUserRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
 // workspace_members). Генерация: `make sqlc`.
 // Воркспейсы, в которых состоит пользователь. JOIN через workspace_members:
 // возвращаются только пространства с членством (инвариант доступа — id из URL
 // права не даёт). В MVP на пользователя ровно один (личный, созданный при
 // регистрации); порядок по created_at (старейший первым) — детерминированно.
-func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
+func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Workspace
+	var items []ListWorkspacesByUserRow
 	for rows.Next() {
-		var i Workspace
+		var i ListWorkspacesByUserRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.CreatedAt); err != nil {
 			return nil, err
 		}

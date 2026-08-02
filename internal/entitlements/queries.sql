@@ -1,4 +1,15 @@
--- Запросы модуля entitlements. Схема — migrations/0014_billing. Генерация: `make sqlc`.
+-- Запросы модуля entitlements. Схема — migrations/0014_billing и 0016.
+-- Генерация: `make sqlc`.
+--
+-- С 0016 подписка принадлежит АККАУНТУ, а воркспейс работает по плану своего
+-- владельца — единственного участника с role='owner' (ADR §10). Отсюда лишний
+-- JOIN в обоих запросах: колонки-копии владельца в workspaces нет намеренно, она
+-- разъезжалась бы при передаче владения. Цена джойна нулевая — workspace_id
+-- является префиксом первичного ключа workspace_members.
+--
+-- role='owner' здесь — резолв ПЛАТЕЛЬЩИКА, а не решение о доступе: правило
+-- «право спрашивается по действию, а не по роли» (internal/CLAUDE.md) касается
+-- Go-кода авторизации и этих запросов не затрагивает.
 
 -- Состояние тарифа воркспейса на период — ОДНОЙ поездкой: запрос стоит на
 -- горячем пути приёма ответа, и делить его на «план» и «расход» значило бы
@@ -9,23 +20,28 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1;
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner';
 
 -- То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
--- членству (инвариант 1: id воркспейса из URL правом доступа не является).
--- Не член → 0 строк → 404, существование чужого воркспейса не раскрывается.
+-- членству СПРАШИВАЮЩЕГО (инвариант 1: id воркспейса из URL правом доступа не
+-- является). Не член → 0 строк → 404, существование чужого воркспейса не
+-- раскрывается. Расход по-прежнему считается на воркспейс, а не на аккаунт:
+-- умножить лимит несколькими пространствами нельзя (на Pro лимита ответов нет,
+-- на Free воркспейс ровно один) — ADR §10.
 -- name: GetEntitlementsForUser :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used
-FROM subscriptions s
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
-JOIN workspace_members m ON m.workspace_id = s.workspace_id AND m.user_id = $3
+JOIN workspace_members me ON me.workspace_id = o.workspace_id AND me.user_id = $3
 LEFT JOIN workspace_usage u
-       ON u.workspace_id = s.workspace_id AND u.period = $2
-WHERE s.workspace_id = $1;
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner';

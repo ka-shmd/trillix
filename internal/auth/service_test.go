@@ -31,9 +31,13 @@ type fakeStore struct {
 	createdUser      bool
 	createdWorkspace bool
 	createdMember    bool
-	createdPlanCode  string // план подписки личного воркспейса ("" — подписки не завели)
-	createdSession   bool
-	deletedSession   bool
+	createdPlanCode  string // план подписки аккаунта ("" — подписки не завели)
+	// Кому принадлежат заведённые строки: личное пространство помечается своим
+	// хозяином (workspaces.personal_user_id), подписка — аккаунтом (0016).
+	workspacePersonalUserID uuid.UUID
+	subscriptionUserID      uuid.UUID
+	createdSession          bool
+	deletedSession          bool
 
 	deleteExpiredN   int64
 	deleteExpiredErr error
@@ -107,8 +111,9 @@ func (f *fakeStore) GetUserByEmail(_ context.Context, _ postgres.DBTX, _ string)
 	return f.user, nil
 }
 
-func (f *fakeStore) CreateWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+func (f *fakeStore) CreateWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {
 	f.createdWorkspace = true
+	f.workspacePersonalUserID = personalUserID
 	return Workspace{ID: id, Name: name, CreatedAt: time.Now()}, nil
 }
 
@@ -117,8 +122,9 @@ func (f *fakeStore) AddWorkspaceMember(_ context.Context, _ postgres.DBTX, _, _ 
 	return nil
 }
 
-func (f *fakeStore) CreateSubscription(_ context.Context, _ postgres.DBTX, _ uuid.UUID, planCode string) error {
+func (f *fakeStore) CreateSubscription(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID, planCode string) error {
 	f.createdPlanCode = planCode
+	f.subscriptionUserID = userID
 	return nil
 }
 
@@ -243,10 +249,20 @@ func TestRegister_Success(t *testing.T) {
 	if !store.createdVerifyToken {
 		t.Error("при регистрации не создан токен подтверждения email")
 	}
-	// Воркспейса без подписки не бывает (0014): иначе проверка лимита получает
-	// ветку «а если строки нет», и однажды эта ветка разрешит лишнее.
+	// Аккаунта без подписки не бывает (0014, субъект переехал на аккаунт в 0016):
+	// иначе проверка лимита получает ветку «а если строки нет», и однажды эта
+	// ветка разрешит лишнее.
 	if store.createdPlanCode != defaultPlanCode {
-		t.Errorf("подписка личного воркспейса: план %q, ждали %q", store.createdPlanCode, defaultPlanCode)
+		t.Errorf("подписка аккаунта: план %q, ждали %q", store.createdPlanCode, defaultPlanCode)
+	}
+	// Обе строки принадлежат заведённому пользователю: личное пространство
+	// помечено им (иначе оно не найдётся как личное и попадёт под заморозку
+	// даунгрейда), подписка выписана на него (иначе план не резолвится вовсе).
+	if store.workspacePersonalUserID != user.ID {
+		t.Errorf("личное пространство помечено %v, ждали %v", store.workspacePersonalUserID, user.ID)
+	}
+	if store.subscriptionUserID != user.ID {
+		t.Errorf("подписка выписана на %v, ждали %v", store.subscriptionUserID, user.ID)
 	}
 }
 

@@ -176,13 +176,13 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, p
 			return e
 		}
 		user = u
-		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName); e != nil {
+		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName, userID); e != nil {
 			return e
 		}
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
 			return e
 		}
-		if e := s.repo.CreateSubscription(ctx, tx, wsID, defaultPlanCode); e != nil {
+		if e := s.repo.CreateSubscription(ctx, tx, wsID, userID, defaultPlanCode); e != nil {
 			return e
 		}
 		if e := s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID); e != nil {

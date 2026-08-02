@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	personalWorkspaceName = "Personal"
+	personalWorkspaceName = "Личное пространство"
 	roleOwner             = "owner"
 
 	// defaultPlanCode — план личного воркспейса при регистрации (0014, фаза 17).
@@ -59,9 +59,9 @@ type Store interface {
 	GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error)
 	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
-	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
+	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
-	CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, planCode string) error
+	CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, planCode string) error
 	CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	GetSessionUser(ctx context.Context, db postgres.DBTX, tokenHash []byte) (User, error)
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
@@ -137,13 +137,13 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 			return e
 		}
 		user = u
-		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName); e != nil {
+		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName, userID); e != nil {
 			return e
 		}
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
 			return e
 		}
-		if e := s.repo.CreateSubscription(ctx, tx, wsID, defaultPlanCode); e != nil {
+		if e := s.repo.CreateSubscription(ctx, tx, wsID, userID, defaultPlanCode); e != nil {
 			return e
 		}
 		return s.enqueueVerificationEmail(ctx, tx, user)
