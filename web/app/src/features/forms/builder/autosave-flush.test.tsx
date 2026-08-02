@@ -88,3 +88,35 @@ describe('автосейв схемы на уходе с полотна (TD-42)'
     expect(saveDraftSchema).not.toHaveBeenCalled()
   })
 })
+
+// Подписка автосейва сверяет поля документа поимённо, и поле, забытое в этом списке,
+// НЕ планирует сохранение: правка ставит dirty, индикатор показывает «Сохранено», а
+// на сервер не уезжает ничего — до тех пор, пока её случайно не унесёт чужой автосейв.
+// Ловится только так: комментарий над списком просит об этом с фазы 15, а сторожа
+// не было, и оформление страницы (фаза обложки) в список действительно не попало.
+describe('подписка автосейва видит все поля документа', () => {
+  const edits: Record<string, (store: StoreApi<BuilderStore>) => void> = {
+    блоки: (s) => s.getState().updateBlock('inp', { required: true }),
+    'текст кнопки': (s) => s.getState().setSubmitLabel('Готово'),
+    'экран после отправки': (s) =>
+      s.getState().setAfterSubmit({ thankYouText: 'Спасибо!', redirectUrl: '' }),
+    обложка: (s) => s.getState().setCover({ color: '#ff8800' }),
+    'сдвиг обложки': (s) => {
+      s.getState().setCover({ imageKey: 'ws/a.jpg' })
+      s.getState().setCoverY(20)
+    },
+    логотип: (s) => s.getState().setLogo({ imageKey: 'ws/logo.png' }),
+  }
+
+  for (const [name, edit] of Object.entries(edits)) {
+    it(`правка «${name}» планирует сохранение`, () => {
+      const { store, unmount } = setup()
+
+      act(() => edit(store))
+      // Дебаунс ещё идёт — на уходе правка обязана досылаться.
+      unmount()
+
+      expect(saveDraftSchema).toHaveBeenCalledTimes(1)
+    })
+  }
+})

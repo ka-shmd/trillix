@@ -4,6 +4,7 @@ import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
@@ -234,89 +235,99 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   const hasFieldErrors = Object.keys(errors).length > 0
 
   return (
-    <main className="rf-page">
-      {formTitle ? (
-        <BlockField block={formTitle} />
-      ) : (
-        form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
-      )}
-      <div className="rf-form">
-        {packRows(groupBlocks(blocks)).map((row) => {
-          // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
-          // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
-          // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
-          // спека §5); обёртка ряда — только у ряда из двоих.
-          const renderGroup = (group: (typeof row)[number][number]) => (
-            <div key={group.id} className="rf-group">
-              {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
+    // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
+    // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
+    <>
+      <CoverBand cover={form.schema.cover} />
+      <main className={pageClass(form.schema.cover)}>
+        <LogoMark logo={form.schema.logo} over={Boolean(form.schema.cover)} />
+        {formTitle ? (
+          <BlockField block={formTitle} />
+        ) : (
+          form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
+        )}
+        <div className="rf-form">
+          {packRows(groupBlocks(blocks)).map((row) => {
+            // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
+            // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
+            // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
+            // спека §5); обёртка ряда — только у ряда из двоих.
+            const renderGroup = (group: (typeof row)[number][number]) => (
+              <div key={group.id} className="rf-group">
+                {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
                   бок той же обёрткой .rf-row, что и два вопроса. Ряд из одного
                   остаётся прямым ребёнком .rf-group. */}
-              {packGroupRows(group.blocks).map((innerRow) => {
-                const render = (block: (typeof innerRow)[number][number]) => (
-                  // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
-                  <FocusReporter key={block.id} index={blocks.indexOf(block)} onReach={markFurthest}>
-                    <BlockField
-                      block={block}
-                      captionText={groups.get(block.groupId)?.caption}
-                      captionRequired={groups.get(block.groupId)?.required}
-                      value={answers[block.id]}
-                      onChange={(value: Answer) => onChange(block.id, value)}
-                      onBlur={() => onBlur(block.id)}
-                      error={errors[block.id]}
-                      disabled={locked}
-                    />
-                  </FocusReporter>
-                )
-                return innerRow.length > 1 ? (
-                  <div key={innerRow[0]![0]!.id} className="rf-row">
-                    {innerRow.map((cell) => (
-                      <div key={cell[0]!.id} className="rf-cell">
-                        {cell.map(render)}
-                      </div>
-                    ))}
+                {packGroupRows(group.blocks).map((innerRow) => {
+                  const render = (block: (typeof innerRow)[number][number]) => (
+                    // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
+                    <FocusReporter
+                      key={block.id}
+                      index={blocks.indexOf(block)}
+                      onReach={markFurthest}
+                    >
+                      <BlockField
+                        block={block}
+                        captionText={groups.get(block.groupId)?.caption}
+                        captionRequired={groups.get(block.groupId)?.required}
+                        value={answers[block.id]}
+                        onChange={(value: Answer) => onChange(block.id, value)}
+                        onBlur={() => onBlur(block.id)}
+                        error={errors[block.id]}
+                        disabled={locked}
+                      />
+                    </FocusReporter>
+                  )
+                  return innerRow.length > 1 ? (
+                    <div key={innerRow[0]![0]!.id} className="rf-row">
+                      {innerRow.map((cell) => (
+                        <div key={cell[0]!.id} className="rf-cell">
+                          {cell.map(render)}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    render(innerRow[0]![0]!)
+                  )
+                })}
+              </div>
+            )
+            // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
+            // справа помещается несколько коротких. Слева стопки не бывает — там всегда
+            // тот, кто открыл ряд.
+            const first = row[0]?.[0]
+            if (!first) return null
+            return row.length > 1 ? (
+              <div key={first.id} className="rf-row">
+                {row.map((cell) => (
+                  <div key={cell[0]!.id} className="rf-cell">
+                    {cell.map(renderGroup)}
                   </div>
-                ) : (
-                  render(innerRow[0]![0]!)
-                )
-              })}
-            </div>
-          )
-          // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
-          // справа помещается несколько коротких. Слева стопки не бывает — там всегда
-          // тот, кто открыл ряд.
-          const first = row[0]?.[0]
-          if (!first) return null
-          return row.length > 1 ? (
-            <div key={first.id} className="rf-row">
-              {row.map((cell) => (
-                <div key={cell[0]!.id} className="rf-cell">
-                  {cell.map(renderGroup)}
-                </div>
-              ))}
-            </div>
-          ) : (
-            renderGroup(first)
-          )
-        })}
-      </div>
-      <button
-        className="rf-submit"
-        type="button"
-        onClick={() => void onSubmit()}
-        disabled={phase === 'submitting'}
-      >
-        {phase === 'submitting' ? 'Отправка…' : submitLabel}
-      </button>
-      {attempted && hasFieldErrors && (
-        <p className="form-note form-note-error" role="alert">
-          Проверьте выделенные поля.
-        </p>
-      )}
-      {notice && !hasFieldErrors && (
-        <p className="form-note form-note-error" role="alert">
-          {notice}
-        </p>
-      )}
-    </main>
+                ))}
+              </div>
+            ) : (
+              renderGroup(first)
+            )
+          })}
+        </div>
+        <button
+          className="rf-submit"
+          type="button"
+          onClick={() => void onSubmit()}
+          disabled={phase === 'submitting'}
+        >
+          {phase === 'submitting' ? 'Отправка…' : submitLabel}
+        </button>
+        {attempted && hasFieldErrors && (
+          <p className="form-note form-note-error" role="alert">
+            Проверьте выделенные поля.
+          </p>
+        )}
+        {notice && !hasFieldErrors && (
+          <p className="form-note form-note-error" role="alert">
+            {notice}
+          </p>
+        )}
+      </main>
+    </>
   )
 }

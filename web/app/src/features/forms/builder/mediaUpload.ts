@@ -9,12 +9,23 @@ export interface UploadHandlers {
   onProgress?: (pct: number) => void
 }
 
+// Назначение картинки: где она будет показана. Влияет только на потолок ширины при
+// нормализации на сервере (media.Purpose, internal/media/service.go) — обложка шире
+// колонки, логотип кратно уже. Значение по умолчанию — картинка блока.
+export type UploadPurpose = 'block' | 'cover' | 'logo'
+
 // uploadImage грузит файл в POST /forms/{formId}/media и резолвит imageKey. Ошибки
 // маппятся в человекочитаемое сообщение по статусу (сервер валидирует независимо).
-export function uploadImage(formId: string, file: File, h: UploadHandlers = {}): Promise<string> {
+export function uploadImage(
+  formId: string,
+  file: File,
+  h: UploadHandlers = {},
+  purpose: UploadPurpose = 'block',
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const body = new FormData()
     body.append('file', file)
+    body.append('purpose', purpose)
 
     const xhr = new XMLHttpRequest()
     xhr.open('POST', `/api/v1/forms/${formId}/media`)

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  coverY,
+  COVER_Y_MAX,
+  COVER_Y_MIN,
+  DEFAULT_COVER_Y,
   formSchemaSchema,
   isValidPhone,
   MAX_BLOCKS,
@@ -592,5 +596,121 @@ describe('plainText / textFromString / sameRichText', () => {
     expect(sameRichText([{ t: 'а', m: ['b'] }], [{ t: 'а', m: ['i'] }])).toBe(false)
     expect(sameRichText([{ t: 'а', color: '#000000' }], [{ t: 'а' }])).toBe(false)
     expect(sameRichText([{ t: 'а' }], [{ t: 'а' }, { t: 'б' }])).toBe(false)
+  })
+})
+
+// Оформление страницы: обложка и логотип. Зеркало TestValidateSchema_CoverAndLogo
+// в internal/domain/schema_test.go — оба набора правятся одним PR: разъехавшиеся
+// стороны означают 422 там, где фронт показывает «сохранено».
+describe('обложка и логотип', () => {
+  const longKey = 'a'.repeat(MAX_IMAGE_KEY_LEN + 1)
+
+  const valid: Record<string, unknown> = {
+    'обложки нет вовсе': { schemaVersion: SCHEMA_VERSION, blocks: [] },
+    'обложка цветом': { schemaVersion: SCHEMA_VERSION, blocks: [], cover: { color: '#ff8800' } },
+    'обложка картинкой': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/deadbeef.jpg' },
+    },
+    'обложка со сдвигом': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: 20 },
+    },
+    'сдвиг у верхней границы': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MAX },
+    },
+    логотип: { schemaVersion: SCHEMA_VERSION, blocks: [], logo: { imageKey: 'ws/logo.png' } },
+    'обложка и логотип вместе': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MIN },
+      logo: { imageKey: 'ws/logo.png' },
+    },
+  }
+
+  for (const [name, doc] of Object.entries(valid)) {
+    it('валидна: ' + name, () => {
+      expect(formSchemaSchema.safeParse(doc).success).toBe(true)
+    })
+  }
+
+  const invalid: Record<string, unknown> = {
+    'обложка пуста': { schemaVersion: SCHEMA_VERSION, blocks: [], cover: {} },
+    'цвет и картинка разом': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ffffff', imageKey: 'ws/x.jpg' },
+    },
+    'цвет не hex': { schemaVersion: SCHEMA_VERSION, blocks: [], cover: { color: 'red' } },
+    'цвет в верхнем регистре': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#FF8800' },
+    },
+    // Инвариант 4: значение уходит в inline-style рендерера, свободный CSS туда не пускаем.
+    'цвет со свободным CSS': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: 'url(javascript:alert(1))' },
+    },
+    'сдвиг без картинки': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ff8800', y: 30 },
+    },
+    'сдвиг выше потолка': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MAX + 1 },
+    },
+    'сдвиг ниже нуля': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MIN - 1 },
+    },
+    'дробный сдвиг': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: 12.5 },
+    },
+    'слишком длинный ключ': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: longKey },
+    },
+    'лишний ключ у обложки': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ff8800', x: 10 },
+    },
+    'логотип с пустым ключом': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: '' },
+    },
+    'логотип с длинным ключом': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: longKey },
+    },
+    'логотип без ключа': { schemaVersion: SCHEMA_VERSION, blocks: [], logo: {} },
+  }
+
+  for (const [name, doc] of Object.entries(invalid)) {
+    it('невалидна: ' + name, () => {
+      expect(formSchemaSchema.safeParse(doc).success).toBe(false)
+    })
+  }
+
+  // «Нет ключа» = центр, y:0 = прижата верхом. Перепутать их значит незаметно
+  // сдвигать чужие обложки на середину.
+  it('coverY: ноль переживает разбор, отсутствие даёт центр', () => {
+    expect(coverY({ imageKey: 'ws/x.jpg', y: 0 })).toBe(0)
+    expect(coverY({ imageKey: 'ws/x.jpg' })).toBe(DEFAULT_COVER_Y)
+    expect(coverY(undefined)).toBe(DEFAULT_COVER_Y)
   })
 })

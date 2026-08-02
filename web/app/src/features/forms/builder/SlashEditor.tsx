@@ -57,6 +57,7 @@ import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
 import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
+import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
@@ -98,6 +99,9 @@ export function SlashEditor({
   engine: FocusEngine
 }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
+  // Обложка нужна полотну только затем, чтобы поджать верхний отступ: сама она
+  // рисуется внутри CoverArea.
+  const cover = useBuilderStore((s) => s.cover)
   // Заголовок формы (фаза 15) — блок документа, но рисуется ВНЕ потока вопросов, тем
   // же разделителем, что у превью и рендерера: внутри .rf-form он получил бы ритм
   // «между вопросами» вместо своего. Всё остальное полотно (группы, dnd, обход
@@ -672,11 +676,21 @@ export function SlashEditor({
         репортёры не перерисовывались от смены каретки (см. activeRow.ts). */}
       <ActiveRowApiProvider value={activeRow.api}>
         <ActiveRowValueProvider value={activeRow.active}>
-          {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него). */}
-          <div
-            ref={canvasRef}
-            className="relative mx-auto max-w-[860px] px-5 pb-16 pt-10 sm:px-20 sm:pb-24 sm:pt-24"
-          >
+          {/* Обложка — во всю ширину полотна, поэтому ВНЕ коробки max-w-[860px]
+        (та же граница, что в рендерере: обложка сестра .rf-page). group/canvas —
+        якорь наведения для кнопок «Добавить обложку/логотип» ниже. */}
+          <div className="group/canvas">
+            <CoverArea formId={formId} />
+            {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него).
+          Верхний отступ с обложкой поджимается: 96px пустоты над заголовком там уже
+          лишние, воздух дала сама обложка. Числа зеркалят .rf-page.rf-covered
+          (fields.css) — правишь там, правь и здесь. */}
+            <div
+              ref={canvasRef}
+              className={`relative mx-auto max-w-[860px] px-5 pb-16 sm:px-20 sm:pb-24 ${
+                cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-24'
+              }`}
+            >
             {/* Драг-рамка (Д10): один absolute-прямоугольник ДО списка в DOM — строки
           (positioned) рисуются поверх. Позиционирование ПРЯМОЕ, без собственной
           анимации: rAF-замер и так даёт гладкие значения (строки едут CSS-пере-
@@ -725,6 +739,10 @@ export function SlashEditor({
                 }}
               />
             )}
+            {/* Логотип и кнопки «завести» — уже ВНУТРИ колонки: логотип
+          выравнивается по её левому краю, как в рендерере. */}
+            <LogoArea formId={formId} over={Boolean(cover)} />
+            <AddChrome formId={formId} />
             {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
 
             {blocks.length === 0 ? (
@@ -839,6 +857,7 @@ export function SlashEditor({
             />
 
             <SubmitButtonEditor />
+            </div>
           </div>
         </ActiveRowValueProvider>
       </ActiveRowApiProvider>

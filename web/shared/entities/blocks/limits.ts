@@ -39,6 +39,12 @@ export const MAX_IMAGE_KEY_LEN = 200
 // Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 export const MAX_THANK_YOU_TEXT_LEN = 2000
 export const MAX_REDIRECT_URL_LEN = 2000
+// Границы точки фокуса обложки по вертикали (доля высоты картинки в процентах,
+// уезжает в CSS object-position). Зеркалят CoverYMin/CoverYMax/DefaultCoverY.
+// Отсутствие ключа = центр, и это НЕ то же самое, что 0 (обложка прижата верхом).
+export const COVER_Y_MIN = 0
+export const COVER_Y_MAX = 100
+export const DEFAULT_COVER_Y = 50
 // Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода, и на
 // телефоне больше десяти в строку не помещается (нужно число — есть тип number).
 // Низ — 0: NPS считается от нуля. Диапазон новой шкалы — 1–5.

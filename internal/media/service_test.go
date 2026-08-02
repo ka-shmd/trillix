@@ -139,7 +139,7 @@ func TestDownscale(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := downscale(image.NewRGBA(image.Rect(0, 0, tc.w, tc.h)))
+			got := downscale(image.NewRGBA(image.Rect(0, 0, tc.w, tc.h)), MaxImageWidth)
 			if got.Bounds().Dx() != tc.wantW || got.Bounds().Dy() != tc.wantH {
 				t.Fatalf("%d×%d → %d×%d, ожидалось %d×%d",
 					tc.w, tc.h, got.Bounds().Dx(), got.Bounds().Dy(), tc.wantW, tc.wantH)
@@ -207,7 +207,7 @@ func TestUpload_Success(t *testing.T) {
 	blobStore := &fakeBlob{}
 	svc := NewService(fakeForms{form: forms.Form{WorkspaceID: ws}}, blobStore, "app-media")
 
-	key, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), makePNG(t, 2, 2))
+	key, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), makePNG(t, 2, 2), PurposeBlock)
 	if err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestUpload_ФотоУменьшаетсяИМеняетФормат(t *test
 	svc := NewService(fakeForms{form: forms.Form{WorkspaceID: ws}}, blobStore, "app-media")
 
 	src := makeNoisePNG(t, 3000, 2250)
-	key, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), src)
+	key, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), src, PurposeBlock)
 	if err != nil {
 		t.Fatalf("Upload: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestUpload_AuthDeniedSkipsBlob(t *testing.T) {
 	blobStore := &fakeBlob{}
 	svc := NewService(fakeForms{err: domain.ErrNotFound}, blobStore, "app-media")
 
-	_, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), makePNG(t, 2, 2))
+	_, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), makePNG(t, 2, 2), PurposeBlock)
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("err = %v, ожидалось ErrNotFound", err)
 	}
@@ -273,7 +273,7 @@ func TestUpload_RejectsNonImage(t *testing.T) {
 	blobStore := &fakeBlob{}
 	svc := NewService(fakeForms{form: forms.Form{WorkspaceID: uuid.New()}}, blobStore, "app-media")
 
-	_, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), []byte("это не картинка"))
+	_, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), []byte("это не картинка"), PurposeBlock)
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("err = %v, ожидалось ErrValidation", err)
 	}
@@ -284,7 +284,7 @@ func TestUpload_RejectsNonImage(t *testing.T) {
 
 func TestDecodeReencode(t *testing.T) {
 	t.Run("PNG ре-энкодится", func(t *testing.T) {
-		ext, ct, out, err := decodeReencode(makePNG(t, 3, 3))
+		ext, ct, out, err := decodeReencode(makePNG(t, 3, 3), MaxImageWidth)
 		if err != nil {
 			t.Fatalf("decodeReencode: %v", err)
 		}
@@ -294,15 +294,90 @@ func TestDecodeReencode(t *testing.T) {
 	})
 
 	t.Run("не-картинка отклоняется", func(t *testing.T) {
-		if _, _, _, err := decodeReencode([]byte("GIF89a...")); !errors.Is(err, domain.ErrValidation) {
+		if _, _, _, err := decodeReencode([]byte("GIF89a..."), MaxImageWidth); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("err = %v, ожидалось ErrValidation", err)
 		}
 	})
 
 	t.Run("превышение площади отклоняется", func(t *testing.T) {
 		// 6000×5000 = 30 Мпикс > MaxImagePixels; отсекается на DecodeConfig без декода.
-		if _, _, _, err := decodeReencode(makePNGHeader(6000, 5000)); !errors.Is(err, domain.ErrValidation) {
+		if _, _, _, err := decodeReencode(makePNGHeader(6000, 5000), MaxImageWidth); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("err = %v, ожидалось ErrValidation", err)
 		}
 	})
+}
+
+// Назначение картинки влияет ровно на потолок ширины — и это то место, где ошибка
+// не видна ни глазами (обложка «просто мыльная»), ни по 422.
+func TestUpload_PurposeВыбираетПотолокШирины(t *testing.T) {
+	// Исходник шире любого из потолков: каждое назначение обязано ужать по-своему.
+	src := makeNoisePNG(t, 2600, 1300)
+
+	tests := []struct {
+		name    string
+		purpose Purpose
+		wantW   int
+	}{
+		{"блок — ширина колонки", PurposeBlock, MaxImageWidth},
+		{"обложка — ширина окна", PurposeCover, MaxCoverWidth},
+		{"логотип — свой мелкий потолок", PurposeLogo, MaxLogoWidth},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			blobStore := &fakeBlob{}
+			svc := NewService(fakeForms{form: forms.Form{WorkspaceID: uuid.New()}}, blobStore, "app-media")
+
+			if _, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), src, tc.purpose); err != nil {
+				t.Fatalf("Upload: %v", err)
+			}
+			if w, _ := decodedSize(t, blobStore.data); w != tc.wantW {
+				t.Fatalf("ширина %d, ожидалась %d", w, tc.wantW)
+			}
+		})
+	}
+}
+
+// Ключ контент-адресный и назначения не знает: одна картинка под разные назначения
+// даёт РАЗНЫЕ объекты, потому что различается содержимое (ширина), а не потому, что
+// кто-то подмешал назначение в ключ.
+func TestUpload_КлючРазличаетсяПоСодержимому(t *testing.T) {
+	ws := uuid.New()
+	src := makeNoisePNG(t, 2600, 1300)
+
+	keyFor := func(p Purpose) string {
+		blobStore := &fakeBlob{}
+		svc := NewService(fakeForms{form: forms.Form{WorkspaceID: ws}}, blobStore, "app-media")
+		key, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), src, p)
+		if err != nil {
+			t.Fatalf("Upload: %v", err)
+		}
+		return key
+	}
+	asBlock, asCover, coverAgain := keyFor(PurposeBlock), keyFor(PurposeCover), keyFor(PurposeCover)
+	if asBlock == asCover {
+		t.Fatal("разная ширина обязана дать разный контент-адресный ключ")
+	}
+	if asCover != coverAgain {
+		t.Fatal("одно и то же назначение обязано быть идемпотентным (дедуп)")
+	}
+}
+
+func TestParsePurpose(t *testing.T) {
+	// Пустое = block: так выглядят загрузки картинки блока, не знающие о параметре.
+	for _, in := range []string{"", "block"} {
+		if p, err := ParsePurpose(in); err != nil || p != PurposeBlock {
+			t.Fatalf("ParsePurpose(%q) = %q, %v; ожидался block", in, p, err)
+		}
+	}
+	if p, err := ParsePurpose("cover"); err != nil || p != PurposeCover {
+		t.Fatalf("ParsePurpose(cover) = %q, %v", p, err)
+	}
+	// Опечатка — 422, а не молчаливый откат к block: иначе обложка уезжает в
+	// хранилище ужатой до ширины колонки, и замечают это глазами через неделю.
+	if _, err := ParsePurpose("Cover"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, ожидалось ErrValidation", err)
+	}
+	if _, err := ParsePurpose("banner"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, ожидалось ErrValidation", err)
+	}
 }

@@ -43,7 +43,8 @@ Tailwind/shadcn (чтобы рендерер читал его без Tailwind).
 - `rf-input` — текстовое поле/`textarea`/date;
 - `rf-options` / `rf-option` / `rf-option-key` / `rf-choice-input` — список выбора: карточки **по ширине текста** с буквенным бейджем;
 - `rf-mark--check` — глиф-галочка, остался только у согласия;
-- `rf-submit` — кнопка отправки; `rf-empty` / `rf-error` — заметки.
+- `rf-submit` — кнопка отправки; `rf-empty` / `rf-error` — заметки;
+- `rf-cover` / `rf-cover-img` / `rf-logo` / `rf-logo-img` / `rf-page.rf-covered` — **хром страницы** (обложка и логотип, ADR §10). Не блоки полотна: обложка — сестра `rf-page` (во всю ширину), логотип — её первый ребёнок (по левому краю колонки), нахлёст сделан отступами, а не `position: absolute`. Вывод общий — [`pageChrome.tsx`](./pageChrome.tsx), его надевают все три поверхности.
 
 ### Референс вида — Tally
 
