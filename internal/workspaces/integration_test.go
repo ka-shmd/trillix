@@ -9,6 +9,7 @@ package workspaces_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -19,9 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -419,4 +422,63 @@ func loginUser(t *testing.T, srv *httptest.Server, email string) *http.Client {
 	}
 	closeBody(t, r)
 	return c
+}
+
+// Права против настоящей БД: роль читается запросом, а решение принимает
+// матрица. Три исхода, которые нельзя путать, — и все три видны снаружи.
+func TestCan_RolesAgainstDB(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "editor@example.com")
+	registerUser(t, srv, "stranger@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	teamID := uuid.MustParse(team.ID)
+
+	ctx := context.Background()
+	editorID := userIDByEmail(t, "editor@example.com")
+	strangerID := userIDByEmail(t, "stranger@example.com")
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'editor')`,
+		teamID, editorID); err != nil {
+		t.Fatalf("добавить редактора: %v", err)
+	}
+
+	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
+	svc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans)
+
+	// Редактор правит формы…
+	if err := svc.Can(ctx, teamID, editorID, domain.ActionFormWrite); err != nil {
+		t.Errorf("редактору запрещено править формы: %v", err)
+	}
+	// …и удаляет их (решение владельца 2026-08-02)…
+	if err := svc.Can(ctx, teamID, editorID, domain.ActionFormDelete); err != nil {
+		t.Errorf("редактору запрещено удалять формы: %v", err)
+	}
+	// …но тариф и участники — не его дело: 403, а не 404. Пространство он видит,
+	// скрывать нечего.
+	for _, action := range []domain.Action{domain.ActionBillingView, domain.ActionMemberManage} {
+		err := svc.Can(ctx, teamID, editorID, action)
+		if !errors.Is(err, domain.ErrForbidden) {
+			t.Errorf("редактор и %q: err = %v, ждали ErrForbidden (403)", action, err)
+		}
+	}
+
+	// Посторонний получает 404 на всё: существование пространства не раскрываем.
+	err := svc.Can(ctx, teamID, strangerID, domain.ActionFormRead)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("посторонний: err = %v, ждали ErrNotFound (404)", err)
+	}
+}
+
+func userIDByEmail(t *testing.T, email string) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id FROM users WHERE email = $1`, email).Scan(&id); err != nil {
+		t.Fatalf("пользователь %s: %v", email, err)
+	}
+	return id
 }

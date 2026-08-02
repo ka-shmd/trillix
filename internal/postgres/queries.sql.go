@@ -860,13 +860,31 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getMemberRole = `-- name: GetMemberRole :one
+SELECT role
+FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2
+`
+
+type GetMemberRoleParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Роль участника: основа проверки прав (Can). Нет строки → не участник, и это
+// 404, а не 403 — существование чужого пространства не раскрывается.
+func (q *Queries) GetMemberRole(ctx context.Context, arg GetMemberRoleParams) (string, error) {
+	row := q.db.QueryRow(ctx, getMemberRole, arg.WorkspaceID, arg.UserID)
+	var role string
+	err := row.Scan(&role)
+	return role, err
+}
+
 const getPersonalWorkspace = `-- name: GetPersonalWorkspace :one
 
-SELECT workspace_id
-FROM workspace_members
-WHERE user_id = $1
-ORDER BY created_at ASC
-LIMIT 1
+SELECT id
+FROM workspaces
+WHERE personal_user_id = $1
 `
 
 // Запросы модуля forms. Схема — migrations/0003_forms. Генерация: `make sqlc`.
@@ -877,13 +895,16 @@ LIMIT 1
 // и так знает версию (при публикации — из InsertFormVersion, иначе переносит из
 // заранее прочитанной формы), а коррелированный подзапрос в RETURNING sqlc считает
 // NOT NULL, из-за чего скан NULL (черновик) на них падал бы.
-// Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
-// «Текущий воркспейс» дашборда, куда кладутся и откуда читаются формы.
-func (q *Queries) GetPersonalWorkspace(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getPersonalWorkspace, userID)
-	var workspace_id uuid.UUID
-	err := row.Scan(&workspace_id)
-	return workspace_id, err
+// ЛИЧНОЕ пространство пользователя — то, куда попадают формы, когда пространство
+// не названо явно. С 0016 оно помечено колонкой, а не выводится из «самого
+// раннего членства»: членство в чужом пространстве старше собственной
+// регистрации невозможно сегодня, но станет возможным ошибкой в любой момент,
+// а цена такой ошибки — формы, уехавшие в чужую папку.
+func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtype.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getPersonalWorkspace, personalUserID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
@@ -1126,27 +1147,6 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const isWorkspaceMember = `-- name: IsWorkspaceMember :one
-SELECT EXISTS (
-    SELECT 1 FROM workspace_members
-    WHERE workspace_id = $1 AND user_id = $2
-)
-`
-
-type IsWorkspaceMemberParams struct {
-	WorkspaceID uuid.UUID
-	UserID      uuid.UUID
-}
-
-// Проверка права доступа к ресурсу: состоит ли пользователь в воркспейсе формы.
-// Основа анти-IDOR — id формы из URL не доказывает право (ARCHITECTURE §4.3).
-func (q *Queries) IsWorkspaceMember(ctx context.Context, arg IsWorkspaceMemberParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isWorkspaceMember, arg.WorkspaceID, arg.UserID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
 }
 
 const listFormNames = `-- name: ListFormNames :many

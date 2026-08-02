@@ -228,7 +228,17 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	authHandler = authHandler.WithOAuth(authSvc, oauthProviders, oauthLimiter, cfg.FormTokenSecret)
 	log.Info("oauth providers configured", slog.Int("count", len(oauthProviders)))
 
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
+	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки, приём
+	// ответа и создание пространства. Собирается до всех потребителей.
+	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
+
+	// Права в пространстве (фаза 18): их спрашивает forms — поэтому workspaces
+	// собирается раньше него. Обратной зависимости нет: workspaces знает про
+	// тариф, но не про формы.
+	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc)
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
 	if err != nil {
@@ -245,19 +255,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	// Единая точка лимитов тарифа (фаза 17): её спрашивают чтение воронки, приём
-	// ответа и создание пространства. Собирается до всех потребителей, живёт на
-	// том же пуле.
-	entitlementsSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
-
-	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc)
-	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
-
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
-	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, authHandler.RequireAuth)
+	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)

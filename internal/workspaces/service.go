@@ -14,12 +14,6 @@ import (
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
-// RoleOwner — владелец пространства: он же плательщик, и он ровно один
-// (уникальный частичный индекс в 0016). Роли и матрица прав приезжают
-// отдельным слайсом; здесь константа нужна затем, чтобы создание пространства
-// не писало строковый литерал в двух местах.
-const RoleOwner = "owner"
-
 // MaxNameLen — потолок имени пространства в рунах. Имя видно в сайдбаре и
 // крошках, длинное там всё равно обрезается многоточием.
 const MaxNameLen = 60
@@ -28,6 +22,8 @@ const MaxNameLen = 60
 // (сервиса). Реализация — Repo; в тестах подменяется фейком.
 type Store interface {
 	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Workspace, error)
+	// MemberRole — роль участника; pgx.ErrNoRows означает «не участник».
+	MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (string, error)
 	CreateTeam(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
 }

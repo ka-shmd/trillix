@@ -18,9 +18,11 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 // closableForm публикует форму с обязательным полем b1 и возвращает slug, id формы,
@@ -29,7 +31,9 @@ func closableForm(t *testing.T) (slug string, userID, formID uuid.UUID, formsSvc
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
-	formsSvc = forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc = forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 
 	user, _, err := authSvc.Register(ctx, "own-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {

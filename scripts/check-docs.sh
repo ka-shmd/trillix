@@ -314,6 +314,25 @@ else
 	ok "нет сравнений с кодом плана вне internal/entitlements"
 fi
 
+# --- 7. Единая точка прав в пространстве ------------------------------------
+# Сравнение с ролью (`role == "owner"`) вне internal/workspaces запрещено
+# (internal/CLAUDE.md, ADR §10). Правило того же класса, что запрет `if plan ==`
+# выше, и по той же причине: дорогая часть модели прав — не таблица ролей, а
+# точки вызова. Спрашивают «какая роль» — персональные исключения потребуют
+# тронуть весь бэк; спрашивают «можно ли действие» — приедут внутрь Can.
+# Мутация: вписать `if role == "owner"` в любой сервис → краснеет.
+# Сам пакет workspaces и тесты исключены: там сравнение с ролью и есть точка решения.
+begin
+hits=$(grep -rn --include='*.go' \
+	--exclude-dir=workspaces --exclude='*_test.go' \
+	-E '(role|memberRole|Role)\s*[!=]=\s*"(owner|editor)"|"(owner|editor)"\s*[!=]=\s*(role|memberRole|Role)' \
+	cmd internal 2>/dev/null || true)
+if [ -n "$hits" ]; then
+	err "Проверка роли мимо internal/workspaces: единая точка прав обходится" "$hits"
+else
+	ok "нет сравнений с ролью вне internal/workspaces"
+fi
+
 echo
 if [ $fail -ne 0 ]; then
 	echo "Проверка документов НЕ пройдена — почини расхождение и повтори."

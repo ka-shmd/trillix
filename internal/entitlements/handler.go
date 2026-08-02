@@ -20,13 +20,21 @@ type snapshotService interface {
 // инжектируется в composition root.
 type Middleware = func(http.Handler) http.Handler
 
+// Access — права в пространстве глазами транспорта тарифов. Объявлен здесь, а
+// не импортирован из workspaces: тот сам спрашивает лимиты у entitlements, и
+// обратный импорт замкнул бы цикл. Тип действия живёт в domain ровно поэтому.
+type Access interface {
+	Can(ctx context.Context, workspaceID, userID uuid.UUID, action domain.Action) error
+}
+
 type Handler struct {
 	svc         snapshotService
+	access      Access
 	requireAuth Middleware
 }
 
-func NewHandler(svc snapshotService, requireAuth Middleware) *Handler {
-	return &Handler{svc: svc, requireAuth: requireAuth}
+func NewHandler(svc snapshotService, access Access, requireAuth Middleware) *Handler {
+	return &Handler{svc: svc, access: access, requireAuth: requireAuth}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -53,6 +61,10 @@ type snapshotResponse struct {
 	Features  []featureResponse `json:"features"`
 }
 
+// snapshot отдаёт снимок тарифа. Тариф — дело ВЛАДЕЛЬЦА: редактор пространства
+// видит формы и ответы, но не то, за что и сколько платят (матрица прав,
+// internal/workspaces). Право спрашивается по действию, а не по роли — иначе
+// персональные исключения потребовали бы править и этот файл.
 func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -63,6 +75,11 @@ func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Кривой id — «нет такого», а не 422: чужое существование не обсуждается.
 		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+
+	if err := h.access.Can(r.Context(), workspaceID, u.ID, domain.ActionBillingView); err != nil {
+		httpserver.WriteError(w, r, err)
 		return
 	}
 

@@ -33,6 +33,12 @@ func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.U
 	return f.workspaces, f.err
 }
 
+// MemberRole фейку списка не нужен — права проверяет отдельный набор
+// (access_test.go со своим roleStore); здесь он только чтобы удовлетворить Store.
+func (f *fakeStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (string, error) {
+	return string(RoleOwner), nil
+}
+
 func (f *fakeStore) CreateTeam(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
 	if f.createErr != nil {
 		return Workspace{}, f.createErr
