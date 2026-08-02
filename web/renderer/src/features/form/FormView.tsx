@@ -240,7 +240,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     <>
       <CoverBand cover={form.schema.cover} />
       <main className={pageClass(form.schema.cover)}>
-        <LogoMark logo={form.schema.logo} />
+        <LogoMark logo={form.schema.logo} over={Boolean(form.schema.cover)} />
         {formTitle ? (
           <BlockField block={formTitle} />
         ) : (

@@ -1810,8 +1810,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             : { thankYouText, redirectUrl },
         ),
 
-      // Тег null: обложка ставится готовым значением по клику — коалесить нечего.
-      setCover: (cover) => commit(null, (s) => (s.cover === cover ? null : { cover })),
+      // Коалесится ТОЛЬКО непрерывный подбор цвета: выборщик зовёт onChange на каждое
+      // движение мыши, и без общего тега один жест дал бы сотню шагов отмены. Всё
+      // остальное — появление обложки, снятие, смена картинки — свой шаг: это разные
+      // намерения автора, и склеивать их в один Mod+Z нельзя.
+      setCover: (cover) =>
+        commit(cover?.color && get().cover?.color ? 'cc' : null, (s) =>
+          s.cover === cover ? null : { cover },
+        ),
       setLogo: (logo) => commit(null, (s) => (s.logo === logo ? null : { logo })),
 
       // Сдвиг осмыслен только у картинки: у цвета двигать нечего, а схема такой

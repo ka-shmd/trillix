@@ -31,7 +31,7 @@ export function PreviewPane({ title }: { title: string }) {
     <>
       <CoverBand cover={cover} />
       <div className={pageClass(cover)}>
-        <LogoMark logo={logo} />
+        <LogoMark logo={logo} over={Boolean(cover)} />
         {formTitle ? (
           <BlockField block={formTitle} />
         ) : (
