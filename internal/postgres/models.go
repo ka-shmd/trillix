@@ -106,6 +106,7 @@ type Subscription struct {
 	CurrentPeriodEnd pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
+	UserID           pgtype.UUID
 }
 
 type User struct {
@@ -124,9 +125,10 @@ type UserIdentity struct {
 }
 
 type Workspace struct {
-	ID        uuid.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
+	ID             uuid.UUID
+	Name           string
+	CreatedAt      pgtype.Timestamptz
+	PersonalUserID pgtype.UUID
 }
 
 type WorkspaceMember struct {

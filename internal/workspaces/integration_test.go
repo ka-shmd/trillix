@@ -77,7 +77,7 @@ type listDTO struct {
 	Workspaces []workspaceDTO `json:"workspaces"`
 }
 
-// Владелец получает свой личный воркспейс (созданный при регистрации, имя Personal).
+// Владелец получает своё личное пространство (созданное при регистрации).
 func TestWorkspaces_ListForUser(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -92,8 +92,8 @@ func TestWorkspaces_ListForUser(t *testing.T) {
 	if len(got.Workspaces) != 1 {
 		t.Fatalf("воркспейсов = %d, ожидался 1: %+v", len(got.Workspaces), got.Workspaces)
 	}
-	if got.Workspaces[0].Name != "Personal" || got.Workspaces[0].ID == "" {
-		t.Fatalf("воркспейс = %+v, ожидался Personal с непустым id", got.Workspaces[0])
+	if got.Workspaces[0].Name != "Личное пространство" || got.Workspaces[0].ID == "" {
+		t.Fatalf("воркспейс = %+v, ожидалось «Личное пространство» с непустым id", got.Workspaces[0])
 	}
 }
 
@@ -196,5 +196,45 @@ func closeBody(t *testing.T, r *http.Response) {
 	t.Helper()
 	if err := r.Body.Close(); err != nil {
 		t.Errorf("close body: %v", err)
+	}
+}
+
+// Владелец у пространства РОВНО один: «не больше одного» держит БД (частичный
+// уникальный индекс 0016), потому что план пространства резолвится через
+// владельца — два owner'а означали бы два ответа на вопрос «чей это тариф».
+// Проверяется на настоящем Postgres: правило живёт в схеме, а не в Go.
+func TestWorkspaceMembers_SecondOwnerRejected(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	registerUser(t, srv, "owner@example.com")
+
+	ctx := context.Background()
+	var wsID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM workspaces LIMIT 1`).Scan(&wsID); err != nil {
+		t.Fatalf("личное пространство не найдено: %v", err)
+	}
+
+	// Второй пользователь — законный участник, но вторым владельцем стать не может.
+	var secondID string
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO users (id, email) VALUES (gen_random_uuid(), 'second@example.com') RETURNING id`,
+	).Scan(&secondID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'editor')`,
+		wsID, secondID); err != nil {
+		t.Fatalf("второй участник ролью editor должен заводиться: %v", err)
+	}
+
+	_, err := testPool.Exec(ctx,
+		`UPDATE workspace_members SET role = 'owner' WHERE workspace_id = $1 AND user_id = $2`,
+		wsID, secondID)
+	if err == nil {
+		t.Fatal("второй owner в пространстве заведён — уникальный индекс не работает")
+	}
+	if !strings.Contains(err.Error(), "idx_workspace_members_owner") {
+		t.Errorf("отказ пришёл не от индекса владельца: %v", err)
 	}
 }

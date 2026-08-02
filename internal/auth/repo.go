@@ -57,8 +57,15 @@ func (Repo) GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) 
 	return userFromRow(row), nil
 }
 
-func (Repo) CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
-	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{ID: id, Name: name})
+// CreateWorkspace заводит ЛИЧНОЕ пространство: personal_user_id заполнен всегда
+// (регистрация — единственный вызывающий). Командные пространства заводит
+// workspaces со своим запросом и NULL в этой колонке.
+func (Repo) CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {
+	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{
+		ID:             id,
+		Name:           name,
+		PersonalUserID: pgtype.UUID{Bytes: personalUserID, Valid: true},
+	})
 	if err != nil {
 		return Workspace{}, fmt.Errorf("create workspace: %w", err)
 	}
@@ -76,9 +83,13 @@ func (Repo) AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceI
 	return nil
 }
 
-func (Repo) CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, planCode string) error {
+// CreateSubscription заводит подписку АККАУНТА (0016). workspaceID — личное
+// пространство: колонка ещё существует и обязана быть заполненной, уходит
+// следующим релизом вместе с переносом первичного ключа на user_id.
+func (Repo) CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, planCode string) error {
 	if err := postgres.New(db).CreateSubscription(ctx, postgres.CreateSubscriptionParams{
 		WorkspaceID: workspaceID,
+		UserID:      pgtype.UUID{Bytes: userID, Valid: true},
 		PlanCode:    planCode,
 	}); err != nil {
 		return fmt.Errorf("create subscription: %w", err)
