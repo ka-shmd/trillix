@@ -1,4 +1,5 @@
-import { type AnimateLayoutChanges } from '@dnd-kit/sortable'
+import { type ClientRect } from '@dnd-kit/core'
+import { type AnimateLayoutChanges, type SortingStrategy } from '@dnd-kit/sortable'
 
 // После дропа dnd-kit «доигрывает» layout-анимацию перетащенного элемента от его
 // СТАРОЙ layout-позиции (useDerivedTransform меряет rect до перестановки): элемент
@@ -17,3 +18,107 @@ export const noLayoutAnimation: AnimateLayoutChanges = () => false
 // драга). Два места с одним смыслом обязаны читать одну константу — разъехавшись, они
 // дадут «иногда после переноса выскакивает меню», а это не воспроизводится по заказу.
 export const DRAG_ACTIVATION_DISTANCE = 6
+
+const NO_SCALE = { scaleX: 1, scaleY: 1 }
+
+// Одна ли это вертикальная стопка: у двумерного полотна соседи по СПИСКУ бывают
+// соседями по документу, но не по экрану (левая и правая колонки секции идут в
+// документе подряд, а стоят бок о бок). Считаем колонку общей, если горизонтальные
+// проекции перекрываются больше чем наполовину узкого из двух.
+function sameColumn(a: ClientRect, b: ClientRect): boolean {
+  const overlap = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
+  return overlap > Math.min(a.width, b.width) / 2
+}
+
+// canvasSorting — как расступаются строки, пока элемент тащат. Заменяет
+// verticalListSortingStrategy, которая на полотне кладёт СТРОКУ НА СТРОКУ (найдено
+// владельцем 2026-08-02: «вытаскиваем блок из ряда и двигаем по полотну — блоки под
+// рядом наезжают на ряд; отпустишь — встают нормально»). Причина одна, и она про
+// допущение, которого полотно не выполняет:
+//
+//   **Родная стратегия считает список одной вертикалью, где уходящий элемент
+//   освобождает свою высоту.** На двумерном полотне это неверно: элемент, вынутый из
+//   КОЛОНКИ ряда (секция §13 или пара «подпись | поле» внутри вопроса), не освобождает
+//   по вертикали НИЧЕГО — ряд ровно той же высоты держит соседняя колонка. Строки ниже
+//   всё равно поднимаются на его высоту и садятся прямо на ряд, из которого его
+//   вынули. Тот же корень у второго проявления: в документе колонки идут подряд
+//   (сперва вся левая, потом вся правая), поэтому «зазор» между последней строкой левой
+//   и первой строкой правой отрицательный, и сдвиг на нём становится произвольным.
+//
+// Ответ в двух правилах, и оба про то, что видно глазами, а не про формулу:
+//   1. строки ЧУЖОЙ колонки не двигаются вовсе;
+//   2. смещаемые едут ВСЕ на одно расстояние — на то, которое ряд с уходящим элементом
+//      реально отдаёт. Отдаёт он не высоту элемента, а разницу между его низом и низом
+//      того, кто в ряду остаётся: держат ряд — не отдаёт ничего, и тогда не двигается
+//      никто.
+// Одинаковый сдвиг сохраняет взаимные просветы в точности, поэтому наложиться строки не
+// могут ни при каком наборе высот и зазоров. Побочно чинится снос ритма: родная брала
+// высоту активного, а зазор — каждой строки свой, из-за чего просветы 14/28 (ритм 13.3)
+// перетасовывались по ходу драга, хотя ни одна строка не меняла соседей.
+export const canvasSorting: SortingStrategy = ({
+  rects,
+  activeIndex,
+  overIndex,
+  index,
+  activeNodeRect,
+}) => {
+  const active = rects[activeIndex] ?? activeNodeRect
+  const over = rects[overIndex]
+  if (!active || !over || activeIndex === overIndex) return null
+
+  // Сам активный: смещение до нового места. Формула dnd-kit — она про drop-анимацию и
+  // клавиатурный перенос (под указателем элемент и так едет за курсором) и в наложении
+  // не участвует.
+  if (index === activeIndex) {
+    return {
+      x: 0,
+      y:
+        activeIndex < overIndex
+          ? over.top + over.height - (active.top + active.height)
+          : over.top - active.top,
+      ...NO_SCALE,
+    }
+  }
+
+  const self = rects[index]
+  if (!self || !sameColumn(self, active)) return null
+
+  const down = activeIndex < overIndex
+  if (down ? index <= activeIndex || index > overIndex : index >= activeIndex || index < overIndex) {
+    return null
+  }
+  const room = vacated(rects, activeIndex, down)
+  return room === 0 ? null : { x: 0, y: down ? -room : room, ...NO_SCALE }
+}
+
+// Сколько вертикали РЕАЛЬНО отдаёт ряд, из которого уходит активный элемент.
+//
+// Соседи по РЯДУ — те, кто пересекается с активным по вертикали, стоя в другой колонке
+// (участник секции, поле рядом со своей подписью). Пока хоть один из них опускается так
+// же низко, ряд не становится ниже ни на пиксель, и правильный сдвиг для всего, что под
+// ним, — ноль. Если активный был самым низким в ряду, отдаётся ровно разница низов.
+//
+// Соседей по ряду нет (обычная полноширинная строка) — отдаётся «высота плюс прилегающий
+// зазор», взятая из живой раскладки ОДНОЙ разностью, а не собранная из двух чисел: вниз
+// — от верха активного до верха его нижнего соседа, вверх — от низа верхнего соседа до
+// низа активного. Сосед не из своей колонки или стоящий не с той стороны для замера
+// непригоден: тогда берём голую высоту — щель выйдет на зазор уже, чем нужно, но строки
+// по-прежнему поедут все на одно и то же и не наложатся.
+function vacated(rects: ClientRect[], activeIndex: number, down: boolean): number {
+  const active = rects[activeIndex]!
+  let held = -Infinity
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i]
+    if (!r || i === activeIndex || sameColumn(r, active)) continue
+    if (Math.min(r.top + r.height, active.top + active.height) > Math.max(r.top, active.top)) {
+      held = Math.max(held, r.top + r.height)
+    }
+  }
+  if (held > -Infinity) return Math.max(0, active.top + active.height - held)
+
+  const mate = rects[down ? activeIndex + 1 : activeIndex - 1]
+  const usable =
+    mate && sameColumn(mate, active) && (down ? mate.top > active.top : mate.top < active.top)
+  if (!usable) return active.height
+  return down ? mate.top - active.top : active.top + active.height - (mate.top + mate.height)
+}

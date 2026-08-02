@@ -21,12 +21,7 @@ import {
   type CollisionDetection,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from '@dnd-kit/sortable'
+import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { toast } from 'sonner'
 import {
@@ -58,7 +53,7 @@ import {
 import { inviteRowId, previewCells } from './rowZones'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
-import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
+import { canvasSorting, DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
@@ -399,7 +394,13 @@ export function SlashEditor({
     // Цель «сам активный элемент» — не цель: dnd-kit отдаёт её, пока курсор над самим
     // собой, и линия просто ехала бы за блоком, ничего не показывая.
     const over = overId === activeId ? null : (rawOverRef.current ?? overId)
-    setDropLine(measureDropLine(root, over))
+    // Куда блок ЛЯЖЕТ относительно цели, решает направление переноса: arrayMove
+    // вставляет на индекс цели, то есть вниз по документу — ПОД неё, вверх — НАД.
+    // Линия обязана это знать: нарисованная всегда снизу, при переносе вверх она
+    // стояла под целью, тогда как блок приземлялся над ней (найдено владельцем).
+    const from = blocks.findIndex((b) => b.id === activeId)
+    const to = over === null ? -1 : blocks.findIndex((b) => b.id === over)
+    setDropLine(measureDropLine(root, over, from >= 0 && to >= 0 && to < from ? 'above' : 'below'))
     if (!root || !overId || groupIds.has(activeId)) {
       setFrame(null)
       setWarnFrame(null)
@@ -788,7 +789,7 @@ export function SlashEditor({
                 aria-hidden="true"
                 className="pointer-events-none absolute left-0 top-0 h-0.5 rounded-full bg-primary"
                 style={{
-                  transform: `translate(${dropLine.x}px, ${dropLine.y + 13}px)`,
+                  transform: `translate(${dropLine.x}px, ${dropLine.y}px)`,
                   width: dropLine.w,
                 }}
               />
@@ -856,7 +857,7 @@ export function SlashEditor({
                   setDrag(null)
                 }}
               >
-                <SortableContext items={groupIdList} strategy={verticalListSortingStrategy}>
+                <SortableContext items={groupIdList} strategy={canvasSorting}>
                   {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
                 mt-12 (48px) заголовок формы→первый блок = gap у .rf-page; gap-7 (28px)
                 МЕЖДУ группами = .rf-form. Внутри группы шаг 14px даёт GroupRow (gap-3.5).
@@ -990,18 +991,35 @@ type Rect = { x: number; y: number; w: number; h: number }
 // там половинная линия обещала ширину, но не место, и на глаз не отличалась от
 // полноширинной — её заменил дублёр, который показывает готовый результат. Зона =
 // ложная цель для замера, и на ней линии просто нет.
-function measureDropLine(root: HTMLElement | null, overId: string | null): Rect | null {
+//
+// СТОРОНА цели — не украшение: `arrayMove` вставляет блок НА индекс цели, поэтому
+// перенос вниз по документу кладёт его ПОД цель, а вверх — НАД ней. Линия, всегда
+// нарисованная снизу, при переносе вверх стояла под целью, тогда как блок приземлялся
+// над ней, и показывала место, к которому не имела отношения. Мерится живой rect: цель
+// к этому кадру уже сдвинута sortable, и её живая граница — ровно край открывшейся
+// щели, то есть та самая черта, по которую блок и встанет.
+function measureDropLine(
+  root: HTMLElement | null,
+  overId: string | null,
+  side: 'above' | 'below',
+): Rect | null {
   if (!root || !overId || isRowZone(overId)) return null
   const list = root.querySelector<HTMLElement>('ol')
   if (!list) return null
   const cr = root.getBoundingClientRect()
   const lr = list.getBoundingClientRect()
-  // Вертикальная вставка: линия во всю ширину, по НИЖНЕЙ границе цели — туда блок и
-  // ложится, а «выше цели» показывает уже раздвинутая sortable щель.
   const el = root.querySelector<HTMLElement>(`[data-block-id="${overId}"]`)
   if (!el) return null
   const r = el.getBoundingClientRect()
-  return { x: lr.left - cr.left, y: r.bottom - cr.top, w: lr.width, h: 0 }
+  // Линия стоит в просвете между вопросами, а не впритык к границе цели: ровно на
+  // столько её и отодвигают в обе стороны, чтобы «над» и «под» читались зеркально.
+  const inGap = 13
+  return {
+    x: lr.left - cr.left,
+    y: (side === 'above' ? r.top - inGap : r.bottom + inGap) - cr.top,
+    w: lr.width,
+    h: 0,
+  }
 }
 
 // measureUnion — union-rect строк с данными id по ЖИВОМУ DOM: getBoundingClientRect
@@ -1309,7 +1327,9 @@ function GroupRow({
       {cellZone !== null && group.blocks.some((b) => b.id === cellZone) && (
         <CellDropZone blockId={cellZone} />
       )}
-      <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
+      {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
+          одной вертикалью и на секции сажает строку на строку. */}
+      <SortableContext items={blockIds} strategy={canvasSorting}>
         {/* Внутри вопроса блоки стоят теснее — 14px (gap-3.5), как .rf-group у превью.
             py-1.5 строк скомпенсирован их -my-1.5, поэтому gap = чистый просвет. */}
         <div className="flex flex-col gap-3.5">
