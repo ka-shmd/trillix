@@ -255,6 +255,11 @@ type FormSchema struct {
 	SubmitLabel   string  `json:"submitLabel"`
 	ThankYouText  string  `json:"thankYouText"`
 	RedirectURL   string  `json:"redirectUrl"`
+	// Оформление страницы (хром, а не блоки полотна) — cover.go. Указатели, а не
+	// значения: «обложки нет» и «обложка задана пустой» обязаны быть разными
+	// состояниями, иначе валидатору нечего отвергать.
+	Cover *FormCover `json:"cover,omitempty"`
+	Logo  *FormLogo  `json:"logo,omitempty"`
 }
 
 // ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. Старые
@@ -355,6 +360,12 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	// URL до автосейва не доезжает и 422 посреди набора не бывает.
 	if s.RedirectURL != "" && !isHTTPURL(s.RedirectURL) {
 		return FormSchema{}, schemaErr("redirectUrl: нужен абсолютный http(s)-адрес")
+	}
+	if err := validateCover(s.Cover); err != nil {
+		return FormSchema{}, schemaErr("%s", err)
+	}
+	if err := validateLogo(s.Logo); err != nil {
+		return FormSchema{}, schemaErr("%s", err)
 	}
 
 	if err := validateGroups(s.Blocks); err != nil {

@@ -378,3 +378,76 @@ func TestValidateSchema_FormTitleDoesNotCountAgainstMaxBlocks(t *testing.T) {
 		t.Fatal("201 блок автора должен отвергаться")
 	}
 }
+
+// --- Оформление страницы: обложка и логотип ---
+
+// Зеркало describe('обложка и логотип') в web/app/src/entities/formSchema.test.ts.
+func TestValidateSchema_CoverAndLogo(t *testing.T) {
+	longKey := strings.Repeat("a", MaxImageKeyLen+1)
+
+	valid := map[string]string{
+		"обложки нет вовсе":       `{"schemaVersion":4,"blocks":[]}`,
+		"обложка цветом":          `{"schemaVersion":4,"blocks":[],"cover":{"color":"#ff8800"}}`,
+		"обложка картинкой":       `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/deadbeef.jpg"}}`,
+		"обложка со сдвигом":      `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":20}}`,
+		"сдвиг у верхней границы": `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":100}}`,
+		"логотип":                 `{"schemaVersion":4,"blocks":[],"logo":{"imageKey":"ws/logo.png"}}`,
+		"обложка и логотип вместе": `{"schemaVersion":4,"blocks":[],` +
+			`"cover":{"imageKey":"ws/x.jpg","y":0},"logo":{"imageKey":"ws/logo.png"}}`,
+	}
+	for name, raw := range valid {
+		t.Run("валидна: "+name, func(t *testing.T) {
+			if _, err := ValidateSchema(json.RawMessage(raw)); err != nil {
+				t.Fatalf("ожидалась валидная схема: %v", err)
+			}
+		})
+	}
+
+	invalid := map[string]string{
+		"обложка пуста":            `{"schemaVersion":4,"blocks":[],"cover":{}}`,
+		"цвет и картинка разом":    `{"schemaVersion":4,"blocks":[],"cover":{"color":"#ffffff","imageKey":"ws/x.jpg"}}`,
+		"цвет не hex":              `{"schemaVersion":4,"blocks":[],"cover":{"color":"red"}}`,
+		"цвет в верхнем регистре":  `{"schemaVersion":4,"blocks":[],"cover":{"color":"#FF8800"}}`,
+		"цвет со свободным CSS":    `{"schemaVersion":4,"blocks":[],"cover":{"color":"url(javascript:alert(1))"}}`,
+		"сдвиг без картинки":       `{"schemaVersion":4,"blocks":[],"cover":{"color":"#ff8800","y":30}}`,
+		"сдвиг выше потолка":       `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":101}}`,
+		"сдвиг ниже нуля":          `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":-1}}`,
+		"слишком длинный ключ":     `{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"` + longKey + `"}}`,
+		"лишний ключ у обложки":    `{"schemaVersion":4,"blocks":[],"cover":{"color":"#ff8800","x":10}}`,
+		"логотип с пустым ключом":  `{"schemaVersion":4,"blocks":[],"logo":{"imageKey":""}}`,
+		"логотип с длинным ключом": `{"schemaVersion":4,"blocks":[],"logo":{"imageKey":"` + longKey + `"}}`,
+		"логотип без ключа":        `{"schemaVersion":4,"blocks":[],"logo":{}}`,
+	}
+	for name, raw := range invalid {
+		t.Run("невалидна: "+name, func(t *testing.T) {
+			if _, err := ValidateSchema(json.RawMessage(raw)); err == nil {
+				t.Fatal("ожидалась ошибка, схема принята")
+			} else if !errors.Is(err, ErrValidation) {
+				t.Fatalf("ошибка не обёрнута ErrValidation: %v", err)
+			}
+		})
+	}
+}
+
+// Ноль сдвига обязан пережить разбор: «нет ключа» = центр, y:0 = прижата верхом, и
+// перепутать их значит незаметно сдвигать чужие обложки на середину.
+func TestValidateSchema_CoverYZeroSurvives(t *testing.T) {
+	s, err := ValidateSchema(json.RawMessage(`{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":0}}`))
+	if err != nil {
+		t.Fatalf("схема должна быть валидной: %v", err)
+	}
+	if s.Cover == nil || s.Cover.Y == nil {
+		t.Fatal("y:0 потерян при разборе")
+	}
+	if got := s.Cover.CoverY(); got != 0 {
+		t.Fatalf("CoverY() = %d, ожидалось 0", got)
+	}
+
+	s, err = ValidateSchema(json.RawMessage(`{"schemaVersion":4,"blocks":[],"cover":{"imageKey":"ws/x.jpg"}}`))
+	if err != nil {
+		t.Fatalf("схема должна быть валидной: %v", err)
+	}
+	if got := s.Cover.CoverY(); got != DefaultCoverY {
+		t.Fatalf("CoverY() без ключа = %d, ожидалось %d", got, DefaultCoverY)
+	}
+}

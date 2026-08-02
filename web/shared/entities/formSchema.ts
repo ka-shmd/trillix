@@ -4,8 +4,12 @@ import { BLOCK_TYPES } from './blocks/contract'
 // отдаёт наружу, идут реэкспортом ниже (иначе линтер справедливо считает их неиспользованными).
 import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/index'
 import {
+  COVER_Y_MAX,
+  COVER_Y_MIN,
+  DEFAULT_COVER_Y,
   MAX_BLOCKS,
   MAX_FORM_TITLE_LEN,
+  MAX_IMAGE_KEY_LEN,
   MAX_QUESTION_NAME_LEN,
   MAX_REDIRECT_URL_LEN,
   MAX_SPANS,
@@ -293,6 +297,52 @@ export const blockSchema = z
   })
 export type Block = z.infer<typeof blockSchema>
 
+// ОФОРМЛЕНИЕ СТРАНИЦЫ — обложка и логотип. Зеркало internal/domain/cover.go
+// (правится тем же PR, с тестами обеих сторон).
+//
+// Это хром страницы, а не блоки полотна: обложка и логотип не участвуют в группах,
+// не собирают ответ, не попадают в CSV и не имеют места в потоке блоков. Поэтому —
+// поля документа, а не элементы blocks. Живут в схеме, а не в колонках forms, по
+// тому же доводу, что экран «после отправки»: схема снапшотится при публикации,
+// поэтому респондент видит оформление той версии, по которой отправил ответ.
+//
+// Обложка — ЛИБО цвет, ЛИБО картинка, никогда оба и никогда ни одного: «обложки
+// нет» выражается отсутствием всего объекта, и второго способа сказать то же самое
+// быть не должно.
+export const coverSchema = z
+  .strictObject({
+    color: z.string().regex(HEX_COLOR).optional(),
+    imageKey: z.string().max(MAX_IMAGE_KEY_LEN).optional(),
+    // Точка фокуса по вертикали. Осмысленна только у картинки (у цвета двигать
+    // нечего) и потому при цвете ОТВЕРГАЕТСЯ, а не игнорируется: молча принятый
+    // бессмысленный ключ доживает до первого читателя, который решит, что он
+    // что-то значит.
+    y: z.number().int().min(COVER_Y_MIN).max(COVER_Y_MAX).optional(),
+  })
+  .superRefine((c, ctx) => {
+    const hasColor = Boolean(c.color)
+    const hasImage = Boolean(c.imageKey)
+    if (hasColor === hasImage) {
+      ctx.addIssue({ code: 'custom', message: 'нужен ровно один из color и imageKey' })
+    }
+    if (c.y !== undefined && !hasImage) {
+      ctx.addIssue({ code: 'custom', message: 'y задаётся только вместе с картинкой', path: ['y'] })
+    }
+  })
+export type FormCover = z.infer<typeof coverSchema>
+
+// Логотип — объект с одним полем, а не голая строка: у него ожидаются свои
+// свойства (форма, размер), и растить их из строки означало бы менять форму
+// документа второй раз.
+export const logoSchema = z.strictObject({
+  imageKey: z.string().min(1).max(MAX_IMAGE_KEY_LEN),
+})
+export type FormLogo = z.infer<typeof logoSchema>
+
+// coverY — точка фокуса с подставленным дефолтом. Единая точка подстановки:
+// рендерер и превью не должны каждый знать, что «нет ключа» = центр.
+export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFAULT_COVER_Y
+
 // Документ черновика формы: версия формата и упорядоченный список блоков.
 // Отсутствующая schemaVersion трактуется как текущая (дефолт БД '{"blocks":[]}').
 export const formSchemaSchema = z
@@ -312,6 +362,9 @@ export const formSchemaSchema = z
     thankYouText: z.string().max(MAX_THANK_YOU_TEXT_LEN).optional(),
     // Ссылка перехода после отправки. Пусто → остаёмся на экране благодарности.
     redirectUrl: z.string().max(MAX_REDIRECT_URL_LEN).optional(),
+    // Оформление страницы (хром, а не блоки полотна) — coverSchema/logoSchema выше.
+    cover: coverSchema.optional(),
+    logo: logoSchema.optional(),
   })
   .superRefine((s, ctx) => {
     // Схема redirect проверяется строго даже в черновике (в отличие от пустого label):
