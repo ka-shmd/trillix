@@ -158,6 +158,10 @@ func (stubStore) AccountEntitlements(context.Context, postgres.DBTX, uuid.UUID) 
 	return Row{}, nil
 }
 
+func (stubStore) EntitlementsWithMembers(context.Context, postgres.DBTX, uuid.UUID, time.Time) (Row, error) {
+	return Row{}, nil
+}
+
 func ptr(v int64) *int64 { return &v }
 
 // Каталог и его порядок обязаны совпадать по составу: ключ, забытый в

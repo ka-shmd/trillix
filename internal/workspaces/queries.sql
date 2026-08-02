@@ -33,3 +33,46 @@ RETURNING id, name, created_at;
 SELECT role
 FROM workspace_members
 WHERE workspace_id = $1 AND user_id = $2;
+
+-- name: CreateInvitation :exec
+-- Приглашение и письмо кладутся ОДНОЙ транзакцией (transactional outbox): либо
+-- есть и ссылка, и письмо в очереди, либо ничего. Повторное приглашение тому же
+-- адресу заменяет непринятое (частичный UNIQUE в 0017) — ON CONFLICT сносит
+-- прежний токен, чтобы годной осталась ровно одна ссылка.
+INSERT INTO invitations (token_hash, workspace_id, email, role, invited_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: DeletePendingInvitation :exec
+-- Снимает непринятое приглашение адресу перед выдачей нового (и обслуживает
+-- отзыв приглашения владельцем).
+DELETE FROM invitations
+WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL;
+
+-- name: GetInvitation :one
+-- Приглашение по токену — для экрана «вас приглашают». Отдаёт заодно название
+-- пространства: показать его нужно ДО принятия, а членства ещё нет.
+SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
+FROM invitations i
+JOIN workspaces w ON w.id = i.workspace_id
+WHERE i.token_hash = $1;
+
+-- name: ConsumeInvitation :one
+-- Потребление токена атомарным UPDATE: повтор получает 0 строк, поэтому одной
+-- ссылкой нельзя войти дважды, и гонка двух вкладок не создаёт двух членств.
+UPDATE invitations
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING workspace_id, email, role;
+
+-- name: CountWorkspaceMembers :one
+SELECT count(*)::bigint FROM workspace_members WHERE workspace_id = $1;
+
+-- name: GetWorkspaceByID :one
+SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+FROM workspaces WHERE id = $1;
+
+-- name: GetUserIDByEmail :one
+SELECT id FROM users WHERE email = lower($1);
+
+-- name: GetEmailByUserID :one
+SELECT email FROM users WHERE id = $1;

@@ -120,7 +120,8 @@ func newStack(t *testing.T) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mediaSvc := media.NewService(formsSvc, blob.New(testS3), testBucket)

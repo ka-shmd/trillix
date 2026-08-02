@@ -60,3 +60,20 @@ SELECT p.code AS plan_code,
 FROM subscriptions s
 JOIN plans p ON p.code = s.plan_code
 WHERE s.user_id = $1;
+
+-- То же состояние плюс счётчик участников — для гейта мест. Отдельным запросом,
+-- а не колонкой в GetEntitlements: тот стоит на горячем пути приёма ответа, и
+-- подсчёт участников был бы там платой за то, что нужно одному редкому
+-- действию — приглашению.
+-- name: GetEntitlementsWithMembers :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner';

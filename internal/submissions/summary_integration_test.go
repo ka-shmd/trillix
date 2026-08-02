@@ -17,6 +17,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/workspaces"
 )
@@ -75,7 +76,8 @@ func publishSummaryForm(t *testing.T, userID uuid.UUID) uuid.UUID {
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	form, err := formsSvc.Create(ctx, userID, "Сводка", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -194,7 +196,8 @@ func TestSummary_NoVersions_EmptyButValid(t *testing.T) {
 	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"))
 	form, err := formsSvc.Create(context.Background(), ownerID, "черновик", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)

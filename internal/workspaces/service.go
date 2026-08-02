@@ -24,6 +24,9 @@ type Store interface {
 	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Workspace, error)
 	// MemberRole — роль участника; pgx.ErrNoRows означает «не участник».
 	MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (string, error)
+	GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Workspace, error)
+	EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error)
+	InviteStore
 	CreateTeam(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
 }
@@ -41,6 +44,9 @@ type Transactor interface {
 // ещё нет, а старое к нему отношения не имеет (ADR §10).
 type Plans interface {
 	CheckAccount(ctx context.Context, userID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
+	// CheckWorkspace — лимит самого пространства (места), спрашивается у плана
+	// его владельца.
+	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
 }
 
 // Service — бизнес-логика пространств: список своих и создание новых.
@@ -51,10 +57,13 @@ type Service struct {
 	tx    Transactor    // пространство + владелец одной транзакцией
 	repo  Store
 	plans Plans
+	mail  MailEnqueuer
+	// appBaseURL — origin кабинета, из которого строится ссылка приглашения.
+	appBaseURL string
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans) *Service {
-	return &Service{db: db, tx: tx, repo: repo, plans: plans}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans, mailer MailEnqueuer, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, repo: repo, plans: plans, mail: mailer, appBaseURL: appBaseURL}
 }
 
 // ListForUser возвращает пространства пользователя (личное — первым: оно старше

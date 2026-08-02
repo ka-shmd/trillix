@@ -31,7 +31,7 @@
   (`auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `httpserver`, `mail`, `media`,
   `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`, `submissions`, `token`, `visits`,
   `workspaces`).
-- **PostgreSQL 16** — 16 миграций (`0001`…`0016_subscription_per_account`).
+- **PostgreSQL 16** — 17 миграций (`0001`…`0017_invitations`).
   Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас 32.82 КиБ).

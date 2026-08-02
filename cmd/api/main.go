@@ -235,7 +235,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Права в пространстве (фаза 18): их спрашивает forms — поэтому workspaces
 	// собирается раньше него. Обратной зависимости нет: workspaces знает про
 	// тариф, но не про формы.
-	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc)
+	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc)

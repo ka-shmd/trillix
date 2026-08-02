@@ -88,6 +88,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, domain.ErrFormClosed):
 		return http.StatusGone, "form_closed"
+	case errors.Is(err, domain.ErrLinkExpired):
+		return http.StatusGone, "link_expired"
 	case errors.Is(err, domain.ErrPlanRequired):
 		return http.StatusPaymentRequired, "plan_required"
 	case errors.Is(err, domain.ErrRateLimited):
