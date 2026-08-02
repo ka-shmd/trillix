@@ -8,6 +8,7 @@ package workspaces_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -49,7 +50,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, invitations, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -63,7 +64,8 @@ func newStack(t *testing.T) *httptest.Server {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
+		pgtest.MailService(testPool), "http://localhost:5173")
 	wsH := workspaces.NewHandler(wsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
@@ -447,7 +449,8 @@ func TestCan_RolesAgainstDB(t *testing.T) {
 	}
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	svc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans)
+	svc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
+		pgtest.MailService(testPool), "http://localhost:5173")
 
 	// Редактор правит формы…
 	if err := svc.Can(ctx, teamID, editorID, domain.ActionFormWrite); err != nil {
@@ -481,4 +484,173 @@ func userIDByEmail(t *testing.T, email string) uuid.UUID {
 		t.Fatalf("пользователь %s: %v", email, err)
 	}
 	return id
+}
+
+// Сквозной путь приглашения против настоящей БД и настоящего outbox:
+// пригласили → письмо в очереди → приняли → участник появился → повтор по той
+// же ссылке отбит.
+func TestInvitation_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("приглашение: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Письмо и токен — одной транзакцией: в outbox лежит ровно одно приглашение.
+	var queued int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE payload::jsonb->>'template' = 'workspace_invite'`).Scan(&queued); err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	if queued != 1 {
+		t.Fatalf("писем приглашения в очереди = %d, ожидалось 1", queued)
+	}
+
+	token := inviteTokenFromDB(t)
+
+	// Чужой человек по ссылке не входит: звали не его — 403, а не молчаливый вход.
+	stranger := registerUser(t, srv, "stranger@example.com")
+	r = post(t, stranger, srv, "/api/v1/invitations/"+token+"/accept", "")
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("посторонний по ссылке: статус %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Приглашённый принимает и видит пространство в своём списке.
+	r = post(t, bob, srv, "/api/v1/invitations/"+token+"/accept", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("принятие: статус %d, ожидалось 200", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var got listDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	if len(got.Workspaces) != 2 {
+		t.Fatalf("у приглашённого пространств = %d, ожидалось 2 (личное + команда)", len(got.Workspaces))
+	}
+
+	// Повтор по той же ссылке — 410: одноразовость держит атомарный UPDATE.
+	r = post(t, bob, srv, "/api/v1/invitations/"+token+"/accept", "")
+	if r.StatusCode != http.StatusGone {
+		t.Fatalf("повтор по использованной ссылке: статус %d, ожидалось 410", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Второй раз позвать того же — 409: он уже участник, и ждать письма незачем.
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("повторное приглашение участника: статус %d, ожидалось 409", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Приглашать может только владелец: редактор получает 403, и письма не будет.
+func TestInvitation_EditorCannotInvite(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	editor := registerUser(t, srv, "editor@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 SELECT $1, id, 'editor' FROM users WHERE email = 'editor@example.com'`, team.ID); err != nil {
+		t.Fatalf("добавить редактора: %v", err)
+	}
+
+	r := post(t, editor, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"third@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("редактор приглашает: статус %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Гейт мест: на плане с лимитом в одного участника приглашение отбивается 402.
+func TestInvitation_SeatLimit(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	setMemberLimit(t, "1")
+
+	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("статус = %d, ожидалось 402 (владелец уже занимает единственное место)", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Ссылку показывают БЕЗ входа: аккаунта у приглашённого может ещё не быть, и
+// понять, куда его зовут, он должен до регистрации.
+func TestInvitation_PreviewWithoutAuth(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"newbie@example.com","role":"editor"}`))
+
+	token := inviteTokenFromDB(t)
+	anon := newClient(t) // без сессии вовсе
+	r := do(t, anon, http.MethodGet, srv.URL+"/api/v1/invitations/"+token)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("просмотр без входа: статус %d, ожидалось 200", r.StatusCode)
+	}
+	var inv struct {
+		WorkspaceName string `json:"workspaceName"`
+		Email         string `json:"email"`
+		State         string `json:"state"`
+	}
+	decode(t, r, &inv)
+	if inv.WorkspaceName != "Команда" || inv.Email != "newbie@example.com" || inv.State != "usable" {
+		t.Fatalf("приглашение = %+v, ждали Команда/newbie@example.com/usable", inv)
+	}
+}
+
+// inviteTokenFromDB достаёт сырой токен единственного живого приглашения.
+// В БД лежит только его SHA-256, поэтому тест выдаёт себе токен сам: подменяет
+// хеш на хеш известной строки. Так проверяется настоящий путь «токен → хеш →
+// строка», а не суррогат с токеном в открытом виде.
+func inviteTokenFromDB(t *testing.T) string {
+	t.Helper()
+	const raw = "test-invite-token"
+	sum := sha256.Sum256([]byte(raw))
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE invitations SET token_hash = $1 WHERE used_at IS NULL`, sum[:]); err != nil {
+		t.Fatalf("подменить хеш токена: %v", err)
+	}
+	return raw
+}
+
+func setMemberLimit(t *testing.T, limit string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{members_per_workspace}', $1::jsonb) WHERE code = 'free'`,
+		limit); err != nil {
+		t.Fatalf("set member limit: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{members_per_workspace}', 'null') WHERE code = 'free'`); err != nil {
+			t.Fatalf("reset member limit: %v", err)
+		}
+	})
 }

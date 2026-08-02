@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -75,4 +76,98 @@ func (Repo) MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userI
 		return "", fmt.Errorf("get member role of %s in %s: %w", userID, workspaceID, err)
 	}
 	return role, nil
+}
+
+// GetWorkspace — пространство по id. is_personal здесь означает «личное вообще»
+// (у кого-то), а не «личное для спрашивающего»: у этого запроса спрашивающего
+// нет — он обслуживает письмо приглашения и ответ на принятие.
+func (Repo) GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Workspace, error) {
+	row, err := postgres.New(db).GetWorkspaceByID(ctx, id)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("get workspace %s: %w", id, err)
+	}
+	return Workspace{ID: row.ID, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
+}
+
+func (Repo) EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error) {
+	email, err := postgres.New(db).GetEmailByUserID(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get email of user %s: %w", id, err)
+	}
+	return email, nil
+}
+
+// UserIDByEmail — pgx.ErrNoRows означает «такого аккаунта ещё нет», и это
+// законный случай: приглашают и тех, кто не зарегистрирован.
+func (Repo) UserIDByEmail(ctx context.Context, db postgres.DBTX, email string) (uuid.UUID, error) {
+	id, err := postgres.New(db).GetUserIDByEmail(ctx, email)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get user by email: %w", err)
+	}
+	return id, nil
+}
+
+func (Repo) CreateInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID, expiresAt time.Time) error {
+	if err := postgres.New(db).CreateInvitation(ctx, postgres.CreateInvitationParams{
+		TokenHash:   tokenHash,
+		WorkspaceID: workspaceID,
+		Email:       email,
+		Role:        role,
+		InvitedBy:   invitedBy,
+		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create invitation: %w", err)
+	}
+	return nil
+}
+
+func (Repo) DeletePendingInvitation(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, email string) error {
+	if err := postgres.New(db).DeletePendingInvitation(ctx, postgres.DeletePendingInvitationParams{
+		WorkspaceID: workspaceID,
+		Lower:       email,
+	}); err != nil {
+		return fmt.Errorf("delete pending invitation: %w", err)
+	}
+	return nil
+}
+
+func (Repo) GetInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte) (Invitation, error) {
+	row, err := postgres.New(db).GetInvitation(ctx, tokenHash)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("get invitation: %w", err)
+	}
+	inv := Invitation{
+		WorkspaceID:   row.WorkspaceID,
+		WorkspaceName: row.WorkspaceName,
+		Email:         row.Email,
+		Role:          Role(row.Role),
+		ExpiresAt:     row.ExpiresAt.Time,
+	}
+	if row.UsedAt.Valid {
+		t := row.UsedAt.Time
+		inv.UsedAt = &t
+	}
+	return inv, nil
+}
+
+// ConsumeInvitation — атомарное потребление токена: 0 строк означает «уже
+// использовано или протухло», и различать эти случаи в ответе незачем.
+func (Repo) ConsumeInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte) (Invitation, error) {
+	row, err := postgres.New(db).ConsumeInvitation(ctx, tokenHash)
+	if err != nil {
+		return Invitation{}, fmt.Errorf("consume invitation: %w", err)
+	}
+	return Invitation{WorkspaceID: row.WorkspaceID, Email: row.Email, Role: Role(row.Role)}, nil
+}
+
+// AddMember добавляет участника с указанной ролью (приглашение принято).
+func (Repo) AddMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error {
+	if err := postgres.New(db).CreateWorkspaceMember(ctx, postgres.CreateWorkspaceMemberParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		Role:        role,
+	}); err != nil {
+		return fmt.Errorf("add workspace member: %w", err)
+	}
+	return nil
 }

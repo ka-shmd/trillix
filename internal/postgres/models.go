@@ -53,6 +53,17 @@ type FormVisit struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Invitation struct {
+	TokenHash   []byte
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+	InvitedBy   uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+	UsedAt      pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+}
+
 type Outbox struct {
 	ID            uuid.UUID
 	Channel       string

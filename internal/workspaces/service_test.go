@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,8 @@ type fakeStore struct {
 	addOwnerErr  error
 	ownerUserID  uuid.UUID
 	createdWSIDs []uuid.UUID
+	invitedEmail string
+	inviteErr    error
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
@@ -37,6 +40,42 @@ func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.U
 // (access_test.go со своим roleStore); здесь он только чтобы удовлетворить Store.
 func (f *fakeStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (string, error) {
 	return string(RoleOwner), nil
+}
+
+func (f *fakeStore) GetWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Workspace, error) {
+	return Workspace{ID: id, Name: "Команда"}, nil
+}
+
+func (f *fakeStore) EmailByUserID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (string, error) {
+	return "owner@example.com", nil
+}
+
+// --- InviteStore: приглашения проверяются интеграционно (нужны настоящие
+// атомарный UPDATE и частичный UNIQUE), здесь фейк только удовлетворяет Store.
+
+func (f *fakeStore) CreateInvitation(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID, _, _ string, _ uuid.UUID, _ time.Time) error {
+	f.invitedEmail = "" // перезаписывается ниже вызывающим тестом при надобности
+	return f.inviteErr
+}
+
+func (f *fakeStore) DeletePendingInvitation(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) GetInvitation(_ context.Context, _ postgres.DBTX, _ []byte) (Invitation, error) {
+	return Invitation{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) ConsumeInvitation(_ context.Context, _ postgres.DBTX, _ []byte) (Invitation, error) {
+	return Invitation{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) AddMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (f *fakeStore) UserIDByEmail(_ context.Context, _ postgres.DBTX, _ string) (uuid.UUID, error) {
+	return uuid.Nil, pgx.ErrNoRows
 }
 
 func (f *fakeStore) CreateTeam(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
@@ -80,9 +119,14 @@ func (p *fakePlans) CheckAccount(_ context.Context, userID uuid.UUID, key entitl
 	return entitlements.Decision{Allowed: p.allowed}, p.err
 }
 
+func (p *fakePlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitlements.Key) (entitlements.Decision, error) {
+	p.gotKey = key
+	return entitlements.Decision{Allowed: p.allowed}, p.err
+}
+
 func newTestService(store *fakeStore, plans *fakePlans) (*Service, *fakeTx) {
 	tx := &fakeTx{}
-	return NewService(nil, tx, store, plans), tx
+	return NewService(nil, tx, store, plans, nil, "https://app.example"), tx
 }
 
 // ListForUser пробрасывает userID в репозиторий и возвращает его результат.

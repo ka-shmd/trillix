@@ -33,6 +33,9 @@ type Row struct {
 	// WorkspacesOwned — сколько пространств аккаунт держит СЕЙЧАС (счётчик
 	// аккаунт-уровневых ключей; у воркспейс-уровневых строк всегда 0).
 	WorkspacesOwned int64
+	// MembersCount — сколько человек в пространстве СЕЙЧАС. Считается только
+	// там, где спрашивают про места: приём ответа за этим не ходит.
+	MembersCount int64
 }
 
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
@@ -45,6 +48,11 @@ type Store interface {
 	// AccountEntitlements — план самого аккаунта и его счётчики. Периода нет:
 	// аккаунт-уровневое считается «здесь и сейчас», а не за расчётный месяц.
 	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error)
+	// EntitlementsWithMembers — то же, что Entitlements, плюс счётчик участников.
+	// ОТДЕЛЬНЫМ запросом, а не колонкой в основном: тот стоит на горячем пути
+	// приёма ответа, и подсчёт участников там был бы платой за то, что нужно
+	// одному редкому действию — приглашению.
+	EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
 }
 
 var _ Store = Repo{}
@@ -112,7 +120,13 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	}
 
 	period := s.PeriodStart()
-	row, err := s.repo.Entitlements(ctx, s.db, workspaceID, period)
+	// Запрос выбирается счётчиком возможности: горячий путь приёма ответа не
+	// платит за подсчёт участников, который нужен только приглашению.
+	fetch := s.repo.Entitlements
+	if f.Meter == MembersMeter {
+		fetch = s.repo.EntitlementsWithMembers
+	}
+	row, err := fetch(ctx, s.db, workspaceID, period)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Воркспейса без подписки не бывает: её создаёт транзакция
@@ -230,6 +244,8 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 		used = row.SubmissionsUsed
 	case WorkspacesMeter:
 		used = row.WorkspacesOwned
+	case MembersMeter:
+		used = row.MembersCount
 	case NoMeter:
 		// Расход не считается: у Toggle его нет по смыслу.
 	}

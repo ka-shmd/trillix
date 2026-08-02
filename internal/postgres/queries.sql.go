@@ -28,6 +28,28 @@ func (q *Queries) ConsumeEmailVerificationToken(ctx context.Context, tokenHash [
 	return user_id, err
 }
 
+const consumeInvitation = `-- name: ConsumeInvitation :one
+UPDATE invitations
+SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING workspace_id, email, role
+`
+
+type ConsumeInvitationRow struct {
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+}
+
+// Потребление токена атомарным UPDATE: повтор получает 0 строк, поэтому одной
+// ссылкой нельзя войти дважды, и гонка двух вкладок не создаёт двух членств.
+func (q *Queries) ConsumeInvitation(ctx context.Context, tokenHash []byte) (ConsumeInvitationRow, error) {
+	row := q.db.QueryRow(ctx, consumeInvitation, tokenHash)
+	var i ConsumeInvitationRow
+	err := row.Scan(&i.WorkspaceID, &i.Email, &i.Role)
+	return i, err
+}
+
 const consumePasswordResetToken = `-- name: ConsumePasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -129,6 +151,17 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 		return nil, err
 	}
 	return items, nil
+}
+
+const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
+SELECT count(*)::bigint FROM workspace_members WHERE workspace_id = $1
+`
+
+func (q *Queries) CountWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkspaceMembers, workspaceID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createEmailVerificationToken = `-- name: CreateEmailVerificationToken :exec
@@ -263,6 +296,36 @@ type CreateIdentityParams struct {
 
 func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) error {
 	_, err := q.db.Exec(ctx, createIdentity, arg.Provider, arg.ProviderUserID, arg.UserID)
+	return err
+}
+
+const createInvitation = `-- name: CreateInvitation :exec
+INSERT INTO invitations (token_hash, workspace_id, email, role, invited_by, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type CreateInvitationParams struct {
+	TokenHash   []byte
+	WorkspaceID uuid.UUID
+	Email       string
+	Role        string
+	InvitedBy   uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+}
+
+// Приглашение и письмо кладутся ОДНОЙ транзакцией (transactional outbox): либо
+// есть и ссылка, и письмо в очереди, либо ничего. Повторное приглашение тому же
+// адресу заменяет непринятое (частичный UNIQUE в 0017) — ON CONFLICT сносит
+// прежний токен, чтобы годной осталась ровно одна ссылка.
+func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationParams) error {
+	_, err := q.db.Exec(ctx, createInvitation,
+		arg.TokenHash,
+		arg.WorkspaceID,
+		arg.Email,
+		arg.Role,
+		arg.InvitedBy,
+		arg.ExpiresAt,
+	)
 	return err
 }
 
@@ -473,6 +536,23 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
+DELETE FROM invitations
+WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL
+`
+
+type DeletePendingInvitationParams struct {
+	WorkspaceID uuid.UUID
+	Lower       string
+}
+
+// Снимает непринятое приглашение адресу перед выдачей нового (и обслуживает
+// отзыв приглашения владельцем).
+func (q *Queries) DeletePendingInvitation(ctx context.Context, arg DeletePendingInvitationParams) error {
+	_, err := q.db.Exec(ctx, deletePendingInvitation, arg.WorkspaceID, arg.Lower)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
@@ -605,6 +685,17 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 	return i, err
 }
 
+const getEmailByUserID = `-- name: GetEmailByUserID :one
+SELECT email FROM users WHERE id = $1
+`
+
+func (q *Queries) GetEmailByUserID(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getEmailByUserID, id)
+	var email string
+	err := row.Scan(&email)
+	return email, err
+}
+
 const getEntitlements = `-- name: GetEntitlements :one
 
 SELECT p.code AS plan_code,
@@ -700,6 +791,50 @@ func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlement
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+	)
+	return i, err
+}
+
+const getEntitlementsWithMembers = `-- name: GetEntitlementsWithMembers :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
+`
+
+type GetEntitlementsWithMembersParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsWithMembersRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	SubmissionsUsed int64
+	MembersCount    int64
+}
+
+// То же состояние плюс счётчик участников — для гейта мест. Отдельным запросом,
+// а не колонкой в GetEntitlements: тот стоит на горячем пути приёма ответа, и
+// подсчёт участников был бы там платой за то, что нужно одному редкому
+// действию — приглашению.
+func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitlementsWithMembersParams) (GetEntitlementsWithMembersRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsWithMembers, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsWithMembersRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+		&i.MembersCount,
 	)
 	return i, err
 }
@@ -856,6 +991,38 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getInvitation = `-- name: GetInvitation :one
+SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
+FROM invitations i
+JOIN workspaces w ON w.id = i.workspace_id
+WHERE i.token_hash = $1
+`
+
+type GetInvitationRow struct {
+	WorkspaceID   uuid.UUID
+	Email         string
+	Role          string
+	ExpiresAt     pgtype.Timestamptz
+	UsedAt        pgtype.Timestamptz
+	WorkspaceName string
+}
+
+// Приглашение по токену — для экрана «вас приглашают». Отдаёт заодно название
+// пространства: показать его нужно ДО принятия, а членства ещё нет.
+func (q *Queries) GetInvitation(ctx context.Context, tokenHash []byte) (GetInvitationRow, error) {
+	row := q.db.QueryRow(ctx, getInvitation, tokenHash)
+	var i GetInvitationRow
+	err := row.Scan(
+		&i.WorkspaceID,
+		&i.Email,
+		&i.Role,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.WorkspaceName,
 	)
 	return i, err
 }
@@ -1053,6 +1220,41 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
+	)
+	return i, err
+}
+
+const getUserIDByEmail = `-- name: GetUserIDByEmail :one
+SELECT id FROM users WHERE email = lower($1)
+`
+
+func (q *Queries) GetUserIDByEmail(ctx context.Context, lower string) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getUserIDByEmail, lower)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const getWorkspaceByID = `-- name: GetWorkspaceByID :one
+SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+FROM workspaces WHERE id = $1
+`
+
+type GetWorkspaceByIDRow struct {
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  pgtype.Timestamptz
+	IsPersonal bool
+}
+
+func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorkspaceByIDRow, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceByID, id)
+	var i GetWorkspaceByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.IsPersonal,
 	)
 	return i, err
 }

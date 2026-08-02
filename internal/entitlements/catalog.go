@@ -28,6 +28,10 @@ const (
 	// которыми он ВЛАДЕЕТ, а не те, где состоит: иначе владелец Pro не смог бы
 	// позвать ни одного человека с Free — а звать он будет именно их (ADR §10).
 	Workspaces Key = "workspaces"
+	// MembersPerWorkspace — сколько человек помещается в пространство (считая
+	// владельца). Гейт стоит на приглашении: «позвать коллегу» — это и есть
+	// момент, когда команда становится командой.
+	MembersPerWorkspace Key = "members_per_workspace"
 	// AnalyticsFunnel — воронка отвала: на каком вопросе уходят.
 	AnalyticsFunnel Key = "analytics_funnel"
 	// AnalyticsSources — источники трафика (utm). Ключ заведён, экрана ещё нет;
@@ -69,6 +73,9 @@ const (
 	NoMeter Meter = iota
 	// SubmissionsMeter — расход берётся из workspace_usage.submissions за период.
 	SubmissionsMeter
+	// MembersMeter — израсходовано = сколько человек уже в пространстве.
+	// Периода нет: выгнал участника — место освободилось сразу.
+	MembersMeter
 	// WorkspacesMeter — израсходовано = сколько пространств аккаунт уже держит
 	// (строки workspace_members с role='owner'). Периода у этого счётчика нет:
 	// удалил пространство — освободилось место, ждать первого числа не нужно.
@@ -94,6 +101,7 @@ type Feature struct {
 // иначе он не покажется, и это ловит тест.
 var CatalogOrder = []Key{
 	SubmissionsPerMonth,
+	MembersPerWorkspace,
 	AnalyticsFunnel,
 	AnalyticsSources,
 	Workspaces,
@@ -102,6 +110,7 @@ var CatalogOrder = []Key{
 var Catalog = map[Key]Feature{
 	SubmissionsPerMonth: {Kind: Quota, Scope: WorkspaceScope, Meter: SubmissionsMeter, Title: "Ответов в месяц"},
 	Workspaces:          {Kind: Quota, Scope: AccountScope, Meter: WorkspacesMeter, Title: "Пространств"},
+	MembersPerWorkspace: {Kind: Quota, Scope: WorkspaceScope, Meter: MembersMeter, Title: "Участников"},
 	AnalyticsFunnel:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Воронка отвала"},
 	AnalyticsSources:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Источники трафика"},
 }

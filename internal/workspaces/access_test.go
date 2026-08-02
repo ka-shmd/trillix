@@ -25,7 +25,7 @@ func (r *roleStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 }
 
 func canService(role string, roleErr error) *Service {
-	return NewService(nil, &fakeTx{}, &roleStore{role: role, roleErr: roleErr}, &fakePlans{allowed: true})
+	return NewService(nil, &fakeTx{}, &roleStore{role: role, roleErr: roleErr}, &fakePlans{allowed: true}, nil, "https://app.example")
 }
 
 // Матрица «роль × действие» проверяется ПОЯЧЕЕЧНО (DoD фазы 18): таблица прав —
