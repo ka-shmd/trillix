@@ -1,10 +1,11 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ImageIcon, ImagePlus, MoveVertical, Palette, RefreshCw, Trash2 } from 'lucide-react'
 
-import { COVER_Y_MAX, COVER_Y_MIN, coverY } from '@entities/formSchema'
+import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
 
 import { ColorPicker } from './ColorPicker'
+import { nextCoverY } from './coverDrag'
 import { uploadImage } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -123,7 +124,7 @@ export function CoverArea({ formId }: { formId: string }) {
   // которой выборщик цвета нагрузил TD-32, и повторять её вторым потребителем незачем.
   const [moving, setMoving] = useState(false)
   const [draftY, setDraftY] = useState<number | null>(null)
-  const drag = useRef<{ pointerY: number; startY: number } | null>(null)
+  const drag = useRef<{ pointerY: number; startY: number; y: number } | null>(null)
 
   if (!cover) return null
 
@@ -148,28 +149,29 @@ export function CoverArea({ formId }: { formId: string }) {
       .finally(() => setProgress(null))
   }
 
-  // Перетаскивание: увод указателя ВВЕРХ показывает нижнюю часть картинки, поэтому
-  // y растёт. Масштаб — высота самой полосы: провёл её насквозь, прошёл весь
-  // диапазон. Так жест соразмерен тому, что видно, на любой высоте обложки.
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!moving || !cover?.imageKey) return
     e.currentTarget.setPointerCapture(e.pointerId)
-    drag.current = { pointerY: e.clientY, startY: coverY(cover) }
+    drag.current = { pointerY: e.clientY, startY: coverY(cover), y: coverY(cover) }
     setDraftY(coverY(cover))
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
     const d = drag.current
     if (!d) return
-    const height = bandRef.current?.offsetHeight ?? 1
-    const next = d.startY + ((d.pointerY - e.clientY) * COVER_Y_MAX) / height
-    setDraftY(Math.round(Math.min(COVER_Y_MAX, Math.max(COVER_Y_MIN, next))))
+    d.y = nextCoverY(d.startY, d.pointerY, e.clientY, bandRef.current?.offsetHeight ?? 0)
+    setDraftY(d.y)
   }
 
+  // Коммит берёт значение из РЕФА, а не из состояния: между последним pointermove и
+  // pointerup React может не успеть перерисоваться, и состояние отстанет на кадр —
+  // жест тогда сохранил бы предпоследнее положение. Отставание состояния от жеста —
+  // тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
   function onPointerUp() {
-    if (!drag.current) return
+    const d = drag.current
+    if (!d) return
     drag.current = null
-    if (draftY !== null) setCoverY(draftY)
+    setCoverY(d.y)
     setDraftY(null)
   }
 
