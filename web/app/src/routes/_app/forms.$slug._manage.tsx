@@ -37,7 +37,7 @@ function ManageLayout() {
       <div role="alert" className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6">
         <p className="mb-3 text-sm">Форма не найдена.</p>
         <Button asChild variant="outline" size="sm">
-          <Link to="/forms">Вернуться к списку</Link>
+          <Link to="/forms" search={(prev) => prev}>Вернуться к списку</Link>
         </Button>
       </div>
     )
@@ -49,6 +49,7 @@ function ManageLayout() {
     <section className="mx-auto max-w-4xl p-6">
       <Link
         to="/forms"
+        search={(prev) => prev}
         className="mb-1 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
       >
         <ArrowLeft className="size-4" /> К формам
@@ -67,7 +68,8 @@ function ManageLayout() {
           )}
         </div>
         <Button asChild variant="outline" className="gap-1.5">
-          <Link to="/forms/$slug/edit" params={{ slug }}>
+          <Link to="/forms/$slug/edit" search={(prev) => prev}
+                params={{ slug }}>
             <Pencil className="size-4" /> Редактировать
           </Link>
         </Button>
@@ -103,7 +105,8 @@ function FormTabs({ slug }: { slug: string }) {
     <nav className="mt-6 mb-6 flex gap-6 border-b" aria-label="Разделы формы">
       <Link
         to="/forms/$slug/share"
-        params={{ slug }}
+        search={(prev) => prev}
+                params={{ slug }}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -112,7 +115,8 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/responses"
-        params={{ slug }}
+        search={(prev) => prev}
+                params={{ slug }}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -121,7 +125,8 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/summary"
-        params={{ slug }}
+        search={(prev) => prev}
+                params={{ slug }}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -130,7 +135,8 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/funnel"
-        params={{ slug }}
+        search={(prev) => prev}
+                params={{ slug }}
         className={base}
         activeProps={active}
         inactiveProps={inactive}

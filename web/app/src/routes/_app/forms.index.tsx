@@ -42,7 +42,8 @@ function FormsDashboard() {
 
   function handleCreate() {
     create.mutate({ workspaceId: w || undefined }, {
-      onSuccess: (form) => navigate({ to: '/forms/$slug/edit', params: { slug: form.slug } }),
+      onSuccess: (form) =>
+        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
     })
   }
 

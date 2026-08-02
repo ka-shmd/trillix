@@ -24,7 +24,7 @@ function FormEditor() {
       <div role="alert" className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6">
         <p className="mb-3 text-sm">Форма не найдена.</p>
         <Button asChild variant="outline" size="sm">
-          <Link to="/forms">Вернуться к списку</Link>
+          <Link to="/forms" search={(prev) => prev}>Вернуться к списку</Link>
         </Button>
       </div>
     )

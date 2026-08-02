@@ -1007,3 +1007,53 @@ func TestPublicForm_TitleFromPublishedSchema(t *testing.T) {
 		})
 	}
 }
+
+// Связка «операция → ДЕЙСТВИЕ» — то, ради чего заведена матрица прав, и до
+// ревью фазы 18 её не сторожило ничто: юниты подменяли Can заглушкой, а
+// интеграционные не различали ролей, потому что права на формы у них
+// совпадают. Подмени действие в любой строке ниже — покраснеет здесь.
+func TestOperations_AskTheRightAction(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Service) error
+		want domain.Action
+	}{
+		{"Get", func(s *Service) error {
+			_, err := s.Get(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormRead},
+		{"Delete", func(s *Service) error {
+			return s.Delete(context.Background(), domain.NewID(), domain.NewID())
+		}, domain.ActionFormDelete},
+		{"UpdateName", func(s *Service) error {
+			_, err := s.UpdateName(context.Background(), domain.NewID(), domain.NewID(), "имя")
+			return err
+		}, domain.ActionFormWrite},
+		{"Publish", func(s *Service) error {
+			_, err := s.Publish(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormWrite},
+		{"Versions", func(s *Service) error {
+			_, err := s.Versions(context.Background(), domain.NewID(), domain.NewID())
+			return err
+		}, domain.ActionFormRead},
+		{"GetForAction — что просили, то и спросили", func(s *Service) error {
+			_, err := s.GetForAction(context.Background(), domain.NewID(), domain.NewID(),
+				domain.ActionSubmissionDelete)
+			return err
+		}, domain.ActionSubmissionDelete},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			access := &fakeAccess{}
+			svc := NewService(nil, fakeTx{}, &fakeStore{form: Form{WorkspaceID: domain.NewID()}}, access)
+			_ = tc.call(svc)
+			if len(access.gotActions) == 0 {
+				t.Fatalf("%s не спросил права вовсе", tc.name)
+			}
+			if access.gotActions[0] != tc.want {
+				t.Fatalf("%s спросил %q, ждали %q", tc.name, access.gotActions[0], tc.want)
+			}
+		})
+	}
+}

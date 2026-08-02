@@ -55,6 +55,7 @@ type InviteStore interface {
 	ConsumeInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte) (Invitation, error)
 	AddMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
 	UserIDByEmail(ctx context.Context, db postgres.DBTX, email string) (uuid.UUID, error)
+	PurgeExpiredInvitations(ctx context.Context, db postgres.DBTX) (int64, error)
 }
 
 // MailEnqueuer — постановка письма в outbox В ТОЙ ЖЕ транзакции, что и токен:
@@ -176,6 +177,18 @@ func (s *Service) AcceptInvitation(ctx context.Context, userID uuid.UUID, userEm
 		return Workspace{}, domain.ErrForbidden
 	}
 
+	// Места проверяются ЕЩЁ РАЗ, на принятии. Проверки на выписке мало: гейт
+	// считает участников, а не выписанные приглашения, поэтому пять приглашений
+	// подряд проходят по одному свободному месту и приносят пятерых. Это же
+	// закрывает гонку двух принятий на последнее место.
+	d, err := s.plans.CheckWorkspace(ctx, inv.WorkspaceID, entitlements.MembersPerWorkspace)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if !d.Allowed {
+		return Workspace{}, domain.ErrPlanRequired
+	}
+
 	var ws Workspace
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		consumed, e := s.repo.ConsumeInvitation(ctx, tx, hashInviteToken(rawToken))
@@ -217,4 +230,11 @@ func newInviteToken() (string, error) {
 func hashInviteToken(token string) []byte {
 	sum := sha256.Sum256([]byte(token))
 	return sum[:]
+}
+
+// PurgeExpiredInvitations — периодическая чистка (аналог уборки токенов сброса
+// пароля). Заводится вместе с индексом по expires_at: индекс, обещающий
+// уборщика, которого не наняли, — это не оптимизация, а недоделка.
+func (s *Service) PurgeExpiredInvitations(ctx context.Context) (int64, error) {
+	return s.repo.PurgeExpiredInvitations(ctx, s.db)
 }

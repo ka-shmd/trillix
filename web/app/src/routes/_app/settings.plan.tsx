@@ -20,13 +20,14 @@ export const Route = createFileRoute('/_app/settings/plan')({
 })
 
 function PlanPage() {
-  // Тариф показывается для ТЕКУЩЕГО пространства (?w=), а не для первого в
-  // списке: с несколькими пространствами «первый» — это просто личный, и
-  // страница врала бы про то, в котором человек работает. Пусто = личное, а оно
-  // всегда первое в списке (создано регистрацией, старше остальных).
+  // Тариф показывается для ТЕКУЩЕГО пространства (?w=). Пусто = личное — и оно
+  // ищется ПО ПОМЕТКЕ, а не как первое в списке: список сортируется по возрасту
+  // ПО ВСЕМ пространствам с членством, включая чужие командные, которые старше
+  // моей регистрации. У приглашённого первым шло бы чужое, и «Тариф» в сайдбаре
+  // отдавал бы 403 без единого способа попасть на свой (найдено ревью фазы 18).
   const current = useCurrentWorkspaceId()
   const workspaces = useQuery(workspacesQueryOptions)
-  const workspaceId = current || workspaces.data?.[0]?.id
+  const workspaceId = current || workspaces.data?.find((w) => w.isPersonal)?.id
   const plan = useQuery({
     ...planSnapshotQueryOptions(workspaceId ?? ''),
     enabled: workspaceId !== undefined,

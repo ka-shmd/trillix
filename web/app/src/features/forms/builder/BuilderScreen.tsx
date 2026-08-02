@@ -120,7 +120,8 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                 <Redo2 className="size-4" />
               </Button>
               <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
-                <Link to="/forms/$slug/responses" params={{ slug: detail.slug }}>
+                <Link to="/forms/$slug/responses" search={(prev) => prev}
+                params={{ slug: detail.slug }}>
                   Ответы
                 </Link>
               </Button>
@@ -192,6 +193,7 @@ function Breadcrumbs({ formName }: { formName: string }) {
     <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1 text-sm">
       <Link
         to="/forms"
+        search={(prev) => prev}
         aria-label="Дом"
         className="flex shrink-0 items-center text-muted-foreground hover:text-foreground"
       >

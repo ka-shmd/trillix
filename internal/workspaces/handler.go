@@ -16,6 +16,13 @@ import (
 	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
+// RateLimiter — лимитер приглашений. Реализация — ratelimit.TokenBucket;
+// в тестах инжектируется пермиссивный (инвариант 6: лимит не ослабляется ради
+// прохождения теста).
+type RateLimiter interface {
+	Allow(key string) bool
+}
+
 // Middleware — HTTP-обёртка (RequireAuth из auth), инжектируется в composition
 // root: workspaces не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
@@ -43,10 +50,17 @@ type Handler struct {
 	svc         workspaceService
 	requireAuth Middleware
 	requireCSRF Middleware
+	// inviteLimiter — ведро по ПОЛЬЗОВАТЕЛЮ: приглашение — единственная ручка,
+	// отправляющая письмо на произвольный адрес, причём с подконтрольным
+	// отправителю текстом (имя пространства попадает в тело). Без лимитера один
+	// аккаунт превращается в рассылку с нашего домена, и в спам-лист уезжают
+	// заодно письма подтверждения живых пользователей. Ключ — id пользователя,
+	// а не IP: он есть после RequireAuth и не размывается за NAT.
+	inviteLimiter RateLimiter
 }
 
-func NewHandler(svc workspaceService, requireAuth, requireCSRF Middleware) *Handler {
-	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
+func NewHandler(svc workspaceService, inviteLimiter RateLimiter, requireAuth, requireCSRF Middleware) *Handler {
+	return &Handler{svc: svc, inviteLimiter: inviteLimiter, requireAuth: requireAuth, requireCSRF: requireCSRF}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -192,6 +206,10 @@ func (h *Handler) invite(w http.ResponseWriter, r *http.Request) {
 	workspaceID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if !h.inviteLimiter.Allow(u.ID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много приглашений", domain.ErrRateLimited))
 		return
 	}
 	var req inviteRequest

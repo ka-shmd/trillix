@@ -48,7 +48,6 @@ func TestCan_Matrix(t *testing.T) {
 			domain.ActionBillingView:      true,
 			domain.ActionMemberRead:       true,
 			domain.ActionMemberManage:     true,
-			domain.ActionWorkspaceManage:  true,
 		},
 		RoleEditor: {
 			domain.ActionFormRead:         true,
@@ -58,7 +57,6 @@ func TestCan_Matrix(t *testing.T) {
 			domain.ActionBillingView:      false,
 			domain.ActionMemberRead:       true,
 			domain.ActionMemberManage:     false,
-			domain.ActionWorkspaceManage:  false,
 		},
 	}
 
@@ -147,7 +145,7 @@ func TestAllowedActions_Editor(t *testing.T) {
 	for _, a := range got {
 		has[a] = true
 	}
-	for _, a := range []domain.Action{domain.ActionBillingView, domain.ActionMemberManage, domain.ActionWorkspaceManage} {
+	for _, a := range []domain.Action{domain.ActionBillingView, domain.ActionMemberManage} {
 		if has[a] {
 			t.Errorf("редактору отдано %q", a)
 		}

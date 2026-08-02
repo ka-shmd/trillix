@@ -821,7 +821,8 @@ const getEntitlementsForUser = `-- name: GetEntitlementsForUser :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
-       coalesce(u.submissions, 0)::bigint AS submissions_used
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members mm WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -842,6 +843,7 @@ type GetEntitlementsForUserRow struct {
 	PlanTitle       string
 	Limits          []byte
 	SubmissionsUsed int64
+	MembersCount    int64
 }
 
 // То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
@@ -850,6 +852,10 @@ type GetEntitlementsForUserRow struct {
 // раскрывается. Расход по-прежнему считается на воркспейс, а не на аккаунт:
 // умножить лимит несколькими пространствами нельзя (на Pro лимита ответов нет,
 // на Free воркспейс ровно один) — ADR §10.
+// Счётчик участников входит СЮДА, но не в GetEntitlements: снимок рисуется раз
+// на открытие страницы тарифа, а GetEntitlements стоит на горячем пути приёма
+// ответа. Без него страница показывала бы «Участников 0 из N» при полном
+// пространстве — цифра противоречила бы отказу на кнопке «Пригласить».
 func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlementsForUserParams) (GetEntitlementsForUserRow, error) {
 	row := q.db.QueryRow(ctx, getEntitlementsForUser, arg.WorkspaceID, arg.Period, arg.UserID)
 	var i GetEntitlementsForUserRow
@@ -858,6 +864,7 @@ func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlement
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.MembersCount,
 	)
 	return i, err
 }
@@ -1993,6 +2000,21 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const purgeExpiredInvitations = `-- name: PurgeExpiredInvitations :execrows
+DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL
+`
+
+// Фоновая чистка: истёкшие и уже использованные приглашения не нужны никому —
+// ни ссылка, ни история (кто кого звал, видно по членству). Индекс
+// idx_invitations_expires заведён ровно под этот запрос.
+func (q *Queries) PurgeExpiredInvitations(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeExpiredInvitations)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revealHiddenSubmissions = `-- name: RevealHiddenSubmissions :execrows

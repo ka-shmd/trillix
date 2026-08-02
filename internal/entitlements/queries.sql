@@ -33,11 +33,16 @@ WHERE o.workspace_id = $1 AND o.role = 'owner';
 -- раскрывается. Расход по-прежнему считается на воркспейс, а не на аккаунт:
 -- умножить лимит несколькими пространствами нельзя (на Pro лимита ответов нет,
 -- на Free воркспейс ровно один) — ADR §10.
+-- Счётчик участников входит СЮДА, но не в GetEntitlements: снимок рисуется раз
+-- на открытие страницы тарифа, а GetEntitlements стоит на горячем пути приёма
+-- ответа. Без него страница показывала бы «Участников 0 из N» при полном
+-- пространстве — цифра противоречила бы отказу на кнопке «Пригласить».
 -- name: GetEntitlementsForUser :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
-       coalesce(u.submissions, 0)::bigint AS submissions_used
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT count(*) FROM workspace_members mm WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code

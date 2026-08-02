@@ -79,6 +79,12 @@ const (
 	// слать письма пачками на свой же ящик).
 	verifyRatePerSec = 1.0 / 12.0
 	verifyBurst      = 5
+	// inviteRatePerSec/inviteBurst — приглашения: письмо уходит на ПРОИЗВОЛЬНЫЙ
+	// адрес, поэтому ведро строже, чем у ручек, пишущих только своему владельцу.
+	// Пять подряд (собрать команду за раз), дальше по одному в две минуты.
+	inviteRatePerSec = 1.0 / 120.0
+	inviteBurst      = 5
+
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
 
@@ -236,7 +242,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// собирается раньше него. Обратной зависимости нет: workspaces знает про
 	// тариф, но не про формы.
 	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
-	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Приглашение — единственная ручка, шлющая письмо на произвольный адрес:
+	// ведро по пользователю, темп как у повторного подтверждения почты.
+	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
@@ -304,6 +313,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("expired password reset tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "invitation-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := workspacesSvc.PurgeExpiredInvitations(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("spent invitations purged", slog.Int64("count", n))
 			}
 			return nil
 		},

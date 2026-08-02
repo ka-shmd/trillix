@@ -27,7 +27,6 @@ type fakeStore struct {
 	addOwnerErr     error
 	ownerUserID     uuid.UUID
 	createdWSIDs    []uuid.UUID
-	invitedEmail    string
 	inviteErr       error
 	deletedMembers  int64
 	deleteMemberErr error
@@ -62,7 +61,6 @@ func (f *fakeStore) EmailByUserID(_ context.Context, _ postgres.DBTX, _ uuid.UUI
 // атомарный UPDATE и частичный UNIQUE), здесь фейк только удовлетворяет Store.
 
 func (f *fakeStore) CreateInvitation(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID, _, _ string, _ uuid.UUID, _ time.Time) error {
-	f.invitedEmail = "" // перезаписывается ниже вызывающим тестом при надобности
 	return f.inviteErr
 }
 
@@ -80,6 +78,10 @@ func (f *fakeStore) ConsumeInvitation(_ context.Context, _ postgres.DBTX, _ []by
 
 func (f *fakeStore) AddMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, _ string) error {
 	return nil
+}
+
+func (f *fakeStore) PurgeExpiredInvitations(_ context.Context, _ postgres.DBTX) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeStore) UserIDByEmail(_ context.Context, _ postgres.DBTX, _ string) (uuid.UUID, error) {
