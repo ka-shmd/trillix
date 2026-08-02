@@ -31,11 +31,16 @@
 тариф стоит трёх строк, а открыть её всем — одного `UPDATE`**, при котором код не трогается
 вовсе (вызов `Check*` остаётся на месте и служит выключателем обратно).
 
-**Субъект подписки — воркспейс, а не пользователь.** Монетизируется содержимое воркспейса
-(объём ответов, позже — места в команде), и перевод денег на другую сущность задним числом
-входит в тройку самых дорогих миграций. Личный воркспейс, созданный транзакцией регистрации, —
-**платёжный якорь аккаунта**: его план отвечает и за аккаунт-уровневые лимиты (сегодня
-единственный такой кандидат — число воркспейсов, и он ещё не включён, §10).
+**Субъект подписки — АККАУНТ, а пространство работает по плану своего владельца** (ADR §10,
+фаза 18; **отменяет решение фазы 17** «субъект — воркспейс», чтобы его не построили заново).
+Монетизируется содержимое пространства, но платит человек: один купленный Pro накрывает все
+его пространства, включая заведённые завтра. Иначе получалась нелепица — Pro куплен ради права
+завести командное пространство, а созданное рождается на Free.
+
+Отсюда два скоупа проверки: `CheckWorkspace` (объём, места, аналитика — план берётся у
+владельца пространства) и `CheckAccount` (число пространств — спрашивается у подписки самого
+аккаунта). Сводить их к одной функции нельзя: у нового пространства ещё нет id, а старое к нему
+отношения не имеет.
 
 ---
 
@@ -46,7 +51,7 @@
 | Таблица | Что хранит | Ключевое |
 |---|---|---|
 | `plans` | каталог тарифов: `free`, `pro`, `legacy_free` | лимиты — **данными** в `limits` (JSONB), а не колонками |
-| `subscriptions` | какой план у воркспейса и в каком статусе | **ровно одна строка на воркспейс** (PK по `workspace_id`) |
+| `subscriptions` | какой план у аккаунта и в каком статусе | **ровно одна строка на аккаунт** (PK по `user_id`, с `0016`) |
 | `workspace_usage` | расход за период (`submissions` за месяц) | отдельно, потому что `COUNT(*)` стоял бы на горячем пути приёма |
 | `submissions.over_quota` | ответ пришёл сверх квоты | пометка на строке, а не вычисление «хвоста» на чтении |
 
@@ -181,9 +186,10 @@ UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', 'true') WHERE 
 останутся скрытыми:
 
 ```sql
-UPDATE subscriptions SET plan_code = 'pro', updated_at = now() WHERE workspace_id = '<uuid>';
+-- План у АККАУНТА: переводится владелец, а не пространство (0016).
+UPDATE subscriptions SET plan_code = 'pro', updated_at = now() WHERE user_id = '<user-uuid>';
 UPDATE submissions s SET over_quota = false FROM forms f
- WHERE f.id = s.form_id AND f.workspace_id = '<uuid>' AND s.over_quota;
+ WHERE f.id = s.form_id AND f.workspace_id = '<workspace-uuid>' AND s.over_quota;
 ```
 
 **Посмотреть, кто во что упирается:**
@@ -191,7 +197,8 @@ UPDATE submissions s SET over_quota = false FROM forms f
 ```sql
 SELECT w.id, s.plan_code, u.period, u.submissions
 FROM workspaces w
-JOIN subscriptions s ON s.workspace_id = w.id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
+JOIN subscriptions s ON s.user_id = o.user_id
 LEFT JOIN workspace_usage u ON u.workspace_id = w.id AND u.period = date_trunc('month', now())::date
 ORDER BY u.submissions DESC NULLS LAST LIMIT 20;
 ```
