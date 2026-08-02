@@ -536,6 +536,26 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteMember = `-- name: DeleteMember :execrows
+DELETE FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
+`
+
+type DeleteMemberParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Удаление участника. role <> 'owner' в условии — сторож последнего владельца
+// на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
+func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMember, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
 DELETE FROM invitations
 WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL
@@ -1551,6 +1571,41 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 	return items, nil
 }
 
+const listPendingInvitations = `-- name: ListPendingInvitations :many
+SELECT email, role, expires_at
+FROM invitations
+WHERE workspace_id = $1 AND used_at IS NULL AND expires_at > now()
+ORDER BY created_at ASC
+`
+
+type ListPendingInvitationsRow struct {
+	Email     string
+	Role      string
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Непринятые и не истёкшие приглашения — их видно на той же странице, что и
+// участников: «позвали, но ещё не вошёл» — это состояние пространства.
+func (q *Queries) ListPendingInvitations(ctx context.Context, workspaceID uuid.UUID) ([]ListPendingInvitationsRow, error) {
+	rows, err := q.db.Query(ctx, listPendingInvitations, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPendingInvitationsRow
+	for rows.Next() {
+		var i ListPendingInvitationsRow
+		if err := rows.Scan(&i.Email, &i.Role, &i.ExpiresAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingOutbox = `-- name: ListPendingOutbox :many
 SELECT id, channel, payload, attempts
 FROM outbox
@@ -1686,6 +1741,48 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
+SELECT m.user_id, u.email, m.role, m.created_at
+FROM workspace_members m
+JOIN users u ON u.id = m.user_id
+WHERE m.workspace_id = $1
+ORDER BY (m.role = 'owner') DESC, m.created_at ASC
+`
+
+type ListWorkspaceMembersRow struct {
+	UserID    uuid.UUID
+	Email     string
+	Role      string
+	CreatedAt pgtype.Timestamptz
+}
+
+// Участники пространства: кто и в какой роли. Владелец первым (сортировка по
+// роли), дальше по времени вступления — порядок детерминированный.
+func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceMembersRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceMembers, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceMembersRow
+	for rows.Next() {
+		var i ListWorkspaceMembersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Role,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

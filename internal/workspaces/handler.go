@@ -27,6 +27,10 @@ type workspaceService interface {
 	Invite(ctx context.Context, inviterID, workspaceID uuid.UUID, email string, role Role) error
 	PreviewInvitation(ctx context.Context, rawToken string) (Invitation, error)
 	AcceptInvitation(ctx context.Context, userID uuid.UUID, userEmail, rawToken string) (Workspace, error)
+	Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, []PendingInvite, error)
+	RemoveMember(ctx context.Context, actorID, workspaceID, memberID uuid.UUID) error
+	Leave(ctx context.Context, userID, workspaceID uuid.UUID) error
+	AllowedActions(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.Action, error)
 }
 
 // maxCreateBodyBytes — потолок тела создания: в нём одно короткое имя
@@ -54,6 +58,114 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// Право здесь — сам токен: знание ссылки и есть доказательство.
 	mux.Handle("GET /api/v1/invitations/{token}", http.HandlerFunc(h.previewInvite))
 	mux.Handle("POST /api/v1/invitations/{token}/accept", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.acceptInvite))))
+	mux.Handle("GET /api/v1/workspaces/{id}/members", h.requireAuth(http.HandlerFunc(h.members)))
+	mux.Handle("DELETE /api/v1/workspaces/{id}/members/{userId}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.removeMember))))
+	mux.Handle("POST /api/v1/workspaces/{id}/leave", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.leave))))
+}
+
+type memberResponse struct {
+	UserID   string `json:"userId"`
+	Email    string `json:"email"`
+	Role     string `json:"role"`
+	JoinedAt string `json:"joinedAt"`
+}
+
+type pendingInviteResponse struct {
+	Email     string `json:"email"`
+	Role      string `json:"role"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+type membersResponse struct {
+	Members []memberResponse        `json:"members"`
+	Invites []pendingInviteResponse `json:"invites"`
+	// permissions — что МОЖЕТ спрашивающий в этом пространстве. Кабинет прячет
+	// по нему кнопки и не дублирует матрицу прав в TypeScript.
+	Permissions []string `json:"permissions"`
+}
+
+func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	members, invites, err := h.svc.Members(r.Context(), u.ID, workspaceID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	actions, err := h.svc.AllowedActions(r.Context(), workspaceID, u.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	resp := membersResponse{
+		Members:     make([]memberResponse, len(members)),
+		Invites:     make([]pendingInviteResponse, len(invites)),
+		Permissions: make([]string, len(actions)),
+	}
+	for i, m := range members {
+		resp.Members[i] = memberResponse{
+			UserID: m.UserID.String(), Email: m.Email, Role: string(m.Role),
+			JoinedAt: m.JoinedAt.UTC().Format(time.RFC3339),
+		}
+	}
+	for i, inv := range invites {
+		resp.Invites[i] = pendingInviteResponse{
+			Email: inv.Email, Role: string(inv.Role),
+			ExpiresAt: inv.ExpiresAt.UTC().Format(time.RFC3339),
+		}
+	}
+	for i, a := range actions {
+		resp.Permissions[i] = string(a)
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+func (h *Handler) removeMember(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	memberID, err := uuid.Parse(r.PathValue("userId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.RemoveMember(r.Context(), u.ID, workspaceID, memberID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.Leave(r.Context(), u.ID, workspaceID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// userAndWorkspace — общий разбор «кто спрашивает и про какое пространство».
+// Кривой id — 404, а не 422: чужое существование не обсуждается.
+func userAndWorkspace(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, bool) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return auth.User{}, uuid.Nil, false
+	}
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return auth.User{}, uuid.Nil, false
+	}
+	return u, id, true
 }
 
 type inviteRequest struct {

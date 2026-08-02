@@ -76,3 +76,26 @@ SELECT id FROM users WHERE email = lower($1);
 
 -- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1;
+
+-- name: ListWorkspaceMembers :many
+-- Участники пространства: кто и в какой роли. Владелец первым (сортировка по
+-- роли), дальше по времени вступления — порядок детерминированный.
+SELECT m.user_id, u.email, m.role, m.created_at
+FROM workspace_members m
+JOIN users u ON u.id = m.user_id
+WHERE m.workspace_id = $1
+ORDER BY (m.role = 'owner') DESC, m.created_at ASC;
+
+-- name: ListPendingInvitations :many
+-- Непринятые и не истёкшие приглашения — их видно на той же странице, что и
+-- участников: «позвали, но ещё не вошёл» — это состояние пространства.
+SELECT email, role, expires_at
+FROM invitations
+WHERE workspace_id = $1 AND used_at IS NULL AND expires_at > now()
+ORDER BY created_at ASC;
+
+-- name: DeleteMember :execrows
+-- Удаление участника. role <> 'owner' в условии — сторож последнего владельца
+-- на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
+DELETE FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner';

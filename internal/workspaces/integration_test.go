@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -653,4 +654,152 @@ func setMemberLimit(t *testing.T, limit string) {
 			t.Fatalf("reset member limit: %v", err)
 		}
 	})
+}
+
+// Состав пространства, снятие доступа и краевые случаи — против настоящей БД:
+// сторож последнего владельца стоит в самом запросе, и проверять его надо там.
+func TestMembers_ListRemoveAndOwnerGuard(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	// Владелец видит обоих участников и свои права.
+	var got membersDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &got)
+	if len(got.Members) != 2 || got.Members[0].Role != "owner" {
+		t.Fatalf("состав = %+v, ждали двоих с владельцем первым", got.Members)
+	}
+	if !slices.Contains(got.Permissions, "member.manage") {
+		t.Errorf("владельцу не отдано право member.manage: %v", got.Permissions)
+	}
+
+	// Редактор состав видит, но управлять им не может.
+	var asEditor membersDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &asEditor)
+	if len(asEditor.Members) != 2 {
+		t.Errorf("редактор не видит состав: %+v", asEditor.Members)
+	}
+	if slices.Contains(asEditor.Permissions, "member.manage") {
+		t.Error("редактору отдано право управлять участниками")
+	}
+
+	bobID := userIDByEmail(t, "bob@example.com").String()
+	aliceID := userIDByEmail(t, "alice@example.com").String()
+
+	// Редактор не снимает доступ никому — 403.
+	r := doBody(t, bob, http.MethodDelete, srv.URL+"/api/v1/workspaces/"+team.ID+"/members/"+aliceID, "")
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("редактор снимает доступ владельцу: статус %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Владельца не снимает даже он сам: пространство без владельца не имеет плана.
+	r = del(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/members/"+aliceID)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("владелец снимает себя: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Владелец не может и выйти — по той же причине.
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/leave", "")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("владелец выходит: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// А редактору доступ снимают — и пространство пропадает из его списка.
+	r = del(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/members/"+bobID)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("снятие доступа: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var bobSpaces listDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces"), &bobSpaces)
+	if len(bobSpaces.Workspaces) != 1 || !bobSpaces.Workspaces[0].IsPersonal {
+		t.Fatalf("у отозванного осталось = %+v, ждали только личное", bobSpaces.Workspaces)
+	}
+
+	// И формы пространства ему больше не видны — 404, а не 403.
+	r = do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("отозванный смотрит состав: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Редактор выходит сам — и теряет пространство.
+func TestMembers_EditorLeaves(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	r := post(t, bob, srv, "/api/v1/workspaces/"+team.ID+"/leave", "")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("выход редактора: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var bobSpaces listDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces"), &bobSpaces)
+	if len(bobSpaces.Workspaces) != 1 {
+		t.Fatalf("после выхода осталось %d пространств, ждали одно личное", len(bobSpaces.Workspaces))
+	}
+}
+
+// Посторонний «выходит» из чужого пространства — 404: существование не
+// раскрывается даже отказом.
+func TestMembers_StrangerLeaveIsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	stranger := registerUser(t, srv, "stranger@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	r := post(t, stranger, srv, "/api/v1/workspaces/"+team.ID+"/leave", "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("посторонний выходит: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+type memberDTO struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Role   string `json:"role"`
+}
+
+type membersDTO struct {
+	Members     []memberDTO `json:"members"`
+	Permissions []string    `json:"permissions"`
+}
+
+func del(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
 }

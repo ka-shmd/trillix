@@ -171,3 +171,40 @@ func (Repo) AddMember(ctx context.Context, db postgres.DBTX, workspaceID, userID
 	}
 	return nil
 }
+
+func (Repo) ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Member, error) {
+	rows, err := postgres.New(db).ListWorkspaceMembers(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list members of %s: %w", workspaceID, err)
+	}
+	out := make([]Member, len(rows))
+	for i, r := range rows {
+		out[i] = Member{UserID: r.UserID, Email: r.Email, Role: Role(r.Role), JoinedAt: r.CreatedAt.Time}
+	}
+	return out, nil
+}
+
+func (Repo) ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error) {
+	rows, err := postgres.New(db).ListPendingInvitations(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("list pending invitations of %s: %w", workspaceID, err)
+	}
+	out := make([]PendingInvite, len(rows))
+	for i, r := range rows {
+		out[i] = PendingInvite{Email: r.Email, Role: Role(r.Role), ExpiresAt: r.ExpiresAt.Time}
+	}
+	return out, nil
+}
+
+// DeleteMember возвращает число снятых строк: 0 означает «нет такого участника
+// или это владелец» (владельца запрос не трогает — сторож на уровне SQL).
+func (Repo) DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteMember(ctx, postgres.DeleteMemberParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete member: %w", err)
+	}
+	return n, nil
+}
