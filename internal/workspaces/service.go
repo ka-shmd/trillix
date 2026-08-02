@@ -32,7 +32,7 @@ type Store interface {
 	ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Member, error)
 	ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error)
 	DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
-	CreateTeam(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
+	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
 }
 
@@ -72,12 +72,12 @@ func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans, mailer
 }
 
 // ListForUser возвращает пространства пользователя (личное — первым: оно старше
-// любого командного, а запрос сортирует по created_at).
+// любого другого, а запрос сортирует по created_at).
 func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
 	return s.repo.ListByUser(ctx, s.db, userID)
 }
 
-// Create заводит командное пространство и делает создателя его владельцем.
+// Create заводит пространство и делает создателя его владельцем.
 //
 // Порядок обязателен: сначала гейт тарифа, потом запись. Лимит считает
 // пространства, которыми аккаунт ВЛАДЕЕТ, — членство в чужих не расходует
@@ -109,7 +109,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name string) (Wo
 	id := domain.NewID()
 	var created Workspace
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		w, e := s.repo.CreateTeam(ctx, tx, id, name)
+		w, e := s.repo.Create(ctx, tx, id, name)
 		if e != nil {
 			return e
 		}

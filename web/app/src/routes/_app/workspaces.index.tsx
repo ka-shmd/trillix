@@ -32,8 +32,7 @@ function WorkspacesPage() {
     <div className="mx-auto w-full max-w-3xl p-6">
       <h1 className="mb-1 text-2xl font-semibold tracking-tight">Пространства</h1>
       <p className="mb-6 text-sm text-muted-foreground">
-        Формы принадлежат пространству. Личное создаётся вместе с аккаунтом, командные вы заводите
-        сами.
+        Формы принадлежат пространству. Личное заводится вместе с аккаунтом, остальные — вы сами.
       </p>
 
       {workspaces.isPending && (

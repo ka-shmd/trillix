@@ -299,7 +299,7 @@ func TestWorkspaceMembers_SecondOwnerRejected(t *testing.T) {
 	}
 }
 
-// Создание командного пространства: 201, владельцем становится создатель,
+// Создание пространства: 201, владельцем становится создатель,
 // пространство появляется в его списке и НЕ помечено личным.
 func TestCreateWorkspace_AppearsInListAsTeam(t *testing.T) {
 	resetDB(t)
@@ -324,7 +324,7 @@ func TestCreateWorkspace_AppearsInListAsTeam(t *testing.T) {
 	if len(got.Workspaces) != 2 {
 		t.Fatalf("пространств = %d, ожидалось 2: %+v", len(got.Workspaces), got.Workspaces)
 	}
-	// Личное первое: оно старше любого командного (сортировка по created_at).
+	// Личное первое: оно старше любого другого (сортировка по created_at).
 	if !got.Workspaces[0].IsPersonal || got.Workspaces[1].IsPersonal {
 		t.Errorf("порядок и пометки = %+v, ждали личное первым", got.Workspaces)
 	}
@@ -370,7 +370,7 @@ func TestCreateWorkspace_MembershipInForeignDoesNotConsumeLimit(t *testing.T) {
 	alice := registerUser(t, srv, "alice@example.com")
 	registerUser(t, srv, "bob@example.com")
 
-	// Алиса заводит командное; Боб — просто участник (роль editor).
+	// Алиса заводит дополнительное; Боб — просто участник (роль editor).
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
 	if _, err := testPool.Exec(context.Background(),
@@ -806,7 +806,7 @@ func del(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.
 	return resp
 }
 
-// Заморозка при даунгрейде против настоящей БД: тариф владельца упал — командное
+// Заморозка при даунгрейде против настоящей БД: тариф владельца упал — дополнительное
 // пространство закрылось для ВСЕХ его участников, личное осталось доступным.
 func TestFreeze_OnOwnerDowngrade(t *testing.T) {
 	resetDB(t)
@@ -866,5 +866,57 @@ func TestFreeze_OnOwnerDowngrade(t *testing.T) {
 	}
 	if members != 2 {
 		t.Fatalf("участников после заморозки = %d, ждали 2 — никого не выгоняют", members)
+	}
+}
+
+// Лишние участники замерзают против настоящей БД: ранг считает запрос, и
+// владелец в нём всегда первый. Пространство ЛИЧНОЕ — чтобы было видно, что
+// заморозка мест работает и там, где заморозка пространств не работает никогда.
+func TestFreeze_ExtraMembersInPersonalWorkspace(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var spaces listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &spaces)
+	personalID := spaces.Workspaces[0].ID
+
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	// Пока мест хватает — работают оба.
+	for name, c := range map[string]*http.Client{"владелец": alice, "приглашённый": bob} {
+		r := do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces/"+personalID+"/members")
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("%s до даунгрейда: статус %d, ожидалось 200", name, r.StatusCode)
+		}
+		closeBody(t, r)
+	}
+
+	// Даунгрейд: одно место — его занимает владелец.
+	setMemberLimit(t, "1")
+
+	r := do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+personalID+"/members")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("владелец после даунгрейда: статус %d — его нельзя отрезать от своих форм", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces/"+personalID+"/members")
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("лишний участник после даунгрейда: статус %d, ожидалось 402", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Никого не выгнало: вернётся тариф — вернутся все.
+	var members int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM workspace_members WHERE workspace_id = $1`, personalID).Scan(&members); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if members != 2 {
+		t.Fatalf("участников = %d, ждали 2 — заморозка не удаляет членство", members)
 	}
 }

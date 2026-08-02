@@ -29,7 +29,7 @@ func (r *roleStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 // касается, поэтому тесты матрицы проверяют ровно матрицу. Саму заморозку
 // проверяет отдельный набор ниже и интеграционный тест.
 func (r *roleStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
-	return AccessContext{Role: r.role, IsPersonal: true}, r.roleErr
+	return AccessContext{Role: r.role, IsPersonal: true, MemberRank: 1}, r.roleErr
 }
 
 func canService(role string, roleErr error) *Service {
@@ -157,7 +157,7 @@ func TestAllowedActions_Editor(t *testing.T) {
 	}
 }
 
-// frozenStore — командное пространство заданного ранга: проверяет решение о
+// frozenStore — неличное пространство заданного ранга: проверяет решение о
 // заморозке, а не матрицу прав.
 type frozenStore struct {
 	fakeStore
@@ -165,7 +165,7 @@ type frozenStore struct {
 }
 
 func (f *frozenStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
-	return AccessContext{Role: string(RoleOwner), IsPersonal: false, TeamRank: f.rank}, nil
+	return AccessContext{Role: string(RoleOwner), IsPersonal: false, TeamRank: f.rank, MemberRank: 1}, nil
 }
 
 func frozenService(rank int64, limit *int64) *Service {
@@ -173,18 +173,75 @@ func frozenService(rank int64, limit *int64) *Service {
 	return NewService(nil, &fakeTx{}, &frozenStore{rank: rank}, plans, nil, "https://app.example")
 }
 
-type limitPlans struct{ limit *int64 }
+type limitPlans struct {
+	limit *int64 // лимит пространств (CheckAccount)
+	seats *int64 // лимит мест (CheckWorkspace)
+	asked int    // сколько раз спросили места — сторож экономии на владельце
+}
 
 func (p *limitPlans) CheckAccount(_ context.Context, _ uuid.UUID, _ entitlements.Key) (entitlements.Decision, error) {
 	return entitlements.Decision{Allowed: true, Limit: p.limit}, nil
 }
 
 func (p *limitPlans) CheckWorkspace(_ context.Context, _ uuid.UUID, _ entitlements.Key) (entitlements.Decision, error) {
-	return entitlements.Decision{Allowed: true}, nil
+	p.asked++
+	return entitlements.Decision{Allowed: true, Limit: p.seats}, nil
+}
+
+// seatStore — участник заданного ранга в личном пространстве: проверяет
+// заморозку ЛИШНИХ УЧАСТНИКОВ отдельно от заморозки пространств.
+type seatStore struct {
+	fakeStore
+	rank int64
+}
+
+func (f *seatStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
+	role := RoleEditor
+	if f.rank == 1 {
+		role = RoleOwner
+	}
+	return AccessContext{Role: string(role), IsPersonal: true, MemberRank: f.rank}, nil
+}
+
+// Лишние УЧАСТНИКИ замерзают, а пространство — нет: владелец от своих форм не
+// отрезается, людей никто не выгоняет, возврат тарифа возвращает всех разом.
+// Без этой проверки лимит мест действовал бы только в момент приглашения:
+// набрал команду на Pro, ушёл на Free — и все работают бесплатно навсегда.
+func TestCan_ExtraMembersFreeze(t *testing.T) {
+	two := int64(2)
+	tests := []struct {
+		name   string
+		rank   int64
+		seats  *int64
+		frozen bool
+	}{
+		{"владелец не мёрзнет никогда", 1, &two, false},
+		{"первый приглашённый в лимите", 2, &two, false},
+		{"третий — лишний", 3, &two, true},
+		{"безлимит мест — не мёрзнет никто", 9, nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plans := &limitPlans{seats: tc.seats}
+			svc := NewService(nil, &fakeTx{}, &seatStore{rank: tc.rank}, plans, nil, "https://app.example")
+			err := svc.Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead)
+			if tc.frozen && !errors.Is(err, domain.ErrWorkspaceFrozen) {
+				t.Fatalf("err = %v, ждали ErrWorkspaceFrozen", err)
+			}
+			if !tc.frozen && err != nil {
+				t.Fatalf("участник в лимите закрыт: %v", err)
+			}
+			// Экономия названа вслух и проверена: у владельца — самого частого
+			// спрашивающего — второй поездки в БД за лимитом мест не будет.
+			if tc.rank == 1 && plans.asked != 0 {
+				t.Errorf("для владельца спросили места %d раз, ждали 0", plans.asked)
+			}
+		})
+	}
 }
 
 // Заморозка при даунгрейде: лимит считает ВСЕ пространства владельца, включая
-// личное, поэтому на командные приходится Limit-1 мест.
+// личное, поэтому на остальные приходится Limit-1 мест.
 func TestCan_FrozenWhenOwnerPlanShrank(t *testing.T) {
 	one, two := int64(1), int64(2)
 	tests := []struct {
@@ -195,8 +252,8 @@ func TestCan_FrozenWhenOwnerPlanShrank(t *testing.T) {
 	}{
 		{"безлимит — не мёрзнет никто", 5, nil, false},
 		{"лимит 1: личное занимает единственное место", 1, &one, true},
-		{"лимит 2: первое командное живо", 1, &two, false},
-		{"лимит 2: второе командное заморожено", 2, &two, true},
+		{"лимит 2: первое дополнительное живо", 1, &two, false},
+		{"лимит 2: второе дополнительное заморожено", 2, &two, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
