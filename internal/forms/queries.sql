@@ -8,21 +8,15 @@
 -- NOT NULL, из-за чего скан NULL (черновик) на них падал бы.
 
 -- name: GetPersonalWorkspace :one
--- Личный воркспейс пользователя (в MVP — единственный, созданный при регистрации).
--- «Текущий воркспейс» дашборда, куда кладутся и откуда читаются формы.
-SELECT workspace_id
-FROM workspace_members
-WHERE user_id = $1
-ORDER BY created_at ASC
-LIMIT 1;
+-- ЛИЧНОЕ пространство пользователя — то, куда попадают формы, когда пространство
+-- не названо явно. С 0016 оно помечено колонкой, а не выводится из «самого
+-- раннего членства»: членство в чужом пространстве старше собственной
+-- регистрации невозможно сегодня, но станет возможным ошибкой в любой момент,
+-- а цена такой ошибки — формы, уехавшие в чужую папку.
+SELECT id
+FROM workspaces
+WHERE personal_user_id = $1;
 
--- name: IsWorkspaceMember :one
--- Проверка права доступа к ресурсу: состоит ли пользователь в воркспейсе формы.
--- Основа анти-IDOR — id формы из URL не доказывает право (ARCHITECTURE §4.3).
-SELECT EXISTS (
-    SELECT 1 FROM workspace_members
-    WHERE workspace_id = $1 AND user_id = $2
-);
 
 -- name: CreateForm :one
 INSERT INTO forms (id, workspace_id, title, slug)

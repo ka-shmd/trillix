@@ -28,6 +28,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/token"
 	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var (
@@ -60,7 +61,9 @@ func resetDB(t *testing.T) {
 // Лимитер пермиссивный (инвариант 6).
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
@@ -79,7 +82,9 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {

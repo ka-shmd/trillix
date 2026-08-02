@@ -30,6 +30,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/token"
 	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var (
@@ -63,7 +64,9 @@ func resetDB(t *testing.T) {
 // Лимитеры пермиссивные (инвариант 6: лимит не ослабляется, а подменяется).
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
@@ -84,7 +87,9 @@ func publishedForm(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 
 	user, _, err := authSvc.Register(ctx, "vis-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {
@@ -323,7 +328,9 @@ func formOwner(t *testing.T, slug string) (formID, userID uuid.UUID) {
 }
 
 func funnelService() *visits.Service {
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 }
 

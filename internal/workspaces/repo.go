@@ -56,9 +56,23 @@ func (Repo) AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID 
 	if err := postgres.New(db).CreateWorkspaceMember(ctx, postgres.CreateWorkspaceMemberParams{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
-		Role:        RoleOwner,
+		Role:        string(RoleOwner),
 	}); err != nil {
 		return fmt.Errorf("add workspace owner: %w", err)
 	}
 	return nil
+}
+
+// MemberRole возвращает роль участника в пространстве. pgx.ErrNoRows означает
+// «не участник» и пробрасывается как есть: разбирает его Can — не член получает
+// 404, а не 403 (существование чужого пространства не раскрывается).
+func (Repo) MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (string, error) {
+	role, err := postgres.New(db).GetMemberRole(ctx, postgres.GetMemberRoleParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return "", fmt.Errorf("get member role of %s in %s: %w", userID, workspaceID, err)
+	}
+	return role, nil
 }

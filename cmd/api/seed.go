@@ -21,6 +21,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 // Демо-пользователь и объём сидирования. Учётка чисто dev-фикстура (пароль —
@@ -76,7 +77,9 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	defer pool.Close()
 
 	authSvc := seedAuthService(pool)
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{})
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{},
+		workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{},
+			entitlements.NewService(pool, entitlements.Repo{}, time.Now)))
 
 	// Создать демо-пользователя или найти уже существующего.
 	user, _, err := authSvc.Register(ctx, seedEmail, seedPassword)

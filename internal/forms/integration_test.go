@@ -24,10 +24,12 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var testPool *pgxpool.Pool
@@ -78,7 +80,9 @@ func newStack(t *testing.T) *httptest.Server {
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
-	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now)))
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
 		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t))

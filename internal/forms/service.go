@@ -43,12 +43,21 @@ const (
 	MaxSearchLen = maxTitleLen
 )
 
+// Access — права в пространстве глазами этого модуля (internal/workspaces).
+// Спрашивается ДЕЙСТВИЕ, а не роль (ADR §10): персональные исключения тогда
+// приедут внутрь Can, не тронув ни одной точки вызова здесь.
+//
+// Can сам различает два отказа: не участник → ErrNotFound (404, существование
+// чужого не раскрывается), участник без права → ErrForbidden (403).
+type Access interface {
+	Can(ctx context.Context, workspaceID, userID uuid.UUID, action domain.Action) error
+}
+
 // Store — доступ к данным forms, объявленный на стороне потребителя (сервиса).
 // Реализация — Repo; в тестах подменяется фейком. Методы принимают исполнителя
 // (postgres.DBTX: пул или транзакция).
 type Store interface {
 	GetPersonalWorkspace(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (uuid.UUID, error)
-	IsWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (bool, error)
 	CreateForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string) (Form, error)
 	CreateFormWithSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, title, slug string, name *string, schema json.RawMessage) (Form, error)
 	ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error)
@@ -140,23 +149,24 @@ type Page struct {
 // права доступа: id формы из URL не доказывает членство в её воркспейсе
 // (ARCHITECTURE §4.3, инвариант безопасности 1).
 type Service struct {
-	db   postgres.DBTX // пул: нетранзакционные операции (чтение, одиночные записи)
-	tx   Transactor    // для атомарной публикации (версия + published_version_id)
-	repo Store
+	db     postgres.DBTX // пул: нетранзакционные операции (чтение, одиночные записи)
+	tx     Transactor    // для атомарной публикации (версия + published_version_id)
+	repo   Store
+	access Access // права в пространстве: спрашиваются по действию, не по роли
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store) *Service {
-	return &Service{db: db, tx: tx, repo: repo}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access) *Service {
+	return &Service{db: db, tx: tx, repo: repo, access: access}
 }
 
 // resolveWorkspace превращает «в каком пространстве работаем» в id и проверяет
 // право на него.
 //
 // nil означает личное пространство — это сохраняет поведение ссылок, не знающих
-// про параметр. Явно названное пространство ПРОВЕРЯЕТСЯ на членство: id из
-// запроса правом доступа не является (инвариант 1), и не-член получает 404, а
-// не 403 — существование чужого пространства не раскрывается.
-func (s *Service) resolveWorkspace(ctx context.Context, userID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
+// про параметр, и права на него не спрашивают: оно и есть пространство
+// спрашивающего. Явно названное ПРОВЕРЯЕТСЯ на право названного действия: id из
+// запроса правом доступа не является (инвариант 1).
+func (s *Service) resolveWorkspace(ctx context.Context, userID uuid.UUID, explicit *uuid.UUID, action domain.Action) (uuid.UUID, error) {
 	if explicit == nil {
 		wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
 		if err != nil {
@@ -164,12 +174,8 @@ func (s *Service) resolveWorkspace(ctx context.Context, userID uuid.UUID, explic
 		}
 		return wsID, nil
 	}
-	member, err := s.repo.IsWorkspaceMember(ctx, s.db, *explicit, userID)
-	if err != nil {
+	if err := s.access.Can(ctx, *explicit, userID, action); err != nil {
 		return uuid.Nil, err
-	}
-	if !member {
-		return uuid.Nil, domain.ErrNotFound
 	}
 	return *explicit, nil
 }
@@ -181,7 +187,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string, wo
 	if err := validateTitleLen(title); err != nil {
 		return Form{}, err
 	}
-	wsID, err := s.resolveWorkspace(ctx, userID, workspaceID)
+	wsID, err := s.resolveWorkspace(ctx, userID, workspaceID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -198,7 +204,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string, wo
 // Так суффикс копии виден только в кабинете, публичный заголовок остаётся чистым.
 // Копия всегда draft (публикация не переносится). Доступ проверяется как везде.
 func (s *Service) Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
-	src, err := s.formForUser(ctx, userID, formID)
+	src, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -224,7 +230,7 @@ func (s *Service) UpdateName(ctx context.Context, userID, formID uuid.UUID, name
 	if err := validateTitleLen(name); err != nil {
 		return Form{}, err
 	}
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -262,7 +268,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 		return Page{}, fmt.Errorf("%w: строка поиска длиннее %d символов", domain.ErrValidation, MaxSearchLen)
 	}
 
-	wsID, err := s.resolveWorkspace(ctx, userID, opts.WorkspaceID)
+	wsID, err := s.resolveWorkspace(ctx, userID, opts.WorkspaceID, domain.ActionFormRead)
 	if err != nil {
 		return Page{}, err
 	}
@@ -301,7 +307,7 @@ func escapeLike(s string) string {
 
 // Get возвращает форму по id, если пользователь состоит в её воркспейсе.
 func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
-	return s.formForUser(ctx, userID, formID)
+	return s.formForUser(ctx, userID, formID, domain.ActionFormRead)
 }
 
 // GetBySlug возвращает форму по slug, если пользователь состоит в её воркспейсе.
@@ -310,7 +316,7 @@ func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, erro
 // slug: чужая/несуществующая форма — domain.ErrNotFound (404, существование не
 // раскрываем), как и в formForUser.
 func (s *Service) GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error) {
-	return s.formForUserBySlug(ctx, userID, slug)
+	return s.formForUserBySlug(ctx, userID, slug, domain.ActionFormRead)
 }
 
 // UpdateCloseSettings заменяет настройки закрытия формы (дата/лимит/текст «приём
@@ -321,7 +327,7 @@ func (s *Service) UpdateCloseSettings(ctx context.Context, userID, formID uuid.U
 	if err := domain.ValidateCloseSettings(settings); err != nil {
 		return Form{}, err
 	}
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -339,7 +345,7 @@ func (s *Service) UpdateCloseSettings(ctx context.Context, userID, formID uuid.U
 // D). Порядок как у UpdateCloseSettings: проверка доступа (чужая/нет формы → 404),
 // затем UPDATE. Живая колонка — применяется немедленно, публикации не требует.
 func (s *Service) UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error) {
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -375,7 +381,7 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 		return Form{}, fmt.Errorf("marshal schema: %w", err)
 	}
 
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -409,7 +415,7 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 
 // Delete удаляет форму (после проверки доступа).
 func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormDelete)
 	if err != nil {
 		return err
 	}
@@ -431,7 +437,7 @@ func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 // публикация — «точка невозврата», проверяем ещё раз. Повторная публикация (в т.ч.
 // после закрытия) даёт следующий номер версии.
 func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -478,7 +484,7 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 // номер сохраняются (кабинет покажет «Закрыта · была версия N»). Одиночный UPDATE —
 // транзакция не нужна.
 func (s *Service) Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
 		return Form{}, err
 	}
@@ -529,17 +535,21 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 // Авторизация как у остальных операций по ресурсу (чужая/нет формы → 404). Пустой
 // срез — форму ещё не публиковали. Нужен CSV-экспорту (модуль submissions).
 func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID) ([]Version, error) {
-	form, err := s.formForUser(ctx, userID, formID)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormRead)
 	if err != nil {
 		return nil, err
 	}
 	return s.repo.ListFormVersions(ctx, s.db, form.ID)
 }
 
-// formForUser загружает форму и проверяет членство пользователя в её воркспейсе.
-// И отсутствие формы, и отсутствие членства дают domain.ErrNotFound — существование
-// чужой формы не раскрывается (404, не 403).
-func (s *Service) formForUser(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+// formForUser загружает форму и проверяет ПРАВО пользователя на названное
+// действие в её пространстве. Действие передаётся вызывающим, а не
+// подразумевается: «прочитать» и «удалить» — разные права, и место, где это
+// видно, должно быть местом вызова.
+//
+// Отсутствие формы даёт ErrNotFound; отказ в праве разбирает Can (не участник →
+// 404, участник без права → 403).
+func (s *Service) formForUser(ctx context.Context, userID, formID uuid.UUID, action domain.Action) (Form, error) {
 	form, err := s.repo.GetForm(ctx, s.db, formID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -547,19 +557,14 @@ func (s *Service) formForUser(ctx context.Context, userID, formID uuid.UUID) (Fo
 		}
 		return Form{}, err
 	}
-	member, err := s.repo.IsWorkspaceMember(ctx, s.db, form.WorkspaceID, userID)
-	if err != nil {
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, action); err != nil {
 		return Form{}, err
-	}
-	if !member {
-		return Form{}, domain.ErrNotFound
 	}
 	return form, nil
 }
 
-// formForUserBySlug — как formForUser, но грузит форму по slug. Проверка доступа
-// идентична: и отсутствие формы, и отсутствие членства дают domain.ErrNotFound.
-func (s *Service) formForUserBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error) {
+// formForUserBySlug — как formForUser, но грузит форму по slug.
+func (s *Service) formForUserBySlug(ctx context.Context, userID uuid.UUID, slug string, action domain.Action) (Form, error) {
 	form, err := s.repo.GetFormBySlug(ctx, s.db, slug)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -567,12 +572,8 @@ func (s *Service) formForUserBySlug(ctx context.Context, userID uuid.UUID, slug 
 		}
 		return Form{}, err
 	}
-	member, err := s.repo.IsWorkspaceMember(ctx, s.db, form.WorkspaceID, userID)
-	if err != nil {
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, action); err != nil {
 		return Form{}, err
-	}
-	if !member {
-		return Form{}, domain.ErrNotFound
 	}
 	return form, nil
 }

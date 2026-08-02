@@ -26,3 +26,10 @@ ORDER BY w.created_at ASC;
 INSERT INTO workspaces (id, name)
 VALUES ($1, $2)
 RETURNING id, name, created_at;
+
+-- name: GetMemberRole :one
+-- Роль участника: основа проверки прав (Can). Нет строки → не участник, и это
+-- 404, а не 403 — существование чужого пространства не раскрывается.
+SELECT role
+FROM workspace_members
+WHERE workspace_id = $1 AND user_id = $2;
