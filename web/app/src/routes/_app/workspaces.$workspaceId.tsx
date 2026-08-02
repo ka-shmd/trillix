@@ -60,9 +60,7 @@ function MembersPage() {
       {state.isError && (
         <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
           <p className="mb-3 text-sm">
-            {state.error instanceof ApiError && state.error.code === 'not_found'
-              ? 'Пространство не найдено или доступ к нему закрыт.'
-              : 'Не удалось загрузить участников.'}
+            {membersErrorText(state.error)}
           </p>
           <Button variant="outline" size="sm" onClick={() => state.refetch()}>
             Повторить
@@ -165,6 +163,20 @@ function MembersPage() {
       )}
     </div>
   )
+}
+
+// Заморозка — не поломка и не «оплатите возможность»: данные целы, вернуть
+// доступ можно возвратом тарифа. Поэтому у неё свой код и свой текст.
+function membersErrorText(error: unknown): string {
+  if (!(error instanceof ApiError)) return 'Не удалось загрузить участников.'
+  switch (error.code) {
+    case 'workspace_frozen':
+      return 'Пространство закрыто: тариф владельца больше не покрывает столько пространств. Формы и ответы целы — доступ вернётся вместе с тарифом.'
+    case 'not_found':
+      return 'Пространство не найдено или доступ к нему закрыт.'
+    default:
+      return 'Не удалось загрузить участников.'
+  }
 }
 
 function inviteErrorText(error: unknown): string {

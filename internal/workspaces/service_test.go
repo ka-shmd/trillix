@@ -44,6 +44,12 @@ func (f *fakeStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return string(RoleOwner), nil
 }
 
+// AccessContext по умолчанию — личное пространство владельца: заморозка не
+// касается, и юниты создания/списка проверяют своё.
+func (f *fakeStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
+	return AccessContext{Role: string(RoleOwner), IsPersonal: true}, nil
+}
+
 func (f *fakeStore) GetWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Workspace, error) {
 	return Workspace{ID: id, Name: "Команда"}, nil
 }

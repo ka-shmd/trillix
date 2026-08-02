@@ -25,6 +25,8 @@ type Store interface {
 	// MemberRole — роль участника; pgx.ErrNoRows означает «не участник».
 	MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (string, error)
 	GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Workspace, error)
+	// AccessContext — роль плюс всё, что нужно для решения о заморозке.
+	AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (AccessContext, error)
 	EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error)
 	InviteStore
 	ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Member, error)

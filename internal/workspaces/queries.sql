@@ -99,3 +99,25 @@ ORDER BY created_at ASC;
 -- на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
 DELETE FROM workspace_members
 WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner';
+
+-- name: GetAccessContext :one
+-- Всё, что нужно для решения о доступе, ОДНОЙ поездкой: роль спрашивающего,
+-- личное ли пространство, кто его владелец и какое оно по счёту среди командных
+-- пространств этого владельца (по времени создания).
+--
+-- Ранг нужен заморозке: когда тариф владельца упал, доступными остаются личное
+-- и самые старые командные — «какие именно» решает не выбор пользователя, а
+-- детерминированный порядок, иначе после даунгрейда состав доступного менялся
+-- бы от запроса к запросу.
+SELECT m.role,
+       (w.personal_user_id IS NOT NULL)::bool AS is_personal,
+       o.user_id AS owner_id,
+       (SELECT count(*) FROM workspaces w2
+          JOIN workspace_members o2 ON o2.workspace_id = w2.id AND o2.role = 'owner'
+         WHERE o2.user_id = o.user_id
+           AND w2.personal_user_id IS NULL
+           AND (w2.created_at, w2.id) <= (w.created_at, w.id))::bigint AS team_rank
+FROM workspace_members m
+JOIN workspaces w ON w.id = m.workspace_id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
+WHERE m.workspace_id = $1 AND m.user_id = $2;

@@ -208,3 +208,28 @@ func (Repo) DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, use
 	}
 	return n, nil
 }
+
+// AccessContext — данные для решения о доступе (роль + признаки заморозки).
+type AccessContext struct {
+	Role       string
+	IsPersonal bool
+	OwnerID    uuid.UUID
+	// TeamRank — какое это по счёту КОМАНДНОЕ пространство владельца (1-based).
+	TeamRank int64
+}
+
+func (Repo) AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (AccessContext, error) {
+	row, err := postgres.New(db).GetAccessContext(ctx, postgres.GetAccessContextParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return AccessContext{}, fmt.Errorf("access context of %s in %s: %w", userID, workspaceID, err)
+	}
+	return AccessContext{
+		Role:       row.Role,
+		IsPersonal: row.IsPersonal,
+		OwnerID:    row.OwnerID,
+		TeamRank:   row.TeamRank,
+	}, nil
+}

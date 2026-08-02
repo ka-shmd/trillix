@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -22,6 +23,13 @@ type roleStore struct {
 
 func (r *roleStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (string, error) {
 	return r.role, r.roleErr
+}
+
+// AccessContext отдаёт роль и ЛИЧНОЕ пространство: заморозка личного не
+// касается, поэтому тесты матрицы проверяют ровно матрицу. Саму заморозку
+// проверяет отдельный набор ниже и интеграционный тест.
+func (r *roleStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
+	return AccessContext{Role: r.role, IsPersonal: true}, r.roleErr
 }
 
 func canService(role string, roleErr error) *Service {
@@ -148,5 +156,71 @@ func TestAllowedActions_Editor(t *testing.T) {
 		if !has[a] {
 			t.Errorf("редактору не отдано %q", a)
 		}
+	}
+}
+
+// frozenStore — командное пространство заданного ранга: проверяет решение о
+// заморозке, а не матрицу прав.
+type frozenStore struct {
+	fakeStore
+	rank int64
+}
+
+func (f *frozenStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
+	return AccessContext{Role: string(RoleOwner), IsPersonal: false, TeamRank: f.rank}, nil
+}
+
+func frozenService(rank int64, limit *int64) *Service {
+	plans := &limitPlans{limit: limit}
+	return NewService(nil, &fakeTx{}, &frozenStore{rank: rank}, plans, nil, "https://app.example")
+}
+
+type limitPlans struct{ limit *int64 }
+
+func (p *limitPlans) CheckAccount(_ context.Context, _ uuid.UUID, _ entitlements.Key) (entitlements.Decision, error) {
+	return entitlements.Decision{Allowed: true, Limit: p.limit}, nil
+}
+
+func (p *limitPlans) CheckWorkspace(_ context.Context, _ uuid.UUID, _ entitlements.Key) (entitlements.Decision, error) {
+	return entitlements.Decision{Allowed: true}, nil
+}
+
+// Заморозка при даунгрейде: лимит считает ВСЕ пространства владельца, включая
+// личное, поэтому на командные приходится Limit-1 мест.
+func TestCan_FrozenWhenOwnerPlanShrank(t *testing.T) {
+	one, two := int64(1), int64(2)
+	tests := []struct {
+		name   string
+		rank   int64
+		limit  *int64
+		frozen bool
+	}{
+		{"безлимит — не мёрзнет никто", 5, nil, false},
+		{"лимит 1: личное занимает единственное место", 1, &one, true},
+		{"лимит 2: первое командное живо", 1, &two, false},
+		{"лимит 2: второе командное заморожено", 2, &two, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := frozenService(tc.rank, tc.limit).
+				Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead)
+			if tc.frozen && !errors.Is(err, domain.ErrWorkspaceFrozen) {
+				t.Fatalf("err = %v, ждали ErrWorkspaceFrozen", err)
+			}
+			if !tc.frozen && err != nil {
+				t.Fatalf("живое пространство закрыто: %v", err)
+			}
+		})
+	}
+}
+
+// Личное пространство не замораживается никогда — даже когда лимит нулевой:
+// иначе человек теряет доступ к собственным формам.
+func TestCan_PersonalNeverFrozen(t *testing.T) {
+	zero := int64(0)
+	svc := NewService(nil, &fakeTx{}, &roleStore{role: string(RoleOwner)},
+		&limitPlans{limit: &zero}, nil, "https://app.example")
+	if err := svc.Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead); err != nil {
+		t.Fatalf("личное пространство заморожено: %v", err)
 	}
 }
