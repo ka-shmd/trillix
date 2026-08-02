@@ -191,7 +191,9 @@ export function CoverArea({ formId }: { formId: string }) {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
-        className={moving ? 'cursor-grab touch-none active:cursor-grabbing' : undefined}
+        // select-none и touch-none — чтобы жест не соревновался с выделением текста
+        // и прокруткой страницы; нативный drag самой картинки выключен в CoverBand.
+        className={moving ? 'cursor-grab touch-none select-none active:cursor-grabbing' : undefined}
       >
         {/* Общий вывод: в редакторе показывается ровно то, что увидит респондент.
             Во время жеста подставляется ЧЕРНОВИК сдвига — картинка едет за рукой,

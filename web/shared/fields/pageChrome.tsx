@@ -25,6 +25,12 @@ export function CoverBand({ cover }: { cover?: FormCover }) {
           className="rf-cover-img"
           src={mediaSrc(cover.imageKey)}
           alt=""
+          // Нативный drag картинки выключен, и это НЕ косметика: он перебивает жест
+          // «изменить положение» в редакторе. Браузер начинает своё перетаскивание
+          // через несколько пикселей, снимает захват указателя и шлёт pointercancel —
+          // сдвиг обрывается почти сразу, а за курсором едет призрак картинки. На
+          // публичной странице он тоже не нужен: обложка — фон, а не файл на вынос.
+          draggable={false}
           // Точка фокуса по вертикали: 0 — прижата верхом, 100 — низом. Проценты
           // по горизонтали всегда 50 — обложка шире, чем высока.
           style={{ objectPosition: `50% ${coverY(cover)}%` }}
@@ -43,7 +49,9 @@ export function LogoMark({ logo, over = false }: { logo?: FormLogo; over?: boole
   if (!logo) return null
   return (
     <div className={over ? 'rf-logo rf-logo--over' : 'rf-logo'}>
-      <img className="rf-logo-img" src={mediaSrc(logo.imageKey)} alt="" />
+      {/* draggable=false по той же причине, что у обложки: логотип — знак страницы,
+          а не файл, который куда-то тащат. */}
+      <img className="rf-logo-img" src={mediaSrc(logo.imageKey)} alt="" draggable={false} />
     </div>
   )
 }
