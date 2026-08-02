@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 )
 
 // Role — роль участника в пространстве.
@@ -99,14 +100,17 @@ func allows(role Role, action domain.Action) (bool, error) {
 //     видит, скрывать нечего, а «404» на кнопке, которая у него есть, читалось
 //     бы как поломка.
 func (s *Service) Can(ctx context.Context, workspaceID, userID uuid.UUID, action domain.Action) error {
-	role, err := s.repo.MemberRole(ctx, s.db, workspaceID, userID)
+	acc, err := s.repo.AccessContext(ctx, s.db, workspaceID, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrNotFound
 		}
 		return err
 	}
-	allowed, err := allows(Role(role), action)
+	if err := s.checkFrozen(ctx, acc); err != nil {
+		return err
+	}
+	allowed, err := allows(Role(acc.Role), action)
 	if err != nil {
 		// Неизвестная роль или дыра в матрице — внутренняя ошибка (500), а не
 		// молчаливое «нельзя»: молчание спрятало бы поломку конфигурации.
@@ -118,17 +122,54 @@ func (s *Service) Can(ctx context.Context, workspaceID, userID uuid.UUID, action
 	return nil
 }
 
+// checkFrozen — пространство закрыто, если тариф ВЛАДЕЛЬЦА больше не покрывает
+// столько пространств (ADR §10).
+//
+// Цена решения названа вслух: проверка стоит второго обращения к БД на каждый
+// вопрос о правах, то есть на каждую операцию кабинета с формами. Платим
+// сознательно (решение владельца 2026-08-02, вариант «а»): дешёвые альтернативы
+// либо оставляли замороженное пространство рабочим через прямые вызовы API,
+// либо заставляли SQL читать plans.limits — а лимиты знает только entitlements.
+// Горячий путь приёма ответа сюда НЕ ходит: он публичный и прав не спрашивает,
+// поэтому опубликованные формы замороженного пространства продолжают работать.
+//
+// Личное не замораживается никогда: иначе человек теряет доступ к собственным
+// формам. Какие из командных остаются доступными, решает не выбор пользователя,
+// а возраст: место занимают самые старые.
+func (s *Service) checkFrozen(ctx context.Context, acc AccessContext) error {
+	if acc.IsPersonal {
+		return nil
+	}
+	d, err := s.plans.CheckAccount(ctx, acc.OwnerID, entitlements.Workspaces)
+	if err != nil {
+		return err
+	}
+	if d.Limit == nil {
+		return nil // безлимит — замораживать нечего
+	}
+	// Лимит считает ВСЕ пространства владельца, включая личное, поэтому на
+	// командные приходится Limit-1 мест.
+	if acc.TeamRank > *d.Limit-1 {
+		return domain.ErrWorkspaceFrozen
+	}
+	return nil
+}
+
 // AllowedActions — что этому человеку можно в этом пространстве. Нужен
 // кабинету: кнопку, которой нет права, не рисуют, и логику матрицы для этого
 // не дублируют в TypeScript.
 func (s *Service) AllowedActions(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.Action, error) {
-	role, err := s.repo.MemberRole(ctx, s.db, workspaceID, userID)
+	acc, err := s.repo.AccessContext(ctx, s.db, workspaceID, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, domain.ErrNotFound
 		}
 		return nil, err
 	}
+	if err := s.checkFrozen(ctx, acc); err != nil {
+		return nil, err
+	}
+	role := acc.Role
 	out := make([]domain.Action, 0, len(AllActions))
 	for _, a := range AllActions {
 		allowed, err := allows(Role(role), a)

@@ -803,3 +803,66 @@ func del(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.
 	}
 	return resp
 }
+
+// Заморозка при даунгрейде против настоящей БД: тариф владельца упал — командное
+// пространство закрылось для ВСЕХ его участников, личное осталось доступным.
+func TestFreeze_OnOwnerDowngrade(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	// Пока лимит не включён — пространство работает у обоих.
+	for _, c := range []*http.Client{alice, bob} {
+		r := do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members")
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("до даунгрейда: статус %d, ожидалось 200", r.StatusCode)
+		}
+		closeBody(t, r)
+	}
+
+	// Даунгрейд: на плане помещается одно пространство — его занимает личное.
+	setWorkspaceLimit(t, "1")
+
+	// Закрылось для обоих: и для владельца, и для приглашённого редактора.
+	for name, c := range map[string]*http.Client{"владелец": alice, "редактор": bob} {
+		r := do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members")
+		if r.StatusCode != http.StatusPaymentRequired {
+			t.Fatalf("%s после даунгрейда: статус %d, ожидалось 402", name, r.StatusCode)
+		}
+		closeBody(t, r)
+	}
+
+	// Личное пространство владельца открыто как обычно: заморозка его не
+	// касается. Проверяется тем же путём через Can — составом участников.
+	var spaces listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &spaces)
+	var personalID string
+	for _, w := range spaces.Workspaces {
+		if w.IsPersonal {
+			personalID = w.ID
+		}
+	}
+	r := do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+personalID+"/members")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("личное пространство после даунгрейда: статус %d, ожидалось 200", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Данные не пропали: и пространство, и членство на месте — вернётся тариф,
+	// вернётся доступ.
+	var members int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM workspace_members WHERE workspace_id = $1`, team.ID).Scan(&members); err != nil {
+		t.Fatalf("count members: %v", err)
+	}
+	if members != 2 {
+		t.Fatalf("участников после заморозки = %d, ждали 2 — никого не выгоняют", members)
+	}
+}

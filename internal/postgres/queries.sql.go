@@ -670,6 +670,53 @@ func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) er
 	return err
 }
 
+const getAccessContext = `-- name: GetAccessContext :one
+SELECT m.role,
+       (w.personal_user_id IS NOT NULL)::bool AS is_personal,
+       o.user_id AS owner_id,
+       (SELECT count(*) FROM workspaces w2
+          JOIN workspace_members o2 ON o2.workspace_id = w2.id AND o2.role = 'owner'
+         WHERE o2.user_id = o.user_id
+           AND w2.personal_user_id IS NULL
+           AND (w2.created_at, w2.id) <= (w.created_at, w.id))::bigint AS team_rank
+FROM workspace_members m
+JOIN workspaces w ON w.id = m.workspace_id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
+WHERE m.workspace_id = $1 AND m.user_id = $2
+`
+
+type GetAccessContextParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+type GetAccessContextRow struct {
+	Role       string
+	IsPersonal bool
+	OwnerID    uuid.UUID
+	TeamRank   int64
+}
+
+// Всё, что нужно для решения о доступе, ОДНОЙ поездкой: роль спрашивающего,
+// личное ли пространство, кто его владелец и какое оно по счёту среди командных
+// пространств этого владельца (по времени создания).
+//
+// Ранг нужен заморозке: когда тариф владельца упал, доступными остаются личное
+// и самые старые командные — «какие именно» решает не выбор пользователя, а
+// детерминированный порядок, иначе после даунгрейда состав доступного менялся
+// бы от запроса к запросу.
+func (q *Queries) GetAccessContext(ctx context.Context, arg GetAccessContextParams) (GetAccessContextRow, error) {
+	row := q.db.QueryRow(ctx, getAccessContext, arg.WorkspaceID, arg.UserID)
+	var i GetAccessContextRow
+	err := row.Scan(
+		&i.Role,
+		&i.IsPersonal,
+		&i.OwnerID,
+		&i.TeamRank,
+	)
+	return i, err
+}
+
 const getAccountEntitlements = `-- name: GetAccountEntitlements :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
