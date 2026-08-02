@@ -2570,3 +2570,94 @@ describe('createBuilderStore — заголовок формы приколот 
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 })
+
+// Оформление страницы (обложка и логотип) — поля документа, а не блоки. Главное,
+// что здесь проверяется: они попали в СНАПШОТ истории. Новое поле документа теряется
+// в undo молча — сломанный откат выглядит как «обложка сама вернулась».
+describe('createBuilderStore — обложка и логотип', () => {
+  it('setCover ставит цвет и помечает dirty; toSchema несёт обложку', () => {
+    const store = createBuilderStore()
+    expect(store.getState().cover).toBeUndefined()
+
+    store.getState().setCover({ color: '#ff8800' })
+    expect(store.getState().cover).toEqual({ color: '#ff8800' })
+    expect(store.getState().dirty).toBe(true)
+    expect(store.getState().toSchema().cover).toEqual({ color: '#ff8800' })
+  })
+
+  // Ключа быть не должно вовсе: cover: {} и logo: {} контракт отвергает (422), и
+  // «оформления нет» выражается только отсутствием объекта.
+  it('без оформления toSchema не несёт ключей cover/logo', () => {
+    const schema = createBuilderStore().getState().toSchema()
+    expect('cover' in schema).toBe(false)
+    expect('logo' in schema).toBe(false)
+  })
+
+  it('обложка и логотип переживают undo/redo', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ imageKey: 'ws/a.jpg' })
+    store.getState().setLogo({ imageKey: 'ws/logo.png' })
+
+    store.getState().undo()
+    expect(store.getState().logo).toBeUndefined()
+    expect(store.getState().cover).toEqual({ imageKey: 'ws/a.jpg' })
+
+    store.getState().undo()
+    expect(store.getState().cover).toBeUndefined()
+
+    store.getState().redo()
+    expect(store.getState().cover).toEqual({ imageKey: 'ws/a.jpg' })
+  })
+
+  it('setCover(undefined) снимает обложку', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ color: '#ff8800' })
+    store.getState().setCover(undefined)
+    expect(store.getState().cover).toBeUndefined()
+    expect('cover' in store.getState().toSchema()).toBe(false)
+  })
+
+  it('setCoverY двигает точку фокуса картинки, ноль не теряется', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ imageKey: 'ws/a.jpg' })
+
+    store.getState().setCoverY(0)
+    expect(store.getState().cover).toEqual({ imageKey: 'ws/a.jpg', y: 0 })
+
+    store.getState().setCoverY(80)
+    expect(store.getState().cover?.y).toBe(80)
+  })
+
+  // У цвета двигать нечего, и схема такой документ отвергает: стор не должен уметь
+  // выразить состояние, за которое автосейв получит 422.
+  it('setCoverY по цветной обложке — no-op', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ color: '#ff8800' })
+    const before = store.getState().past.length
+
+    store.getState().setCoverY(30)
+    expect(store.getState().cover).toEqual({ color: '#ff8800' })
+    expect(store.getState().past.length).toBe(before)
+  })
+
+  it('hydrate загружает оформление из схемы', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/a.jpg', y: 10 },
+      logo: { imageKey: 'ws/logo.png' },
+    })
+    expect(store.getState().cover).toEqual({ imageKey: 'ws/a.jpg', y: 10 })
+    expect(store.getState().logo).toEqual({ imageKey: 'ws/logo.png' })
+  })
+
+  // Сторож контракта: то, что стор отдаёт автосейву, обязано проходить Zod.
+  it('документ с оформлением валиден по контракту', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ imageKey: 'ws/a.jpg' })
+    store.getState().setCoverY(0)
+    store.getState().setLogo({ imageKey: 'ws/logo.png' })
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+})

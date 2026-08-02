@@ -3,6 +3,8 @@ import { createStore, type StoreApi } from 'zustand/vanilla'
 import {
   type Block,
   type BlockType,
+  type FormCover,
+  type FormLogo,
   type FormSchema,
   type Option,
   SCHEMA_VERSION,
@@ -68,6 +70,8 @@ export type Snapshot = {
   submitLabel: string
   thankYouText: string
   redirectUrl: string
+  cover: FormCover | undefined
+  logo: FormLogo | undefined
 }
 
 // Потолок глубины истории: длинная сессия не должна расти в памяти без предела.
@@ -81,6 +85,11 @@ export type BuilderState = {
   // дефолтную благодарность; redirectUrl пусто → перехода нет.
   thankYouText: string
   redirectUrl: string
+  // Оформление страницы (форма-уровень): обложка цветом или картинкой и логотип.
+  // undefined = «не задано», и это единственный способ сказать «обложки нет» —
+  // пустого объекта в схеме не бывает (ADR §10).
+  cover: FormCover | undefined
+  logo: FormLogo | undefined
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
   // считается правкой и dirty не трогает.
@@ -221,6 +230,16 @@ export type BuilderActions = {
   // нажатие обязано быть одним шагом отмены. Никаких правок — no-op (историю и
   // dirty не трогает).
   setAfterSubmit: (settings: { thankYouText: string; redirectUrl: string }) => void
+  // setCover/setLogo применяют оформление страницы целиком; undefined снимает его.
+  // Обложка ставится ОДНИМ значением (цвет или картинка), а не двумя полями: контракт
+  // не знает состояния «и то, и другое», и стор не должен уметь его выразить даже на
+  // мгновение — иначе автосейв поймает 422 посреди жеста.
+  setCover: (cover: FormCover | undefined) => void
+  setLogo: (logo: FormLogo | undefined) => void
+  // setCoverY двигает точку фокуса картинки. Свой тег коалесинга: жест перетаскивания
+  // коммитится один раз на отпускании, но повторные жесты подряд остаются разными
+  // шагами истории — как набор в одно поле против набора в разные.
+  setCoverY: (y: number) => void
   // undo/redo откатывают и повторяют изменения документа. Возвращают id блока для
   // каретки после отката (§2.4, firstDiffFocus) — фокус-движок его потребляет; пустой
   // стек / нечего фокусировать — null (no-op / каретка на заголовок).
@@ -994,6 +1013,8 @@ const snapshot = (s: BuilderState): Snapshot => ({
   submitLabel: s.submitLabel,
   thankYouText: s.thankYouText,
   redirectUrl: s.redirectUrl,
+  cover: s.cover,
+  logo: s.logo,
 })
 
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
@@ -1068,6 +1089,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       submitLabel: '',
       thankYouText: '',
       redirectUrl: '',
+      cover: undefined,
+      logo: undefined,
       dirty: false,
       past: [],
       future: [],
@@ -1082,6 +1105,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           submitLabel: schema.submitLabel ?? '',
           thankYouText: schema.thankYouText ?? '',
           redirectUrl: schema.redirectUrl ?? '',
+          cover: schema.cover,
+          logo: schema.logo,
           dirty: false,
           past: [],
           future: [],
@@ -1785,6 +1810,17 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             : { thankYouText, redirectUrl },
         ),
 
+      // Тег null: обложка ставится готовым значением по клику — коалесить нечего.
+      setCover: (cover) => commit(null, (s) => (s.cover === cover ? null : { cover })),
+      setLogo: (logo) => commit(null, (s) => (s.logo === logo ? null : { logo })),
+
+      // Сдвиг осмыслен только у картинки: у цвета двигать нечего, а схема такой
+      // документ отвергает (422). Обложки нет вовсе — тем более no-op.
+      setCoverY: (y) =>
+        commit('cy', (s) =>
+          !s.cover?.imageKey || s.cover.y === y ? null : { cover: { ...s.cover, y } },
+        ),
+
       undo: () => {
         let focus: string | null = null
         set((s) => {
@@ -1829,6 +1865,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         submitLabel: get().submitLabel,
         thankYouText: get().thankYouText,
         redirectUrl: get().redirectUrl,
+        // Ключа нет, когда оформления нет: пустой объект контракт отвергает (422).
+        ...(get().cover ? { cover: get().cover } : {}),
+        ...(get().logo ? { logo: get().logo } : {}),
       }),
     }
   })

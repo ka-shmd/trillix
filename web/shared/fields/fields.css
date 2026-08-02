@@ -117,6 +117,82 @@
   color: var(--rf-text);
 }
 
+/* ОБЛОЖКА И ЛОГОТИП — хром страницы (ADR §10), а не блоки полотна.
+
+   Обложка — СЕСТРА .rf-page, а не её содержимое: у страницы max-width 860 и
+   боковые поля, а обложка идёт во всю ширину. Логотип, наоборот, ВНУТРИ страницы —
+   так он сам собой встаёт по левому краю колонки на всех трёх поверхностях, без
+   абсолютного позиционирования и без знания о ширине полей.
+
+   Высота обложки фиксирована, а не в vh: три поверхности живут в разных коробках
+   (окно респондента, колонка превью, полотно редактора), и доля вьюпорта дала бы в
+   них три разные обложки — WYSIWYG сломан ровно там, где автор его проверяет. */
+.rf-cover {
+  height: 220px;
+  overflow: hidden;
+  background-color: var(--rf-muted); /* виден, пока картинка грузится */
+}
+
+@media (max-width: 640px) {
+  .rf-cover {
+    height: 140px;
+  }
+}
+
+/* object-fit: cover + object-position по вертикали — то, чем управляет «изменить
+   положение» (cover.y, 0–100%). По горизонтали всегда центр: обложка шире, чем
+   высока, и двигать её вбок незачем. */
+.rf-cover-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Нахлёст логотипа на обложку сделан отступами, а не position: absolute: в потоке
+   он остаётся выравненным по колонке и не требует своего контекста позиционирования
+   на каждой из трёх поверхностей.
+
+   margin-bottom съедает gap страницы (48px) до 12px — просвет «логотип → заголовок»
+   у страницы Notion. Меняешь gap у .rf-page — правь и это. */
+.rf-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--rf-radius);
+  overflow: hidden;
+  background: var(--rf-surface);
+  box-shadow: var(--rf-field-shadow);
+  margin-bottom: calc(0.75rem - 3rem);
+}
+
+.rf-logo-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Страница С ОБЛОЖКОЙ: 96px пустоты над заголовком там уже лишние — воздух сверху
+   дала сама обложка. Логотип вылезает на неё ровно наполовину своей высоты
+   (2rem паддинга страницы + 2.25rem = половина 72px). */
+.rf-page.rf-covered {
+  padding-top: 2rem;
+}
+
+.rf-page.rf-covered .rf-logo {
+  margin-top: calc(-2rem - 2.25rem);
+}
+
+@media (max-width: 640px) {
+  .rf-page.rf-covered {
+    padding-top: 1.25rem;
+  }
+
+  .rf-page.rf-covered .rf-logo {
+    margin-top: calc(-1.25rem - 2.25rem);
+  }
+}
+
 /* Кнопка отправки — shadcn primary size=lg редактора (h-10, px-6, text-sm/500). */
 .rf-submit {
   align-self: flex-start;
