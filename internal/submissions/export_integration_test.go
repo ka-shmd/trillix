@@ -39,7 +39,7 @@ func publishTwoVersions(t *testing.T, userID uuid.UUID) uuid.UUID {
 	t.Helper()
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, userID, "CSV")
+	form, err := formsSvc.Create(ctx, userID, "CSV", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestExportCSV_NoVersions_EmptyButValid(t *testing.T) {
 	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{})
-	form, err := formsSvc.Create(ctx, ownerID, "черновик")
+	form, err := formsSvc.Create(ctx, ownerID, "черновик", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

@@ -90,7 +90,7 @@ func publishedForm(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	form, err := formsSvc.Create(ctx, user.ID, "Анкета")
+	form, err := formsSvc.Create(ctx, user.ID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}

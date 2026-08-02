@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -57,8 +59,9 @@ func newStack(t *testing.T) *httptest.Server {
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
-	wsSvc := workspaces.NewService(testPool, workspaces.Repo{})
-	wsH := workspaces.NewHandler(wsSvc, authH.RequireAuth)
+	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans)
+	wsH := workspaces.NewHandler(wsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -69,8 +72,9 @@ func newStack(t *testing.T) *httptest.Server {
 }
 
 type workspaceDTO struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	IsPersonal bool   `json:"isPersonal"`
 }
 
 type listDTO struct {
@@ -164,6 +168,54 @@ func do(t *testing.T, c *http.Client, method, u string) *http.Response {
 	return doBody(t, c, method, u, "")
 }
 
+// post отправляет тело с CSRF-заголовком: запись за RequireCSRF.
+func post(t *testing.T, c *http.Client, srv *httptest.Server, path, jsonBody string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(jsonBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+func csrf(t *testing.T, c *http.Client, base string) string {
+	t.Helper()
+	u, err := url.Parse(base)
+	if err != nil {
+		t.Fatalf("parse url: %v", err)
+	}
+	for _, ck := range c.Jar.Cookies(u) {
+		if ck.Name == "csrf_token" {
+			return ck.Value
+		}
+	}
+	t.Fatal("csrf_token cookie не выдан")
+	return ""
+}
+
+// setWorkspaceLimit включает лимит числа пространств на плане free тем же
+// UPDATE, каким его включит владелец на проде (гейты приезжают выключенными).
+func setWorkspaceLimit(t *testing.T, limit string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{workspaces}', $1::jsonb) WHERE code = 'free'`,
+		limit); err != nil {
+		t.Fatalf("set workspace limit: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{workspaces}', 'null') WHERE code = 'free'`); err != nil {
+			t.Fatalf("reset workspace limit: %v", err)
+		}
+	})
+}
+
 func doBody(t *testing.T, c *http.Client, method, u, jsonBody string) *http.Response {
 	t.Helper()
 	var rdr io.Reader
@@ -237,4 +289,134 @@ func TestWorkspaceMembers_SecondOwnerRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "idx_workspace_members_owner") {
 		t.Errorf("отказ пришёл не от индекса владельца: %v", err)
 	}
+}
+
+// Создание командного пространства: 201, владельцем становится создатель,
+// пространство появляется в его списке и НЕ помечено личным.
+func TestCreateWorkspace_AppearsInListAsTeam(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	r := post(t, c, srv, "/api/v1/workspaces", `{"name":"  Команда  "}`)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("создание: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var created workspaceDTO
+	decode(t, r, &created)
+	if created.Name != "Команда" {
+		t.Errorf("имя = %q, ждали обрезанное «Команда»", created.Name)
+	}
+	if created.IsPersonal {
+		t.Error("созданное пространство помечено личным — личное заводит только регистрация")
+	}
+
+	var got listDTO
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	if len(got.Workspaces) != 2 {
+		t.Fatalf("пространств = %d, ожидалось 2: %+v", len(got.Workspaces), got.Workspaces)
+	}
+	// Личное первое: оно старше любого командного (сортировка по created_at).
+	if !got.Workspaces[0].IsPersonal || got.Workspaces[1].IsPersonal {
+		t.Errorf("порядок и пометки = %+v, ждали личное первым", got.Workspaces)
+	}
+
+	// Владелец ровно один и это создатель: пространство работает по его плану.
+	var owners int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM workspace_members WHERE workspace_id = $1 AND role = 'owner'`,
+		created.ID).Scan(&owners); err != nil {
+		t.Fatalf("count owners: %v", err)
+	}
+	if owners != 1 {
+		t.Errorf("владельцев = %d, ждали ровно одного", owners)
+	}
+}
+
+// Гейт тарифа: на плане с лимитом в одно пространство второе не заводится, и
+// отказ приходит как 402 (plan_required), а не 400 или 403.
+func TestCreateWorkspace_PlanLimit(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+	setWorkspaceLimit(t, "1")
+
+	r := post(t, c, srv, "/api/v1/workspaces", `{"name":"Команда"}`)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("статус = %d, ожидалось 402 (личное уже занимает единственное место)", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var got listDTO
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	if len(got.Workspaces) != 1 {
+		t.Fatalf("пространств = %d, ожидалось 1 — отказ не должен ничего создавать", len(got.Workspaces))
+	}
+}
+
+// Лимит считает пространства, которыми аккаунт ВЛАДЕЕТ. Членство в чужом место
+// не занимает — иначе владелец Pro не смог бы позвать никого с Free.
+func TestCreateWorkspace_MembershipInForeignDoesNotConsumeLimit(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	// Алиса заводит командное; Боб — просто участник (роль editor).
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 SELECT $1, id, 'editor' FROM users WHERE email = 'bob@example.com'`, team.ID); err != nil {
+		t.Fatalf("добавить участника: %v", err)
+	}
+
+	setWorkspaceLimit(t, "2")
+
+	// У Боба во владении одно (личное), значит второе место свободно, хотя
+	// состоит он уже в двух пространствах.
+	bob := loginUser(t, srv, "bob@example.com")
+	r := post(t, bob, srv, "/api/v1/workspaces", `{"name":"Боб и Ко"}`)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("статус = %d, ожидалось 201: членство в чужом пространстве съело место", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Пустое имя — 422 (ошибка валидации), а не пространство без названия.
+func TestCreateWorkspace_EmptyNameRejected(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	r := post(t, c, srv, "/api/v1/workspaces", `{"name":"   "}`)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус = %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Без CSRF-заголовка запись не проходит (инвариант: мутация за RequireCSRF).
+func TestCreateWorkspace_RequiresCSRF(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	r := doBody(t, c, http.MethodPost, srv.URL+"/api/v1/workspaces", `{"name":"Команда"}`)
+	if r.StatusCode == http.StatusCreated {
+		t.Fatal("пространство создано без CSRF-токена")
+	}
+	closeBody(t, r)
+}
+
+func loginUser(t *testing.T, srv *httptest.Server, email string) *http.Client {
+	t.Helper()
+	c := newClient(t)
+	r := doBody(t, c, http.MethodPost, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+email+`","password":"supersecret1"}`)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("login %s: статус %d, ожидалось 200", email, r.StatusCode)
+	}
+	closeBody(t, r)
+	return c
 }

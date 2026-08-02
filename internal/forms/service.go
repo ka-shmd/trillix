@@ -124,6 +124,10 @@ type ListOptions struct {
 	Sort   SortOrder
 	After  *Cursor
 	Limit  int
+	// WorkspaceID — в каком пространстве смотрим. nil = личное (пространство по
+	// умолчанию): так сохраняются живые ссылки кабинета, не знающие про
+	// параметр. Чужое пространство неотличимо от несуществующего — 404.
+	WorkspaceID *uuid.UUID
 }
 
 // Page — страница списка форм и курсор на следующую (nil, если страница последняя).
@@ -145,15 +149,41 @@ func NewService(db postgres.DBTX, tx Transactor, repo Store) *Service {
 	return &Service{db: db, tx: tx, repo: repo}
 }
 
-// Create создаёт форму в личном воркспейсе пользователя с пустым черновиком.
-func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string) (Form, error) {
+// resolveWorkspace превращает «в каком пространстве работаем» в id и проверяет
+// право на него.
+//
+// nil означает личное пространство — это сохраняет поведение ссылок, не знающих
+// про параметр. Явно названное пространство ПРОВЕРЯЕТСЯ на членство: id из
+// запроса правом доступа не является (инвариант 1), и не-член получает 404, а
+// не 403 — существование чужого пространства не раскрывается.
+func (s *Service) resolveWorkspace(ctx context.Context, userID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
+	if explicit == nil {
+		wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("resolve workspace: %w", err)
+		}
+		return wsID, nil
+	}
+	member, err := s.repo.IsWorkspaceMember(ctx, s.db, *explicit, userID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if !member {
+		return uuid.Nil, domain.ErrNotFound
+	}
+	return *explicit, nil
+}
+
+// Create создаёт форму в указанном пространстве (nil = личное) с пустым
+// черновиком.
+func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string, workspaceID *uuid.UUID) (Form, error) {
 	title = normalizeCreateTitle(title)
 	if err := validateTitleLen(title); err != nil {
 		return Form{}, err
 	}
-	wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
+	wsID, err := s.resolveWorkspace(ctx, userID, workspaceID)
 	if err != nil {
-		return Form{}, fmt.Errorf("resolve workspace: %w", err)
+		return Form{}, err
 	}
 	form, err := s.repo.CreateForm(ctx, s.db, domain.NewID(), wsID, title, domain.NewSlug())
 	if err != nil {
@@ -232,9 +262,9 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 		return Page{}, fmt.Errorf("%w: строка поиска длиннее %d символов", domain.ErrValidation, MaxSearchLen)
 	}
 
-	wsID, err := s.repo.GetPersonalWorkspace(ctx, s.db, userID)
+	wsID, err := s.resolveWorkspace(ctx, userID, opts.WorkspaceID)
 	if err != nil {
-		return Page{}, fmt.Errorf("resolve workspace: %w", err)
+		return Page{}, err
 	}
 
 	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в

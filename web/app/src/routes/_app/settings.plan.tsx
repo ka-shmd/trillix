@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { type PlanFeature } from '../../entities/plan'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
+import { useCurrentWorkspaceId } from '../../shared/currentWorkspace'
 import { planSnapshotQueryOptions } from '../../features/plan/queries'
 import { formatDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
@@ -19,9 +20,13 @@ export const Route = createFileRoute('/_app/settings/plan')({
 })
 
 function PlanPage() {
-  // В MVP у пользователя один личный воркспейс — он же платёжный якорь аккаунта.
+  // Тариф показывается для ТЕКУЩЕГО пространства (?w=), а не для первого в
+  // списке: с несколькими пространствами «первый» — это просто личный, и
+  // страница врала бы про то, в котором человек работает. Пусто = личное, а оно
+  // всегда первое в списке (создано регистрацией, старше остальных).
+  const current = useCurrentWorkspaceId()
   const workspaces = useQuery(workspacesQueryOptions)
-  const workspaceId = workspaces.data?.[0]?.id
+  const workspaceId = current || workspaces.data?.[0]?.id
   const plan = useQuery({
     ...planSnapshotQueryOptions(workspaceId ?? ''),
     enabled: workspaceId !== undefined,
@@ -34,7 +39,7 @@ function PlanPage() {
   if (workspaces.isError) {
     return (
       <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-        <p className="mb-3 text-sm">Не удалось загрузить воркспейс.</p>
+        <p className="mb-3 text-sm">Не удалось загрузить пространство.</p>
         <Button variant="outline" size="sm" onClick={() => workspaces.refetch()}>
           Повторить
         </Button>

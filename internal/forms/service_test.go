@@ -67,6 +67,7 @@ type fakeStore struct {
 
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS     uuid.UUID
+	lastListWS       uuid.UUID
 	lastCreateTitle  string
 	lastCreateSlug   string
 	lastCreateName   *string
@@ -150,7 +151,8 @@ func (f *fakeStore) GetFormBySlug(_ context.Context, _ postgres.DBTX, slug strin
 	return form, nil
 }
 
-func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, _ uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+	f.lastListWS = workspaceID
 	f.lastListLimit = limit
 	f.lastListAfter = after != nil
 	f.lastListSort = sort
@@ -674,7 +676,7 @@ func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
 	store := &fakeStore{personalWS: wsID}
 	svc := newTestService(store)
 
-	form, err := svc.Create(context.Background(), domain.NewID(), "  ")
+	form, err := svc.Create(context.Background(), domain.NewID(), "  ", nil)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -686,6 +688,47 @@ func TestCreate_UsesPersonalWorkspaceAndDefaultsTitle(t *testing.T) {
 	}
 	if len(store.lastCreateSlug) != domain.SlugLen {
 		t.Fatalf("slug %q неверной длины", store.lastCreateSlug)
+	}
+}
+
+// Явно названное пространство используется вместо личного — но только после
+// проверки членства: id из запроса правом доступа не является.
+func TestCreate_ExplicitWorkspaceRequiresMembership(t *testing.T) {
+	personal, explicit := domain.NewID(), domain.NewID()
+
+	store := &fakeStore{personalWS: personal, member: true}
+	svc := newTestService(store)
+	if _, err := svc.Create(context.Background(), domain.NewID(), "Форма", &explicit); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if store.lastCreateWS != explicit {
+		t.Fatalf("форма создана в %v, ожидалось названное пространство %v", store.lastCreateWS, explicit)
+	}
+
+	// Не член — 404 (не 403): существование чужого пространства не раскрываем.
+	denied := &fakeStore{personalWS: personal, member: false}
+	svcDenied := newTestService(denied)
+	_, err := svcDenied.Create(context.Background(), domain.NewID(), "Форма", &explicit)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, ожидался domain.ErrNotFound", err)
+	}
+	if denied.created {
+		t.Error("форма создана в пространстве, членом которого пользователь не является")
+	}
+}
+
+// Список без параметра идёт в личное пространство — так работают ссылки,
+// не знающие про workspaceId.
+func TestList_DefaultsToPersonalWorkspace(t *testing.T) {
+	personal := domain.NewID()
+	store := &fakeStore{personalWS: personal}
+	svc := newTestService(store)
+
+	if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{Limit: 10}); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if store.lastListWS != personal {
+		t.Fatalf("список прочитан из %v, ожидалось личное %v", store.lastListWS, personal)
 	}
 }
 

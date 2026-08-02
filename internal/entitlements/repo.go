@@ -50,3 +50,19 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 		SubmissionsUsed: row.SubmissionsUsed,
 	}, nil
 }
+
+// AccountEntitlements — план аккаунта и его счётчики (сколько пространств уже
+// держит). pgx.ErrNoRows пробрасывается: «у аккаунта нет подписки» — нарушенный
+// инвариант регистрации, а не пустой ответ.
+func (Repo) AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error) {
+	row, err := postgres.New(db).GetAccountEntitlements(ctx, userID)
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements of account %s: %w", userID, err)
+	}
+	return Row{
+		PlanCode:        row.PlanCode,
+		PlanTitle:       row.PlanTitle,
+		Limits:          row.Limits,
+		WorkspacesOwned: row.WorkspacesOwned,
+	}, nil
+}
