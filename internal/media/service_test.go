@@ -353,10 +353,11 @@ func TestUpload_КлючРазличаетсяПоСодержимому(t *test
 		}
 		return key
 	}
-	if keyFor(PurposeBlock) == keyFor(PurposeCover) {
+	asBlock, asCover, coverAgain := keyFor(PurposeBlock), keyFor(PurposeCover), keyFor(PurposeCover)
+	if asBlock == asCover {
 		t.Fatal("разная ширина обязана дать разный контент-адресный ключ")
 	}
-	if keyFor(PurposeCover) != keyFor(PurposeCover) {
+	if asCover != coverAgain {
 		t.Fatal("одно и то же назначение обязано быть идемпотентным (дедуп)")
 	}
 }
