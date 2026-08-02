@@ -100,13 +100,12 @@ type Submission struct {
 }
 
 type Subscription struct {
-	WorkspaceID      uuid.UUID
 	PlanCode         string
 	Status           string
 	CurrentPeriodEnd pgtype.Timestamptz
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
-	UserID           pgtype.UUID
+	UserID           uuid.UUID
 }
 
 type User struct {

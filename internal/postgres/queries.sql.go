@@ -300,25 +300,20 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const createSubscription = `-- name: CreateSubscription :exec
-INSERT INTO subscriptions (workspace_id, user_id, plan_code)
-VALUES ($1, $2, $3)
+INSERT INTO subscriptions (user_id, plan_code)
+VALUES ($1, $2)
 `
 
 type CreateSubscriptionParams struct {
-	WorkspaceID uuid.UUID
-	UserID      pgtype.UUID
-	PlanCode    string
+	UserID   uuid.UUID
+	PlanCode string
 }
 
 // Подписка АККАУНТА — четвёртая строка транзакции регистрации (0014, фаза 17;
 // субъект переехал на аккаунт в 0016). Аккаунта без подписки не бывает: иначе
 // каждая проверка лимита обрастает веткой «а если строки нет».
-//
-// workspace_id заполняется до снятия колонки (0016 аддитивна, PK пока на ней):
-// у личного пространства это оно само, и пока колонка есть, она обязана быть
-// заполненной. Уходит вместе с ней следующим релизом.
 func (q *Queries) CreateSubscription(ctx context.Context, arg CreateSubscriptionParams) error {
-	_, err := q.db.Exec(ctx, createSubscription, arg.WorkspaceID, arg.UserID, arg.PlanCode)
+	_, err := q.db.Exec(ctx, createSubscription, arg.UserID, arg.PlanCode)
 	return err
 }
 

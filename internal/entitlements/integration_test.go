@@ -191,8 +191,8 @@ func seedWorkspace(t *testing.T, plan string) (uuid.UUID, uuid.UUID) {
 		t.Fatalf("insert owner: %v", err)
 	}
 	if _, err := testPool.Exec(ctx,
-		`INSERT INTO subscriptions (workspace_id, user_id, plan_code) VALUES ($1, $2, $3)`,
-		wsID, ownerID, plan); err != nil {
+		`INSERT INTO subscriptions (user_id, plan_code) VALUES ($1, $2)`,
+		ownerID, plan); err != nil {
 		t.Fatalf("insert subscription: %v", err)
 	}
 	t.Cleanup(func() {

@@ -61,7 +61,7 @@ type Store interface {
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
-	CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, planCode string) error
+	CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error
 	CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	GetSessionUser(ctx context.Context, db postgres.DBTX, tokenHash []byte) (User, error)
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
@@ -143,7 +143,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {
 			return e
 		}
-		if e := s.repo.CreateSubscription(ctx, tx, wsID, userID, defaultPlanCode); e != nil {
+		if e := s.repo.CreateSubscription(ctx, tx, userID, defaultPlanCode); e != nil {
 			return e
 		}
 		return s.enqueueVerificationEmail(ctx, tx, user)

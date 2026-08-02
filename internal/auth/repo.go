@@ -83,14 +83,12 @@ func (Repo) AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceI
 	return nil
 }
 
-// CreateSubscription заводит подписку АККАУНТА (0016). workspaceID — личное
-// пространство: колонка ещё существует и обязана быть заполненной, уходит
-// следующим релизом вместе с переносом первичного ключа на user_id.
-func (Repo) CreateSubscription(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, planCode string) error {
+// CreateSubscription заводит подписку АККАУНТА (0016): субъект тарифа —
+// пользователь, воркспейс работает по плану своего владельца.
+func (Repo) CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error {
 	if err := postgres.New(db).CreateSubscription(ctx, postgres.CreateSubscriptionParams{
-		WorkspaceID: workspaceID,
-		UserID:      pgtype.UUID{Bytes: userID, Valid: true},
-		PlanCode:    planCode,
+		UserID:   userID,
+		PlanCode: planCode,
 	}); err != nil {
 		return fmt.Errorf("create subscription: %w", err)
 	}
