@@ -20,7 +20,7 @@ type Middleware = func(http.Handler) http.Handler
 
 // mediaService — потребляемый интерфейс сервиса (объявлен на стороне транспорта).
 type mediaService interface {
-	Upload(ctx context.Context, userID, formID uuid.UUID, data []byte) (string, error)
+	Upload(ctx context.Context, userID, formID uuid.UUID, data []byte, purpose Purpose) (string, error)
 }
 
 // Handler — HTTP-транспорт модуля media. Роут приватный (за RequireAuth+RequireCSRF).
@@ -72,7 +72,16 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := h.svc.Upload(r.Context(), u.ID, formID, data)
+	// Назначение — поле той же формы. Читается ПОСЛЕ FormFile: это он разбирает
+	// multipart, до него формы ещё нет. Отсутствие поля = картинка блока (так
+	// выглядят загрузки, которые про параметр не знают).
+	purpose, err := ParsePurpose(r.FormValue("purpose"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	key, err := h.svc.Upload(r.Context(), u.ID, formID, data, purpose)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

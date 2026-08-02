@@ -35,9 +35,66 @@ const (
 	// (1200×3000) кап длинной стороны срезал бы ширину до 640 и сделал картинку
 	// НЕДОразрешённой для той же колонки — оптимизация во вред.
 	MaxImageWidth = 1400
+	// MaxCoverWidth — потолок ширины ОБЛОЖКИ. Она тянется во всю ширину окна, а не
+	// колонки, поэтому 1400 ей мало: типовой ноутбук — 1440–1680 CSS-px. 2000
+	// покрывает его с запасом и даёт DPR 2 на мобильном (390×2 = 780) и DPR 3
+	// (1170). Полный ретина-десктоп (2×1440 = 2880) сознательно НЕ даём: обложка
+	// декоративна, и полтора лишних мегабайта у респондента дороже её резкости.
+	MaxCoverWidth = 2000
+	// MaxLogoWidth — потолок ширины ЛОГОТИПА. Он рисуется ~72 CSS-px (`.rf-logo`),
+	// то есть сегодня хватило бы 216 (DPR 3). 512 взято с запасом на смену размера
+	// и не стоит ничего заметного: плоская графика в этих габаритах — единицы КиБ.
+	MaxLogoWidth = 512
 	// jpegQuality — качество при ре-энкоде JPEG.
 	jpegQuality = 85
 )
+
+// Purpose — НАЗНАЧЕНИЕ картинки: где она будет показана. Влияет ровно на одно —
+// потолок ширины при нормализации. Отдельный параметр, а не догадка по размеру
+// входа: обложку от картинки блока по пикселям не отличить, а хранить обложку в
+// ширину колонки (или логотип в ширину обложки) одинаково неправильно.
+//
+// Хранилище от назначения НЕ зависит: ключ по-прежнему контент-адресный, бакет и
+// политика те же. Поэтому Purpose не попадает ни в ключ, ни в схему — одна и та же
+// картинка, загруженная дважды с разным назначением, даст два объекта, и это
+// нормально: у них разное содержимое (разная ширина).
+type Purpose string
+
+const (
+	PurposeBlock Purpose = "block"
+	PurposeCover Purpose = "cover"
+	PurposeLogo  Purpose = "logo"
+)
+
+// maxWidth — потолок ширины для назначения. Неизвестное назначение сюда не
+// доезжает: его отвергает ParsePurpose на границе.
+func (p Purpose) maxWidth() int {
+	switch p {
+	case PurposeCover:
+		return MaxCoverWidth
+	case PurposeLogo:
+		return MaxLogoWidth
+	default:
+		return MaxImageWidth
+	}
+}
+
+// ParsePurpose разбирает назначение из запроса. Пустое = block: так выглядят
+// загрузки картинки блока, которые про параметр не знают. Неизвестное значение —
+// ошибка, а не молчаливый откат к block: опечатка в назначении означала бы обложку,
+// ужатую до ширины колонки, и заметили бы это глазами через неделю.
+func ParsePurpose(s string) (Purpose, error) {
+	switch Purpose(s) {
+	case "", PurposeBlock:
+		return PurposeBlock, nil
+	case PurposeCover:
+		return PurposeCover, nil
+	case PurposeLogo:
+		return PurposeLogo, nil
+	default:
+		return "", fmt.Errorf("%w: неизвестное назначение картинки %q", domain.ErrValidation, s)
+	}
+}
 
 // Forms — узкий интерфейс потребителя над forms.Service: авторизует членство и
 // резолвит WorkspaceID формы. Get возвращает ErrNotFound для чужой/несуществующей
@@ -67,13 +124,13 @@ func NewService(f Forms, b blobPutter, bucket string) *Service {
 // EXIF/GPS) и кладёт её в бакет, возвращая стабильный ключ
 // workspaceID/<sha256>.<ext>. Порядок: сначала проверка доступа (инвариант 1),
 // затем обработка байтов. Контент-адресный ключ делает PUT идемпотентным (дедуп).
-func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []byte) (string, error) {
+func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []byte, purpose Purpose) (string, error) {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
 		return "", err // ErrNotFound для чужой/несуществующей — не раскрываем приватное
 	}
 
-	ext, contentType, canonical, err := decodeReencode(data)
+	ext, contentType, canonical, err := decodeReencode(data, purpose.maxWidth())
 	if err != nil {
 		return "", err
 	}
@@ -88,10 +145,10 @@ func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []b
 }
 
 // decodeReencode проверяет, что вход — PNG/JPEG, гардит площадь, уменьшает картинку
-// до MaxImageWidth и пере-кодирует в канонические байты (снимая EXIF/GPS и
+// до maxWidth и пере-кодирует в канонические байты (снимая EXIF/GPS и
 // нормализуя). Возвращает расширение, content-type и новые байты. Любая проблема
 // входа → ErrValidation (422).
-func decodeReencode(data []byte) (ext, contentType string, out []byte, err error) {
+func decodeReencode(data []byte, maxWidth int) (ext, contentType string, out []byte, err error) {
 	// Тип по контенту, не по заголовку/имени файла.
 	sniff := detectImageType(data)
 	if sniff == "" {
@@ -112,22 +169,22 @@ func decodeReencode(data []byte) (ext, contentType string, out []byte, err error
 		return "", "", nil, fmt.Errorf("%w: не удалось декодировать картинку", domain.ErrValidation)
 	}
 
-	return encodeCanonical(downscale(img))
+	return encodeCanonical(downscale(img, maxWidth))
 }
 
-// downscale уменьшает картинку до MaxImageWidth по ширине, сохраняя пропорции.
+// downscale уменьшает картинку до maxWidth по ширине, сохраняя пропорции.
 // Только уменьшает: то, что уже уже потолка (логотип, узкая высокая полоса),
 // возвращается нетронутым — апскейл добавил бы байт, не добавив деталей.
-func downscale(img image.Image) image.Image {
+func downscale(img image.Image, maxWidth int) image.Image {
 	b := img.Bounds()
-	if b.Dx() <= MaxImageWidth {
+	if b.Dx() <= maxWidth {
 		return img
 	}
-	h := int(math.Round(float64(b.Dy()) * float64(MaxImageWidth) / float64(b.Dx())))
+	h := int(math.Round(float64(b.Dy()) * float64(maxWidth) / float64(b.Dx())))
 	if h < 1 {
 		h = 1 // очень широкая полоса: высота не должна схлопнуться в ноль
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, MaxImageWidth, h))
+	dst := image.NewRGBA(image.Rect(0, 0, maxWidth, h))
 	// CatmullRom — интерполяция с резкостью, заметно лучше билинейной на
 	// сильном уменьшении (фото с телефона ужимается втрое и больше).
 	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
