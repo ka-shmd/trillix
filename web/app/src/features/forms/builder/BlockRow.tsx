@@ -88,12 +88,6 @@ export interface BlockRowProps {
   // зеркалится в правое поле (левый лёг бы в 28px-жёлоб между колонками и наехал
   // на соседнюю группу), тогл обязательности остаётся у правого края текста.
   mirrored?: boolean
-  // rowZone — зона жеста «встань в ряд со мной» на ЭТОЙ строке (фаза 15, §6.6):
-  // absolute-оверлей, который полотно зажигает, пока тащат подходящее поле её группы.
-  // Приходит готовым узлом: строка о droppable'ах и правилах dnd не знает, её дело —
-  // дать absolute-якорь (root уже relative). Вне потока и pointer-events-none — как
-  // и весь появляющийся по драгу декор (урок TD-22).
-  rowZone?: ReactNode
   // needsCaption — строка ответа стоит без заголовка. С фазы 15 это ЗАКОННОЕ
   // состояние (правило requiresCaption понижено до правила вставки, §4.4 спеки), и
   // вместо сопротивления строка предлагает недостающее действие: чип «Mod+Alt+T —
@@ -144,7 +138,6 @@ export function BlockRow({
   insideQuestion = false,
   firstOfForm = false,
   mirrored = false,
-  rowZone,
   needsCaption = false,
   openMenuOnMount,
   onAddBelow,
@@ -485,7 +478,6 @@ export function BlockRow({
       onKeyDown={onRowKeyDown}
       className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
     >
-      {rowZone}
       {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
           строки, сам поповер порталится. onPickType — тот же pickType, что у слеш-меню
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
