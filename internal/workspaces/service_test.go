@@ -21,14 +21,16 @@ type fakeStore struct {
 	err        error
 	gotUserID  uuid.UUID
 
-	createdName  string
-	createErr    error
-	ownerAdded   bool
-	addOwnerErr  error
-	ownerUserID  uuid.UUID
-	createdWSIDs []uuid.UUID
-	invitedEmail string
-	inviteErr    error
+	createdName     string
+	createErr       error
+	ownerAdded      bool
+	addOwnerErr     error
+	ownerUserID     uuid.UUID
+	createdWSIDs    []uuid.UUID
+	invitedEmail    string
+	inviteErr       error
+	deletedMembers  int64
+	deleteMemberErr error
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
@@ -76,6 +78,20 @@ func (f *fakeStore) AddMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID
 
 func (f *fakeStore) UserIDByEmail(_ context.Context, _ postgres.DBTX, _ string) (uuid.UUID, error) {
 	return uuid.Nil, pgx.ErrNoRows
+}
+
+func (f *fakeStore) ListMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Member, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListPendingInvites(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]PendingInvite, error) {
+	return nil, nil
+}
+
+// DeleteMember отдаёт заданное число снятых строк: 0 — «нет такого или это
+// владелец», и именно этот случай проверяют юниты выхода и снятия доступа.
+func (f *fakeStore) DeleteMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
+	return f.deletedMembers, f.deleteMemberErr
 }
 
 func (f *fakeStore) CreateTeam(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
