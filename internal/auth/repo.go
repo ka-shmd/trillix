@@ -61,7 +61,7 @@ func (Repo) GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) 
 // (регистрация — единственный вызывающий). Командные пространства заводит
 // workspaces со своим запросом и NULL в этой колонке.
 func (Repo) CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {
-	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{
+	row, err := postgres.New(db).CreatePersonalWorkspace(ctx, postgres.CreatePersonalWorkspaceParams{
 		ID:             id,
 		Name:           name,
 		PersonalUserID: pgtype.UUID{Bytes: personalUserID, Valid: true},

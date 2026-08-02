@@ -312,7 +312,7 @@ type createRequest struct {
 	Name string `json:"name"`
 }
 
-// create заводит командное пространство. Владелец — текущий пользователь (из
+// create заводит дополнительное пространство. Владелец — текущий пользователь (из
 // контекста RequireAuth, а не из тела: id в теле правом не является).
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.UserFromContext(r.Context())

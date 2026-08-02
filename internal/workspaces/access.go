@@ -131,22 +131,39 @@ func (s *Service) Can(ctx context.Context, workspaceID, userID uuid.UUID, action
 // поэтому опубликованные формы замороженного пространства продолжают работать.
 //
 // Личное не замораживается никогда: иначе человек теряет доступ к собственным
-// формам. Какие из командных остаются доступными, решает не выбор пользователя,
+// формам. Какие из дополнительных остаются доступными, решает не выбор пользователя,
 // а возраст: место занимают самые старые.
 func (s *Service) checkFrozen(ctx context.Context, acc AccessContext) error {
-	if acc.IsPersonal {
+	// 1. Лишние ПРОСТРАНСТВА. Личное не замораживается никогда: иначе даунгрейд
+	// отнимает у человека собственные формы, и жить ему негде.
+	if !acc.IsPersonal {
+		d, err := s.plans.CheckAccount(ctx, acc.OwnerID, entitlements.Workspaces)
+		if err != nil {
+			return err
+		}
+		// Лимит считает ВСЕ пространства владельца, включая личное, поэтому на
+		// остальные приходится Limit-1 мест.
+		if d.Limit != nil && acc.TeamRank > *d.Limit-1 {
+			return domain.ErrWorkspaceFrozen
+		}
+	}
+
+	// 2. Лишние УЧАСТНИКИ. Без этой проверки лимит мест действовал бы только в
+	// момент приглашения: набрал команду на Pro, ушёл на Free — и все остались
+	// работать бесплатно навсегда. Морозим не пространство, а именно лишних:
+	// владельца от его форм отрезать нельзя, а выгонять людей — терять данные и
+	// доверие. Возврат тарифа возвращает всех разом.
+	//
+	// Владелец всегда первый и потому не мёрзнет НИКОГДА — на этом же экономится
+	// запрос: у самого частого спрашивающего второй поездки в БД не будет.
+	if acc.MemberRank <= 1 {
 		return nil
 	}
-	d, err := s.plans.CheckAccount(ctx, acc.OwnerID, entitlements.Workspaces)
+	d, err := s.plans.CheckWorkspace(ctx, acc.WorkspaceID, entitlements.MembersPerWorkspace)
 	if err != nil {
 		return err
 	}
-	if d.Limit == nil {
-		return nil // безлимит — замораживать нечего
-	}
-	// Лимит считает ВСЕ пространства владельца, включая личное, поэтому на
-	// командные приходится Limit-1 мест.
-	if acc.TeamRank > *d.Limit-1 {
+	if d.Limit != nil && acc.MemberRank > *d.Limit {
 		return domain.ErrWorkspaceFrozen
 	}
 	return nil

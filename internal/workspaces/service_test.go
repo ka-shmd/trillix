@@ -46,7 +46,7 @@ func (f *fakeStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 // AccessContext по умолчанию — личное пространство владельца: заморозка не
 // касается, и юниты создания/списка проверяют своё.
 func (f *fakeStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (AccessContext, error) {
-	return AccessContext{Role: string(RoleOwner), IsPersonal: true}, nil
+	return AccessContext{Role: string(RoleOwner), IsPersonal: true, MemberRank: 1}, nil
 }
 
 func (f *fakeStore) GetWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Workspace, error) {
@@ -102,7 +102,7 @@ func (f *fakeStore) DeleteMember(_ context.Context, _ postgres.DBTX, _, _ uuid.U
 	return f.deletedMembers, f.deleteMemberErr
 }
 
-func (f *fakeStore) CreateTeam(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+func (f *fakeStore) Create(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
 	if f.createErr != nil {
 		return Workspace{}, f.createErr
 	}

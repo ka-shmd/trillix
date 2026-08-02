@@ -40,12 +40,12 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) 
 	return out, nil
 }
 
-// CreateTeam заводит КОМАНДНОЕ пространство (без пометки личного): личное
-// создаёт только транзакция регистрации, и оно у аккаунта ровно одно.
-func (Repo) CreateTeam(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
-	row, err := postgres.New(db).CreateTeamWorkspace(ctx, postgres.CreateTeamWorkspaceParams{ID: id, Name: name})
+// Create заводит пространство (без пометки личного): личное создаёт только
+// транзакция регистрации, и оно у аккаунта ровно одно.
+func (Repo) Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{ID: id, Name: name})
 	if err != nil {
-		return Workspace{}, fmt.Errorf("create team workspace: %w", err)
+		return Workspace{}, fmt.Errorf("create workspace: %w", err)
 	}
 	return Workspace{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.Time}, nil
 }
@@ -211,11 +211,15 @@ func (Repo) DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, use
 
 // AccessContext — данные для решения о доступе (роль + признаки заморозки).
 type AccessContext struct {
-	Role       string
-	IsPersonal bool
-	OwnerID    uuid.UUID
-	// TeamRank — какое это по счёту КОМАНДНОЕ пространство владельца (1-based).
+	WorkspaceID uuid.UUID
+	Role        string
+	IsPersonal  bool
+	OwnerID     uuid.UUID
+	// TeamRank — какое это по счёту НЕЛИЧНОЕ пространство владельца (1-based).
 	TeamRank int64
+	// MemberRank — какой по счёту участник этого пространства спрашивает
+	// (1-based; владелец всегда первый).
+	MemberRank int64
 }
 
 func (Repo) AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (AccessContext, error) {
@@ -227,10 +231,12 @@ func (Repo) AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, us
 		return AccessContext{}, fmt.Errorf("access context of %s in %s: %w", userID, workspaceID, err)
 	}
 	return AccessContext{
-		Role:       row.Role,
-		IsPersonal: row.IsPersonal,
-		OwnerID:    row.OwnerID,
-		TeamRank:   row.TeamRank,
+		WorkspaceID: workspaceID,
+		Role:        row.Role,
+		IsPersonal:  row.IsPersonal,
+		OwnerID:     row.OwnerID,
+		TeamRank:    row.TeamRank,
+		MemberRank:  row.MemberRank,
 	}, nil
 }
 

@@ -134,7 +134,7 @@ type listResponse struct {
 type titleRequest struct {
 	Title string `json:"title"`
 	// workspaceId — в каком пространстве заводим форму. Отсутствует = личное:
-	// кабинет присылает его, только когда работает в командном.
+	// кабинет присылает его, только когда работает не в личном.
 	WorkspaceID *string `json:"workspaceId"`
 }
 
