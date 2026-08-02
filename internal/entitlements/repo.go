@@ -48,6 +48,7 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 		PlanTitle:       row.PlanTitle,
 		Limits:          row.Limits,
 		SubmissionsUsed: row.SubmissionsUsed,
+		MembersCount:    row.MembersCount,
 	}, nil
 }
 

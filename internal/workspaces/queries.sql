@@ -121,3 +121,9 @@ FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
 JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
 WHERE m.workspace_id = $1 AND m.user_id = $2;
+
+-- name: PurgeExpiredInvitations :execrows
+-- Фоновая чистка: истёкшие и уже использованные приглашения не нужны никому —
+-- ни ссылка, ни история (кто кого звал, видно по членству). Индекс
+-- idx_invitations_expires заведён ровно под этот запрос.
+DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL;

@@ -2,6 +2,7 @@ package workspaces
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,12 +39,21 @@ func (s *Service) Members(ctx context.Context, userID, workspaceID uuid.UUID) ([
 	}
 	// Непринятые приглашения видит только тот, кто может ими управлять: адреса
 	// позванных — не то, что нужно знать редактору.
+	//
+	// Различать «нельзя» и «спросить не удалось» здесь обязательно: проглоти мы
+	// вторую — владелец увидел бы пустой список приглашённых, выписал бы
+	// повторное, и первая ссылка молча аннулировалась бы у человека на руках.
 	var invites []PendingInvite
-	if err := s.Can(ctx, workspaceID, userID, domain.ActionMemberManage); err == nil {
+	switch err := s.Can(ctx, workspaceID, userID, domain.ActionMemberManage); {
+	case err == nil:
 		invites, err = s.repo.ListPendingInvites(ctx, s.db, workspaceID)
 		if err != nil {
 			return nil, nil, err
 		}
+	case errors.Is(err, domain.ErrForbidden):
+		// Роль не даёт — законный случай: редактор видит состав без приглашений.
+	default:
+		return nil, nil, err
 	}
 	return members, invites, nil
 }

@@ -32,6 +32,10 @@ func (f fakeForms) Get(context.Context, uuid.UUID, uuid.UUID) (forms.Form, error
 	return forms.Form{}, domain.ErrNotFound
 }
 
+func (f fakeForms) GetForAction(context.Context, uuid.UUID, uuid.UUID, domain.Action) (forms.Form, error) {
+	return forms.Form{}, domain.ErrNotFound
+}
+
 func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Version, error) {
 	return nil, domain.ErrNotFound
 }

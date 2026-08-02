@@ -67,7 +67,9 @@ func newStack(t *testing.T) *httptest.Server {
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
 		pgtest.MailService(testPool), "http://localhost:5173")
-	wsH := workspaces.NewHandler(wsSvc, authH.RequireAuth, authH.RequireCSRF)
+	// Лимитер приглашений — пермиссивный (инвариант 6: лимит не ослабляется
+	// ради теста, а инжектируется).
+	wsH := workspaces.NewHandler(wsSvc, ratelimit.AllowAll{}, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)

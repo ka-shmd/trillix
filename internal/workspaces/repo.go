@@ -233,3 +233,11 @@ func (Repo) AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, us
 		TeamRank:   row.TeamRank,
 	}, nil
 }
+
+func (Repo) PurgeExpiredInvitations(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).PurgeExpiredInvitations(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired invitations: %w", err)
+	}
+	return n, nil
+}

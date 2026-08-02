@@ -39,7 +39,10 @@ function AppLayout() {
 
   function handleCreate() {
     create.mutate({ workspaceId: workspaceId || undefined }, {
-      onSuccess: (form) => navigate({ to: '/forms/$slug/edit', params: { slug: form.slug } }),
+      onSuccess: (form) =>
+        // search сохраняется: иначе редактор откроется «вне пространства», и
+        // следующая созданная оттуда форма уедет в личное.
+        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
     })
   }
 

@@ -305,6 +305,14 @@ func escapeLike(s string) string {
 	return r.Replace(s)
 }
 
+// GetForAction — форма плюс проверка НАЗВАННОГО права на неё. Нужна соседним
+// модулям (удаление ответа), которым мало права «прочитать форму»: у их
+// действия своё право, и спрашивать надо именно его — иначе снятая ячейка
+// матрицы молча не действует.
+func (s *Service) GetForAction(ctx context.Context, userID, formID uuid.UUID, action domain.Action) (Form, error) {
+	return s.formForUser(ctx, userID, formID, action)
+}
+
 // Get возвращает форму по id, если пользователь состоит в её воркспейсе.
 func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
 	return s.formForUser(ctx, userID, formID, domain.ActionFormRead)
