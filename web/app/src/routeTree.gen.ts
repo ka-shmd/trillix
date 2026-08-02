@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
+import { Route as InviteRouteImport } from './routes/invite'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
@@ -20,6 +21,7 @@ import { Route as AuthLinkAccountRouteImport } from './routes/_auth/link-account
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
+import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
@@ -31,6 +33,11 @@ import { Route as AppFormsSlugManageFunnelRouteImport } from './routes/_app/form
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: '/verify-email',
   path: '/verify-email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InviteRoute = InviteRouteImport.update({
+  id: '/invite',
+  path: '/invite',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
@@ -81,6 +88,12 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   path: '/forms/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppWorkspacesWorkspaceIdRoute =
+  AppWorkspacesWorkspaceIdRouteImport.update({
+    id: '/workspaces/$workspaceId',
+    path: '/workspaces/$workspaceId',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
   id: '/settings/plan',
   path: '/settings/plan',
@@ -122,6 +135,7 @@ const AppFormsSlugManageFunnelRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
@@ -129,6 +143,7 @@ export interface FileRoutesByFullPath {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/settings/plan': typeof AppSettingsPlanRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms/': typeof AppFormsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
@@ -140,6 +155,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
@@ -147,6 +163,7 @@ export interface FileRoutesByTo {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/settings/plan': typeof AppSettingsPlanRoute
+  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms': typeof AppFormsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
@@ -160,6 +177,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
+  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/_auth/forgot-password': typeof AuthForgotPasswordRoute
   '/_auth/link-account': typeof AuthLinkAccountRoute
@@ -168,6 +186,7 @@ export interface FileRoutesById {
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_app/': typeof AppIndexRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
+  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/_app/forms/': typeof AppFormsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
@@ -181,6 +200,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/invite'
     | '/verify-email'
     | '/forgot-password'
     | '/link-account'
@@ -188,6 +208,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/settings/plan'
+    | '/workspaces/$workspaceId'
     | '/forms/'
     | '/workspaces/'
     | '/forms/$slug'
@@ -199,6 +220,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/invite'
     | '/verify-email'
     | '/forgot-password'
     | '/link-account'
@@ -206,6 +228,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/settings/plan'
+    | '/workspaces/$workspaceId'
     | '/forms'
     | '/workspaces'
     | '/forms/$slug'
@@ -218,6 +241,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_auth'
+    | '/invite'
     | '/verify-email'
     | '/_auth/forgot-password'
     | '/_auth/link-account'
@@ -226,6 +250,7 @@ export interface FileRouteTypes {
     | '/_auth/reset-password'
     | '/_app/'
     | '/_app/settings/plan'
+    | '/_app/workspaces/$workspaceId'
     | '/_app/forms/'
     | '/_app/workspaces/'
     | '/_app/forms/$slug/_manage'
@@ -239,6 +264,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
+  InviteRoute: typeof InviteRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
 }
 
@@ -249,6 +275,13 @@ declare module '@tanstack/react-router' {
       path: '/verify-email'
       fullPath: '/verify-email'
       preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invite': {
+      id: '/invite'
+      path: '/invite'
+      fullPath: '/invite'
+      preLoaderRoute: typeof InviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -319,6 +352,13 @@ declare module '@tanstack/react-router' {
       path: '/forms'
       fullPath: '/forms/'
       preLoaderRoute: typeof AppFormsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/workspaces/$workspaceId': {
+      id: '/_app/workspaces/$workspaceId'
+      path: '/workspaces/$workspaceId'
+      fullPath: '/workspaces/$workspaceId'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings/plan': {
@@ -393,6 +433,7 @@ const AppFormsSlugManageRouteWithChildren =
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
+  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
@@ -402,6 +443,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
+  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
@@ -431,6 +473,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
+  InviteRoute: InviteRoute,
   VerifyEmailRoute: VerifyEmailRoute,
 }
 export const routeTree = rootRouteImport

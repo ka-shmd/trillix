@@ -73,6 +73,13 @@ function WorkspacesPage() {
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">личное</span>
                 )}
               </Link>
+              <Link
+                to="/workspaces/$workspaceId"
+                params={{ workspaceId: ws.id }}
+                className="mt-1 inline-block pl-4 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Участники
+              </Link>
             </li>
           ))}
         </ul>
