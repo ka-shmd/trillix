@@ -149,7 +149,9 @@ export function useAutosave(
         state.blocks !== prev.blocks ||
         state.submitLabel !== prev.submitLabel ||
         state.thankYouText !== prev.thankYouText ||
-        state.redirectUrl !== prev.redirectUrl
+        state.redirectUrl !== prev.redirectUrl ||
+        state.cover !== prev.cover ||
+        state.logo !== prev.logo
       if (changed && !conflictRef.current) schedule()
     })
 

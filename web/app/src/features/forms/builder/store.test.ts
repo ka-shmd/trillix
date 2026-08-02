@@ -2628,6 +2628,22 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(store.getState().cover?.y).toBe(80)
   })
 
+  // Жест перетаскивания коммитится один раз, на отпускании, поэтому коалесить внутри
+  // него нечего — а два жеста подряд обязаны остаться двумя шагами отмены. С «липким»
+  // тегом они слились бы в один, и Mod+Z прыгал бы через положение.
+  it('два сдвига подряд — два шага отмены', () => {
+    const store = createBuilderStore()
+    store.getState().setCover({ imageKey: 'ws/a.jpg' })
+
+    store.getState().setCoverY(20)
+    store.getState().setCoverY(70)
+
+    store.getState().undo()
+    expect(store.getState().cover?.y).toBe(20)
+    store.getState().undo()
+    expect(store.getState().cover?.y).toBeUndefined()
+  })
+
   // У цвета двигать нечего, и схема такой документ отвергает: стор не должен уметь
   // выразить состояние, за которое автосейв получит 422.
   it('setCoverY по цветной обложке — no-op', () => {
