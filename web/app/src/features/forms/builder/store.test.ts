@@ -740,6 +740,30 @@ describe('createBuilderStore', () => {
     expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email', 'text'])
   })
 
+  // Вертикальный дроп обязан бит СНИМАТЬ (§13). Он же его и рождал: блок, унесённый из
+  // ряда внутрь чужого вопроса, отдавал свой бит голове ЭТОГО вопроса (reanchorRowBits
+  // писался под другой случай — «полю дали заголовок»), и вопрос вставал справа от
+  // предыдущего. Из вертикального дропа возникал ряд, которого никто не просил, — то,
+  // что владелец видел как склеивание блоков вокруг ряда (2026-08-03).
+  it('блок, унесённый из ряда в чужой вопрос, не отдаёт ему бит ряда', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('text') // левый участник ряда
+    store.getState().addBlock('text') // правый участник — он и понесёт бит
+    const [x, y] = store.getState().blocks
+    store.getState().placeInRow(y!.groupId, x!.groupId)
+    store.getState().addQuestionAfter(null, 'short_text') // вопрос A
+    store.getState().addQuestionAfter(null, 'email') // вопрос B
+    const capB = store.getState().blocks.filter((b) => b.type === 'title')[1]!
+
+    store.getState().reorderBlocks(y!.id, capB.id)
+
+    const blocks = store.getState().blocks
+    // Блок уехал внутрь вопроса B (дроп туда законен с фазы 15) — но РЯДА из этого не
+    // возникло: ни одного бита на полотне не осталось.
+    expect(blocks.every((b) => b.settings?.column === undefined)).toBe(true)
+    expect(packRows(groupBlocks(blocks)).every((r) => r.length === 1)).toBe(true)
+  })
+
   it('rowBoundaryTarget: участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
     const store = createBuilderStore()
     for (const t of ['short_text', 'email', 'phone', 'number'] as const)
