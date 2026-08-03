@@ -459,19 +459,36 @@ function optionPartners(options: Option[]): Map<string, string> {
 // Обратный случай (бит был внутригрупповым, блок стал головой — например, подпись
 // удалили) специально НЕ переносится: партнёр, ради которого бит ставили, исчез, и
 // дальше его судьбу решает обычная проверка инертности/смены соседа.
+//
+// **Переезжает бит только внутри СВОЕГО вопроса.** Условие «блок был головой, а стал не
+// головой» выполняется ещё в одном случае, для которого правило не писалось: блок
+// вертикальным дропом уехал ВНУТРЬ чужого вопроса (§4.1, дроп туда разрешён с фазы 15).
+// Тогда бит доставался голове чужой группы, и та «вставала справа от предыдущей» —
+// вертикальный дроп РОЖДАЛ ряд, которого никто не просил, вместо того чтобы бит снять
+// (§13, «обычный вертикальный дроп бит снимает»). Владелец видел это как склеивание
+// блоков вокруг ряда, 2026-08-03. Отличаются случаи головой: у `Mod+Alt+T`/makeQuestion
+// подпись СОЗДАЁТСЯ, её id в прежнем документе нет; у переезда в чужой вопрос голова —
+// давно живущий блок другой группы. Бит там не переезжает и не остаётся: он умирает
+// вместе с рядом, из которого блок унесли.
 function reanchorRowBits(blocks: Block[], prev?: Block[]): Block[] {
   if (!prev) return blocks
   const wasHead = new Set(groupBlocks(prev).map((g) => g.blocks[0]!.id))
+  const wasGroup = new Map(prev.map((b) => [b.id, b.groupId]))
   const move = new Map<string, string>() // носитель → голова, на которую переезжает бит
+  const drop = new Set<string>() // носитель, чей бит умирает: вопрос теперь чужой
   for (const g of groupBlocks(blocks)) {
+    const head = g.blocks[0]!
     for (const b of g.blocks.slice(1)) {
-      if (b.settings?.column === COLUMN_RIGHT && wasHead.has(b.id)) move.set(b.id, g.blocks[0]!.id)
+      if (b.settings?.column !== COLUMN_RIGHT || !wasHead.has(b.id)) continue
+      const headWas = wasGroup.get(head.id)
+      if (headWas === undefined || headWas === wasGroup.get(b.id)) move.set(b.id, head.id)
+      else drop.add(b.id)
     }
   }
-  if (move.size === 0) return blocks
+  if (move.size === 0 && drop.size === 0) return blocks
   const heads = new Set(move.values())
   return blocks.map((b) => {
-    if (move.has(b.id)) return withoutColumn(b)
+    if (move.has(b.id) || drop.has(b.id)) return withoutColumn(b)
     // У головы бит уже мог быть свой — тогда переезжающий просто пропадает.
     if (heads.has(b.id) && b.settings?.column !== COLUMN_RIGHT) {
       return { ...b, settings: { ...b.settings, column: COLUMN_RIGHT } }
@@ -954,6 +971,47 @@ export function rowBoundaryTarget(
       } else if (ti === mid) return blocks[re + 1]?.id ?? null
     }
     return null
+  }
+  return null
+}
+
+// rowBoundaryGroup — то же правило «ряд атомарен для вертикальной вставки» (§5), но на
+// ГРУППОВОМ слое, где его не было вовсе (найдено владельцем 2026-08-02: «таскаю группу
+// и не могу поставить её между обычным блоком и рядом — они склеиваются, как будто это
+// группа»).
+//
+// Причина ровно та же, что у блочного правила, но последствие грубее. `reorderGroups` —
+// голый arrayMove по группам, и цель «правая колонка ряда» при переносе сверху вниз
+// кладёт группу МЕЖДУ колонками. Дальше раскладчик читает получившийся список буквально
+// (§13): пришелец без бита закрывает секцию, левый участник выпадает во всю ширину, а
+// правый со своим `'right'` открывает НОВУЮ секцию и забирает в неё пришельца. Автор
+// целился в щель над рядом, а получил ряд с новым составом — «склеились».
+//
+// Лечение — то, что §5 уже обещает: **ряд для вертикальной вставки одна цель**. Тащат
+// сверху — кладём ПОД ряд (цель = последний участник), снизу — НАД ним (цель = первый).
+// Так ряд ведёт себя как один высокий блок, чем он для этого жеста и является.
+// Перестановка ВНУТРИ своего ряда правилу не подчиняется: там щель между колонками —
+// законная цель, ею меняют участников местами.
+export function rowBoundaryGroup(
+  blocks: Block[],
+  activeGroupId: string,
+  overGroupId: string,
+): string | null {
+  const groups = rowGroups(blocks)
+  const at = (id: string) => groups.findIndex((g) => g.id === id)
+  const ai = at(activeGroupId)
+  const ti = at(overGroupId)
+  if (ai < 0 || ti < 0 || ai === ti) return null
+  for (const row of packRows(groups)) {
+    // Участники ряда смежны в списке групп (ряды собираются из идущих подряд), поэтому
+    // границы пролёта — индексы первого и последнего.
+    const participants = row.flat()
+    if (participants.length < 2) continue
+    const rs = at(participants[0]!.id)
+    const re = at(participants[participants.length - 1]!.id)
+    if (ti < rs || ti > re) continue
+    if (ai >= rs && ai <= re) return null
+    return ai < rs ? groups[re]!.id : groups[rs]!.id
   }
   return null
 }
