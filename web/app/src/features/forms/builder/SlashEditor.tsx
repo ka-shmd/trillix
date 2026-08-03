@@ -69,6 +69,7 @@ import { chords, formatLabel, type ShortcutContext, type ShortcutFilters } from 
 import { useGlobalChord } from './useGlobalChord'
 import { ShortcutSheet } from './ShortcutSheet'
 import {
+  type ActiveRow,
   ActiveRowApiProvider,
   ActiveRowValueProvider,
   CANVAS_ROW,
@@ -182,6 +183,9 @@ export function SlashEditor({
   // (активный блок и цель) обновляют обработчики. Пустой ref = цикл остановлен.
   const frameArgsRef = useRef<{ activeId: string; overId: string | null } | null>(null)
   const frameRafRef = useRef(0)
+  // Прогноз дропа под текущую цель: состав обеих рамок. Пересчитывается на смене цели,
+  // а не каждый кадр (см. updateFrame).
+  const planRef = useRef<{ key: string | null; frameIds: string[]; lossIds: string[] } | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Диалог выбора типа (кнопка «+»): открыт ли и после какого блока вставлять
   // (null — в конец).
@@ -196,14 +200,30 @@ export function SlashEditor({
   // строку, из которой её позвали.
   const [sheet, setSheet] = useState<SheetState>({ open: false, ctx: null, filters: {} })
   // Читать активную строку в оконном слушателе — только через ref: иначе подписка
-  // пересоздаётся на каждое движение каретки. В снимок идёт не один контекст, а и
-  // признаки строки: шпаргалка — единственная поверхность карты (чипы сняты), и
-  // печатать в ней пункт, который на этой строке молчит, значит соврать.
-  const snapshotRef = useRef<Omit<SheetState, 'open'>>({ ctx: null, filters: {} })
+  // пересоздаётся на каждое движение каретки.
+  //
+  // В ref лежит СЫРАЯ строка, а всё производное считается в момент вызова. Прежде снимок
+  // собирался эффектом без списка зависимостей, то есть после КАЖДОГО рендера полотна, а
+  // внутри него `rowPosition` гоняет полный раскладчик (rowGroups + packRows): каждое
+  // нажатие клавиши стоило лишнего прохода по всей форме ради снимка, который открывают
+  // раз в сессию (разбор производительности 2026-08-03). Считать в момент вызова
+  // безопасно: аккорд приходит, пока полотно ещё в фокусе и активная строка та самая, —
+  // диалог уводит фокус уже после.
+  const rowRef = useRef<ActiveRow | null>(null)
+  const blocksRef = useRef(blocks)
   const sheetOpenRef = useRef(false)
   useEffect(() => {
-    const row = activeRow.active
-    snapshotRef.current = {
+    rowRef.current = activeRow.active
+    blocksRef.current = blocks
+    sheetOpenRef.current = sheet.open
+  })
+  // Снимок строки для шпаргалки: не один контекст, а и признаки строки — шпаргалка
+  // единственная поверхность карты (чипы сняты), и печатать в ней пункт, который на этой
+  // строке молчит, значит соврать.
+  const snapshot = (): Omit<SheetState, 'open'> => {
+    const row = rowRef.current
+    const blocksNow = blocksRef.current
+    return {
       ctx: row?.ctx ?? null,
       filters: row
         ? {
@@ -211,18 +231,17 @@ export function SlashEditor({
             movesRow: row.movesRow,
             // Тем же предикатом, что решает судьбу чипа у строки (needsCaptionFor):
             // обещание шпаргалки и предложение на полотне обязаны совпадать.
-            needsCaption: needsCaptionFor(blocks, row.id),
+            needsCaption: needsCaptionFor(blocksNow, row.id),
             insideQuestion: row.insideQuestion,
             // Позиция на оси колонок (§11.6) — тем же предикатом, которым ось ведёт стор:
             // подпись пункта обязана называть то, что случится на ЭТОЙ строке. У строки
             // внутри вопроса ось своя (insideQuestion выше), позицию ей не считаем.
-            row: row.insideQuestion ? undefined : rowPosition(blocks, row.id),
+            row: row.insideQuestion ? undefined : rowPosition(blocksNow, row.id),
           }
         : {},
     }
-    sheetOpenRef.current = sheet.open
-  })
-  const openSheet = () => setSheet({ open: true, ...snapshotRef.current })
+  }
+  const openSheet = () => setSheet({ open: true, ...snapshot() })
   // globalThis.KeyboardEvent — нативное событие окна: имя KeyboardEvent в этом файле
   // занято React-синтетическим (импорт сверху). Правило цели — в useGlobalChord: в
   // поле попапа «/» остаётся литералом, а сама шпаргалка (диалог без полей) закрывается
@@ -232,7 +251,7 @@ export function SlashEditor({
     // Mod+/ — тогл: повторное нажатие при открытой шпаргалке закрывает её, как Esc.
     e.preventDefault()
     if (sheetOpenRef.current) setSheet((s) => ({ ...s, open: false }))
-    else setSheet({ open: true, ...snapshotRef.current })
+    else setSheet({ open: true, ...snapshot() })
   })
 
   // dnd-kit: небольшой порог активации, чтобы клик по ручке не начинал перетаскивание;
@@ -418,7 +437,8 @@ export function SlashEditor({
     // вопрос из ряда (найдено владельцем). Поэтому и слой, и порядок, и геометрия
     // берутся у своего слоя: у группы это её строки целиком.
     const isGroup = groupIds.has(activeId)
-    const order = isGroup ? groups.map((g) => g.id) : blocks.map((b) => b.id)
+    // Мемоизированные списки, а не свежие map'ы: функция бежит каждый кадр драга.
+    const order = isGroup ? groupIdList : blockIds
     // У группы цель — её строки целиком, а у группы, стоящей в РЯДУ, — строки всего
     // ряда: вопрос всё равно ляжет над рядом или под ним целиком (rowBoundaryGroup),
     // а колонки бывают разной высоты, и линия, отмеренная от края одной из них, встала
@@ -431,7 +451,13 @@ export function SlashEditor({
         : undefined
       return row ? row.flat().flatMap((g) => g.blocks.map((b) => b.id)) : ownRows(id)
     }
-    setDropLine(
+    // Через setRect, как и рамки: замер идёт КАЖДЫЙ кадр, а свежий объект с теми же
+    // числами — это полный ре-рендер полотна 60 раз в секунду. Полотно не мемоизировано
+    // построчно (TD-32), поэтому такой ре-рендер стоит всех строк формы разом, и линия
+    // была единственным местом в цикле, где бэйла не было (найдено разбором
+    // производительности 2026-08-03).
+    setRect(
+      setDropLine,
       measureDropLine(
         root,
         over === null || isRowZone(over) ? [] : targetRows(over),
@@ -444,17 +470,27 @@ export function SlashEditor({
       setWarnFrame(null)
       return
     }
-    const plan = planBlockDrop(blocks, activeId, rawOverRef.current ?? overId)
+    // СОСТАВ рамок зависит только от цели, а меняется она редко — геометрия же обязана
+    // пересчитываться каждый кадр (строки едут). Поэтому прогноз считается один раз на
+    // цель и лежит в ref: planBlockDrop копирует весь документ и заново выводит
+    // groupId, captionLoss идёт по нему ещё раз, и делать это 60 раз в секунду ради
+    // неизменного ответа — чистый мусор для сборщика на длинной форме.
+    const planTarget = rawOverRef.current ?? overId
+    if (planRef.current?.key !== planTarget) {
+      const plan = planBlockDrop(blocks, activeId, planTarget)
+      planRef.current = {
+        key: planTarget,
+        frameIds: plan?.frameIds ?? [],
+        lossIds: plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : [],
+      }
+    }
     // Активная строка следует за курсором по ОБЕИМ осям, и её rect растягивал рамку
     // вбок при горизонтальном дрейфе, хотя горизонтального перемещения у полотна нет:
     // по горизонтали меряем только строки-резиденты. У предупреждающей рамки исключать
     // нечего — жертвой бывает и сама активная строка (поле, уведённое из своего
     // вопроса), и тогда мерить, кроме неё, некого.
-    setRect(setFrame, measureUnion(root, plan?.frameIds ?? [], activeId))
-    setRect(
-      setWarnFrame,
-      measureUnion(root, plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : []),
-    )
+    setRect(setFrame, measureUnion(root, planRef.current.frameIds, activeId))
+    setRect(setWarnFrame, measureUnion(root, planRef.current.lossIds))
   }
 
   function startFrameLoop(activeId: string) {
@@ -480,6 +516,7 @@ export function SlashEditor({
     setNearGroup(null)
     rawOverRef.current = null
     nearGroupRef.current = null
+    planRef.current = null
   }
 
   // Страховка на анмаунт посреди драга (смена маршрута): rAF-цикл не должен пережить

@@ -41,21 +41,19 @@ export const closestVertical: CollisionDetection = ({
   droppableContainers,
 }) => {
   const centerY = collisionRect.top + collisionRect.height / 2
-  return droppableContainers
-    .flatMap((droppableContainer) => {
-      const rect = droppableRects.get(droppableContainer.id)
-      if (!rect) return []
-      return [
-        {
-          id: droppableContainer.id,
-          data: {
-            droppableContainer,
-            value: Math.abs(rect.top + rect.height / 2 - centerY),
-          },
-        },
-      ]
+  // Обычный цикл, а не flatMap: функция бежит на КАЖДОЕ движение указателя по всем
+  // droppable'ам полотна, и промежуточный массив на каждый из них — мусор на ровном
+  // месте (так же устроен и родной closestCenter).
+  const collisions = []
+  for (const droppableContainer of droppableContainers) {
+    const rect = droppableRects.get(droppableContainer.id)
+    if (!rect) continue
+    collisions.push({
+      id: droppableContainer.id,
+      data: { droppableContainer, value: Math.abs(rect.top + rect.height / 2 - centerY) },
     })
-    .sort((a, b) => a.data.value - b.data.value)
+  }
+  return collisions.sort((a, b) => a.data.value - b.data.value)
 }
 
 // dropSide — с какой стороны цели окажется перетаскиваемый элемент. Ответ целиком в
@@ -187,11 +185,25 @@ export const canvasSorting: SortingStrategy = ({
 //   freed  = 0, пока в ряду кто-то опускается так же низко: ряд не становится ниже ни на
 //            пиксель. Если активный был в ряду самым низким — ровно разница низов. Ряда
 //            нет — отдаётся столько же, сколько нужно.
-function room(
-  rects: ClientRect[],
-  activeIndex: number,
-  down: boolean,
-): { freed: number; needed: number } {
+// Кэш на один вызов раскладки: dnd-kit зовёт стратегию по разу НА КАЖДЫЙ элемент, а
+// ответ зависит только от (rects, activeIndex, down) — один и тот же для всех. Без кэша
+// обход всех прямоугольников внутри повторялся бы столько раз, сколько на полотне строк,
+// то есть каждый кадр драга стоил бы квадрата от длины формы. Ключ — ССЫЛКА на rects:
+// SortableContext собирает массив мемоизированно и раздаёт всем элементам одну и ту же.
+let roomCache: { rects: ClientRect[]; activeIndex: number; down: boolean; out: Room } | null = null
+type Room = { freed: number; needed: number }
+
+function room(rects: ClientRect[], activeIndex: number, down: boolean): Room {
+  const hit = roomCache
+  if (hit && hit.rects === rects && hit.activeIndex === activeIndex && hit.down === down) {
+    return hit.out
+  }
+  const out = computeRoom(rects, activeIndex, down)
+  roomCache = { rects, activeIndex, down, out }
+  return out
+}
+
+function computeRoom(rects: ClientRect[], activeIndex: number, down: boolean): Room {
   const active = rects[activeIndex]!
   const inRow = (r: ClientRect) =>
     !sameColumn(r, active) &&
