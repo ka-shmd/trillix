@@ -107,18 +107,38 @@ function sectionCanvas(): ClientRect[] {
 }
 
 describe('canvasSorting', () => {
-  it('блок, вынутый из колонки ряда, не подтягивает строки под рядом', () => {
+  // Ключевой сценарий разбора: блок вынимают ИЗ КОЛОНКИ ряда и ведут по полотну. Старое
+  // место не отдаёт ничего (ряд держит вторая колонка), но новое обязано раскрыться —
+  // иначе полотно вообще не разъезжается и место дропа невидимо. Цель — строка 2, то
+  // есть ЗА ней есть строка 3: именно она и должна уступить место.
+  it('блок, вынутый из колонки ряда, раскрывает щель на НОВОМ месте', () => {
     const rects = sectionCanvas()
-    // Тащим левую колонку ряда вниз, мимо строк под ним.
-    const placed = settle(canvasSorting, rects, 0, 3)
+    const placed = settle(canvasSorting, rects, 0, 2)
     expect(overlaps(placed)).toEqual([])
-    // Ряд держит правая колонка — отдавать нечего, и нижние строки стоят на месте.
-    for (const p of placed) expect(p.top).toBe(rects[p.index]!.top)
+    // Ряд держит правая колонка — старое место не схлопывается: строки до цели стоят.
+    expect(placed.find((p) => p.index === 1)!.top).toBe(rects[1]!.top)
+    expect(placed.find((p) => p.index === 2)!.top).toBe(rects[2]!.top)
+    // А за целью открывается щель: высота блока плюс просвет ритма (16 по border-box).
+    // Просвет отмерян от НИЗА РЯДА, а не от низа самого блока: сосед по списку у него —
+    // вторая колонка, она стоит вровень, и по ней просвет вышел бы бессмысленным.
+    expect(placed.find((p) => p.index === 3)!.top).toBe(rects[3]!.top + rects[0]!.height + 16)
   })
 
   it('родная стратегия на тех же данных сажает строки на ряд', () => {
-    const placed = settle(verticalListSortingStrategy, sectionCanvas(), 0, 3)
+    const placed = settle(verticalListSortingStrategy, sectionCanvas(), 0, 2)
     expect(overlaps(placed).length).toBeGreaterThan(0)
+  })
+
+  it('перенос ВВЕРХ из-под ряда: щель открывается над целью, ряд уезжает вниз', () => {
+    const rects = sectionCanvas()
+    // Строка 3 уходит наверх, цель — левая колонка ряда: вопрос встанет НАД рядом.
+    const placed = settle(canvasSorting, rects, 3, 0)
+    expect(overlaps(placed)).toEqual([])
+    // Ряд стоит ниже точки вставки — едет вниз ЦЕЛИКОМ, обеими колонками.
+    const shift = placed.find((p) => p.index === 0)!.top - rects[0]!.top
+    expect(shift).toBeGreaterThan(0)
+    expect(placed.find((p) => p.index === 1)!.top - rects[1]!.top).toBe(shift)
+    expect(placed.find((p) => p.index === 2)!.top - rects[2]!.top).toBe(shift)
   })
 
   it('если уходящий был в ряду самым низким — отдаётся ровно разница низов', () => {
