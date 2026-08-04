@@ -1443,24 +1443,37 @@ function sameGroupProps(a: GroupRowProps, b: GroupRowProps): boolean {
     if (a.blockIds.length !== b.blockIds.length) return false
     if (!a.blockIds.every((v, i) => v === b.blockIds[i])) return false
   }
-  return (
-    a.firstGroup === b.firstGroup &&
-    a.formId === b.formId &&
-    a.side === b.side &&
-    a.cellZone === b.cellZone &&
-    a.cellGhost === b.cellGhost &&
-    a.rail === b.rail &&
-    a.menuForId === b.menuForId &&
-    a.onAddBelow === b.onAddBelow &&
-    a.onInsertBelow === b.onInsertBelow &&
-    a.onBackspaceAtStart === b.onBackspaceAtStart &&
-    a.onBackspaceDelete === b.onBackspaceDelete &&
-    a.onDeleteBlock === b.onDeleteBlock &&
-    a.onAnswerAction === b.onAnswerAction &&
-    a.onArrow === b.onArrow &&
-    a.onRowShift === b.onRowShift
-  )
+  return BY_REFERENCE.every((k) => a[k] === b[k])
 }
+
+// Пропсы, которые компаратор сравнивает ПО ССЫЛКЕ, — списком, а не цепочкой `&&`.
+//
+// Тип здесь — сторож, а не украшение: `Record<Exclude<keyof GroupRowProps, ...>, true>`
+// требует перечислить КАЖДЫЙ пропс, кроме двух поэлементных, поэтому новый пропс у
+// GroupRow не скомпилируется, пока его сюда не внесли. Без этого отказ был бы
+// молчаливым — ровно тем, ради которого вся эта ветка и затевалась: пропс, забытый в
+// компараторе, не даёт ни ошибки, ни предупреждения, а группа просто перестаёт
+// обновляться (или, наоборот, memo перестаёт срабатывать).
+const BY_REFERENCE = Object.keys({
+  firstGroup: true,
+  formId: true,
+  side: true,
+  cellZone: true,
+  cellGhost: true,
+  rail: true,
+  menuForId: true,
+  onAddBelow: true,
+  onInsertBelow: true,
+  onBackspaceAtStart: true,
+  onBackspaceDelete: true,
+  onDeleteBlock: true,
+  onAnswerAction: true,
+  onArrow: true,
+  onRowShift: true,
+} satisfies Record<Exclude<keyof GroupRowProps, 'group' | 'blockIds'>, true>) as Exclude<
+  keyof GroupRowProps,
+  'group' | 'blockIds'
+>[]
 
 const GroupRow = memo(function GroupRow({
   group,
