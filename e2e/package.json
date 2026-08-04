@@ -5,6 +5,7 @@
   "description": "Сквозной Playwright-тест против prod-local (фаза 7, шаг 7).",
   "scripts": {
     "test": "playwright test",
+    "perf": "playwright test --config playwright.perf.config.ts",
     "report": "playwright show-report"
   },
   "devDependencies": {
