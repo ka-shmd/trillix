@@ -3,7 +3,12 @@ import { join } from 'node:path'
 import { test, expect, type CDPSession, type Page } from '@playwright/test'
 import { login, seedAccount } from '../tests/helpers/session'
 import { createForm } from './form'
-import { instrumentSource, readCountersSource, resetCountersSource } from './instrument'
+import {
+  instrumentSource,
+  readCountersSource,
+  resetCountersSource,
+  watchDragSource,
+} from './instrument'
 
 // Замер производительности полотна редактора — оснастка пунктов TD-32 (набор текста)
 // и TD-55 (перетаскивание).
@@ -62,6 +67,13 @@ type Phase = {
   resizeObservers: number | null
   worstFrameMs: number | null
   p95FrameMs: number | null
+  // Длинные задачи (>50 мс): сколько их и сколько времени они суммарно отняли у
+  // отрисовки. «Дёргано» — это они, а не среднее по кадрам.
+  longTasks: number | null
+  longTaskMs: number | null
+  worstTaskMs: number | null
+  // Задержка «взялся за ручку → блок поехал». Осмысленна только у фазы драга.
+  dragStartMs: number | null
 }
 
 type SizeReport = {
@@ -132,6 +144,8 @@ async function phase(
     resizeObservers: number | null
     boundingRects: number | null
     frames: number[] | null
+    longTasks: number[] | null
+    dragStartMs: number | null
   }
   const frames = c.frames ? [...c.frames].sort((a, b) => a - b) : null
   return {
@@ -151,6 +165,10 @@ async function phase(
     resizeObservers: c.resizeObservers,
     worstFrameMs: frames && frames.length > 0 ? frames[frames.length - 1]! : null,
     p95FrameMs: frames && frames.length > 0 ? pct(frames, 95) : null,
+    longTasks: c.longTasks ? c.longTasks.length : null,
+    longTaskMs: c.longTasks ? c.longTasks.reduce((a, b) => a + b, 0) : null,
+    worstTaskMs: c.longTasks && c.longTasks.length > 0 ? Math.max(...c.longTasks) : null,
+    dragStartMs: c.dragStartMs,
   }
 }
 
@@ -168,6 +186,10 @@ test('замер полотна: набор текста и перетаскив
 }) => {
   test.setTimeout(10 * 60_000)
 
+  // PERF_SCROLL_STACKS — тяжёлая диагностика: патчит геттеры scroll-свойств и снимает
+  // стеки вызовов. Ею найдена причина дорогого драга (5.3 млн чтений за жест), поэтому
+  // она осталась в оснастке — но по флагу: сам патч искажает замер времени.
+  if (process.env.PERF_SCROLL_STACKS) await page.addInitScript('globalThis.__perfScrollStacks = true')
   await page.addInitScript(instrumentSource)
   const email = seedAccount('perf')
   await login(page, email)
@@ -245,6 +267,11 @@ test('замер полотна: набор текста и перетаскив
     ;[m0, h0] = await start(page, cdp)
     await cdp.send('Profiler.start')
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+    // Проба ставится ДО нажатия: она слушает pointerdown, и поставленная после уже
+    // ничего не увидит.
+    if (!(await page.evaluate(watchDragSource(`f${midIndex}`)))) {
+      throw new Error('проба старта драга не встала — строки нет в DOM')
+    }
     await page.mouse.down()
     for (let i = 1; i <= DRAG_STEPS; i++) {
       await page.mouse.move(
@@ -255,6 +282,9 @@ test('замер полотна: набор текста и перетаскив
     }
     const dragPhase = await phase(page, cdp, m0, h0)
     const hot = await profileTop(cdp)
+    if (process.env.PERF_SCROLL_STACKS) {
+      console.log('SCROLL', await page.evaluate('JSON.stringify({n: window.__perf.scrollReads, by: window.__perf.scrollBy, top: Object.entries(window.__perf.scrollStacks).sort((a,b)=>b[1]-a[1]).slice(0,3)})'))
+    }
     await page.mouse.up()
     await page.waitForTimeout(500)
     // Утечка или пила: если после сборки куча вернулась к дозамерному уровню, за жест
@@ -279,6 +309,10 @@ test('замер полотна: набор текста и перетаскив
         `(атрибутов ${typing.attrMutations ?? 'н/д'}, топ ${JSON.stringify(typing.attrTop)})\n` +
         `Enter:        ${structural.boundingRects ?? 'н/д'} getBoundingClientRect, ` +
         `${structural.scriptMs.toFixed(0)} мс\n` +
+        `старт драга:  ${dragPhase.dragStartMs?.toFixed(0) ?? 'н/д'} мс от нажатия до сдвига\n` +
+        `длинные:      ${dragPhase.longTasks ?? 'н/д'} задач, ` +
+        `${dragPhase.longTaskMs?.toFixed(0) ?? 'н/д'} мс суммарно, ` +
+        `худшая ${dragPhase.worstTaskMs?.toFixed(0) ?? 'н/д'} мс\n` +
         `драг:         ${dragPhase.scriptMs.toFixed(0)} мс JS, ` +
         `${dragPhase.heapDeltaMb.toFixed(1)} МБ, ` +
         `${dragPhase.resizeObservers ?? 'н/д'} ResizeObserver, ` +

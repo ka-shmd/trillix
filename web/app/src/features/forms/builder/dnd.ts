@@ -40,14 +40,18 @@ export const closestVertical: CollisionDetection = ({
   droppableRects,
   droppableContainers,
 }) => {
-  const centerY = collisionRect.top + collisionRect.height / 2
+  // Через снимок: цикл ниже обходит ВСЕ droppable'ы полотна на каждое движение
+  // указателя, и каждое `rect.top` — это чтение scroll-свойства (см. flatRect).
+  const active = flatRect(collisionRect)
+  const centerY = active.top + active.height / 2
   // Обычный цикл, а не flatMap: функция бежит на КАЖДОЕ движение указателя по всем
   // droppable'ам полотна, и промежуточный массив на каждый из них — мусор на ровном
   // месте (так же устроен и родной closestCenter).
   const collisions = []
   for (const droppableContainer of droppableContainers) {
-    const rect = droppableRects.get(droppableContainer.id)
-    if (!rect) continue
+    const raw = droppableRects.get(droppableContainer.id)
+    if (!raw) continue
+    const rect = flatRect(raw)
     collisions.push({
       id: droppableContainer.id,
       data: { droppableContainer, value: Math.abs(rect.top + rect.height / 2 - centerY) },
@@ -72,13 +76,69 @@ export function dropSide(order: string[], activeId: string, overId: string): 'ab
   return from >= 0 && to >= 0 && to < from ? 'above' : 'below'
 }
 
+// ПЛОСКИЙ СНИМОК ПРЯМОУГОЛЬНИКА — самая дорогая находка разбора драга (TD-55).
+//
+// `ClientRect` у dnd-kit только выглядит структурой с числами: `top`/`bottom`/`left`/
+// `right` — ГЕТТЕРЫ, и каждый зовёт `getScrollOffsets` по прокручиваемым предкам, то
+// есть читает scroll-свойство. Обращение к `rect.top` выглядит как чтение числа, а
+// стоит как замер, и ничто в коде об этом не напоминает.
+//
+// Умножается это на два обстоятельства. Стратегию dnd-kit зовёт ПО РАЗУ НА КАЖДЫЙ
+// сортируемый элемент, а раскладка ряда внутри обходит ещё и весь массив. И главное:
+// блочный слой — одна сортируемая вселенная, но `SortableContext` у каждой группы
+// СВОЙ (иначе `li` группы читала бы контекст блоков вместо своего, §2 EDITOR.md),
+// поэтому на сотне вопросов стратегию зовут из сотни контекстов, и у каждого свой
+// массив `sortedRects` — с тем же содержимым и другой идентичностью.
+//
+// Отсюда правило: **кэш обязан быть по ПРЯМОУГОЛЬНИКУ, а не по массиву.** Объекты
+// `ClientRect` у всех контекстов одни и те же (приезжают из общей `droppableRects`),
+// поэтому WeakMap по ним переживает границу контекста, тогда как кэш по ссылке на
+// массив на этой границе промахивается каждый раз. Замерено на форме из 199 блоков:
+// одно перетаскивание — 5 283 164 чтения scroll-свойства; кэш по массиву не убрал ни
+// одного (и потому не дал выигрыша), кэш по прямоугольнику оставляет по шесть чтений
+// на прямоугольник на кадр.
+//
+// Снимок живёт РОВНО ОДИН КАДР: прокрутка между кадрами его обесценивает, а внутри
+// кадра меняться ей негде.
+type FlatRect = { top: number; bottom: number; left: number; right: number; width: number; height: number }
+
+let flatCache = new WeakMap<ClientRect, FlatRect>()
+let flatScheduled = false
+
+export function flatRect(r: ClientRect): FlatRect {
+  const hit = flatCache.get(r)
+  if (hit) return hit
+  const out = {
+    top: r.top,
+    bottom: r.bottom,
+    left: r.left,
+    right: r.right,
+    width: r.width,
+    height: r.height,
+  }
+  flatCache.set(r, out)
+  if (!flatScheduled) {
+    flatScheduled = true
+    const drop = () => {
+      flatCache = new WeakMap()
+      flatScheduled = false
+    }
+    // В браузере кадр — правильная граница жизни снимка. В node-окружении (табличные
+    // тесты раскладки) rAF нет вовсе, и там снимок живёт до конца текущей задачи:
+    // тесты синхронны, а кэш, переживший задачу, стал бы враньём.
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(drop)
+    else queueMicrotask(drop)
+  }
+  return out
+}
+
 const NO_SCALE = { scaleX: 1, scaleY: 1 }
 
 // Одна ли это вертикальная стопка: у двумерного полотна соседи по СПИСКУ бывают
 // соседями по документу, но не по экрану (левая и правая колонки секции идут в
 // документе подряд, а стоят бок о бок). Считаем колонку общей, если горизонтальные
 // проекции перекрываются больше чем наполовину узкого из двух.
-function sameColumn(a: ClientRect, b: ClientRect): boolean {
+function sameColumn(a: FlatRect, b: FlatRect): boolean {
   const overlap = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
   return overlap > Math.min(a.width, b.width) / 2
 }
@@ -135,9 +195,13 @@ export const canvasSorting: SortingStrategy = ({
   index,
   activeNodeRect,
 }) => {
-  const active = rects[activeIndex] ?? activeNodeRect
-  const over = rects[overIndex]
-  if (!active || !over || activeIndex === overIndex) return null
+  // Всё, что стратегия читает, идёт через снимок: её зовут по разу на каждый элемент
+  // полотна, и на форме у потолка MAX_BLOCKS это тысячи вызовов за кадр.
+  const activeRaw = rects[activeIndex] ?? activeNodeRect
+  const overRaw = rects[overIndex]
+  if (!activeRaw || !overRaw || activeIndex === overIndex) return null
+  const active = flatRect(activeRaw)
+  const over = flatRect(overRaw)
 
   // Сам активный: смещение до нового места. Формула dnd-kit — она про drop-анимацию и
   // клавиатурный перенос (под указателем элемент и так едет за курсором) и в раскладке
@@ -190,10 +254,10 @@ export const canvasSorting: SortingStrategy = ({
 // обход всех прямоугольников внутри повторялся бы столько раз, сколько на полотне строк,
 // то есть каждый кадр драга стоил бы квадрата от длины формы. Ключ — ССЫЛКА на rects:
 // SortableContext собирает массив мемоизированно и раздаёт всем элементам одну и ту же.
-let roomCache: { rects: ClientRect[]; activeIndex: number; down: boolean; out: Room } | null = null
+let roomCache: { rects: readonly (ClientRect | undefined)[]; activeIndex: number; down: boolean; out: Room } | null = null
 type Room = { freed: number; needed: number }
 
-function room(rects: ClientRect[], activeIndex: number, down: boolean): Room {
+function room(rects: readonly (ClientRect | undefined)[], activeIndex: number, down: boolean): Room {
   const hit = roomCache
   if (hit && hit.rects === rects && hit.activeIndex === activeIndex && hit.down === down) {
     return hit.out
@@ -203,9 +267,13 @@ function room(rects: ClientRect[], activeIndex: number, down: boolean): Room {
   return out
 }
 
-function computeRoom(rects: ClientRect[], activeIndex: number, down: boolean): Room {
-  const active = rects[activeIndex]!
-  const inRow = (r: ClientRect) =>
+function computeRoom(
+  rects: readonly (ClientRect | undefined)[],
+  activeIndex: number,
+  down: boolean,
+): Room {
+  const active = flatRect(rects[activeIndex]!)
+  const inRow = (r: FlatRect) =>
     !sameColumn(r, active) &&
     Math.min(r.top + r.height, active.top + active.height) > Math.max(r.top, active.top)
 
@@ -213,8 +281,10 @@ function computeRoom(rects: ClientRect[], activeIndex: number, down: boolean): R
   let rowTop = active.top
   let rowBottom = active.top + active.height
   for (let i = 0; i < rects.length; i++) {
-    const r = rects[i]
-    if (!r || i === activeIndex || !inRow(r)) continue
+    const raw = rects[i]
+    if (!raw || i === activeIndex) continue
+    const r = flatRect(raw)
+    if (!inRow(r)) continue
     held = Math.max(held, r.top + r.height)
     rowTop = Math.min(rowTop, r.top)
     rowBottom = Math.max(rowBottom, r.top + r.height)
@@ -222,10 +292,12 @@ function computeRoom(rects: ClientRect[], activeIndex: number, down: boolean): R
 
   // Ближайшая строка ЗА рядом: участники ряда пропускаются — они не «следующие», они
   // соседи по горизонтали.
-  let mate: ClientRect | undefined
+  let mate: FlatRect | undefined
   for (let i = activeIndex + (down ? 1 : -1); i >= 0 && i < rects.length; i += down ? 1 : -1) {
-    const r = rects[i]
-    if (!r || inRow(r)) continue
+    const raw = rects[i]
+    if (!raw) continue
+    const r = flatRect(raw)
+    if (inRow(r)) continue
     mate = r
     break
   }
