@@ -934,9 +934,7 @@ export function SlashEditor({
               <DndContext
                 sensors={sensors}
                 collisionDetection={collisionDetection}
-                // Always, а не дефолтный WhileDragging (меряет один раз на старте): ряды
-                // живут весь драг, и блок, уходящий из ряда, меняет геометрию соседей по
-                // ходу — по устаревшим rect'ам коллизии считались бы по прежней раскладке.
+                // Стратегия замера и опции сенсоров — модульные константы (см. MEASURING).
                 measuring={MEASURING}
                 onDragStart={(e) => {
                   const id = String(e.active.id)
@@ -1125,7 +1123,20 @@ function useIdList(items: readonly { id: string }[]): string[] {
 // CPU-профиле это видно как propagateContextChange, самая дорогая функция самотайма.
 const POINTER_OPTIONS = { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }
 const KEYBOARD_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates }
-const MEASURING = { droppable: { strategy: MeasuringStrategy.Always } }
+// СТРАТЕГИЯ ЗАМЕРА: WhileDragging, а не Always (TD-55).
+//
+// Здесь стоял Always с доводом «ряды живут весь драг, и блок, уходящий из ряда, меняет
+// геометрию соседей по ходу — по устаревшим rect'ам коллизии считались бы по прежней
+// раскладке». Довод описывал НЕ ТО, чем эти стратегии отличаются. Разница у них ровно
+// одна и она вне драга: `isDisabled()` в useDroppableMeasuring отдаёт для Always
+// всегда false, а для WhileDragging — `!dragging`. Во время жеста обе меряют
+// одинаково, поэтому опасение «померим один раз на старте» не про WhileDragging.
+//
+// Чего Always стоил: droppableRects пересобирался на КАЖДОЙ структурной правке в покое,
+// а это один синхронный getBoundingClientRect на каждый droppable полотна. Замерено:
+// один `Enter` на форме из 199 блоков — 301 обращение; после смены стратегии — ноль.
+// Столько же стоили удаление строки и `Mod+Alt+→`.
+const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 
 // Rect — прямоугольник в координатах полотна (canvasRef): в них живут обе драг-рамки.
 type Rect = { x: number; y: number; w: number; h: number }

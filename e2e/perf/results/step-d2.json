@@ -1,0 +1,351 @@
+{
+  "label": "step-d2",
+  "at": "2026-08-04T12:57:24.373Z",
+  "report": [
+    {
+      "blocks": 13,
+      "idle": {
+        "scriptMs": 3.821999999999992,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 31.68800000000002,
+        "heapDeltaMb": 0.004825592041015625,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.800000000000182
+      },
+      "typing": {
+        "scriptMs": 73.98299999999999,
+        "layoutMs": 6.7410000000000005,
+        "styleMs": 2.9239999999999995,
+        "taskMs": 147.99999999999997,
+        "heapDeltaMb": 1.6860733032226562,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.799999999999272,
+        "perChar": {
+          "scriptMs": 3.6991499999999995,
+          "heapKb": 86.326953125,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 597.744,
+        "layoutMs": 7.693000000000002,
+        "styleMs": 44.172000000000004,
+        "taskMs": 1064.044,
+        "heapDeltaMb": 2.4747886657714844,
+        "mutations": 902,
+        "attrMutations": 877,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            400
+          ],
+          [
+            "DIV[style]",
+            325
+          ],
+          [
+            "INPUT[type]",
+            137
+          ]
+        ],
+        "boundingRects": 1641,
+        "resizeObservers": 23,
+        "worstFrameMs": 33.400000000000546,
+        "p95FrameMs": 16.800000000000182,
+        "retainedMbAfterGc": 1.0500450134277344,
+        "hot": [
+          [
+            "(idle) [native]",
+            2206.3900000000135
+          ],
+          [
+            "(program) [native]",
+            404.43799999999794
+          ],
+          [
+            "getBoundingClientRect [native]",
+            29.829000000000022
+          ],
+          [
+            "Co@index-eondl5kf.js:7:47446",
+            22.309000000000005
+          ],
+          [
+            "Yi@index-eondl5kf.js:7:33369",
+            22.199999999999992
+          ],
+          [
+            "(garbage collector) [native]",
+            21.842999999999993
+          ],
+          [
+            "scrollBy [native]",
+            14.321000000000002
+          ],
+          [
+            "kL@index-eondl5kf.js:120:5818",
+            13.11
+          ]
+        ]
+      },
+      "structural": {
+        "boundingRects": 0,
+        "scriptMs": 25.622000000000007
+      }
+    },
+    {
+      "blocks": 61,
+      "idle": {
+        "scriptMs": 4.406000000000021,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 39.08599999999973,
+        "heapDeltaMb": 0.00495147705078125,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.799999999999727
+      },
+      "typing": {
+        "scriptMs": 107.66000000000008,
+        "layoutMs": 11.326000000000002,
+        "styleMs": 3.9819999999999993,
+        "taskMs": 251.21800000000016,
+        "heapDeltaMb": 1.9057655334472656,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.800000000000182,
+        "perChar": {
+          "scriptMs": 5.3830000000000044,
+          "heapKb": 97.5751953125,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 1221.0200000000002,
+        "layoutMs": 14.088000000000003,
+        "styleMs": 60.86400000000002,
+        "taskMs": 1863.253,
+        "heapDeltaMb": 37.316890716552734,
+        "mutations": 4113,
+        "attrMutations": 4030,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            3316
+          ],
+          [
+            "DIV[style]",
+            522
+          ],
+          [
+            "INPUT[type]",
+            153
+          ]
+        ],
+        "boundingRects": 2046,
+        "resizeObservers": 95,
+        "worstFrameMs": 50,
+        "p95FrameMs": 16.799999999999272,
+        "retainedMbAfterGc": 1.1447372436523438,
+        "hot": [
+          [
+            "(idle) [native]",
+            1524.7089999999866
+          ],
+          [
+            "(program) [native]",
+            546.8499999999972
+          ],
+          [
+            "OL@index-eondl5kf.js:120:5767",
+            249.64599999999848
+          ],
+          [
+            "(garbage collector) [native]",
+            59.708000000000034
+          ],
+          [
+            "Yi@index-eondl5kf.js:7:33369",
+            54.34200000000001
+          ],
+          [
+            "getBoundingClientRect [native]",
+            36.49100000000002
+          ],
+          [
+            "querySelector [native]",
+            29.883000000000017
+          ],
+          [
+            "Co@index-eondl5kf.js:7:47446",
+            29.65500000000001
+          ]
+        ]
+      },
+      "structural": {
+        "boundingRects": 0,
+        "scriptMs": 32.49400000000002
+      }
+    },
+    {
+      "blocks": 199,
+      "idle": {
+        "scriptMs": 3.5849999999997273,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 35.27900000000006,
+        "heapDeltaMb": 0.00453948974609375,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000273
+      },
+      "typing": {
+        "scriptMs": 91.55300000000022,
+        "layoutMs": 10.163999999999993,
+        "styleMs": 2.9589999999999894,
+        "taskMs": 199.38900000000004,
+        "heapDeltaMb": 1.9613990783691406,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.800000000000182,
+        "perChar": {
+          "scriptMs": 4.577650000000011,
+          "heapKb": 100.4236328125,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 3422.2140000000004,
+        "layoutMs": 13.377,
+        "styleMs": 64.84100000000001,
+        "taskMs": 4342.345000000001,
+        "heapDeltaMb": 1.9000053405761719,
+        "mutations": 9112,
+        "attrMutations": 8973,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            8146
+          ],
+          [
+            "DIV[style]",
+            585
+          ],
+          [
+            "INPUT[type]",
+            134
+          ]
+        ],
+        "boundingRects": 2570,
+        "resizeObservers": 302,
+        "worstFrameMs": 166.60000000000036,
+        "p95FrameMs": 83.30000000000109,
+        "retainedMbAfterGc": 0.8913040161132812,
+        "hot": [
+          [
+            "OL@index-eondl5kf.js:120:5767",
+            1502.6829999999416
+          ],
+          [
+            "(idle) [native]",
+            1232.8939999999836
+          ],
+          [
+            "(program) [native]",
+            836.7159999999997
+          ],
+          [
+            "Yi@index-eondl5kf.js:7:33369",
+            166.03899999999956
+          ],
+          [
+            "mI@index-eondl5kf.js:116:153247",
+            114.223
+          ],
+          [
+            "(garbage collector) [native]",
+            109.29500000000009
+          ],
+          [
+            "querySelector [native]",
+            80.08600000000004
+          ],
+          [
+            "qz@index-eondl5kf.js:120:42052",
+            64.744
+          ]
+        ]
+      },
+      "structural": {
+        "boundingRects": 0,
+        "scriptMs": 102.99900000000007
+      }
+    }
+  ]
+}

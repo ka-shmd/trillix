@@ -68,7 +68,7 @@ type SizeReport = {
   blocks: number
   idle: Phase
   typing: Phase & { perChar: { scriptMs: number; heapKb: number; mutations: number | null } }
-  drag: Phase & { retainedMbAfterGc: number }
+  drag: Phase & { retainedMbAfterGc: number; hot: Hot[] }
   structural: { boundingRects: number | null; scriptMs: number }
 }
 
@@ -87,6 +87,29 @@ async function heapAfterGc(cdp: CDPSession): Promise<number> {
 }
 
 const mb = (bytes: number) => bytes / 1024 / 1024
+
+// Топ функций по САМОТАЙМУ за участок. Нужен затем, чтобы порядок починки диктовали
+// данные, а не догадка: первый заход по TD-32 показал, что «очевидная» причина
+// (восемь колбэков) была не той, а настоящую назвал именно профиль.
+type Hot = [string, number]
+
+async function profileTop(cdp: CDPSession, limit = 8): Promise<Hot[]> {
+  const { profile } = await cdp.send('Profiler.stop')
+  const self = new Map<string, number>()
+  const byId = new Map(profile.nodes.map((n) => [n.id, n]))
+  // timeDeltas[i] — время, проведённое в samples[i]. Складываем по узлу: это и есть
+  // самотайм, без времени потомков.
+  const samples = profile.samples ?? []
+  const deltas = profile.timeDeltas ?? []
+  for (const [i, id] of samples.entries()) {
+    const node = byId.get(id)
+    if (!node) continue
+    const f = node.callFrame
+    const name = `${f.functionName || '(anonymous)'}${f.url ? `@${f.url.split('/').pop()}:${f.lineNumber}:${f.columnNumber}` : ' [native]'}`
+    self.set(name, (self.get(name) ?? 0) + (deltas[i] ?? 0) / 1000)
+  }
+  return [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit)
+}
 
 function pct(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
@@ -152,6 +175,10 @@ test('замер полотна: набор текста и перетаскив
   const cdp = await page.context().newCDPSession(page)
   await cdp.send('Performance.enable')
   await cdp.send('HeapProfiler.enable')
+  await cdp.send('Profiler.enable')
+  // Шаг выборки чаще дефолтного (1000 мкс): жест длится секунды, и на дефолте в
+  // хвосте распределения остаются единицы отсчётов — по ним ничего не видно.
+  await cdp.send('Profiler.setSamplingInterval', { interval: 200 })
 
   const report: SizeReport[] = []
 
@@ -216,6 +243,7 @@ test('замер полотна: набор текста и перетаскив
 
     await heapAfterGc(cdp)
     ;[m0, h0] = await start(page, cdp)
+    await cdp.send('Profiler.start')
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     await page.mouse.down()
     for (let i = 1; i <= DRAG_STEPS; i++) {
@@ -226,6 +254,7 @@ test('замер полотна: набор текста и перетаскив
       await page.waitForTimeout(DRAG_STEP_MS)
     }
     const dragPhase = await phase(page, cdp, m0, h0)
+    const hot = await profileTop(cdp)
     await page.mouse.up()
     await page.waitForTimeout(500)
     // Утечка или пила: если после сборки куча вернулась к дозамерному уровню, за жест
@@ -236,7 +265,7 @@ test('замер полотна: набор текста и перетаскив
       blocks: size,
       idle,
       typing,
-      drag: { ...dragPhase, retainedMbAfterGc: retained },
+      drag: { ...dragPhase, retainedMbAfterGc: retained, hot },
       structural,
     })
 
@@ -255,7 +284,8 @@ test('замер полотна: набор текста и перетаскив
         `${dragPhase.resizeObservers ?? 'н/д'} ResizeObserver, ` +
         `худший кадр ${dragPhase.worstFrameMs?.toFixed(0) ?? 'н/д'} мс, ` +
         `p95 ${dragPhase.p95FrameMs?.toFixed(0) ?? 'н/д'} мс, ` +
-        `удержано после GC ${retained.toFixed(2)} МБ`,
+        `удержано после GC ${retained.toFixed(2)} МБ\n` +
+        `самотайм:     ${hot.map(([n, ms]) => `${n} ${ms.toFixed(0)}мс`).join(', ')}`,
     )
   }
 
