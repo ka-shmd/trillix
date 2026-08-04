@@ -1,0 +1,249 @@
+{
+  "label": "step-a",
+  "at": "2026-08-04T12:38:18.378Z",
+  "report": [
+    {
+      "blocks": 13,
+      "idle": {
+        "scriptMs": 2.0970000000000018,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 16.441999999999986,
+        "heapDeltaMb": 0.0049285888671875,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000273
+      },
+      "typing": {
+        "scriptMs": 30.77200000000001,
+        "layoutMs": 3.067,
+        "styleMs": 1.6559999999999995,
+        "taskMs": 64.737,
+        "heapDeltaMb": 1.6244049072265625,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.800000000000182,
+        "perChar": {
+          "scriptMs": 1.5386000000000004,
+          "heapKb": 83.16953125,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 237.94999999999996,
+        "layoutMs": 3.7070000000000003,
+        "styleMs": 19.610999999999997,
+        "taskMs": 399.40700000000004,
+        "heapDeltaMb": 0.7729721069335938,
+        "mutations": 866,
+        "attrMutations": 841,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            384
+          ],
+          [
+            "DIV[style]",
+            313
+          ],
+          [
+            "INPUT[type]",
+            129
+          ]
+        ],
+        "boundingRects": 1575,
+        "resizeObservers": 23,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000728,
+        "retainedMbAfterGc": 0.7318153381347656
+      },
+      "structural": {
+        "boundingRects": 22,
+        "scriptMs": 10.704000000000018
+      }
+    },
+    {
+      "blocks": 61,
+      "idle": {
+        "scriptMs": 2.43900000000008,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 20.648,
+        "heapDeltaMb": 0.004779815673828125,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.799999999999727
+      },
+      "typing": {
+        "scriptMs": 40.73899999999997,
+        "layoutMs": 4.067999999999999,
+        "styleMs": 1.680000000000001,
+        "taskMs": 98.65199999999996,
+        "heapDeltaMb": 1.22802734375,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.700000000000728,
+        "perChar": {
+          "scriptMs": 2.0369499999999983,
+          "heapKb": 62.875,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 1045.8529999999998,
+        "layoutMs": 11.797000000000002,
+        "styleMs": 52.076,
+        "taskMs": 1437.148,
+        "heapDeltaMb": 37.105953216552734,
+        "mutations": 4386,
+        "attrMutations": 4300,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            3542
+          ],
+          [
+            "DIV[style]",
+            558
+          ],
+          [
+            "INPUT[type]",
+            161
+          ]
+        ],
+        "boundingRects": 2139,
+        "resizeObservers": 95,
+        "worstFrameMs": 33.30000000000018,
+        "p95FrameMs": 16.700000000000728,
+        "retainedMbAfterGc": 0.7905654907226562
+      },
+      "structural": {
+        "boundingRects": 94,
+        "scriptMs": 31.603000000000048
+      }
+    },
+    {
+      "blocks": 199,
+      "idle": {
+        "scriptMs": 2.286999999999928,
+        "layoutMs": 0,
+        "styleMs": 0,
+        "taskMs": 22.49599999999985,
+        "heapDeltaMb": 0.0049285888671875,
+        "mutations": 0,
+        "attrMutations": 0,
+        "attrTop": [],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.799999999999727
+      },
+      "typing": {
+        "scriptMs": 57.836,
+        "layoutMs": 6.019000000000004,
+        "styleMs": 1.6369999999999996,
+        "taskMs": 137.1889999999998,
+        "heapDeltaMb": 1.7503318786621094,
+        "mutations": 83,
+        "attrMutations": 63,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            40
+          ],
+          [
+            "INPUT[type]",
+            20
+          ],
+          [
+            "BUTTON[disabled]",
+            2
+          ]
+        ],
+        "boundingRects": 0,
+        "resizeObservers": 0,
+        "worstFrameMs": 16.800000000000182,
+        "p95FrameMs": 16.800000000000182,
+        "perChar": {
+          "scriptMs": 2.8918,
+          "heapKb": 89.6169921875,
+          "mutations": 4.15
+        }
+      },
+      "drag": {
+        "scriptMs": 3231.3030000000003,
+        "layoutMs": 13.087999999999996,
+        "styleMs": 59.77499999999999,
+        "taskMs": 3943.156,
+        "heapDeltaMb": 18.850929260253906,
+        "mutations": 9352,
+        "attrMutations": 9212,
+        "attrTop": [
+          [
+            "INPUT[name]",
+            8388
+          ],
+          [
+            "DIV[style]",
+            581
+          ],
+          [
+            "INPUT[type]",
+            135
+          ]
+        ],
+        "boundingRects": 2811,
+        "resizeObservers": 302,
+        "worstFrameMs": 166.60000000000036,
+        "p95FrameMs": 83.29999999999927,
+        "retainedMbAfterGc": 0.5741844177246094
+      },
+      "structural": {
+        "boundingRects": 301,
+        "scriptMs": 95.46399999999977
+      }
+    }
+  ]
+}
