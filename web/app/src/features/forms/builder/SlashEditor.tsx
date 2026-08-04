@@ -1,4 +1,6 @@
 import {
+  memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -41,7 +43,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
-import { useBuilderStore } from './storeContext'
+import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import {
   captionLoss,
   needsCaptionFor,
@@ -127,6 +129,17 @@ export function SlashEditor({
   const placeBlockInRow = useBuilderStore((s) => s.placeBlockInRow)
   const takeOwnRow = useBuilderStore((s) => s.takeOwnRow)
   const shiftColumn = useBuilderStore((s) => s.shiftColumn)
+  // Сам стор, без подписки: обработчики строк читают документ В МОМЕНТ ВЫЗОВА, а не
+  // берут значение с рендера. Это и есть то, что делает их ссылки стабильными
+  // (useCallback без зависимости от blocks), а стабильные ссылки — условие, без
+  // которого memo на строках не срабатывает вовсе (TD-32). Значение с рендера здесь
+  // не просто лишняя зависимость: обработчики правят СОСТАВ документа по индексам,
+  // и работать они обязаны с тем документом, который есть сейчас.
+  const storeApi = useBuilderStoreApi()
+  // Поток вопросов БЕЗ заголовка формы — тот же срез, что и `blocks` выше: обработчики
+  // ходят по нему индексами (stopNeighbor, findIndex), и заголовок в списке сдвинул бы
+  // все соседства на единицу.
+  const readBlocks = useCallback(() => splitFormTitle(storeApi.getState().blocks).rest, [storeApi])
   // Драг-рамка (Д10): прямоугольник в координатах полотна (canvasRef), обнимающий
   // union-rect РЕАЛЬНЫХ (трансформированных) rect'ов строк будущего состава группы.
   // Статичный ring на <li> группы врал: sortable раздвигает строки CSS-трансформами,
@@ -259,8 +272,8 @@ export function SlashEditor({
   // общая константа (dnd.ts): по нему же грип отличает клик-настройки от хвостового
   // click'а после драга.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+    useSensor(PointerSensor, POINTER_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_OPTIONS),
   )
 
   // Два уровня dnd. МУЛЬТИ-ГРУППА (подпись…поле) — единица перетаскивания за грип
@@ -287,9 +300,17 @@ export function SlashEditor({
   // ссылке (itemsHaveChanged), и свежий массив на рендере, где группа начинает
   // смещаться, отключает её transition — группа телепортируется вместо сдвига.
   // Ре-рендеры во время драга есть: setDrag (рейл цели) и setFrame (rAF рамки).
-  const groupIdList = useMemo(() => groups.map((g) => g.id), [groups])
+  //
+  // МЕЖДУ нажатиями клавиш ссылка была нестабильна, и это стоило дороже, чем кажется:
+  // SortableContext пересобирает по items значение своего контекста, а оно
+  // протягивается через КАЖДЫЙ useSortable полотна — то есть через все строки и все
+  // группы, мимо любого memo (в CPU-профиле разбора 2026-08-03 это самая дорогая
+  // именованная функция самотайма, propagateContextChange). Один свежий массив на
+  // символ обесценивал мемоизацию строк целиком. Поэтому списки id считаются от
+  // СОДЕРЖИМОГО (useIdList), а не от идентичности массива-источника.
+  const groupIdList = useIdList(groups)
   const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
-  const blockIds = useMemo(() => blocks.map((b) => b.id), [blocks])
+  const blockIds = useIdList(blocks)
 
   // Сторона группы в ряду (WYSIWYG, спека §5): раскладчик тот же, что у превью и
   // рендерера (packRows). Ряд двигает кластеры значков: у правой колонки они
@@ -559,21 +580,24 @@ export function SlashEditor({
   // — сразу под текущей строкой, внутри группы (regroup оставит контент в вопросе).
   // Засев первого символа и открытие меню типов — опции с объектной остановки/пустого
   // полотна.
-  function startBlock(
-    afterId: string | null,
-    opts: { openMenu?: boolean; seed?: string; inside?: boolean } = {},
-  ) {
-    const id = opts.inside
-      ? addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
-      : addBlockAfterGroup(afterId, DEFAULT_BLOCK_TYPE)
-    // openMenu (вставка блока по «/» с объектной остановки/пустого полотна) засевает
-    // строку литералом «/»: инлайн-слеш открыт с монтирования на позиции 0 (§3.5),
-    // «/» остаётся в тексте, как при наборе «/» в самой строке.
-    const seed = opts.openMenu ? '/' : opts.seed
-    if (seed) updateBlock(id, { text: textFromString(seed) })
-    if (opts.openMenu) setMenuForId(id)
-    engine.focusBlock(id)
-  }
+  const startBlock = useCallback(
+    (
+      afterId: string | null,
+      opts: { openMenu?: boolean; seed?: string; inside?: boolean } = {},
+    ) => {
+      const id = opts.inside
+        ? addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
+        : addBlockAfterGroup(afterId, DEFAULT_BLOCK_TYPE)
+      // openMenu (вставка блока по «/» с объектной остановки/пустого полотна) засевает
+      // строку литералом «/»: инлайн-слеш открыт с монтирования на позиции 0 (§3.5),
+      // «/» остаётся в тексте, как при наборе «/» в самой строке.
+      const seed = opts.openMenu ? '/' : opts.seed
+      if (seed) updateBlock(id, { text: textFromString(seed) })
+      if (opts.openMenu) setMenuForId(id)
+      engine.focusBlock(id)
+    },
+    [addBlockAfter, addBlockAfterGroup, updateBlock, engine],
+  )
 
   function focusFirstOrCreate() {
     const first = blocks[0]
@@ -584,25 +608,26 @@ export function SlashEditor({
   // Фокус на заголовок формы (его textarea всегда смонтирован над полотном): каретка
   // в конец. Сюда уходит фокус, когда удаляют первую/единственную строку — иначе он
   // потерялся бы в body. rAF не нужен (нет Radix-возврата фокуса).
-  function focusTitle() {
-    if (formTitle) engine.focusBlock(formTitle.id, 'end')
-  }
+  const focusTitle = useCallback(() => {
+    const title = splitFormTitle(storeApi.getState().blocks).title
+    if (title) engine.focusBlock(title.id, 'end')
+  }, [storeApi, engine])
 
   // onAddBelow: новая текстовая строка ниже — Enter (после группы), Shift+Enter
   // (opts.inside — внутрь группы), либо с засевом/меню с объектной остановки (§2.2).
   // Прокидывает opts в startBlock.
-  function handleAddBelow(
-    id: string,
-    opts?: { openMenu?: boolean; seed?: string; inside?: boolean },
-  ) {
-    startBlock(id, opts)
-  }
+  const handleAddBelow = useCallback(
+    (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => {
+      startBlock(id, opts)
+    },
+    [startBlock],
+  )
 
   // Кнопка «+»: открыть диалог выбора типа блока (после блока id).
-  function handleInsertBelow(id: string) {
+  const handleInsertBelow = useCallback((id: string) => {
     setInsertAfterId(id)
     setInsertOpen(true)
-  }
+  }, [])
 
   // Выбор пункта в диалоге: «Вопросы» → подпись+поле новой группой; «Отдельные поля»
   // → голое поле новой группой; «Лэйаут» → один блок после текущего. Фокус — на
@@ -624,15 +649,8 @@ export function SlashEditor({
   // кареткой. Предыдущий блок — картинка → удаляем её, а текущий блок с кареткой
   // остаётся на месте (у image нет textarea, встать каретке некуда). Иначе — пустой
   // текущий блок схлопываем в предыдущий с переносом фокуса.
-  //
-  // «Пусто» считается по ПЛОСКОМУ тексту, а не сравнением поля с пустой строкой:
-  // с фазы 14 text — массив спанов, и `(text ?? '') === ''` для него ложно ВСЕГДА
-  // (пустой массив не равен пустой строке). Тип это пропускает — `Span[] | ''`
-  // пересекается с `''`, поэтому tsc сравнение не запрещает, — и весь жест молча
-  // переставал работать: пустая строка не схлопывалась ни в какой ситуации.
-  const isBlank = (b: Block) => plainText(b.text) === ''
-
-  function handleBackspaceAtStart(id: string) {
+  const handleBackspaceAtStart = useCallback((id: string) => {
+    const blocks = readBlocks()
     const i = blocks.findIndex((b) => b.id === id)
     const cur = blocks[i]
     if (!cur) return
@@ -657,26 +675,31 @@ export function SlashEditor({
       if (prevStop) engine.focusBlock(prevStop.id, 'end')
       else focusTitle()
     }
-  }
+  }, [readBlocks, removeBlock, removeGroup, changeBlockType, engine, focusTitle])
 
   // Cmd/Ctrl+Enter (§3.2) — «действие над ответом»: из подписи/контента прыгнуть к
   // контролу ответа своей группы. choice: каретка на последний вариант (edge end), а
   // если вариантов ещё нет — на призрака списка, он же и есть место для набора.
   // На картинке файловый диалог открывает сама объектная остановка (см. ObjectStop).
-  function handleAnswerAction(id: string) {
-    const src = blocks.find((b) => b.id === id)
-    if (!src) return
-    const field = blocks.find((b) => b.groupId === src.groupId && isAnswerableType(b.type))
-    if (!field) return
-    engine.focusBlock(field.id, 'end')
-  }
+  const handleAnswerAction = useCallback(
+    (id: string) => {
+      const blocks = readBlocks()
+      const src = blocks.find((b) => b.id === id)
+      if (!src) return
+      const field = blocks.find((b) => b.groupId === src.groupId && isAnswerableType(b.type))
+      if (!field) return
+      engine.focusBlock(field.id, 'end')
+    },
+    [readBlocks, engine],
+  )
 
   // Cmd+Shift+Backspace (§3.4): явное удаление блока — на подписи сносит группу
   // целиком (подпись владеет группой), иначе один блок. Без диалога подтверждения
   // (решение владельца): страховка — тост с напоминанием про Ctrl+Z, а undo
   // восстанавливает группу в целости. Исход фокуса по контракту (§2.4): следующая
   // строка после группы, иначе предыдущая, иначе заголовок формы.
-  function handleDeleteBlock(id: string) {
+  const handleDeleteBlock = useCallback((id: string) => {
+    const blocks = readBlocks()
     const i = blocks.findIndex((b) => b.id === id)
     const cur = blocks[i]
     if (!cur) return
@@ -696,29 +719,37 @@ export function SlashEditor({
     else if (prev) engine.focusBlock(prev.id, 'end')
     else focusTitle()
     toast(isGroup ? 'Вопрос удалён' : 'Блок удалён', { description: 'Ctrl+Z — вернуть' })
-  }
+  }, [readBlocks, removeBlock, removeGroup, engine, focusTitle])
 
   // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
   // предыдущей строки; её нет → заголовок формы.
-  function handleBackspaceDelete(id: string) {
-    const i = blocks.findIndex((b) => b.id === id)
-    const prevStop = stopNeighbor(blocks, i, 'up')
-    removeBlock(id)
-    if (prevStop) engine.focusBlock(prevStop.id, 'end')
-    else focusTitle()
-  }
+  const handleBackspaceDelete = useCallback(
+    (id: string) => {
+      const blocks = readBlocks()
+      const i = blocks.findIndex((b) => b.id === id)
+      const prevStop = stopNeighbor(blocks, i, 'up')
+      removeBlock(id)
+      if (prevStop) engine.focusBlock(prevStop.id, 'end')
+      else focusTitle()
+    },
+    [readBlocks, removeBlock, engine, focusTitle],
+  )
 
   // Обход стрелками между строками (§2.1): вниз — в начало следующей, вверх — в конец
   // предыдущей; из первой строки вверх — заголовок формы. Край определяет, куда встанет
   // каретка у многострочных/составных целей (первый/последний вариант choice).
   // Инпуты плейсхолдера с подписью — листы: поток их перескакивает (stopNeighbor),
   // каретка приземляется на подпись, а не в необязательное поле (navigation.ts).
-  function handleArrow(id: string, dir: 'up' | 'down') {
-    const i = blocks.findIndex((b) => b.id === id)
-    const neighbor = stopNeighbor(blocks, i, dir)
-    if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
-    else if (dir === 'up') focusTitle()
-  }
+  const handleArrow = useCallback(
+    (id: string, dir: 'up' | 'down') => {
+      const blocks = readBlocks()
+      const i = blocks.findIndex((b) => b.id === id)
+      const neighbor = stopNeighbor(blocks, i, dir)
+      if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
+      else if (dir === 'up') focusTitle()
+    },
+    [readBlocks, engine, focusTitle],
+  )
 
   // Mod+Alt+→/← — клавиатурное зеркало жеста ряда (§5, §6.6). Каретка не трогается: id
   // блока стабилен, строка не перемонтируется — «каретка едет с блоком» (§2.4).
@@ -731,21 +762,28 @@ export function SlashEditor({
   // Уровень задаёт МЕСТО строки в группе — тем же правилом, что и смысл бита (§6.3):
   // первая строка (подпись или голое поле) ведёт по оси ВЕСЬ вопрос, любая другая —
   // саму себя по короткой оси ряда внутри вопроса.
-  function handleRowShift(id: string, dir: 'left' | 'right') {
-    const gid = blocks.find((b) => b.id === id)?.groupId
-    if (gid === undefined) return
-    const group = groups.find((g) => g.id === gid)
-    if (!group) return
-    if (group.blocks[0]!.id !== id) {
-      // Ряд ВНУТРИ вопроса: пара направленная («подпись | поле»), левой колонки полю не
-      // достаётся — остаются вход и выход.
-      if (dir === 'left') return takeOwnRow(id)
-      const caption = group.blocks.find((b) => isCaptionType(b.type))
-      if (caption) placeBlockInRow(id, caption.id)
-      return
-    }
-    shiftColumn(id, dir)
-  }
+  const handleRowShift = useCallback(
+    (id: string, dir: 'left' | 'right') => {
+      const blocks = readBlocks()
+      const gid = blocks.find((b) => b.id === id)?.groupId
+      if (gid === undefined) return
+      // Группы считаются здесь, а не берутся с рендера: обработчик обязан быть
+      // стабильной ссылкой (иначе memo строк не срабатывает), а разбиение — чистая
+      // функция, и один её прогон на жест ничего не стоит.
+      const group = groupBlocks(blocks).find((g) => g.id === gid)
+      if (!group) return
+      if (group.blocks[0]!.id !== id) {
+        // Ряд ВНУТРИ вопроса: пара направленная («подпись | поле»), левой колонки полю не
+        // достаётся — остаются вход и выход.
+        if (dir === 'left') return takeOwnRow(id)
+        const caption = group.blocks.find((b) => isCaptionType(b.type))
+        if (caption) placeBlockInRow(id, caption.id)
+        return
+      }
+      shiftColumn(id, dir)
+    },
+    [readBlocks, takeOwnRow, placeBlockInRow, shiftColumn],
+  )
 
   // Группа, чья копия рисуется дублёром: та, что уедет в ряд. У блочного драга это
   // группа перетаскиваемой строки (одиночка — сама строка), у группового — сам вопрос;
@@ -896,10 +934,8 @@ export function SlashEditor({
               <DndContext
                 sensors={sensors}
                 collisionDetection={collisionDetection}
-                // Always, а не дефолтный WhileDragging (меряет один раз на старте): ряды
-                // живут весь драг, и блок, уходящий из ряда, меняет геометрию соседей по
-                // ходу — по устаревшим rect'ам коллизии считались бы по прежней раскладке.
-                measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
+                // Стратегия замера и опции сенсоров — модульные константы (см. MEASURING).
+                measuring={MEASURING}
                 onDragStart={(e) => {
                   const id = String(e.active.id)
                   const isGroup = groupIds.has(id)
@@ -1050,6 +1086,57 @@ export function SlashEditor({
     </FocusEngineProvider>
   )
 }
+
+// «Пусто» считается по ПЛОСКОМУ тексту, а не сравнением поля с пустой строкой: с фазы
+// 14 text — массив спанов, и `(text ?? '') === ''` для него ложно ВСЕГДА (пустой массив
+// не равен пустой строке). Тип это пропускает — `Span[] | ''` пересекается с `''`,
+// поэтому tsc сравнение не запрещает, — и весь жест молча переставал работать: пустая
+// строка не схлопывалась ни в какой ситуации.
+const isBlank = (b: Block) => plainText(b.text) === ''
+
+// useIdList — список id, чья ССЫЛКА живёт, пока живёт сам список id.
+//
+// Зависимость useMemo — строка, а не массив-источник: источник (blocks/groups) меняет
+// идентичность на каждую правку любого блока, а id при этом остаются прежними.
+// JSON.stringify, а не join с разделителем: id — свободная строка по контракту
+// (idSchema), и символ, который в неё заведомо не попадёт, пришлось бы выдумывать.
+// Цена ключа — обход двухсот коротких строк на рендер, то есть микросекунды против
+// десятков миллисекунд, которые стоит протяжка контекста dnd-kit.
+function useIdList(items: readonly { id: string }[]): string[] {
+  const key = JSON.stringify(items.map((x) => x.id))
+  return useMemo(() => JSON.parse(key) as string[], [key])
+}
+
+// Опции сенсоров и конфигурация замера — МОДУЛЬНЫЕ КОНСТАНТЫ, а не литералы в теле
+// компонента, и это не косметика, а главная находка починки TD-32.
+//
+// `useSensor` мемоизирует дескриптор по ССЫЛКЕ на объект опций. Литерал в аргументе —
+// новый объект на каждый рендер полотна, то есть новый дескриптор, новый массив
+// `sensors`, новые `activators` и, в итоге, НОВОЕ ЗНАЧЕНИЕ внутреннего контекста
+// DndContext. А его читает каждый `useDraggable`/`useDroppable`, то есть каждая строка
+// и каждая группа полотна.
+//
+// Смена значения контекста перерисовывает потребителей МИМО memo: React сверяет пропсы,
+// но, увидев отложенное обновление контекста, всё равно рендерит. Отсюда и вывод
+// разбора 2026-08-03 «наивная мемоизация не сработает» — она и не срабатывала: пока
+// литерал стоял здесь, memo на строке гасился на каждом нажатии клавиши, а в
+// CPU-профиле это видно как propagateContextChange, самая дорогая функция самотайма.
+const POINTER_OPTIONS = { activationConstraint: { distance: DRAG_ACTIVATION_DISTANCE } }
+const KEYBOARD_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates }
+// СТРАТЕГИЯ ЗАМЕРА: WhileDragging, а не Always (TD-55).
+//
+// Здесь стоял Always с доводом «ряды живут весь драг, и блок, уходящий из ряда, меняет
+// геометрию соседей по ходу — по устаревшим rect'ам коллизии считались бы по прежней
+// раскладке». Довод описывал НЕ ТО, чем эти стратегии отличаются. Разница у них ровно
+// одна и она вне драга: `isDisabled()` в useDroppableMeasuring отдаёт для Always
+// всегда false, а для WhileDragging — `!dragging`. Во время жеста обе меряют
+// одинаково, поэтому опасение «померим один раз на старте» не про WhileDragging.
+//
+// Чего Always стоил: droppableRects пересобирался на КАЖДОЙ структурной правке в покое,
+// а это один синхронный getBoundingClientRect на каждый droppable полотна. Замерено:
+// один `Enter` на форме из 199 блоков — 301 обращение; после смены стратегии — ноль.
+// Столько же стоили удаление строки и `Mod+Alt+→`.
+const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 
 // Rect — прямоугольник в координатах полотна (canvasRef): в них живут обе драг-рамки.
 type Rect = { x: number; y: number; w: number; h: number }
@@ -1298,25 +1385,7 @@ function GhostBlock({ block, caption }: { block: Block; caption?: string }) {
 // (глобальные индексы → родная анимация через границы групп; см. коммент у blockIds
 // в SlashEditor). Отклик блочного драга над группой — драг-рамка полотна (Д10),
 // GroupRow своей подсветки не несёт.
-function GroupRow({
-  group,
-  firstGroup,
-  formId,
-  blockIds,
-  side,
-  cellZone,
-  cellGhost,
-  rail,
-  menuForId,
-  onAddBelow,
-  onInsertBelow,
-  onBackspaceAtStart,
-  onBackspaceDelete,
-  onDeleteBlock,
-  onAnswerAction,
-  onArrow,
-  onRowShift,
-}: {
+type GroupRowProps = {
   group: { id: string; blocks: Block[] }
   // Первая группа полотна: её первая строка — начало формы, у пустого текста там
   // свой плейсхолдер (§7).
@@ -1349,7 +1418,82 @@ function GroupRow({
   onAnswerAction: (id: string) => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   onRowShift: (id: string, dir: 'left' | 'right') => void
-}) {
+}
+
+// sameGroupProps — сравнение пропсов группы для memo (TD-32).
+//
+// Своё, а не поверхностное по ссылке, ровно из-за двух пропсов: `group` пересобирается
+// раскладчиком (groupBlocks — чистая функция, новый объект на каждый вызов) и
+// `blockIds` пересобирается полотном, а вызываются оба на каждый ре-рендер полотна, то
+// есть на каждый введённый символ. По ссылке memo не срабатывал бы НИ РАЗУ — ровно та
+// «наивная мемоизация», про которую сказано в TD-32, что она ничего не даст.
+//
+// Оба сравниваются ПОЭЛЕМЕНТНО, и этого достаточно: блоки иммутабельны (updateBlock
+// заменяет один элемент массива, не трогая соседей), а id — строки. Остальные пропсы
+// сравниваются по ссылке, как в обычном memo: колбэки стабилизированы в полотне
+// (useCallback), примитивы сравниваются значением.
+function sameGroupProps(a: GroupRowProps, b: GroupRowProps): boolean {
+  if (a.group !== b.group) {
+    if (a.group.id !== b.group.id) return false
+    const x = a.group.blocks
+    const y = b.group.blocks
+    if (x.length !== y.length || !x.every((v, i) => v === y[i])) return false
+  }
+  if (a.blockIds !== b.blockIds) {
+    if (a.blockIds.length !== b.blockIds.length) return false
+    if (!a.blockIds.every((v, i) => v === b.blockIds[i])) return false
+  }
+  return BY_REFERENCE.every((k) => a[k] === b[k])
+}
+
+// Пропсы, которые компаратор сравнивает ПО ССЫЛКЕ, — списком, а не цепочкой `&&`.
+//
+// Тип здесь — сторож, а не украшение: `Record<Exclude<keyof GroupRowProps, ...>, true>`
+// требует перечислить КАЖДЫЙ пропс, кроме двух поэлементных, поэтому новый пропс у
+// GroupRow не скомпилируется, пока его сюда не внесли. Без этого отказ был бы
+// молчаливым — ровно тем, ради которого вся эта ветка и затевалась: пропс, забытый в
+// компараторе, не даёт ни ошибки, ни предупреждения, а группа просто перестаёт
+// обновляться (или, наоборот, memo перестаёт срабатывать).
+const BY_REFERENCE = Object.keys({
+  firstGroup: true,
+  formId: true,
+  side: true,
+  cellZone: true,
+  cellGhost: true,
+  rail: true,
+  menuForId: true,
+  onAddBelow: true,
+  onInsertBelow: true,
+  onBackspaceAtStart: true,
+  onBackspaceDelete: true,
+  onDeleteBlock: true,
+  onAnswerAction: true,
+  onArrow: true,
+  onRowShift: true,
+} satisfies Record<Exclude<keyof GroupRowProps, 'group' | 'blockIds'>, true>) as Exclude<
+  keyof GroupRowProps,
+  'group' | 'blockIds'
+>[]
+
+const GroupRow = memo(function GroupRow({
+  group,
+  firstGroup,
+  formId,
+  blockIds,
+  side,
+  cellZone,
+  cellGhost,
+  rail,
+  menuForId,
+  onAddBelow,
+  onInsertBelow,
+  onBackspaceAtStart,
+  onBackspaceDelete,
+  onDeleteBlock,
+  onAnswerAction,
+  onArrow,
+  onRowShift,
+}: GroupRowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: group.id,
     // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
@@ -1358,6 +1502,10 @@ function GroupRow({
   // Translate-only (как у BlockRow): сдвиг без scaleY, чтобы группа не сжималась
   // под высоту соседнего слота при перетаскивании.
   const style = { transform: CSS.Translate.toString(transform), transition }
+  // Ручка группы, отдаваемая строке подписи, — стабильный объект. Литерал
+  // `{ attributes, listeners }` пересоздавался на каждый рендер группы и в одиночку
+  // отменял memo у подписи: одна такая строка на вопрос — это половина строк формы.
+  const groupHandle = useMemo(() => ({ attributes, listeners }), [attributes, listeners])
   // Есть ли в группе контрол ответа: от этого зависит, работает ли Mod+Enter из
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
@@ -1431,9 +1579,7 @@ function GroupRow({
                   key={b.id}
                   block={b}
                   formId={formId}
-                  groupHandle={
-                    group.blocks.length > 1 && i === 0 ? { attributes, listeners } : null
-                  }
+                  groupHandle={group.blocks.length > 1 && i === 0 ? groupHandle : null}
                   groupHasAnswer={hasAnswer}
                   // Чью обязательность представляет строка: ПЕРВАЯ подпись группы — поля
                   // своего вопроса, поле БЕЗ подписи — своё. Прочие строки (контент,
@@ -1510,7 +1656,7 @@ function GroupRow({
       </SortableContext>
     </li>
   )
-}
+}, sameGroupProps)
 
 // SubmitButtonEditor — кнопка отправки формы (всегда видна). Клик открывает поповер
 // со сменой её текста; пусто → показывается дефолт. Пишет в стор (форма-уровень),
