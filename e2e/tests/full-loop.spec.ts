@@ -86,10 +86,20 @@ test('регистрация → форма → публикация → отв�
   // модалка — без гонки слэш-меню). Грузим PNG в скрытый input. После загрузки
   // локальный превью сменяется реальным src /media/<key> — это подтверждает, что
   // аплоад дошёл до бакета и билдер получил ключ (который автосейв положит в схему).
+  //
+  // Скрытый input берётся ВНУТРИ группы своего блока, а не по всей странице: обложка
+  // и логотип держат на полотне такие же скрытые input'ы (полоса «Добавить обложку»
+  // висит на любой форме, пока не заданы оба), и незаскоупленный селектор с их
+  // появлением стал неоднозначным. Якорь — кнопка загрузки самого блока: она называет
+  // предмет («тот input, что за этой кнопкой»), тогда как `ol input` держался бы лишь
+  // на том, что полоса обложки нарисована снаружи списка групп.
   await page.getByRole('button', { name: '+ Добавить блок' }).click()
   await page.getByRole('button', { name: 'Картинка', exact: true }).click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).click()
-  await page
+  const imageGroup = page
+    .locator('li')
+    .filter({ has: page.getByRole('button', { name: /^Загрузить картинку/ }) })
+  await imageGroup
     .locator('input[type="file"]')
     .setInputFiles({ name: 'pic.png', mimeType: 'image/png', buffer: PNG_2x2 })
   await expect(page.locator('img.rf-image')).toHaveAttribute('src', /\/media\//, { timeout: 15000 })

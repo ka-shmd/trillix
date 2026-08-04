@@ -93,8 +93,23 @@ test('билдер без мыши: форма собирается клавиа
   // юнит видит модель, но не то, чьему стеку достаётся клавиша в живом браузере.
   const titleRow = page.locator('.rf-title[data-rich-line]')
   const titleTail = formTitle.slice(formTitle.lastIndexOf(' ') + 1)
+  // К хвосту идём ВПРАВО от начала: каретка при заходе на форму стоит в начале
+  // заголовка (FormTitleRow, эффект монтирования — так же вело себя поле до фазы 15),
+  // и выделение влево оттуда остаётся схлопнутым. Схлопнутое `selectionRange` отдаёт
+  // null, `apply` в RichLine выходит до применения — Mod+B молча не делает ничего
+  // (жирный по контракту работает только на выделении).
+  //
+  // Прыжком в конец это не заменяется: `End` в contenteditable уводит в конец
+  // ВИЗУАЛЬНОЙ строки, а заголовок на полотне переносится — при каком шрифте раннера,
+  // тест знать не может. Модификаторный аккорд «в конец текста» тем более: Mod+↓ на
+  // маке попадёт в `chords.arrowDown` (матчер без проверки модификаторов) и уведёт
+  // каретку из заголовка на полотно.
+  const titleHead = formTitle.slice(0, formTitle.length - titleTail.length)
+  for (let i = 0; i < titleHead.length; i++) {
+    await page.keyboard.press('ArrowRight')
+  }
   for (let i = 0; i < titleTail.length; i++) {
-    await page.keyboard.press('Shift+ArrowLeft')
+    await page.keyboard.press('Shift+ArrowRight')
   }
   await page.keyboard.press(`${MOD}+KeyB`)
   await expect(titleRow.locator('.rf-b')).toHaveText(titleTail)
