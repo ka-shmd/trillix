@@ -130,14 +130,244 @@ export interface BlockRowProps {
 // меню действий и удаление. Клавиатура: Enter — новый блок, «/» — меню типов,
 // Backspace в пустом — удалить и уйти на предыдущий, ↑/↓ на границе — переход,
 // Alt+↑/↓ — перемещение.
-// memo здесь несёт всю цену набора текста (TD-32): полотно подписано на весь массив
-// blocks, и любая правка любого блока перерисовывала ВСЕ строки формы — 30 мс и
-// 400 мутаций DOM на символ у потолка MAX_BLOCKS. Сравнение по ссылке достаточное и
-// честное: блоки иммутабельны (updateBlock заменяет один элемент), а все пропсы-функции
-// и списки, которые раздаёт полотно, стабилизированы там же (SlashEditor: useCallback,
-// useIdList, useStableGroups). Уберёшь стабилизацию хоть у одного — memo перестанет
-// срабатывать МОЛЧА, и цена вернётся целиком; сторож на это — замер e2e/perf.
-export const BlockRow = memo(function BlockRow({
+//
+// СТРОКА РАСЩЕПЛЕНА НА ДВОЕ, и это не стилистика, а лечение задержки старта драга
+// (TD-55, разбор 2026-08-04). Здесь — ТОНКАЯ ОБОЛОЧКА: `useSortable`, корневой узел с
+// его трансформом и кластер значков, которому нужны ручка и слушатели драга. Всё
+// содержимое — в `BlockRowBody` под `memo`, и он про dnd не знает вовсе.
+//
+// Зачем: `useSortable` подписывает строку на контексты dnd-kit, а смена значения
+// контекста перерисовывает потребителя МИМО `memo` — React сверяет пропсы, но, увидев
+// отложенное обновление контекста, всё равно рендерит. Поэтому любое движение dnd
+// перерисовывало все триста строк формы целиком. Замерено: старт жеста на форме из 199
+// блоков — 958 записей `INPUT[name]`, то есть ЧЕТЫРЕ полные перерисовки полотна, ~180 мс
+// JS, и ровно это владелец видит как «взялся за ручку, а блок поехал не сразу».
+//
+// После разреза контекст перерисовывает только оболочки — а тело бэйлится по пропсам.
+// **Условие, без которого разрез не работает:** пропсы тела обязаны быть стабильными
+// по ссылке. Их раздаёт полотно (`SlashEditor`: `useCallback`, `useIdList`), а
+// `actionOpen`/`setActionOpen` держит оболочка. Уберёшь стабилизацию хоть у одного —
+// `memo` перестанет срабатывать МОЛЧА и цена вернётся целиком; сторож — замер
+// `e2e/perf` (окно «СТАРТ ЖЕСТА») и `canvasRerender.test.tsx`.
+export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
+  const { block, groupHandle, requiredFor, mirrored = false, needsCaption = false } = props
+  const engine = useFocusEngine()
+  const captionGuard = useCaptionGuard(engine)
+  const removeBlock = useBuilderStore((s) => s.removeBlock)
+  const removeGroup = useBuilderStore((s) => s.removeGroup)
+  const addCaptionFor = useBuilderStore((s) => s.addCaptionFor)
+  // Меню действий живёт в ТЕЛЕ, а открывают его из обоих половин: кликом по грипу
+  // (здесь) и аккордом Cmd+. с текстовой поверхности (там). Поэтому состояние держит
+  // оболочка и отдаёт телу — сеттер `useState` стабилен по построению, и `memo` тела
+  // от него не страдает.
+  const [actionOpen, setActionOpen] = useState(false)
+  // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
+  // после перетаскивания (см. обработчик грипа ниже).
+  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: block.id,
+    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
+    // У строк артефакт проявлялся при переносе ВНУТРИ группы (без ремаунта).
+    animateLayoutChanges: noLayoutAnimation,
+  })
+  // Translate, а не Transform: блоки разной высоты, и dnd-kit кладёт в transform
+  // scaleY, чтобы переносимый блок «подгонялся» под высоту соседнего слота — из-за
+  // этого он визуально сжимался/растягивался при перетаскивании. Translate.toString
+  // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
+  // свою высоту. Смещение соседей (scale=1) от этого не страдает.
+  const style = { transform: CSS.Translate.toString(transform), transition }
+
+  // Слушатели драга грипа: у подписи мульти-группы — групповые (тащится вопрос
+  // целиком), у всех остальных — свои. Одна переменная на оба случая, потому что грип
+  // обязан и спредить их, и звать onPointerDown руками (см. кластер значков ниже).
+  const dragListeners = groupHandle ? groupHandle.listeners : listeners
+
+  const row = rowFacts(block.type)
+  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
+  // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
+  // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
+  // они стоят на уровне текста.
+  const rowLineH = row?.lineH ?? 'h-6'
+
+  // Кластер значков строки ВЫБОРА снят (фаза 16, решение владельца 6 — разворот
+  // решения 15.2, ADR §10 ARCHITECTURE). Управление списком живёт у карточек вариантов
+  // (у каждой свой кластер и свой попап), а самой строкой — у вопроса: подпись и есть
+  // её ручка, оттуда же попап меняет тип ответа и сносит вопрос. Так у списка перестаёт
+  // быть два этажа управления, различающиеся парой пикселей, и закрывается TD-44:
+  // строка выбора не покидает свой вопрос ни мышью, ни с клавиатуры — асимметрии
+  // «мышью можно, клавиатурой нельзя» больше нет.
+  //
+  // Условие про подпись обязательно: строка выбора БЕЗ подписи — сама себе вопрос
+  // (§4.2: субъект настроек голой строки — она сама), и снятый кластер оставил бы её
+  // без единого способа управления мышью. Наличие подписи для строки и означает
+  // requiredFor === undefined (звёздочку показывает подпись), поэтому спрашиваем ровно
+  // это, а не заводим второй проп о составе группы.
+  const ownedByQuestion = row?.surface === 'choice' && requiredFor?.id !== block.id
+
+  // Дать голой строке ответа заголовок (§4.4 спеки фазы 15) — одно действие на два
+  // входа: клавиша строки (здесь, на корне) и клик по чипу (в теле). Ссылка стабильна:
+  // иначе чип ломал бы memo тела на каждой перерисовке оболочки.
+  const addCaption = useCallback(() => {
+    const id = addCaptionFor(block.id)
+    if (id) engine.focusBlock(id, 'end')
+  }, [addCaptionFor, engine, block.id])
+
+  function onRowKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Строке с заголовком жест не обещан (чипа нет) — и не делается: no-op без шага
+    // истории, а не тихое «ничего не произошло» после коммита.
+    if (!needsCaption || !chords.addCaption(e)) return
+    e.preventDefault()
+    addCaption()
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      // data-block-id — якорь для замера строки драг-рамкой (updateFrame в
+      // SlashEditor): getBoundingClientRect по нему учитывает live-трансформы.
+      data-block-id={block.id}
+      // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
+      // поток она НЕ входит: -my-1.5 гасит её ровно на padding, поэтому flex-gap
+      // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента
+      // и совпадает с превью (ритм 13.3). Значки центрируются по top-1.5 = padding →
+      // на первой строке текста. Меняешь padding — правь -my И top-1.5 значков.
+      // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
+      // строке (дать ей заголовок), а поверхностей у неё несколько — инпут
+      // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
+      // любой из них, и ни одна этот аккорд не перехватывает.
+      onKeyDown={onRowKeyDown}
+      className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
+    >
+      {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
+          сам текст остаётся по центру колонки. Проявляются по hover/фокусу строки;
+          высота кластера = line-height первой строки блока (rowLineH) + items-center
+          → значки на уровне текста. Порядок: удалить, добавить, перетащить (ручка
+          последняя = ближайшая к тексту).
+
+          Кластер absolute и проявляется через opacity — высоту строки он не меняет
+          НИКОГДА, и это здесь не косметика, а требование корректности. Контрол,
+          который появляется по hover/фокусу и при этом занимает место в потоке,
+          схлопывается синхронно на mousedown (фокус уходит из блока → блок теряет
+          :focus-within → высота падает): всё, что ниже, уезжает вверх, mouseup
+          приходит уже мимо цели, и браузер диспатчит click на общего предка —
+          обработчик кнопки не срабатывает. Так «+ Описание» (контрол тех времён,
+          сейчас его нет), стоявшее в потоке под заголовком, съедало первый клик по
+          «+ Добавить блок» — TD-22.
+          Любой новый reveal-on-hover контрол блока — только сюда.
+
+          Кластер живёт в ОБОЛОЧКЕ, а не в теле: грипу нужны attributes/listeners
+          от useSortable, то есть ровно то, что меняет идентичность вместе с контекстом
+          dnd. Отдай их телу — и memo на нём перестанет срабатывать (см. шапку). */}
+      {/* tabIndex=-1 у значков строки: полотно — один Tab-stop, кнопки-значки —
+          мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
+          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2).
+
+          Кластер есть у КАЖДОЙ строки, включая строку ответа в собранном вопросе
+          (фаза 15, §4.1 спеки): удалить поле отдельно, вставить блок между подписью
+          и полем, утащить поле из своего вопроса — законные действия, а не «действия,
+          которых не бывает», как считал снятый замок. У вариантов choice поверх этого
+          свои кластеры (см. OptionCard). */}
+      {!ownedByQuestion && (
+        <div
+          // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
+          // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
+          // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
+          // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
+          className={`absolute top-1.5 flex ${
+            mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
+          } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+        >
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() =>
+              captionGuard(() =>
+                isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
+              )
+            }
+            aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
+            className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
+          >
+            <Trash2 className="size-4" />
+          </button>
+          <button
+            type="button"
+            tabIndex={-1}
+            onClick={() => props.onInsertBelow(block.id)}
+            aria-label="Добавить блок ниже (выбрать тип)"
+            className={ICON_BTN}
+          >
+            <Plus className="size-4" />
+          </button>
+          <button
+            type="button"
+            {...(groupHandle ? groupHandle.attributes : attributes)}
+            {...dragListeners}
+            // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
+            // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
+            tabIndex={-1}
+            // Грип — два жеста на одной ручке (§4.1 спеки фазы 16): тащим — перенос,
+            // кликаем — настройки. Имя называет КЛИК: перетаскивание скринридеру и так
+            // недоступно (Tab сюда не заходит, перенос с клавиатуры — Alt+↑/↓), а
+            // подсказка про оба жеста живёт в title, который видит мышь.
+            aria-label={
+              groupHandle && isCaptionType(block.type) ? 'Настройки вопроса' : 'Настройки блока'
+            }
+            title="Настройки — клик, перенос — перетаскивание"
+            // ВАЖНО: свой onPointerDown стоит ПОСЛЕ спреда listeners, а значит перебивает
+            // одноимённый обработчик dnd-kit — именно им сенсор начинает драг. Поэтому
+            // вызываем его руками; забыть этот вызов = грип перестаёт таскать, и молча:
+            // ни типы, ни тесты про клик этого не видят.
+            onPointerDown={(e) => {
+              gripDownRef.current = { x: e.clientX, y: e.clientY }
+              dragListeners?.onPointerDown?.(e)
+            }}
+            onClick={(e) => {
+              // Хвостовой click после настоящего драга: браузер шлёт его по mouseup,
+              // и без этой проверки попап открывался бы после КАЖДОГО перетаскивания.
+              // Отличаем по тому же порогу, по которому сенсор решает «это драг»
+              // (DRAG_ACTIVATION_DISTANCE) — иначе два числа разъедутся и меню начнёт
+              // выскакивать «иногда».
+              const from = gripDownRef.current
+              gripDownRef.current = null
+              // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance сравнивает
+              // через >): при >= жест ровно на пороге пропадал бы молча — сенсор драг
+              // не начал, а guard уже съел клик.
+              if (
+                from &&
+                Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
+              )
+                return
+              setActionOpen(true)
+            }}
+            className={`${ICON_BTN} cursor-grab active:cursor-grabbing`}
+          >
+            <GripVertical className="size-4" />
+          </button>
+        </div>
+      )}
+
+      <BlockRowBody
+        {...props}
+        actionOpen={actionOpen}
+        setActionOpen={setActionOpen}
+        onAddCaption={addCaption}
+      />
+    </div>
+  )
+})
+
+const ICON_BTN =
+  'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
+
+// BlockRowBody — содержимое строки: меню действий, тогл обязательности, чип заголовка
+// и сама поверхность (текст / варианты / инпут плейсхолдера / объектная остановка).
+// Про dnd не знает НИЧЕГО и ни одного его контекста не читает — в этом весь смысл
+// разреза (см. шапку BlockRow). Единственное исключение — список вариантов
+// (OptionsInline), но у него СВОЙ DndContext, поэтому канвасный его не касается.
+const BlockRowBody = memo(function BlockRowBody({
   block,
   formId,
   groupHandle,
@@ -148,15 +378,21 @@ export const BlockRow = memo(function BlockRow({
   mirrored = false,
   needsCaption = false,
   openMenuOnMount,
+  actionOpen,
+  setActionOpen,
+  onAddCaption,
   onAddBelow,
-  onInsertBelow,
   onBackspaceAtStart,
   onBackspaceDelete,
   onDeleteBlock,
   onAnswerAction,
   onArrow,
   onRowShift,
-}: BlockRowProps) {
+}: BlockRowProps & {
+  actionOpen: boolean
+  setActionOpen: (open: boolean) => void
+  onAddCaption: () => void
+}) {
   const engine = useFocusEngine()
   // Обёртка структурных команд, называющая потерю заголовка (§4.3 спеки фазы 15):
   // строка теперь двигается и удаляется отдельно от своего вопроса, и каждый такой
@@ -166,13 +402,10 @@ export const BlockRow = memo(function BlockRow({
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const moveBlock = useBuilderStore((s) => s.moveBlock)
   const moveGroup = useBuilderStore((s) => s.moveGroup)
-  const removeBlock = useBuilderStore((s) => s.removeBlock)
-  const removeGroup = useBuilderStore((s) => s.removeGroup)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
-  const addCaptionFor = useBuilderStore((s) => s.addCaptionFor)
   // Текстовая поверхность строки: <textarea> либо (проба 14.0) contenteditable. Тип
   // union, потому что поток строки с ней говорит только через адаптер каретки и о её
   // природе не знает — ровно ради этого адаптер и вводился (§2.6 спеки фазы 13).
@@ -188,11 +421,6 @@ export const BlockRow = memo(function BlockRow({
   )
   const [slashActive, setSlashActive] = useState(0)
   const slashList = slash ? filterMenuItems(slash.query) : []
-  // Меню действий блока (Cmd+. §3.3): открыто ли.
-  const [actionOpen, setActionOpen] = useState(false)
-  // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
-  // после перетаскивания (см. обработчик грипа ниже).
-  const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   // Пометка «действие попапа уже поставило каретку»: см. onOpenChange у BlockActionMenu.
   const movedCaretRef = useRef(false)
   // Текстовая строка в фокусе. Нужно ровно одному: плейсхолдер обычного текста
@@ -236,39 +464,6 @@ export const BlockRow = memo(function BlockRow({
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
   const captionCls = isTextRow ? row.className : ''
-
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: block.id,
-    // Без «доигрывания» анимации после дропа (отскок к старой позиции) — см. dnd.ts.
-    // У строк артефакт проявлялся при переносе ВНУТРИ группы (без ремаунта).
-    animateLayoutChanges: noLayoutAnimation,
-  })
-  // Translate, а не Transform: блоки разной высоты, и dnd-kit кладёт в transform
-  // scaleY, чтобы переносимый блок «подгонялся» под высоту соседнего слота — из-за
-  // этого он визуально сжимался/растягивался при перетаскивании. Translate.toString
-  // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
-  // свою высоту. Смещение соседей (scale=1) от этого не страдает.
-  const style = { transform: CSS.Translate.toString(transform), transition }
-
-  // Слушатели драга грипа: у подписи мульти-группы — групповые (тащится вопрос
-  // целиком), у всех остальных — свои. Одна переменная на оба случая, потому что грип
-  // обязан и спредить их, и звать onPointerDown руками (см. кластер значков ниже).
-  const dragListeners = groupHandle ? groupHandle.listeners : listeners
-
-  // Кластер значков строки ВЫБОРА снят (фаза 16, решение владельца 6 — разворот
-  // решения 15.2, ADR §10 ARCHITECTURE). Управление списком живёт у карточек вариантов
-  // (у каждой свой кластер и свой попап), а самой строкой — у вопроса: подпись и есть
-  // её ручка, оттуда же попап меняет тип ответа и сносит вопрос. Так у списка перестаёт
-  // быть два этажа управления, различающиеся парой пикселей, и закрывается TD-44:
-  // строка выбора не покидает свой вопрос ни мышью, ни с клавиатуры — асимметрии
-  // «мышью можно, клавиатурой нельзя» больше нет.
-  //
-  // Условие про подпись обязательно: строка выбора БЕЗ подписи — сама себе вопрос
-  // (§4.2: субъект настроек голой строки — она сама), и снятый кластер оставил бы её
-  // без единого способа управления мышью. Наличие подписи для строки и означает
-  // requiredFor === undefined (звёздочку показывает подпись), поэтому спрашиваем ровно
-  // это, а не заводим второй проп о составе группы.
-  const ownedByQuestion = row?.surface === 'choice' && requiredFor?.id !== block.id
 
   // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
   // textarea). Строится от АКТУАЛЬНОГО элемента: identity textarea могла смениться
@@ -442,25 +637,6 @@ export const BlockRow = memo(function BlockRow({
     }
   }
 
-  // Дать голой строке ответа заголовок (§4.4 спеки фазы 15) — одно действие на два
-  // входа: клавиша строки и клик по чипу. Каретка уходит на новую подпись: автор
-  // позвал этот жест, чтобы её написать.
-  function addCaption() {
-    const id = addCaptionFor(block.id)
-    if (id) engine.focusBlock(id, 'end')
-  }
-
-  function onRowKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    // Строке с заголовком жест не обещан (чипа нет) — и не делается: no-op без шага
-    // истории, а не тихое «ничего не произошло» после коммита.
-    if (!needsCaption || !chords.addCaption(e)) return
-    e.preventDefault()
-    addCaption()
-  }
-
-  const iconBtn =
-    'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
-
   // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
   // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
   // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
@@ -468,24 +644,7 @@ export const BlockRow = memo(function BlockRow({
   const rowLineH = row?.lineH ?? 'h-6'
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      // data-block-id — якорь для замера строки драг-рамкой (updateFrame в
-      // SlashEditor): getBoundingClientRect по нему учитывает live-трансформы.
-      data-block-id={block.id}
-      // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
-      // поток она НЕ входит: -my-1.5 гасит её ровно на padding, поэтому flex-gap
-      // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента
-      // и совпадает с превью (ритм 13.3). Значки центрируются по top-1.5 = padding →
-      // на первой строке текста. Меняешь padding — правь -my И top-1.5 значков.
-      // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
-      // строке (дать ей заголовок), а поверхностей у неё несколько — инпут
-      // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
-      // любой из них, и ни одна этот аккорд не перехватывает.
-      onKeyDown={onRowKeyDown}
-      className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
-    >
+    <>
       {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
           строки, сам поповер порталится. onPickType — тот же pickType, что у слеш-меню
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
@@ -532,111 +691,6 @@ export const BlockRow = memo(function BlockRow({
         }}
       />
 
-      {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
-          сам текст остаётся по центру колонки. Проявляются по hover/фокусу строки;
-          высота кластера = line-height первой строки блока (rowLineH) + items-center
-          → значки на уровне текста. Порядок: удалить, добавить, перетащить (ручка
-          последняя = ближайшая к тексту).
-
-          Кластер absolute и проявляется через opacity — высоту строки он не меняет
-          НИКОГДА, и это здесь не косметика, а требование корректности. Контрол,
-          который появляется по hover/фокусу и при этом занимает место в потоке,
-          схлопывается синхронно на mousedown (фокус уходит из блока → блок теряет
-          :focus-within → высота падает): всё, что ниже, уезжает вверх, mouseup
-          приходит уже мимо цели, и браузер диспатчит click на общего предка —
-          обработчик кнопки не срабатывает. Так «+ Описание» (контрол тех времён,
-          сейчас его нет), стоявшее в потоке под заголовком, съедало первый клик по
-          «+ Добавить блок» — TD-22.
-          Любой новый reveal-on-hover контрол блока — только сюда. */}
-      {/* tabIndex=-1 у значков строки: полотно — один Tab-stop, кнопки-значки —
-          мышиные удобства и выпадают из Tab-обхода (§3.1). Клавиатурные эквиваленты —
-          шорткаты (Alt+↑/↓ — перенос) и меню действий Cmd+. (13.2).
-
-          Кластер есть у КАЖДОЙ строки, включая строку ответа в собранном вопросе
-          (фаза 15, §4.1 спеки): удалить поле отдельно, вставить блок между подписью
-          и полем, утащить поле из своего вопроса — законные действия, а не «действия,
-          которых не бывает», как считал снятый замок. У вариантов choice поверх этого
-          свои кластеры (см. OptionCard). */}
-      {!ownedByQuestion && (
-        <div
-          // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
-          // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
-          // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
-          // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
-          className={`absolute top-1.5 flex ${
-            mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
-          } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
-        >
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() =>
-              captionGuard(() =>
-                isCaptionType(block.type) ? removeGroup(block.id) : removeBlock(block.id),
-              )
-            }
-            aria-label={isCaptionType(block.type) ? 'Удалить вопрос (группу)' : 'Удалить блок'}
-            className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-destructive"
-          >
-            <Trash2 className="size-4" />
-          </button>
-          <button
-            type="button"
-            tabIndex={-1}
-            onClick={() => onInsertBelow(block.id)}
-            aria-label="Добавить блок ниже (выбрать тип)"
-            className={iconBtn}
-          >
-            <Plus className="size-4" />
-          </button>
-          <button
-            type="button"
-            {...(groupHandle ? groupHandle.attributes : attributes)}
-            {...dragListeners}
-            // После спреда: dnd-kit кладёт в attributes свой tabIndex=0 — перебиваем на
-            // -1, чтобы грип выпал из Tab (перенос с клавиатуры — Alt+↑/↓, не Space-драг).
-            tabIndex={-1}
-            // Грип — два жеста на одной ручке (§4.1 спеки фазы 16): тащим — перенос,
-            // кликаем — настройки. Имя называет КЛИК: перетаскивание скринридеру и так
-            // недоступно (Tab сюда не заходит, перенос с клавиатуры — Alt+↑/↓), а
-            // подсказка про оба жеста живёт в title, который видит мышь.
-            aria-label={
-              groupHandle && isCaptionType(block.type) ? 'Настройки вопроса' : 'Настройки блока'
-            }
-            title="Настройки — клик, перенос — перетаскивание"
-            // ВАЖНО: свой onPointerDown стоит ПОСЛЕ спреда listeners, а значит перебивает
-            // одноимённый обработчик dnd-kit — именно им сенсор начинает драг. Поэтому
-            // вызываем его руками; забыть этот вызов = грип перестаёт таскать, и молча:
-            // ни типы, ни тесты про клик этого не видят.
-            onPointerDown={(e) => {
-              gripDownRef.current = { x: e.clientX, y: e.clientY }
-              dragListeners?.onPointerDown?.(e)
-            }}
-            onClick={(e) => {
-              // Хвостовой click после настоящего драга: браузер шлёт его по mouseup,
-              // и без этой проверки попап открывался бы после КАЖДОГО перетаскивания.
-              // Отличаем по тому же порогу, по которому сенсор решает «это драг»
-              // (DRAG_ACTIVATION_DISTANCE) — иначе два числа разъедутся и меню начнёт
-              // выскакивать «иногда».
-              const from = gripDownRef.current
-              gripDownRef.current = null
-              // Строго БОЛЬШЕ, как у сенсора dnd-kit (hasExceededDistance сравнивает
-              // через >): при >= жест ровно на пороге пропадал бы молча — сенсор драг
-              // не начал, а guard уже съел клик.
-              if (
-                from &&
-                Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
-              )
-                return
-              setActionOpen(true)
-            }}
-            className={`${iconBtn} cursor-grab active:cursor-grabbing`}
-          >
-            <GripVertical className="size-4" />
-          </button>
-        </div>
-      )}
-
       {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
           левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
           рендерер, §6), а пишет в отвечаемый блок группы — носитель флага не менялся.
@@ -648,7 +702,7 @@ export const BlockRow = memo(function BlockRow({
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
           себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
-      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={addCaption} />}
+      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -736,7 +790,7 @@ export const BlockRow = memo(function BlockRow({
           {row?.surface === 'object' && <row.Control block={block} formId={formId} />}
         </ObjectStop>
       )}
-    </div>
+    </>
   )
 })
 
