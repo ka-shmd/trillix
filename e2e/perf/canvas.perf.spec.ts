@@ -80,8 +80,15 @@ type SizeReport = {
   blocks: number
   idle: Phase
   typing: Phase & { perChar: { scriptMs: number; heapKb: number; mutations: number | null } }
+  dragStart: Phase & { hot: Hot[] }
   drag: Phase & { retainedMbAfterGc: number; hot: Hot[] }
-  structural: { boundingRects: number | null; scriptMs: number }
+  structural: {
+    boundingRects: number | null
+    scriptMs: number
+    mutations: number | null
+    attrTop: [string, number][] | null
+    hot: Hot[]
+  }
 }
 
 async function metrics(cdp: CDPSession): Promise<Metrics> {
@@ -159,7 +166,7 @@ async function phase(
     attrTop: c.attrByTarget
       ? Object.entries(c.attrByTarget)
           .sort((a, b) => b[1] - a[1])
-          .slice(0, 3)
+          .slice(0, 5)
       : null,
     boundingRects: c.boundingRects,
     resizeObservers: c.resizeObservers,
@@ -243,12 +250,17 @@ test('замер полотна: набор текста и перетаскив
     // замера dnd-kit работает и ВНЕ драга (TD-55, источник 2) — состав контейнеров
     // меняется, и droppableRects пересобирается целиком.
     ;[m0, h0] = await start(page, cdp)
+    await cdp.send('Profiler.start')
     await page.keyboard.press('Enter')
     await page.waitForTimeout(500)
     const structuralPhase = await phase(page, cdp, m0, h0)
+    const structuralHot = await profileTop(cdp, 10)
     const structural = {
       boundingRects: structuralPhase.boundingRects,
       scriptMs: structuralPhase.scriptMs,
+      mutations: structuralPhase.mutations,
+      attrTop: structuralPhase.attrTop,
+      hot: structuralHot,
     }
 
     // 4. ПЕРЕТАСКИВАНИЕ строки (TD-55). Тащим ПОЛЕ середины формы, а не подпись: у
@@ -263,20 +275,40 @@ test('замер полотна: набор текста и перетаскив
     const box = await grip.boundingBox()
     if (!box) throw new Error('грип строки не найден — драг замерить нечем')
 
-    await heapAfterGc(cdp)
-    ;[m0, h0] = await start(page, cdp)
-    await cdp.send('Profiler.start')
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
     // Проба ставится ДО нажатия: она слушает pointerdown, и поставленная после уже
     // ничего не увидит.
     if (!(await page.evaluate(watchDragSource(`f${midIndex}`)))) {
       throw new Error('проба старта драга не встала — строки нет в DOM')
     }
+
+    // 4а. СТАРТ ЖЕСТА — отдельным окном. Всё, что владелец видит как «взялся за ручку,
+    // а блок поехал не сразу», происходит здесь: нажатие, один шаг мыши за порог
+    // активации и вся работа, которую dnd-kit делает на старте. Меряется отдельно от
+    // установившегося движения, потому что суммарные числа за жест эти два режима
+    // смешивают, а причины у них разные.
+    await heapAfterGc(cdp)
+    ;[m0, h0] = await start(page, cdp)
+    await cdp.send('Profiler.start')
     await page.mouse.down()
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 12)
+    // Ждём именно СДВИГА строки, а не фиксированной паузы: пауза «на глаз» либо
+    // обрежет работу, либо приплюсует простой, и в обоих случаях соврёт.
+    await page
+      .waitForFunction('window.__perf.dragMoved > 0', undefined, { timeout: 5000 })
+      .catch(() => {
+        throw new Error('строка так и не сдвинулась — старт драга замерить нечем')
+      })
+    const startPhase = await phase(page, cdp, m0, h0)
+    const startHot = await profileTop(cdp, 6)
+
+    // 4б. УСТАНОВИВШЕЕСЯ ДВИЖЕНИЕ — остальные шаги, своим окном.
+    ;[m0, h0] = await start(page, cdp)
+    await cdp.send('Profiler.start')
     for (let i = 1; i <= DRAG_STEPS; i++) {
       await page.mouse.move(
         box.x + box.width / 2,
-        box.y + box.height / 2 + (DRAG_DISTANCE_PX * i) / DRAG_STEPS,
+        box.y + box.height / 2 + 12 + (DRAG_DISTANCE_PX * i) / DRAG_STEPS,
       )
       await page.waitForTimeout(DRAG_STEP_MS)
     }
@@ -295,6 +327,7 @@ test('замер полотна: набор текста и перетаскив
       blocks: size,
       idle,
       typing,
+      dragStart: { ...startPhase, hot: startHot },
       drag: { ...dragPhase, retainedMbAfterGc: retained, hot },
       structural,
     })
@@ -307,9 +340,18 @@ test('замер полотна: набор текста и перетаскив
         `${typing.perChar.heapKb.toFixed(0)} КБ/символ, ` +
         `${typing.perChar.mutations?.toFixed(0) ?? 'н/д'} мутаций/символ ` +
         `(атрибутов ${typing.attrMutations ?? 'н/д'}, топ ${JSON.stringify(typing.attrTop)})\n` +
-        `Enter:        ${structural.boundingRects ?? 'н/д'} getBoundingClientRect, ` +
-        `${structural.scriptMs.toFixed(0)} мс\n` +
-        `старт драга:  ${dragPhase.dragStartMs?.toFixed(0) ?? 'н/д'} мс от нажатия до сдвига\n` +
+        `Enter:        ${structural.boundingRects ?? 'н/д'} rect, ` +
+        `${structural.scriptMs.toFixed(0)} мс, ${structural.mutations ?? 'н/д'} мутаций ` +
+        `${JSON.stringify(structural.attrTop)}\n` +
+        `  самотайм:   ${structuralHot.map(([n, ms]) => `${n} ${ms.toFixed(0)}мс`).join(', ')}\n` +
+        `СТАРТ ЖЕСТА:  ${startPhase.dragStartMs?.toFixed(0) ?? 'н/д'} мс от нажатия до сдвига; ` +
+        `${startPhase.scriptMs.toFixed(0)} мс JS, ` +
+        `${startPhase.boundingRects ?? 'н/д'} rect, ` +
+        `${startPhase.resizeObservers ?? 'н/д'} RO, ` +
+        `${startPhase.mutations ?? 'н/д'} мутаций, ` +
+        `layout ${startPhase.layoutMs.toFixed(0)} мс, стиль ${startPhase.styleMs.toFixed(0)} мс\n` +
+        `  атрибуты:   ${JSON.stringify(startPhase.attrTop)}\n` +
+        `  самотайм:   ${startHot.map(([n, ms]) => `${n} ${ms.toFixed(0)}мс`).join(', ')}\n` +
         `длинные:      ${dragPhase.longTasks ?? 'н/д'} задач, ` +
         `${dragPhase.longTaskMs?.toFixed(0) ?? 'н/д'} мс суммарно, ` +
         `худшая ${dragPhase.worstTaskMs?.toFixed(0) ?? 'н/д'} мс\n` +
