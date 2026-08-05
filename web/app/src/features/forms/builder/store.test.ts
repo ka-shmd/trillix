@@ -2806,6 +2806,26 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(after).toEqual([['a', 'b']])
   })
 
+  // Тот же дефект, что чинит сторож в rowZones.test, со стороны клавиатуры: подсказка
+  // «войти в ряд» (rowPosition → 'enter') обещала Mod+Alt+→ там, где placeInRow вернёт
+  // null. Найдено ревью фазы 19.
+  it('вопрос под разрывом в ряд с ним не встаёт — ни подсказкой, ни командой', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'b', groupId: '', type: 'email' },
+      ],
+    })
+    expect(rowPosition(store.getState().blocks, 'b')).toBe('solo')
+
+    const before = store.getState().blocks
+    store.getState().shiftColumn('b', 'right')
+    expect(store.getState().blocks).toEqual(before)
+  })
+
   it('разрыв, вставленный редактором, валиден по контракту', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')

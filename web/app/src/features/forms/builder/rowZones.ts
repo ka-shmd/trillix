@@ -1,5 +1,5 @@
 import { type Block } from '@entities/formSchema'
-import { groupCanShareRow } from '@fields/groups'
+import { groupCanPair } from '@fields/groups'
 
 // Правила приглашения «встань в ряд» — то, что решает, ГДЕ горит зона и КАК будет
 // выглядеть результат. Вынесено из SlashEditor чистыми функциями: жест проверяется
@@ -25,8 +25,10 @@ type Row = Group[][]
 // становился бы no-op'ом: дублёр рисует результат, дроп не делает ничего.
 //
 // Два отказа, и оба про честность приглашения, а не про вкус:
-//   • ряд из одного вопроса с внутренним рядом колонку не делит (§6.5) — placeInRow
-//     такой дроп отвергнет, и зона обещала бы несбыточное;
+//   • ряд из одного элемента, которому колонку делить нельзя, — placeInRow такой дроп
+//     отвергнет, и зона обещала бы несбыточное. Условий два и оба в groupCanPair:
+//     внутренний ряд у вопроса (§6.5) и тип, не делящий ряд вовсе (заголовок формы,
+//     разрыв страницы);
 //   • ряд, в котором стоит только сам перетаскиваемый вопрос, паре не с кем (адреса,
 //     отличного от активного, в таком ряду просто нет).
 export function inviteRowId(
@@ -37,7 +39,7 @@ export function inviteRowId(
   if (candidateGroupId === null || nearGroupId === null) return null
   const row = rows.find((r) => r.some((cell) => cell.some((g) => g.id === nearGroupId)))
   if (!row) return null
-  if (row.length === 1 && !groupCanShareRow(row[0]![0]!.blocks)) return null
+  if (row.length === 1 && !groupCanPair(row[0]![0]!.blocks)) return null
   return row.flat().find((g) => g.id !== candidateGroupId)?.id ?? null
 }
 
