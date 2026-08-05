@@ -2762,6 +2762,34 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(store.getState().logo).toEqual({ imageKey: 'ws/logo.png' })
   })
 
+  // Разрыв страницы (фаза 19). Спецслучая в regroup он не требует — как не потребовал
+  // form_title: связь «подпись → поле» ищется от поля ВВЕРХ через text/image, а разрыв
+  // ни то ни другое. Проверяем следствие, ради которого это важно: вопрос не может
+  // оказаться разорванным границей страниц (подпись на одной, поле на другой).
+  it('разрыв не даёт подписи и полю попасть в одну группу', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'cap', groupId: '', type: 'title', text: textFromString('Вопрос') },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'fld', groupId: '', type: 'short_text' },
+      ],
+    })
+    const [cap, brk, fld] = store.getState().blocks
+    expect(cap!.groupId).not.toBe(fld!.groupId)
+    expect(brk!.groupId).not.toBe(cap!.groupId)
+    expect(brk!.groupId).not.toBe(fld!.groupId)
+  })
+
+  it('разрыв, вставленный редактором, валиден по контракту', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('page_break')
+    store.getState().addBlock('email')
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
   // Сторож контракта: то, что стор отдаёт автосейву, обязано проходить Zod.
   it('документ с оформлением валиден по контракту', () => {
     const store = createBuilderStore()

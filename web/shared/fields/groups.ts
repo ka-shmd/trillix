@@ -3,6 +3,7 @@ import {
   type BlockType,
   COLUMN_LEFT,
   COLUMN_RIGHT,
+  canShareRow,
   isAnswerableType,
   isCaptionType,
   plainText,
@@ -46,6 +47,29 @@ export function splitFormTitle<T extends { type: BlockType }>(blocks: T[]): { ti
   const i = blocks.findIndex((b) => b.type === 'form_title')
   if (i < 0) return { title: null, rest: blocks }
   return { title: blocks[i]!, rest: [...blocks.slice(0, i), ...blocks.slice(i + 1)] }
+}
+
+// splitPages — страницы формы (фаза 19). Разрыв (`page_break`) — граница, а не элемент:
+// в возвращённых страницах его нет, страницы идут в порядке документа, и на выходе их
+// всегда хотя бы одна (форма без разрывов — это одна страница, то есть ровно поведение
+// до фазы).
+//
+// ПУСТЫЕ СТРАНИЦЫ ВЫКИДЫВАЮТСЯ ЗДЕСЬ, а не запрещаются валидатором. Разрыв первым
+// блоком, два подряд, разрыв последним — законные промежуточные состояния набора,
+// драга и undo; кросс-блочное правило в схеме ловило бы на них 422, как ловило бы на
+// инертном бите ряда (formSchema.ts, packCells). Инертный разрыв убирает стор, мусор на
+// экране — этот раскладчик, и обе уборки идут ПОСЛЕ валидности, а не вместо неё.
+//
+// Один помощник на три поверхности, по тому же доводу, что splitFormTitle: разъедься
+// разбиение — и автор увидел бы в превью не те страницы, что респондент.
+export function splitPages<T extends { type: BlockType }>(blocks: T[]): T[][] {
+  const pages: T[][] = [[]]
+  for (const b of blocks) {
+    if (b.type === 'page_break') pages.push([])
+    else pages[pages.length - 1]!.push(b)
+  }
+  const filled = pages.filter((p) => p.length > 0)
+  return filled.length > 0 ? filled : [[]]
 }
 
 // Ряд — это КОЛОНКИ, а колонка — стопка элементов. Полноширинный ряд = одна колонка с
@@ -189,9 +213,22 @@ export function packRows<T extends { blocks: RowCell[] }>(groups: T[]): Row<T>[]
   return packCells(
     groups,
     (g) => bitOfBlock(g.blocks[0]),
-    (l, r) => groupCanShareRow(l.blocks) && groupCanShareRow(r.blocks),
+    (l, r) => pairableGroup(l.blocks) && pairableGroup(r.blocks),
   )
 }
+
+// Может ли группа стоять в ячейке ряда: разрешает ли делить ряд её ТИП (contract.ts,
+// зеркало canShareRow в Go) и нет ли у неё внутреннего ряда (§6.5).
+//
+// Типовое условие добавлено фазой 19 вместе с разрывом страницы, и оно не косметическое:
+// правило «'right' забирает предыдущий полноширинный элемент» (packCells) иначе утащило
+// бы разрыв в левую колонку — а такого документа схема не принимает, и автор получил бы
+// 422 на автосейве. До фазы дыру закрывал стор, вырезая form_title из раскладки
+// (rowGroups); разрыв так вырезать нельзя — он ГРАНИЦА и обязан закрывать секцию, а
+// вырезанный из списка он стал бы для раскладчика невидимым, и секция склеилась бы через
+// него, разъехавшись на две страницы.
+const pairableGroup = (blocks: RowCell[]): boolean =>
+  canShareRow(blocks[0]!.type) && groupCanShareRow(blocks)
 
 // Упаковка вариантов в ряды (спека §5.1) — тот же бит, тот же раскладчик. Whitelist
 // здесь не нужен: карточка варианта делит ряд всегда (потолок ширины у неё тот же,

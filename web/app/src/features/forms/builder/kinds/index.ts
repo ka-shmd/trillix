@@ -13,6 +13,7 @@ import { label } from './label'
 import { longText } from './longText'
 import { multiChoice } from './multiChoice'
 import { numberField } from './number'
+import { pageBreak } from './pageBreak'
 import { phone } from './phone'
 import { scale } from './scale'
 import { shortText } from './shortText'
@@ -40,6 +41,7 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   heading,
   text,
   image,
+  page_break: pageBreak,
   form_title: formTitle,
 }
 
