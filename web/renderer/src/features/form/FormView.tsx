@@ -396,6 +396,11 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
           ) : (
             form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
           ))}
+        {/* Линии шагов — НАД вопросами страницы (решение владельца 2026-08-05, после
+            примерки внизу). Клик по пройденной линии возвращает на тот шаг: то же, что
+            «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
+            «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
+        <StepBar pages={pages.length} page={page} reached={reached} onGo={onBackTo} />
         <div
           className="rf-form"
           ref={pageRef}
@@ -488,11 +493,6 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
             </button>
           )}
         </div>
-        {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
-            2026-08-05). Клик по пройденной линии возвращает на тот шаг: то же, что
-            «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
-            «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
-        <StepBar pages={pages.length} page={page} reached={reached} onGo={onBackTo} />
         {attempted && hasFieldErrors && (
           <p className="form-note form-note-error" role="alert">
             Проверьте выделенные поля.

@@ -82,7 +82,7 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await leaverPage.goto(`${RENDERER}/r/${form.slug}`)
   await leaverPage.getByLabel(Q1).fill('Пётр')
   await leaverPage.locator('button.rf-next').click()
-  await expect(leaverPage.getByText('Шаг 2 из 3')).toBeVisible()
+  await expect(leaverPage.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
   // Уводим страницу: pagehide гарантированно шлёт последний бикон визита.
   await leaverPage.goto('about:blank')
   await leaver.close()
@@ -99,15 +99,18 @@ test('форма из трёх страниц: шаги, пошаговая ва
   // 1. Первая страница: заголовок формы и первый вопрос; вопросов следующих страниц
   // нет в DOM вовсе, и кнопки отправки тоже нет.
   await expect(respondent.getByRole('heading', { name: formTitle })).toBeVisible()
-  await expect(respondent.getByText('Шаг 1 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
   await expect(respondent.getByLabel(Q1)).toBeVisible()
   await expect(respondent.getByLabel(Q2)).toHaveCount(0)
+  // Видимой подписи «Шаг N из M» нет (решение владельца): счёт несут линии, а текст
+  // остаётся только скринридеру.
+  await expect(respondent.getByText('Шаг 1 из 3')).toBeHidden()
   await expect(respondent.locator('button.rf-submit:not(.rf-next)')).toHaveCount(0)
 
   // 2. «Далее» не пускает с пустым обязательным ЭТОЙ страницы — и не жалуется на поля
   // следующих (их валидация не запускалась).
   await respondent.locator('button.rf-next').click()
-  await expect(respondent.getByText('Шаг 1 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
   await expect(respondent.getByText('Обязательное поле')).toHaveCount(1)
 
   await respondent.getByLabel(Q1).fill(`Иван ${uniq}`)
@@ -115,7 +118,7 @@ test('форма из трёх страниц: шаги, пошаговая ва
 
   // 3. Вторая страница: хром остался на первой (заголовка формы больше нет), вопрос
   // сменился, появилась кнопка «Назад».
-  await expect(respondent.getByText('Шаг 2 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
   await expect(respondent.getByRole('heading', { name: formTitle })).toHaveCount(0)
   await expect(respondent.getByLabel(Q2)).toBeVisible()
   await expect(respondent.getByRole('button', { name: 'Назад' })).toBeVisible()
@@ -131,7 +134,7 @@ test('форма из трёх страниц: шаги, пошаговая ва
   // 4б. Линии шагов: клик по пройденной возвращает на неё, непройденная кнопкой не
   // является вовсе (вперёд ведёт только «Далее» с проверкой).
   await respondent.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }).click()
-  await expect(respondent.getByText('Шаг 1 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
   await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
   await expect(respondent.locator('button.rf-step-mark')).toHaveCount(0)
   await respondent.locator('button.rf-next').click()
@@ -139,13 +142,13 @@ test('форма из трёх страниц: шаги, пошаговая ва
   // 5. Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: это ровно та
   // правка (pushState/popstate), которую не видит ни один юнит.
   await respondent.goBack()
-  await expect(respondent.getByText('Шаг 1 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
   await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
   await respondent.locator('button.rf-next').click()
 
   // 6. Третья страница — последняя: «Далее» нет, есть отправка.
   await respondent.locator('button.rf-next').click()
-  await expect(respondent.getByText('Шаг 3 из 3')).toBeVisible()
+  await expect(respondent.locator('.rf-steps[aria-label="Шаг 3 из 3"]')).toBeVisible()
   await expect(respondent.locator('button.rf-next')).toHaveCount(0)
   await respondent.getByLabel(Q3).fill('Всё понравилось')
 

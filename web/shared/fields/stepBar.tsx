@@ -28,10 +28,15 @@ export function StepBar({
   reached: number
   onGo: (next: number) => void
 }) {
-  if (pages < 2) return null // «Шаг 1 из 1» — шум, а не индикатор
+  if (pages < 2) return null // индикатор из одной линии — шум, а не индикатор
+  const label = `Шаг ${page + 1} из ${pages}`
   return (
     <div className="rf-progress">
-      <ol className="rf-steps">
+      {/* Подписи под линиями нет (решение владельца 2026-08-05): номер шага читается из
+          самих линий. Но для скринридера линии — пустые прямоугольники, поэтому счёт
+          остаётся ДВАЖДЫ и оба раза невидимо: именем списка (где я сейчас, если прийти
+          сюда Tab'ом) и живой областью ниже (что изменилось, когда шаг сменился). */}
+      <ol className="rf-steps" aria-label={label}>
         {Array.from({ length: pages }, (_, i) => {
           const state = i === page ? 'current' : i < page ? 'done' : 'ahead'
           const cls = `rf-step-mark rf-step-mark--${state}`
@@ -53,10 +58,8 @@ export function StepBar({
           )
         })}
       </ol>
-      {/* role=status озвучивает смену шага скринридеру без ручного управления фокусом.
-          Он же — единственный текстовый носитель прогресса: линии декоративны. */}
-      <p className="rf-step" role="status">
-        Шаг {page + 1} из {pages}
+      <p className="rf-sr-only" role="status">
+        {label}
       </p>
     </div>
   )

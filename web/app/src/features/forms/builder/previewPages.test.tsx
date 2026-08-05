@@ -43,8 +43,8 @@ const twoPages = (): Block[] => [
 
 describe('превью листает страницы', () => {
   it('одностраничная форма шагов не показывает и сразу даёт кнопку отправки', () => {
-    renderPreview(question('a', 'Имя'))
-    expect(screen.queryByText(/Шаг/)).toBeNull()
+    const { container } = renderPreview(question('a', 'Имя'))
+    expect(container.querySelector('.rf-steps')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Далее' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Отправить' })).toBeTruthy()
   })
@@ -53,7 +53,7 @@ describe('превью листает страницы', () => {
     renderPreview(twoPages())
     expect(screen.getByText('Имя')).toBeTruthy()
     expect(screen.queryByText('Почта')).toBeNull()
-    expect(screen.getByText('Шаг 1 из 2')).toBeTruthy()
+    expect(screen.getByLabelText('Шаг 1 из 2')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Отправить' })).toBeNull()
     // Назад с первой страницы некуда — кнопки нет вовсе, а не disabled.
     expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
@@ -64,19 +64,30 @@ describe('превью листает страницы', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     expect(screen.getByText('Почта')).toBeTruthy()
     expect(screen.queryByText('Имя')).toBeNull()
-    expect(screen.getByText('Шаг 2 из 2')).toBeTruthy()
+    expect(screen.getByLabelText('Шаг 2 из 2')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Отправить' })).toBeTruthy()
   })
 
-  // Место прогресса — часть WYSIWYG, а не вкус: он стоит ПОД кнопками шага (решение
-  // владельца 2026-08-05), и разъедься это с рендерером, автор увидел бы не ту
+  // Место индикатора — часть WYSIWYG, а не вкус: он стоит НАД вопросами страницы
+  // (решение владельца 2026-08-05), и разъедься это с рендерером, автор увидел бы не ту
   // страницу, которую увидит человек.
-  it('прогресс стоит ниже кнопок шага', () => {
+  it('линии шагов стоят выше вопросов', () => {
     const { container } = renderPreview(twoPages())
-    const nav = container.querySelector('.rf-nav')!
+    const form = container.querySelector('.rf-form')!
     const progress = container.querySelector('.rf-progress')!
-    // DOCUMENT_POSITION_FOLLOWING = прогресс идёт ПОСЛЕ навигации в порядке документа.
-    expect(nav.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // DOCUMENT_POSITION_PRECEDING = индикатор идёт ДО вопросов в порядке документа.
+    expect(form.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+  })
+
+  // Видимой подписи «Шаг N из M» нет, но счёт обязан оставаться доступным: линии для
+  // скринридера — пустые прямоугольники.
+  it('счёт шагов остаётся скринридеру именем списка и живой областью', () => {
+    const { container } = renderPreview(twoPages())
+    expect(container.querySelector('.rf-steps')!.getAttribute('aria-label')).toBe('Шаг 1 из 2')
+    const live = container.querySelector('[role="status"]')!
+    expect(live.textContent).toBe('Шаг 1 из 2')
+    // Текст есть в DOM, но невидим — иначе подпись бы вернулась.
+    expect(live.className).toContain('rf-sr-only')
   })
 
   // Линии шагов (решение владельца 2026-08-05): по одной на страницу, кликом — только
@@ -98,12 +109,12 @@ describe('превью листает страницы', () => {
     const { container } = renderPreview(threePages())
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
-    expect(screen.getByText('Шаг 3 из 3')).toBeTruthy()
+    expect(screen.getByLabelText('Шаг 3 из 3')).toBeTruthy()
 
     // Пройденных шагов теперь два, текущий кнопкой не бывает.
     expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
-    expect(screen.getByText('Шаг 1 из 3')).toBeTruthy()
+    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
     expect(screen.getByLabelText(/Имя/)).toBeTruthy()
   })
 

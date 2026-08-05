@@ -67,6 +67,9 @@ export function PreviewPane({ title }: { title: string }) {
           ) : (
             title.trim() && <h1 className="rf-title">{title.trim()}</h1>
           ))}
+        {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
+            правило «кликом только назад» — часть WYSIWYG. */}
+        <StepBar pages={pages.length} page={page} reached={reached} onGo={setPage} />
         {blocks.length === 0 ? (
           <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
         ) : (
@@ -147,9 +150,6 @@ export function PreviewPane({ title }: { title: string }) {
             </button>
           )}
         </div>
-        {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
-            правило «кликом только назад» — часть WYSIWYG. */}
-        <StepBar pages={pages.length} page={page} reached={reached} onGo={setPage} />
       </div>
     </>
   )
