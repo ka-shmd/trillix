@@ -1,6 +1,15 @@
+import { useState } from 'react'
+
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import {
+  groupBlocks,
+  groupMeta,
+  packGroupRows,
+  packRows,
+  splitFormTitle,
+  splitPages,
+} from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 
 import { useBuilderStore } from './storeContext'
@@ -20,22 +29,51 @@ export function PreviewPane({ title }: { title: string }) {
   // до первого автосейва блока в сторе может не быть.
   const { title: formTitle, rest: blocks } = splitFormTitle(allBlocks)
   const groups = groupMeta(blocks)
+  // Страницы (фаза 19) — тем же splitPages, что режет форму респонденту. Превью,
+  // рисующее все страницы подряд, соврало бы автору о главном: он не увидел бы ни
+  // границ шагов, ни того, что кнопка отправки живёт только на последней.
+  const pages = splitPages(blocks)
+  const lastPage = pages.length - 1
+  const multi = pages.length > 1
+  // Номер страницы держится ЗДЕСЬ, а не в сторе билдера: это состояние просмотра, а не
+  // документа (web/CLAUDE.md — «переживает ли перезагрузку?» нет, «нужен ли больше чем
+  // одному дереву?» нет). Автор стёр разрыв, стоя на последней странице, — clamp ниже
+  // возвращает его в существующий диапазон, а не показывает пустоту.
+  const [rawPage, setPage] = useState(0)
+  const page = Math.min(rawPage, lastPage)
+  // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
+  // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
+  const chrome = page === 0
   // Ряды вопросов (спека §5): вопрос с column='right' встаёт рядом с предыдущим,
   // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
-  const rows = packRows(groupBlocks(blocks))
+  const rows = packRows(groupBlocks(pages[page] ?? []))
 
   return (
     // Тот же хром, что у рендерера, и теми же двумя компонентами: обложка снаружи
     // страницы, логотип внутри. WYSIWYG держится на общем выводе, а не на похожей
     // вёрстке в двух местах.
     <>
-      <CoverBand cover={cover} />
-      <div className={pageClass(cover)}>
-        <LogoMark logo={logo} over={Boolean(cover)} />
-        {formTitle ? (
-          <BlockField block={formTitle} />
-        ) : (
-          title.trim() && <h1 className="rf-title">{title.trim()}</h1>
+      <CoverBand cover={chrome ? cover : undefined} />
+      <div className={pageClass(chrome ? cover : undefined)}>
+        {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}
+        {chrome &&
+          (formTitle ? (
+            <BlockField block={formTitle} />
+          ) : (
+            title.trim() && <h1 className="rf-title">{title.trim()}</h1>
+          ))}
+        {multi && (
+          <div className="rf-progress">
+            <div className="rf-progress-track">
+              <div
+                className="rf-progress-fill"
+                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
+              />
+            </div>
+            <p className="rf-step">
+              Шаг {page + 1} из {pages.length}
+            </p>
+          </div>
         )}
         {blocks.length === 0 ? (
           <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
@@ -90,11 +128,26 @@ export function PreviewPane({ title }: { title: string }) {
             })}
           </div>
         )}
-        {/* Не disabled: превью показывает кнопку как у респондента (активной);
-          обработчика нет, поэтому клик всё равно ничего не делает. */}
-        <button type="button" className="rf-submit">
-          {label}
-        </button>
+        {/* Кнопки шага — рабочие: превью для того и нужно, чтобы автор прошёл форму
+          так же, как её пройдёт респондент. Кнопка отправки по-прежнему без
+          обработчика (клик ничего не делает), но выглядит как у респондента —
+          активной, и только на последней странице. */}
+        <div className="rf-nav">
+          {page > 0 && (
+            <button type="button" className="rf-back" onClick={() => setPage(page - 1)}>
+              Назад
+            </button>
+          )}
+          {page < lastPage ? (
+            <button type="button" className="rf-submit" onClick={() => setPage(page + 1)}>
+              Далее
+            </button>
+          ) : (
+            <button type="button" className="rf-submit">
+              {label}
+            </button>
+          )}
+        </div>
       </div>
     </>
   )
