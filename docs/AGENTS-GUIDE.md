@@ -36,8 +36,8 @@
 
 ### Скиллы (`.claude/skills/`)
 
-Шесть справочников подгружаются, когда задача их касается: `editor-canvas`, `form-field`,
-`analytics-metric`, `ci-pipeline`, `s3-media`, `billing-plan`. Прежде единственным механизмом были строчки
+Восемь справочников подгружаются, когда задача их касается: `editor-canvas`, `form-field`,
+`analytics-metric`, `ci-pipeline`, `s3-media`, `billing-plan`, `workspace-team`, `embed-form`. Прежде единственным механизмом были строчки
 «прочитай EDITOR.md» в `CLAUDE.md`/`web/CLAUDE.md` — за них платили контекстом всегда,
 а исполнялись они по доброй воле. Указатели там остались (вреда нет), но теперь справочник
 приезжает сам.
