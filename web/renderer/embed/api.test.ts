@@ -196,3 +196,21 @@ describe('isHttpUrl', () => {
     expect(isHttpUrl(null)).toBe(false)
   })
 })
+
+describe('frameSrc: предзаполнение', () => {
+  const base: MountOptions = { form: 'opros', mode: 'block' }
+
+  it('уезжает параметрами pf.<id блока>', () => {
+    const src = frameSrc(
+      'https://f.trillix.ru',
+      { ...base, prefill: { blk_1: 'ivan@site.ru' } },
+      '',
+    )
+    expect(src).toContain('pf.blk_1=ivan%40site.ru')
+  })
+
+  it('пустое значение не подставляется', () => {
+    const src = frameSrc('https://f.trillix.ru', { ...base, prefill: { blk_1: '' } }, '')
+    expect(src).not.toContain('pf.blk_1')
+  })
+})

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createHostBridge, readEmbed, type HostMessage } from './embed'
+import { createHostBridge, readEmbed, readPrefill, type HostMessage } from './embed'
 
 describe('readEmbed', () => {
   it('читает режим и прозрачность', () => {
@@ -75,5 +75,26 @@ describe('createHostBridge', () => {
       type: 'submit',
       submissionId: '01930000-0000-7000-8000-000000000000',
     })
+  })
+})
+
+describe('readPrefill', () => {
+  it('читает значения, подставленные хостом', () => {
+    expect(
+      readPrefill('?embed=block&pf.blk_1=ivan%40site.ru&pf.blk_2=%D0%98%D0%B2%D0%B0%D0%BD'),
+    ).toEqual({
+      blk_1: 'ivan@site.ru',
+      blk_2: 'Иван',
+    })
+  })
+
+  it('без предзаполнения — пусто', () => {
+    expect(readPrefill('?embed=block&utm_source=vk')).toEqual({})
+  })
+
+  // Пустое значение — не ответ: иначе сниппет с незаполненной переменной шаблона
+  // молча «отвечал» бы за человека пустой строкой.
+  it('пустые значения пропускаются', () => {
+    expect(readPrefill('?pf.blk_1=&pf.blk_2=x')).toEqual({ blk_2: 'x' })
   })
 })

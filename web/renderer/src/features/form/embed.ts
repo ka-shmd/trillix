@@ -33,6 +33,31 @@ export function readEmbed(search: string): EmbedOptions | null {
   return { mode: mode as EmbedMode, transparent: params.get('bg') === 'transparent' }
 }
 
+/** Префикс параметра предзаполнения: `pf.<block_id>=<значение>`. */
+const PREFILL_PREFIX = 'pf.'
+
+/**
+ * readPrefill — значения, которые хост подставил в поля формы (фаза 20).
+ *
+ * Адресуются id блока — тем же ключом, что и ответы при отправке: у поля другого
+ * стабильного имени нет, а брать под это `name` (имя вопроса в CSV и воронке) нельзя,
+ * переименование колонки в выгрузке ломало бы предзаполнение на чужом сайте
+ * (design/embed.md §8).
+ *
+ * Значения приходят из адреса, то есть от кого угодно, — и это нормально: они не
+ * дают прав и ничего не утверждают, а ответ всё равно проверяет сервер. Полагаться
+ * на предзаполненную почту как на подтверждённую нельзя (там же, §11).
+ */
+export function readPrefill(search: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of new URLSearchParams(search)) {
+    if (key.startsWith(PREFILL_PREFIX) && value !== '') {
+      out[key.slice(PREFILL_PREFIX.length)] = value
+    }
+  }
+  return out
+}
+
 /** Что фрейм сообщает хосту. */
 type HostPayload =
   | { type: 'ready' }

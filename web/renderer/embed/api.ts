@@ -24,6 +24,13 @@ export interface MountOptions {
   /** Надпись на кнопке виджета. */
   label?: string
   position?: WidgetPosition
+  /**
+   * Значения полей, известные приложению-хозяину: `{ '<id блока>': 'ivan@site.ru' }`.
+   *
+   * Полей НЕ создаёт: заполняет только те вопросы, которые автор формы добавил сам.
+   * Ключ — id блока, тот же, которым адресуются ответы (design/embed.md §8).
+   */
+  prefill?: Record<string, string>
 }
 
 /** Надпись кнопки по умолчанию: нейтральная, годится и заявке, и опросу. */
@@ -66,6 +73,12 @@ export function frameSrc(origin: string, opts: MountOptions, hostSearch: string)
   for (const key of UTM_KEYS) {
     const value = host.get(key)
     if (value) params.set(key, value)
+  }
+  // Предзаполнение — параметрами `pf.<id блока>`: адрес фрейма человеку не виден и
+  // ссылкой не делится, а отдельный канал (сообщение после ready) стоил бы гонки
+  // «форма уже нарисовалась пустой».
+  for (const [blockId, value] of Object.entries(opts.prefill ?? {})) {
+    if (value !== '') params.set('pf.' + blockId, value)
   }
   return origin + '/r/' + encodeURIComponent(opts.form) + '?' + params.toString()
 }

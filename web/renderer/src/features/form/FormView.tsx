@@ -15,7 +15,7 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
-import { type HostBridge } from './embed'
+import { type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,
   clearAnswers,
@@ -99,9 +99,19 @@ export function FormView({
   const lastPage = pages.length - 1
   const multi = pages.length > 1
 
-  const [answers, dispatch] = useReducer(answersReducer, null, () =>
-    loadAnswers(slug, form.version),
-  )
+  // Предзаполнение (фаза 20) идёт ПОД черновиком, а не поверх: человек, начавший
+  // заполнять форму и обновивший страницу, не должен увидеть, как его правки
+  // затирает значение, подставленное чужим сайтом. Пустая строка в черновике —
+  // тоже ответ («стёр подставленное»), поэтому смотрим на наличие ключа.
+  const [answers, dispatch] = useReducer(answersReducer, null, () => {
+    const draft = loadAnswers(slug, form.version)
+    const prefill = readPrefill(window.location.search)
+    const merged: typeof draft = { ...draft }
+    for (const [blockId, value] of Object.entries(prefill)) {
+      if (!(blockId in merged)) merged[blockId] = value
+    }
+    return merged
+  })
   const [page, setPage] = useState(() => loadPage(slug, form.version, pages.length))
   // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом по
   // линии. Стартует с восстановленного номера — человек там уже был, и запрещать ему
