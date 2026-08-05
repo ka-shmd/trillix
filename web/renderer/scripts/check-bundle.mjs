@@ -16,6 +16,14 @@ import { gzipSync } from 'node:zlib'
 
 const BUDGET_BYTES = 45 * 1024
 
+// Загрузчик встроенной формы (dist/embed/v1.js, фаза 20) считается ОТДЕЛЬНО и своим
+// порогом. Он не часть публичной формы: грузится на ЧУЖОЙ странице, где мы гости, и
+// сложенный с формой не значил бы ничего — ни один посетитель не скачивает оба веса
+// за раз. Общий счёт вдобавок тихо съел бы запас рендерера: 4 КиБ — это почти
+// половина того, что у него осталось до порога.
+const EMBED_BUDGET_BYTES = 4 * 1024
+const EMBED_PREFIX = 'embed/'
+
 // Считаем весь клиентский JS в dist/: entry и code-split-чанки лежат под assets/
 // с хешированными именами (vite-дефолт). Обходим dist/ рекурсивно и берём все .js —
 // имена не важны, поэтому переход на хеши сборку не ломает.
@@ -40,7 +48,9 @@ function jsFilesUnder(dir, prefix = '') {
   return out
 }
 
-const jsFiles = jsFilesUnder(distDir)
+const allFiles = jsFilesUnder(distDir)
+const jsFiles = allFiles?.filter((f) => !f.label.startsWith(EMBED_PREFIX)) ?? null
+const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
 if (jsFiles === null) {
   console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
@@ -69,3 +79,25 @@ if (total > BUDGET_BYTES) {
   process.exit(1)
 }
 console.log('✓ в пределах бюджета')
+
+// Загрузчик собирается вторым проходом (vite.embed.config.ts). Его отсутствие —
+// не ошибка: `vite build` без второго прохода оставляет dist без embed/, и ронять
+// на этом проверку формы незачем.
+if (embedFiles.length > 0) {
+  let embedTotal = 0
+  console.log('')
+  for (const f of embedFiles) {
+    const size = gzipSync(readFileSync(f.path)).length
+    embedTotal += size
+    console.log(`  ${f.label}  ${kib(size)} gzip`)
+  }
+  console.log(`Загрузчик embed: ${kib(embedTotal)} gzip · бюджет ${kib(EMBED_BUDGET_BYTES)}`)
+  if (embedTotal > EMBED_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет загрузчика превышен на ${kib(embedTotal - EMBED_BUDGET_BYTES)}. ` +
+        `Он грузится на чужих страницах — режь код, а не порог.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ загрузчик в пределах бюджета')
+}
