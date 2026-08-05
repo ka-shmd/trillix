@@ -244,6 +244,75 @@
   cursor: default;
 }
 
+/* ШАГИ МНОГОСТРАНИЧНОЙ ФОРМЫ (фаза 19). Классы живут здесь, а не в рендерере: те же
+   кнопки и ту же полоску показывает превью билдера — иначе автор увидел бы у себя не
+   то, что респондент, ровно как было бы с ритмом до этапа 13.3.
+   Ничего из этого не рисуется у формы без разрывов: одностраничная форма выглядит
+   ровно как до фазы. */
+.rf-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Кнопка «Назад» — вторичная: тот же размер и радиус, что у отправки (высота одна на
+   всё полотно), но контуром. Она не действие формы, а возврат. */
+.rf-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--rf-control-h);
+  padding: 0 1.25rem;
+  border: 1px solid var(--rf-muted);
+  border-radius: var(--rf-radius);
+  background: transparent;
+  color: var(--rf-text);
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.25rem;
+  cursor: pointer;
+}
+
+.rf-back:hover {
+  border-color: var(--rf-text);
+}
+
+.rf-back:focus-visible {
+  outline: 2px solid var(--rf-text);
+  outline-offset: 2px;
+}
+
+/* Прогресс: полоска и «Шаг 2 из 4». Полоска — div, а не <progress>: у нативного
+   элемента вид задаётся вендорными псевдоэлементами, и три поверхности разъехались бы
+   по браузерам. */
+.rf-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 1.75rem;
+}
+
+.rf-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--rf-muted) 25%, transparent);
+  overflow: hidden;
+}
+
+.rf-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--rf-primary);
+  transition: width 200ms ease;
+}
+
+.rf-step {
+  color: var(--rf-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
 /* РИТМ ПОЛОТНА — ЕДИНЫЙ ИСТОЧНИК ДЛЯ ТРЁХ ПОВЕРХНОСТЕЙ (этап 13.3).
    Один вопрос = группа блоков (общий groupId): подпись + поле, иногда + абзац.
    Внутри вопроса блоки стоят ТЕСНЕЕ (14px), между вопросами/одиночками — ПРОСТОРНЕЕ

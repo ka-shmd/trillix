@@ -3,11 +3,26 @@ import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } 
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import {
+  groupBlocks,
+  groupMeta,
+  packGroupRows,
+  packRows,
+  splitFormTitle,
+  splitPages,
+} from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
-import { answersReducer, clearAnswers, loadAnswers, saveAnswers } from './answers'
+import {
+  answersReducer,
+  clearAnswers,
+  loadAnswers,
+  loadPage,
+  saveAnswers,
+  savePage,
+} from './answers'
+import { firstErrorPage } from './pages'
 import { uuidv7 } from './submissionId'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
@@ -61,9 +76,23 @@ async function submitWithRetry(
 // sessionStorage, клиентская валидация (required/email/число/дата) по blur и на
 // «Отправить», затем реальная отправка на сервер с идемпотентностью и авторетраем.
 export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
+  // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
+  // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
+  // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
+  // полем JSON (form.title), которое сервер резолвит из колонки.
+  const { title: formTitle, rest: blocks } = splitFormTitle(form.schema.blocks)
+  // Страницы (фаза 19): форма без разрывов даёт ровно одну страницу, то есть поведение
+  // до фазы. Разбиение — общий splitPages, тот же, которым считает номера полотно.
+  // Считается до состояния: сохранённый номер страницы обязан быть проверен по РЕАЛЬНОМУ
+  // числу страниц (форму могли переопубликовать короче, пока вкладка стояла открытой).
+  const pages = splitPages(blocks)
+  const lastPage = pages.length - 1
+  const multi = pages.length > 1
+
   const [answers, dispatch] = useReducer(answersReducer, null, () =>
     loadAnswers(slug, form.version),
   )
+  const [page, setPage] = useState(() => loadPage(slug, form.version, pages.length))
   const [errors, setErrors] = useState<Errors>({})
   const [attempted, setAttempted] = useState(false)
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
@@ -88,13 +117,56 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     saveAnswers(slug, form.version, answers)
   }, [slug, form.version, answers])
 
-  // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
-  // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
-  // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
-  // полем JSON (form.title), которое сервер резолвит из колонки.
-  const { title: formTitle, rest: blocks } = splitFormTitle(form.schema.blocks)
+  useEffect(() => {
+    savePage(slug, form.version, page)
+  }, [slug, form.version, page])
+
+  // Смена шага: наверх и фокус на контейнер страницы. Контейнер, а НЕ первое поле, —
+  // осознанно: фокус в input на телефоне поднимает клавиатуру и уводит экран вниз, мимо
+  // заголовка нового шага. Контейнер с tabIndex=-1 и aria-label даёт скринридеру тот же
+  // «мы на шаге 2», а Tab дальше приводит ровно в первое поле.
+  //
+  // Первый рендер пропускаем: страница 0 при открытии формы — не переход, скроллить и
+  // забирать фокус у только что открытой страницы нельзя.
+  const pageRef = useRef<HTMLDivElement | null>(null)
+  const navigated = useRef(false)
+  useEffect(() => {
+    if (!navigated.current) return
+    window.scrollTo({ top: 0 })
+    pageRef.current?.focus()
+  }, [page])
+
+  // Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: на телефоне ею
+  // пользуются вместо экранной, и уход с заполненной формы читается как потеря данных
+  // (черновик переживёт, но человек этого не знает). URL не трогаем — pushState без
+  // адреса кладёт запись в историю, оставляя ссылку прежней: ссылкой делятся, и «шаг 3»
+  // в ней не нужен никому. Роутера в рендерере нет и не заводим (web/CLAUDE.md).
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const state = e.state as { formPage?: unknown } | null
+      const n = typeof state?.formPage === 'number' ? state.formPage : 0
+      navigated.current = true
+      setPage(n >= 0 && n <= lastPage ? n : 0)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [lastPage])
+
+  // goToPage — единственная точка смены шага: и кнопки, и переброс к странице с ошибкой.
+  // История пишется здесь, а не в эффекте на page: эффект сработал бы и на popstate,
+  // и «назад» упирался бы в собственную запись.
+  const goToPage = (next: number) => {
+    if (next === page) return
+    navigated.current = true
+    window.history.pushState({ formPage: next }, '')
+    setPage(next)
+  }
+
+  const pageBlocks = pages[page] ?? []
   // Подпись и обязательность на группу (v2): подпись → aria поля, обязательность →
-  // звёздочка у блока-подписи.
+  // звёздочка у блока-подписи. Считаются по ВСЕМУ документу, а не по странице: группа
+  // границу страницы не пересекает (regroup ведёт её через text/image, а разрыв ни то
+  // ни другое), но карта на весь документ дешевле и не зависит от того, где мы сейчас.
   const groups = groupMeta(blocks)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
@@ -173,6 +245,29 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     if (block) setBlockError(blockId, validateBlock(block, answers[blockId]))
   }
 
+  // «Далее» проверяет ТОЛЬКО текущую страницу: пугать красным вопросы, до которых
+  // человек ещё не дошёл, — верный способ его потерять. Форму целиком проверит
+  // «Отправить», а финальная инстанция всё равно сервер.
+  const onNext = () => {
+    if (locked) return
+    setNotice(null)
+    setAttempted(true)
+    const found = validateAll(pageBlocks, answers)
+    setErrors(found)
+    if (Object.keys(found).length > 0) return
+    setAttempted(false)
+    goToPage(Math.min(page + 1, lastPage))
+  }
+
+  const onBack = () => {
+    if (locked) return
+    // Назад пускаем всегда: незаполненное обязательное поле не повод запирать человека
+    // на шаге. Ответы остаются в reducer'е и в черновике — вернувшись, он их увидит.
+    setNotice(null)
+    setAttempted(false)
+    goToPage(Math.max(page - 1, 0))
+  }
+
   const onSubmit = async () => {
     if (locked) return
     setNotice(null)
@@ -180,7 +275,14 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
 
     const found = validateAll(blocks, answers)
     setErrors(found)
-    if (Object.keys(found).length > 0) return // сеть не трогаем, пока форма невалидна
+    if (Object.keys(found).length > 0) {
+      // Ошибка на другой странице (сюда попадают из-за прыжка «назад» и правки, из-за
+      // восстановленного черновика и из-за формы, переопубликованной под открытой
+      // вкладкой): ведём на неё, иначе сообщение указывает на невидимое.
+      const target = firstErrorPage(pages, found)
+      if (target !== null) goToPage(target)
+      return // сеть не трогаем, пока форма невалидна
+    }
 
     if (submissionId.current === '') submissionId.current = uuidv7()
     setPhase('submitting')
@@ -206,12 +308,16 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
         clearAnswers(slug, form.version)
         setPhase('done')
         return
-      case 'invalid':
-        // Сервер — финальная инстанция: подсвечиваем присланные им поля.
+      case 'invalid': {
+        // Сервер — финальная инстанция: подсвечиваем присланные им поля. И ведём на
+        // страницу первой из них по той же причине, что и при своей валидации.
         setErrors(outcome.fields)
         setPhase('editing')
         setNotice('Проверьте выделенные поля.')
+        const target = firstErrorPage(pages, outcome.fields)
+        if (target !== null) goToPage(target)
         return
+      }
       case 'closed':
         setPhase('editing')
         setNotice('Форма больше не принимает ответы.')
@@ -234,20 +340,49 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
 
   const hasFieldErrors = Object.keys(errors).length > 0
 
+  // Хром страницы (обложка, логотип, заголовок) — ТОЛЬКО на первой (решение владельца
+  // 2026-08-05, спека §2.3): дальше идут чистые вопросы. Цена решения известна и
+  // записана там же — со второго шага у респондента нет заголовка формы, и контекст
+  // «что я заполняю» держит автор, поставив heading первой строкой страницы.
+  const chrome = page === 0
+  const cover = chrome ? form.schema.cover : undefined
+
   return (
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
     <>
-      <CoverBand cover={form.schema.cover} />
-      <main className={pageClass(form.schema.cover)}>
-        <LogoMark logo={form.schema.logo} over={Boolean(form.schema.cover)} />
-        {formTitle ? (
-          <BlockField block={formTitle} />
-        ) : (
-          form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
+      <CoverBand cover={cover} />
+      <main className={pageClass(cover)}>
+        {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}
+        {chrome &&
+          (formTitle ? (
+            <BlockField block={formTitle} />
+          ) : (
+            form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
+          ))}
+        {/* Прогресс — только у многостраничной формы: у одностраничной шагов нет, и
+            «Шаг 1 из 1» был бы шумом. role=status озвучивает смену шага скринридеру
+            без ручного управления фокусом. */}
+        {multi && (
+          <div className="rf-progress">
+            <div className="rf-progress-track">
+              <div
+                className="rf-progress-fill"
+                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
+              />
+            </div>
+            <p className="rf-step" role="status">
+              Шаг {page + 1} из {pages.length}
+            </p>
+          </div>
         )}
-        <div className="rf-form">
-          {packRows(groupBlocks(blocks)).map((row) => {
+        <div
+          className="rf-form"
+          ref={pageRef}
+          tabIndex={multi ? -1 : undefined}
+          aria-label={multi ? `Шаг ${page + 1} из ${pages.length}` : undefined}
+        >
+          {packRows(groupBlocks(pageBlocks)).map((row) => {
             // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
             // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
             // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
@@ -309,14 +444,30 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
             )
           })}
         </div>
-        <button
-          className="rf-submit"
-          type="button"
-          onClick={() => void onSubmit()}
-          disabled={phase === 'submitting'}
-        >
-          {phase === 'submitting' ? 'Отправка…' : submitLabel}
-        </button>
+        {/* Отправка — только на последней странице; на остальных её место занимает
+            «Далее». Иначе форма собирала бы неполные ответы у тех, кто дошёл до
+            середины: кнопка отправки посреди шагов читается как «готово». */}
+        <div className="rf-nav">
+          {page > 0 && (
+            <button className="rf-back" type="button" onClick={onBack} disabled={locked}>
+              Назад
+            </button>
+          )}
+          {page < lastPage ? (
+            <button className="rf-submit" type="button" onClick={onNext} disabled={locked}>
+              Далее
+            </button>
+          ) : (
+            <button
+              className="rf-submit"
+              type="button"
+              onClick={() => void onSubmit()}
+              disabled={phase === 'submitting'}
+            >
+              {phase === 'submitting' ? 'Отправка…' : submitLabel}
+            </button>
+          )}
+        </div>
         {attempted && hasFieldErrors && (
           <p className="form-note form-note-error" role="alert">
             Проверьте выделенные поля.

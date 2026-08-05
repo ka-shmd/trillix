@@ -47,7 +47,34 @@ export function saveAnswers(slug: string, version: number, answers: Answers): vo
 export function clearAnswers(slug: string, version: number): void {
   try {
     sessionStorage.removeItem(storageKey(slug, version))
+    sessionStorage.removeItem(pageKey(slug, version))
   } catch {
     // Недоступный sessionStorage — ничего не делаем, черновик и так не сохранялся.
+  }
+}
+
+// Номер открытой страницы (фаза 19) — рядом с черновиком ответов и по тем же
+// правилам: переживает F5, умирает с вкладкой, привязан к версии. Без него
+// перезагрузка на четвёртом шаге возвращала бы человека к первому вопросу при
+// сохранённых ответах — худший из вариантов: заполненное есть, а где он был, забыто.
+const pageKey = (slug: string, version: number) => `trillix:page:${slug}:${version}`
+
+// pages — сколько страниц у формы: номер за пределами документа читать нельзя (форму
+// могли переопубликовать короче, пока вкладка стояла открытой).
+export function loadPage(slug: string, version: number, pages: number): number {
+  try {
+    const raw = sessionStorage.getItem(pageKey(slug, version))
+    const n = raw === null ? 0 : Number.parseInt(raw, 10)
+    return Number.isInteger(n) && n >= 0 && n < pages ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+export function savePage(slug: string, version: number, page: number): void {
+  try {
+    sessionStorage.setItem(pageKey(slug, version), String(page))
+  } catch {
+    // Как и у ответов: теряем только запоминание шага, форма работает.
   }
 }

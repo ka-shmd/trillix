@@ -2,7 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { toggleMulti } from '@fields/answer'
 
-import { answersReducer, loadAnswers, saveAnswers, type Answers } from './answers'
+import {
+  answersReducer,
+  clearAnswers,
+  loadAnswers,
+  loadPage,
+  savePage,
+  saveAnswers,
+  type Answers,
+} from './answers'
 
 // Минимальный sessionStorage для node-окружения теста (jsdom не подключаем —
 // зависимостей рендерера не трогаем).
@@ -66,5 +74,41 @@ describe('toggleMulti (@fields)', () => {
     expect(toggleMulti([], 'a', true)).toEqual(['a'])
     expect(toggleMulti(['a'], 'b', true)).toEqual(['a', 'b'])
     expect(toggleMulti(['a', 'b'], 'a', false)).toEqual(['b'])
+  })
+})
+
+// Номер открытой страницы (фаза 19) — тот же контракт, что у черновика ответов:
+// переживает F5, привязан к версии, при любом сомнении даёт первую страницу.
+describe('loadPage/savePage', () => {
+  it('сохранённый шаг возвращается', () => {
+    savePage('form', 3, 2)
+    expect(loadPage('form', 3, 4)).toBe(2)
+  })
+
+  it('шага нет — первая страница', () => {
+    expect(loadPage('form', 3, 4)).toBe(0)
+  })
+
+  // Форму переопубликовали короче, пока вкладка стояла открытой: сохранённый номер
+  // указывает за конец документа, и открыть его значило бы показать пустой экран.
+  it('шаг за пределами документа — первая страница', () => {
+    savePage('form', 3, 5)
+    expect(loadPage('form', 3, 2)).toBe(0)
+  })
+
+  it('мусор в хранилище — первая страница, а не падение', () => {
+    sessionStorage.setItem('trillix:page:form:3', 'третья')
+    expect(loadPage('form', 3, 4)).toBe(0)
+  })
+
+  it('номер версии входит в ключ: шаг чужой версии не читается', () => {
+    savePage('form', 3, 1)
+    expect(loadPage('form', 4, 4)).toBe(0)
+  })
+
+  it('clearAnswers уносит и шаг: F5 на «Спасибо» не воскрешает третью страницу', () => {
+    savePage('form', 3, 2)
+    clearAnswers('form', 3)
+    expect(loadPage('form', 3, 4)).toBe(0)
   })
 })
