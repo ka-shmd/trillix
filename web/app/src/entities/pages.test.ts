@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupBlocks, packRows, splitPages } from '@fields/groups'
+import { groupBlocks, packRows, pageNumbers, splitPages } from '@fields/groups'
 import { type Block, type BlockType } from '@entities/formSchema'
 
 // splitPages (@fields/groups) — разбиение документа на страницы разрывами (фаза 19),
@@ -78,5 +78,41 @@ describe('разрыв и ряды', () => {
     expect(
       rows([block('a'), block('b', 'short_text', true), brk('p'), block('c', 'short_text', true)]),
     ).toEqual([['a', 'b'], ['p'], ['c']])
+  })
+})
+
+// pageNumbers — метка «Страница N» на разделителе полотна. Считается тем же разбиением,
+// что режет форму респонденту: разойдись они, автор увидел бы на полотне страницу,
+// которой у респондента нет. Отсутствие разрыва в карте = он инертен и подписывается без
+// номера (но НЕ удаляется: за ним автор ещё допишет блоки).
+describe('pageNumbers', () => {
+  const numbers = (blocks: Block[]): (number | undefined)[] =>
+    blocks.filter((b) => b.type === 'page_break').map((b) => pageNumbers(blocks).get(b.id))
+
+  it('разрыв подписан номером страницы, которую открывает', () => {
+    expect(numbers([block('a'), brk('p1'), block('b'), brk('p2'), block('c')])).toEqual([2, 3])
+  })
+
+  it('число меток равно числу страниц минус первая', () => {
+    const blocks = [block('a'), brk('p1'), block('b'), brk('p2'), block('c')]
+    expect(pageNumbers(blocks).size).toBe(splitPages(blocks).length - 1)
+  })
+
+  it('разрыв в конце инертен — страницы за ним нет', () => {
+    expect(numbers([block('a'), brk('p')])).toEqual([undefined])
+  })
+
+  it('из двух подряд номер несёт второй — первый не делит ничего', () => {
+    expect(numbers([block('a'), brk('p1'), brk('p2'), block('b')])).toEqual([undefined, 2])
+  })
+
+  it('разрыв выше всего содержимого инертен: страницы перед ним нет', () => {
+    expect(numbers([brk('p'), block('a')])).toEqual([undefined])
+  })
+
+  it('нумерация не сбивается инертным разрывом посередине', () => {
+    expect(
+      numbers([block('a'), brk('p1'), block('b'), brk('p2'), brk('p3'), block('c')]),
+    ).toEqual([2, undefined, 3])
   })
 })

@@ -72,6 +72,42 @@ export function splitPages<T extends { type: BlockType }>(blocks: T[]): T[][] {
   return filled.length > 0 ? filled : [[]]
 }
 
+// pageNumbers — какую страницу открывает каждый разрыв. Нужен полотну редактора: метка
+// «Страница 3» на разделителе обязана считаться ТЕМ ЖЕ разбиением, которым respondent'у
+// режется форма, иначе автор увидит на полотне номера, которых у респондента нет.
+//
+// Разрыва нет в карте — он ИНЕРТЕН и страницы не открывает: два подряд, разрыв в самом
+// конце (за ним пусто) и разрыв до первого блока (страницы перед ним нет вовсе). Инертный
+// разрыв законен и НЕ удаляется: за ним автор ещё допишет блоки, и стирать набранное
+// «в порядке уборки» редактор не вправе — в отличие от бита ряда, который не содержимое,
+// а выводимая метаданная.
+export function pageNumbers<T extends { id: string; type: BlockType }>(
+  blocks: T[],
+): Map<string, number> {
+  const out = new Map<string, number>()
+  let openedBy: string | null = null
+  let filled = false
+  let page = 0
+  const closeSegment = () => {
+    if (!filled) return
+    page++
+    // Первая страница ничьим разрывом не открыта: разрыв, за которым она оказалась,
+    // стоит выше всего содержимого и не делит ничего.
+    if (openedBy !== null && page > 1) out.set(openedBy, page)
+  }
+  for (const b of blocks) {
+    if (b.type === 'page_break') {
+      closeSegment()
+      openedBy = b.id
+      filled = false
+      continue
+    }
+    filled = true
+  }
+  closeSegment()
+  return out
+}
+
 // Ряд — это КОЛОНКИ, а колонка — стопка элементов. Полноширинный ряд = одна колонка с
 // одним элементом; СЕКЦИЯ = две непустые колонки, в каждой сколько угодно элементов.
 export type Row<T> = T[][]

@@ -7,7 +7,7 @@ import {
   SCHEMA_VERSION,
   textFromString,
 } from '@entities/formSchema'
-import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
+import { groupBlocks, packOptionRows, packRows, splitPages } from '@fields/groups'
 
 import {
   captionLoss,
@@ -2780,6 +2780,30 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(cap!.groupId).not.toBe(fld!.groupId)
     expect(brk!.groupId).not.toBe(cap!.groupId)
     expect(brk!.groupId).not.toBe(fld!.groupId)
+  })
+
+  // Перетаскивание границы страницы — не отдельная команда, а обычный перенос группы:
+  // документ линейный, поэтому «сдвинул разрыв» и «вопрос сменил страницу» — одно и то
+  // же событие. Проверяем следствие, а не механику.
+  it('перенос разрыва переводит вопрос на другую страницу', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'b', groupId: '', type: 'email' },
+      ],
+    })
+    const before = splitPages(store.getState().blocks).map((p) => p.map((b) => b.id))
+    expect(before).toEqual([['a'], ['b']])
+
+    store.getState().moveGroup('brk', 'up')
+
+    // Разрыв уехал выше первого вопроса — страница перед ним пуста, значит её нет, и оба
+    // вопроса снова на одной.
+    const after = splitPages(store.getState().blocks).map((p) => p.map((b) => b.id))
+    expect(after).toEqual([['a', 'b']])
   })
 
   it('разрыв, вставленный редактором, валиден по контракту', () => {
