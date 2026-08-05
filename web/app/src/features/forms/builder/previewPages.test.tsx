@@ -29,6 +29,12 @@ function renderPreview(blocks: Block[], title = 'Анкета') {
   )
 }
 
+const threePages = (): Block[] => [
+  ...twoPages(),
+  { id: 'brk2', groupId: '', type: 'page_break' },
+  ...question('c', 'Телефон'),
+]
+
 const twoPages = (): Block[] => [
   ...question('a', 'Имя'),
   { id: 'brk', groupId: '', type: 'page_break' },
@@ -71,6 +77,34 @@ describe('превью листает страницы', () => {
     const progress = container.querySelector('.rf-progress')!
     // DOCUMENT_POSITION_FOLLOWING = прогресс идёт ПОСЛЕ навигации в порядке документа.
     expect(nav.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // Линии шагов (решение владельца 2026-08-05): по одной на страницу, кликом — только
+  // НАЗАД. Кликабельность вперёд сделала бы из индикатора оглавление со скачком, а оно
+  // обесценивает пошаговую валидацию — то самое, от чего владелец отказался в первой
+  // развилке фазы.
+  it('линий столько же, сколько страниц', () => {
+    const { container } = renderPreview(threePages())
+    expect(container.querySelectorAll('.rf-step-mark')).toHaveLength(3)
+  })
+
+  it('вперёд по линиям не ходят: непройденный шаг — не кнопка вовсе', () => {
+    const { container } = renderPreview(threePages())
+    // На первом шаге кнопок-линий нет ни одной: назад некуда, вперёд нельзя.
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+  })
+
+  it('клик по пройденной линии возвращает на её шаг', () => {
+    const { container } = renderPreview(threePages())
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    expect(screen.getByText('Шаг 3 из 3')).toBeTruthy()
+
+    // Пройденных шагов теперь два, текущий кнопкой не бывает.
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
+    expect(screen.getByText('Шаг 1 из 3')).toBeTruthy()
+    expect(screen.getByLabelText(/Имя/)).toBeTruthy()
   })
 
   it('заголовок формы виден только на первой странице', () => {

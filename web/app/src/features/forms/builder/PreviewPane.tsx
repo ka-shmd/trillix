@@ -11,6 +11,7 @@ import {
   splitPages,
 } from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
+import { StepBar } from '@fields/stepBar'
 
 import { useBuilderStore } from './storeContext'
 
@@ -34,13 +35,17 @@ export function PreviewPane({ title }: { title: string }) {
   // границ шагов, ни того, что кнопка отправки живёт только на последней.
   const pages = splitPages(blocks)
   const lastPage = pages.length - 1
-  const multi = pages.length > 1
   // Номер страницы держится ЗДЕСЬ, а не в сторе билдера: это состояние просмотра, а не
   // документа (web/CLAUDE.md — «переживает ли перезагрузку?» нет, «нужен ли больше чем
   // одному дереву?» нет). Автор стёр разрыв, стоя на последней странице, — clamp ниже
   // возвращает его в существующий диапазон, а не показывает пустоту.
   const [rawPage, setPage] = useState(0)
   const page = Math.min(rawPage, lastPage)
+  // Самый дальний просмотренный шаг — как у респондента: клик по линии возвращает
+  // только назад. Зажимается тем же lastPage: стёртый разрыв не должен оставлять
+  // кликабельной страницу, которой больше нет.
+  const [rawReached, setReached] = useState(0)
+  const reached = Math.min(Math.max(rawReached, page), lastPage)
   // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
   // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
   const chrome = page === 0
@@ -126,7 +131,14 @@ export function PreviewPane({ title }: { title: string }) {
             </button>
           )}
           {page < lastPage ? (
-            <button type="button" className="rf-submit rf-next" onClick={() => setPage(page + 1)}>
+            <button
+              type="button"
+              className="rf-submit rf-next"
+              onClick={() => {
+                setPage(page + 1)
+                setReached(page + 1)
+              }}
+            >
               Далее
             </button>
           ) : (
@@ -135,22 +147,9 @@ export function PreviewPane({ title }: { title: string }) {
             </button>
           )}
         </div>
-        {/* Прогресс — под кнопками, как у респондента (решение владельца 2026-08-05).
-            Место тоже часть WYSIWYG: разъедься оно, и автор увидел бы не ту страницу,
-            которую увидит человек. */}
-        {multi && (
-          <div className="rf-progress">
-            <div className="rf-progress-track">
-              <div
-                className="rf-progress-fill"
-                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
-              />
-            </div>
-            <p className="rf-step">
-              Шаг {page + 1} из {pages.length}
-            </p>
-          </div>
-        )}
+        {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
+            правило «кликом только назад» — часть WYSIWYG. */}
+        <StepBar pages={pages.length} page={page} reached={reached} onGo={setPage} />
       </div>
     </>
   )

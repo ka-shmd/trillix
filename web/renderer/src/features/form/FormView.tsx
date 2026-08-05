@@ -12,6 +12,7 @@ import {
   splitPages,
 } from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
+import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import {
@@ -93,6 +94,10 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     loadAnswers(slug, form.version),
   )
   const [page, setPage] = useState(() => loadPage(slug, form.version, pages.length))
+  // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом по
+  // линии. Стартует с восстановленного номера — человек там уже был, и запрещать ему
+  // возврат туда, откуда его вернула перезагрузка, было бы наказанием за F5.
+  const [reached, setReached] = useState(page)
   const [errors, setErrors] = useState<Errors>({})
   const [attempted, setAttempted] = useState(false)
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
@@ -161,6 +166,18 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     navigated.current = true
     window.history.pushState({ formPage: next }, '')
     setPage(next)
+    setReached((r) => Math.max(r, next))
+  }
+
+  // onBackTo — возврат кликом по линии пройденного шага. Отдельно от goToPage, потому
+  // что это ход НАЗАД со всеми его правилами: гасим показанные ошибки и «уже пробовали
+  // отправить», как это делает кнопка «Назад». Вперёд линии не ведут (StepBar их не
+  // делает кнопками), поэтому проверять здесь нечего.
+  const onBackTo = (next: number) => {
+    if (locked) return
+    setNotice(null)
+    setAttempted(false)
+    goToPage(next)
   }
 
   const pageBlocks = pages[page] ?? []
@@ -471,24 +488,11 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
             </button>
           )}
         </div>
-        {/* Прогресс — ПОД кнопками шага, у нижнего края страницы (решение владельца
-            2026-08-05): вверху он занимал первый экран собой, а нужен он в момент
-            «дальше или хватит», то есть у кнопки. Только у многостраничной формы:
-            «Шаг 1 из 1» был бы шумом. role=status озвучивает смену шага скринридеру
-            без ручного управления фокусом — от места в разметке это не зависит. */}
-        {multi && (
-          <div className="rf-progress">
-            <div className="rf-progress-track">
-              <div
-                className="rf-progress-fill"
-                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
-              />
-            </div>
-            <p className="rf-step" role="status">
-              Шаг {page + 1} из {pages.length}
-            </p>
-          </div>
-        )}
+        {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
+            2026-08-05). Клик по пройденной линии возвращает на тот шаг: то же, что
+            «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
+            «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
+        <StepBar pages={pages.length} page={page} reached={reached} onGo={onBackTo} />
         {attempted && hasFieldErrors && (
           <p className="form-note form-note-error" role="alert">
             Проверьте выделенные поля.

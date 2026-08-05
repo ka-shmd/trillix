@@ -128,6 +128,14 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await respondent.locator('button.rf-next').click()
   await expect(respondent.getByLabel(Q2)).toHaveValue(`ivan${uniq}@example.com`)
 
+  // 4б. Линии шагов: клик по пройденной возвращает на неё, непройденная кнопкой не
+  // является вовсе (вперёд ведёт только «Далее» с проверкой).
+  await respondent.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }).click()
+  await expect(respondent.getByText('Шаг 1 из 3')).toBeVisible()
+  await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
+  await expect(respondent.locator('button.rf-step-mark')).toHaveCount(0)
+  await respondent.locator('button.rf-next').click()
+
   // 5. Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: это ровно та
   // правка (pushState/popstate), которую не видит ни один юнит.
   await respondent.goBack()
