@@ -473,7 +473,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
             </button>
           )}
           {page < lastPage ? (
-            <button className="rf-submit" type="button" onClick={onNext} disabled={locked}>
+            <button className="rf-submit rf-next" type="button" onClick={onNext} disabled={locked}>
               Далее
             </button>
           ) : (

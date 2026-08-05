@@ -139,7 +139,7 @@ export function PreviewPane({ title }: { title: string }) {
             </button>
           )}
           {page < lastPage ? (
-            <button type="button" className="rf-submit" onClick={() => setPage(page + 1)}>
+            <button type="button" className="rf-submit rf-next" onClick={() => setPage(page + 1)}>
               Далее
             </button>
           ) : (
