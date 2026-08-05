@@ -5,8 +5,11 @@
 // заморожен), поэтому проверяется юнитами ровно то, что живёт здесь, — а живёт здесь
 // всё, где можно ошибиться молча. В v1.ts остаются только сборка узлов и подписки.
 
-/** Как форма показана на чужой странице. Виджет и страница приезжают шагами 3–4. */
-export type EmbedMode = 'block'
+/** Как форма показана на чужой странице. */
+export type EmbedMode = 'block' | 'widget' | 'page'
+
+/** Угол, в котором стоит кнопка виджета. */
+export type WidgetPosition = 'bottom-right' | 'bottom-left'
 
 export interface MountOptions {
   /** Короткий адрес формы, тот же, что в публичной ссылке. */
@@ -18,7 +21,13 @@ export interface MountOptions {
   height?: number
   /** Кто уходит по ссылке после отправки: 'top' — страница-хозяин, 'frame' — сам фрейм. */
   redirect?: 'top' | 'frame'
+  /** Надпись на кнопке виджета. */
+  label?: string
+  position?: WidgetPosition
 }
+
+/** Надпись кнопки по умолчанию: нейтральная, годится и заявке, и опросу. */
+export const DEFAULT_LABEL = 'Открыть форму'
 
 /** Высота фрейма до первого `resize`. Форма из пары вопросов примерно столько и занимает. */
 export const DEFAULT_HEIGHT = 520
@@ -74,16 +83,23 @@ export interface AttrSource {
  * серверная копия настроек всякий раз спорила бы с двумя другими вставками.
  */
 export function optionsFromAttrs(el: AttrSource): MountOptions | null {
-  const form = el.getAttribute('data-trillix-form')
+  // Виджет узнаётся по своему атрибуту, а не по data-mode: он единственный, кто
+  // ничего не вставляет в поток страницы, и путать его с блоком опечаткой в режиме
+  // («форма пропала со страницы») не стоит.
+  const widget = el.getAttribute('data-trillix-widget')
+  const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
   const height = Number(el.getAttribute('data-height'))
+  const label = el.getAttribute('data-label')
   return {
     form,
-    mode: 'block',
+    mode: widget ? 'widget' : el.getAttribute('data-mode') === 'page' ? 'page' : 'block',
     transparent: el.getAttribute('data-bg') === 'transparent',
     // Мусор в атрибуте (пусто, «500px», «много») — не повод схлопнуть блок в ноль.
     height: Number.isFinite(height) && height > 0 ? height : DEFAULT_HEIGHT,
     redirect: el.getAttribute('data-redirect') === 'frame' ? 'frame' : 'top',
+    label: label !== null && label !== '' ? label : DEFAULT_LABEL,
+    position: el.getAttribute('data-position') === 'bottom-left' ? 'bottom-left' : 'bottom-right',
   }
 }
 

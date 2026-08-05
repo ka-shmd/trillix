@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_HEIGHT,
+  DEFAULT_LABEL,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -64,14 +65,48 @@ describe('frameSrc', () => {
 })
 
 describe('optionsFromAttrs', () => {
-  it('читает сниппет', () => {
+  it('читает сниппет блока', () => {
     expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'opros' }))).toEqual({
       form: 'opros',
       mode: 'block',
       transparent: false,
       height: DEFAULT_HEIGHT,
       redirect: 'top',
+      label: DEFAULT_LABEL,
+      position: 'bottom-right',
     })
+  })
+
+  // Виджет узнаётся по своему атрибуту: он единственный ничего не вставляет в поток,
+  // и путать его с блоком опечаткой в data-mode («форма пропала со страницы») незачем.
+  it('виджет — по своему атрибуту, с надписью и углом', () => {
+    const opts = optionsFromAttrs(
+      attrs({
+        'data-trillix-widget': 'opros',
+        'data-label': 'Оставить заявку',
+        'data-position': 'bottom-left',
+      }),
+    )
+    expect(opts?.mode).toBe('widget')
+    expect(opts?.form).toBe('opros')
+    expect(opts?.label).toBe('Оставить заявку')
+    expect(opts?.position).toBe('bottom-left')
+  })
+
+  it('страница — режимом у обычного сниппета', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-mode': 'page' }))?.mode).toBe(
+      'page',
+    )
+    // Неизвестный режим — блок: сниппет с опечаткой обязан показать форму, а не пропасть.
+    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-mode': 'popup' }))?.mode).toBe(
+      'block',
+    )
+  })
+
+  it('пустая надпись — дефолтная, а не пустая кнопка', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-widget': 'a', 'data-label': '' }))?.label).toBe(
+      DEFAULT_LABEL,
+    )
   })
 
   it('чужой тег без нашего атрибута — не наш узел', () => {
@@ -80,23 +115,25 @@ describe('optionsFromAttrs', () => {
   })
 
   it('переход внутри фрейма — только по явной просьбе', () => {
-    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-redirect': 'frame' }))?.redirect).toBe(
-      'frame',
-    )
-    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-redirect': 'top' }))?.redirect).toBe(
-      'top',
-    )
+    expect(
+      optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-redirect': 'frame' }))?.redirect,
+    ).toBe('frame')
+    expect(
+      optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-redirect': 'top' }))?.redirect,
+    ).toBe('top')
   })
 
   // Мусор в атрибуте не должен схлопывать блок в ноль на чужой странице.
   it('негодная высота — дефолт', () => {
     const bad = ['', '0', '-100', '500px', 'много']
     for (const height of bad) {
-      expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-height': height }))?.height).toBe(
-        DEFAULT_HEIGHT,
-      )
+      expect(
+        optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-height': height }))?.height,
+      ).toBe(DEFAULT_HEIGHT)
     }
-    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-height': '300' }))?.height).toBe(300)
+    expect(
+      optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-height': '300' }))?.height,
+    ).toBe(300)
   })
 })
 
