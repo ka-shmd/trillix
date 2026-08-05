@@ -21,7 +21,7 @@
 | [`block-settings.md`](block-settings.md) | фаза 16, свойства блока | `v0.16.0` | [`EDITOR.md`](../EDITOR.md), [`fields/README.md`](../../web/shared/fields/README.md) |
 | [`billing.md`](billing.md) | фаза 17, тарифы и лимиты | `v0.17.0` | [`BILLING.md`](../BILLING.md) |
 | [`s3-media.md`](s3-media.md) | объектное хранилище и блок «картинка» | живёт на проде | [`S3.md`](../S3.md) |
-| [`multipage.md`](multipage.md) | многостраничные формы (фаза 19 `DEV-PLAN`) | **не начата** | — (кода ещё нет) |
+| [`multipage.md`](multipage.md) | фаза 19, многостраничные формы | `v0.19.0` | [`EDITOR.md`](../EDITOR.md) §1/§6, [`ANALYTICS.md`](../ANALYTICS.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).
