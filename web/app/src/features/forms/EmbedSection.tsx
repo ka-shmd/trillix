@@ -145,7 +145,13 @@ export function EmbedSection({ form }: { form: FormDetail }) {
         </p>
       </div>
 
-      <Textarea readOnly value={snippet} rows={3} className="mt-4 font-mono text-xs" />
+      <Textarea
+        readOnly
+        aria-label="Код для вставки"
+        value={snippet}
+        rows={3}
+        className="mt-4 font-mono text-xs"
+      />
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <CopyButton text={snippet} />
         <Button variant="outline" size="sm" asChild>
