@@ -62,19 +62,6 @@ export function PreviewPane({ title }: { title: string }) {
           ) : (
             title.trim() && <h1 className="rf-title">{title.trim()}</h1>
           ))}
-        {multi && (
-          <div className="rf-progress">
-            <div className="rf-progress-track">
-              <div
-                className="rf-progress-fill"
-                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
-              />
-            </div>
-            <p className="rf-step">
-              Шаг {page + 1} из {pages.length}
-            </p>
-          </div>
-        )}
         {blocks.length === 0 ? (
           <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
         ) : (
@@ -148,6 +135,22 @@ export function PreviewPane({ title }: { title: string }) {
             </button>
           )}
         </div>
+        {/* Прогресс — под кнопками, как у респондента (решение владельца 2026-08-05).
+            Место тоже часть WYSIWYG: разъедься оно, и автор увидел бы не ту страницу,
+            которую увидит человек. */}
+        {multi && (
+          <div className="rf-progress">
+            <div className="rf-progress-track">
+              <div
+                className="rf-progress-fill"
+                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
+              />
+            </div>
+            <p className="rf-step">
+              Шаг {page + 1} из {pages.length}
+            </p>
+          </div>
+        )}
       </div>
     </>
   )

@@ -379,22 +379,6 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
           ) : (
             form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
           ))}
-        {/* Прогресс — только у многостраничной формы: у одностраничной шагов нет, и
-            «Шаг 1 из 1» был бы шумом. role=status озвучивает смену шага скринридеру
-            без ручного управления фокусом. */}
-        {multi && (
-          <div className="rf-progress">
-            <div className="rf-progress-track">
-              <div
-                className="rf-progress-fill"
-                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
-              />
-            </div>
-            <p className="rf-step" role="status">
-              Шаг {page + 1} из {pages.length}
-            </p>
-          </div>
-        )}
         <div
           className="rf-form"
           ref={pageRef}
@@ -487,6 +471,24 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
             </button>
           )}
         </div>
+        {/* Прогресс — ПОД кнопками шага, у нижнего края страницы (решение владельца
+            2026-08-05): вверху он занимал первый экран собой, а нужен он в момент
+            «дальше или хватит», то есть у кнопки. Только у многостраничной формы:
+            «Шаг 1 из 1» был бы шумом. role=status озвучивает смену шага скринридеру
+            без ручного управления фокусом — от места в разметке это не зависит. */}
+        {multi && (
+          <div className="rf-progress">
+            <div className="rf-progress-track">
+              <div
+                className="rf-progress-fill"
+                style={{ width: `${((page + 1) / pages.length) * 100}%` }}
+              />
+            </div>
+            <p className="rf-step" role="status">
+              Шаг {page + 1} из {pages.length}
+            </p>
+          </div>
+        )}
         {attempted && hasFieldErrors && (
           <p className="form-note form-note-error" role="alert">
             Проверьте выделенные поля.

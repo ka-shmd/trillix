@@ -62,6 +62,17 @@ describe('превью листает страницы', () => {
     expect(screen.getByRole('button', { name: 'Отправить' })).toBeTruthy()
   })
 
+  // Место прогресса — часть WYSIWYG, а не вкус: он стоит ПОД кнопками шага (решение
+  // владельца 2026-08-05), и разъедься это с рендерером, автор увидел бы не ту
+  // страницу, которую увидит человек.
+  it('прогресс стоит ниже кнопок шага', () => {
+    const { container } = renderPreview(twoPages())
+    const nav = container.querySelector('.rf-nav')!
+    const progress = container.querySelector('.rf-progress')!
+    // DOCUMENT_POSITION_FOLLOWING = прогресс идёт ПОСЛЕ навигации в порядке документа.
+    expect(nav.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('заголовок формы виден только на первой странице', () => {
     renderPreview(twoPages())
     expect(screen.getByRole('heading', { name: 'Анкета' })).toBeTruthy()
