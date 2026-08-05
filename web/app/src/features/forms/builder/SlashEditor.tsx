@@ -59,7 +59,6 @@ import {
   canvasSorting,
   closestVertical,
   DRAG_ACTIVATION_DISTANCE,
-  dropSide,
   noLayoutAnimation,
 } from './dnd'
 import { BlockRow } from './BlockRow'
@@ -140,34 +139,40 @@ export function SlashEditor({
   // ходят по нему индексами (stopNeighbor, findIndex), и заголовок в списке сдвинул бы
   // все соседства на единицу.
   const readBlocks = useCallback(() => splitFormTitle(storeApi.getState().blocks).rest, [storeApi])
-  // Драг-рамка (Д10): прямоугольник в координатах полотна (canvasRef), обнимающий
-  // union-rect РЕАЛЬНЫХ (трансформированных) rect'ов строк будущего состава группы.
-  // Статичный ring на <li> группы врал: sortable раздвигает строки CSS-трансформами,
-  // а layout-бокс родителя не меняется — строки визуально уезжали за рамку. Поэтому
-  // рамка — absolute-оверлей, который меряет DOM (getBoundingClientRect учитывает
-  // трансформы) на каждый onDragMove/onDragOver. У группового драга отклик нативный
-  // (sortable двигает группы сам), рамка не участвует.
+  // Координатный якорь оверлеев драга (рейл будущей группы, предупреждающая рамка):
+  // они absolute-прямоугольники в системе полотна и меряют DOM относительно него.
   const canvasRef = useRef<HTMLDivElement>(null)
-  const [frame, setFrame] = useState<Rect | null>(null)
-  // Вторая рамка того же цикла (§4.3): строки, которые от ЭТОГО дропа останутся без
-  // заголовка. Считается тем же прогнозом planBlockDrop, что и состав основной рамки,
-  // и рисуется предупреждающим контуром — цену дропа автор видит ДО того, как отпустит
-  // кнопку, а не узнаёт из тоста после.
+  // Рейл БУДУЩЕЙ группы (решение владельца 2026-08-05) — единственное, что во время
+  // блочного драга называет вопрос, частью которого блок вот-вот станет. В покое рейл
+  // рисует сама группа (GroupRow, span на li), но во время драга это враньё: sortable
+  // раздвигает строки CSS-трансформами, а layout-бокс li не меняется — из статичного
+  // рейла выезжала то подпись, то поле. Поэтому на время жеста рейл — оверлей, который
+  // меряет ЖИВЫЕ rect'ы строк группы (тот же приём, что был у снятой драг-рамки, но
+  // одной линией вместо обводки).
+  //
+  // Меряются только СТАРОЖИЛЫ группы: активная строка следует за курсором, и её rect
+  // растянул бы рейл до места, где вопроса нет. Щель, которую строки открыли под
+  // пришельца, попадает ВНУТРЬ измеренного отрезка — рейл остаётся сплошным и растёт
+  // вместе с группой.
+  const [rail, setRail] = useState<Rect | null>(null)
+  // Предупреждающая рамка (§4.3): строки, которые от ЭТОГО дропа останутся без
+  // заголовка. Состав даёт прогноз planBlockDrop, а рисуется он предупреждающим
+  // контуром — цену дропа автор видит ДО того, как отпустит кнопку, а не узнаёт из
+  // тоста после.
+  //
+  // Про МЕСТО вставки она не говорит ничего — это работа расступающихся строк. Обе
+  // подсказки, которые про место говорили, сняты 2026-08-05: обводка будущей группы
+  // (её роль забрал рейл выше — одной линией вместо рамки) и линия дропа, которая
+  // показывала место неверно.
   const [warnFrame, setWarnFrame] = useState<Rect | null>(null)
-  // Линия дропа (§11.6): показывает, КАКОЙ ШИРИНЫ ляжет блок. Во всю ширину — значит
-  // полноширинным, из секции вышел; в половину внутри колонки — значит в эту колонку.
-  // Ширина и есть ответ: без неё «кладу под секцию» и «кладу в её колонку» на глаз
-  // неотличимы (просьба владельца 2026-07-29). Тот же rAF-замер, что у драг-рамки, —
-  // события драга молчат, пока строки доигрывают переход.
-  const [dropLine, setDropLine] = useState<Rect | null>(null)
-  // Цель коллизии, от которой рамка считает состав. Совпадает с e.over везде, кроме
+  // Цель коллизии, от которой считается прогноз дропа. Совпадает с e.over везде, кроме
   // подмены границей ряда (rowBoundaryTarget): там полотно кладёт в ref уже
-  // подменённую цель — по сырой рамка обвела бы состав, который не сложится.
+  // подменённую цель — по сырой прогноз описывал бы дроп, которого не будет.
   const rawOverRef = useRef<string | null>(null)
   // Во время драга рейлом групп управляет не hover (курсор с таскаемым элементом
   // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
-  // рейл у группы-цели постоянно, блочный — гасит рейлы совсем (иначе рейл
-  // накладывался на драг-рамку).
+  // рейл у группы-цели постоянно, блочный — гасит рейлы совсем: рейлы мульти-групп
+  // по всему полотну спорят с оверлеями жеста за внимание.
   const [drag, setDrag] = useState<{
     kind: 'group' | 'block'
     activeId: string
@@ -178,27 +183,32 @@ export function SlashEditor({
   // группы, способной делить ряд, то есть практически по всему полотну: приглашений
   // было вдвое больше, чем вопросов, и ни одно не называло то место, куда автор целится.
   // Ближайшую цель считает тот же closestVertical, что ведёт вертикальную вставку
-  // (collisionDetection пишет её в ref), а в состояние переносит rAF-цикл рамок —
+  // (collisionDetection пишет её в ref), а в состояние переносит rAF-цикл кадра —
   // события драга молчат, пока строки доигрывают переход.
   const [nearGroup, setNearGroup] = useState<string | null>(null)
   const nearGroupRef = useRef<string | null>(null)
   // Зона под курсором — по ней рисуется ДУБЛЁР (§5): тусклая копия перетаскиваемого
   // вопроса на его будущем месте. Отклик у жеста один и он показывает результат, а не
-  // намерение, поэтому линия дропа за зонами больше не рисуется.
+  // намерение.
   const [hoverZone, setHoverZone] = useState<{ groupId: string; side: 'left' | 'right' } | null>(
     null,
   )
   // То же на втором уровне (ряд ВНУТРИ вопроса): id подписи, у зоны которой стоит курсор.
   const [hoverCell, setHoverCell] = useState<string | null>(null)
-  // Замер рамки гонит rAF-цикл, а не события драга: строки доигрывают свой
+  // Замер оверлеев гонит rAF-цикл, а не события драга: строки доигрывают свой
   // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
-  // рамка отставала от расступающихся строк. Цикл меряет каждый кадр; аргументы
+  // оверлеи отставали от расступающихся строк. Цикл меряет каждый кадр; аргументы
   // (активный блок и цель) обновляют обработчики. Пустой ref = цикл остановлен.
   const frameArgsRef = useRef<{ activeId: string; overId: string | null } | null>(null)
   const frameRafRef = useRef(0)
-  // Прогноз дропа под текущую цель: состав обеих рамок. Пересчитывается на смене цели,
-  // а не каждый кадр (см. updateFrame).
-  const planRef = useRef<{ key: string | null; frameIds: string[]; lossIds: string[] } | null>(null)
+  // Прогноз дропа под текущую цель: состав обоих оверлеев и сторона рейла.
+  // Пересчитывается на смене цели, а не каждый кадр (см. updateFrame).
+  const planRef = useRef<{
+    key: string | null
+    railIds: string[]
+    railSide: 'left' | 'right'
+    lossIds: string[]
+  } | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
   // Диалог выбора типа (кнопка «+»): открыт ли и после какого блока вставлять
   // (null — в конец).
@@ -299,7 +309,7 @@ export function SlashEditor({
   // blockIds): items внешнего SortableContext сравниваются в useSortable по
   // ссылке (itemsHaveChanged), и свежий массив на рендере, где группа начинает
   // смещаться, отключает её transition — группа телепортируется вместо сдвига.
-  // Ре-рендеры во время драга есть: setDrag (рейл цели) и setFrame (rAF рамки).
+  // Ре-рендеры во время драга есть: setDrag (рейл цели) и rAF-цикл оверлеев.
   //
   // МЕЖДУ нажатиями клавиш ссылка была нестабильна, и это стоило дороже, чем кажется:
   // SortableContext пересобирает по items значение своего контекста, а оно
@@ -407,7 +417,7 @@ export function SlashEditor({
       const hit = pointerWithin({ ...args, droppableContainers: zones })
       if (hit.length > 0) {
         // Сырую цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
-        // драг-рамка обводила бы состав вертикального дропа, которого не будет.
+        // прогноз описывал бы вертикальный дроп, которого не будет.
         rawOverRef.current = null
         return hit
       }
@@ -440,77 +450,46 @@ export function SlashEditor({
     return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
   }
 
-  // Пересчёт обеих рамок: состав основной отдаёт planBlockDrop (будущая группа
-  // активного блока), состав предупреждающей — captionLoss по тому же прогнозу;
-  // геометрию обеим даёт живой DOM по data-block-id. Пустой состав (блок остаётся
-  // одиночкой; заголовка никто не теряет) — рамки нет.
+  // Пересчёт кадра драга: ближайшее место для приглашения «встань в ряд», рейл будущей
+  // группы и предупреждающая рамка. Состав обоих оверлеев даёт прогноз planBlockDrop
+  // (рейлу — сама будущая группа, рамке — captionLoss по тому же прогнозу), геометрию —
+  // живой DOM по data-block-id. Пустой состав — оверлея нет.
   function updateFrame(activeId: string, overId: string | null) {
     const root = canvasRef.current
-    // Ближайшее место — в состояние тем же кадром, что и рамки: по нему полотно решает,
+    // Ближайшее место — в состояние тем же кадром, что и оверлеи: по нему полотно решает,
     // у какой группы зажечь приглашение. setState тем же значением React гасит сам.
     setNearGroup(nearGroupRef.current)
-    // Цель «сам активный элемент» — не цель: dnd-kit отдаёт её, пока курсор над самим
-    // собой, и линия просто ехала бы за блоком, ничего не показывая.
-    const over = overId === activeId ? null : (rawOverRef.current ?? overId)
-    // Линия живёт на ОБОИХ слоях. Прежде она умела только блочный и искала цель по
-    // data-block-id: при переносе ГРУППЫ цель — groupId, поиск не находил ничего, и
-    // линии не было вовсе — автор не мог понять, поняло ли полотно, что он выносит
-    // вопрос из ряда (найдено владельцем). Поэтому и слой, и порядок, и геометрия
-    // берутся у своего слоя: у группы это её строки целиком.
-    const isGroup = groupIds.has(activeId)
-    // Мемоизированные списки, а не свежие map'ы: функция бежит каждый кадр драга.
-    const order = isGroup ? groupIdList : blockIds
-    // У группы цель — её строки целиком, а у группы, стоящей в РЯДУ, — строки всего
-    // ряда: вопрос всё равно ляжет над рядом или под ним целиком (rowBoundaryGroup),
-    // а колонки бывают разной высоты, и линия, отмеренная от края одной из них, встала
-    // бы внутрь ряда.
-    const ownRows = (id: string) =>
-      isGroup ? (groups.find((g) => g.id === id)?.blocks.map((b) => b.id) ?? []) : [id]
-    const targetRows = (id: string) => {
-      const row = isGroup
-        ? rows.find((r) => r.length > 1 && r.some((c) => c.some((g) => g.id === id)))
-        : undefined
-      return row ? row.flat().flatMap((g) => g.blocks.map((b) => b.id)) : ownRows(id)
-    }
-    // Через setRect, как и рамки: замер идёт КАЖДЫЙ кадр, а свежий объект с теми же
-    // числами — это полный ре-рендер полотна 60 раз в секунду. Полотно не мемоизировано
-    // построчно (TD-32), поэтому такой ре-рендер стоит всех строк формы разом, и линия
-    // была единственным местом в цикле, где бэйла не было (найдено разбором
-    // производительности 2026-08-03).
-    setRect(
-      setDropLine,
-      measureDropLine(
-        root,
-        over === null || isRowZone(over) ? [] : targetRows(over),
-        ownRows(activeId),
-        dropSide(order, activeId, over ?? activeId),
-      ),
-    )
-    if (!root || !overId || isGroup) {
-      setFrame(null)
+    // Групповой драг оверлеям не адресован: вопрос переезжает целиком, ни в чей состав
+    // не входит и ничьего заголовка не забирает. Его рейл ведёт сама группа (проп rail).
+    if (!root || !overId || groupIds.has(activeId)) {
+      setRail(null)
       setWarnFrame(null)
       return
     }
-    // СОСТАВ рамок зависит только от цели, а меняется она редко — геометрия же обязана
+    // СОСТАВ оверлеев зависит только от цели, а меняется она редко — геометрия же обязана
     // пересчитываться каждый кадр (строки едут). Поэтому прогноз считается один раз на
-    // цель и лежит в ref: planBlockDrop копирует весь документ и заново выводит
-    // groupId, captionLoss идёт по нему ещё раз, и делать это 60 раз в секунду ради
-    // неизменного ответа — чистый мусор для сборщика на длинной форме.
+    // цель и лежит в ref: planBlockDrop копирует весь документ и выводит groupId,
+    // captionLoss идёт по нему ещё раз, и делать это 60 раз в секунду ради неизменного
+    // ответа — чистый мусор для сборщика на длинной форме.
     const planTarget = rawOverRef.current ?? overId
     if (planRef.current?.key !== planTarget) {
       const plan = planBlockDrop(blocks, activeId, planTarget)
+      // Старожилы будущей группы — без активной строки: она следует за курсором, и её
+      // rect растянул бы рейл туда, где вопроса нет.
+      const residents = (plan?.groupIds ?? []).filter((id) => id !== activeId)
+      // Группа-хозяйка будущего рейла в ТЕКУЩЕЙ раскладке: по первому старожилу.
+      // Прогноз колонок не меняет, а группа целиком стоит в одной колонке.
+      const host = blocks.find((b) => b.id === residents[0])?.groupId ?? null
       planRef.current = {
         key: planTarget,
-        frameIds: plan?.frameIds ?? [],
+        // Сторона рейла — та же, что у группы в покое: у правой колонки ряда левый
+        // жёлоб занят соседом (см. GroupRow).
+        railSide: rowSide.get(host ?? '') ?? 'left',
+        railIds: residents,
         lossIds: plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : [],
       }
     }
-    // Активная строка следует за курсором по ОБЕИМ осям, и её rect растягивал рамку
-    // вбок при горизонтальном дрейфе, хотя горизонтального перемещения у полотна нет:
-    // по горизонтали меряем только строки-резиденты. У предупреждающей рамки исключать
-    // нечего — жертвой бывает и сама активная строка (поле, уведённое из своего
-    // вопроса), и тогда мерить, кроме неё, некого.
-    setRect(setFrame, measureUnion(root, planRef.current.frameIds, activeId))
+    setRect(setRail, measureRail(root, planRef.current.railIds, planRef.current.railSide))
     setRect(setWarnFrame, measureUnion(root, planRef.current.lossIds))
   }
 
@@ -529,9 +508,8 @@ export function SlashEditor({
   function stopFrameLoop() {
     frameArgsRef.current = null
     cancelAnimationFrame(frameRafRef.current)
-    setFrame(null)
+    setRail(null)
     setWarnFrame(null)
-    setDropLine(null)
     setHoverZone(null)
     setHoverCell(null)
     setNearGroup(null)
@@ -806,6 +784,13 @@ export function SlashEditor({
     () => hoverZone?.groupId ?? inviteRowId(rows, nearGroup, rowCandidate),
     [hoverZone, rows, nearGroup, rowCandidate],
   )
+  // Во время БЛОЧНОГО драга зона своей линии не рисует (заливка остаётся). Причина не
+  // в тесноте, а в правде: рейл зоны висит на контейнере РЯДА, а ряд во время такого
+  // жеста меняет вид, не меняя своего бокса — строки внутри группы расступаются
+  // трансформами. Статичная линия при этом обнимает не то, что видит автор: в одной
+  // колонке ряда стоит стопка вопросов, и в неё попадают чужие строки. Линия в жёлобе
+  // остаётся одна, измеренная, и принадлежит она вопросу (см. rail).
+  const zoneRailOff = drag?.kind === 'block'
 
   // Одна группа полотна. Вынесена из JSX функцией, потому что зовут её из двух мест:
   // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5). railOff — у ряда горят
@@ -863,7 +848,7 @@ export function SlashEditor({
         якорь наведения для кнопок «Добавить обложку/логотип» ниже. */}
           <div className="group/canvas">
             <CoverArea formId={formId} />
-            {/* relative — якорь координат драг-рамки (updateFrame меряет относительно него).
+            {/* relative — якорь координат оверлеев драга (updateFrame меряет относительно него).
           Верхний отступ с обложкой поджимается: 96px пустоты над заголовком там уже
           лишние, воздух дала сама обложка. Числа зеркалят .rf-page.rf-covered
           (fields.css) — правишь там, правь и здесь. */}
@@ -873,44 +858,30 @@ export function SlashEditor({
                 cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-24'
               }`}
             >
-            {/* Драг-рамка (Д10): один absolute-прямоугольник ДО списка в DOM — строки
-          (positioned) рисуются поверх. Позиционирование ПРЯМОЕ, без собственной
-          анимации: rAF-замер и так даёт гладкие значения (строки едут CSS-пере-
-          ходами, union-rect движется вместе с ними), а своя пружина, ретаргети-
-          руемая каждый кадр, копила скорость по движущейся цели — рамка отставала
-          от расступающихся строк и отскакивала на их остановке. Скачок остаётся
-          только при смене состава (переезд на другую группу) — осознанно: это
-          резкая смена цели, а не движение. */}
-            {frame && (
+            {/* Рейл будущей группы: во время блочного драга показывает ВОПРОС, частью
+          которого станет блок. Тот же вид, что у рейла в покое (GroupRow), — линия
+          bg-primary/40 в жёлобе, — но геометрия измеренная: пока идёт жест, layout-бокс
+          группы врёт (см. коммент у состояния rail). Оба оверлея ниже — absolute ДО
+          списка в DOM (строки positioned и рисуются поверх), позиционирование ПРЯМОЕ,
+          без своей анимации: rAF-замер и так даёт гладкие значения — строки едут
+          CSS-переходами, а пружина, ретаргетируемая каждый кадр, копила скорость по
+          движущейся цели и отскакивала на остановке. Замер гонит именно rAF, а не
+          события драга: onDragMove молчит, пока строки доигрывают свой переход, и
+          оверлей отставал бы от них. */}
+            {rail && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-primary/40"
+                className="pointer-events-none absolute left-0 top-0 rounded-full bg-primary/40"
                 style={{
-                  transform: `translate(${frame.x - 10}px, ${frame.y - 6}px)`,
-                  width: frame.w + 20,
-                  height: frame.h + 12,
+                  transform: `translate(${rail.x}px, ${rail.y}px)`,
+                  width: rail.w,
+                  height: rail.h,
                 }}
               />
             )}
-            {/* Линия ВЕРТИКАЛЬНОГО дропа (§11.6): всегда во всю ширину — такой дроп
-          снимает бит колонки, то есть выводит блок из секции, и без линии «кладу под
-          секцию» и «кладу в её колонку» на глаз неотличимы. Половинная линия у зон
-          снята (§5.1): место она не называла, а её заменил дублёр. Оверлей и rAF-замер
-          те же, что у рамок: события драга молчат, пока строки доигрывают переход. */}
-            {dropLine && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute left-0 top-0 h-0.5 rounded-full bg-primary"
-                style={{
-                  transform: `translate(${dropLine.x}px, ${dropLine.y}px)`,
-                  width: dropLine.w,
-                }}
-              />
-            )}
-            {/* Рамка-предупреждение (§4.3): строка, которая от этого дропа останется без
-          заголовка. Тот же оверлей и тот же rAF-замер, что у основной рамки, — иначе
-          она отставала бы от расступающихся строк; отличие только в цвете, потому что
-          говорит она противоположное: не «сюда встанет», а «отсюда уйдёт имя». */}
+            {/* Рамка-предупреждение (§4.3): строка, которая от этого дропа останется
+          без заголовка. Про МЕСТО вставки она, в отличие от рейла, не говорит ничего —
+          только про УЩЕРБ: «отсюда уйдёт имя». */}
             {warnFrame && (
               <div
                 aria-hidden="true"
@@ -994,10 +965,10 @@ export function SlashEditor({
                       // любой участник, кроме перетаскиваемого (см. inviteRowId), тогда
                       // как key ряда обязан оставаться стабильным — иначе смена адреса
                       // посреди драга ремаунтила бы весь ряд.
-                      const has = (id: string | null) =>
-                        id !== null && row.some((c) => c.some((g) => g.id === id))
-                      const zones = has(inviteRow)
-                      const hot = has(hoverZone?.groupId ?? null) ? hoverZone!.side : null
+                      const zones = hasGroup(row, inviteRow)
+                      const hot = hasGroup(row, hoverZone?.groupId ?? null)
+                        ? hoverZone!.side
+                        : null
                       // Дублёр (§5): пока курсор в зоне, будущее место занимает тусклая
                       // копия перетаскиваемого вопроса, а ряд перестраивается в секцию —
                       // автор видит РЕЗУЛЬТАТ, а не отклик, который надо расшифровать.
@@ -1028,8 +999,12 @@ export function SlashEditor({
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
                         <div key={rowId} className="relative flex flex-col gap-7 sm:flex-row">
-                          {zones && <SideDropZone rowId={inviteRow!} side="left" />}
-                          {zones && <SideDropZone rowId={inviteRow!} side="right" />}
+                          {zones && (
+                            <SideDropZone rowId={inviteRow!} side="left" railOff={zoneRailOff} />
+                          )}
+                          {zones && (
+                            <SideDropZone rowId={inviteRow!} side="right" railOff={zoneRailOff} />
+                          )}
                           {cellNodes}
                         </div>
                       )
@@ -1138,66 +1113,50 @@ const KEYBOARD_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates }
 // Столько же стоили удаление строки и `Mod+Alt+→`.
 const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 
-// Rect — прямоугольник в координатах полотна (canvasRef): в них живут обе драг-рамки.
+// Rect — прямоугольник в координатах полотна (canvasRef): в них живут оверлеи драга.
 type Rect = { x: number; y: number; w: number; h: number }
 
-// measureDropLine — геометрия линии ВЕРТИКАЛЬНОГО дропа (§11.6). Отвечает на
-// единственный вопрос: какой ШИРИНЫ ляжет блок, — и отвечает самой своей шириной.
+// hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
+// (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес
+// посреди жеста меняется.
+type GroupRef = { id: string }
+function hasGroup(row: GroupRef[][], id: string | null): boolean {
+  return id !== null && row.some((c) => c.some((g) => g.id === id))
+}
+
+// measureRail — геометрия рейла будущей группы: вертикальный отрезок в жёлобе рядом
+// со строками группы. Высоту и вертикаль даёт union-rect старожилов, а X — жёлоб.
 //
-// Вертикальный дроп всегда даёт ПОЛНУЮ ширину: он снимает бит колонки (правило §5,
-// «обычный вертикальный дроп флаг снимает»), то есть выводит блок из секции. Поэтому
-// линия во всю ширину = «встанешь полноширинным», и именно её не хватало под секцией:
-// на глаз «кладу под секцию» и «кладу в её колонку» неотличимы.
+// Числа обязаны повторить рейл в покое ТОЧНО, иначе линия дёргается на 1–2px в тот
+// момент, когда статичный сменяется измеренным (найдено владельцем). У покоя это
+// `-left-2`/`-right-2` + `w-0.5`, а `left`/`right` у absolute задают КРАЙ элемента,
+// не его центр: слева линия занимает [край−8, край−6], справа [край+6, край+8].
+// Отсюда асимметрия формулы — слева вычитается только вылет, справа ещё и ширина.
 //
-// Про зоны ряда линия больше не рассказывает НИЧЕГО (решение владельца 2026-08-02):
-// там половинная линия обещала ширину, но не место, и на глаз не отличалась от
-// полноширинной — её заменил дублёр, который показывает готовый результат. Зона =
-// ложная цель для замера, и на ней линии просто нет.
-//
-// СТОРОНА цели — не украшение: `arrayMove` вставляет элемент НА индекс цели, поэтому
-// перенос вниз по документу кладёт его ПОД цель, а вверх — НАД ней. Линия, всегда
-// нарисованная снизу, при переносе вверх стояла под целью, тогда как элемент
-// приземлялся над ней.
-//
-// Отступ от края цели — ПОЛОВИНА ВЫСОТЫ САМОГО ЭЛЕМЕНТА, а не фиксированные 13px.
-// Щель, которую открывает sortable, ровно с него высотой, и её середина — то место,
-// куда элемент встанет; постоянный отступ отмерял от края цели одинаково в обе
-// стороны, то есть в щели оказывался то у верхнего её края, то у нижнего, и линия
-// стояла то над местом приземления, то под ним в зависимости от направления переноса
-// (найдено владельцем). Мерится живой DOM: цель к этому кадру уже сдвинута, и её
-// граница — настоящий край открывшейся щели.
-//
-// targetIds/activeIds — строки СВОЕГО слоя: у блока это он сам, у группы все её строки.
-// Пустой список целей (её нет, либо цель — зона жеста, у которой свой отклик, §5.1) —
-// линии нет.
-function measureDropLine(
-  root: HTMLElement | null,
-  targetIds: string[],
-  activeIds: string[],
-  side: 'above' | 'below',
-): Rect | null {
-  if (!root || targetIds.length === 0) return null
-  const list = root.querySelector<HTMLElement>('ol')
-  if (!list) return null
-  const target = measureUnion(root, targetIds)
-  if (!target) return null
-  const cr = root.getBoundingClientRect()
-  const lr = list.getBoundingClientRect()
-  const half = (measureUnion(root, activeIds)?.h ?? 0) / 2
+// ROW_PAD — плата за то, что меряется СТРОКА, а не её текст: rect строки включает её
+// py-1.5, а рейл в покое обнимает чистый контент (li хватает его вплотную — py-1.5
+// строк погашен их же -my-1.5, BlockRow). Без вычета рейл прыгал бы на 6px в каждую
+// сторону ровно в момент, когда жест начинается и статичный сменяется измеренным.
+// Меняешь py-1.5 у строки — правь это число.
+const RAIL_W = 2
+const RAIL_GAP = 8
+const ROW_PAD = 6
+function measureRail(root: HTMLElement, ids: string[], side: 'left' | 'right'): Rect | null {
+  const u = measureUnion(root, ids)
+  if (!u) return null
   return {
-    x: lr.left - cr.left,
-    y: side === 'above' ? target.y - half : target.y + target.h + half,
-    w: lr.width,
-    h: 0,
+    x: side === 'right' ? u.x + u.w + RAIL_GAP - RAIL_W : u.x - RAIL_GAP,
+    y: u.y + ROW_PAD,
+    w: RAIL_W,
+    h: Math.max(0, u.h - ROW_PAD * 2),
   }
 }
 
 // measureUnion — union-rect строк с данными id по ЖИВОМУ DOM: getBoundingClientRect
 // учитывает трансформы, которыми sortable раздвигает строки, а layout-бокс — нет
-// (из-за этого рамка и рисуется оверлеем, а не ring'ом на группе). skipX — строка,
-// не участвующая в ГОРИЗОНТАЛЬНОМ замере (активная следует за курсором по обеим
-// осям). null — мерить нечего.
-function measureUnion(root: HTMLElement, ids: string[], skipX?: string): Rect | null {
+// (из-за этого рамка и рисуется оверлеем, а не ring'ом на строке). null — мерить
+// нечего.
+function measureUnion(root: HTMLElement, ids: string[]): Rect | null {
   if (ids.length === 0) return null
   const cr = root.getBoundingClientRect()
   let left = Infinity
@@ -1210,7 +1169,6 @@ function measureUnion(root: HTMLElement, ids: string[], skipX?: string): Rect | 
     const r = el.getBoundingClientRect()
     top = Math.min(top, r.top)
     bottom = Math.max(bottom, r.bottom)
-    if (id === skipX) continue
     left = Math.min(left, r.left)
     right = Math.max(right, r.right)
   }
@@ -1273,7 +1231,9 @@ const isRowZone = (id: string | number): boolean =>
 const ZONE_LEFT = 'right-full mr-2.5 w-2 sm:w-[4.375rem]'
 const ZONE_RIGHT = 'left-full ml-2.5 w-2 sm:w-[4.375rem]'
 // Рейл жеста — те же координаты и та же толщина, что у рейла группы: у автора не
-// должно быть двух «почти одинаковых» линий на разном вылете.
+// должно быть двух «почти одинаковых» линий на разном вылете. Рисуется только на
+// ГРУППОВОМ драге (railOff у SideDropZone): там ряд не меняет своего вида, не меняя
+// бокса, и статичная линия честна. На блочном линию ведёт измеренный рейл вопроса.
 const zoneRail = (side: 'left' | 'right', hot: boolean) =>
   `pointer-events-none absolute top-0 bottom-0 z-20 w-0.5 rounded-full bg-primary transition-opacity ${
     side === 'right' ? '-right-2' : '-left-2'
@@ -1291,11 +1251,19 @@ const zoneFill = (hot: boolean) =>
 // в тот момент, когда автор увидел результат (зона гасила бы сама себя, и жест
 // мигал бы). Вне потока и pointer-events-none: dnd-kit меряет rect, а не ловит
 // события, а занимающий место контрол схлопнул бы строку на mousedown (урок TD-22).
-function SideDropZone({ rowId, side }: { rowId: string; side: 'left' | 'right' }) {
+function SideDropZone({
+  rowId,
+  side,
+  railOff,
+}: {
+  rowId: string
+  side: 'left' | 'right'
+  railOff: boolean
+}) {
   const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, side) })
   return (
     <>
-      <span aria-hidden="true" className={zoneRail(side, isOver)} />
+      {!railOff && <span aria-hidden="true" className={zoneRail(side, isOver)} />}
       <div
         ref={setNodeRef}
         aria-hidden="true"
@@ -1309,11 +1277,14 @@ function SideDropZone({ rowId, side }: { rowId: string; side: 'left' | 'right' }
 // вопроса. Вид и правила те же, что у SideDropZone, — жест один, уровень разный, и
 // выглядеть они обязаны одинаково. Сторона всегда правая: пара внутри вопроса
 // направленная (слева подпись, справа поле).
+//
+// Своей линии не рисует никогда: зона второго уровня живёт ТОЛЬКО в блочном драге
+// (её зажигает поле, уносимое из своей мульти-группы), а в нём в жёлобе одна линия и
+// она измеренная — см. zoneRailOff.
 function CellDropZone({ blockId }: { blockId: string }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellZoneId(blockId) })
   return (
     <>
-      <span aria-hidden="true" className={zoneRail('right', isOver)} />
       <div
         ref={setNodeRef}
         aria-hidden="true"
@@ -1383,8 +1354,8 @@ function GhostBlock({ block, caption }: { block: Block; caption?: string }) {
 // blockIds — ОБЩИЙ список всех block-id полотна: items вложенного SortableContext
 // одинаковы у всех групп, чтобы блочный слой был одной сортируемой вселенной
 // (глобальные индексы → родная анимация через границы групп; см. коммент у blockIds
-// в SlashEditor). Отклик блочного драга над группой — драг-рамка полотна (Д10),
-// GroupRow своей подсветки не несёт.
+// в SlashEditor). Отклик блочного драга над группой — расступающиеся строки и линия
+// дропа полотна; GroupRow своей подсветки не несёт.
 type GroupRowProps = {
   group: { id: string; blocks: Block[] }
   // Первая группа полотна: её первая строка — начало формы, у пустого текста там

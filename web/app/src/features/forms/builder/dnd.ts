@@ -60,22 +60,6 @@ export const closestVertical: CollisionDetection = ({
   return collisions.sort((a, b) => a.data.value - b.data.value)
 }
 
-// dropSide — с какой стороны цели окажется перетаскиваемый элемент. Ответ целиком в
-// арифметике arrayMove, которой живут и reorderBlocks, и reorderGroups: индекс цели
-// берётся в ИСХОДНОМ списке, а вставка идёт в список уже без активного. Поэтому перенос
-// вниз по документу кладёт элемент ПОД цель, а вверх — НАД ней.
-//
-// Правило записано отдельно и проверено против самого стора (dnd.test.ts), потому что
-// по нему рисуется линия дропа, а её ошибка не ловится ничем: линия, нарисованная
-// всегда снизу, при переносе вверх спокойно показывала место, к которому не имела
-// отношения (найдено владельцем 2026-08-02). `order` — список СВОЕГО слоя: блоки для
-// блочного драга, группы для группового.
-export function dropSide(order: string[], activeId: string, overId: string): 'above' | 'below' {
-  const from = order.indexOf(activeId)
-  const to = order.indexOf(overId)
-  return from >= 0 && to >= 0 && to < from ? 'above' : 'below'
-}
-
 // ПЛОСКИЙ СНИМОК ПРЯМОУГОЛЬНИКА — самая дорогая находка разбора драга (TD-55).
 //
 // `ClientRect` у dnd-kit только выглядит структурой с числами: `top`/`bottom`/`left`/

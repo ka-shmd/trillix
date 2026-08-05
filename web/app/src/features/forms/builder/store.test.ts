@@ -560,18 +560,29 @@ describe('createBuilderStore', () => {
     expect(s[0]!.groupId).toBe(s[1]!.groupId) // подпись пристегнулась к полю
   })
 
-  it('planBlockDrop: frameIds — будущий состав группы активного блока', () => {
+  it('planBlockDrop: groupIds — вопрос, в который войдёт активный блок', () => {
     const store = createBuilderStore()
     store.getState().addBlock('email')
     store.getState().addBlock('label')
     const b = store.getState().blocks
 
-    // Подпись летит над голое поле: рамка обнимет будущую пару «подпись+поле».
+    // Подпись летит над голое поле: рейл зажжётся у пары «подпись+поле», которой
+    // ещё нет — вопрос рождается этим самым дропом.
     const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
-    expect(join?.frameIds).toEqual([b[1]!.id, b[0]!.id])
+    expect(join?.groupIds).toEqual([b[1]!.id, b[0]!.id])
   })
 
-  it('planBlockDrop: дроп внутрь чужого вопроса — рамка обнимает будущую группу пришельца', () => {
+  it('planBlockDrop: одиночка остаётся одиночкой — зажигать нечего', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email')
+    store.getState().addBlock('number')
+    const b = store.getState().blocks
+
+    // Два голых поля: перестановка их не роднит, каждое само себе вопрос.
+    expect(planBlockDrop(b, b[1]!.id, b[0]!.id)?.groupIds).toEqual([])
+  })
+
+  it('planBlockDrop: дроп внутрь чужого вопроса — плоский сплайс, как arrayMove', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('email') // голое поле сразу под группой
@@ -579,8 +590,8 @@ describe('createBuilderStore', () => {
 
     const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — между подписью и полем
     expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'email', 'short_text'])
-    // Рамка = группа, в которую войдёт САМ активный блок: заголовок достаётся ему.
-    expect(plan!.frameIds).toEqual([b[0]!.id, b[2]!.id])
+    // Вопрос = группа, в которую войдёт САМ активный блок: заголовок достаётся ему.
+    expect(plan!.groupIds).toEqual([b[0]!.id, b[2]!.id])
   })
 
   // captionLoss (§4.3 спеки фазы 15) — цена свободы строки ответа: правка, после

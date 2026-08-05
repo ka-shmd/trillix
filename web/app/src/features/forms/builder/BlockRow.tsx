@@ -225,7 +225,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
     <div
       ref={setNodeRef}
       style={style}
-      // data-block-id — якорь для замера строки драг-рамкой (updateFrame в
+      // data-block-id — якорь для замера строки оверлеями драга (updateFrame в
       // SlashEditor): getBoundingClientRect по нему учитывает live-трансформы.
       data-block-id={block.id}
       // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
