@@ -68,15 +68,15 @@ describe('превью листает страницы', () => {
     expect(screen.getByRole('button', { name: 'Отправить' })).toBeTruthy()
   })
 
-  // Место индикатора — часть WYSIWYG, а не вкус: он стоит НАД вопросами страницы
-  // (решение владельца 2026-08-05), и разъедься это с рендерером, автор увидел бы не ту
-  // страницу, которую увидит человек.
-  it('линии шагов стоят выше вопросов', () => {
+  // Место индикатора — часть WYSIWYG, а не вкус: он стоит ПОД кнопками шага (решение
+  // владельца 2026-08-05), и разъедься это с рендерером, автор увидел бы не ту страницу,
+  // которую увидит человек.
+  it('линии шагов стоят ниже кнопок шага', () => {
     const { container } = renderPreview(twoPages())
-    const form = container.querySelector('.rf-form')!
+    const nav = container.querySelector('.rf-nav')!
     const progress = container.querySelector('.rf-progress')!
-    // DOCUMENT_POSITION_PRECEDING = индикатор идёт ДО вопросов в порядке документа.
-    expect(form.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+    // DOCUMENT_POSITION_FOLLOWING = индикатор идёт ПОСЛЕ навигации в порядке документа.
+    expect(nav.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   // Видимой подписи «Шаг N из M» нет, но счёт обязан оставаться доступным: линии для
