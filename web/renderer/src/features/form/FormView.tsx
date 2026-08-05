@@ -22,7 +22,7 @@ import {
   saveAnswers,
   savePage,
 } from './answers'
-import { firstErrorPage } from './pages'
+import { firstErrorPage, firstQuestionIndex } from './pages'
 import { uuidv7 } from './submissionId'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
@@ -136,6 +136,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     pageRef.current?.focus()
   }, [page])
 
+
   // Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: на телефоне ею
   // пользуются вместо экранной, и уход с заполненной формы читается как потеря данных
   // (черновик переживёт, но человек этого не знает). URL не трогаем — pushState без
@@ -218,6 +219,24 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
       document.removeEventListener('visibilitychange', onHidden)
     }
   }, [blocks])
+
+  // ВОРОНКА (фаза 19, шаг 5). Переход на страницу — это и есть «дошёл до сюда», то
+  // самое наблюдение, которого воронке не хватало с самого начала: касание поля молчит
+  // про проскроллившего и передумавшего (ADR §10, SCHEMA.md — «поменяется только способ
+  // наблюдения, не модель»). Ни новых полей, ни правок в Go и SQL: тот же бикон с тем же
+  // last_block_id, сервер по-прежнему берёт максимальный seq.
+  //
+  // Шлём ТОЛЬКО когда страница дальше уже достигнутого: «Назад» дальнюю точку не
+  // откатывает, иначе вернувшийся на первый шаг выглядел бы в воронке как ушедший с него.
+  // Сравнение — в позициях документа, той же мерой, что у фокусной дальней точки.
+  useEffect(() => {
+    if (!navigated.current) return
+    const index = firstQuestionIndex(blocks, pages[page] ?? [])
+    // Страница без вопросов (одно вступление) сообщать нечего: у воронки шаги — вопросы.
+    if (index < 0 || index <= furthest.current) return
+    furthest.current = index
+    visit.current?.reach(blocks[index]!.id)
+  }, [page, pages, blocks])
 
   const setBlockError = (blockId: string, msg: string | null) =>
     setErrors((prev) => {

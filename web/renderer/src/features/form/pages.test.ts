@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { type Block } from '@entities/formSchema'
 
-import { firstErrorPage, pageOfBlock } from './pages'
+import { firstErrorPage, firstQuestionIndex, pageOfBlock } from './pages'
 
 const b = (id: string): Block => ({ id, groupId: id, type: 'short_text' })
+const content = (id: string): Block => ({ id, groupId: id, type: 'heading' })
 
 // Страницы тут задаются готовыми: разбиение проверяет splitPages (тест в кабинете),
 // здесь — только решение «куда вести человека».
@@ -39,5 +40,25 @@ describe('firstErrorPage', () => {
   it('ошибки на исчезнувших блоках игнорируются', () => {
     expect(firstErrorPage(pages, { исчез: 'Обязательное поле' })).toBeNull()
     expect(firstErrorPage(pages, { исчез: 'x', c1: 'Обязательное поле' })).toBe(2)
+  })
+})
+
+// firstQuestionIndex — «дошёл до страницы N» для воронки: id первого ВОПРОСА новой
+// страницы, найденный в позициях полного документа. Позиция, а не порядок внутри
+// страницы: дальняя точка визита сравнивается по документу, и вторая мера разошлась бы
+// с первой на первом же «Назад».
+describe('firstQuestionIndex', () => {
+  const doc = [b('a1'), content('h1'), b('a2'), content('h2'), b('c1')]
+
+  it('находит первый вопрос страницы в позициях документа', () => {
+    expect(firstQuestionIndex(doc, [content('h2'), doc[4]!])).toBe(4)
+  })
+
+  it('неотвечаемые блоки вопросом не считаются', () => {
+    expect(firstQuestionIndex(doc, [doc[1]!])).toBe(-1)
+  })
+
+  it('пустая страница — вопросов нет', () => {
+    expect(firstQuestionIndex(doc, [])).toBe(-1)
   })
 })

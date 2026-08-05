@@ -1,4 +1,4 @@
-import { type Block } from '@entities/formSchema'
+import { type Block, isAnswerableType } from '@entities/formSchema'
 
 import { type Errors } from './validation'
 
@@ -10,6 +10,17 @@ import { type Errors } from './validation'
 // переопубликовали, пока вкладка стояла открытой, и блок из неё исчез).
 export function pageOfBlock(pages: readonly Block[][], blockId: string): number {
   return pages.findIndex((page) => page.some((b) => b.id === blockId))
+}
+
+// firstQuestionIndex — позиция первого ОТВЕЧАЕМОГО блока страницы в полном потоке
+// документа; -1, если вопросов на странице нет (страница-вступление из одного текста).
+//
+// Позиция, а не id: воронке нужен id, но «дальше или ближе» сравнивается только по
+// порядку документа — тому же, которым считается самая дальняя точка визита по фокусу.
+// Две меры одной величины в разных единицах разошлись бы на первом же «Назад».
+export function firstQuestionIndex(blocks: readonly Block[], page: readonly Block[]): number {
+  const first = page.find((b) => isAnswerableType(b.type))
+  return first === undefined ? -1 : blocks.indexOf(first)
 }
 
 // firstErrorPage — САМАЯ РАННЯЯ страница с ошибкой, или null, если вести некуда.
