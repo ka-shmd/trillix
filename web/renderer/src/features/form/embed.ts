@@ -1,0 +1,87 @@
+// Встроенная форма (фаза 20): та же публичная страница, показанная во фрейме на
+// чужом сайте — блоком в потоке, виджетом в модалке или на весь экран. Отличий от
+// обычной страницы ровно два: вид (компактные поля, см. index.css) и то, что
+// страница перестала быть самой собой — размером, скроллом и переходами теперь
+// распоряжается хост, а мы можем только сообщать.
+//
+// Здесь — обе половины разговора с хостом: чтение параметров из адреса и мост
+// сообщений. Всё чистое: отправка инжектируется, поэтому проверяется юнитом без
+// DOM (у рендерера нет testing-library, список зависимостей заморожен).
+
+/** Как форма показана на чужой странице. Приезжает от загрузчика `embed/v1.js`. */
+export type EmbedMode = 'block' | 'widget' | 'page'
+
+export interface EmbedOptions {
+  mode: EmbedMode
+  /** Фон формы прозрачен — блок ложится на фон чужого сайта, а не белым прямоугольником. */
+  transparent: boolean
+}
+
+const MODES: readonly string[] = ['block', 'widget', 'page']
+
+/**
+ * readEmbed — режим встраивания из строки запроса; null = обычная страница.
+ *
+ * Неизвестное значение читается как «не встроены», а не как дефолтный режим:
+ * параметр приходит с чужой страницы, и опечатка в нём не повод менять вид формы,
+ * открытой по прямой ссылке.
+ */
+export function readEmbed(search: string): EmbedOptions | null {
+  const params = new URLSearchParams(search)
+  const mode = params.get('embed')
+  if (mode === null || !MODES.includes(mode)) return null
+  return { mode: mode as EmbedMode, transparent: params.get('bg') === 'transparent' }
+}
+
+/** Что фрейм сообщает хосту. */
+type HostPayload =
+  | { type: 'ready' }
+  | { type: 'resize'; height: number }
+  | { type: 'page'; index: number }
+  | { type: 'submit'; submissionId: string }
+  | { type: 'redirect'; url: string }
+
+/** Сообщение фрейма хосту. Версия — часть контракта: `v1.js` живёт на чужих сайтах вечно. */
+export type HostMessage = { source: 'trillix'; v: 1 } & HostPayload
+
+export interface HostBridge {
+  readonly mode: EmbedMode
+  /** Высота содержимого: хост подгоняет фрейм, внутреннего скролла в блоке нет. */
+  resize(height: number): void
+  /** Переход на шаг: хост подтягивает фрейм в вид — высота изменилась рывком. */
+  page(index: number): void
+  /** Ответ принят. Ответы НЕ отдаём: они у владельца в кабинете (design/embed.md §5). */
+  submitted(submissionId: string): void
+  /** Переход после отправки делает хост: внутри фрейма он увёл бы в сайт внутри сайта. */
+  redirect(url: string): void
+}
+
+/**
+ * createHostBridge — исходящая половина разговора.
+ *
+ * `post` инжектируется (в бою — `window.parent.postMessage` с `targetOrigin: '*'`).
+ * Звёздочка здесь не небрежность: origin хоста нам неоткуда узнать, а высота, номер
+ * шага и факт отправки не секрет. Входящие сообщения — единственное место, где
+ * origin проверяется строго, и их у фрейма пока нет вовсе.
+ */
+export function createHostBridge(mode: EmbedMode, post: (msg: HostMessage) => void): HostBridge {
+  const send = (msg: HostPayload) => post({ source: 'trillix', v: 1, ...msg })
+
+  // Высота меняется на каждый символ в textarea, а сообщение через границу фрейма
+  // не бесплатно: одинаковое значение хосту не нужно.
+  let lastHeight = -1
+
+  send({ type: 'ready' })
+
+  return {
+    mode,
+    resize: (height) => {
+      if (height === lastHeight) return
+      lastHeight = height
+      send({ type: 'resize', height })
+    },
+    page: (index) => send({ type: 'page', index }),
+    submitted: (submissionId) => send({ type: 'submit', submissionId }),
+    redirect: (url) => send({ type: 'redirect', url }),
+  }
+}

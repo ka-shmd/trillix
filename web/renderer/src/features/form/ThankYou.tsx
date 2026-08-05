@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { DEFAULT_THANK_YOU_TITLE } from '@entities/formSchema'
 
+import { type HostBridge } from './embed'
 import { planThankYou } from './thankYouPlan'
 
 // Экран «после отправки». Оба поля — из схемы той версии, по которой респондент
@@ -11,7 +12,15 @@ import { planThankYou } from './thankYouPlan'
 //
 // Текст владельца рендерится как текст: React экранирует, dangerouslySetInnerHTML
 // в репозитории запрещён (инвариант 4).
-export function ThankYou({ text, redirectUrl }: { text: string; redirectUrl: string }) {
+export function ThankYou({
+  text,
+  redirectUrl,
+  bridge,
+}: {
+  text: string
+  redirectUrl: string
+  bridge: HostBridge | null
+}) {
   const { message, target, delayMs } = planThankYou(text, redirectUrl)
   // Ссылка-запасной путь показывается, когда переход уже запущен: если он не
   // случится (заблокирован в iframe, вкладка в фоне), человек не окажется в тупике.
@@ -19,16 +28,26 @@ export function ThankYou({ text, redirectUrl }: { text: string; redirectUrl: str
 
   useEffect(() => {
     if (!target) return
+    // ВО ФРЕЙМЕ (фаза 20) переход делает хост: window.location внутри фрейма увёл бы
+    // человека в сайт внутри сайта, оставив на чужой странице чужую шапку вокруг.
+    // Послушался ли хост, нам не сообщают, поэтому запасную ссылку показываем сразу —
+    // владелец сайта мог поставить data-redirect="frame" или не подключить скрипт вовсе.
+    const go = bridge
+      ? () => {
+          setStalled(true)
+          bridge.redirect(target)
+        }
+      : () => window.location.assign(target)
     if (delayMs === 0) {
-      window.location.assign(target)
+      go()
       return
     }
     const timer = setTimeout(() => {
       setStalled(true)
-      window.location.assign(target)
+      go()
     }, delayMs)
     return () => clearTimeout(timer)
-  }, [target, delayMs])
+  }, [target, delayMs, bridge])
 
   return (
     <main className="status">

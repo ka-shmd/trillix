@@ -15,6 +15,7 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
+import { type HostBridge } from './embed'
 import {
   answersReducer,
   clearAnswers,
@@ -76,7 +77,15 @@ async function submitWithRetry(
 // что и превью билдера, но в интерактивном режиме. Ответы в useReducer, черновик в
 // sessionStorage, клиентская валидация (required/email/число/дата) по blur и на
 // «Отправить», затем реальная отправка на сервер с идемпотентностью и авторетраем.
-export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
+export function FormView({
+  slug,
+  form,
+  bridge,
+}: {
+  slug: string
+  form: PublicForm
+  bridge: HostBridge | null
+}) {
   // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
@@ -133,13 +142,21 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
   //
   // Первый рендер пропускаем: страница 0 при открытии формы — не переход, скроллить и
   // забирать фокус у только что открытой страницы нельзя.
+  //
+  // ВО ФРЕЙМЕ (фаза 20) прокрутка — не наша: в блочном режиме внутреннего скролла нет
+  // вовсе, а хост-страницу мы двигать не вправе, поэтому просим об этом хост
+  // сообщением `page` (он подтянет фрейм, только если тот ушёл выше вида). Фокус
+  // ставим с preventScroll — иначе браузер сам уведёт чужую страницу к фрейму, и
+  // выйдет два прыжка на один переход. `window.scrollTo` остаётся только в режиме
+  // 'page': там фрейм ростом с вьюпорт и скроллится сам.
   const pageRef = useRef<HTMLDivElement | null>(null)
   const navigated = useRef(false)
   useEffect(() => {
     if (!navigated.current) return
-    window.scrollTo({ top: 0 })
-    pageRef.current?.focus()
-  }, [page])
+    if (bridge === null || bridge.mode === 'page') window.scrollTo({ top: 0 })
+    pageRef.current?.focus({ preventScroll: bridge !== null })
+    bridge?.page(page)
+  }, [page, bridge])
 
 
   // Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: на телефоне ею
@@ -342,6 +359,9 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
     switch (outcome.status) {
       case 'ok':
         clearAnswers(slug, form.version)
+        // Хост узнаёт об успехе тем же сообщением, каким пользуется онбординг внутри
+        // чужого приложения: по нему оно продолжает свой сценарий (design/embed.md §5).
+        bridge?.submitted(submissionId.current)
         setPhase('done')
         return
       case 'invalid': {
@@ -370,6 +390,7 @@ export function FormView({ slug, form }: { slug: string; form: PublicForm }) {
       <ThankYou
         text={form.schema.thankYouText ?? ''}
         redirectUrl={form.schema.redirectUrl ?? ''}
+        bridge={bridge}
       />
     )
   }
