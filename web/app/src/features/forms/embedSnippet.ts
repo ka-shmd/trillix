@@ -81,6 +81,12 @@ export interface PrefillField {
  *
  * Только отвечаемые блоки: у подписи и картинки ответа нет, заполнять нечего.
  * Подпись берётся из группы вопроса — той же строки, которой вопрос назван в CSV.
+ *
+ * **`multi_choice` исключён**: его ответ — массив id вариантов, а предзаполнение
+ * передаёт строку. Предложи мы его здесь — разработчик вписал бы значение, рендерер
+ * молча нарисовал бы «ничего не выбрано» (клиентской проверки у choice-типов нет), и
+ * посетитель получил бы «ожидался список вариантов» на поле, которого не касался.
+ * Рендерер такие значения отбрасывает независимо от этого списка (`applyPrefill`).
  */
 export function prefillFields(blocks: Block[]): PrefillField[] {
   const captions = new Map<string, string>()
@@ -90,7 +96,7 @@ export function prefillFields(blocks: Block[]): PrefillField[] {
     if (text && !captions.has(block.groupId)) captions.set(block.groupId, text)
   }
   return blocks
-    .filter((block) => isAnswerableType(block.type))
+    .filter((block) => isAnswerableType(block.type) && block.type !== 'multi_choice')
     .map((block) => ({
       blockId: block.id,
       caption: captions.get(block.groupId) ?? 'Без заголовка',

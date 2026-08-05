@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 
-import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
+import { DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import {
@@ -15,7 +15,7 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
-import { type HostBridge, readPrefill } from './embed'
+import { applyPrefill, type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,
   clearAnswers,
@@ -81,10 +81,12 @@ export function FormView({
   slug,
   form,
   bridge,
+  redirectSelf,
 }: {
   slug: string
   form: PublicForm
   bridge: HostBridge | null
+  redirectSelf: boolean
 }) {
   // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
@@ -99,19 +101,15 @@ export function FormView({
   const lastPage = pages.length - 1
   const multi = pages.length > 1
 
-  // Предзаполнение (фаза 20) идёт ПОД черновиком, а не поверх: человек, начавший
-  // заполнять форму и обновивший страницу, не должен увидеть, как его правки
-  // затирает значение, подставленное чужим сайтом. Пустая строка в черновике —
-  // тоже ответ («стёр подставленное»), поэтому смотрим на наличие ключа.
-  const [answers, dispatch] = useReducer(answersReducer, null, () => {
-    const draft = loadAnswers(slug, form.version)
-    const prefill = readPrefill(window.location.search)
-    const merged: typeof draft = { ...draft }
-    for (const [blockId, value] of Object.entries(prefill)) {
-      if (!(blockId in merged)) merged[blockId] = value
-    }
-    return merged
-  })
+  // Предзаполнение (фаза 20). Правила и причины обоих фильтров — в applyPrefill;
+  // здесь только источник правды о том, какой блок вообще можно заполнить: это
+  // опубликованная схема, по которой респондент сейчас отвечает.
+  const [answers, dispatch] = useReducer(answersReducer, null, () =>
+    applyPrefill(loadAnswers(slug, form.version), readPrefill(window.location.search), (blockId) => {
+      const block = form.schema.blocks.find((b) => b.id === blockId)
+      return block !== undefined && isAnswerableType(block.type) && block.type !== 'multi_choice'
+    }),
+  )
   const [page, setPage] = useState(() => loadPage(slug, form.version, pages.length))
   // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом по
   // линии. Стартует с восстановленного номера — человек там уже был, и запрещать ему
@@ -400,7 +398,7 @@ export function FormView({
       <ThankYou
         text={form.schema.thankYouText ?? ''}
         redirectUrl={form.schema.redirectUrl ?? ''}
-        bridge={bridge}
+        bridge={redirectSelf ? null : bridge}
       />
     )
   }

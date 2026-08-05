@@ -240,12 +240,22 @@ function open(opts: MountOptions, from: HTMLElement | null = null): EmbedHandle 
   return handleOf(entry, closeWidget)
 }
 
+// Сколько кнопок уже стоит в каждом углу: две формы на одном лендинге — обычная
+// вставка, а кнопки по умолчанию идут в один угол и легли бы одна на другую
+// попиксельно. Вторая перекрывает первую целиком, и по виду страницы это неотличимо
+// от «одна кнопка, всё работает».
+const buttonsInCorner: Record<string, number> = {}
+
 function createButton(opts: MountOptions) {
+  const corner = opts.position === 'bottom-left' ? 'bottom-left' : 'bottom-right'
+  const taken = buttonsInCorner[corner] ?? 0
+  buttonsInCorner[corner] = taken + 1
+
   const button = document.createElement('button')
   button.type = 'button'
   button.textContent = opts.label ?? DEFAULT_LABEL
   button.style.position = 'fixed'
-  button.style.bottom = '24px'
+  button.style.bottom = 24 + taken * 60 + 'px'
   if (opts.position === 'bottom-left') button.style.left = '24px'
   else button.style.right = '24px'
   button.style.padding = '12px 20px'
@@ -262,31 +272,41 @@ function createButton(opts: MountOptions) {
   document.body.appendChild(button)
 }
 
-// Esc закрывает — это первое, что пробует человек, у которого форма открылась не
-// вовремя. Слушатель один на страницу, а не на модалку.
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && openWidgetEntry) closeWidget()
-})
+// listen — все подписки на документ разом. Вызывается РОВНО ОДИН РАЗ за страницу,
+// даже если файл выполнился дважды (см. bootstrap внизу): иначе один клик по
+// `[data-trillix-open]` доходил бы до обоих экземпляров, и каждый строил бы свой
+// фрейм — два визита на одно открытие и два `lockScroll`, второй из которых
+// запоминает уже запертую страницу как исходное состояние и при закрытии
+// восстанавливает `overflow: hidden` навсегда.
+function listen() {
+  // Esc закрывает — это первое, что пробует человек, у которого форма открылась не
+  // вовремя. Слушатель один на страницу, а не на модалку.
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && openWidgetEntry) closeWidget()
+  })
 
-// Триггер на чужом элементе: владелец сайта вешает форму на свою кнопку и не спорит
-// с нашим видом. Делегированием, а не подпиской на узлы, — элемент может появиться
-// после загрузки (SPA, аккордеон, модалка).
-document.addEventListener('click', (event) => {
-  const target = event.target as Element | null
-  const trigger = target?.closest?.('[data-trillix-open]')
-  if (!trigger) return
-  const form = trigger.getAttribute('data-trillix-open')
-  if (!form) return
-  event.preventDefault()
-  open({ form, mode: 'widget' }, trigger as HTMLElement)
-})
+  // Триггер на чужом элементе: владелец сайта вешает форму на свою кнопку и не спорит
+  // с нашим видом. Делегированием, а не подпиской на узлы, — элемент может появиться
+  // после загрузки (SPA, аккордеон, модалка).
+  document.addEventListener('click', (event) => {
+    const target = event.target as Element | null
+    const trigger = target?.closest?.('[data-trillix-open]')
+    if (!trigger) return
+    const form = trigger.getAttribute('data-trillix-open')
+    if (!form) return
+    event.preventDefault()
+    open({ form, mode: 'widget' }, trigger as HTMLElement)
+  })
+
+  window.addEventListener('message', onFrameMessage)
+}
 
 // --- Сообщения фрейма --------------------------------------------------------
 //
 // Единый слушатель на все фреймы страницы: их может быть несколько, и заводить
 // подписку на каждый незачем. Свой фрейм узнаём по contentWindow, а не по
 // придуманному идентификатору, — сравнение работает без договорённостей с фреймом.
-window.addEventListener('message', (event: MessageEvent) => {
+const onFrameMessage = (event: MessageEvent) => {
   if (ORIGIN === '' || event.origin !== ORIGIN) return
   const entry = mounted.find((m) => m.frame.contentWindow === event.source)
   if (!entry) return
@@ -319,38 +339,63 @@ window.addEventListener('message', (event: MessageEvent) => {
       // Переход после отправки: внутри фрейма он увёл бы человека в сайт внутри сайта,
       // поэтому его делает хозяин страницы. Ссылка проверена ещё раз — она прилетела
       // через границу фрейма и уходит в location чужого сайта.
+      //
+      // При `data-redirect="frame"` сюда вообще ничего не приходит: фрейм знает о
+      // выборе владельца сайта (параметр `redirect=frame`) и уходит по ссылке сам.
       if (entry.opts.redirect !== 'frame' && isHttpUrl(msg.url)) window.location.assign(msg.url)
       return
   }
-})
+}
 
-// Декларативный путь: сниппет-однотегович вставляет форму на место самого скрипта.
-// document.currentScript работает и с async (в отличие от модулей), поэтому парный
-// div на чужой странице не нужен — одна строка в буфере обмена, нечего перепутать.
-if (current && current.parentNode) {
-  const opts = optionsFromAttrs(current)
-  if (opts?.mode === 'widget') {
+/**
+ * attach — обработать один сниппет: вставить форму на место скрипта или завести
+ * кнопку виджета.
+ *
+ * Публичный метод, а не внутренняя функция, потому что при двойном выполнении файла
+ * второй экземпляр обязан отдать свой сниппет ПЕРВОМУ — иначе на странице появятся
+ * два независимых реестра фреймов и два комплекта подписок.
+ */
+function attach(script: Element): void {
+  const opts = optionsFromAttrs(script)
+  if (!opts) return
+  if (opts.mode === 'widget') {
     createButton(opts)
-  } else if (opts) {
-    const slot = document.createElement('div')
-    current.parentNode.insertBefore(slot, current)
-    mount(slot, opts)
+    return
   }
+  if (!script.parentNode) return
+  // Декларативный путь: сниппет-однотегович вставляет форму на место самого скрипта.
+  // document.currentScript работает и с async (в отличие от модулей), поэтому парный
+  // div на чужой странице не нужен — одна строка в буфере обмена, нечего перепутать.
+  const slot = document.createElement('div')
+  script.parentNode.insertBefore(slot, script)
+  mount(slot, opts)
 }
 
 // Императивный путь — для приложений, где контейнер появляется после загрузки, а
 // форма открывается по событию приложения (онбординг в SPA), а не по клику в разметке.
-//
-// Один и тот же файл на странице может выполниться дважды (два сниппета — два тега с
-// одним src), поэтому глобал заводится идемпотентно: второй проход не должен обнулять
-// подписки первого.
 declare global {
   interface Window {
     Trillix?: {
       mount(target: Element, opts: MountOptions): EmbedHandle | null
       open(opts: MountOptions, from?: HTMLElement | null): EmbedHandle | null
       close(): void
+      /** Внутреннее: второй экземпляр файла отдаёт свой сниппет первому. */
+      attach?(script: Element): void
     }
   }
 }
-window.Trillix = window.Trillix ?? { mount, open, close: closeWidget }
+
+// Два сниппета на странице — это два тега с одним `src`, то есть ФАЙЛ ВЫПОЛНЯЕТСЯ
+// ДВАЖДЫ. Идемпотентного глобала мало: состояние (реестр фреймов, запертый скролл,
+// открытый виджет) и подписки на документ обязаны быть в единственном экземпляре,
+// иначе один клик обслуживают оба, а страница остаётся запертой после закрытия.
+// Поэтому второй экземпляр не инициализирует ничего — только передаёт свой тег
+// первому и умолкает.
+const prior = window.Trillix
+if (prior?.attach) {
+  if (current) prior.attach(current)
+} else {
+  listen()
+  window.Trillix = { mount, open, close: closeWidget, attach }
+  if (current) attach(current)
+}

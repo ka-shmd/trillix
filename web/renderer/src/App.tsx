@@ -7,7 +7,14 @@ import { usePublicForm } from './features/form/usePublicForm'
 
 // Корень рендерера: slug из pathname → загрузка → форма либо статус-экран.
 // bridge не null, когда страница открыта во фрейме на чужом сайте (фаза 20).
-export function App({ bridge }: { bridge: HostBridge | null }) {
+export function App({
+  bridge,
+  redirectSelf,
+}: {
+  bridge: HostBridge | null
+  /** Переход после отправки исполняет сам фрейм (`data-redirect="frame"` у сниппета). */
+  redirectSelf: boolean
+}) {
   useHostHeight(bridge)
   const slug = slugFromPath(window.location.pathname)
   const state = usePublicForm(slug)
@@ -16,7 +23,9 @@ export function App({ bridge }: { bridge: HostBridge | null }) {
     case 'loading':
       return <StatusScreen title="Загрузка формы…" />
     case 'ok':
-      return <FormView slug={slug} form={state.form} bridge={bridge} />
+      return (
+        <FormView slug={slug} form={state.form} bridge={bridge} redirectSelf={redirectSelf} />
+      )
     case 'closed':
       // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
       // название и текст владельца, а не безликое «недоступна» (шаг 4).

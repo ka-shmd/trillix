@@ -214,3 +214,22 @@ describe('frameSrc: предзаполнение', () => {
     expect(src).not.toContain('pf.blk_1')
   })
 })
+
+// Переход после отправки внутри фрейма может исполнить ТОЛЬКО фрейм: хост, получив
+// сообщение redirect, вправе лишь промолчать. Пока выбор владельца сайта оставался
+// знанием одного загрузчика, data-redirect="frame" означало «перехода нет вообще».
+describe('frameSrc: кто исполняет переход', () => {
+  const base: MountOptions = { form: 'opros', mode: 'block' }
+
+  it('по умолчанию параметра нет — уводит хост', () => {
+    expect(frameSrc('https://f.trillix.ru', { ...base, redirect: 'top' }, '')).not.toContain(
+      'redirect',
+    )
+  })
+
+  it('redirect=frame доезжает до фрейма', () => {
+    expect(frameSrc('https://f.trillix.ru', { ...base, redirect: 'frame' }, '')).toContain(
+      'redirect=frame',
+    )
+  })
+})

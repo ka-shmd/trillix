@@ -69,6 +69,10 @@ export function frameSrc(origin: string, opts: MountOptions, hostSearch: string)
   const params = new URLSearchParams()
   params.set('embed', opts.mode)
   if (opts.transparent) params.set('bg', 'transparent')
+  // Переход после отправки внутри фрейма может исполнить ТОЛЬКО фрейм: хост, получив
+  // сообщение `redirect`, вправе лишь промолчать. Поэтому выбор владельца сайта едет
+  // во фрейм параметром, а не остаётся знанием одного загрузчика.
+  if (opts.redirect === 'frame') params.set('redirect', 'frame')
   const host = new URLSearchParams(hostSearch)
   for (const key of UTM_KEYS) {
     const value = host.get(key)

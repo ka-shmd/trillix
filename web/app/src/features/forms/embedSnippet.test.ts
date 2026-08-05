@@ -89,6 +89,18 @@ describe('prefillFields', () => {
     ])
   })
 
+  // Ответ multi_choice — массив id вариантов, а предзаполнение передаёт строку:
+  // предложи мы его здесь, посетитель увидел бы группу без единой галочки и получил
+  // бы «ожидался список вариантов» на поле, которого не касался.
+  it('вопрос с несколькими вариантами не предлагается', () => {
+    const multi = [
+      block({ id: 'blk_t', groupId: 'gm', type: 'label', text: textFromString('Языки') }),
+      block({ id: 'blk_m', groupId: 'gm', type: 'multi_choice' }),
+      block({ id: 'blk_s', groupId: 'gs', type: 'single_choice' }),
+    ]
+    expect(prefillFields(multi).map((f) => f.blockId)).toEqual(['blk_s'])
+  })
+
   it('вопрос без заголовка всё равно предзаполняем', () => {
     const naked = [block({ id: 'blk_x', groupId: 'g9', type: 'short_text' })]
     expect(prefillFields(naked)).toEqual([{ blockId: 'blk_x', caption: 'Без заголовка' }])

@@ -19,6 +19,8 @@ if (embed) {
 // (форму с ?embed=block можно открыть прямой ссылкой и посмотреть глазами), а вот
 // слать сообщения самому себе бессмысленно, и, что важнее, ThankYou по наличию
 // моста решает, кто делает переход после отправки: хост или мы сами.
+// `redirect=frame` мост не отменяет (высота и шаги хосту по-прежнему нужны) — он
+// меняет только того, кто исполняет переход после отправки, см. ThankYou.
 const bridge: HostBridge | null =
   embed && window.parent !== window
     ? createHostBridge(embed.mode, (msg) => window.parent.postMessage(msg, '*'))
@@ -26,6 +28,6 @@ const bridge: HostBridge | null =
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App bridge={bridge} />
+    <App bridge={bridge} redirectSelf={embed?.redirectSelf ?? false} />
   </StrictMode>,
 )

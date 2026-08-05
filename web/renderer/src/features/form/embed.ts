@@ -15,6 +15,16 @@ export interface EmbedOptions {
   mode: EmbedMode
   /** Фон формы прозрачен — блок ложится на фон чужого сайта, а не белым прямоугольником. */
   transparent: boolean
+  /**
+   * Переход после отправки делает САМ ФРЕЙМ, а не страница-хозяин
+   * (`data-redirect="frame"` у сниппета).
+   *
+   * Решение принимает владелец сайта, но исполнять его может только фрейм: хост,
+   * получив сообщение `redirect`, вправе лишь промолчать — увести человека внутри
+   * фрейма он не может. Пока флаг не приезжал сюда, «frame» означало «перехода нет
+   * вообще»: фрейм слал сообщение, хост его игнорировал.
+   */
+  redirectSelf: boolean
 }
 
 const MODES: readonly string[] = ['block', 'widget', 'page']
@@ -30,7 +40,11 @@ export function readEmbed(search: string): EmbedOptions | null {
   const params = new URLSearchParams(search)
   const mode = params.get('embed')
   if (mode === null || !MODES.includes(mode)) return null
-  return { mode: mode as EmbedMode, transparent: params.get('bg') === 'transparent' }
+  return {
+    mode: mode as EmbedMode,
+    transparent: params.get('bg') === 'transparent',
+    redirectSelf: params.get('redirect') === 'frame',
+  }
 }
 
 /** Префикс параметра предзаполнения: `pf.<block_id>=<значение>`. */
@@ -56,6 +70,41 @@ export function readPrefill(search: string): Record<string, string> {
     }
   }
   return out
+}
+
+/**
+ * applyPrefill — подставленные хостом значения поверх пустых мест черновика.
+ *
+ * ДВА ФИЛЬТРА, И ОБА ОБЯЗАТЕЛЬНЫ, потому что ключи приходят с чужой страницы:
+ *
+ * 1. **Блок должен существовать в ОПУБЛИКОВАННОЙ схеме и собирать ответ.** Иначе
+ *    неизвестный ключ уезжает в `answers`, сервер отвергает весь ответ («ответ на
+ *    несуществующий вопрос»), а показать эту ошибку не на чем — поля-то нет. Форма
+ *    становится неотправляемой для всех посетителей чужой страницы, и происходит это
+ *    молча. Ключи в кабинете берутся из ЧЕРНОВИКА, поэтому «вопрос добавлен, но не
+ *    опубликован» — не экзотика, а обычный порядок работ.
+ * 2. **Тип должен принимать строку.** У `multi_choice` ответ — массив id вариантов;
+ *    строка прошла бы клиентскую проверку (для choice-типов её нет), нарисовалась бы
+ *    как «ничего не выбрано» и упала бы на сервере. Мультивыбор в v1 не
+ *    предзаполняется вовсе — и кабинет его не предлагает.
+ *
+ * Значения ложатся ПОД черновик: человек, начавший заполнять форму и обновивший
+ * страницу, не должен увидеть, как его правки затирает значение с чужого сайта.
+ * Пустая строка в черновике — тоже ответ («стёр подставленное»), поэтому смотрим на
+ * наличие ключа, а не на истинность значения.
+ */
+export function applyPrefill<T extends Record<string, unknown>>(
+  draft: T,
+  prefill: Record<string, string>,
+  fillable: (blockId: string) => boolean,
+): T {
+  const merged = { ...draft }
+  for (const [blockId, value] of Object.entries(prefill)) {
+    if (blockId in merged) continue
+    if (!fillable(blockId)) continue
+    ;(merged as Record<string, unknown>)[blockId] = value
+  }
+  return merged
 }
 
 /** Что фрейм сообщает хосту. */

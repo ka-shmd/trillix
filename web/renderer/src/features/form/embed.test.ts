@@ -1,15 +1,30 @@
 import { describe, expect, it } from 'vitest'
 
-import { createHostBridge, readEmbed, readPrefill, type HostMessage } from './embed'
+import {
+  applyPrefill,
+  createHostBridge,
+  readEmbed,
+  readPrefill,
+  type HostMessage,
+} from './embed'
 
 describe('readEmbed', () => {
   it('читает режим и прозрачность', () => {
-    expect(readEmbed('?embed=block')).toEqual({ mode: 'block', transparent: false })
+    expect(readEmbed('?embed=block')).toEqual({
+      mode: 'block',
+      transparent: false,
+      redirectSelf: false,
+    })
     expect(readEmbed('?embed=widget&bg=transparent')).toEqual({
       mode: 'widget',
       transparent: true,
+      redirectSelf: false,
     })
-    expect(readEmbed('?embed=page')).toEqual({ mode: 'page', transparent: false })
+    expect(readEmbed('?embed=page')).toEqual({
+      mode: 'page',
+      transparent: false,
+      redirectSelf: false,
+    })
   })
 
   it('без параметра — обычная страница', () => {
@@ -96,5 +111,49 @@ describe('readPrefill', () => {
   // молча «отвечал» бы за человека пустой строкой.
   it('пустые значения пропускаются', () => {
     expect(readPrefill('?pf.blk_1=&pf.blk_2=x')).toEqual({ blk_2: 'x' })
+  })
+})
+
+// Пока флаг не приезжал во фрейм, data-redirect="frame" означало «перехода нет
+// вообще»: фрейм слал сообщение, хост его игнорировал, и никто никуда не уходил.
+describe('readEmbed: кто исполняет переход после отправки', () => {
+  it('по умолчанию — страница-хозяин', () => {
+    expect(readEmbed('?embed=block')?.redirectSelf).toBe(false)
+  })
+
+  it('redirect=frame — сам фрейм', () => {
+    expect(readEmbed('?embed=block&redirect=frame')?.redirectSelf).toBe(true)
+  })
+})
+
+describe('applyPrefill', () => {
+  const anything = () => true
+
+  it('заполняет пустые места черновика', () => {
+    expect(applyPrefill({ a: 'своё' }, { a: 'чужое', b: 'подставлено' }, anything)).toEqual({
+      a: 'своё',
+      b: 'подставлено',
+    })
+  })
+
+  // Пустая строка в черновике — тоже ответ («стёр подставленное»).
+  it('не воскрешает стёртое человеком', () => {
+    expect(applyPrefill({ a: '' }, { a: 'подставлено' }, anything)).toEqual({ a: '' })
+  })
+
+  // Ключ с чужой страницы, которого нет в ОПУБЛИКОВАННОЙ схеме, уехал бы в ответ,
+  // сервер отверг бы ответ целиком («ответ на несуществующий вопрос»), а показать
+  // ошибку не на чем — поля нет. Форма стала бы неотправляемой для всех и молча.
+  it('отбрасывает ключи, которые нельзя заполнить', () => {
+    const known = (id: string) => id === 'blk_known'
+    expect(applyPrefill({}, { blk_known: 'x', blk_unknown: 'y' }, known)).toEqual({
+      blk_known: 'x',
+    })
+  })
+
+  it('черновик не мутируется', () => {
+    const draft = { a: 'своё' }
+    applyPrefill(draft, { b: 'x' }, anything)
+    expect(draft).toEqual({ a: 'своё' })
   })
 })
