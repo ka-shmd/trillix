@@ -451,3 +451,50 @@ func TestValidateSchema_CoverYZeroSurvives(t *testing.T) {
 		t.Fatalf("CoverY() без ключа = %d, ожидалось %d", got, DefaultCoverY)
 	}
 }
+
+// Разрыв страницы (фаза 19). Go про страницы не знает: разбиение выводит раскладчик
+// фронта, а сюда разрыв приезжает обычным неотвечаемым блоком. Проверяем ровно то, что
+// от контракта требуется, — что он принимается и что правила контента к нему применены.
+func TestValidateSchema_PageBreak(t *testing.T) {
+	valid := map[string]string{
+		"разрыв между вопросами": `{"schemaVersion":4,"blocks":[
+			{"id":"b1","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"p1","groupId":"gp","type":"page_break"},
+			{"id":"b2","groupId":"g2","type":"email","settings":{}}
+		]}`,
+		// Вырожденные раскладки — законные промежуточные состояния набора и драга:
+		// схема их принимает, пустую страницу выкидывает раскладчик (splitPages).
+		"разрыв первым блоком": `{"schemaVersion":4,"blocks":[{"id":"p1","groupId":"gp","type":"page_break"},{"id":"b1","groupId":"g1","type":"email","settings":{}}]}`,
+		"два разрыва подряд":   `{"schemaVersion":4,"blocks":[{"id":"p1","groupId":"gp1","type":"page_break"},{"id":"p2","groupId":"gp2","type":"page_break"}]}`,
+		"разрыв последним":     `{"schemaVersion":4,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{}},{"id":"p1","groupId":"gp","type":"page_break"}]}`,
+		"разрыв в форме с v1":  `{"schemaVersion":4,"blocks":[{"id":"p1","groupId":"gp","type":"page_break"}]}`,
+	}
+	for name, raw := range valid {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ValidateSchema(json.RawMessage(raw)); err != nil {
+				t.Fatalf("схема отвергнута: %v", err)
+			}
+		})
+	}
+
+	invalid := map[string]string{
+		// Ряд делить не может — как и заголовок формы: разрыв граница раскладки, а не
+		// её элемент.
+		"разрыв с битом ряда": `{"schemaVersion":4,"blocks":[
+			{"id":"b1","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"p1","groupId":"gp","type":"page_break","settings":{"column":"right"}}
+		]}`,
+		// Своего текста не несёт: название страницы — отдельный heading, а не второе
+		// место, где у формы заводится текст.
+		"разрыв с текстом": `{"schemaVersion":4,"blocks":[{"id":"p1","groupId":"gp","type":"page_break","text":[{"t":"Страница 2"}]}]}`,
+		// Имя вопроса — только у отвечаемых: у разрыва нет ни колонки CSV, ни шага воронки.
+		"разрыв с именем вопроса": `{"schemaVersion":4,"blocks":[{"id":"p1","groupId":"gp","type":"page_break","name":"page2"}]}`,
+	}
+	for name, raw := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ValidateSchema(json.RawMessage(raw)); err == nil {
+				t.Fatal("схема принята, ждали ошибку")
+			}
+		})
+	}
+}

@@ -65,6 +65,21 @@ describe('inviteRowId', () => {
     expect(inviteRowId(rows, right.groupId, right.groupId)).toBe(left.groupId)
   })
 
+  // Найдено ревью фазы 19. Разрыв страницы стал вторым типом с canShareRow: false, но,
+  // в отличие от заголовка формы, он остаётся в раскладке (он граница и обязан закрывать
+  // секцию). Приглашение спрашивало только про внутренний ряд — и загоралось на разрыве,
+  // хотя placeInRow такой дроп отвергает: жест, который убедительно ничего не делает.
+  it('не приглашает разрыв страницы: ряд с ним невозможен', () => {
+    const before = blk('short_text')
+    const brk = blk('page_break')
+    const other = blk('email')
+    const rows = layout([before, brk, other])
+
+    expect(inviteRowId(rows, brk.groupId, other.groupId)).toBeNull()
+    // Соседи разрыва между собой приглашение по-прежнему показывают.
+    expect(inviteRowId(rows, before.groupId, other.groupId)).toBe(before.groupId)
+  })
+
   it('не приглашает вопрос с внутренним рядом: он занимает всю ширину (§6.5)', () => {
     // Мульти-группа «подпись | поле», собранная в ряд ВНУТРИ вопроса: подпись несёт
     // бит, поле стоит справа от неё. groupCanShareRow для такой группы ложен, и

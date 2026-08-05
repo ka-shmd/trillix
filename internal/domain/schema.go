@@ -107,6 +107,12 @@ const (
 	BlockHeading BlockType = "heading"
 	BlockText    BlockType = "text"
 	BlockImage   BlockType = "image"
+	// Разрыв страницы (фаза 19): граница между страницами формы. Неотвечаемый, как
+	// прочий контент; страница сущностью схемы не является — её выводит раскладчик
+	// фронта (splitPages), как groupId выводит regroup. Go про страницы не знает
+	// вовсе: ответ приходит одним запросом со всех страниц сразу, поэтому ни приём,
+	// ни валидация ответов разбиения не видят. Зеркалит 'page_break' в contract.ts.
+	BlockPageBreak BlockType = "page_break"
 	// Заголовок ФОРМЫ (фаза 15): первая строка документа, <h1> у респондента.
 	// Отдельный тип, а не BlockTitle: тот — подпись ВОПРОСА, из которой аналитика
 	// берёт имя колонки и шага воронки. Слить их значило бы навсегда объяснять,
@@ -128,8 +134,8 @@ var blockTypes = []BlockType{
 	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
 	// подписи
 	BlockTitle, BlockLabel,
-	// контент и заголовок формы
-	BlockHeading, BlockText, BlockImage, BlockFormTitle,
+	// контент, разрыв страницы и заголовок формы
+	BlockHeading, BlockText, BlockImage, BlockPageBreak, BlockFormTitle,
 }
 
 func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
@@ -161,7 +167,7 @@ func (t BlockType) isCaption() bool {
 // у формы появится колонка в выгрузке и шаг воронки, которых автор не создавал.
 func (t BlockType) isContent() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
-		t == BlockImage || t == BlockFormTitle
+		t == BlockImage || t == BlockPageBreak || t == BlockFormTitle
 }
 
 // isAnswerable — блок собирает ответ (все отвечаемые типы, включая consent).
@@ -183,7 +189,10 @@ func (t BlockType) carriesText() bool {
 // вставал вовсе). Заголовок формы исключён по устройству, а не по виду: он рисуется
 // вне потока вопросов, и соседей по ряду у него не бывает. Зеркалит canShareRow в
 // formSchema.ts.
-func (t BlockType) canShareRow() bool { return t != BlockFormTitle }
+// Разрыв страницы (фаза 19) исключён по той же причине, что заголовок формы, — по
+// устройству, а не по виду: он граница раскладки, а не её элемент, и половина ряда, за
+// которой начинается новая страница, не значит ничего.
+func (t BlockType) canShareRow() bool { return t != BlockFormTitle && t != BlockPageBreak }
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.

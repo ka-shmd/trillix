@@ -7,7 +7,7 @@ import {
   SCHEMA_VERSION,
   textFromString,
 } from '@entities/formSchema'
-import { groupBlocks, packOptionRows, packRows } from '@fields/groups'
+import { groupBlocks, packOptionRows, packRows, splitPages } from '@fields/groups'
 
 import {
   captionLoss,
@@ -2760,6 +2760,78 @@ describe('createBuilderStore — обложка и логотип', () => {
     })
     expect(store.getState().cover).toEqual({ imageKey: 'ws/a.jpg', y: 10 })
     expect(store.getState().logo).toEqual({ imageKey: 'ws/logo.png' })
+  })
+
+  // Разрыв страницы (фаза 19). Спецслучая в regroup он не требует — как не потребовал
+  // form_title: связь «подпись → поле» ищется от поля ВВЕРХ через text/image, а разрыв
+  // ни то ни другое. Проверяем следствие, ради которого это важно: вопрос не может
+  // оказаться разорванным границей страниц (подпись на одной, поле на другой).
+  it('разрыв не даёт подписи и полю попасть в одну группу', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'cap', groupId: '', type: 'title', text: textFromString('Вопрос') },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'fld', groupId: '', type: 'short_text' },
+      ],
+    })
+    const [cap, brk, fld] = store.getState().blocks
+    expect(cap!.groupId).not.toBe(fld!.groupId)
+    expect(brk!.groupId).not.toBe(cap!.groupId)
+    expect(brk!.groupId).not.toBe(fld!.groupId)
+  })
+
+  // Перетаскивание границы страницы — не отдельная команда, а обычный перенос группы:
+  // документ линейный, поэтому «сдвинул разрыв» и «вопрос сменил страницу» — одно и то
+  // же событие. Проверяем следствие, а не механику.
+  it('перенос разрыва переводит вопрос на другую страницу', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'b', groupId: '', type: 'email' },
+      ],
+    })
+    const before = splitPages(store.getState().blocks).map((p) => p.map((b) => b.id))
+    expect(before).toEqual([['a'], ['b']])
+
+    store.getState().moveGroup('brk', 'up')
+
+    // Разрыв уехал выше первого вопроса — страница перед ним пуста, значит её нет, и оба
+    // вопроса снова на одной.
+    const after = splitPages(store.getState().blocks).map((p) => p.map((b) => b.id))
+    expect(after).toEqual([['a', 'b']])
+  })
+
+  // Тот же дефект, что чинит сторож в rowZones.test, со стороны клавиатуры: подсказка
+  // «войти в ряд» (rowPosition → 'enter') обещала Mod+Alt+→ там, где placeInRow вернёт
+  // null. Найдено ревью фазы 19.
+  it('вопрос под разрывом в ряд с ним не встаёт — ни подсказкой, ни командой', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break' },
+        { id: 'b', groupId: '', type: 'email' },
+      ],
+    })
+    expect(rowPosition(store.getState().blocks, 'b')).toBe('solo')
+
+    const before = store.getState().blocks
+    store.getState().shiftColumn('b', 'right')
+    expect(store.getState().blocks).toEqual(before)
+  })
+
+  it('разрыв, вставленный редактором, валиден по контракту', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('short_text')
+    store.getState().addBlock('page_break')
+    store.getState().addBlock('email')
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 
   // Сторож контракта: то, что стор отдаёт автосейву, обязано проходить Zod.

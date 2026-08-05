@@ -40,6 +40,10 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   heading: null,
   text: null,
   image: null,
+  // Разрыв страницы контрола не имеет и у респондента не рисуется вовсе: его потребляет
+  // splitPages, превращая в границу шага. До BlockField он доходит только на поверхности,
+  // которую ещё не научили страницам, — там он рисуется ничем (BlockField).
+  page_break: null,
   form_title: null,
 }
 

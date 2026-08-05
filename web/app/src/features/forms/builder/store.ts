@@ -21,7 +21,7 @@ import {
 } from '@entities/formSchema'
 import {
   groupBlocks,
-  groupCanShareRow,
+  groupCanPair,
   groupMeta,
   packGroupRows,
   packOptionRows,
@@ -853,8 +853,10 @@ export function rowPosition(blocks: Block[], id: string): RowPosition {
     return row[1]!.length > 1 ? 'rightStack' : 'rightSolo'
   }
   const prev = groups[gi - 1]
-  const canEnter =
-    prev !== undefined && groupCanShareRow(prev.blocks) && groupCanShareRow(group.blocks)
+  // Тем же предикатом, что раскладчик и команда (groupCanPair): подсказка «войти в ряд»
+  // обязана обещать ровно то, что placeInRow сделает. Разрыв страницы сюда не пускает
+  // ни себя, ни соседа — иначе Mod+Alt+→ выглядел бы сломанным.
+  const canEnter = prev !== undefined && groupCanPair(prev.blocks) && groupCanPair(group.blocks)
   return canEnter ? 'enter' : 'solo'
 }
 
@@ -1533,14 +1535,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const from = groups.findIndex((g) => g.id === activeGroupId)
           const targetGroup = groups.find((g) => g.id === targetGroupId)
           if (from < 0 || !targetGroup) return null
-          // Группа с внутренним рядом занимает всю ширину и в секцию не встаёт (§6.5).
-          if (!groupCanShareRow(groups[from]!.blocks)) return null
-          if (!groupCanShareRow(targetGroup.blocks)) return null
-          // Заголовок формы колонку не делит (ADR §10). Полотно его в списке групп и не
-          // показывает, но команда обязана быть честной сама по себе: бит на заголовке —
-          // документ, который отвергнет валидатор.
-          if (!canShareRow(groups[from]!.blocks[0]!.type)) return null
-          if (!canShareRow(targetGroup.blocks[0]!.type)) return null
+          // Может ли группа стоять в ячейке ряда — один предикат на раскладчик, команду
+          // и приглашение жеста (groupCanPair): группа с внутренним рядом занимает всю
+          // ширину (§6.5), а заголовок формы и разрыв страницы ряд не делят по типу
+          // (ADR §10). Полотно их в списке групп и не показывает, но команда обязана
+          // быть честной сама по себе: такой бит — документ, который отвергнет валидатор.
+          if (!groupCanPair(groups[from]!.blocks)) return null
+          if (!groupCanPair(targetGroup.blocks)) return null
 
           // side — КОЛОНКА, В КОТОРУЮ ВСТАЁТ АКТИВНЫЙ, а не «с какой стороны от цели».
           // Так читается жест: зона слева — «в левую колонку», справа — «в правую», и

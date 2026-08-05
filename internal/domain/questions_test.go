@@ -189,3 +189,20 @@ func TestQuestionOrder_NoVersions(t *testing.T) {
 		t.Fatalf("без версий ждали пусто, получили %v", ids(got))
 	}
 }
+
+// Разрыв страницы в модели вопросов не участвует: он неотвечаемый, значит ни колонки в
+// CSV, ни шага воронки, ни ключа в сводке у него нет. Правило общее для всего контента —
+// проверяем на разрыве отдельно, потому что именно он приходит НЕ от автора текста, а от
+// раскладки, и «лишний вопрос» здесь был бы виден владельцу на трёх экранах сразу.
+func TestQuestionOrder_SkipsPageBreak(t *testing.T) {
+	got := QuestionOrder([]VersionedSchema{
+		vsg(1,
+			grp("Имя", Block{ID: "b1", Type: BlockShortText}),
+			[]Block{{ID: "p1", GroupID: "g_p1", Type: BlockPageBreak}},
+			grp("Почта", Block{ID: "b2", Type: BlockEmail}),
+		),
+	})
+	if want := []string{"b1", "b2"}; !equal(ids(got), want) {
+		t.Fatalf("вопросы = %v, ждали %v (разрыв — не вопрос)", ids(got), want)
+	}
+}

@@ -37,7 +37,7 @@ import {
 import { BlockField } from '@fields/BlockField'
 import {
   groupBlocks,
-  groupCanShareRow,
+  groupCanPair,
   groupMeta,
   packGroupRows,
   packRows,
@@ -354,11 +354,11 @@ export function SlashEditor({
     if (!drag) return null
     if (drag.kind === 'group') {
       const g = groups.find((x) => x.id === drag.activeId)
-      return g && groupCanShareRow(g.blocks) ? g.id : null
+      return g && groupCanPair(g.blocks) ? g.id : null
     }
     const b = blocks.find((x) => x.id === drag.activeId)
     const g = b && groups.find((x) => x.id === b.groupId)
-    return g && g.blocks.length === 1 && groupCanShareRow(g.blocks) ? g.id : null
+    return g && g.blocks.length === 1 && groupCanPair(g.blocks) ? g.id : null
   }, [drag, groups, blocks])
 
   // Жест ряда ВНУТРИ вопроса (§6.6): тащат поле из своей мульти-группы → цель ровно
