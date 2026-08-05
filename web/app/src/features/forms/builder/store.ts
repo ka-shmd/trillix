@@ -799,13 +799,18 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
 // решение владельца — не запрещать, а делать громким: жертву видно во время драга
 // и её называет тост с отменой после (captionLoss, §4.3).
 //
-// frameIds — состав для драг-рамки (union-rect строк на полотне): мульти-группа, в
-// которую активный блок войдёт после дропа; пусто — блок останется одиночкой.
+// Раскладка `blocks` — СЫРАЯ (groupId старые): это прогноз, а не результат, и
+// раскладывает её regroup у того, кто спрашивает (captionLoss зовёт его сам).
+//
+// groupIds — состав ВОПРОСА, в который активный блок войдёт после дропа, в порядке
+// документа и вместе с самим активным. По нему полотно зажигает рейл будущей группы
+// (§5 EDITOR.md): единственный ответ на вопрос «этот блок сейчас станет частью
+// вопроса — какого?». Пусто — блок останется одиночкой, зажигать нечего.
 export function planBlockDrop(
   blocks: Block[],
   activeId: string,
   overId: string,
-): { blocks: Block[]; frameIds: string[] } | null {
+): { blocks: Block[]; groupIds: string[] } | null {
   const from = blocks.findIndex((b) => b.id === activeId)
   const to = blocks.findIndex((b) => b.id === overId)
   if (from < 0 || to < 0 || from === to) return null
@@ -816,7 +821,7 @@ export function planBlockDrop(
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
-  return { blocks: next, frameIds: members.length > 1 ? members.map((b) => b.id) : [] }
+  return { blocks: next, groupIds: members.length > 1 ? members.map((b) => b.id) : [] }
 }
 
 // RowPosition — где вопрос стоит на ОСИ КОЛОНОК (§11.6). Не «состояние блока» (в
