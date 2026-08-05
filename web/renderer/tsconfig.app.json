@@ -43,5 +43,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "../shared/entities", "../shared/fields"]
+  "include": ["src", "embed", "../shared/entities", "../shared/fields"]
 }

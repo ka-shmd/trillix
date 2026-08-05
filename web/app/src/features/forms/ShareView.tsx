@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 
 import { type Block, plainText } from '@entities/formSchema'
 import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
+import { EmbedSection } from './EmbedSection'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,7 @@ export function ShareView({ form }: { form: FormDetail }) {
               teaser={linkTeaser(form.draftSchema.blocks)}
             />
           </div>
+          {!isClosed && <EmbedSection form={form} />}
           <ManageSection form={form} />
         </>
       )}

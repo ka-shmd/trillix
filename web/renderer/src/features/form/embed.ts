@@ -1,0 +1,161 @@
+// Встроенная форма (фаза 20): та же публичная страница, показанная во фрейме на
+// чужом сайте — блоком в потоке, виджетом в модалке или на весь экран. Отличий от
+// обычной страницы ровно два: вид (компактные поля, см. index.css) и то, что
+// страница перестала быть самой собой — размером, скроллом и переходами теперь
+// распоряжается хост, а мы можем только сообщать.
+//
+// Здесь — обе половины разговора с хостом: чтение параметров из адреса и мост
+// сообщений. Всё чистое: отправка инжектируется, поэтому проверяется юнитом без
+// DOM (у рендерера нет testing-library, список зависимостей заморожен).
+
+/** Как форма показана на чужой странице. Приезжает от загрузчика `embed/v1.js`. */
+export type EmbedMode = 'block' | 'widget' | 'page'
+
+export interface EmbedOptions {
+  mode: EmbedMode
+  /** Фон формы прозрачен — блок ложится на фон чужого сайта, а не белым прямоугольником. */
+  transparent: boolean
+  /**
+   * Переход после отправки делает САМ ФРЕЙМ, а не страница-хозяин
+   * (`data-redirect="frame"` у сниппета).
+   *
+   * Решение принимает владелец сайта, но исполнять его может только фрейм: хост,
+   * получив сообщение `redirect`, вправе лишь промолчать — увести человека внутри
+   * фрейма он не может. Пока флаг не приезжал сюда, «frame» означало «перехода нет
+   * вообще»: фрейм слал сообщение, хост его игнорировал.
+   */
+  redirectSelf: boolean
+}
+
+const MODES: readonly string[] = ['block', 'widget', 'page']
+
+/**
+ * readEmbed — режим встраивания из строки запроса; null = обычная страница.
+ *
+ * Неизвестное значение читается как «не встроены», а не как дефолтный режим:
+ * параметр приходит с чужой страницы, и опечатка в нём не повод менять вид формы,
+ * открытой по прямой ссылке.
+ */
+export function readEmbed(search: string): EmbedOptions | null {
+  const params = new URLSearchParams(search)
+  const mode = params.get('embed')
+  if (mode === null || !MODES.includes(mode)) return null
+  return {
+    mode: mode as EmbedMode,
+    transparent: params.get('bg') === 'transparent',
+    redirectSelf: params.get('redirect') === 'frame',
+  }
+}
+
+/** Префикс параметра предзаполнения: `pf.<block_id>=<значение>`. */
+const PREFILL_PREFIX = 'pf.'
+
+/**
+ * readPrefill — значения, которые хост подставил в поля формы (фаза 20).
+ *
+ * Адресуются id блока — тем же ключом, что и ответы при отправке: у поля другого
+ * стабильного имени нет, а брать под это `name` (имя вопроса в CSV и воронке) нельзя,
+ * переименование колонки в выгрузке ломало бы предзаполнение на чужом сайте
+ * (design/embed.md §8).
+ *
+ * Значения приходят из адреса, то есть от кого угодно, — и это нормально: они не
+ * дают прав и ничего не утверждают, а ответ всё равно проверяет сервер. Полагаться
+ * на предзаполненную почту как на подтверждённую нельзя (там же, §11).
+ */
+export function readPrefill(search: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of new URLSearchParams(search)) {
+    if (key.startsWith(PREFILL_PREFIX) && value !== '') {
+      out[key.slice(PREFILL_PREFIX.length)] = value
+    }
+  }
+  return out
+}
+
+/**
+ * applyPrefill — подставленные хостом значения поверх пустых мест черновика.
+ *
+ * ДВА ФИЛЬТРА, И ОБА ОБЯЗАТЕЛЬНЫ, потому что ключи приходят с чужой страницы:
+ *
+ * 1. **Блок должен существовать в ОПУБЛИКОВАННОЙ схеме и собирать ответ.** Иначе
+ *    неизвестный ключ уезжает в `answers`, сервер отвергает весь ответ («ответ на
+ *    несуществующий вопрос»), а показать эту ошибку не на чем — поля-то нет. Форма
+ *    становится неотправляемой для всех посетителей чужой страницы, и происходит это
+ *    молча. Ключи в кабинете берутся из ЧЕРНОВИКА, поэтому «вопрос добавлен, но не
+ *    опубликован» — не экзотика, а обычный порядок работ.
+ * 2. **Тип должен принимать строку.** У `multi_choice` ответ — массив id вариантов;
+ *    строка прошла бы клиентскую проверку (для choice-типов её нет), нарисовалась бы
+ *    как «ничего не выбрано» и упала бы на сервере. Мультивыбор в v1 не
+ *    предзаполняется вовсе — и кабинет его не предлагает.
+ *
+ * Значения ложатся ПОД черновик: человек, начавший заполнять форму и обновивший
+ * страницу, не должен увидеть, как его правки затирает значение с чужого сайта.
+ * Пустая строка в черновике — тоже ответ («стёр подставленное»), поэтому смотрим на
+ * наличие ключа, а не на истинность значения.
+ */
+export function applyPrefill<T extends Record<string, unknown>>(
+  draft: T,
+  prefill: Record<string, string>,
+  fillable: (blockId: string) => boolean,
+): T {
+  const merged = { ...draft }
+  for (const [blockId, value] of Object.entries(prefill)) {
+    if (blockId in merged) continue
+    if (!fillable(blockId)) continue
+    ;(merged as Record<string, unknown>)[blockId] = value
+  }
+  return merged
+}
+
+/** Что фрейм сообщает хосту. */
+type HostPayload =
+  | { type: 'ready' }
+  | { type: 'resize'; height: number }
+  | { type: 'page'; index: number }
+  | { type: 'submit'; submissionId: string }
+  | { type: 'redirect'; url: string }
+
+/** Сообщение фрейма хосту. Версия — часть контракта: `v1.js` живёт на чужих сайтах вечно. */
+export type HostMessage = { source: 'trillix'; v: 1 } & HostPayload
+
+export interface HostBridge {
+  readonly mode: EmbedMode
+  /** Высота содержимого: хост подгоняет фрейм, внутреннего скролла в блоке нет. */
+  resize(height: number): void
+  /** Переход на шаг: хост подтягивает фрейм в вид — высота изменилась рывком. */
+  page(index: number): void
+  /** Ответ принят. Ответы НЕ отдаём: они у владельца в кабинете (design/embed.md §5). */
+  submitted(submissionId: string): void
+  /** Переход после отправки делает хост: внутри фрейма он увёл бы в сайт внутри сайта. */
+  redirect(url: string): void
+}
+
+/**
+ * createHostBridge — исходящая половина разговора.
+ *
+ * `post` инжектируется (в бою — `window.parent.postMessage` с `targetOrigin: '*'`).
+ * Звёздочка здесь не небрежность: origin хоста нам неоткуда узнать, а высота, номер
+ * шага и факт отправки не секрет. Входящие сообщения — единственное место, где
+ * origin проверяется строго, и их у фрейма пока нет вовсе.
+ */
+export function createHostBridge(mode: EmbedMode, post: (msg: HostMessage) => void): HostBridge {
+  const send = (msg: HostPayload) => post({ source: 'trillix', v: 1, ...msg })
+
+  // Высота меняется на каждый символ в textarea, а сообщение через границу фрейма
+  // не бесплатно: одинаковое значение хосту не нужно.
+  let lastHeight = -1
+
+  send({ type: 'ready' })
+
+  return {
+    mode,
+    resize: (height) => {
+      if (height === lastHeight) return
+      lastHeight = height
+      send({ type: 'resize', height })
+    },
+    page: (index) => send({ type: 'page', index }),
+    submitted: (submissionId) => send({ type: 'submit', submissionId }),
+    redirect: (url) => send({ type: 'redirect', url }),
+  }
+}
