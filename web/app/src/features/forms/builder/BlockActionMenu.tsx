@@ -190,7 +190,9 @@ export function BlockActionMenu({
           kind={logicField}
         />
       )}
-      {jumpsAllowed && <JumpDialog open={jumpsOpen} onOpenChange={setJumpsOpen} block={block} />}
+      {/* Тоже только открытым: JumpDialog подписан на blocks, а строка-разрыв есть у
+          каждой страницы формы. */}
+      {jumpsAllowed && jumpsOpen && <JumpDialog open onOpenChange={setJumpsOpen} block={block} />}
       <Popover
         open={open}
         onOpenChange={(o) => {

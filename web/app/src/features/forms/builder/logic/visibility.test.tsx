@@ -7,7 +7,7 @@ import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema
 import { PreviewPane } from '../PreviewPane'
 import { createBuilderStore } from '../store'
 import { BuilderStoreContext } from '../storeContext'
-import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
+import { planForm, ruleWarnings, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 
 import {
   JUMP_END,
@@ -334,5 +334,52 @@ describe('переходы: когда правило собрать можно'
       { id: 'br1', groupId: 'g_br1', type: 'page_break' },
     ]
     expect(jumpTargets(trailing, 'br1')).toEqual([])
+  })
+})
+
+// Находки ревью ветки фазы (2026-08-06). Каждая — про то, что тесты пропустили.
+describe('находки ревью', () => {
+  it('пустой план БЕЗ правил объясняется «добавьте блоки», а не условиями', () => {
+    // Документ из одного разрыва: он инертен, страниц не открывает, план пуст — но
+    // условий в форме нет, и «всё скрыто условиями» было бы неправдой.
+    renderPreview([{ id: 'brk', groupId: 'g_brk', type: 'page_break' }])
+    expect(screen.getByText(/добавьте блоки/i)).toBeTruthy()
+    expect(screen.queryByText(/скрыты условиями/i)).toBeNull()
+  })
+
+  it('пустой план С правилами объясняется условиями', () => {
+    renderPreview([
+      ...choice('pet', 'Есть питомец?'),
+      { id: 'brk', groupId: 'g_brk', type: 'page_break' },
+      ...dependent('kind', 'Какой?', { all: [{ blockId: 'pet', op: 'is', value: 'yes' }] }),
+    ])
+    // Первая страница видна, значит план не пуст — сообщения нет вовсе.
+    expect(screen.queryByText(/скрыты условиями/i)).toBeNull()
+    expect(screen.getByText('Есть питомец?')).toBeTruthy()
+  })
+
+  // Правило могло стать инертным от смены ТИПА источника: id при этом сохраняется,
+  // поэтому подписка на «состав документа» такую правку не замечала.
+  it('смена типа источника делает правило инертным — вопрос снова виден', () => {
+    const blocks: Block[] = [
+      {
+        id: 'src',
+        groupId: 'g_src',
+        type: 'multi_choice',
+        settings: { options: [{ id: 'leash', label: 'Поводок' }] },
+      },
+      {
+        id: 'dep',
+        groupId: 'g_dep',
+        type: 'short_text',
+        visibleIf: { all: [{ blockId: 'src', op: 'includes', value: 'leash' }] },
+      },
+    ]
+    expect(planForm(blocks, {}).visible.has('dep')).toBe(false)
+
+    // Тот же id, другой тип: «содержит» к короткому ответу не применим → правило инертно.
+    const retyped: Block[] = [{ ...blocks[0]!, type: 'short_text', settings: {} }, blocks[1]!]
+    expect(planForm(retyped, {}).visible.has('dep')).toBe(true)
+    expect(ruleWarnings(retyped, 'dep', retyped[1]!.visibleIf)[0]?.reason).toContain('не подходит')
   })
 })

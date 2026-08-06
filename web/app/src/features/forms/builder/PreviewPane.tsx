@@ -3,13 +3,7 @@ import { useState } from 'react'
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import {
-  groupBlocks,
-  groupMeta,
-  packGroupRows,
-  packRows,
-  splitFormTitle,
-} from '@fields/groups'
+import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
@@ -62,6 +56,14 @@ export function PreviewPane({ title }: { title: string }) {
   // Ряды вопросов (спека §5): вопрос с column='right' встаёт рядом с предыдущим,
   // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
   const rows = packRows(groupBlocks(pages[page] ?? []))
+  // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
+  const hasRules = blocks.some(
+    (b) =>
+      b.visibleIf ||
+      b.requiredIf ||
+      b.jumpIf?.length ||
+      b.settings?.options?.some((o) => o.visibleIf),
+  )
   const onChange = (blockId: string, value: Answer) =>
     setAnswers((prev) => ({ ...prev, [blockId]: value }))
 
@@ -79,11 +81,15 @@ export function PreviewPane({ title }: { title: string }) {
           ) : (
             title.trim() && <h1 className="rf-title">{title.trim()}</h1>
           ))}
-        {plan.pages.every((p) => p.length === 0) && blocks.length > 0 ? (
+        {/* «Скрыто условиями» говорим только когда условия в форме ЕСТЬ. Пустой план
+            бывает и без логики — например у документа из одного разрыва страницы (он
+            инертен, ни одной страницы не открывает), и там правильный текст — второй:
+            добавьте блоки. Найдено ревью ветки фазы. */}
+        {plan.pages.every((p) => p.length === 0) && hasRules ? (
           <p className="rf-empty">
             Все вопросы скрыты условиями — ответьте выше или снимите условие в настройках блока.
           </p>
-        ) : blocks.length === 0 ? (
+        ) : plan.pages.every((p) => p.length === 0) ? (
           <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
         ) : (
           <div className="rf-form">

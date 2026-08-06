@@ -5,6 +5,7 @@ import {
   type LogicCondition,
   type LogicOperator,
   MAX_LOGIC_DEPTH,
+  MAX_LOGIC_VALUE_LEN,
   opNeedsValue,
 } from '@entities/formSchema'
 import { operatorsFor } from '@fields/logic'
@@ -67,7 +68,12 @@ export function ConditionEditor({
       onChange(asGroup(rest, and))
       return
     }
-    onChange(asGroup(children.map((c, j) => (j === i ? next : c)), and))
+    onChange(
+      asGroup(
+        children.map((c, j) => (j === i ? next : c)),
+        and,
+      ),
+    )
   }
 
   const addLeaf = (): void => {
@@ -83,7 +89,9 @@ export function ConditionEditor({
   }
 
   return (
-    <div className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}>
+    <div
+      className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}
+    >
       <div className="flex items-center gap-2">
         <Select
           value={and ? 'all' : 'any'}
@@ -182,7 +190,11 @@ function LeafRow({
   const pickSource = (id: string): void => {
     const next = blocks.find((b) => b.id === id)
     if (!next) return
-    onChange(operatorsFor(next.type).includes(value.op) ? { ...defaultLeaf(next), op: value.op } : defaultLeaf(next))
+    onChange(
+      operatorsFor(next.type).includes(value.op)
+        ? { ...defaultLeaf(next), op: value.op }
+        : defaultLeaf(next),
+    )
   }
 
   return (
@@ -226,10 +238,7 @@ function LeafRow({
 
       {needsValue &&
         (choices.length > 0 ? (
-          <Select
-            value={value.value ?? ''}
-            onValueChange={(v) => onChange({ ...value, value: v })}
-          >
+          <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
             <SelectTrigger size="sm" className="h-7 min-w-28 flex-1" aria-label="Значение">
               <SelectValue placeholder="Значение…" />
             </SelectTrigger>
@@ -247,6 +256,10 @@ function LeafRow({
             value={value.value ?? ''}
             placeholder="Значение…"
             aria-label="Значение"
+            // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
+            // автосейв в 422 и черновик перестал бы сохраняться, а сообщения про лимит
+            // автор не видит нигде. То же правило, по которому ограничено имя вопроса.
+            maxLength={MAX_LOGIC_VALUE_LEN}
             onChange={(e) =>
               onChange(
                 e.target.value === ''
