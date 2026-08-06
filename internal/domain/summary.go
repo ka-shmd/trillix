@@ -97,7 +97,11 @@ type SummaryBuilder struct {
 	order []string                     // block_id в порядке вопросов (свежая версия слева)
 	acc   map[string]*summaryAcc       // block_id → счётчики
 	byVer map[int]map[string]BlockType // версия → block_id → тип В ТОЙ версии
-	total int
+	// blocksByVer — блоки каждой версии целиком (фаза 21): знаменатель считается по
+	// ВИДИМЫМ вопросам, а видимость знает только вычислитель, и ему нужны блоки с их
+	// правилами, а не карта типов.
+	blocksByVer map[int][]Block
+	total       int
 }
 
 // summaryAcc — счётчики одного вопроса.
@@ -121,8 +125,9 @@ type summaryAcc struct {
 // возрастанию номера (как их отдаёт forms.Versions) — как у NewCSVBuilder.
 func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 	b := &SummaryBuilder{
-		acc:   make(map[string]*summaryAcc),
-		byVer: make(map[int]map[string]BlockType, len(versions)),
+		acc:         make(map[string]*summaryAcc),
+		byVer:       make(map[int]map[string]BlockType, len(versions)),
+		blocksByVer: make(map[int][]Block, len(versions)),
 	}
 
 	for _, v := range versions {
@@ -131,6 +136,7 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 			types[blk.ID] = blk.Type
 		}
 		b.byVer[v.Version] = types
+		b.blocksByVer[v.Version] = v.Schema.Blocks
 	}
 
 	// Вопросы и их порядок — общая модель по всем версиям (questions.go): сводка,
@@ -178,6 +184,17 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 func (b *SummaryBuilder) Add(version int, answers map[string]json.RawMessage) {
 	b.total++
 
+	// ЗНАМЕНАТЕЛЬ — «вопрос ПОКАЗАЛИ этому респонденту» (фаза 21, ADR §10), а не «был
+	// в этой версии». Видимость пересчитывается по сохранённым ответам тем же
+	// вычислителем, что считал форму респонденту; это законно, потому что ответы на
+	// скрытое вычищены на приёме (инвариант logic.go), значит пересчёт воспроизводит
+	// ровно то, что человек видел.
+	//
+	// Без этого вопрос за условием читался бы как «заполнили 12 из 400»: доля тем ниже,
+	// чем реже показывается ветка, и владелец делает вывод про вопрос, который как раз
+	// работает. У формы без правил план видит всё — числа те же, что до фазы.
+	plan := PlanForm(b.blocksByVer[version], answers)
+
 	// Идём по блокам ВЕРСИИ ОТВЕТА, а не по присланным ответам: вопрос, который
 	// человек видел и пропустил, обязан попасть в знаменатель (asked), хотя ключа в
 	// answers для него нет. Ответ на блок, которого в этой версии не было, здесь же
@@ -186,6 +203,9 @@ func (b *SummaryBuilder) Add(version int, answers map[string]json.RawMessage) {
 		a, ok := b.acc[id]
 		if !ok {
 			continue // неотвечаемый блок: acc для него не заводился
+		}
+		if !plan.Visible[id] {
+			continue // вопрос этому респонденту не показывали — он не в знаменателе
 		}
 		a.asked++
 		raw, answered := answers[id]

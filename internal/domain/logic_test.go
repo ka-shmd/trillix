@@ -747,3 +747,82 @@ func TestValidateSchema_LogicCanonical(t *testing.T) {
 		}
 	}
 }
+
+// ---------- сводка: знаменатель «показан» ----------
+
+func TestSummary_DenominatorCountsShownOnly(t *testing.T) {
+	// Форма: «Есть питомец?» и «Какой?» за условием «Да».
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
+	dep := lblk("dep", "g2", BlockShortText)
+	dep.VisibleIf = leaf("src", OpIs, "yes")
+	schema := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, dep}}
+	versions := []VersionedSchema{{Version: 1, Schema: schema}}
+
+	b := NewSummaryBuilder(versions)
+	// Трое ответили «Нет» — им «Какой?» не показывали; один «Да» и заполнил.
+	for range 3 {
+		b.Add(1, answers(map[string]any{"src": "no"}))
+	}
+	b.Add(1, answers(map[string]any{"src": "yes", "dep": "Барсик"}))
+
+	res := b.Result()
+	var got BlockSummary
+	for _, bs := range res.Blocks {
+		if bs.BlockID == "dep" {
+			got = bs
+		}
+	}
+	if got.Asked != 1 || got.Answered != 1 {
+		t.Fatalf("вопрос за условием: asked=%d answered=%d, ожидалось 1 и 1 (в знаменатель идут только те, кому показали)", got.Asked, got.Answered)
+	}
+	// У источника знаменатель — все четверо: его видели все.
+	for _, bs := range res.Blocks {
+		if bs.BlockID == "src" && bs.Asked != 4 {
+			t.Fatalf("источник: asked=%d, ожидалось 4", bs.Asked)
+		}
+	}
+	if res.Total != 4 {
+		t.Fatalf("всего ответов %d, ожидалось 4", res.Total)
+	}
+}
+
+func TestSummary_NoRules_SameAsBefore(t *testing.T) {
+	// Форма без правил: знаменатель — все ответы, как до фазы. Регресс-сторож на то,
+	// что пересчёт видимости ничего не отнял у обычных форм.
+	q1 := lblk("q1", "g1", BlockShortText)
+	q2 := lblk("q2", "g2", BlockShortText)
+	versions := []VersionedSchema{{Version: 1, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{q1, q2}}}}
+
+	b := NewSummaryBuilder(versions)
+	b.Add(1, answers(map[string]any{"q1": "а"}))
+	b.Add(1, answers(map[string]any{"q1": "б", "q2": "в"}))
+
+	for _, bs := range b.Result().Blocks {
+		if bs.Asked != 2 {
+			t.Fatalf("%s: asked=%d, ожидалось 2", bs.BlockID, bs.Asked)
+		}
+	}
+}
+
+func TestSummary_HiddenByJump_NotAsked(t *testing.T) {
+	// Пропущенная переходом страница в знаменатель не идёт — она не показывалась.
+	blocks := pagedDoc([]JumpRule{{When: leaf("src", OpIs, "no"), To: "br2"}})
+	versions := []VersionedSchema{{Version: 1, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: blocks}}}
+
+	b := NewSummaryBuilder(versions)
+	b.Add(1, answers(map[string]any{"src": "no"}))             // перескочил q2
+	b.Add(1, answers(map[string]any{"src": "yes", "q2": "x"})) // прошёл всё
+
+	for _, bs := range b.Result().Blocks {
+		switch bs.BlockID {
+		case "q2":
+			if bs.Asked != 1 {
+				t.Fatalf("q2: asked=%d, ожидалось 1", bs.Asked)
+			}
+		case "q3":
+			if bs.Asked != 2 {
+				t.Fatalf("q3: asked=%d, ожидалось 2 (страница за переходом посещается всеми)", bs.Asked)
+			}
+		}
+	}
+}
