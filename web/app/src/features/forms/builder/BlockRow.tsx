@@ -44,7 +44,7 @@ import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
-import { useBuilderStore } from './storeContext'
+import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { useCaptionGuard } from './captionGuard'
@@ -819,9 +819,21 @@ const BlockRowBody = memo(function BlockRowBody({
 // Стоит в правом поле под звёздочкой обязательности: то же absolute-поле, никакого
 // места в потоке (иначе схлопывание на mousedown съедало бы клики — TD-22).
 function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
-  const blocks = useBuilderStore((s) => s.blocks)
-  const warnings = ruleWarnings(blocks, block.id, block.visibleIf)
-  const summary = ruleSummary(blocks, block.visibleIf)
+  // Бейдж рисуется у КАЖДОГО вопроса за условием, а массив блоков меняет идентичность на
+  // каждое нажатие клавиши — подписка на него перерисовывала бы все такие строки при
+  // наборе текста (тот же класс, что записан про useSortable в STATUS; замер фазы поймал
+  // это у попапа настроек).
+  //
+  // Поэтому подписка — на СОСТАВ документа (строка id через запятую): она стабильна при
+  // наборе и меняется при вставке, удалении и переносе, то есть ровно тогда, когда
+  // правило может стать инертным. Сам документ читается getState'ом в моменте рендера —
+  // без подписки, но и без устаревания: перерисовка уже вызвана сменой состава.
+  const api = useBuilderStoreApi()
+  const composition = useBuilderStore((s) => s.blocks.map((b) => b.id).join(','))
+  void composition
+  const docBlocks = api.getState().blocks
+  const warnings = ruleWarnings(docBlocks, block.id, block.visibleIf)
+  const summary = ruleSummary(docBlocks, block.visibleIf)
   const inert = warnings.length > 0
   return (
     <div className={`absolute left-full top-8 ml-1 flex ${lineH} items-center`}>
@@ -1574,6 +1586,10 @@ function GhostOption({
   )
 }
 
+// Стабильная пустота для закрытого попапа варианта: новый литерал на каждый рендер сам
+// был бы сменой значения и перерисовывал бы карточку.
+const NO_BLOCKS: Block[] = []
+
 // OptionActionMenu — попап варианта (фаза 16, решение владельца 7). Состав из двух
 // пунктов и никаких настроек типа: у варианта их нет, а «в колонку» — свойство строки
 // (раскладку списка задаёт она), не карточки. Отдельный маленький компонент, а не
@@ -1686,11 +1702,14 @@ function OptionCard({
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
-  const blocks = useBuilderStore((s) => s.blocks)
   const [menuOpen, setMenuOpen] = useState(false)
   // Диалог правила варианта — рядом с попапом, как у блока: у условия дерево, а попап
   // варианта ещё уже блочного.
   const [ruleOpen, setRuleOpen] = useState(false)
+  // Как у попапа блока: массив блоков меняет идентичность на каждое нажатие клавиши, а
+  // карточек вариантов на полотне десятки. Подписываемся, только когда попап или диалог
+  // открыт, — иначе набор текста перерисовывал бы все карточки мимо memo.
+  const blocks = useBuilderStore((s) => (menuOpen || ruleOpen ? s.blocks : NO_BLOCKS))
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
   // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.

@@ -102,6 +102,10 @@ function RequiredSetting({ block, onCondition }: { block: Block; onCondition: ()
   )
 }
 
+// Стабильная пустота для закрытого попапа: новый литерал на каждый рендер сам был бы
+// сменой значения и перерисовывал бы строку.
+const NO_BLOCKS: Block[] = []
+
 export function BlockActionMenu({
   open,
   onOpenChange,
@@ -143,7 +147,17 @@ export function BlockActionMenu({
   const [jumpsOpen, setJumpsOpen] = useState(false)
   // Носитель правила — голова группы: прячется вопрос целиком, а не одна его строка.
   // У заголовка формы правил не бывает — он скелет документа, не вопрос.
-  const blocks = useBuilderStore((s) => s.blocks)
+  //
+  // ПОДПИСКА НА blocks — ТОЛЬКО КОГДА ПОПАП ОТКРЫТ, и это не микрооптимизация. Попап
+  // отрисован у КАЖДОЙ строки полотна, а массив блоков меняет идентичность на каждое
+  // нажатие клавиши: подписка «всегда» перерисовывала все строки мимо memo и удвоила
+  // стоимость символа (замер: 8.8 → 13.4 мс/символ на 13 блоках, 16.7 → 30.9 на 199).
+  // Тот же класс, что записан в STATUS про useSortable: дорогое живёт там, где его
+  // видит только открытый попап. Закрытый селектор отдаёт стабильную пустоту и не
+  // перерисовывает ничего.
+  const blocks = useBuilderStore((s) =>
+    open || logicField !== null || jumpsOpen ? s.blocks : NO_BLOCKS,
+  )
   const carrier = ruleCarrier(blocks, block.id)
   const logicAllowed =
     carrier !== null && carrier.type !== 'form_title' && block.type !== 'page_break'
