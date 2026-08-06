@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GitBranch, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
@@ -37,7 +37,9 @@ import {
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
+import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
@@ -706,6 +708,12 @@ const BlockRowBody = memo(function BlockRowBody({
           негде. Контент ответов не собирает — там её нет вовсе. */}
       {requiredFor ? <RequiredToggle block={requiredFor} lineH={rowLineH} /> : null}
 
+      {/* Бейдж условной логики (фаза 21): вопрос за условием обязан быть виден на
+          полотне как таковой — иначе автор смотрит на форму, где часть вопросов
+          показывается не всем, и ничем это не отличается от обычных. Носитель правила —
+          голова группы, поэтому бейдж рисует ровно та строка, что его несёт. */}
+      {block.visibleIf && <LogicBadge block={block} lineH={rowLineH} />}
+
       {/* Единственная подсказка, оставшаяся у строки (решение владельца 2026-07-29):
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
@@ -801,6 +809,33 @@ const BlockRowBody = memo(function BlockRowBody({
     </>
   )
 })
+
+// LogicBadge — «этот вопрос показывается по условию». Индикатор, а не контрол: правят
+// правило в попапе настроек, где для дерева условий есть место. Виден всегда (в отличие
+// от проявляющихся по hover значков) — это состояние документа, и прятать его значило
+// бы прятать причину, по которой вопрос не появился у респондента.
+//
+// Стоит в правом поле под звёздочкой обязательности: то же absolute-поле, никакого
+// места в потоке (иначе схлопывание на mousedown съедало бы клики — TD-22).
+function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
+  const blocks = useBuilderStore((s) => s.blocks)
+  const warnings = ruleWarnings(blocks, block.id, block.visibleIf)
+  const summary = ruleSummary(blocks, block.visibleIf)
+  const inert = warnings.length > 0
+  return (
+    <div className={`absolute left-full top-8 ml-1 flex ${lineH} items-center`}>
+      <span
+        title={inert ? `Условие не действует: ${warnings[0]!.reason}` : `Показывать, если ${summary}`}
+        aria-label={inert ? 'Условие показа не действует' : `Показывать, если ${summary}`}
+        className={`flex size-5 items-center justify-center rounded ${
+          inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
+        }`}
+      >
+        <GitBranch className="size-4" />
+      </span>
+    </div>
+  )
+}
 
 // RequiredToggle — контрол обязательности в правом поле блока (absolute left-full),
 // зеркально левому кластеру значков. Это редактируемый контрол, а не индикатор:

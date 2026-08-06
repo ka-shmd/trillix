@@ -46,10 +46,37 @@ func (e AnswerErrors) Error() string {
 // Is делает errors.Is(err, ErrValidation) истинным — единый маппинг на 422.
 func (e AnswerErrors) Is(target error) bool { return target == ErrValidation }
 
-// ValidateAnswers проверяет ответы против схемы. nil — ответ валиден. Иначе —
+// NormalizeAnswers — единственная точка приёма ответа (фаза 21): вычищает то, чего
+// респондент не видел, и проверяет оставшееся. Возвращает карту, которую и надо писать
+// в базу.
+//
+// Порядок именно такой. Сперва вычистка (StripHiddenAnswers), потом проверка: иначе
+// обязательным оказался бы вопрос за невыполненным условием, а в базу попали бы ответы
+// на вопросы, которых человек не видел. Клиент чистит ответ у себя тем же движком, но
+// доверия к нему нет никакого — план считается здесь заново (инвариант 3 проекта).
+func NormalizeAnswers(schema FormSchema, answers map[string]json.RawMessage) (map[string]json.RawMessage, error) {
+	clean := StripHiddenAnswers(schema.Blocks, answers)
+	// План по УЖЕ очищенным ответам — тот же, что по исходным (инвариант logic.go), но
+	// считать его надо от того, что будет сохранено: так «обязательные среди видимых»
+	// и содержимое базы описывают одну и ту же форму.
+	plan := PlanForm(schema.Blocks, clean)
+	if err := validateAnswers(schema, clean, plan); err != nil {
+		return nil, err
+	}
+	return clean, nil
+}
+
+// ValidateAnswers проверяет ответы против схемы БЕЗ учёта условной логики. Оставлена
+// для тестов и для кода, которому нужна чистая проверка формата; приём ответа ходит
+// через NormalizeAnswers.
+func ValidateAnswers(schema FormSchema, answers map[string]json.RawMessage) error {
+	return validateAnswers(schema, answers, PlanForm(schema.Blocks, answers))
+}
+
+// validateAnswers — общая проверка против ПЛАНА: nil — ответ валиден. Иначе —
 // AnswerErrors с сообщением под каждым проблемным block_id (собираются все
 // нарушения за один проход, чтобы респондент увидел их разом, а не по одному).
-func ValidateAnswers(schema FormSchema, answers map[string]json.RawMessage) error {
+func validateAnswers(schema FormSchema, answers map[string]json.RawMessage, plan Plan) error {
 	errs := AnswerErrors{}
 
 	known := make(map[string]struct{}, len(schema.Blocks))
@@ -60,8 +87,14 @@ func ValidateAnswers(schema FormSchema, answers map[string]json.RawMessage) erro
 		if b.Type.isContent() {
 			continue
 		}
+		// Скрытый вопрос остаётся ИЗВЕСТНЫМ: ответ на него уже вычищен нормализацией,
+		// а «несуществующим вопросом» его звать нельзя — он в форме есть, просто не был
+		// показан. Проверять его нечего: обязательности у скрытого не бывает.
 		known[b.ID] = struct{}{}
-		if msg := validateAnswer(b, answers[b.ID]); msg != "" {
+		if !plan.Visible[b.ID] {
+			continue
+		}
+		if msg := validateAnswer(b, answers[b.ID], plan.Required[b.ID]); msg != "" {
 			errs[b.ID] = msg
 		}
 	}
@@ -82,17 +115,17 @@ func ValidateAnswers(schema FormSchema, answers map[string]json.RawMessage) erro
 
 // validateAnswer проверяет один блок против сырого значения; "" — валиден.
 // raw == nil означает «поля нет в ответах» (эквивалент пустого).
-func validateAnswer(b Block, raw json.RawMessage) string {
+func validateAnswer(b Block, raw json.RawMessage, required bool) string {
 	if b.Type.isChoice() {
-		return validateChoiceAnswer(b, raw)
+		return validateChoiceAnswer(b, raw, required)
 	}
 	if b.Type == BlockScale {
-		return validateScaleAnswer(b, raw)
+		return validateScaleAnswer(b, raw, required)
 	}
 	if b.Type == BlockConsent {
-		return validateConsentAnswer(b, raw)
+		return validateConsentAnswer(b, raw, required)
 	}
-	return validateTextAnswer(b, raw)
+	return validateTextAnswer(b, raw, required)
 }
 
 // ConsentYes — значение отмеченного согласия. Ответ хранится строкой, а не булевым
@@ -104,9 +137,9 @@ const ConsentYes = "yes"
 // обычный флаг required (решение владельца): необязательное согласие это реальный
 // случай (подписка на рассылку, маркетинг-opt-in), поэтому спецслучая «consent
 // всегда обязателен» в валидаторе нет. Текст согласия — label блока.
-func validateConsentAnswer(b Block, raw json.RawMessage) string {
+func validateConsentAnswer(b Block, raw json.RawMessage, required bool) string {
 	if len(raw) == 0 {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -116,7 +149,7 @@ func validateConsentAnswer(b Block, raw json.RawMessage) string {
 		return "ожидалась строка"
 	}
 	if v == "" {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -131,9 +164,9 @@ func validateConsentAnswer(b Block, raw json.RawMessage) string {
 // date, конвенция проекта), которое обязано попадать в диапазон блока. Диапазон
 // берётся из ТОЙ ЖЕ версии схемы, против которой валидируется ответ, поэтому смена
 // диапазона владельцем не делает старые ответы невалидными задним числом.
-func validateScaleAnswer(b Block, raw json.RawMessage) string {
+func validateScaleAnswer(b Block, raw json.RawMessage, required bool) string {
 	if len(raw) == 0 {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -143,7 +176,7 @@ func validateScaleAnswer(b Block, raw json.RawMessage) string {
 		return "ожидалась строка"
 	}
 	if v == "" {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -171,9 +204,9 @@ func scaleRange(b Block) (int, int) {
 
 // validateTextAnswer — типы, чьё значение приходит JSON-строкой (short_text,
 // long_text, email, number, date).
-func validateTextAnswer(b Block, raw json.RawMessage) string {
+func validateTextAnswer(b Block, raw json.RawMessage, required bool) string {
 	if len(raw) == 0 {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -183,7 +216,7 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 		return "ожидалась строка"
 	}
 	if v == "" {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -221,7 +254,7 @@ func validateTextAnswer(b Block, raw json.RawMessage) string {
 // validateChoiceAnswer — одиночный выбор (single_choice, dropdown — строка-id) и
 // multi_choice (массив id). Ветвление по isSingleChoice(), а не по конкретному
 // типу: новый одиночный choice-тип иначе молча попадёт в ветку multi.
-func validateChoiceAnswer(b Block, raw json.RawMessage) string {
+func validateChoiceAnswer(b Block, raw json.RawMessage, required bool) string {
 	opts := make(map[string]struct{}, len(b.Settings.Options))
 	for _, o := range b.Settings.Options {
 		opts[o.ID] = struct{}{}
@@ -229,7 +262,7 @@ func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 
 	if b.Type.isSingleChoice() {
 		if len(raw) == 0 {
-			if b.Required {
+			if required {
 				return msgRequired
 			}
 			return ""
@@ -239,7 +272,7 @@ func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 			return "ожидался выбор одного варианта"
 		}
 		if v == "" {
-			if b.Required {
+			if required {
 				return msgRequired
 			}
 			return ""
@@ -252,7 +285,7 @@ func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 
 	// multi_choice.
 	if len(raw) == 0 {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""
@@ -262,7 +295,7 @@ func validateChoiceAnswer(b Block, raw json.RawMessage) string {
 		return "ожидался список вариантов"
 	}
 	if len(ids) == 0 {
-		if b.Required {
+		if required {
 			return msgRequired
 		}
 		return ""

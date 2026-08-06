@@ -64,3 +64,25 @@ describe('validateAll', () => {
     expect(validateAll(blocks, { b1: 'a@b.co' })).toEqual({})
   })
 })
+
+// Обязательность из ПЛАНА (фаза 21): у блока может стоять requiredIf, и решает его
+// сработавшее условие, а не флаг документа. Без аргумента поведение прежнее.
+describe('обязательность приходит из плана', () => {
+  const block: Block = { id: 'b', groupId: 'g', type: 'short_text' }
+
+  it('без аргумента берётся флаг блока', () => {
+    expect(validateBlock({ ...block, required: true }, undefined)).toBe('Обязательное поле')
+    expect(validateBlock(block, undefined)).toBeNull()
+  })
+
+  it('план перебивает флаг в обе стороны', () => {
+    expect(validateBlock(block, undefined, true)).toBe('Обязательное поле')
+    expect(validateBlock({ ...block, required: true }, undefined, false)).toBeNull()
+  })
+
+  it('validateAll спрашивает обязательность у множества плана', () => {
+    const blocks: Block[] = [block, { id: 'c', groupId: 'g2', type: 'short_text' }]
+    const errors = validateAll(blocks, {}, new Set(['c']))
+    expect(errors).toEqual({ c: 'Обязательное поле' })
+  })
+})

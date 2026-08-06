@@ -443,3 +443,77 @@ func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
 		t.Errorf("помечено сверхлимитными %d, ожидалось 0", got)
 	}
 }
+
+// Условная логика на приёме (фаза 21, слайс 2). Форма: «Есть питомец?» (single_choice)
+// и обязательный «Какой?» за условием «выбрано Да».
+const logicSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
+	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{},"visibleIf":{"all":[{"blockId":"pet","op":"is","value":"yes"}]}}
+]}`
+
+// Сервер не верит клиенту: ответ на скрытый вопрос принимается (респондент не виноват,
+// что успел его набрать до переключения источника), но в базу не попадает — иначе
+// владелец увидел бы в таблице и CSV ответы на вопросы, которых человек не видел.
+func TestSubmit_HiddenAnswer_AcceptedButNotStored(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	subID := uuid.NewString()
+	body := `{"submission_id":"` + subID + `","token":"` + freshToken() +
+		`","answers":{"pet":"no","kind":"Барсик"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var answers []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT answers FROM submissions WHERE id = $1`, subID).Scan(&answers); err != nil {
+		t.Fatalf("read submission: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(answers, &parsed); err != nil {
+		t.Fatalf("answers: %s (%v)", answers, err)
+	}
+	if _, hidden := parsed["kind"]; hidden {
+		t.Fatalf("ответ на скрытый вопрос сохранён: %s", answers)
+	}
+	if parsed["pet"] != "no" {
+		t.Fatalf("видимый ответ пропал: %s", answers)
+	}
+}
+
+// Обязательность спрашивается только у видимых: «Какой?» обязателен, но при «Нет» его
+// не показывали — форма обязана отправиться.
+func TestSubmit_HiddenRequired_DoesNotBlock(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"pet":"no"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("строк в базе %d, ожидалась 1", n)
+	}
+}
+
+// Обратная сторона: показанный обязательный вопрос по-прежнему обязателен, и 422
+// приходит с ошибкой ровно под его id.
+func TestSubmit_VisibleRequired_422(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"pet":"yes"}}`
+	resp := postSubmission(t, srv, slug, body)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 0 {
+		t.Fatalf("невалидный ответ попал в базу: строк %d", n)
+	}
+}

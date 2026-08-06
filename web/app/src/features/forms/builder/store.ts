@@ -54,7 +54,12 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 
 // Редактируемые поля блока. id/groupId/type через updateBlock не меняются: id
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
-export type BlockPatch = Partial<Pick<Block, 'text' | 'name' | 'required' | 'settings'>>
+// Условная логика (фаза 21) правится тем же updateBlock: visibleIf — свойство блока,
+// как name и required. Носителя (голову группы) выбирает вызывающий — стор про
+// семантику правил не знает, ему хватает того, что это поле документа.
+export type BlockPatch = Partial<
+  Pick<Block, 'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf'>
+>
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
 // как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
@@ -1231,6 +1236,12 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             // запрещает).
             name: isAnswerableType(type) ? src.name : undefined,
             required: isAnswerableType(type) ? src.required : false,
+            // Правила переживают смену типа (фаза 21) по тому же доводу, что имя:
+            // «показывать, если» относится к ВОПРОСУ, а не к тому, чем на него
+            // отвечают. Обязательность по условию едет вместе с обычной — и роняется
+            // там же, где она: у неотвечаемого типа её схема запрещает.
+            visibleIf: src.visibleIf,
+            requiredIf: isAnswerableType(type) ? src.requiredIf : undefined,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
           // short_text→email не должна молча разваливать ряд); вне whitelist они

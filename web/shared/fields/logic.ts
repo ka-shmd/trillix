@@ -1,7 +1,9 @@
 import {
   type Block,
+  type BlockType,
   type LogicCondition,
   type LogicOperator,
+  LOGIC_OPERATORS,
   isAnswerableType,
   isMultiChoiceType,
   isSingleChoiceType,
@@ -198,24 +200,84 @@ function groupRuns(blocks: readonly Block[]): [number, number][] {
   return runs
 }
 
+// Операторы, осмысленные у этого типа источника, — В ПОРЯДКЕ КОНТРАКТА. Один источник
+// на две стороны: вычислитель спрашивает «подходит ли» (opApplies ниже), редактор
+// показывает автору ровно этот список. Разъедься они — билдер предлагал бы выбор,
+// который движок считает инертным, то есть молча не работающим.
+export function operatorsFor(type: BlockType): LogicOperator[] {
+  if (!isAnswerableType(type)) return []
+  const numeric = type === 'scale' || type === 'number'
+  const multi = isMultiChoiceType(type)
+  return LOGIC_OPERATORS.filter((op) => {
+    switch (op) {
+      case 'answered':
+      case 'empty':
+        return true
+      case 'is':
+      case 'is_not':
+        return !multi
+      case 'includes':
+      case 'excludes':
+        return multi
+      case 'gt':
+      case 'lt':
+        return numeric
+    }
+  })
+}
+
 // Осмыслен ли оператор у типа источника. Схемой НЕ проверяется (смена типа источника
 // иначе роняла бы 422 в автосейв) — несовместимая пара делает правило инертным.
 function opApplies(op: LogicOperator, src: Block): boolean {
-  if (!isAnswerableType(src.type)) return false
-  switch (op) {
-    case 'answered':
-    case 'empty':
-      return true
-    case 'is':
-    case 'is_not':
-      return !isMultiChoiceType(src.type)
-    case 'includes':
-    case 'excludes':
-      return isMultiChoiceType(src.type)
-    case 'gt':
-    case 'lt':
-      return src.type === 'scale' || src.type === 'number'
+  return operatorsFor(src.type).includes(op)
+}
+
+// Почему правило не действует — для ПРЕДУПРЕЖДЕНИЙ билдера (не для схемы: там всё это
+// законно, см. доклок). Пусто — правило действует.
+//
+// Живёт рядом с вычислителем, а не в редакторе, ровно по одной причине: причин
+// инертности четыре, и вторая их копия в билдере разъехалась бы с первой на первой же
+// правке — автор получил бы зелёное правило, которое молча ничего не делает.
+export type RuleWarning = { blockId: string; reason: string }
+
+export function ruleWarnings(
+  blocks: readonly Block[],
+  carrierId: string,
+  cond: LogicCondition | undefined,
+): RuleWarning[] {
+  if (cond === undefined) return []
+  const carrier = blocks.findIndex((b) => b.id === carrierId)
+  const out: RuleWarning[] = []
+
+  const walk = (c: LogicCondition): void => {
+    if ('all' in c) {
+      c.all.forEach(walk)
+      return
+    }
+    if ('any' in c) {
+      c.any.forEach(walk)
+      return
+    }
+    const at = blocks.findIndex((b) => b.id === c.blockId)
+    if (at < 0) {
+      out.push({ blockId: c.blockId, reason: 'вопрос-источник удалён' })
+      return
+    }
+    if (carrier >= 0 && at >= carrier) {
+      out.push({ blockId: c.blockId, reason: 'источник стоит ниже — условие не действует' })
+      return
+    }
+    if (!opApplies(c.op, blocks[at]!)) {
+      out.push({ blockId: c.blockId, reason: 'сравнение не подходит типу источника' })
+      return
+    }
+    if (opNeedsValue(c.op) && (c.value ?? '') === '') {
+      out.push({ blockId: c.blockId, reason: 'не выбрано значение' })
+    }
   }
+
+  walk(cond)
+  return out
 }
 
 // Равенство ответа значению. У шкалы и number сравнение ЧИСЛОВОЕ: «5» и «5.0» — один
@@ -294,7 +356,10 @@ function decodeAnswer(b: Block, raw: Answer | undefined, opts: Set<string> | nul
 //
 // Ответы на блоки, которых нет в схеме, остаются нетронутыми: это нарушение контракта, и
 // ловить его обязана валидация, а не нормализация.
-export function stripHiddenAnswers(blocks: readonly Block[], answers: Answers): Answers {
+export function stripHiddenAnswers(
+  blocks: readonly Block[],
+  answers: Answers,
+): Record<string, Answer> {
   const plan = planForm(blocks, answers)
   const byId = new Map(blocks.map((b) => [b.id, b]))
   const out: Record<string, Answer> = {}

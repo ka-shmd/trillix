@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Asterisk, Copy, Replace, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GitBranch, Replace, Trash2 } from 'lucide-react'
 import {
   MAX_QUESTION_NAME_LEN,
   isAnswerableType,
@@ -7,6 +7,8 @@ import {
   type Block,
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { LogicDialog } from './logic/LogicDialog'
+import { ruleCarrier, ruleSummary } from './logic/model'
 import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
 import { editorKind } from './kinds/index'
@@ -84,6 +86,15 @@ export function BlockActionMenu({
   // Какой вид показан: действия или выбор нового типа. Сбрасывается на «действия»
   // при закрытии, чтобы следующее открытие начиналось с корня.
   const [view, setView] = useState<'actions' | 'types'>('actions')
+  // Диалог логики (фаза 21) — рядом с попапом, а не внутри: у правила дерево с
+  // группами, попап шириной в одну строку настройки для него мал.
+  const [logicOpen, setLogicOpen] = useState(false)
+  // Носитель правила — голова группы: прячется вопрос целиком, а не одна его строка.
+  // У заголовка формы правил не бывает — он скелет документа, не вопрос.
+  const blocks = useBuilderStore((s) => s.blocks)
+  const carrier = ruleCarrier(blocks, block.id)
+  const logicAllowed =
+    carrier !== null && carrier.type !== 'form_title' && block.type !== 'page_break'
   const isGroup = isCaptionType(block.type)
   // Имя — свойство любого отвечаемого блока, а не типа (ADR §10), поэтому строка общая
   // и стоит выше типового раздела. У подписи, контента и заголовка формы её нет: имя
@@ -99,99 +110,113 @@ export function BlockActionMenu({
   }
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) setView('actions')
-        onOpenChange(o)
-      }}
-    >
-      <PopoverAnchor asChild>{anchor}</PopoverAnchor>
-      <PopoverContent
-        className="w-60 p-0"
-        align="start"
-        side="bottom"
-        // Фокус после действия ставит фокус-движок/само действие; возврат Radix на
-        // якорь (позиционированный span) глушим — иначе каретка падает в body.
-        onCloseAutoFocus={(e) => e.preventDefault()}
+    <>
+      {carrier && <LogicDialog open={logicOpen} onOpenChange={setLogicOpen} carrier={carrier} />}
+      <Popover
+        open={open}
+        onOpenChange={(o) => {
+          if (!o) setView('actions')
+          onOpenChange(o)
+        }}
       >
-        {view === 'actions' ? (
-          <>
-            {/* Настройки стоят ВЫШЕ общих пунктов и ВНЕ Command: cmdk перехватывает
+        <PopoverAnchor asChild>{anchor}</PopoverAnchor>
+        <PopoverContent
+          className="w-60 p-0"
+          align="start"
+          side="bottom"
+          // Фокус после действия ставит фокус-движок/само действие; возврат Radix на
+          // якорь (позиционированный span) глушим — иначе каретка падает в body.
+          onCloseAutoFocus={(e) => e.preventDefault()}
+        >
+          {view === 'actions' ? (
+            <>
+              {/* Настройки стоят ВЫШЕ общих пунктов и ВНЕ Command: cmdk перехватывает
                 стрелки и Enter для навигации по пунктам, а внутри раздела те же клавиши
                 принадлежат контролам (набор текста, открыть список, выбрать значение). */}
-            {(named || Settings) && (
-              <div className="border-b py-1">
-                {named && <QuestionNameSetting block={subject} />}
-                {Settings && <Settings block={subject} />}
-              </div>
-            )}
-            <Command>
-              <CommandList>
-                <CommandGroup>
-                  {requiredFor && (
+              {(named || Settings) && (
+                <div className="border-b py-1">
+                  {named && <QuestionNameSetting block={subject} />}
+                  {Settings && <Settings block={subject} />}
+                </div>
+              )}
+              <Command>
+                <CommandList>
+                  <CommandGroup>
+                    {requiredFor && (
+                      <CommandItem
+                        onSelect={() => {
+                          onToggleRequired()
+                          close()
+                        }}
+                      >
+                        <Asterisk className="size-4" />
+                        {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                      </CommandItem>
+                    )}
+                    {logicAllowed && (
+                      <CommandItem
+                        onSelect={() => {
+                          setLogicOpen(true)
+                          onOpenChange(false)
+                        }}
+                      >
+                        <GitBranch className="size-4" />
+                        Показывать: {ruleSummary(blocks, carrier.visibleIf)}
+                      </CommandItem>
+                    )}
+                    <CommandItem onSelect={() => setView('types')}>
+                      <Replace className="size-4" />
+                      Сменить тип
+                    </CommandItem>
                     <CommandItem
                       onSelect={() => {
-                        onToggleRequired()
+                        onDuplicate()
                         close()
                       }}
                     >
-                      <Asterisk className="size-4" />
-                      {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
+                      <Copy className="size-4" />
+                      Дублировать
                     </CommandItem>
-                  )}
-                  <CommandItem onSelect={() => setView('types')}>
-                    <Replace className="size-4" />
-                    Сменить тип
-                  </CommandItem>
-                  <CommandItem
-                    onSelect={() => {
-                      onDuplicate()
-                      close()
-                    }}
-                  >
-                    <Copy className="size-4" />
-                    Дублировать
-                  </CommandItem>
-                  <CommandItem
-                    onSelect={() => {
-                      onDelete()
-                      close()
-                    }}
-                  >
-                    <Trash2 className="size-4" />
-                    {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
-                  </CommandItem>
-                </CommandGroup>
+                    <CommandItem
+                      onSelect={() => {
+                        onDelete()
+                        close()
+                      }}
+                    >
+                      <Trash2 className="size-4" />
+                      {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
+                    </CommandItem>
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </>
+          ) : (
+            <Command>
+              <CommandInput placeholder="Тип поля…" />
+              <CommandList>
+                <CommandEmpty>Ничего не найдено</CommandEmpty>
+                {BLOCK_GROUP_ORDER.map((g) => (
+                  <CommandGroup key={g} heading={BLOCK_GROUP_LABELS[g]}>
+                    {MENU_ITEMS.filter((t) => t.group === g).map((t) => (
+                      <CommandItem
+                        key={t.key}
+                        value={`${t.label} ${t.key}`}
+                        onSelect={() => {
+                          onPickType(t)
+                          close()
+                        }}
+                      >
+                        {typeIcon(t.type)}
+                        {t.label}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                ))}
               </CommandList>
             </Command>
-          </>
-        ) : (
-          <Command>
-            <CommandInput placeholder="Тип поля…" />
-            <CommandList>
-              <CommandEmpty>Ничего не найдено</CommandEmpty>
-              {BLOCK_GROUP_ORDER.map((g) => (
-                <CommandGroup key={g} heading={BLOCK_GROUP_LABELS[g]}>
-                  {MENU_ITEMS.filter((t) => t.group === g).map((t) => (
-                    <CommandItem
-                      key={t.key}
-                      value={`${t.label} ${t.key}`}
-                      onSelect={() => {
-                        onPickType(t)
-                        close()
-                      }}
-                    >
-                      {typeIcon(t.type)}
-                      {t.label}
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
-              ))}
-            </CommandList>
-          </Command>
-        )}
-      </PopoverContent>
-    </Popover>
+          )}
+        </PopoverContent>
+      </Popover>
+    </>
   )
 }

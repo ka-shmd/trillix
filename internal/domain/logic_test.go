@@ -488,6 +488,82 @@ func TestStripHiddenAnswers(t *testing.T) {
 	})
 }
 
+// ---------- приём ответа (NormalizeAnswers) ----------
+
+func TestNormalizeAnswers(t *testing.T) {
+	// Форма: «Есть питомец?» → при «Да» показывается обязательный «Какой?».
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
+	dep := lblk("dep", "g2", BlockShortText)
+	dep.Required = true
+	dep.VisibleIf = leaf("src", OpIs, "yes")
+	schema := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, dep}}
+
+	t.Run("скрытый обязательный вопрос не мешает отправке", func(t *testing.T) {
+		clean, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no"}))
+		if err != nil {
+			t.Fatalf("ответ обязан приниматься: %v", err)
+		}
+		if len(clean) != 1 {
+			t.Fatalf("в базу уходит лишнее: %v", clean)
+		}
+	})
+
+	t.Run("ответ на скрытый вопрос отброшен, а не назван несуществующим", func(t *testing.T) {
+		clean, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no", "dep": "Барсик"}))
+		if err != nil {
+			t.Fatalf("ответ обязан приниматься: %v", err)
+		}
+		if _, ok := clean["dep"]; ok {
+			t.Fatalf("ответ на скрытый вопрос сохранён: %v", clean)
+		}
+	})
+
+	t.Run("видимый обязательный по-прежнему обязателен", func(t *testing.T) {
+		_, err := NormalizeAnswers(schema, answers(map[string]any{"src": "yes"}))
+		var errs AnswerErrors
+		if !errors.As(err, &errs) || errs["dep"] != msgRequired {
+			t.Fatalf("ожидалась обязательность dep, получено: %v", err)
+		}
+	})
+
+	t.Run("ответ на несуществующий вопрос остаётся ошибкой", func(t *testing.T) {
+		_, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no", "призрак": "x"}))
+		var errs AnswerErrors
+		if !errors.As(err, &errs) || errs["призрак"] == "" {
+			t.Fatalf("ожидалась ошибка по призраку, получено: %v", err)
+		}
+	})
+
+	t.Run("requiredIf: обязателен только при сработавшем условии", func(t *testing.T) {
+		phone := lblk("phone", "g2", BlockPhone)
+		phone.RequiredIf = leaf("src", OpIs, "yes")
+		s := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, phone}}
+
+		if _, err := NormalizeAnswers(s, answers(map[string]any{"src": "no"})); err != nil {
+			t.Fatalf("условие не сработало — ответ обязан приниматься: %v", err)
+		}
+		_, err := NormalizeAnswers(s, answers(map[string]any{"src": "yes"}))
+		var errs AnswerErrors
+		if !errors.As(err, &errs) || errs["phone"] != msgRequired {
+			t.Fatalf("ожидалась обязательность phone, получено: %v", err)
+		}
+	})
+
+	t.Run("форма без правил ведёт себя как до фазы", func(t *testing.T) {
+		plain := lblk("q", "g1", BlockShortText)
+		plain.Required = true
+		s := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{plain}}
+
+		if _, err := NormalizeAnswers(s, answers(map[string]any{})); err == nil {
+			t.Fatal("обязательное поле без ответа обязано давать ошибку")
+		}
+		clean, err := NormalizeAnswers(s, answers(map[string]any{"q": "Иван"}))
+		if err != nil || string(clean["q"]) != `"Иван"` {
+			t.Fatalf("ответ обязан пройти как есть: %v %v", clean, err)
+		}
+	})
+}
+
 // ---------- форма правил в схеме ----------
 
 func TestValidateSchema_LogicValid(t *testing.T) {

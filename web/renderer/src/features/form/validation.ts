@@ -22,11 +22,19 @@ function isEmpty(value: Answer | undefined): boolean {
 
 // Проверка одного блока: null — ок. Пустое необязательное поле валидно; формат
 // проверяется только у заполненного значения.
-export function validateBlock(block: Block, value: Answer | undefined): string | null {
+//
+// required передаётся ОТДЕЛЬНО от блока (фаза 21): обязательность стала свойством не
+// документа, а плана — у блока может стоять requiredIf, и решает его сработавшее
+// условие. Без аргумента берётся флаг блока, то есть поведение до фазы.
+export function validateBlock(
+  block: Block,
+  value: Answer | undefined,
+  required = block.required === true,
+): string | null {
   // Неотвечаемый блок (text) не собирает ответ — всегда валиден.
   if (isContentType(block.type)) return null
   if (isEmpty(value)) {
-    return block.required ? REQUIRED : null
+    return required ? REQUIRED : null
   }
   // Дальше значение непустое. Формат — только у текстовых типов (choice-значения
   // приходят из готовых вариантов, отдельный формат не нужен).
@@ -56,10 +64,18 @@ export function validateBlock(block: Block, value: Answer | undefined): string |
 }
 
 // Проверка всей формы: собирает только ошибки (валидные блоки в карту не попадают).
-export function validateAll(blocks: readonly Block[], answers: Answers): Errors {
+//
+// blocks — то, что респондент ВИДИТ (страница или плоский план), а не весь документ:
+// скрытый условием вопрос не спрашивали, и ошибка по нему указывала бы на невидимое.
+// required — множество фактически обязательных из плана; без него берутся флаги блоков.
+export function validateAll(
+  blocks: readonly Block[],
+  answers: Answers,
+  required?: ReadonlySet<string>,
+): Errors {
   const errors: Errors = {}
   for (const block of blocks) {
-    const msg = validateBlock(block, answers[block.id])
+    const msg = validateBlock(block, answers[block.id], required?.has(block.id) ?? block.required === true)
     if (msg) errors[block.id] = msg
   }
   return errors
