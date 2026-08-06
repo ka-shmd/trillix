@@ -154,6 +154,11 @@ func (t BlockType) isSingleChoice() bool {
 	return t == BlockSingleChoice || t == BlockDropdown
 }
 
+// isMultiChoice — выбор нескольких вариантов (ответ — массив id). Выводится из двух
+// предикатов выше, а не перечисляет типы: новый множественный choice-тип не придётся
+// вспоминать в третьем месте.
+func (t BlockType) isMultiChoice() bool { return t.isChoice() && !t.isSingleChoice() }
+
 // isCaption — блок-подпись группы (title/label): его text — подпись вопроса, из
 // которой аналитика берёт имя колонки/шага. Крупная (title) против мелкой (label)
 // — только вид, семантика одна.
@@ -204,6 +209,10 @@ type Option struct {
 	// живёт в нативном select) — и потому не запрещён, как и любой другой флаг,
 	// которому некуда примениться.
 	Column string `json:"column,omitempty"`
+	// VisibleIf — условие показа ВАРИАНТА (фаза 21, каскадные списки): то же дерево,
+	// что у вопроса, носитель — сам вариант. Позиция носителя для «ссылка смотрит
+	// назад» — позиция его блока: вариант живёт там же, где список. См. logic.go.
+	VisibleIf *Condition `json:"visibleIf,omitempty"`
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
@@ -240,6 +249,9 @@ type BlockSettings struct {
 // которой вопрос называется в данных. Пусто — имя выводится как раньше
 // (questionLabel). Верхний уровень, а не Settings: свойство любого отвечаемого
 // блока, а не типа.
+// Правила условной логики (фаза 21) — верхний уровень блока, а не Settings: это
+// свойство любого блока, а не типа (тот же довод, что у Name). Формат, семантика и
+// причина, по которой ссылки не валидируются, — logic.go.
 type Block struct {
 	ID       string        `json:"id"`
 	GroupID  string        `json:"groupId"`
@@ -248,6 +260,17 @@ type Block struct {
 	Name     string        `json:"name,omitempty"`
 	Required bool          `json:"required,omitempty"`
 	Settings BlockSettings `json:"settings"`
+	// VisibleIf — условие показа ВОПРОСА ЦЕЛИКОМ; читается с ГОЛОВНОГО блока группы
+	// (подпись, поле и контент прячутся вместе), как бит ряда. На любом другом блоке
+	// группы инертно — по той же причине, по которой не валидируется бит: голова
+	// меняется драгом и удалением подписи.
+	VisibleIf *Condition `json:"visibleIf,omitempty"`
+	// RequiredIf — условная обязательность отвечаемого блока. Взаимоисключающа с
+	// Required: обязательность это три состояния (нет / всегда / по условию).
+	RequiredIf *Condition `json:"requiredIf,omitempty"`
+	// JumpIf — переходы со страницы, которую закрывает ЭТОТ разрыв; только у
+	// page_break. Порядок = приоритет.
+	JumpIf []JumpRule `json:"jumpIf,omitempty"`
 }
 
 // FormSchema — документ черновика формы: версия формата, список блоков, текст
@@ -579,6 +602,12 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if err := validateScaleSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)
 	}
+	// Условная логика (фаза 21): проверяется ФОРМА правил, а не их разрешимость —
+	// ссылки, позиции и совместимость операторов кросс-блочны и потому инертны, а не
+	// невалидны (logic.go, доклок).
+	if err := validateLogic(b); err != nil {
+		return schemaErr("%s: %s", at, err)
+	}
 
 	if !b.Type.isChoice() {
 		if len(b.Settings.Options) > 0 {
@@ -606,6 +635,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		// раскладчик. Открыта ли секция — не проверяется, как и у блока: флаг инертен.
 		if o.Column != "" && o.Column != ColumnLeft && o.Column != ColumnRight {
 			return schemaErr("%s: опция #%d: неизвестная колонка %q", at, j, o.Column)
+		}
+		if err := validateCondition(o.VisibleIf, fmt.Sprintf("опция #%d: visibleIf", j)); err != nil {
+			return schemaErr("%s: %s", at, err)
 		}
 	}
 	return nil
