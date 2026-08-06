@@ -10,7 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
-import { planForm, stripHiddenAnswers } from '@fields/logic'
+import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -471,7 +471,8 @@ export function FormView({
                       onReach={markFurthest}
                     >
                       <BlockField
-                        block={block}
+                        // Скрытые условием варианты в список не попадают (фаза 21).
+                        block={withVisibleOptions(block, plan)}
                         captionText={groups.get(block.groupId)?.caption}
                         captionRequired={groups.get(block.groupId)?.required}
                         value={answers[block.id]}

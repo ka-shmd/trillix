@@ -6,6 +6,7 @@ import {
   type FormCover,
   type FormLogo,
   type FormSchema,
+  type LogicCondition,
   type Option,
   SCHEMA_VERSION,
   isChoiceType,
@@ -221,6 +222,10 @@ export type BuilderActions = {
   // это второе действие рядом с «удалить».
   duplicateOption: (blockId: string, optionId: string) => string | null
   updateOption: (blockId: string, optionId: string, label: string) => void
+  // setOptionRule — условие показа ВАРИАНТА (фаза 21, каскадные списки). undefined
+  // снимает правило. Отдельная операция, а не поле в updateOption: тот коалесит набор
+  // подписи в один шаг истории, а правило — дискретная правка со своим шагом.
+  setOptionRule: (blockId: string, optionId: string, rule: LogicCondition | undefined) => void
   // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
   // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
   reorderOptions: (blockId: string, activeOptionId: string, overOptionId: string) => void
@@ -1825,6 +1830,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         commit(`uo:${blockId}:${optionId}`, (s) =>
           mutateOptions(s.blocks, blockId, (opts) =>
             opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
+          ),
+        ),
+
+      setOptionRule: (blockId, optionId, rule) =>
+        commit(null, (s) =>
+          mutateOptions(s.blocks, blockId, (opts) =>
+            opts.map((o) => (o.id === optionId ? { ...o, visibleIf: rule } : o)),
           ),
         ),
 

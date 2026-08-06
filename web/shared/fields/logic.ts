@@ -54,6 +54,24 @@ export function optionVisible(plan: FormPlan, blockId: string, optionId: string)
   return opts === undefined || opts.has(optionId)
 }
 
+// Блок, каким его видит респондент: со скрытыми вариантами, вычищенными из списка.
+// Возвращает ИСХОДНЫЙ объект, когда прятать нечего, — новый объект на каждый рендер
+// заставлял бы React считать поле изменившимся там, где ничего не изменилось.
+//
+// Фильтруем сам блок, а не прокидываем множество видимых через контракт контролов:
+// иначе о видимости пришлось бы знать каждому типу поля (список, выпадающий список и
+// всякий будущий), а знать об этом не должен ни один — «варианты блока» это то, что в
+// блоке лежит. Бесплатно чинится и буквенный бейдж: буквы считаются по позиции в
+// списке, и у отфильтрованного списка они идут подряд, без дырок на месте скрытых.
+export function withVisibleOptions(block: Block, plan: FormPlan): Block {
+  const opts = plan.options.get(block.id)
+  if (opts === undefined) return block
+  const options = block.settings?.options ?? []
+  const kept = options.filter((o) => opts.has(o.id))
+  if (kept.length === options.length) return block
+  return { ...block, settings: { ...block.settings, options: kept } }
+}
+
 // Ответ в виде, пригодном для сравнения: строка у всех типов, кроме множественного
 // выбора. Скрытые варианты уже вычищены.
 type Decided = { text: string; list: string[] }

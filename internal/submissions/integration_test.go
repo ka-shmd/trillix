@@ -548,3 +548,44 @@ func TestSubmit_RequiredIf(t *testing.T) {
 		t.Fatalf("строк в базе %d, ожидалась 1", n)
 	}
 }
+
+// Скрытие вариантов (слайс 4): выбранный скрытый вариант не принимается — даже если его
+// прислать вручную. Проверяем сквозь HTTP: это про то, что попадёт в базу и в выгрузку.
+const optionRuleSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"dog","label":"Собака"},{"id":"cat","label":"Кот"}]}},
+	{"id":"stuff","groupId":"g2","type":"multi_choice","settings":{"options":[
+		{"id":"leash","label":"Поводок","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"dog"}]}},
+		{"id":"tray","label":"Лоток","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"cat"}]}},
+		{"id":"food","label":"Корм"}
+	]}}
+]}`
+
+func TestSubmit_HiddenOption_StrippedFromAnswer(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, optionRuleSchema)
+
+	subID := uuid.NewString()
+	body := `{"submission_id":"` + subID + `","token":"` + freshToken() +
+		`","answers":{"pet":"dog","stuff":["leash","tray","food"]}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var answers []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT answers FROM submissions WHERE id = $1`, subID).Scan(&answers); err != nil {
+		t.Fatalf("read submission: %v", err)
+	}
+	var parsed struct {
+		Stuff []string `json:"stuff"`
+	}
+	if err := json.Unmarshal(answers, &parsed); err != nil {
+		t.Fatalf("answers: %s (%v)", answers, err)
+	}
+	// «Лоток» показывают только владельцу кота — в ответе владельца собаки его быть не
+	// может, как бы он туда ни попал.
+	if len(parsed.Stuff) != 2 || parsed.Stuff[0] != "leash" || parsed.Stuff[1] != "food" {
+		t.Fatalf("варианты в базе: %v, ожидались [leash food]", parsed.Stuff)
+	}
+}

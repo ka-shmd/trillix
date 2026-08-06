@@ -10,7 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
-import { planForm } from '@fields/logic'
+import { planForm, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -97,7 +97,7 @@ export function PreviewPane({ title }: { title: string }) {
                     const render = (block: (typeof innerRow)[number][number]) => (
                       <BlockField
                         key={block.id}
-                        block={block}
+                        block={withVisibleOptions(block, plan)}
                         captionText={groups.get(block.groupId)?.caption}
                         captionRequired={groups.get(block.groupId)?.required}
                         value={answers[block.id]}

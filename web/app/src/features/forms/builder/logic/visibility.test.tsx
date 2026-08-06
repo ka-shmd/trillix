@@ -7,7 +7,7 @@ import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema
 import { PreviewPane } from '../PreviewPane'
 import { createBuilderStore } from '../store'
 import { BuilderStoreContext } from '../storeContext'
-import { planForm } from '@fields/logic'
+import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 
 import {
   asRootGroup,
@@ -179,5 +179,59 @@ describe('обязательность — три состояния', () => {
     const plan = planForm(blocks, { pet: 'yes' })
     expect(plan.visible.has('q')).toBe(false)
     expect(plan.required.has('q')).toBe(false)
+  })
+})
+
+describe('скрытие вариантов выбора', () => {
+  // Каскад: «Кто у вас?» → в списке принадлежностей вариант «поводок» только для собаки,
+  // «лоток» только для кота, «корм» всегда.
+  const doc = (): Block[] => [
+    ...choice('pet', 'Кто у вас?'),
+    {
+      id: 'stuff',
+      groupId: 'g_stuff',
+      type: 'multi_choice',
+      settings: {
+        options: [
+          { id: 'leash', label: 'Поводок', visibleIf: { all: [{ blockId: 'pet', op: 'is', value: 'yes' }] } },
+          { id: 'tray', label: 'Лоток', visibleIf: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] } },
+          { id: 'food', label: 'Корм' },
+        ],
+      },
+    },
+  ]
+
+  it('в списке остаются только варианты со сработавшим условием', () => {
+    renderPreview(doc())
+    // До ответа не сработало ни одно условие — виден только безусловный вариант.
+    expect(screen.queryByText('Поводок')).toBeNull()
+    expect(screen.queryByText('Лоток')).toBeNull()
+    expect(screen.getByText('Корм')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    expect(screen.getByText('Поводок')).toBeTruthy()
+    expect(screen.queryByText('Лоток')).toBeNull()
+  })
+
+  // Блок отдаётся рендеру уже отфильтрованным (withVisibleOptions), поэтому буквенные
+  // бейджи считаются по видимому списку и идут подряд — без дырок на месте скрытых.
+  it('withVisibleOptions отдаёт исходный объект, когда прятать нечего', () => {
+    const blocks = doc()
+    const plan = planForm(blocks, { pet: 'yes' })
+    const list = blocks[2]!
+    expect(withVisibleOptions(list, plan).settings?.options?.map((o) => o.id)).toEqual([
+      'leash',
+      'food',
+    ])
+    // У блока без правил — тот же объект, а не копия: копия на каждый рендер заставляла
+    // бы React считать поле изменившимся там, где ничего не менялось.
+    expect(withVisibleOptions(blocks[1]!, plan)).toBe(blocks[1])
+  })
+
+  it('выбранный скрытый вариант не уходит в ответ', () => {
+    const blocks = doc()
+    // Человек выбрал «лоток» при «Нет», затем переключил на «Да» — вариант скрылся.
+    const clean = stripHiddenAnswers(blocks, { pet: 'yes', stuff: ['tray', 'food'] })
+    expect(clean.stuff).toEqual(['food'])
   })
 })

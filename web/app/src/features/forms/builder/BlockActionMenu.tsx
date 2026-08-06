@@ -7,7 +7,7 @@ import {
   type Block,
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
-import { LogicDialog } from './logic/LogicDialog'
+import { BlockRuleDialog } from './logic/LogicDialog'
 import {
   type RequiredMode,
   requiredMode,
@@ -161,11 +161,11 @@ export function BlockActionMenu({
       {/* Носитель у правил РАЗНЫЙ: видимость прячет вопрос целиком (голова группы),
           обязательность — свойство поля (сам отвечаемый блок). */}
       {logicField !== null && (
-        <LogicDialog
+        <BlockRuleDialog
           open
           onOpenChange={(o) => !o && setLogicField(null)}
           carrier={logicField === 'visibleIf' ? carrier! : requiredFor!}
-          field={logicField}
+          kind={logicField}
         />
       )}
       <Popover

@@ -39,6 +39,7 @@ import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
 import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { OptionRuleDialog } from './logic/LogicDialog'
 import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
@@ -1582,12 +1583,18 @@ function OptionActionMenu({
   open,
   onOpenChange,
   anchor,
+  ruleSummaryText,
+  onEditRule,
   onDuplicate,
   onDelete,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor: ReactNode
+  // Текст правила показа варианта («всегда» или короткая фраза условия): пункт без
+  // намёка на содержание заставлял бы открывать диалог, чтобы просто узнать состояние.
+  ruleSummaryText: string
+  onEditRule: () => void
   onDuplicate: () => void
   onDelete: () => void
 }) {
@@ -1605,6 +1612,17 @@ function OptionActionMenu({
         <Command>
           <CommandList>
             <CommandGroup>
+              {/* Каскадные списки (фаза 21): вариант прячется по ответу на вопрос выше.
+                  Пункт стоит первым — это настройка, а ниже идут действия. */}
+              <CommandItem
+                onSelect={() => {
+                  onEditRule()
+                  onOpenChange(false)
+                }}
+              >
+                <GitBranch className="size-4" />
+                Показывать: {ruleSummaryText}
+              </CommandItem>
               <CommandItem
                 onSelect={() => {
                   onDuplicate()
@@ -1668,7 +1686,11 @@ function OptionCard({
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
+  const blocks = useBuilderStore((s) => s.blocks)
   const [menuOpen, setMenuOpen] = useState(false)
+  // Диалог правила варианта — рядом с попапом, как у блока: у условия дерево, а попап
+  // варианта ещё уже блочного.
+  const [ruleOpen, setRuleOpen] = useState(false)
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
   // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
@@ -1720,7 +1742,21 @@ function OptionCard({
             (решение владельца 7): с решением 6 карточка варианта остаётся
             единственным местом, где списком управляют, и оставить её без попапа
             значило бы спрятать управление совсем. */}
+        <OptionRuleDialog
+          open={ruleOpen}
+          onOpenChange={(o) => {
+            setRuleOpen(o)
+            if (!o) inputEl.current?.focus()
+          }}
+          block={block}
+          optionId={option.id}
+        />
         <OptionActionMenu
+          ruleSummaryText={ruleSummary(blocks, option.visibleIf)}
+          onEditRule={() => {
+            movedCaretRef.current = true
+            setRuleOpen(true)
+          }}
           open={menuOpen}
           // Закрытие без действия (Esc, клик мимо) возвращает каретку на свою
           // карточку. Без этого она падала в body — Radix ставит фокус на поповер при
