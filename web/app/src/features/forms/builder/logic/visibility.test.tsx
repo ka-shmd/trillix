@@ -7,7 +7,17 @@ import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema
 import { PreviewPane } from '../PreviewPane'
 import { createBuilderStore } from '../store'
 import { BuilderStoreContext } from '../storeContext'
-import { asRootGroup, defaultLeaf, ruleCarrier, ruleSummary, sourcesFor } from './model'
+import { planForm } from '@fields/logic'
+
+import {
+  asRootGroup,
+  defaultLeaf,
+  requiredMode,
+  requiredPatch,
+  ruleCarrier,
+  ruleSummary,
+  sourcesFor,
+} from './model'
 
 // Условная логика в превью (фаза 21, слайс 2). Тест ДОМ-ный, а не модельный, и это не
 // перестраховка: модель проверена таблицей в entities/logic.test.ts, а здесь проверяется
@@ -126,5 +136,48 @@ describe('модель редактора правил', () => {
     expect(asRootGroup({ blockId: 'pet', op: 'answered' })).toEqual({
       all: [{ blockId: 'pet', op: 'answered' }],
     })
+  })
+})
+
+describe('обязательность — три состояния', () => {
+  const field: Block = { id: 'q', groupId: 'g', type: 'short_text' }
+  const rule = { all: [{ blockId: 'src', op: 'answered' as const }] }
+
+  it('режим читается из документа', () => {
+    expect(requiredMode(field)).toBe('no')
+    expect(requiredMode({ ...field, required: true })).toBe('always')
+    expect(requiredMode({ ...field, requiredIf: rule })).toBe('conditional')
+  })
+
+  // Схема запрещает required и requiredIf вместе, поэтому патч всегда чистит второе
+  // поле: иначе первое же переключение ловило бы 422 в автосейве.
+  it('патч режима всегда чистит второе поле', () => {
+    expect(requiredPatch('always')).toEqual({ required: true, requiredIf: undefined })
+    expect(requiredPatch('no')).toEqual({ required: false, requiredIf: undefined })
+    expect(requiredPatch('conditional', rule)).toEqual({ required: false, requiredIf: rule })
+  })
+
+  it('звёздочка обязательности считается по плану, а не по флагу', () => {
+    // Условие не сработало — поле необязательно, звёздочки нет; сработало — есть.
+    const blocks: Block[] = [
+      ...choice('pet', 'Есть питомец?'),
+      { ...field, requiredIf: { all: [{ blockId: 'pet', op: 'is', value: 'yes' }] } },
+    ]
+    expect(planForm(blocks, {}).required.has('q')).toBe(false)
+    expect(planForm(blocks, { pet: 'yes' }).required.has('q')).toBe(true)
+  })
+
+  it('скрытый вопрос не обязателен, даже когда условие обязательности сработало', () => {
+    const blocks: Block[] = [
+      ...choice('pet', 'Есть питомец?'),
+      {
+        ...field,
+        visibleIf: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] },
+        requiredIf: { all: [{ blockId: 'pet', op: 'answered' }] },
+      },
+    ]
+    const plan = planForm(blocks, { pet: 'yes' })
+    expect(plan.visible.has('q')).toBe(false)
+    expect(plan.required.has('q')).toBe(false)
   })
 })

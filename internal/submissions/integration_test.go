@@ -517,3 +517,34 @@ func TestSubmit_VisibleRequired_422(t *testing.T) {
 		t.Fatalf("невалидный ответ попал в базу: строк %d", n)
 	}
 }
+
+// Обязательность по условию (слайс 3): телефон обязателен только при выборе «хочу
+// звонок». Проверяем сквозь HTTP, а не только в домене: путь ответа проходит через
+// нормализацию, и «обязателен» здесь означает 422 респонденту.
+const requiredIfSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"how","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"call","label":"Звонок"},{"id":"mail","label":"Почта"}]}},
+	{"id":"phone","groupId":"g2","type":"phone","settings":{},"requiredIf":{"all":[{"blockId":"how","op":"is","value":"call"}]}}
+]}`
+
+func TestSubmit_RequiredIf(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredIfSchema)
+
+	// Условие не сработало — пустой телефон принимается.
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"how":"mail"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	// Сработало — тот же пустой телефон отвергается.
+	body = `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"how":"call"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("строк в базе %d, ожидалась 1", n)
+	}
+}

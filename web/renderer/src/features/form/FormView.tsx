@@ -222,7 +222,10 @@ export function FormView({
   // звёздочка у блока-подписи. Считаются по ВСЕМУ документу, а не по странице: группа
   // границу страницы не пересекает (regroup ведёт её через text/image, а разрыв ни то
   // ни другое), но карта на весь документ дешевле и не зависит от того, где мы сейчас.
-  const groups = groupMeta(blocks)
+  // Звёздочка обязательности — из ПЛАНА: условно обязательное поле обязано получать её
+  // ровно тогда, когда условие сработало, иначе форма отказывает в отправке по полю,
+  // ничем не помеченному.
+  const groups = groupMeta(blocks, plan.required)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
 

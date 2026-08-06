@@ -88,6 +88,28 @@ export function asRootGroup(cond: LogicCondition): Group {
   return 'all' in cond || 'any' in cond ? cond : { all: [cond] }
 }
 
+// Обязательность — ТРИ состояния, а не два флага (ADR §10): нет / всегда / по условию.
+// Схема запрещает required и requiredIf вместе, поэтому патч всегда чистит второе поле:
+// иначе автосейв ловил бы 422 на первом же переключении.
+export type RequiredMode = 'no' | 'always' | 'conditional'
+
+export function requiredMode(block: Block): RequiredMode {
+  if (block.requiredIf) return 'conditional'
+  return block.required ? 'always' : 'no'
+}
+
+// Патч перехода в режим. У 'conditional' условие приходит извне: его выбирает автор в
+// диалоге, а до первого условия режим не включается вовсе — правило без условий
+// невалидно, и «обязателен по пустому условию» ничего не значит.
+export function requiredPatch(
+  mode: RequiredMode,
+  cond?: LogicCondition,
+): { required?: boolean; requiredIf?: LogicCondition } {
+  if (mode === 'always') return { required: true, requiredIf: undefined }
+  if (mode === 'no') return { required: false, requiredIf: undefined }
+  return { required: false, requiredIf: cond }
+}
+
 export const OPERATOR_LABELS: Record<LogicOperator, string> = {
   answered: 'отвечен',
   empty: 'не отвечен',

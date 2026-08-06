@@ -307,7 +307,11 @@ export function packOptionRows<T extends { column?: ColumnBit }>(options: T[]): 
   )
 }
 
-export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
+// required — множество ФАКТИЧЕСКИ обязательных блоков из плана (фаза 21): у поля может
+// стоять requiredIf, и решает его сработавшее условие, а не флаг документа. Без
+// аргумента берутся флаги блоков, то есть поведение до фазы (полотно редактора считает
+// именно так: там показывается документ, а не заполнение).
+export function groupMeta(blocks: Block[], required?: ReadonlySet<string>): Map<string, GroupMeta> {
   const meta = new Map<string, GroupMeta>()
   const hasTitle = new Set<string>()
   const get = (g: string): GroupMeta => {
@@ -335,7 +339,7 @@ export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
         m.caption = flat
       }
     } else if (isAnswerableType(b.type)) {
-      if (b.required) m.required = true
+      if (required ? required.has(b.id) : b.required) m.required = true
     }
   }
   return meta

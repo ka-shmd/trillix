@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Asterisk, Copy, GitBranch, Replace, Trash2 } from 'lucide-react'
+import { Copy, GitBranch, Replace, Trash2 } from 'lucide-react'
 import {
   MAX_QUESTION_NAME_LEN,
   isAnswerableType,
@@ -8,11 +8,24 @@ import {
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
 import { LogicDialog } from './logic/LogicDialog'
-import { ruleCarrier, ruleSummary } from './logic/model'
+import {
+  type RequiredMode,
+  requiredMode,
+  requiredPatch,
+  ruleCarrier,
+  ruleSummary,
+} from './logic/model'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
 import { editorKind } from './kinds/index'
-import { TextSetting } from './kinds/settings'
+import { SettingRow, TextSetting } from './kinds/settings'
 import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
@@ -53,6 +66,40 @@ function QuestionNameSetting({ block }: { block: Block }) {
   )
 }
 
+// RequiredSetting — обязательность ТРЕМЯ состояниями (фаза 21, ADR §10): нет / всегда /
+// по условию. Не два флага и не чекбокс с довеском: required и requiredIf схема
+// запрещает вместе, и переключатель, из которого невыразимо «ни то ни другое», рано или
+// поздно соберёт документ, который сервер отвергнет.
+//
+// «По условию» открывает диалог, а не пишет что-то само: правило без единого условия
+// невалидно, и «обязателен по пустому условию» ничего не значит. Пока автор не выбрал
+// условие, режим остаётся прежним.
+function RequiredSetting({ block, onCondition }: { block: Block; onCondition: () => void }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const mode = requiredMode(block)
+  const pick = (next: RequiredMode) => {
+    if (next === 'conditional') {
+      onCondition()
+      return
+    }
+    updateBlock(block.id, requiredPatch(next))
+  }
+  return (
+    <SettingRow label="Обязательный">
+      <Select value={mode} onValueChange={(v) => pick(v as RequiredMode)}>
+        <SelectTrigger size="sm" className="h-7 w-36" aria-label="Обязательность вопроса">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="no">Нет</SelectItem>
+          <SelectItem value="always">Всегда</SelectItem>
+          <SelectItem value="conditional">По условию…</SelectItem>
+        </SelectContent>
+      </Select>
+    </SettingRow>
+  )
+}
+
 export function BlockActionMenu({
   open,
   onOpenChange,
@@ -60,7 +107,6 @@ export function BlockActionMenu({
   subject,
   anchor,
   requiredFor,
-  onToggleRequired,
   onDuplicate,
   onDelete,
   onPickType,
@@ -78,7 +124,6 @@ export function BlockActionMenu({
   // requiredFor — блок, чью обязательность правит пункт меню (см. BlockRow): у поля
   // это оно само, у подписи — поле её вопроса, у контента — ничего, и пункта нет.
   requiredFor?: Block
-  onToggleRequired: () => void
   onDuplicate: () => void
   onDelete: () => void
   onPickType: (item: MenuItem) => void
@@ -88,7 +133,9 @@ export function BlockActionMenu({
   const [view, setView] = useState<'actions' | 'types'>('actions')
   // Диалог логики (фаза 21) — рядом с попапом, а не внутри: у правила дерево с
   // группами, попап шириной в одну строку настройки для него мал.
-  const [logicOpen, setLogicOpen] = useState(false)
+  // Какое правило правим — или null, если диалог закрыт. Одно состояние на оба: диалог
+  // у них общий, отличаются только тексты.
+  const [logicField, setLogicField] = useState<'visibleIf' | 'requiredIf' | null>(null)
   // Носитель правила — голова группы: прячется вопрос целиком, а не одна его строка.
   // У заголовка формы правил не бывает — он скелет документа, не вопрос.
   const blocks = useBuilderStore((s) => s.blocks)
@@ -111,7 +158,16 @@ export function BlockActionMenu({
 
   return (
     <>
-      {carrier && <LogicDialog open={logicOpen} onOpenChange={setLogicOpen} carrier={carrier} />}
+      {/* Носитель у правил РАЗНЫЙ: видимость прячет вопрос целиком (голова группы),
+          обязательность — свойство поля (сам отвечаемый блок). */}
+      {logicField !== null && (
+        <LogicDialog
+          open
+          onOpenChange={(o) => !o && setLogicField(null)}
+          carrier={logicField === 'visibleIf' ? carrier! : requiredFor!}
+          field={logicField}
+        />
+      )}
       <Popover
         open={open}
         onOpenChange={(o) => {
@@ -133,30 +189,28 @@ export function BlockActionMenu({
               {/* Настройки стоят ВЫШЕ общих пунктов и ВНЕ Command: cmdk перехватывает
                 стрелки и Enter для навигации по пунктам, а внутри раздела те же клавиши
                 принадлежат контролам (набор текста, открыть список, выбрать значение). */}
-              {(named || Settings) && (
+              {(named || Settings || requiredFor) && (
                 <div className="border-b py-1">
                   {named && <QuestionNameSetting block={subject} />}
+                  {requiredFor && (
+                    <RequiredSetting
+                      block={requiredFor}
+                      onCondition={() => {
+                        onOpenChange(false)
+                        setLogicField('requiredIf')
+                      }}
+                    />
+                  )}
                   {Settings && <Settings block={subject} />}
                 </div>
               )}
               <Command>
                 <CommandList>
                   <CommandGroup>
-                    {requiredFor && (
-                      <CommandItem
-                        onSelect={() => {
-                          onToggleRequired()
-                          close()
-                        }}
-                      >
-                        <Asterisk className="size-4" />
-                        {requiredFor.required ? 'Убрать обязательность' : 'Сделать обязательным'}
-                      </CommandItem>
-                    )}
                     {logicAllowed && (
                       <CommandItem
                         onSelect={() => {
-                          setLogicOpen(true)
+                          setLogicField('visibleIf')
                           onOpenChange(false)
                         }}
                       >

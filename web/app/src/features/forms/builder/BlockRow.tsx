@@ -677,12 +677,10 @@ const BlockRowBody = memo(function BlockRowBody({
         subject={settingsSubject}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
         // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
-        // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись
-        // ответов не собирает, а флаг — как раз про её вопрос).
+        // группы. Поэтому на подписи вопроса строка есть (раньше не было: подпись
+        // ответов не собирает, а флаг — как раз про её вопрос). С фазы 21 это не пункт
+        // «сделать обязательным», а три состояния: нет / всегда / по условию.
         requiredFor={requiredFor}
-        onToggleRequired={() =>
-          requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
-        }
         // Каретка уходит на копию (§12): без этого после «Дублировать» активным
         // элементом остаётся body — поповер закрылся, а возврат фокуса на его якорь
         // мы гасим сами.
@@ -718,7 +716,9 @@ const BlockRowBody = memo(function BlockRowBody({
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
           себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
-      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />}
+      {needsCaption && (
+        <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />
+      )}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -825,7 +825,9 @@ function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
   return (
     <div className={`absolute left-full top-8 ml-1 flex ${lineH} items-center`}>
       <span
-        title={inert ? `Условие не действует: ${warnings[0]!.reason}` : `Показывать, если ${summary}`}
+        title={
+          inert ? `Условие не действует: ${warnings[0]!.reason}` : `Показывать, если ${summary}`
+        }
         aria-label={inert ? 'Условие показа не действует' : `Показывать, если ${summary}`}
         className={`flex size-5 items-center justify-center rounded ${
           inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
@@ -847,7 +849,12 @@ function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
 // на уровне первой строки текста, а она разной высоты у вопроса и у согласия.
 function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const required = block.required
+  // Третье состояние (фаза 21): обязателен ПО УСЛОВИЮ. Звёздочка показывает его
+  // приглушённо — «иногда обязателен» это не то же, что «обязателен», и рисовать их
+  // одинаково значило бы врать про форму. Клик снимает условие (обязательности больше
+  // нет): у переключателя два положения, а потеря правила лечится Ctrl+Z.
+  const conditional = Boolean(block.requiredIf)
+  const required = block.required || conditional
   return (
     <div
       className={`absolute left-full top-1.5 ml-1 flex ${lineH} items-center transition-opacity ${
@@ -859,11 +866,27 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
       <button
         type="button"
         aria-pressed={required}
-        aria-label={required ? 'Обязательный вопрос' : 'Сделать вопрос обязательным'}
-        title={required ? 'Обязательный вопрос' : 'Сделать обязательным'}
-        onClick={() => updateBlock(block.id, { required: !required })}
+        aria-label={
+          conditional
+            ? 'Обязателен по условию — снять'
+            : required
+              ? 'Обязательный вопрос'
+              : 'Сделать вопрос обязательным'
+        }
+        title={
+          conditional
+            ? 'Обязателен по условию — снять'
+            : required
+              ? 'Обязательный вопрос'
+              : 'Сделать обязательным'
+        }
+        onClick={() => updateBlock(block.id, { required: !required, requiredIf: undefined })}
         className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
-          required ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+          conditional
+            ? 'text-primary/60'
+            : required
+              ? 'text-primary'
+              : 'text-muted-foreground hover:text-foreground'
         }`}
       >
         <Asterisk className="size-4" />
@@ -939,7 +962,8 @@ function ObjectStop({
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
-      answerAction: () => ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
+      answerAction: () =>
+        ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
       moveGroup: onMoveGroup,
       // Mod+Alt+→/← — ряд (§5): у объектной остановки (date/scale/картинка в вопросе)
       // жест тот же, что на подписи — переносится ВОПРОС, а не строка.
