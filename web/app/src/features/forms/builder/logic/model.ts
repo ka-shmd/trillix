@@ -8,6 +8,7 @@ import {
   plainText,
   scaleRange,
 } from '@entities/formSchema'
+import { pageNumbers } from '@fields/groups'
 import { operatorsFor } from '@fields/logic'
 
 import { derivedQuestionName } from '../questionName'
@@ -142,6 +143,48 @@ export function ruleSummary(blocks: readonly Block[], cond: LogicCondition | und
   const value = opNeedsValue(first.op) ? valueTitle(src, first.value ?? '') : ''
   const head = [name, op, value].filter(Boolean).join(' ')
   return leaves.length > 1 ? `${head} и ещё ${leaves.length - 1}` : head
+}
+
+// ПЕРЕХОДЫ МЕЖДУ СТРАНИЦАМИ (фаза 21, слайс 5).
+//
+// Цель перехода — разрыв, ОТКРЫВАЮЩИЙ страницу; нумерация берётся из pageNumbers, того
+// же разбиения, которым форма режется респонденту (собственный счёт разрывов разошёлся
+// бы с показом на первом же инертном разрыве).
+//
+// Предлагаются только цели ВПЕРЁД: переход назад инертен по построению обхода
+// (@fields/logic), и показать его в списке значило бы пообещать работу, которой не будет.
+export function jumpTargets(
+  blocks: readonly Block[],
+  breakId: string,
+): { value: string; label: string }[] {
+  const opens = pageNumbers([...blocks])
+  const from = opens.get(breakId)
+  const out: { value: string; label: string }[] = []
+  if (from === undefined) return out // инертный разрыв: страницы не открывает, вести некуда
+  for (const b of blocks) {
+    const page = opens.get(b.id)
+    if (b.type !== 'page_break' || page === undefined || page <= from) continue
+    out.push({ value: b.id, label: `Страница ${page}` })
+  }
+  out.push({ value: JUMP_END, label: 'К отправке' })
+  return out
+}
+
+// Значение поля `to`, означающее «страниц дальше нет». В схеме это отдельный флаг `end`,
+// а не строка: id блока генерирует клиент, и 'end' — сам по себе законный id. В UI
+// удобнее одно поле выбора, поэтому здесь строка-маркер, а на запись она разворачивается
+// в правильную форму (см. JumpDialog).
+export const JUMP_END = '\u0000end'
+
+// Как переход читается одной строкой — для пункта попапа: цель плюс первое условие.
+export function jumpSummary(blocks: readonly Block[], block: Block): string {
+  const rules = block.jumpIf ?? []
+  const first = rules[0]
+  if (!first) return 'нет'
+  const opens = pageNumbers([...blocks])
+  const target = first.end === true ? 'к отправке' : `на страницу ${opens.get(first.to ?? '') ?? '?'}`
+  const head = `${target}, если ${ruleSummary(blocks, first.when)}`
+  return rules.length > 1 ? `${head} +${rules.length - 1}` : head
 }
 
 // Значение глазами автора: у списка это подпись варианта, а не его id.

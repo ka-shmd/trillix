@@ -29,7 +29,7 @@ export type RuleKind = 'visibleIf' | 'requiredIf' | 'optionVisibleIf'
 
 const COPY: Record<
   RuleKind,
-  { title: string; hint: string; empty: string; off: string; inert: string }
+  { title: string; hint: string; empty: string; off: string; inert: string; noSources: string }
 > = {
   visibleIf: {
     title: 'Показывать вопрос, если',
@@ -37,6 +37,7 @@ const COPY: Record<
     empty: 'Сейчас вопрос показывается всегда.',
     off: 'Показывать всегда',
     inert: 'вопрос показывается всем',
+    noSources: 'Поставьте этот вопрос ниже того, от ответа на который он зависит.',
   },
   requiredIf: {
     title: 'Обязателен, если',
@@ -44,6 +45,7 @@ const COPY: Record<
     empty: 'Сейчас поле необязательно.',
     off: 'Сделать необязательным',
     inert: 'поле необязательно',
+    noSources: 'Поставьте этот вопрос ниже того, от ответа на который зависит его обязательность.',
   },
   optionVisibleIf: {
     title: 'Показывать вариант, если',
@@ -51,6 +53,7 @@ const COPY: Record<
     empty: 'Сейчас вариант показывается всегда.',
     off: 'Показывать всегда',
     inert: 'вариант показывается всем',
+    noSources: 'Поставьте список ниже того вопроса, от ответа на который зависят его варианты.',
   },
 }
 
@@ -78,7 +81,10 @@ export function LogicDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      {/* Ширина как у диалога переходов: в max-w-lg строка условия («вопрос — сравнение
+          — значение — ×») не влезала, и крестик удаления срывался на отдельную строку,
+          где читался как «удалить всё правило». Найдено в браузере. */}
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>{copy.hint}</DialogDescription>
@@ -88,8 +94,8 @@ export function LogicDialog({
           // Условию не на что смотреть: выше нет ни одного вопроса. Говорим об этом
           // прямо, а не показываем конструктор с пустым списком источников.
           <p className="text-muted-foreground text-sm">
-            Условие сравнивает ответ на предыдущий вопрос, а выше пока нет ни одного.
-            Поставьте этот вопрос ниже того, от ответа на который он зависит.
+            Условие сравнивает ответ на предыдущий вопрос, а выше пока нет ни одного.{' '}
+            {copy.noSources}
           </p>
         ) : rule === undefined ? (
           <div className="space-y-3">

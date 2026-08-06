@@ -10,11 +10,13 @@ import { BuilderStoreContext } from '../storeContext'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 
 import {
+  JUMP_END,
   asRootGroup,
   defaultLeaf,
   requiredMode,
   requiredPatch,
   ruleCarrier,
+  jumpTargets,
   ruleSummary,
   sourcesFor,
 } from './model'
@@ -233,5 +235,104 @@ describe('скрытие вариантов выбора', () => {
     // Человек выбрал «лоток» при «Нет», затем переключил на «Да» — вариант скрылся.
     const clean = stripHiddenAnswers(blocks, { pet: 'yes', stuff: ['tray', 'food'] })
     expect(clean.stuff).toEqual(['food'])
+  })
+})
+
+describe('переходы между страницами', () => {
+  // Три страницы: [pet] | [q2] | [q3]; разрывы br1 (открывает 2) и br2 (открывает 3).
+  const paged = (jumpIf?: Block['jumpIf']): Block[] => [
+    ...choice('pet', 'Есть питомец?'),
+    { id: 'br1', groupId: 'g_br1', type: 'page_break', jumpIf },
+    ...dependent('q2', 'Уточнение', undefined),
+    { id: 'br2', groupId: 'g_br2', type: 'page_break' },
+    ...dependent('q3', 'Телефон', undefined),
+  ]
+
+  it('цели предлагаются только вперёд, плюс «к отправке»', () => {
+    const blocks = paged()
+    // С первого разрыва (он открывает страницу 2) вперёд лежит только страница 3.
+    expect(jumpTargets(blocks, 'br1')).toEqual([
+      { value: 'br2', label: 'Страница 3' },
+      { value: JUMP_END, label: 'К отправке' },
+    ])
+    // Со второго — только отправка: страниц за ним нет.
+    expect(jumpTargets(blocks, 'br2')).toEqual([{ value: JUMP_END, label: 'К отправке' }])
+  })
+
+  it('«Далее» по сработавшему переходу перескакивает страницу', () => {
+    renderPreview(paged([{ when: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] }, to: 'br2' }]))
+
+    // Ответ «Нет» — второе правило пути: страница уточнения выпадает, шагов остаётся два.
+    fireEvent.click(screen.getAllByRole('radio')[1]!)
+    fireEvent.click(screen.getByText('Далее'))
+
+    expect(screen.getByText('Телефон')).toBeTruthy()
+    expect(screen.queryByText('Уточнение')).toBeNull()
+  })
+
+  it('без сработавшего перехода идём подряд', () => {
+    renderPreview(paged([{ when: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] }, to: 'br2' }]))
+
+    fireEvent.click(screen.getAllByRole('radio')[0]!)
+    fireEvent.click(screen.getByText('Далее'))
+
+    expect(screen.getByText('Уточнение')).toBeTruthy()
+  })
+
+  it('переход «к отправке» обрывает форму на текущей странице', () => {
+    renderPreview(paged([{ when: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] }, end: true }]))
+
+    // До ответа путь обычный — три шага, на первом «Далее».
+    expect(screen.getByText('Далее')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('radio')[1]!)
+    // Путь стал одностраничным: «Далее» больше нет, на его месте кнопка отправки.
+    expect(screen.queryByText('Далее')).toBeNull()
+    expect(screen.getByText('Отправить')).toBeTruthy()
+  })
+})
+
+// Дефект, найденный владельцем в браузере (2026-08-06): диалог переходов отказывал
+// «перескакивать некуда» на разрыве, за которым нет ДРУГИХ разрывов. Это была моя
+// ошибка в условии: переход «к отправке» осмыслен у любого делящего разрыва, и у
+// единственного он как раз главный сценарий — «дальше спрашивать нечего, отправляем».
+describe('переходы: когда правило собрать можно', () => {
+  const twoPages = (): Block[] => [
+    ...choice('pet', 'Есть питомец?'),
+    { id: 'br1', groupId: 'g_br1', type: 'page_break' },
+    ...dependent('q2', 'Уточнение', undefined),
+  ]
+
+  it('у единственного разрыва есть цель «к отправке»', () => {
+    expect(jumpTargets(twoPages(), 'br1')).toEqual([{ value: JUMP_END, label: 'К отправке' }])
+  })
+
+  it('у последнего из нескольких разрывов тоже', () => {
+    const blocks: Block[] = [
+      ...twoPages(),
+      { id: 'br2', groupId: 'g_br2', type: 'page_break' },
+      ...dependent('q3', 'Телефон', undefined),
+    ]
+    expect(jumpTargets(blocks, 'br2')).toEqual([{ value: JUMP_END, label: 'К отправке' }])
+  })
+
+  // Инертный разрыв — единственный случай, когда вести действительно некуда: у
+  // респондента он страницу не открывает вовсе, значит и «уйти с неё» невозможно.
+  it('у инертного разрыва целей нет', () => {
+    const twoInARow: Block[] = [
+      ...choice('pet', 'Есть питомец?'),
+      { id: 'br1', groupId: 'g_br1', type: 'page_break' },
+      { id: 'br2', groupId: 'g_br2', type: 'page_break' },
+      ...dependent('q2', 'Уточнение', undefined),
+    ]
+    expect(jumpTargets(twoInARow, 'br1')).toEqual([])
+    // Второй при этом рабочий: он и делит форму.
+    expect(jumpTargets(twoInARow, 'br2')).toEqual([{ value: JUMP_END, label: 'К отправке' }])
+
+    const trailing: Block[] = [
+      ...choice('pet', 'Есть питомец?'),
+      { id: 'br1', groupId: 'g_br1', type: 'page_break' },
+    ]
+    expect(jumpTargets(trailing, 'br1')).toEqual([])
   })
 })

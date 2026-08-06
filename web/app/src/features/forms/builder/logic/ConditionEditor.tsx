@@ -188,7 +188,7 @@ function LeafRow({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Select value={source ? value.blockId : ''} onValueChange={pickSource}>
-        <SelectTrigger size="sm" className="h-7 min-w-40 flex-1" aria-label="Вопрос-источник">
+        <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Вопрос-источник">
           <SelectValue placeholder="Удалённый вопрос" />
         </SelectTrigger>
         <SelectContent>
@@ -212,7 +212,7 @@ function LeafRow({
           })
         }
       >
-        <SelectTrigger size="sm" className="h-7 w-36" aria-label="Сравнение">
+        <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -230,7 +230,7 @@ function LeafRow({
             value={value.value ?? ''}
             onValueChange={(v) => onChange({ ...value, value: v })}
           >
-            <SelectTrigger size="sm" className="h-7 min-w-32 flex-1" aria-label="Значение">
+            <SelectTrigger size="sm" className="h-7 min-w-28 flex-1" aria-label="Значение">
               <SelectValue placeholder="Значение…" />
             </SelectTrigger>
             <SelectContent>
@@ -243,7 +243,7 @@ function LeafRow({
           </Select>
         ) : (
           <Input
-            className="h-7 min-w-32 flex-1 text-sm"
+            className="h-7 min-w-28 flex-1 text-sm"
             value={value.value ?? ''}
             placeholder="Значение…"
             aria-label="Значение"

@@ -7,9 +7,11 @@ import {
   type Block,
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { JumpDialog } from './logic/JumpDialog'
 import { BlockRuleDialog } from './logic/LogicDialog'
 import {
   type RequiredMode,
+  jumpSummary,
   requiredMode,
   requiredPatch,
   ruleCarrier,
@@ -136,12 +138,18 @@ export function BlockActionMenu({
   // Какое правило правим — или null, если диалог закрыт. Одно состояние на оба: диалог
   // у них общий, отличаются только тексты.
   const [logicField, setLogicField] = useState<'visibleIf' | 'requiredIf' | null>(null)
+  // Переходы (слайс 5) — свой диалог: у них не одно правило, а список со своим порядком
+  // приоритета и целью у каждого.
+  const [jumpsOpen, setJumpsOpen] = useState(false)
   // Носитель правила — голова группы: прячется вопрос целиком, а не одна его строка.
   // У заголовка формы правил не бывает — он скелет документа, не вопрос.
   const blocks = useBuilderStore((s) => s.blocks)
   const carrier = ruleCarrier(blocks, block.id)
   const logicAllowed =
     carrier !== null && carrier.type !== 'form_title' && block.type !== 'page_break'
+  // Переходы задаются только у разрыва страницы: правило «куда уходим» принадлежит
+  // границе, а не элементу (схема это и проверяет).
+  const jumpsAllowed = block.type === 'page_break'
   const isGroup = isCaptionType(block.type)
   // Имя — свойство любого отвечаемого блока, а не типа (ADR §10), поэтому строка общая
   // и стоит выше типового раздела. У подписи, контента и заголовка формы её нет: имя
@@ -168,6 +176,7 @@ export function BlockActionMenu({
           kind={logicField}
         />
       )}
+      {jumpsAllowed && <JumpDialog open={jumpsOpen} onOpenChange={setJumpsOpen} block={block} />}
       <Popover
         open={open}
         onOpenChange={(o) => {
@@ -216,6 +225,17 @@ export function BlockActionMenu({
                       >
                         <GitBranch className="size-4" />
                         Показывать: {ruleSummary(blocks, carrier.visibleIf)}
+                      </CommandItem>
+                    )}
+                    {jumpsAllowed && (
+                      <CommandItem
+                        onSelect={() => {
+                          setJumpsOpen(true)
+                          onOpenChange(false)
+                        }}
+                      >
+                        <GitBranch className="size-4" />
+                        Переходы: {jumpSummary(blocks, block)}
                       </CommandItem>
                     )}
                     <CommandItem onSelect={() => setView('types')}>

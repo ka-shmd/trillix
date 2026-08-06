@@ -59,7 +59,7 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // как name и required. Носителя (голову группы) выбирает вызывающий — стор про
 // семантику правил не знает, ему хватает того, что это поле документа.
 export type BlockPatch = Partial<
-  Pick<Block, 'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf'>
+  Pick<Block, 'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf' | 'jumpIf'>
 >
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
