@@ -45,11 +45,6 @@ export function PreviewPane({ title }: { title: string }) {
   // возвращает его в существующий диапазон, а не показывает пустоту.
   const [rawPage, setPage] = useState(0)
   const page = Math.min(rawPage, lastPage)
-  // Самый дальний просмотренный шаг — как у респондента: клик по линии возвращает
-  // только назад. Зажимается тем же lastPage: стёртый разрыв не должен оставлять
-  // кликабельной страницу, которой больше нет.
-  const [rawReached, setReached] = useState(0)
-  const reached = Math.min(Math.max(rawReached, page), lastPage)
   // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
   // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
   const chrome = page === 0
@@ -162,10 +157,7 @@ export function PreviewPane({ title }: { title: string }) {
             <button
               type="button"
               className="rf-submit rf-next"
-              onClick={() => {
-                setPage(page + 1)
-                setReached(page + 1)
-              }}
+              onClick={() => setPage(page + 1)}
             >
               Далее
             </button>
@@ -177,7 +169,7 @@ export function PreviewPane({ title }: { title: string }) {
         </div>
         {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
             правило «кликом только назад» — часть WYSIWYG. */}
-        <StepBar pages={pages.length} page={page} reached={reached} onGo={setPage} />
+        <StepBar pages={pages.length} page={page} onGo={setPage} />
       </div>
     </>
   )

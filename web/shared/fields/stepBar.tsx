@@ -18,14 +18,11 @@
 export function StepBar({
   pages,
   page,
-  reached,
   onGo,
 }: {
   // Сколько всего страниц и на какой мы сейчас (индексы с нуля).
   pages: number
   page: number
-  // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом.
-  reached: number
   onGo: (next: number) => void
 }) {
   if (pages < 2) return null // индикатор из одной линии — шум, а не индикатор
@@ -40,8 +37,11 @@ export function StepBar({
         {Array.from({ length: pages }, (_, i) => {
           const state = i === page ? 'current' : i < page ? 'done' : 'ahead'
           const cls = `rf-step-mark rf-step-mark--${state}`
-          // Вернуться можно на любой пройденный шаг, кроме текущего.
-          const clickable = i <= reached && i !== page
+          // Кнопка — ровно шаг ПОЗАДИ текущего, и никогда впереди. «Дальний достигнутый
+          // шаг» тут не годится (было `i <= reached`): вернувшись на первую страницу,
+          // человек получал кликабельную линию второй и уходил туда мимо «Далее» — то
+          // есть мимо валидации текущей страницы, ради которой пошаговость и заведена.
+          const clickable = i < page
           return (
             <li key={i} className="rf-step-cell" aria-current={i === page ? 'step' : undefined}>
               {clickable ? (

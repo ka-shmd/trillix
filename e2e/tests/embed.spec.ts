@@ -13,13 +13,22 @@ import { login, seedAccount } from './helpers/session'
 // внутри фрейма ходит на свой origin, и это тот же прод-контур с той же CSP).
 //
 // ПОСТОРОННИЙ ORIGIN БЕЗ СЕРВЕРА. Страница-хозяин раздаётся через page.route на
-// http://embed-host.test — для браузера это полноценный чужой origin, и ради теста не
-// приходится ни поднимать сервер, ни трогать прод-конфиг Caddy. Смешанного контента
-// браузер тут не блокирует: https-фрейм внутри http-страницы разрешён (запрещено
-// обратное).
+// https://embed-host.test — для браузера это полноценный чужой origin, и ради теста не
+// приходится ни поднимать сервер, ни трогать прод-конфиг Caddy. Перехват происходит до
+// DNS и TLS, поэтому несуществующий хост и отсутствие сертификата роли не играют.
+//
+// ХОЗЯИН ПО HTTPS И С РАЗРЕШЁННОЙ ЛОКАЛЬНОЙ СЕТЬЮ — цена того, что прод-контур живёт на
+// loopback, а хозяин снаружи него. Local Network Access в Chrome режет запрос со
+// страницы-хозяина в более приватное адресное пространство (`f.localhost` — loopback)
+// дважды: по http — наглухо, «the request client is not a secure context», а по https —
+// спросив разрешение, которое в автоматизации некому дать. Обе блокировки молчаливые:
+// загрузчик просто не грузится, фрейма нет, и падает первый же поиск поля внутри него.
+// Поэтому хозяин отдаётся по https (заодно это правда про настоящие сайты, куда форму
+// вставляют), а разрешение выдаётся контексту заранее. На проде ни того ни другого нет:
+// там `f.trillix.ru` — обычный публичный адрес, и LNA к нему не применяется.
 const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
 
-const HOST_PAGE = 'http://embed-host.test/'
+const HOST_PAGE = 'https://embed-host.test/'
 const Q1 = 'Ваше имя'
 
 // Страница-хозяин: ровно тот сниппет, который кабинет даёт владельцу формы.
@@ -75,6 +84,7 @@ test('форма живёт блоком и виджетом на посторо
 
   // ── Блок на постороннем сайте ────────────────────────────────────────────────
   const visitor = await browser.newContext({ ignoreHTTPSErrors: true })
+  await visitor.grantPermissions(['local-network-access'], { origin: HOST_PAGE })
   const host = await visitor.newPage()
   await host.route(HOST_PAGE, (route) =>
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: hostHtml(snippet) }),
