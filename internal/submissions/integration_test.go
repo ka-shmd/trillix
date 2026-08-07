@@ -443,3 +443,198 @@ func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
 		t.Errorf("помечено сверхлимитными %d, ожидалось 0", got)
 	}
 }
+
+// Условная логика на приёме (фаза 21, слайс 2). Форма: «Есть питомец?» (single_choice)
+// и обязательный «Какой?» за условием «выбрано Да».
+const logicSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
+	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{},"visibleIf":{"all":[{"blockId":"pet","op":"is","value":"yes"}]}}
+]}`
+
+// Сервер не верит клиенту: ответ на скрытый вопрос принимается (респондент не виноват,
+// что успел его набрать до переключения источника), но в базу не попадает — иначе
+// владелец увидел бы в таблице и CSV ответы на вопросы, которых человек не видел.
+func TestSubmit_HiddenAnswer_AcceptedButNotStored(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	subID := uuid.NewString()
+	body := `{"submission_id":"` + subID + `","token":"` + freshToken() +
+		`","answers":{"pet":"no","kind":"Барсик"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var answers []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT answers FROM submissions WHERE id = $1`, subID).Scan(&answers); err != nil {
+		t.Fatalf("read submission: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(answers, &parsed); err != nil {
+		t.Fatalf("answers: %s (%v)", answers, err)
+	}
+	if _, hidden := parsed["kind"]; hidden {
+		t.Fatalf("ответ на скрытый вопрос сохранён: %s", answers)
+	}
+	if parsed["pet"] != "no" {
+		t.Fatalf("видимый ответ пропал: %s", answers)
+	}
+}
+
+// Обязательность спрашивается только у видимых: «Какой?» обязателен, но при «Нет» его
+// не показывали — форма обязана отправиться.
+func TestSubmit_HiddenRequired_DoesNotBlock(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"pet":"no"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("строк в базе %d, ожидалась 1", n)
+	}
+}
+
+// Обратная сторона: показанный обязательный вопрос по-прежнему обязателен, и 422
+// приходит с ошибкой ровно под его id.
+func TestSubmit_VisibleRequired_422(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, logicSchema)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"pet":"yes"}}`
+	resp := postSubmission(t, srv, slug, body)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 0 {
+		t.Fatalf("невалидный ответ попал в базу: строк %d", n)
+	}
+}
+
+// Обязательность по условию (слайс 3): телефон обязателен только при выборе «хочу
+// звонок». Проверяем сквозь HTTP, а не только в домене: путь ответа проходит через
+// нормализацию, и «обязателен» здесь означает 422 респонденту.
+const requiredIfSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"how","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"call","label":"Звонок"},{"id":"mail","label":"Почта"}]}},
+	{"id":"phone","groupId":"g2","type":"phone","settings":{},"requiredIf":{"all":[{"blockId":"how","op":"is","value":"call"}]}}
+]}`
+
+func TestSubmit_RequiredIf(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredIfSchema)
+
+	// Условие не сработало — пустой телефон принимается.
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"how":"mail"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	// Сработало — тот же пустой телефон отвергается.
+	body = `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"how":"call"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("строк в базе %d, ожидалась 1", n)
+	}
+}
+
+// Скрытие вариантов (слайс 4): выбранный скрытый вариант не принимается — даже если его
+// прислать вручную. Проверяем сквозь HTTP: это про то, что попадёт в базу и в выгрузку.
+const optionRuleSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"dog","label":"Собака"},{"id":"cat","label":"Кот"}]}},
+	{"id":"stuff","groupId":"g2","type":"multi_choice","settings":{"options":[
+		{"id":"leash","label":"Поводок","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"dog"}]}},
+		{"id":"tray","label":"Лоток","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"cat"}]}},
+		{"id":"food","label":"Корм"}
+	]}}
+]}`
+
+func TestSubmit_HiddenOption_StrippedFromAnswer(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, optionRuleSchema)
+
+	subID := uuid.NewString()
+	body := `{"submission_id":"` + subID + `","token":"` + freshToken() +
+		`","answers":{"pet":"dog","stuff":["leash","tray","food"]}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var answers []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT answers FROM submissions WHERE id = $1`, subID).Scan(&answers); err != nil {
+		t.Fatalf("read submission: %v", err)
+	}
+	var parsed struct {
+		Stuff []string `json:"stuff"`
+	}
+	if err := json.Unmarshal(answers, &parsed); err != nil {
+		t.Fatalf("answers: %s (%v)", answers, err)
+	}
+	// «Лоток» показывают только владельцу кота — в ответе владельца собаки его быть не
+	// может, как бы он туда ни попал.
+	if len(parsed.Stuff) != 2 || parsed.Stuff[0] != "leash" || parsed.Stuff[1] != "food" {
+		t.Fatalf("варианты в базе: %v, ожидались [leash food]", parsed.Stuff)
+	}
+}
+
+// Переходы между страницами (слайс 5): страница, которую перескочили, не собрана —
+// ответы на её вопросы не сохраняются, а её обязательные поля не мешают отправке.
+// Сервер считает обход сам: тело запроса ему в этом не указ.
+const jumpSchema = `{"schemaVersion":4,"blocks":[
+	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
+	{"id":"br1","groupId":"g2","type":"page_break","jumpIf":[{"when":{"all":[{"blockId":"pet","op":"is","value":"no"}]},"to":"br2"}]},
+	{"id":"kind","groupId":"g3","type":"short_text","required":true,"settings":{}},
+	{"id":"br2","groupId":"g4","type":"page_break"},
+	{"id":"phone","groupId":"g5","type":"phone","settings":{}}
+]}`
+
+func TestSubmit_JumpedPage_NotCollected(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, jumpSchema)
+
+	subID := uuid.NewString()
+	// «Нет» перескакивает страницу с обязательным «Какой?» — форма обязана отправиться,
+	// а присланный ответ на пропущенный вопрос в базу не попасть.
+	body := `{"submission_id":"` + subID + `","token":"` + freshToken() +
+		`","answers":{"pet":"no","kind":"Барсик","phone":"+7 999 000 00 00"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var answers []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT answers FROM submissions WHERE id = $1`, subID).Scan(&answers); err != nil {
+		t.Fatalf("read submission: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(answers, &parsed); err != nil {
+		t.Fatalf("answers: %s (%v)", answers, err)
+	}
+	if _, jumped := parsed["kind"]; jumped {
+		t.Fatalf("ответ с перескоченной страницы сохранён: %s", answers)
+	}
+	if parsed["phone"] != "+7 999 000 00 00" {
+		t.Fatalf("ответ с посещённой страницы пропал: %s", answers)
+	}
+
+	// Обратная сторона: без перехода тот же обязательный вопрос обязателен.
+	body = `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"pet":"yes"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+}

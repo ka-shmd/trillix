@@ -45,6 +45,13 @@ export const MAX_REDIRECT_URL_LEN = 2000
 export const COVER_Y_MIN = 0
 export const COVER_Y_MAX = 100
 export const DEFAULT_COVER_Y = 50
+// Условная логика (фаза 21). Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen/
+// MaxJumpRules. Первые два обязательны: без них стоимость вычисления чужого документа
+// умножается на MAX_BLOCKS — тот же класс, что у MAX_SPANS в тексте блока.
+export const MAX_LOGIC_DEPTH = 4
+export const MAX_LOGIC_NODES = 40
+export const MAX_LOGIC_VALUE_LEN = 200
+export const MAX_JUMP_RULES = 10
 // Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода, и на
 // телефоне больше десяти в строку не помещается (нужно число — есть тип number).
 // Низ — 0: NPS считается от нуля. Диапазон новой шкалы — 1–5.

@@ -9,8 +9,8 @@ import {
   packGroupRows,
   packRows,
   splitFormTitle,
-  splitPages,
 } from '@fields/groups'
+import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -93,13 +93,6 @@ export function FormView({
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
   // полем JSON (form.title), которое сервер резолвит из колонки.
   const { title: formTitle, rest: blocks } = splitFormTitle(form.schema.blocks)
-  // Страницы (фаза 19): форма без разрывов даёт ровно одну страницу, то есть поведение
-  // до фазы. Разбиение — общий splitPages, тот же, которым считает номера полотно.
-  // Считается до состояния: сохранённый номер страницы обязан быть проверен по РЕАЛЬНОМУ
-  // числу страниц (форму могли переопубликовать короче, пока вкладка стояла открытой).
-  const pages = splitPages(blocks)
-  const lastPage = pages.length - 1
-  const multi = pages.length > 1
 
   // Предзаполнение (фаза 20). Правила и причины обоих фильтров — в applyPrefill;
   // здесь только источник правды о том, какой блок вообще можно заполнить: это
@@ -110,11 +103,30 @@ export function FormView({
       return block !== undefined && isAnswerableType(block.type) && block.type !== 'multi_choice'
     }),
   )
-  const [page, setPage] = useState(() => loadPage(slug, form.version, pages.length))
+  // ПЛАН ФОРМЫ (фаза 21) — что видно при текущих ответах: страницы, видимые блоки,
+  // фактическая обязательность. Форма без правил даёт ровно то же, что splitPages до
+  // фазы: те же страницы, те же блоки, тот же порядок.
+  //
+  // Считается на каждый рендер, а не в useMemo: проход по документу — единицы
+  // микросекунд на форме любого разумного размера, а мемоизация по answers всё равно
+  // пересчитывала бы его на каждое нажатие клавиши. Появится замер, говорящий обратное, —
+  // мемоизировать здесь одну строку.
+  const plan = planForm(blocks, answers)
+  const pages = plan.pages
+  const lastPage = pages.length - 1
+  const multi = pages.length > 1
+
+  // Номер страницы зажимается по РЕАЛЬНОМУ числу страниц, и теперь этого мало иметь
+  // только при загрузке: страница может исчезнуть под ногами — человек вернулся назад,
+  // сменил ответ, и весь следующий шаг оказался скрыт условием. Зажим производной, как в
+  // превью билдера: состояние остаётся сырым, экран всегда в существующем диапазоне.
+  const [rawPage, setPage] = useState(() => loadPage(slug, form.version, pages.length))
+  const page = Math.min(rawPage, Math.max(lastPage, 0))
   // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом по
   // линии. Стартует с восстановленного номера — человек там уже был, и запрещать ему
   // возврат туда, откуда его вернула перезагрузка, было бы наказанием за F5.
-  const [reached, setReached] = useState(page)
+  const [rawReached, setReached] = useState(page)
+  const reached = Math.min(Math.max(rawReached, page), Math.max(lastPage, 0))
   const [errors, setErrors] = useState<Errors>({})
   const [attempted, setAttempted] = useState(false)
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
@@ -210,7 +222,10 @@ export function FormView({
   // звёздочка у блока-подписи. Считаются по ВСЕМУ документу, а не по странице: группа
   // границу страницы не пересекает (regroup ведёт её через text/image, а разрыв ни то
   // ни другое), но карта на весь документ дешевле и не зависит от того, где мы сейчас.
-  const groups = groupMeta(blocks)
+  // Звёздочка обязательности — из ПЛАНА: условно обязательное поле обязано получать её
+  // ровно тогда, когда условие сработало, иначе форма отказывает в отправке по полю,
+  // ничем не помеченному.
+  const groups = groupMeta(blocks, plan.required)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
   const locked = phase !== 'editing'
 
@@ -297,13 +312,13 @@ export function FormView({
     // исправления; чистое поле ошибкой не «пугаем» до blur/отправки.
     if (blockId in errors) {
       const block = blocks.find((b) => b.id === blockId)
-      if (block) setBlockError(blockId, validateBlock(block, value))
+      if (block) setBlockError(blockId, validateBlock(block, value, plan.required.has(blockId)))
     }
   }
 
   const onBlur = (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId)
-    if (block) setBlockError(blockId, validateBlock(block, answers[blockId]))
+    if (block) setBlockError(blockId, validateBlock(block, answers[blockId], plan.required.has(blockId)))
   }
 
   // «Далее» проверяет ТОЛЬКО текущую страницу: пугать красным вопросы, до которых
@@ -313,7 +328,7 @@ export function FormView({
     if (locked) return
     setNotice(null)
     setAttempted(true)
-    const found = validateAll(pageBlocks, answers)
+    const found = validateAll(pageBlocks, answers, plan.required)
     setErrors(found)
     if (Object.keys(found).length > 0) return
     setAttempted(false)
@@ -334,7 +349,10 @@ export function FormView({
     setNotice(null)
     setAttempted(true)
 
-    const found = validateAll(blocks, answers)
+    // Проверяем ВИДИМОЕ, а не весь документ: скрытый условием вопрос не спрашивали, и
+    // требовать его — значит запереть человека на форме без единого видимого красного
+    // поля. Видимые блоки — это плоский план (страниц, на которые он не попадёт, там нет).
+    const found = validateAll(pages.flat(), answers, plan.required)
     setErrors(found)
     if (Object.keys(found).length > 0) {
       // Ошибка на другой странице (сюда попадают из-за прыжка «назад» и правки, из-за
@@ -353,7 +371,10 @@ export function FormView({
       outcome = await submitWithRetry(slug, {
         submissionId: submissionId.current,
         token: form.token,
-        answers,
+        // Ответы на скрытые вопросы не отправляются: они остались в стейте (человек
+        // переключил источник, и введённое ждёт возврата), но формой не собраны.
+        // Сервер повторит вычистку сам — здесь она ради честного тела запроса.
+        answers: stripHiddenAnswers(blocks, answers),
         visitId: visit.current?.id ?? '',
       })
     } catch {
@@ -450,7 +471,8 @@ export function FormView({
                       onReach={markFurthest}
                     >
                       <BlockField
-                        block={block}
+                        // Скрытые условием варианты в список не попадают (фаза 21).
+                        block={withVisibleOptions(block, plan)}
                         captionText={groups.get(block.groupId)?.caption}
                         captionRequired={groups.get(block.groupId)?.required}
                         value={answers[block.id]}

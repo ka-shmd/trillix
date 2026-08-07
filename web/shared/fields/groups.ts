@@ -63,13 +63,33 @@ export function splitFormTitle<T extends { type: BlockType }>(blocks: T[]): { ti
 // Один помощник на три поверхности, по тому же доводу, что splitFormTitle: разъедься
 // разбиение — и автор увидел бы в превью не те страницы, что респондент.
 export function splitPages<T extends { type: BlockType }>(blocks: T[]): T[][] {
-  const pages: T[][] = [[]]
+  return splitPagesWithClosers(blocks).map((p) => p.blocks)
+}
+
+// Страница вместе с ЗАКРЫВАЮЩИМ её разрывом (null у последней). Нужна условной логике
+// (фаза 21): переходы «куда уходим с этой страницы» живут на закрывающем разрыве, и
+// достать его иначе можно было бы только вторым разбором документа — то есть второй
+// копией правил о том, какой разрыв инертен.
+//
+// Разбиение остаётся ОДНИМ: splitPages выражен через эту функцию, а не рядом с ней.
+export type PageRun<T> = { blocks: T[]; closer: T | null }
+
+export function splitPagesWithClosers<T extends { type: BlockType }>(blocks: T[]): PageRun<T>[] {
+  const pages: PageRun<T>[] = []
+  let cur: T[] = []
   for (const b of blocks) {
-    if (b.type === 'page_break') pages.push([])
-    else pages[pages.length - 1]!.push(b)
+    if (b.type !== 'page_break') {
+      cur.push(b)
+      continue
+    }
+    // Инертный разрыв (первым блоком, второй подряд): страницы не открывает и не
+    // закрывает — правило то же, по которому пустые страницы не доезжают до экрана.
+    if (cur.length === 0) continue
+    pages.push({ blocks: cur, closer: b })
+    cur = []
   }
-  const filled = pages.filter((p) => p.length > 0)
-  return filled.length > 0 ? filled : [[]]
+  if (cur.length > 0) pages.push({ blocks: cur, closer: null })
+  return pages.length > 0 ? pages : [{ blocks: [], closer: null }]
 }
 
 // pageNumbers — какую страницу открывает каждый разрыв. Нужен полотну редактора: метка
@@ -287,7 +307,11 @@ export function packOptionRows<T extends { column?: ColumnBit }>(options: T[]): 
   )
 }
 
-export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
+// required — множество ФАКТИЧЕСКИ обязательных блоков из плана (фаза 21): у поля может
+// стоять requiredIf, и решает его сработавшее условие, а не флаг документа. Без
+// аргумента берутся флаги блоков, то есть поведение до фазы (полотно редактора считает
+// именно так: там показывается документ, а не заполнение).
+export function groupMeta(blocks: Block[], required?: ReadonlySet<string>): Map<string, GroupMeta> {
   const meta = new Map<string, GroupMeta>()
   const hasTitle = new Set<string>()
   const get = (g: string): GroupMeta => {
@@ -315,7 +339,7 @@ export function groupMeta(blocks: Block[]): Map<string, GroupMeta> {
         m.caption = flat
       }
     } else if (isAnswerableType(b.type)) {
-      if (b.required) m.required = true
+      if (required ? required.has(b.id) : b.required) m.required = true
     }
   }
   return meta

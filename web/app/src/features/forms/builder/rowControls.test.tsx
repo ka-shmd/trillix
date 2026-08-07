@@ -251,19 +251,33 @@ describe('субъект настроек: подпись правит поле 
     expect(blocks.find((b) => b.id === 'inp')?.type).toBe('long_text')
   })
 
-  // Находка ревью этапа: «Сделать обязательным» каретку не двигает, и без общего
-  // правила закрытия она падала в body — попап размонтирован, возврат Radix на якорь
-  // погашен. Правило: действия, уводящие каретку, помечают себя, остальное (в том числе
-  // Esc и клик мимо) возвращает её на свою строку. Проверяем здесь, а не в
-  // focusContract: пункт обязательности показывается только строке, которая
-  // представляет поле вопроса (requiredFor), а его считает этот стенд.
-  it('«Сделать обязательным» возвращает каретку на строку, а не роняет в body', () => {
-    const { store } = setup(QUESTION)
+  // Обязательность (фаза 21) — строка настроек с тремя состояниями вместо прежнего
+  // пункта «Сделать обязательным»: required и requiredIf схема запрещает вместе, и
+  // переключатель, из которого невыразимо «по условию», собрал бы документ, который
+  // сервер отвергнет. Проверяем здесь, а не в focusContract: строка показывается только
+  // тому ряду, который представляет поле вопроса (requiredFor), а его считает этот стенд.
+  //
+  // Значение выбирается не кликом: Radix Select в happy-dom не открывается (портал плюс
+  // pointer-события). Что выбор делает с документом — в модели (logic/visibility.test).
+  it('обязательность правит строка настроек, адресованная полю вопроса', () => {
+    setup(QUESTION)
 
     openMenu('cap', 'Настройки блока')
-    fireEvent.click(screen.getByText('Сделать обязательным'))
 
-    expect(store.getState().blocks.find((b) => b.id === 'inp')?.required).toBe(true)
+    const popup = document.querySelector('[data-slot="popover-content"]') as HTMLElement
+    expect(within(popup).getByLabelText('Обязательность вопроса')).toBeTruthy()
+  })
+
+  // Правило закрытия попапа: действия, уводящие каретку, помечают себя, остальное (Esc,
+  // клик мимо) возвращает её на свою строку — иначе каретка падает в body, потому что
+  // возврат Radix на якорь мы гасим сами. Находка ревью этапа 16.
+  it('Esc из попапа возвращает каретку на строку, а не роняет в body', () => {
+    setup(QUESTION)
+
+    openMenu('cap', 'Настройки блока')
+    const popup = document.querySelector('[data-slot="popover-content"]') as HTMLElement
+    fireEvent.keyDown(popup, { key: 'Escape', code: 'Escape' })
+
     const caret = document.activeElement as HTMLElement
     expect(caret.dataset.richLine).toBeDefined()
     expect(caret.textContent).toBe('Как вас зовут?')

@@ -1,15 +1,10 @@
 import { useState } from 'react'
 
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
+import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import {
-  groupBlocks,
-  groupMeta,
-  packGroupRows,
-  packRows,
-  splitFormTitle,
-  splitPages,
-} from '@fields/groups'
+import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import { planForm, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -29,11 +24,20 @@ export function PreviewPane({ title }: { title: string }) {
   // автор ещё не открывал после фазы, сервер синтезирует при чтении черновика, но
   // до первого автосейва блока в сторе может не быть.
   const { title: formTitle, rest: blocks } = splitFormTitle(allBlocks)
-  const groups = groupMeta(blocks)
-  // Страницы (фаза 19) — тем же splitPages, что режет форму респонденту. Превью,
-  // рисующее все страницы подряд, соврало бы автору о главном: он не увидел бы ни
-  // границ шагов, ни того, что кнопка отправки живёт только на последней.
-  const pages = splitPages(blocks)
+  // ПРЕВЬЮ ЗАПОЛНЯЕМОЕ (фаза 21). До условной логики поля были декоративны — смотреть
+  // не на что, кроме вида. С логикой это перестало работать: ветка показывается ОТ
+  // ОТВЕТА, и превью без ответов молча прятало бы от автора всё, что он только что
+  // настроил. Ответы живут здесь и никуда не сохраняются: это состояние просмотра, а не
+  // документа (web/CLAUDE.md), и уходят вместе с закрытой панелью.
+  const [answers, setAnswers] = useState<Record<string, Answer>>({})
+  // Страницы и видимость — тем же planForm, что считает форму респонденту. Превью,
+  // рисующее все страницы подряд или все вопросы разом, соврало бы автору о главном:
+  // он не увидел бы ни границ шагов, ни собственного ветвления.
+  const plan = planForm(blocks, answers)
+  // Звёздочка обязательности — из плана: условно обязательное поле получает её ровно
+  // тогда, когда условие сработало (фаза 21).
+  const groups = groupMeta(blocks, plan.required)
+  const pages = plan.pages
   const lastPage = pages.length - 1
   // Номер страницы держится ЗДЕСЬ, а не в сторе билдера: это состояние просмотра, а не
   // документа (web/CLAUDE.md — «переживает ли перезагрузку?» нет, «нужен ли больше чем
@@ -52,6 +56,16 @@ export function PreviewPane({ title }: { title: string }) {
   // Ряды вопросов (спека §5): вопрос с column='right' встаёт рядом с предыдущим,
   // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
   const rows = packRows(groupBlocks(pages[page] ?? []))
+  // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
+  const hasRules = blocks.some(
+    (b) =>
+      b.visibleIf ||
+      b.requiredIf ||
+      b.jumpIf?.length ||
+      b.settings?.options?.some((o) => o.visibleIf),
+  )
+  const onChange = (blockId: string, value: Answer) =>
+    setAnswers((prev) => ({ ...prev, [blockId]: value }))
 
   return (
     // Тот же хром, что у рендерера, и теми же двумя компонентами: обложка снаружи
@@ -67,7 +81,15 @@ export function PreviewPane({ title }: { title: string }) {
           ) : (
             title.trim() && <h1 className="rf-title">{title.trim()}</h1>
           ))}
-        {blocks.length === 0 ? (
+        {/* «Скрыто условиями» говорим только когда условия в форме ЕСТЬ. Пустой план
+            бывает и без логики — например у документа из одного разрыва страницы (он
+            инертен, ни одной страницы не открывает), и там правильный текст — второй:
+            добавьте блоки. Найдено ревью ветки фазы. */}
+        {plan.pages.every((p) => p.length === 0) && hasRules ? (
+          <p className="rf-empty">
+            Все вопросы скрыты условиями — ответьте выше или снимите условие в настройках блока.
+          </p>
+        ) : plan.pages.every((p) => p.length === 0) ? (
           <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
         ) : (
           <div className="rf-form">
@@ -81,9 +103,15 @@ export function PreviewPane({ title }: { title: string }) {
                     const render = (block: (typeof innerRow)[number][number]) => (
                       <BlockField
                         key={block.id}
-                        block={block}
+                        block={withVisibleOptions(block, plan)}
                         captionText={groups.get(block.groupId)?.caption}
                         captionRequired={groups.get(block.groupId)?.required}
+                        value={answers[block.id]}
+                        onChange={(value: Answer) => onChange(block.id, value)}
+                        // disabled=true — умолчание BlockField (превью было
+                        // декоративным). С фазы 21 превью заполняется: иначе автор не
+                        // увидит ни одной своей ветки — она показывается ОТ ОТВЕТА.
+                        disabled={false}
                       />
                     )
                     return innerRow.length > 1 ? (

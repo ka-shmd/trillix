@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GitBranch, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
@@ -37,7 +37,10 @@ import {
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
+import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { OptionRuleDialog } from './logic/LogicDialog'
+import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
@@ -675,12 +678,10 @@ const BlockRowBody = memo(function BlockRowBody({
         subject={settingsSubject}
         anchor={<span aria-hidden="true" className="pointer-events-none absolute left-0 top-1.5" />}
         // Обязательность меню правит там же, где звёздочка, — в отвечаемом блоке
-        // группы. Поэтому на подписи вопроса пункт есть (раньше не было: подпись
-        // ответов не собирает, а флаг — как раз про её вопрос).
+        // группы. Поэтому на подписи вопроса строка есть (раньше не было: подпись
+        // ответов не собирает, а флаг — как раз про её вопрос). С фазы 21 это не пункт
+        // «сделать обязательным», а три состояния: нет / всегда / по условию.
         requiredFor={requiredFor}
-        onToggleRequired={() =>
-          requiredFor && updateBlock(requiredFor.id, { required: !requiredFor.required })
-        }
         // Каретка уходит на копию (§12): без этого после «Дублировать» активным
         // элементом остаётся body — поповер закрылся, а возврат фокуса на его якорь
         // мы гасим сами.
@@ -706,11 +707,19 @@ const BlockRowBody = memo(function BlockRowBody({
           негде. Контент ответов не собирает — там её нет вовсе. */}
       {requiredFor ? <RequiredToggle block={requiredFor} lineH={rowLineH} /> : null}
 
+      {/* Бейдж условной логики (фаза 21): вопрос за условием обязан быть виден на
+          полотне как таковой — иначе автор смотрит на форму, где часть вопросов
+          показывается не всем, и ничем это не отличается от обычных. Носитель правила —
+          голова группы, поэтому бейдж рисует ровно та строка, что его несёт. */}
+      {block.visibleIf && <LogicBadge block={block} lineH={rowLineH} />}
+
       {/* Единственная подсказка, оставшаяся у строки (решение владельца 2026-07-29):
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
           клавиш целиком живёт в шпаргалке Mod+/. Компонент сам решает, рисовать ли
           себя (каретка на этой строке), и ничего не рисует, когда её здесь нет. */}
-      {needsCaption && <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />}
+      {needsCaption && (
+        <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />
+      )}
 
       {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
@@ -802,6 +811,41 @@ const BlockRowBody = memo(function BlockRowBody({
   )
 })
 
+// LogicBadge — «этот вопрос показывается по условию». Индикатор, а не контрол: правят
+// правило в попапе настроек, где для дерева условий есть место. Виден всегда (в отличие
+// от проявляющихся по hover значков) — это состояние документа, и прятать его значило
+// бы прятать причину, по которой вопрос не появился у респондента.
+//
+// Стоит в правом поле под звёздочкой обязательности: то же absolute-поле, никакого
+// места в потоке (иначе схлопывание на mousedown съедало бы клики — TD-22).
+function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
+  // Подписка — на ТО, ЧТО ПОКАЗАНО: селекторы отдают строки, поэтому перерисовка
+  // случается ровно тогда, когда меняется текст бейджа или его состояние. Массив блоков
+  // подписывать нельзя (он меняет идентичность на каждый символ, а бейдж есть у каждого
+  // вопроса за условием); прежняя попытка подписаться на СОСТАВ документа (строка id)
+  // была быстрой, но неверной: `changeBlockType` сохраняет id, поэтому правило,
+  // ставшее инертным от смены типа источника, оставалось помеченным действующим до
+  // следующей структурной правки. Найдено ревью ветки фазы.
+  const summary = useBuilderStore((s) => ruleSummary(s.blocks, block.visibleIf))
+  const reason = useBuilderStore(
+    (s) => ruleWarnings(s.blocks, block.id, block.visibleIf)[0]?.reason ?? '',
+  )
+  const inert = reason !== ''
+  return (
+    <div className={`absolute left-full top-8 ml-1 flex ${lineH} items-center`}>
+      <span
+        title={inert ? `Условие не действует: ${reason}` : `Показывать, если ${summary}`}
+        aria-label={inert ? 'Условие показа не действует' : `Показывать, если ${summary}`}
+        className={`flex size-5 items-center justify-center rounded ${
+          inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
+        }`}
+      >
+        <GitBranch className="size-4" />
+      </span>
+    </div>
+  )
+}
+
 // RequiredToggle — контрол обязательности в правом поле блока (absolute left-full),
 // зеркально левому кластеру значков. Это редактируемый контрол, а не индикатор:
 // совпадать видом с звёздочкой rf-required рендерера не обязан, только менять
@@ -812,7 +856,12 @@ const BlockRowBody = memo(function BlockRowBody({
 // на уровне первой строки текста, а она разной высоты у вопроса и у согласия.
 function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const required = block.required
+  // Третье состояние (фаза 21): обязателен ПО УСЛОВИЮ. Звёздочка показывает его
+  // приглушённо — «иногда обязателен» это не то же, что «обязателен», и рисовать их
+  // одинаково значило бы врать про форму. Клик снимает условие (обязательности больше
+  // нет): у переключателя два положения, а потеря правила лечится Ctrl+Z.
+  const conditional = Boolean(block.requiredIf)
+  const required = block.required || conditional
   return (
     <div
       className={`absolute left-full top-1.5 ml-1 flex ${lineH} items-center transition-opacity ${
@@ -824,11 +873,27 @@ function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
       <button
         type="button"
         aria-pressed={required}
-        aria-label={required ? 'Обязательный вопрос' : 'Сделать вопрос обязательным'}
-        title={required ? 'Обязательный вопрос' : 'Сделать обязательным'}
-        onClick={() => updateBlock(block.id, { required: !required })}
+        aria-label={
+          conditional
+            ? 'Обязателен по условию — снять'
+            : required
+              ? 'Обязательный вопрос'
+              : 'Сделать вопрос обязательным'
+        }
+        title={
+          conditional
+            ? 'Обязателен по условию — снять'
+            : required
+              ? 'Обязательный вопрос'
+              : 'Сделать обязательным'
+        }
+        onClick={() => updateBlock(block.id, { required: !required, requiredIf: undefined })}
         className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
-          required ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+          conditional
+            ? 'text-primary/60'
+            : required
+              ? 'text-primary'
+              : 'text-muted-foreground hover:text-foreground'
         }`}
       >
         <Asterisk className="size-4" />
@@ -904,7 +969,8 @@ function ObjectStop({
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
-      answerAction: () => ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
+      answerAction: () =>
+        ref.current?.querySelector<HTMLInputElement>('input[type="file"]')?.click(),
       moveGroup: onMoveGroup,
       // Mod+Alt+→/← — ряд (§5): у объектной остановки (date/scale/картинка в вопросе)
       // жест тот же, что на подписи — переносится ВОПРОС, а не строка.
@@ -1514,6 +1580,10 @@ function GhostOption({
   )
 }
 
+// Стабильная пустота для закрытого попапа варианта: новый литерал на каждый рендер сам
+// был бы сменой значения и перерисовывал бы карточку.
+const NO_BLOCKS: Block[] = []
+
 // OptionActionMenu — попап варианта (фаза 16, решение владельца 7). Состав из двух
 // пунктов и никаких настроек типа: у варианта их нет, а «в колонку» — свойство строки
 // (раскладку списка задаёт она), не карточки. Отдельный маленький компонент, а не
@@ -1523,12 +1593,18 @@ function OptionActionMenu({
   open,
   onOpenChange,
   anchor,
+  ruleSummaryText,
+  onEditRule,
   onDuplicate,
   onDelete,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor: ReactNode
+  // Текст правила показа варианта («всегда» или короткая фраза условия): пункт без
+  // намёка на содержание заставлял бы открывать диалог, чтобы просто узнать состояние.
+  ruleSummaryText: string
+  onEditRule: () => void
   onDuplicate: () => void
   onDelete: () => void
 }) {
@@ -1546,6 +1622,17 @@ function OptionActionMenu({
         <Command>
           <CommandList>
             <CommandGroup>
+              {/* Каскадные списки (фаза 21): вариант прячется по ответу на вопрос выше.
+                  Пункт стоит первым — это настройка, а ниже идут действия. */}
+              <CommandItem
+                onSelect={() => {
+                  onEditRule()
+                  onOpenChange(false)
+                }}
+              >
+                <GitBranch className="size-4" />
+                Показывать: {ruleSummaryText}
+              </CommandItem>
               <CommandItem
                 onSelect={() => {
                   onDuplicate()
@@ -1610,6 +1697,13 @@ function OptionCard({
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
   const [menuOpen, setMenuOpen] = useState(false)
+  // Диалог правила варианта — рядом с попапом, как у блока: у условия дерево, а попап
+  // варианта ещё уже блочного.
+  const [ruleOpen, setRuleOpen] = useState(false)
+  // Как у попапа блока: массив блоков меняет идентичность на каждое нажатие клавиши, а
+  // карточек вариантов на полотне десятки. Подписываемся, только когда попап или диалог
+  // открыт, — иначе набор текста перерисовывал бы все карточки мимо memo.
+  const blocks = useBuilderStore((s) => (menuOpen ? s.blocks : NO_BLOCKS))
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
   // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
@@ -1661,7 +1755,28 @@ function OptionCard({
             (решение владельца 7): с решением 6 карточка варианта остаётся
             единственным местом, где списком управляют, и оставить её без попапа
             значило бы спрятать управление совсем. */}
+        {/* МОНТИРУЕТСЯ ТОЛЬКО ОТКРЫТЫМ. Диалог подписан на весь массив блоков (ему
+            нужны источники), а карточек вариантов на полотне десятки: закрытый, но
+            смонтированный, он перерисовывался на каждое нажатие клавиши и обходил
+            сужение подписки строкой ниже. Найдено ревью ветки фазы — тот же класс, что
+            уже ловил замер у попапа настроек. */}
+        {ruleOpen && (
+          <OptionRuleDialog
+            open
+            onOpenChange={(o) => {
+              setRuleOpen(o)
+              if (!o) inputEl.current?.focus()
+            }}
+            block={block}
+            optionId={option.id}
+          />
+        )}
         <OptionActionMenu
+          ruleSummaryText={ruleSummary(blocks, option.visibleIf)}
+          onEditRule={() => {
+            movedCaretRef.current = true
+            setRuleOpen(true)
+          }}
           open={menuOpen}
           // Закрытие без действия (Esc, клик мимо) возвращает каретку на свою
           // карточку. Без этого она падала в body — Radix ставит фокус на поповер при

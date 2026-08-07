@@ -77,6 +77,11 @@ export const isChoiceType = (t: BlockType): boolean => blockKind(t).choice !== u
 // Выбор ровно одного варианта (ответ — строка-id) против множественного (массив).
 export const isSingleChoiceType = (t: BlockType): boolean => blockKind(t).choice === 'single'
 
+// Множественный выбор (ответ — массив id). Выводится из двух предикатов выше, а не
+// перечисляет типы: новый множественный choice-тип не придётся вспоминать в третьем
+// месте. Зеркалит isMultiChoice в Go.
+export const isMultiChoiceType = (t: BlockType): boolean => blockKind(t).choice === 'multi'
+
 // Типы, у которых респондент вводит текст — для них можно задать плейсхолдер.
 export const supportsPlaceholder = (t: BlockType): boolean => blockKind(t).supportsPlaceholder
 

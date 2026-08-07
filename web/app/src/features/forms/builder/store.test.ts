@@ -455,6 +455,41 @@ describe('createBuilderStore', () => {
     expect(b.settings?.placeholder).toBe('Иван')
   })
 
+  // Правила логики (фаза 21) переживают смену типа по тому же доводу, что имя:
+  // «показывать, если» относится к ВОПРОСУ, а не к тому, чем на него отвечают. Без
+  // этого первая же смена типа стирала бы настройку молча — конверсия собирает блок из
+  // дефолтов нового типа и переносит поля поимённо.
+  it('changeBlockType сохраняет visibleIf и requiredIf', () => {
+    const store = createBuilderStore()
+    const src = store.getState().addBlockAfter(null, 'short_text')
+    const id = store.getState().addBlockAfter(src, 'short_text')
+    const rule = { all: [{ blockId: src, op: 'answered' as const }] }
+    store.getState().updateBlock(id, { visibleIf: rule, requiredIf: rule })
+
+    store.getState().changeBlockType(id, 'email')
+
+    const b = store.getState().blocks.find((x) => x.id === id)!
+    expect(b.visibleIf).toEqual(rule)
+    expect(b.requiredIf).toEqual(rule)
+  })
+
+  // Обязательности по условию у неотвечаемого типа не бывает (схема её запрещает) —
+  // роняется вместе с обычной required. Видимость остаётся: прятать по условию можно и
+  // заголовок, и абзац.
+  it('changeBlockType роняет requiredIf на неотвечаемом типе, но не visibleIf', () => {
+    const store = createBuilderStore()
+    const src = store.getState().addBlockAfter(null, 'short_text')
+    const id = store.getState().addBlockAfter(src, 'short_text')
+    const rule = { all: [{ blockId: src, op: 'answered' as const }] }
+    store.getState().updateBlock(id, { visibleIf: rule, requiredIf: rule })
+
+    store.getState().changeBlockType(id, 'heading')
+
+    const b = store.getState().blocks.find((x) => x.id === id)!
+    expect(b.requiredIf).toBeUndefined()
+    expect(b.visibleIf).toEqual(rule)
+  })
+
   // Новый тип ответов не собирает — имени нечего называть, и схема его у такого типа
   // запрещает: остаться оно не может даже «на всякий случай».
   it('changeBlockType роняет имя на неотвечаемом типе', () => {

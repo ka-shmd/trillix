@@ -66,7 +66,7 @@ function SummaryPage() {
       ) : (
         <div className="flex flex-col gap-4">
           {summary.data.blocks.map((b) => (
-            <BlockCard key={b.blockId} block={b} />
+            <BlockCard key={b.blockId} block={b} total={total} />
           ))}
         </div>
       )}
@@ -74,12 +74,17 @@ function SummaryPage() {
   )
 }
 
-function BlockCard({ block }: { block: BlockSummary }) {
+function BlockCard({ block, total }: { block: BlockSummary; total: number }) {
   return (
     <article className="rounded-lg border p-5">
       <h2 className="font-medium">{block.label}</h2>
       <p className="mt-0.5 text-sm text-muted-foreground">
         Ответили {block.answered} из {block.asked}
+        {/* Знаменатель меньше числа ответов формы — значит вопрос видели не все: он за
+            условием, на пропущенной странице или появился в поздней версии (фаза 21).
+            Без этой оговорки владелец сравнивает «12 из 34» с «400 ответов» на карточке
+            формы и читает расхождение как поломку. */}
+        {block.asked < total && ` — вопрос показали ${block.asked} из ${total}`}
       </p>
       <div className="mt-4">
         {block.kind === 'distribution' ? (

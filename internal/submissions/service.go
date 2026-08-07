@@ -201,11 +201,17 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	if err != nil {
 		return fmt.Errorf("parse published schema for %s: %v", slug, err)
 	}
-	if err := domain.ValidateAnswers(schema, answers); err != nil {
+	// Нормализация вместо голой проверки (фаза 21): условная логика решает, какие
+	// вопросы респондент видел, поэтому обязательность спрашивается только у видимых, а
+	// ответы на скрытое отбрасываются молча — они не попадают ни в базу, ни в CSV, ни в
+	// сводку. Клиент чистит ответ у себя тем же движком; доверия к нему нет, план
+	// считается здесь заново. У формы без правил результат тот же, что до фазы.
+	clean, err := domain.NormalizeAnswers(schema, answers)
+	if err != nil {
 		return err
 	}
 
-	answersJSON, err := json.Marshal(answers)
+	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
 	}

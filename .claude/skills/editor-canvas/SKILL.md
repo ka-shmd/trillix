@@ -1,6 +1,6 @@
 ---
 name: editor-canvas
-description: Правила полотна редактора форм и модели «вопрос — группа блоков» (schemaVersion 4). Использовать при любой работе с web/app/src/features/forms/builder/ — SlashEditor, BlockRow, GroupRow, store.ts: типы блоков, groupId и regroup, slash-меню и разделы «+», двухслойный drag-and-drop, подписи title/label, добавление или перенос блоков, клавиатурный поток строки.
+description: Правила полотна редактора форм и модели «вопрос — группа блоков» (schemaVersion 4). Использовать при любой работе с web/app/src/features/forms/builder/ — SlashEditor, BlockRow, GroupRow, store.ts: типы блоков, groupId и regroup, slash-меню и разделы «+», двухслойный drag-and-drop, подписи title/label, добавление или перенос блоков, клавиатурный поток строки, условная логика (visibleIf/requiredIf/jumpIf, диалоги правил, бейдж на строке).
 ---
 
 # Полотно редактора
