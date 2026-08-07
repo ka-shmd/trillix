@@ -122,11 +122,6 @@ export function FormView({
   // превью билдера: состояние остаётся сырым, экран всегда в существующем диапазоне.
   const [rawPage, setPage] = useState(() => loadPage(slug, form.version, pages.length))
   const page = Math.min(rawPage, Math.max(lastPage, 0))
-  // Самый дальний достигнутый шаг: до него включительно можно вернуться кликом по
-  // линии. Стартует с восстановленного номера — человек там уже был, и запрещать ему
-  // возврат туда, откуда его вернула перезагрузка, было бы наказанием за F5.
-  const [rawReached, setReached] = useState(page)
-  const reached = Math.min(Math.max(rawReached, page), Math.max(lastPage, 0))
   const [errors, setErrors] = useState<Errors>({})
   const [attempted, setAttempted] = useState(false)
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
@@ -203,7 +198,6 @@ export function FormView({
     navigated.current = true
     window.history.pushState({ formPage: next }, '')
     setPage(next)
-    setReached((r) => Math.max(r, next))
   }
 
   // onBackTo — возврат кликом по линии пройденного шага. Отдельно от goToPage, потому
@@ -543,7 +537,7 @@ export function FormView({
             2026-08-05). Клик по пройденной линии возвращает на тот шаг: то же, что
             «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
             «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
-        <StepBar pages={pages.length} page={page} reached={reached} onGo={onBackTo} />
+        <StepBar pages={pages.length} page={page} onGo={onBackTo} />
         {attempted && hasFieldErrors && (
           <p className="form-note form-note-error" role="alert">
             Проверьте выделенные поля.

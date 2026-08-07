@@ -81,8 +81,16 @@ test('форма из трёх страниц: шаги, пошаговая ва
   const leaverPage = await leaver.newPage()
   await leaverPage.goto(`${RENDERER}/r/${form.slug}`)
   await leaverPage.getByLabel(Q1).fill('Пётр')
+  // Бикон «дошёл до второй страницы» уходит из ЭФФЕКТА, то есть кадром позже отрисовки
+  // линий шага. Ждать надо сам бикон, а не вид: уведя страницу сразу после появления
+  // «Шаг 2 из 3», тест обгонял эффект, и в воронке этот визит вставал на первый вопрос —
+  // расхождение теста с продуктом, которое выглядело как баг воронки.
+  const reachedPageTwo = leaverPage.waitForRequest(
+    (r) => r.url().includes('/visits') && r.method() === 'POST',
+  )
   await leaverPage.locator('button.rf-next').click()
   await expect(leaverPage.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
+  await reachedPageTwo
   // Уводим страницу: pagehide гарантированно шлёт последний бикон визита.
   await leaverPage.goto('about:blank')
   await leaver.close()
@@ -103,8 +111,15 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await expect(respondent.getByLabel(Q1)).toBeVisible()
   await expect(respondent.getByLabel(Q2)).toHaveCount(0)
   // Видимой подписи «Шаг N из M» нет (решение владельца): счёт несут линии, а текст
-  // остаётся только скринридеру.
-  await expect(respondent.getByText('Шаг 1 из 3')).toBeHidden()
+  // остаётся только скринридеру. `toBeHidden` тут не годится: приём sr-only оставляет
+  // элемент в потоке размером в пиксель, и для Playwright он ВИДИМ (непустой бокс) —
+  // проверять надо ровно то, чем приём является: единственное вхождение текста, и оно
+  // схлопнуто в пиксель прод-стилями (не доехавший до сборки `.rf-sr-only` дал бы
+  // респонденту настоящую подпись под линиями).
+  const stepLabel = respondent.getByText('Шаг 1 из 3')
+  await expect(stepLabel).toHaveCount(1)
+  await expect(stepLabel).toHaveClass(/\brf-sr-only\b/)
+  expect(await stepLabel.boundingBox()).toMatchObject({ width: 1, height: 1 })
   await expect(respondent.locator('button.rf-submit:not(.rf-next)')).toHaveCount(0)
 
   // 2. «Далее» не пускает с пустым обязательным ЭТОЙ страницы — и не жалуется на поля

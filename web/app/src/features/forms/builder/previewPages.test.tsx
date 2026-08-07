@@ -118,6 +118,17 @@ describe('превью листает страницы', () => {
     expect(screen.getByLabelText(/Имя/)).toBeTruthy()
   })
 
+  it('вернувшись назад, вперёд по линиям не уйти — даже на шаг, где уже был', () => {
+    const { container } = renderPreview(threePages())
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
+    // Второй шаг пройден, но он ВПЕРЕДИ — значит не кнопка. Кликабельность «до самого
+    // дальнего достигнутого» пускала отсюда на второй шаг мимо «Далее», то есть мимо
+    // проверки текущей страницы, ради которой пошаговость и заведена.
+    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+  })
+
   it('заголовок формы виден только на первой странице', () => {
     renderPreview(twoPages())
     expect(screen.getByRole('heading', { name: 'Анкета' })).toBeTruthy()
