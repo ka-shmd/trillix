@@ -5,6 +5,7 @@ import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
+import { designToVars, themeClass } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -18,6 +19,7 @@ export function PreviewPane({ title }: { title: string }) {
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const cover = useBuilderStore((s) => s.cover)
   const logo = useBuilderStore((s) => s.logo)
+  const design = useBuilderStore((s) => s.design)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   // Заголовок формы — блок документа (фаза 15), рисуется вне потока вопросов, тем же
   // разделителем, что у рендерера. Проп title остаётся фолбэком: форму, которую
@@ -66,7 +68,8 @@ export function PreviewPane({ title }: { title: string }) {
     // Тот же хром, что у рендерера, и теми же двумя компонентами: обложка снаружи
     // страницы, логотип внутри. WYSIWYG держится на общем выводе, а не на похожей
     // вёрстке в двух местах.
-    <>
+    // Контейнер темы обнимает обложку и страницу разом — как на полотне.
+    <div className={`rf-theme ${themeClass(design)}`} style={designToVars(design)}>
       <CoverBand cover={chrome ? cover : undefined} />
       <div className={pageClass(chrome ? cover : undefined)}>
         {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}
@@ -171,6 +174,6 @@ export function PreviewPane({ title }: { title: string }) {
             правило «кликом только назад» — часть WYSIWYG. */}
         <StepBar pages={pages.length} page={page} onGo={setPage} />
       </div>
-    </>
+    </div>
   )
 }

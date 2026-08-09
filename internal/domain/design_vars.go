@@ -98,6 +98,16 @@ var designVarSpecs = []designVarSpec{
 		}
 		return d.Layout.Align
 	}},
+	// Второй токен той же настройки, а не дубль: карточки вариантов стоят в
+	// flex-колонке, где выравнивание делает align-items, и ключевого слова `left` он
+	// не понимает вовсе. Один токен на оба свойства дал бы центрированный текст в
+	// карточках, прижатых влево.
+	{"--rf-align-items", func(d *FormDesign) string {
+		if d.Layout == nil || d.Layout.Align != "center" {
+			return ""
+		}
+		return "center"
+	}},
 	{"--rf-radius", func(d *FormDesign) string {
 		if d.Controls == nil || d.Controls.Radius == nil {
 			return ""

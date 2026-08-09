@@ -10,6 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { designToVars, themeClass } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
@@ -141,6 +142,29 @@ export function FormView({
       active.current = false
     }
   }, [])
+
+  // ОФОРМЛЕНИЕ НАДЕВАЕТСЯ НА КОРЕНЬ ДОКУМЕНТА, а не на контейнер, как в кабинете, и
+  // это не расхождение: в рендерере вся страница И ЕСТЬ форма. Фон за её пределами —
+  // область оверскролла и полоса под коротким документом — красится только через
+  // body, который читает --rf-canvas; повесь мы переменные на обёртку, тёмная форма
+  // получила бы белые поля вокруг себя.
+  //
+  // Эффектом, а не в разметке, по той же причине, по какой main.tsx ставит data-embed
+  // до первой отрисовки: свойство принадлежит документу, а не узлу. Первый кадр всё
+  // равно остаётся за сервером — <style> в <head> из снапшота (слайс 5), — здесь же
+  // тема доезжает до экранов, которые FormView рисует вне .rf-page: «Спасибо» и
+  // сообщение об ошибке.
+  useEffect(() => {
+    const root = document.documentElement
+    const vars = designToVars(form.schema.design)
+    for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
+    const cls = themeClass(form.schema.design)
+    if (cls) root.classList.add(cls)
+    return () => {
+      for (const name of Object.keys(vars)) root.style.removeProperty(name)
+      if (cls) root.classList.remove(cls)
+    }
+  }, [form.schema.design])
 
   useEffect(() => {
     saveAnswers(slug, form.version, answers)

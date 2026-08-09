@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
-import { ChevronRight, Eye, House, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
+import { ChevronRight, Eye, House, Palette, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { displayFormName, type FormDetail } from '../../../entities/form'
 import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
+import { DesignDrawer } from './DesignDrawer'
 import { FormSettings } from './FormSettings'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
@@ -48,6 +49,10 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   const headerSlot = useHeaderSlot()
   const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+  // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
+  // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
+  // бы полотно и превратил подбор темы в угадывание.
+  const [designOpen, setDesignOpen] = useState(false)
 
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
@@ -141,6 +146,22 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                   </>
                 )}
               </Button>
+              {/* Оформление — ТУМБЛЕР шторки, а не вход в режим (в отличие от
+                  настроек ниже): она выезжает ПОВЕРХ полотна, не закрывая его, и
+                  второго выхода мимо чего-либо тут нет — закрывать нечему. Отдельно
+                  от настроек ещё и потому, что сохраняется иначе: тема применяется
+                  сразу и уезжает автосейвом, настройки — явной кнопкой. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className={designOpen ? '' : 'text-muted-foreground'}
+                aria-pressed={designOpen}
+                onClick={() => setDesignOpen((v) => !v)}
+                aria-label="Оформление формы"
+                title="Оформление формы"
+              >
+                <Palette className="size-4" />
+              </Button>
               {/* Настройки формы — только вход, не тумблер: назад уводит кнопка на
                   самой странице. Тумблер здесь был бы вторым выходом мимо диалога
                   о несохранённых правках — и неочевидным (по иконке не догадаться,
@@ -175,6 +196,13 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
       {mode === 'settings' && (
         <FormSettings detail={detail} onBack={() => setMode('edit')} onSaved={saveNow} />
+      )}
+      {/* Шторка монтируется только открытой (урок фазы 21): смонтированный, но
+          закрытый диалог подписан на стор и перерисовывается на каждый символ,
+          обходя memo строк полотна. Только в режиме полотна: поверх превью или
+          настроек ей нечего показывать. */}
+      {mode === 'edit' && designOpen && (
+        <DesignDrawer open onOpenChange={setDesignOpen} />
       )}
     </BuilderStoreContext.Provider>
   )

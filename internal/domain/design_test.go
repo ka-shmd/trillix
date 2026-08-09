@@ -169,6 +169,7 @@ func TestDesignVars(t *testing.T) {
 			"--rf-font-size":   "18px",
 			"--rf-density":     "0.75",
 			"--rf-align":       "center",
+			"--rf-align-items": "center",
 			"--rf-radius":      "0px",
 			"--rf-font-family": "Inter, system-ui, -apple-system, sans-serif",
 		}

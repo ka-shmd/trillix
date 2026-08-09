@@ -46,6 +46,11 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   ['--rf-column', (d) => (d.layout?.width ? `${WIDTH_PX[d.layout.width]}px` : undefined)],
   ['--rf-density', (d) => (d.layout?.density ? DENSITY_SCALE[d.layout.density] : undefined)],
   ['--rf-align', (d) => d.layout?.align],
+  // Второй токен той же настройки, а не дубль: карточки вариантов стоят в
+  // flex-колонке, где выравнивание делает align-items, и ключевого слова `left` он
+  // не понимает вовсе. Один токен на оба свойства дал бы центрированный текст в
+  // карточках, прижатых влево.
+  ['--rf-align-items', (d) => (d.layout?.align === 'center' ? 'center' : undefined)],
   ['--rf-radius', (d) => (d.controls?.radius === undefined ? undefined : `${d.controls.radius}px`)],
 ]
 
