@@ -7,6 +7,7 @@ import {
   DESIGN_BUTTON_VARIANTS,
   DESIGN_BUTTON_WIDTHS,
   DESIGN_DENSITIES,
+  DESIGN_FONTS,
   DESIGN_OUTLINES,
   DESIGN_THEMES,
   DESIGN_WIDTHS,
@@ -103,7 +104,7 @@ export function DesignDrawer({
   }, [open])
 
   const set = (
-    group: 'palette' | 'layout' | 'controls' | 'button',
+    group: 'palette' | 'font' | 'layout' | 'controls' | 'button',
     key: string,
     value: string | number | undefined,
     // Ключ коалесинга — только у непрерывных жестов (выборщик цвета зовёт onChange
@@ -179,6 +180,32 @@ export function DesignDrawer({
                 Такой текст трудно читать на телефоне и при ярком свете.
               </Warning>
             )}
+          </Group>
+
+          <Separator />
+
+          <Group title="Шрифт">
+            <Field label="Текст" id="design-font-body">
+              <Choice
+                id="design-font-body"
+                value={design?.font?.body ?? 'system'}
+                options={DESIGN_FONTS}
+                titles={FONT_TITLES}
+                onChange={(v) => set('font', 'body', dflt(v, 'system'))}
+              />
+            </Field>
+            {/* Заголовки отдельно от текста — типовой приём брендирования, стоящий
+                ровно одной переменной. По умолчанию наследуют шрифт текста, поэтому
+                «Как у текста» — это отсутствие ключа, а не отдельное значение. */}
+            <Field label="Заголовки" id="design-font-heading">
+              <Choice
+                id="design-font-heading"
+                value={design?.font?.heading ?? design?.font?.body ?? 'system'}
+                options={DESIGN_FONTS}
+                titles={FONT_TITLES}
+                onChange={(v) => set('font', 'heading', dflt(v, design?.font?.body ?? 'system'))}
+              />
+            </Field>
           </Group>
 
           <Separator />
@@ -503,6 +530,11 @@ const DENSITY_TITLES: Record<string, string> = {
   roomy: 'Просторно',
 }
 const ALIGN_TITLES: Record<string, string> = { left: 'Слева', center: 'По центру' }
+const FONT_TITLES: Record<string, string> = {
+  system: 'Системный',
+  inter: 'Inter',
+  golos: 'Golos Text',
+}
 const OUTLINE_TITLES: Record<string, string> = {
   shadow: 'Тень',
   border: 'Рамка',

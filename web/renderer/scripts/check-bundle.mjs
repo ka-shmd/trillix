@@ -24,12 +24,26 @@ const BUDGET_BYTES = 45 * 1024
 const EMBED_BUDGET_BYTES = 4 * 1024
 const EMBED_PREFIX = 'embed/'
 
+// Шрифты формы (фаза 22) — ТРЕТИЙ порог, снова отдельный, и снова потому, что
+// складывать разное значит не мерить ничего. Шрифт не в бандле: он не парсится и не
+// исполняется, приезжает параллельно и только тем респондентам, чьей форме он
+// назначен, — но респондент его СКАЧИВАЕТ, и до фазы 22 вес шрифтов в проекте не
+// сторожило вообще ничто (check:bundle считал только JS).
+//
+// Порог — 200 КиБ на всю раздачу: сегодня это два вариативных семейства по два
+// подмножества (~132 КиБ), запас примерно на одно семейство. Числа сырые, БЕЗ gzip:
+// woff2 уже сжат внутри, и gzip поверх него не даёт почти ничего, а сравнивать
+// «сжатое сжатое» с тем, что видно в devtools, только путать себя.
+const FONT_BUDGET_BYTES = 200 * 1024
+
 // Считаем весь клиентский JS в dist/: entry и code-split-чанки лежат под assets/
 // с хешированными именами (vite-дефолт). Обходим dist/ рекурсивно и берём все .js —
 // имена не важны, поэтому переход на хеши сборку не ломает.
 const distDir = fileURLToPath(new URL('../dist/', import.meta.url))
 
-function jsFilesUnder(dir, prefix = '') {
+// Обход по расширению: тем же кодом собираются и .js под бюджет бандла, и .woff2
+// под бюджет шрифтов. Второй параметр остаётся префиксом пути (он идёт в подпись).
+function filesUnder(dir, ext, prefix = '') {
   let out = []
   let entries
   try {
@@ -39,16 +53,16 @@ function jsFilesUnder(dir, prefix = '') {
   }
   for (const e of entries) {
     if (e.isDirectory()) {
-      const nested = jsFilesUnder(dir + e.name + '/', prefix + e.name + '/')
+      const nested = filesUnder(dir + e.name + '/', ext, prefix + e.name + '/')
       if (nested) out = out.concat(nested)
-    } else if (e.name.endsWith('.js')) {
+    } else if (e.name.endsWith(ext)) {
       out.push({ label: prefix + e.name, path: dir + e.name })
     }
   }
   return out
 }
 
-const allFiles = jsFilesUnder(distDir)
+const allFiles = filesUnder(distDir, '.js')
 const jsFiles = allFiles?.filter((f) => !f.label.startsWith(EMBED_PREFIX)) ?? null
 const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
 if (jsFiles === null) {
@@ -83,6 +97,26 @@ console.log('✓ в пределах бюджета')
 // Загрузчик собирается вторым проходом (vite.embed.config.ts). Его отсутствие —
 // не ошибка: `vite build` без второго прохода оставляет dist без embed/, и ронять
 // на этом проверку формы незачем.
+const fontFiles = filesUnder(distDir, '.woff2') ?? []
+if (fontFiles.length > 0) {
+  let fontTotal = 0
+  console.log('')
+  for (const f of fontFiles) {
+    const size = readFileSync(f.path).length
+    fontTotal += size
+    console.log(`  ${f.label}  ${kib(size)}`)
+  }
+  console.log(`Шрифты: ${kib(fontTotal)} · бюджет ${kib(FONT_BUDGET_BYTES)}`)
+  if (fontTotal > FONT_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет шрифтов превышен на ${kib(fontTotal - FONT_BUDGET_BYTES)}. ` +
+        `Убери семейство или подмножество — порог поднимать последним делом.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ шрифты в пределах бюджета')
+}
+
 if (embedFiles.length > 0) {
   let embedTotal = 0
   console.log('')

@@ -49,7 +49,7 @@ export const SWATCHES = [
 // `{layout:{}}`), которых автор не создавал: документ отличается от исходного при
 // одинаковом виде — то же расхождение, из-за которого светлая тема хранится
 // отсутствием ключа, а не `theme: 'light'`.
-export function patch<K extends 'palette' | 'layout' | 'controls' | 'button'>(
+export function patch<K extends 'palette' | 'font' | 'layout' | 'controls' | 'button'>(
   design: FormDesign | undefined,
   group: K,
   key: string,
