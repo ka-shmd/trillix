@@ -4,6 +4,7 @@ import {
   type Block,
   type BlockType,
   type FormCover,
+  type FormDesign,
   type FormLogo,
   type FormSchema,
   type LogicCondition,
@@ -78,6 +79,7 @@ export type Snapshot = {
   redirectUrl: string
   cover: FormCover | undefined
   logo: FormLogo | undefined
+  design: FormDesign | undefined
 }
 
 // Потолок глубины истории: длинная сессия не должна расти в памяти без предела.
@@ -96,6 +98,13 @@ export type BuilderState = {
   // пустого объекта в схеме не бывает (ADR §10).
   cover: FormCover | undefined
   logo: FormLogo | undefined
+  // ОФОРМЛЕНИЕ ФОРМЫ (фаза 22) — тема, цвета, шрифт, лэйаут. Слайс 2 везёт его
+  // НАСКВОЗЬ, без единого способа изменить: панель приезжает слайсом 3, а контракт
+  // PATCH /forms/{id} поле уже принимает — то есть без переноса через стор путь
+  // «записал через API → открыл билдер → автосейв стёр оформление» существовал бы
+  // уже сегодня. Поле документа, поэтому едет и в историю (Snapshot): undo обязан
+  // возвращать тот документ, который был.
+  design: FormDesign | undefined
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
   // считается правкой и dirty не трогает.
@@ -1090,6 +1099,7 @@ const snapshot = (s: BuilderState): Snapshot => ({
   redirectUrl: s.redirectUrl,
   cover: s.cover,
   logo: s.logo,
+  design: s.design,
 })
 
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
@@ -1166,6 +1176,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       redirectUrl: '',
       cover: undefined,
       logo: undefined,
+      design: undefined,
       dirty: false,
       past: [],
       future: [],
@@ -1182,6 +1193,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           redirectUrl: schema.redirectUrl ?? '',
           cover: schema.cover,
           logo: schema.logo,
+          design: schema.design,
           dirty: false,
           past: [],
           future: [],
@@ -1972,6 +1984,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         // Ключа нет, когда оформления нет: пустой объект контракт отвергает (422).
         ...(get().cover ? { cover: get().cover } : {}),
         ...(get().logo ? { logo: get().logo } : {}),
+        // У design, в отличие от обложки, пустой объект контракт ПРИНИМАЕТ («всё по
+        // умолчанию»), но печатать его на форме, где оформления не трогали, всё равно
+        // нельзя: документ обязан остаться байт в байт прежним.
+        ...(get().design ? { design: get().design } : {}),
       }),
     }
   })

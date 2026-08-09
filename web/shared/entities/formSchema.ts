@@ -402,6 +402,99 @@ export type FormLogo = z.infer<typeof logoSchema>
 // рендерер и превью не должны каждый знать, что «нет ключа» = центр.
 export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFAULT_COVER_Y
 
+// ОФОРМЛЕНИЕ ФОРМЫ (фаза 22) — тема, цвета, шрифт, лэйаут, вид контролов.
+// Зеркало internal/domain/design.go (правится тем же PR, с тестами обеих сторон).
+//
+// Живёт в схеме по тому же доводу, что обложка: схема снапшотится при публикации,
+// поэтому респондент видит оформление ТОЙ версии, по которой отправил ответ.
+//
+// Каждое поле необязательно, и отсутствие значит «дефолт» — не «пусто» и не
+// «наследуй», а сегодняшнее зашитое значение fields.css. Отсюда главное свойство
+// фазы: форма без design выглядит байт в байт как до неё.
+
+// Списки перечислимых настроек — рядом со схемой и экспортируются: их читает
+// паритет-тест на Go, и они же наполняют выпадающие списки панели «Оформление».
+export const DESIGN_THEMES = ['light', 'dark'] as const
+export const DESIGN_WIDTHS = ['narrow', 'normal', 'wide'] as const
+export const DESIGN_DENSITIES = ['compact', 'normal', 'roomy'] as const
+export const DESIGN_ALIGNS = ['left', 'center'] as const
+export const DESIGN_OUTLINES = ['shadow', 'border', 'none'] as const
+export const DESIGN_BUTTON_VARIANTS = ['solid', 'outline'] as const
+export const DESIGN_BUTTON_WIDTHS = ['auto', 'full'] as const
+export const DESIGN_BUTTON_SIZES = ['sm', 'md', 'lg'] as const
+// Курируемый список self-hosted семейств с кириллицей. Внешний CDN не подключить
+// физически (прод-CSP `font-src 'self' data:`), и ослаблять её не будем: подключённый
+// шрифт — запрос браузера респондента на чужой сервер, то есть передача IP третьему
+// лицу на публичной странице сбора персональных данных.
+export const DESIGN_FONTS = ['system', 'inter', 'golos'] as const
+
+// Границы числовых настроек. Значение вне диапазона ОТВЕРГАЕТСЯ, а не зажимается:
+// молча исправленное число доживает до первого читателя, который решит, что оно
+// что-то значит.
+export const MIN_FONT_SIZE = 14
+// Потолок базы — 20, а не «сколько угодно»: line-height полотна остаётся
+// литеральным (числа обязаны совпадать с Tailwind-классами кластеров значков
+// редактора), и слишком крупная база перестанет помещаться в свою строку.
+export const MAX_FONT_SIZE = 20
+export const MIN_RADIUS = 0
+export const MAX_RADIUS = 24
+
+const hexColor = z.string().regex(HEX_COLOR)
+
+export const designSchema = z.strictObject({
+  theme: z.enum(DESIGN_THEMES).optional(),
+  // Canvas и field — РАЗНЫЕ поля, хотя сегодня оба белые: пока это был один токен,
+  // «цветная страница с белыми карточками» была невыразима вовсе (слайс 1).
+  palette: z
+    .strictObject({
+      canvas: hexColor.optional(),
+      field: hexColor.optional(),
+      text: hexColor.optional(),
+      muted: hexColor.optional(),
+      accent: hexColor.optional(),
+      button: hexColor.optional(),
+      buttonText: hexColor.optional(),
+    })
+    .optional(),
+  font: z
+    .strictObject({
+      body: z.enum(DESIGN_FONTS).optional(),
+      heading: z.enum(DESIGN_FONTS).optional(),
+    })
+    .optional(),
+  layout: z
+    .strictObject({
+      width: z.enum(DESIGN_WIDTHS).optional(),
+      fontSize: z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE).optional(),
+      density: z.enum(DESIGN_DENSITIES).optional(),
+      align: z.enum(DESIGN_ALIGNS).optional(),
+    })
+    .optional(),
+  controls: z
+    .strictObject({
+      radius: z.number().int().min(MIN_RADIUS).max(MAX_RADIUS).optional(),
+      outline: z.enum(DESIGN_OUTLINES).optional(),
+    })
+    .optional(),
+  // Текст кнопки живёт отдельно (submitLabel): его респондент читает, а автор правит
+  // на месте — это не оформление.
+  button: z
+    .strictObject({
+      variant: z.enum(DESIGN_BUTTON_VARIANTS).optional(),
+      width: z.enum(DESIGN_BUTTON_WIDTHS).optional(),
+      align: z.enum(DESIGN_ALIGNS).optional(),
+      size: z.enum(DESIGN_BUTTON_SIZES).optional(),
+    })
+    .optional(),
+})
+export type FormDesign = z.infer<typeof designSchema>
+
+// Пустой объект design допустим и значит «всё по умолчанию» — в отличие от обложки,
+// где пустота отвергается. Разница не в прихоти: у обложки два способа сказать «её
+// нет» были бы двумя представлениями одного состояния, а тут «все поля по умолчанию»
+// и «поля нет» — одно состояние с одним смыслом, и отвергать его значило бы ронять
+// автосейв на форме, где автор сбросил тему.
+
 // Документ черновика формы: версия формата и упорядоченный список блоков.
 // Отсутствующая schemaVersion трактуется как текущая (дефолт БД '{"blocks":[]}').
 export const formSchemaSchema = z
@@ -424,6 +517,8 @@ export const formSchemaSchema = z
     // Оформление страницы (хром, а не блоки полотна) — coverSchema/logoSchema выше.
     cover: coverSchema.optional(),
     logo: logoSchema.optional(),
+    // Оформление формы (тема, цвета, шрифт, лэйаут) — designSchema выше.
+    design: designSchema.optional(),
   })
   .superRefine((s, ctx) => {
     // Схема redirect проверяется строго даже в черновике (в отличие от пустого label):

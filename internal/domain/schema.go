@@ -292,6 +292,10 @@ type FormSchema struct {
 	// состояниями, иначе валидатору нечего отвергать.
 	Cover *FormCover `json:"cover,omitempty"`
 	Logo  *FormLogo  `json:"logo,omitempty"`
+	// Оформление страницы (тема, цвета, шрифт, лэйаут) — design.go. Указатель по
+	// той же причине: «оформление не трогали» и «оформление сброшено в дефолт» —
+	// разные состояния документа, и различает их только наличие объекта.
+	Design *FormDesign `json:"design,omitempty"`
 }
 
 // ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. Старые
@@ -397,6 +401,9 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("%s", err)
 	}
 	if err := validateLogo(s.Logo); err != nil {
+		return FormSchema{}, schemaErr("%s", err)
+	}
+	if err := validateDesign(s.Design); err != nil {
 		return FormSchema{}, schemaErr("%s", err)
 	}
 
