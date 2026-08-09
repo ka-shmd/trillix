@@ -13,10 +13,6 @@ import type { FormDesign } from '@entities/formSchema'
 // Функция чистая: ни DOM, ни знания о поверхностях. Всё, что в ней есть, — таблицы
 // перевода перечислимых значений в CSS и отсев незаданного.
 
-// Ширины колонки в px. normal — замеренная ширина формы Tally (700), сегодня зашитая
-// в .rf-form; narrow и wide — шаг в обе стороны.
-const WIDTH_PX: Record<string, number> = { narrow: 560, normal: 700, wide: 860 }
-
 // Множители ритма: ритм полотна (14/28/48, этап 13.3) задан долями базы, поэтому
 // плотность — один множитель на все три интервала, а не три числа.
 const DENSITY_SCALE: Record<string, string> = { compact: '0.75', normal: '1', roomy: '1.25' }
@@ -46,10 +42,9 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   ['--rf-accent-badge', (d) => d.palette?.accent],
   ['--rf-primary', (d) => d.palette?.button],
   ['--rf-primary-foreground', (d) => d.palette?.buttonText],
-  ['--rf-font-family', (d) => (d.font?.body ? FONT_STACK[d.font.body] : undefined)],
-  ['--rf-font-family-heading', (d) => (d.font?.heading ? FONT_STACK[d.font.heading] : undefined)],
+  ['--rf-font-family', (d) => (d.font ? FONT_STACK[d.font] : undefined)],
   ['--rf-font-size', (d) => (d.layout?.fontSize ? `${d.layout.fontSize}px` : undefined)],
-  ['--rf-column', (d) => (d.layout?.width ? `${WIDTH_PX[d.layout.width]}px` : undefined)],
+  ['--rf-column', (d) => (d.layout?.width ? `${d.layout.width}px` : undefined)],
   ['--rf-density', (d) => (d.layout?.density ? DENSITY_SCALE[d.layout.density] : undefined)],
   ['--rf-align', (d) => d.layout?.align],
   // Второй токен той же настройки, а не дубль: карточки вариантов стоят в

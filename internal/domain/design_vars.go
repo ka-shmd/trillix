@@ -21,10 +21,6 @@ import (
 // Поэтому состав ключей сверяется машинно (design_vars_parity_test.go читает
 // TypeScript), а значения — таблицами кейсов одинакового состава с обеих сторон.
 
-// Ширины колонки в px. Числа — не «на глаз»: normal это замеренная ширина формы
-// Tally (700), она же сегодня зашита в .rf-form; narrow и wide — шаг в обе стороны.
-var designWidthPx = map[string]int{"narrow": 560, "normal": 700, "wide": 860}
-
 // Множители ритма. Ритм полотна (14/28/48, этап 13.3) задан долями базы, поэтому
 // плотность — один множитель на все три интервала, а не три числа.
 var designDensityScale = map[string]string{"compact": "0.75", "normal": "1", "roomy": "1.25"}
@@ -65,18 +61,7 @@ var designVarSpecs = []designVarSpec{
 	{"--rf-primary-foreground", func(d *FormDesign) string {
 		return palette(d, func(p *DesignPalette) string { return p.ButtonText })
 	}},
-	{"--rf-font-family", func(d *FormDesign) string {
-		if d.Font == nil {
-			return ""
-		}
-		return designFontStack[d.Font.Body]
-	}},
-	{"--rf-font-family-heading", func(d *FormDesign) string {
-		if d.Font == nil {
-			return ""
-		}
-		return designFontStack[d.Font.Heading]
-	}},
+	{"--rf-font-family", func(d *FormDesign) string { return designFontStack[d.Font] }},
 	{"--rf-font-size", func(d *FormDesign) string {
 		if d.Layout == nil || d.Layout.FontSize == nil {
 			return ""
@@ -84,13 +69,10 @@ var designVarSpecs = []designVarSpec{
 		return fmt.Sprintf("%dpx", *d.Layout.FontSize)
 	}},
 	{"--rf-column", func(d *FormDesign) string {
-		if d.Layout == nil {
+		if d.Layout == nil || d.Layout.Width == nil {
 			return ""
 		}
-		if px, ok := designWidthPx[d.Layout.Width]; ok {
-			return fmt.Sprintf("%dpx", px)
-		}
-		return ""
+		return fmt.Sprintf("%dpx", *d.Layout.Width)
 	}},
 	{"--rf-density", func(d *FormDesign) string {
 		if d.Layout == nil {

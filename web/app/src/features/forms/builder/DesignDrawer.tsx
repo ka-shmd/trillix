@@ -10,9 +10,10 @@ import {
   DESIGN_FONTS,
   DESIGN_OUTLINES,
   DESIGN_THEMES,
-  DESIGN_WIDTHS,
   MAX_FONT_SIZE,
+  MAX_COLUMN,
   MAX_RADIUS,
+  MIN_COLUMN,
   MIN_FONT_SIZE,
   MIN_RADIUS,
 } from '@entities/formSchema'
@@ -32,7 +33,7 @@ import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 import { ColorPicker } from './ColorPicker'
-import { PALETTE_FIELDS, patch, SWATCHES } from './designEdit'
+import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
 import { currentTheme, withTheme } from './designTheme'
 import { darkThemeColorClash, lowContrast } from './designWarnings'
 import { useBuilderStore } from './storeContext'
@@ -104,7 +105,7 @@ export function DesignDrawer({
   }, [open])
 
   const set = (
-    group: 'palette' | 'font' | 'layout' | 'controls' | 'button',
+    group: 'palette' | 'layout' | 'controls' | 'button',
     key: string,
     value: string | number | undefined,
     // Ключ коалесинга — только у непрерывных жестов (выборщик цвета зовёт onChange
@@ -130,7 +131,7 @@ export function DesignDrawer({
         // Длительность выровнена с оболочкой (300 мс в обе стороны против штатных
         // 500/300 у Sheet): панель и шапка обязаны ехать одним движением, иначе
         // видно, что это два разных элемента.
-        className="w-80 gap-0 overflow-y-auto sm:max-w-80 data-[state=closed]:duration-300 data-[state=open]:duration-300"
+        className="w-104 gap-0 overflow-y-auto sm:max-w-104 data-[state=closed]:duration-300 data-[state=open]:duration-300"
         aria-label="Оформление формы"
       >
         <SheetHeader>
@@ -175,49 +176,40 @@ export function DesignDrawer({
               />
             ))}
             {contrast !== null && (
-              <Warning>
+              <Wide>
+                <Warning>
                 Контраст текста к фону — {contrast.toFixed(1)}:1, ниже рекомендованных 4,5:1.
-                Такой текст трудно читать на телефоне и при ярком свете.
-              </Warning>
+                  Такой текст трудно читать на телефоне и при ярком свете.
+                </Warning>
+              </Wide>
             )}
           </Group>
 
           <Separator />
 
-          <Group title="Шрифт">
-            <Field label="Текст" id="design-font-body">
-              <Choice
-                id="design-font-body"
-                value={design?.font?.body ?? 'system'}
-                options={DESIGN_FONTS}
-                titles={FONT_TITLES}
-                onChange={(v) => set('font', 'body', dflt(v, 'system'))}
-              />
-            </Field>
-            {/* Заголовки отдельно от текста — типовой приём брендирования, стоящий
-                ровно одной переменной. По умолчанию наследуют шрифт текста, поэтому
-                «Как у текста» — это отсутствие ключа, а не отдельное значение. */}
-            <Field label="Заголовки" id="design-font-heading">
-              <Choice
-                id="design-font-heading"
-                value={design?.font?.heading ?? design?.font?.body ?? 'system'}
-                options={DESIGN_FONTS}
-                titles={FONT_TITLES}
-                onChange={(v) => set('font', 'heading', dflt(v, design?.font?.body ?? 'system'))}
-              />
-            </Field>
-          </Group>
-
-          <Separator />
-
           <Group title="Лэйаут">
-            <Field label="Ширина колонки" id="design-width">
+            {/* Шрифт ОДИН на всю форму (решение владельца 2026-08-09): раздельные
+                семейства для текста и заголовков были заведены и убраны — на форме
+                из десяти строк это читается не как брендирование, а как небрежность. */}
+            <Field label="Шрифт" id="design-font">
               <Choice
+                id="design-font"
+                value={design?.font ?? 'system'}
+                options={DESIGN_FONTS}
+                titles={FONT_TITLES}
+                onChange={(v) => setDesign(patchTop(design, 'font', dflt(v, 'system')))}
+              />
+            </Field>
+            {/* Ширина — числом, а не выбором из трёх: три варианта покрывают три
+                макета из бесконечности (решение владельца 2026-08-09). */}
+            <Field label="Ширина, px" id="design-width">
+              <NumberRow
                 id="design-width"
-                value={design?.layout?.width ?? 'normal'}
-                options={DESIGN_WIDTHS}
-                titles={WIDTH_TITLES}
-                onChange={(v) => set('layout', 'width', dflt(v, 'normal'))}
+                value={design?.layout?.width}
+                fallback={700}
+                min={MIN_COLUMN}
+                max={MAX_COLUMN}
+                onChange={(n) => set('layout', 'width', n)}
               />
             </Field>
             <Field label="Размер шрифта" id="design-font-size">
@@ -276,7 +268,11 @@ export function DesignDrawer({
 
           <Separator />
 
-          <Group title="Кнопка отправки">
+          {/* «Кнопки», а не «кнопка отправки»: размер, поля и радиус управляют всеми
+              кнопками шага, включая «Назад» и «Далее» многостраничной формы (решение
+              владельца 2026-08-09). Вид остаётся только у главного действия: «Назад»
+              контурная всегда — уравнять «вернуться» с «отправить» нельзя. */}
+          <Group title="Кнопки">
             <Field label="Вид" id="design-btn-variant">
               <Choice
                 id="design-btn-variant"
@@ -325,21 +321,33 @@ export function DesignDrawer({
 
 // Ширина шторки — одним числом на два места: класс w-80 у панели и отступ оболочки.
 // 20rem = w-80; расхождение этих двух чисел означало бы щель или нахлёст.
-const DRAWER_WIDTH = '20rem'
+const DRAWER_WIDTH = '26rem'
 
+// Две колонки (решение владельца 2026-08-09): контролов в панели полтора десятка, и
+// в один столбец они уезжают за пределы экрана — до кнопки приходилось скроллить,
+// не видя формы, ради которой панель и открыта. Заголовок группы занимает обе.
 function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="grid gap-3">
-      <h3 className="text-sm font-medium">{title}</h3>
+    <section className="grid grid-cols-2 gap-x-3 gap-y-3">
+      <h3 className="col-span-2 text-sm font-medium">{title}</h3>
       {children}
     </section>
   )
 }
 
+// Ячейка во всю ширину — для того, что в половину не влезает (предупреждения).
+function Wide({ children }: { children: ReactNode }) {
+  return <div className="col-span-2">{children}</div>
+}
+
+// Подпись НАД контролом, а не слева (решение владельца 2026-08-09): в колонке
+// шириной в половину панели подпись сбоку отбирала у контрола больше места, чем
+// занимала сама, и длинные названия («Приглушённый текст») переносились в две
+// строки, разъезжаясь по высоте с соседями.
 function Field({ label, id, children }: { label: string; id: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[1fr_8.5rem] items-center gap-2">
-      <Label htmlFor={id} className="text-muted-foreground font-normal">
+    <div className="grid gap-1">
+      <Label htmlFor={id} className="text-muted-foreground text-xs font-normal">
         {label}
       </Label>
       {children}
@@ -458,8 +466,8 @@ function ColorRow({
   onRemove: () => void
 }) {
   return (
-    <div className="grid grid-cols-[1fr_8.5rem] items-center gap-2">
-      <span className="text-muted-foreground text-sm">{title}</span>
+    <div className="grid gap-1">
+      <span className="text-muted-foreground text-xs">{title}</span>
       <Popover>
         <PopoverTrigger asChild>
           <button
@@ -519,11 +527,6 @@ function plural(n: number, one: string, few: string, many: string): string {
 // Подписи — здесь, а не в @entities: список значений это контракт (его сверяет
 // паритет-тест с Go), а перевод на человеческий — дело интерфейса.
 const THEME_TITLES: Record<string, string> = { light: 'Светлая', dark: 'Тёмная' }
-const WIDTH_TITLES: Record<string, string> = {
-  narrow: 'Узкая',
-  normal: 'Обычная',
-  wide: 'Широкая',
-}
 const DENSITY_TITLES: Record<string, string> = {
   compact: 'Плотно',
   normal: 'Обычно',

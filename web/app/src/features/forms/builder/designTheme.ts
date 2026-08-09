@@ -1,5 +1,7 @@
 import type { FormDesign } from '@entities/formSchema'
 
+import { patchTop } from './designEdit'
+
 // Выбор темы в шторке «Оформление» (фаза 22, слайс 3) — отдельным модулем, а не
 // внутри компонента, ровно чтобы это можно было проверить тестом: Radix Select в
 // happy-dom не открывается вовсе (известная граница, STATUS.md), поэтому через
@@ -25,8 +27,5 @@ export function withTheme(
   design: FormDesign | undefined,
   theme: 'light' | 'dark',
 ): FormDesign | undefined {
-  const next: FormDesign = { ...design }
-  delete next.theme
-  if (theme === 'dark') next.theme = 'dark'
-  return Object.keys(next).length === 0 ? undefined : next
+  return patchTop(design, 'theme', theme === 'dark' ? 'dark' : undefined)
 }

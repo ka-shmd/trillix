@@ -42,6 +42,22 @@ export const SWATCHES = [
   '#b91c1c',
 ] as const
 
+// patchTop — заменить поле ВЕРХНЕГО уровня (тема, шрифт). Отдельно от patch, потому
+// что это не группа: `font` стал скаляром, когда шрифт свели к одному на форму, и
+// звать для него групповую правку значило бы получить `{font: {'': 'inter'}}`.
+//
+// Схлопывание пустого — то же самое и по той же причине (см. patch ниже).
+export function patchTop(
+  design: FormDesign | undefined,
+  key: 'theme' | 'font',
+  value: string | undefined,
+): FormDesign | undefined {
+  const next: Record<string, unknown> = { ...design }
+  if (value === undefined) delete next[key]
+  else next[key] = value
+  return Object.keys(next).length === 0 ? undefined : (next as FormDesign)
+}
+
 // patch — заменить одно поле внутри группы оформления.
 //
 // ГЛАВНОЕ ЗДЕСЬ — СХЛОПЫВАНИЕ ПУСТОГО. Снятие последнего значения обязано убирать и
@@ -49,7 +65,7 @@ export const SWATCHES = [
 // `{layout:{}}`), которых автор не создавал: документ отличается от исходного при
 // одинаковом виде — то же расхождение, из-за которого светлая тема хранится
 // отсутствием ключа, а не `theme: 'light'`.
-export function patch<K extends 'palette' | 'font' | 'layout' | 'controls' | 'button'>(
+export function patch<K extends 'palette' | 'layout' | 'controls' | 'button'>(
   design: FormDesign | undefined,
   group: K,
   key: string,

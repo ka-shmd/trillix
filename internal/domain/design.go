@@ -40,13 +40,18 @@ const (
 	// высоте контрола 36px — дальше поле превращается в пилюлю и перестаёт быть полем.
 	MinRadius = 0
 	MaxRadius = 24
+	// Ширина колонки — ЧИСЛО, а не три варианта (решение владельца 2026-08-09):
+	// выбор из «узкой/обычной/широкой» покрывает три макета из бесконечности. Низ —
+	// 400: уже колонка перестаёт вмещать поле ввода с подписью; верх — 1200: дальше
+	// строка длиннее комфортной для чтения, и это уже не форма, а таблица.
+	MinColumn = 400
+	MaxColumn = 1200
 )
 
 // Допустимые значения перечислимых настроек. Списки, а не свободные строки: набор
 // конечен, и опечатка обязана краснеть, а не доезжать до CSS.
 var (
 	designThemes        = []string{"light", "dark"}
-	designWidths        = []string{"narrow", "normal", "wide"}
 	designDensities     = []string{"compact", "normal", "roomy"}
 	designAligns        = []string{"left", "center"}
 	designOutlines      = []string{"shadow", "border", "none"}
@@ -64,9 +69,12 @@ var (
 
 // FormDesign — оформление страницы формы.
 type FormDesign struct {
-	Theme    string          `json:"theme,omitempty"`
-	Palette  *DesignPalette  `json:"palette,omitempty"`
-	Font     *DesignFont     `json:"font,omitempty"`
+	Theme   string         `json:"theme,omitempty"`
+	Palette *DesignPalette `json:"palette,omitempty"`
+	// Font — ОДИН на всю форму (решение владельца 2026-08-09). Раздельные семейства
+	// для текста и заголовков на форме из десяти строк читаются не как брендирование,
+	// а как небрежность, и удваивают вес раздачи.
+	Font     string          `json:"font,omitempty"`
 	Layout   *DesignLayout   `json:"layout,omitempty"`
 	Controls *DesignControls `json:"controls,omitempty"`
 	Button   *DesignButton   `json:"button,omitempty"`
@@ -89,16 +97,10 @@ type DesignPalette struct {
 	ButtonText string `json:"buttonText,omitempty"`
 }
 
-// DesignFont — семейства текста и заголовков. Раздельно: разный шрифт заголовка и
-// тела — типовой приём брендирования, стоящий ровно одной переменной.
-type DesignFont struct {
-	Body    string `json:"body,omitempty"`
-	Heading string `json:"heading,omitempty"`
-}
-
 // DesignLayout — геометрия страницы.
 type DesignLayout struct {
-	Width string `json:"width,omitempty"`
+	// Width — ширина колонки в px. Указатель по той же причине, что FontSize.
+	Width *int `json:"width,omitempty"`
 	// FontSize — база шкалы кеглей в px. Указатель: «не задан» и «задан 14» обязаны
 	// быть разными состояниями, иначе нулевое значение читалось бы как выбор автора.
 	FontSize *int   `json:"fontSize,omitempty"`
@@ -155,23 +157,18 @@ func validateDesign(d *FormDesign) error {
 			}
 		}
 	}
-	if f := d.Font; f != nil {
-		if err := oneOf("font.body", f.Body, designFonts); err != nil {
-			return err
-		}
-		if err := oneOf("font.heading", f.Heading, designFonts); err != nil {
-			return err
-		}
+	if err := oneOf("font", d.Font, designFonts); err != nil {
+		return err
 	}
 	if l := d.Layout; l != nil {
-		if err := oneOf("layout.width", l.Width, designWidths); err != nil {
-			return err
-		}
 		if err := oneOf("layout.density", l.Density, designDensities); err != nil {
 			return err
 		}
 		if err := oneOf("layout.align", l.Align, designAligns); err != nil {
 			return err
+		}
+		if l.Width != nil && (*l.Width < MinColumn || *l.Width > MaxColumn) {
+			return fmt.Errorf("design.layout.width: %d вне диапазона %d–%d", *l.Width, MinColumn, MaxColumn)
 		}
 		if l.FontSize != nil && (*l.FontSize < MinFontSize || *l.FontSize > MaxFontSize) {
 			return fmt.Errorf("design.layout.fontSize: %d вне диапазона %d–%d", *l.FontSize, MinFontSize, MaxFontSize)

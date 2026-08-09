@@ -415,7 +415,6 @@ export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFA
 // Списки перечислимых настроек — рядом со схемой и экспортируются: их читает
 // паритет-тест на Go, и они же наполняют выпадающие списки панели «Оформление».
 export const DESIGN_THEMES = ['light', 'dark'] as const
-export const DESIGN_WIDTHS = ['narrow', 'normal', 'wide'] as const
 export const DESIGN_DENSITIES = ['compact', 'normal', 'roomy'] as const
 export const DESIGN_ALIGNS = ['left', 'center'] as const
 export const DESIGN_OUTLINES = ['shadow', 'border', 'none'] as const
@@ -438,6 +437,13 @@ export const MIN_FONT_SIZE = 14
 export const MAX_FONT_SIZE = 20
 export const MIN_RADIUS = 0
 export const MAX_RADIUS = 24
+// Ширина колонки — ЧИСЛО, а не три варианта (решение владельца 2026-08-09): выбор из
+// «узкой/обычной/широкой» покрывает три макета из бесконечности, а форма под таблицу
+// вариантов или под мобильную рассылку требует своего числа. Низ — 400: уже колонка
+// перестаёт вмещать поле ввода с подписью; верх — 1200: дальше строка становится
+// длиннее комфортной для чтения, и это уже не форма, а таблица.
+export const MIN_COLUMN = 400
+export const MAX_COLUMN = 1200
 
 const hexColor = z.string().regex(HEX_COLOR)
 
@@ -456,15 +462,13 @@ export const designSchema = z.strictObject({
       buttonText: hexColor.optional(),
     })
     .optional(),
-  font: z
-    .strictObject({
-      body: z.enum(DESIGN_FONTS).optional(),
-      heading: z.enum(DESIGN_FONTS).optional(),
-    })
-    .optional(),
+  // ОДИН шрифт на всю форму (решение владельца 2026-08-09). Раздельные семейства для
+  // текста и заголовков — приём, который на форме из десяти строк читается не как
+  // брендирование, а как небрежность; и он же удваивает вес раздачи.
+  font: z.enum(DESIGN_FONTS).optional(),
   layout: z
     .strictObject({
-      width: z.enum(DESIGN_WIDTHS).optional(),
+      width: z.number().int().min(MIN_COLUMN).max(MAX_COLUMN).optional(),
       fontSize: z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE).optional(),
       density: z.enum(DESIGN_DENSITIES).optional(),
       align: z.enum(DESIGN_ALIGNS).optional(),

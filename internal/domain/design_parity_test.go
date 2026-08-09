@@ -43,7 +43,7 @@ var (
 	reTSVarName  = regexp.MustCompile(`\['(--rf-[a-z-]+)'`)
 	reTSConstArr = regexp.MustCompile(`export const (DESIGN_[A-Z_]+) = \[(.*?)\] as const`)
 	reTSQuoted   = regexp.MustCompile(`'([a-zA-Z_]+)'`)
-	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS) = (\d+)`)
+	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS|MIN_COLUMN|MAX_COLUMN) = (\d+)`)
 	reTSClass    = regexp.MustCompile(`push\('(rf-[a-z-]+)'\)`)
 	reGoClass    = regexp.MustCompile(`append\(out, "(rf-[a-z-]+)"\)`)
 	reLineCmt    = regexp.MustCompile(`(?m)//.*$`)
@@ -169,7 +169,6 @@ func TestDesignEnumsParity(t *testing.T) {
 	// без пары на Go.
 	pairs := map[string][]string{
 		"DESIGN_THEMES":          designThemes,
-		"DESIGN_WIDTHS":          designWidths,
 		"DESIGN_DENSITIES":       designDensities,
 		"DESIGN_ALIGNS":          designAligns,
 		"DESIGN_OUTLINES":        designOutlines,
@@ -203,6 +202,8 @@ func TestDesignLimitsParity(t *testing.T) {
 		"MAX_FONT_SIZE": MaxFontSize,
 		"MIN_RADIUS":    MinRadius,
 		"MAX_RADIUS":    MaxRadius,
+		"MIN_COLUMN":    MinColumn,
+		"MAX_COLUMN":    MaxColumn,
 	}
 
 	found := map[string]bool{}

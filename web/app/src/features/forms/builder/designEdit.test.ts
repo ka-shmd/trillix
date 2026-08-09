@@ -1,7 +1,7 @@
 import { designSchema } from '@entities/formSchema'
 import { describe, expect, it } from 'vitest'
 
-import { patch, PALETTE_FIELDS } from './designEdit'
+import { patch, patchTop, PALETTE_FIELDS } from './designEdit'
 
 describe('patch', () => {
   it('ставит значение в пустой документ', () => {
@@ -43,11 +43,31 @@ describe('patch', () => {
   })
 
   it('результат остаётся валидным документом оформления', () => {
-    let d = patch(undefined, 'layout', 'width', 'wide')
+    let d = patch(undefined, 'layout', 'width', 900)
     d = patch(d, 'controls', 'outline', 'border')
     d = patch(d, 'button', 'size', 'lg')
     d = patch(d, 'palette', 'canvas', '#faf6f0')
     expect(designSchema.safeParse(d).success).toBe(true)
+  })
+})
+
+describe('patchTop', () => {
+  it('ставит поле верхнего уровня', () => {
+    // font стал скаляром, когда шрифт свели к одному на форму: групповая правка дала
+    // бы {font: {'': 'inter'}}, то есть документ, который контракт отвергнет.
+    expect(patchTop(undefined, 'font', 'inter')).toEqual({ font: 'inter' })
+  })
+
+  it('снятие последнего поля схлопывает документ', () => {
+    expect(patchTop({ font: 'inter' }, 'font', undefined)).toBeUndefined()
+  })
+
+  it('не трогает остальное', () => {
+    expect(patchTop({ theme: 'dark', palette: { accent: '#00aa55' } }, 'font', 'golos')).toEqual({
+      theme: 'dark',
+      palette: { accent: '#00aa55' },
+      font: 'golos',
+    })
   })
 })
 
