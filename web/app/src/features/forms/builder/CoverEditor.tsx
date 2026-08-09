@@ -48,10 +48,10 @@ function OverlayButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium transition-colors ${
+      className={`flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium transition-colors ${
         danger
-          ? 'text-[var(--rf-danger)] hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-danger))]'
-          : 'text-[var(--rf-text)] hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-text))]'
+          ? 'text-[var(--rf-danger)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-danger))]'
+          : 'text-[var(--rf-text)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]'
       }`}
     >
       {children}
@@ -70,7 +70,7 @@ function ColorButton({ current }: { current: string }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-text))]"
+          className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]"
         >
           <Palette className="size-3.5" /> Цвет
         </button>

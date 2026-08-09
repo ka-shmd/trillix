@@ -11,31 +11,76 @@
    рендерер их читает, не таща Tailwind и не ломая бюджет 95 КиБ.
    Приложение может переопределить --rf-* (напр. кабинет в .dark).
 
-   ТИПОГРАФИКА — ЗАКРЫТАЯ ШКАЛА ИЗ ПЯТИ РАЗМЕРОВ (по образцу Notion). Иерархию
-   держат ВЕС и ЦВЕТ, а не размер: на странице Notion почти всё тело — 16px, и
-   ровно поэтому она выглядит опрятной. Шкала:
+   ТИПОГРАФИКА — ЗАКРЫТАЯ ШКАЛА, ВЫРАЖЕННАЯ ДОЛЯМИ ОТ БАЗЫ (по образцу Notion).
+   Иерархию держат ВЕС и ЦВЕТ, а не размер: на странице Notion почти всё тело — 16px,
+   и ровно поэтому она выглядит опрятной. Шкала при базе 16px:
 
-     40px / 700 / 1.2   — заголовок формы (rf-title)
-     20px / 600 / 1.4   — вопрос (rf-label), уровень H3
-     16px / 400 / 1.5   — ВСЁ тело формы: абзац, поле ввода, вариант, согласие,
-                          шкала (rf-text, rf-input, rf-option, rf-consent, rf-scale-mark)
-     14px / 400 / 1.5   — служебное: описание вопроса, заметки, ошибка, кнопка
-                          отправки (rf-desc, rf-empty, rf-error, rf-submit)
-     12px               — подсказки редактора (только Tailwind в кабинете, сюда не едет)
+     ×2.5  = 40px / 800 / 48px  — заголовок формы (rf-title)
+     ×1.5  = 24px / 700 / 28px  — заголовок раздела (rf-heading)
+     ×1.25 = 20px / 600 / 28px  — вопрос (rf-label), уровень H3
+     ×1    = 16px / 400 / 24px  — ВСЁ тело формы: абзац, поле ввода, вариант, согласие,
+                                  шкала (rf-text, rf-input, rf-option, rf-consent,
+                                  rf-scale-mark, rf-label--sm)
+     ×0.875 = 14px / 400 / 1.5  — служебное: описание вопроса, заметки, ошибка, кнопка
+                                  отправки и «Назад» (rf-desc, rf-empty, rf-error,
+                                  rf-submit, rf-back)
+     ×0.75  = 12px / 900        — буквенный бейдж варианта (rf-option-key)
 
-   Шестого размера тут быть не должно. Новому элементу полотна размер НЕ подбирается
-   на глаз — он берётся из этих пяти. Раньше их было девять (48/20/18/16/14.4/14/12
-   плюс rf-input, ужимавшийся с 16 до 14 на десктопе, из-за чего поле ввода и подпись
-   варианта в одной форме были разного размера) — так и выглядит расхождение, если
-   каждый класс заводит свой кегль. */
+   Седьмого размера тут быть не должно. Новому элементу полотна размер НЕ подбирается
+   на глаз — он берётся из этих шести, и пишется как `calc(var(--rf-font-size) *
+   var(--rf-ratio-…))`, а не литералом (почему именно так — в :root ниже).
+   Раньше их было девять (48/20/18/16/14.4/14/12 плюс rf-input, ужимавшийся с 16 до 14
+   на десктопе, из-за чего поле ввода и подпись варианта в одной форме были разного
+   размера) — так и выглядит расхождение, если каждый класс заводит свой кегль.
+
+   Почему доли, а не числа (фаза 22, слайс 1): базовый кегль настраивает автор, и
+   шкала обязана ехать за ним целиком. Литеральный `1rem`, появившийся здесь после
+   фазы 22, — это седьмой размер, вернувшийся с чёрного хода: он останется 16px, когда
+   всё вокруг станет 20.
+
+   LINE-HEIGHT ОСТАЁТСЯ ЛИТЕРАЛЬНЫМ и за базой НЕ едет — см. «строка и кластер
+   значков» ниже: числа обязаны совпадать с Tailwind-классами редактора буквально.
+   Это не недоделка: кластеры значков центрируются по line-height, поэтому при смене
+   базы они остаются на своих местах — а поехали бы, будь line-height множителем.
+
+   ЭТА ШАПКА ОТСТАВАЛА ОТ ФАЙЛА. До фазы 22 она обещала пять размеров, а в файле их
+   было шесть: rf-heading (24px) приехал с блоком «заголовок раздела», rf-option-key
+   (12px) — с буквенным бейджем варианта, и строка «12px сюда не едет» стала ложью. */
 :root {
+  /* ШКАЛА КЕГЛЕЙ — база плюс безразмерные ОТНОШЕНИЯ. База настраивается автором
+     (фаза 22); всё остальное считается от неё, поэтому шкала не разъезжается.
+
+     ПОЧЕМУ ОТНОШЕНИЯ, А НЕ ГОТОВЫЕ РАЗМЕРЫ. Просится `--rf-size-title:
+     calc(var(--rf-font-size) * 2.5)` и короткое `font-size: var(--rf-size-title)`
+     на месте — но так шкала НЕ ПОЕДЕТ за базой. Кастомное свойство подставляется
+     на том элементе, где объявлено: посчитанный на :root `calc(16px * 2.5)`
+     наследуется вниз уже числом, и контейнер, переопределивший базу на 20px,
+     получит заголовок 40px вместо 50. Проверено в браузере (слайс 1), а тема
+     надевается именно на контейнер — на :root её ставить нельзя, иначе полотно
+     редактора перекрасило бы кабинет вокруг.
+     Отношение безразмерно и наследуется как есть, поэтому умножение происходит
+     в ТОЧКЕ ИСПОЛЬЗОВАНИЯ, где база уже правильная. */
+  --rf-font-size: 1rem; /* 16px — база */
+  --rf-ratio-title: 2.5; /* 40 */
+  --rf-ratio-heading: 1.5; /* 24 */
+  --rf-ratio-label: 1.25; /* 20 */
+  --rf-ratio-small: 0.875; /* 14 */
+  --rf-ratio-badge: 0.75; /* 12 */
+
   /* Цвет текста полотна — тёплый угольный, а не холодный синеватый foreground
      кабинета. Замерено на живой форме Tally (getComputedStyle): rgb(55, 53, 47).
      Полотно тут сознательно расходится с хромом кабинета: форма — отдельная
      поверхность со своим характером, её видит респондент, а не оператор. */
   --rf-text: rgb(55, 53, 47);
   --rf-muted: rgb(119, 118, 114);
-  --rf-surface: oklch(1 0 0); /* белый холст/поле (--background/--card) */
+  /* ХОЛСТ И ЗАЛИВКА КОНТРОЛА — ДВА РАЗНЫХ ТОКЕНА, хотя сегодня оба белые.
+     До фазы 22 это был один --rf-surface, и из-за него «бежевая страница с белыми
+     карточками» — фирменный приём, ради которого вид и снимали с Tally, — был
+     невыразим вовсе, а тёмная тема красила поле тем же цветом, что и фон, превращая
+     форму в плоское пятно. Холст читает страница (body рендерера), заливку — поле,
+     select, карточка варианта, глиф и логотип. */
+  --rf-canvas: oklch(1 0 0); /* белый холст страницы (--background) */
+  --rf-field-bg: oklch(1 0 0); /* белая заливка контрола (--card) */
   --rf-danger: oklch(0.577 0.245 27.325); /* shadcn --destructive */
   --rf-primary: oklch(0.208 0.042 265.755); /* shadcn --primary (кнопка отправки) */
   --rf-primary-foreground: oklch(0.984 0.003 247.858); /* shadcn --primary-foreground */
@@ -58,20 +103,44 @@
 
      Почему тень, а не border: кольцо box-shadow не занимает места в коробке
      (не сдвигает контент на фокусе), кладётся слоями и красится независимо от
-     фона. Значения — с живой формы Tally, getComputedStyle. */
-  --rf-field-shadow:
-    0 1px 1px 0 rgb(0 0 0 / 0.12), 0 0 0 1px rgb(61 59 53 / 0.16), 0 2px 5px 0 rgb(61 59 53 / 0.08);
-  /* Фокус — голубое свечение вокруг кольца (замерено), а не тёмный outline.
-     Кольцо сохраняется, иначе контрол на фокусе теряет контур. */
-  --rf-focus-shadow: 0 0 0 4px rgb(58 152 255 / 0.36), 0 0 0 1px rgb(61 59 53 / 0.16);
+     фона. Значения — с живой формы Tally, getComputedStyle.
+
+     ТРИ КОМПОЗИТА НИЖЕ СОБИРАЮТСЯ ИЗ СОСТАВЛЯЮЩИХ, а не пишутся списком (фаза 22,
+     слайс 1). До неё в них были зашиты абсолютные rgb, и из этого следовали две
+     вещи: на тёмном холсте слоёная тень не видна вовсе (тень на тёмном — это не
+     контур), а свечение фокуса не имело никакого отношения к акценту, который
+     выберет автор. Композиты остаются — их читают десятки правил ниже; меняются
+     теперь ЧЕТЫРЕ токена под ними. */
+  --rf-ring: rgb(61 59 53 / 0.16); /* кольцо в 1px — во всех трёх композитах */
+  --rf-shadow-near: rgb(0 0 0 / 0.12); /* короткая тень под верхней кромкой */
+  --rf-shadow-far: rgb(61 59 53 / 0.08); /* мягкое рассеивание вниз */
 
   /* Акцент выбора — синий (замер). Отдельный токен от --rf-primary: у Tally
      кнопка отправки тёмная, а выбранный вариант синий, это два разных цвета. */
   --rf-accent: rgb(0, 122, 255);
   --rf-accent-badge: rgb(0, 112, 215);
+  /* Фокус — голубое свечение вокруг кольца (замер: rgb(58 152 255)), а не тёмный
+     outline. ВЫВОДИТСЯ ИЗ АКЦЕНТА, а не задаётся своим цветом: свой цвет означал бы,
+     что автор, поставивший зелёный акцент, получает синий фокус.
+
+     Доля подобрана под замеренный цвет: 255×0.2275 = 58.0 (R), 255 (B). По зелёному
+     совпадение НЕ точное — 122×0.7725 + 255×0.2275 = 152.25 против замеренных 152:
+     точка rgb(58 152 255) не лежит ровно на отрезке «акцент → белый», и никакая доля
+     не даст обе координаты разом. Разница — 0.25/255, вчетверо меньше кванта 8-битного
+     канала, то есть на экране это тот же пиксель (проверено сравнением computed
+     box-shadow старого и нового CSS, слайс 1). Если акцент однажды станет настраиваемым
+     и замер перестанет быть опорой — доля не подгоняется, а пересматривается целиком. */
+  --rf-focus-ring: color-mix(in srgb, var(--rf-accent) 77.25%, white);
+
+  --rf-field-shadow:
+    0 1px 1px 0 var(--rf-shadow-near), 0 0 0 1px var(--rf-ring),
+    0 2px 5px 0 var(--rf-shadow-far);
+  /* Кольцо сохраняется и на фокусе, иначе контрол на фокусе теряет контур. */
+  --rf-focus-shadow:
+    0 0 0 4px color-mix(in srgb, var(--rf-focus-ring) 36%, transparent), 0 0 0 1px var(--rf-ring);
   /* Выбранная карточка: синее кольцо 2px, мягкая тень СНИМАЕТСЯ (замер) — карточка
      «прижимается» к листу, и выбор читается даже без цвета. */
-  --rf-selected-shadow: 0 0 0 2px var(--rf-accent), 0 0 0 1px rgb(61 59 53 / 0.16);
+  --rf-selected-shadow: 0 0 0 2px var(--rf-accent), 0 0 0 1px var(--rf-ring);
 }
 
 /* Холст формы: заголовок, поля, кнопка отправки. Ширину и поля холста (max-width,
@@ -110,7 +179,7 @@
 .rf-title {
   margin: 0;
   padding: 0;
-  font-size: 2.5rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-title));
   line-height: 3rem; /* 48px — замер */
   font-weight: 800; /* замер: у Tally заголовок формы тяжелее обычного bold */
   letter-spacing: normal; /* замер: Tally заголовок не поджимает */
@@ -163,7 +232,7 @@
   height: 72px;
   border-radius: var(--rf-radius);
   overflow: hidden;
-  background: var(--rf-surface);
+  background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   margin-bottom: 0.75rem;
 }
@@ -224,7 +293,7 @@
   background: var(--rf-primary);
   color: var(--rf-primary-foreground);
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   font-weight: 500;
   line-height: 1.25rem;
   cursor: pointer;
@@ -273,7 +342,7 @@
   background: transparent;
   color: var(--rf-text);
   font-family: inherit;
-  font-size: 0.875rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   font-weight: 500;
   line-height: 1.25rem;
   cursor: pointer;
@@ -472,7 +541,7 @@
    line-height 1.4 (28px), а не прежние 2rem: 1.6 на полужирном 20px давало вопросу
    в две строки лишний воздух и рвало ритм «вопрос → поле». */
 .rf-label {
-  font-size: 1.25rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-label));
   font-weight: 600;
   line-height: 1.75rem; /* 28px — см. «строка и кластер значков» ниже */
   color: var(--rf-text);
@@ -482,7 +551,7 @@
    и полей регистрации: тело формы 16/600, а не крупный H3. Вес держит роль подписи,
    размер — как у обычного текста. line-height 24px (h-6 у кластера значков). */
 .rf-label--sm {
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   font-weight: 600;
   line-height: 1.5rem;
 }
@@ -490,7 +559,7 @@
 /* Заголовок раздела (block heading, v2) — крупная плашка секции формы. Крупнее
    вопроса (rf-label), но мельче заголовка формы (rf-title). line-height 28px (h-7). */
 .rf-heading {
-  font-size: 1.5rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-heading));
   font-weight: 700;
   line-height: 1.75rem;
   color: var(--rf-text);
@@ -500,7 +569,7 @@
    Был 18/2rem — крупнее и просторнее поля ввода рядом, хотя это обычный текст. */
 .rf-text {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   font-weight: 400;
   line-height: 1.5rem; /* 24px — см. «строка и кластер значков» ниже */
   color: var(--rf-text);
@@ -572,14 +641,14 @@
    `normal` даёт ~1.2 и описание в две строки слипается сильнее, чем текст рядом. */
 .rf-desc {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   line-height: 1.5;
   color: var(--rf-muted);
 }
 
 .rf-empty {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   line-height: 1.5;
   color: var(--rf-muted);
   font-style: italic;
@@ -587,7 +656,7 @@
 
 .rf-error {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   line-height: 1.5;
   color: var(--rf-danger);
 }
@@ -625,10 +694,10 @@
   /* 6px сверху/снизу + строка 24px = 36px (--rf-control-h); 10px по бокам — замер. */
   padding: 0.375rem 0.625rem;
   font-family: inherit;
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   line-height: 1.5rem;
   color: var(--rf-text);
-  background: var(--rf-surface);
+  background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   resize: vertical;
 }
@@ -647,7 +716,7 @@ textarea.rf-input {
    превью надевают его на <span> в контроле, редактор — на textarea строки
    заголовка (там текст правится). */
 .rf-consent {
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   font-weight: 400;
   line-height: 1.5rem;
   color: var(--rf-text);
@@ -669,9 +738,9 @@ textarea.rf-input {
   border-radius: var(--rf-radius);
   padding: 0 0.5rem;
   font-family: inherit;
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   color: var(--rf-text);
-  background: var(--rf-surface);
+  background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   cursor: pointer;
 }
@@ -739,9 +808,9 @@ textarea.rf-input {
   max-width: 100%;
   padding: 0.5625rem 0.625rem; /* 9px 10px — замер */
   border-radius: var(--rf-radius);
-  background: var(--rf-surface);
+  background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
-  font-size: 1rem;
+  font-size: var(--rf-font-size);
   line-height: 1.125rem; /* 18px — замер */
   color: var(--rf-text);
   cursor: pointer;
@@ -815,7 +884,7 @@ textarea.rf-input {
   border-radius: 3px;
   background: rgb(95, 94, 90);
   color: #fff;
-  font-size: 0.75rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-badge));
   font-weight: 900;
   line-height: 1;
 }
@@ -859,7 +928,7 @@ textarea.rf-input {
   height: 1.25rem;
   margin: 0;
   border: 0;
-  background: var(--rf-surface);
+  background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   display: inline-block;
 }
