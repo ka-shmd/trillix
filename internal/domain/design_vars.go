@@ -55,6 +55,12 @@ var designVarSpecs = []designVarSpec{
 	{"--rf-text", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Text }) }},
 	{"--rf-muted", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Muted }) }},
 	{"--rf-accent", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Accent }) }},
+	// Буквенный бейдж выбранного варианта — свой токен: у Tally он замерен чуть темнее
+	// акцента (rgb(0,112,215) против rgb(0,122,255)), и это соотношение не выражается
+	// ни одним множителем. Дефолт остаётся замеренным, но как только автор задал
+	// акцент, бейдж обязан ехать за ним — иначе выбранный вариант получает синюю
+	// метку посреди зелёной формы.
+	{"--rf-accent-badge", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Accent }) }},
 	{"--rf-primary", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Button }) }},
 	{"--rf-primary-foreground", func(d *FormDesign) string {
 		return palette(d, func(p *DesignPalette) string { return p.ButtonText })
@@ -114,6 +120,42 @@ var designVarSpecs = []designVarSpec{
 		}
 		return fmt.Sprintf("%dpx", *d.Controls.Radius)
 	}},
+	// Кнопка. Положение — justify-content РЯДА (.rf-nav), а не align-self самой
+	// кнопки: ряд горизонтальный, и align-self двигал бы её по вертикали, где двигать
+	// нечего. При кнопке во всю ширину настройка инертна — свободного места не
+	// остаётся; отдельной ветки для этого нет намеренно, инертное правило равно
+	// отсутствующему.
+	{"--rf-submit-justify", func(d *FormDesign) string {
+		if d.Button == nil || d.Button.Align != "center" {
+			return ""
+		}
+		return "center"
+	}},
+	{"--rf-submit-width", func(d *FormDesign) string {
+		if d.Button == nil || d.Button.Width != "full" {
+			return ""
+		}
+		return "100%"
+	}},
+	{"--rf-submit-h", func(d *FormDesign) string { return buttonSize(d).h }},
+	{"--rf-submit-px", func(d *FormDesign) string { return buttonSize(d).px }},
+	{"--rf-submit-ratio", func(d *FormDesign) string { return buttonSize(d).ratio }},
+}
+
+// Размеры кнопки. `md` тут нет намеренно: это дефолт fields.css, и печатать для него
+// переменные значило бы писать в документ то, что и так есть.
+type buttonMetrics struct{ h, px, ratio string }
+
+var buttonSizes = map[string]buttonMetrics{
+	"sm": {h: "2rem", px: "1rem", ratio: "0.75"},
+	"lg": {h: "2.75rem", px: "2rem", ratio: "1"},
+}
+
+func buttonSize(d *FormDesign) buttonMetrics {
+	if d.Button == nil {
+		return buttonMetrics{}
+	}
+	return buttonSizes[d.Button.Size]
 }
 
 func palette(d *FormDesign, pick func(*DesignPalette) string) string {
@@ -171,17 +213,37 @@ func DesignStyleAttr(d *FormDesign) string {
 	return strings.TrimSpace(b.String())
 }
 
-// DesignThemeClass — класс темы для контейнера формы; пусто, если тема светлая
-// (она же дефолт) или не задана.
+// DesignClasses — классы контейнера формы; близнец designClasses из
+// web/shared/fields/design.ts.
 //
-// Класс, а не набор переменных, по двум причинам. Во-первых, color-scheme
-// переменной не выражается, а без него тёмная форма получает светлый скроллбар и
-// белое автозаполнение поверх — заметный брак. Во-вторых, тёмная тема меняет не
-// только цвета: на тёмном холсте слоёная тень не видна вовсе (тень на тёмном — это
-// не контур), и кольцо с силой тени переопределяются вместе с палитрой.
-func DesignThemeClass(d *FormDesign) string {
-	if d == nil || d.Theme != "dark" {
+// КЛАССОМ, А НЕ ПЕРЕМЕННОЙ, выражается ровно то, что является другим СПОСОБОМ
+// РИСОВАНИЯ, а не другим значением:
+//   - тема — color-scheme переменной не выразить, а без него тёмная форма получает
+//     светлый скроллбар и белое автозаполнение поверх; и на тёмном холсте слоёная
+//     тень не видна вовсе, поэтому кольцо с тенями переопределяются с палитрой;
+//   - контур — «рамка» и «без контура» зависят от темы (светлому холсту нужно тёмное
+//     кольцо, тёмному светлое), и значением, не зная темы, это не выразить;
+//   - контурная кнопка — тот же довод.
+//
+// Всё остальное (цвета, числа, ширины) — переменные: их можно назвать значением.
+func DesignClasses(d *FormDesign) string {
+	if d == nil {
 		return ""
 	}
-	return "rf-theme-dark"
+	var out []string
+	if d.Theme == "dark" {
+		out = append(out, "rf-theme-dark")
+	}
+	if d.Controls != nil {
+		switch d.Controls.Outline {
+		case "border":
+			out = append(out, "rf-outline-border")
+		case "none":
+			out = append(out, "rf-outline-none")
+		}
+	}
+	if d.Button != nil && d.Button.Variant == "outline" {
+		out = append(out, "rf-btn-outline")
+	}
+	return strings.Join(out, " ")
 }

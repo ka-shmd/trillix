@@ -5,7 +5,7 @@ import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
-import { designToVars, themeClass } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -69,7 +69,7 @@ export function PreviewPane({ title }: { title: string }) {
     // страницы, логотип внутри. WYSIWYG держится на общем выводе, а не на похожей
     // вёрстке в двух местах.
     // Контейнер темы обнимает обложку и страницу разом — как на полотне.
-    <div className={`rf-theme ${themeClass(design)}`} style={designToVars(design)}>
+    <div className={`rf-theme ${designClasses(design)}`} style={designToVars(design)}>
       <CoverBand cover={chrome ? cover : undefined} />
       <div className={pageClass(chrome ? cover : undefined)}>
         {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}

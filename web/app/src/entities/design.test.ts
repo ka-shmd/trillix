@@ -1,5 +1,5 @@
 import { designSchema, formSchemaSchema, MAX_FONT_SIZE, MIN_FONT_SIZE } from '@entities/formSchema'
-import { designToVars, themeClass } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import { describe, expect, it } from 'vitest'
 
 // Оформление формы (фаза 22, слайс 2). Таблица кейсов ТОГО ЖЕ СОСТАВА, что
@@ -107,6 +107,7 @@ describe('designToVars', () => {
       }),
     ).toEqual({
       '--rf-accent': '#00aa55',
+      '--rf-accent-badge': '#00aa55',
       '--rf-column': '560px',
       '--rf-font-size': '18px',
       '--rf-density': '0.75',
@@ -124,13 +125,57 @@ describe('designToVars', () => {
   })
 })
 
-describe('themeClass', () => {
+describe('designClasses', () => {
   it.each([
     ['нет оформления', undefined, ''],
     ['светлая — дефолт, класса нет', { theme: 'light' } as const, ''],
     ['тема не задана', {} as const, ''],
     ['тёмная', { theme: 'dark' } as const, 'rf-theme-dark'],
+    ['контур рамкой', { controls: { outline: 'border' } } as const, 'rf-outline-border'],
+    ['без контура', { controls: { outline: 'none' } } as const, 'rf-outline-none'],
+    ['тень — дефолт, класса нет', { controls: { outline: 'shadow' } } as const, ''],
+    ['контурная кнопка', { button: { variant: 'outline' } } as const, 'rf-btn-outline'],
+    ['заливка — дефолт, класса нет', { button: { variant: 'solid' } } as const, ''],
+    [
+      'всё сразу — порядок стабилен',
+      { theme: 'dark', controls: { outline: 'border' }, button: { variant: 'outline' } } as const,
+      'rf-theme-dark rf-outline-border rf-btn-outline',
+    ],
   ])('%s', (_name, design, want) => {
-    expect(themeClass(design)).toBe(want)
+    expect(designClasses(design)).toBe(want)
+  })
+})
+
+describe('designToVars — кнопка', () => {
+  it('положение — justify ряда, а не align-self кнопки', () => {
+    // Кнопка лежит в .rf-nav — это flex-СТРОКА, и align-self двигал бы её по
+    // вертикали, где двигать нечего. Первая редакция слайса ошиблась именно осью:
+    // значение в стиле стояло, а кнопка не двигалась ни на одной поверхности.
+    expect(designToVars({ button: { align: 'center' } })).toEqual({
+      '--rf-submit-justify': 'center',
+    })
+  })
+
+  it('во всю ширину плюс центр — обе переменные, центр инертен', () => {
+    // Растянутой кнопке двигаться некуда, но отдельной ветки для этого нет
+    // намеренно: инертное правило равно отсутствующему.
+    expect(designToVars({ button: { width: 'full', align: 'center' } })).toEqual({
+      '--rf-submit-justify': 'center',
+      '--rf-submit-width': '100%',
+    })
+  })
+
+  it('средний размер переменных не печатает', () => {
+    // md — дефолт fields.css; печатать для него переменные значило бы писать в
+    // документ то, что и так есть.
+    expect(designToVars({ button: { size: 'md' } })).toEqual({})
+  })
+
+  it('крупный размер даёт три метрики', () => {
+    expect(designToVars({ button: { size: 'lg' } })).toEqual({
+      '--rf-submit-h': '2.75rem',
+      '--rf-submit-px': '2rem',
+      '--rf-submit-ratio': '1',
+    })
   })
 })

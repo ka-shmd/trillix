@@ -164,14 +164,15 @@ func TestDesignVars(t *testing.T) {
 			Font:     &DesignFont{Body: "inter"},
 		})
 		want := map[string]string{
-			"--rf-accent":      "#00aa55",
-			"--rf-column":      "560px",
-			"--rf-font-size":   "18px",
-			"--rf-density":     "0.75",
-			"--rf-align":       "center",
-			"--rf-align-items": "center",
-			"--rf-radius":      "0px",
-			"--rf-font-family": "Inter, system-ui, -apple-system, sans-serif",
+			"--rf-accent":       "#00aa55",
+			"--rf-accent-badge": "#00aa55",
+			"--rf-column":       "560px",
+			"--rf-font-size":    "18px",
+			"--rf-density":      "0.75",
+			"--rf-align":        "center",
+			"--rf-align-items":  "center",
+			"--rf-radius":       "0px",
+			"--rf-font-family":  "Inter, system-ui, -apple-system, sans-serif",
 		}
 		if len(got) != len(want) {
 			t.Fatalf("состав переменных разошёлся:\nполучено %v\nождалось %v", got, want)
@@ -200,7 +201,7 @@ func TestDesignStyleAttr(t *testing.T) {
 		d := &FormDesign{
 			Palette: &DesignPalette{Text: "#111111", Accent: "#00aa55", Canvas: "#ffffff"},
 		}
-		want := "--rf-accent: #00aa55; --rf-canvas: #ffffff; --rf-text: #111111;"
+		want := "--rf-accent: #00aa55; --rf-accent-badge: #00aa55; --rf-canvas: #ffffff; --rf-text: #111111;"
 		for i := 0; i < 20; i++ {
 			if got := DesignStyleAttr(d); got != want {
 				t.Fatalf("прогон %d: %q, ожидалось %q", i, got, want)
@@ -215,7 +216,7 @@ func TestDesignStyleAttr(t *testing.T) {
 	})
 }
 
-func TestDesignThemeClass(t *testing.T) {
+func TestDesignClasses(t *testing.T) {
 	cases := map[string]struct {
 		design *FormDesign
 		want   string
@@ -224,12 +225,75 @@ func TestDesignThemeClass(t *testing.T) {
 		"светлая — дефолт, класса нет": {&FormDesign{Theme: "light"}, ""},
 		"тема не задана":               {&FormDesign{}, ""},
 		"тёмная":                       {&FormDesign{Theme: "dark"}, "rf-theme-dark"},
+		"контур рамкой":                {&FormDesign{Controls: &DesignControls{Outline: "border"}}, "rf-outline-border"},
+		"без контура":                  {&FormDesign{Controls: &DesignControls{Outline: "none"}}, "rf-outline-none"},
+		"тень — дефолт, класса нет":    {&FormDesign{Controls: &DesignControls{Outline: "shadow"}}, ""},
+		"контурная кнопка":             {&FormDesign{Button: &DesignButton{Variant: "outline"}}, "rf-btn-outline"},
+		"заливка — дефолт, класса нет": {&FormDesign{Button: &DesignButton{Variant: "solid"}}, ""},
+		"всё сразу — порядок стабилен": {
+			&FormDesign{
+				Theme:    "dark",
+				Controls: &DesignControls{Outline: "border"},
+				Button:   &DesignButton{Variant: "outline"},
+			},
+			"rf-theme-dark rf-outline-border rf-btn-outline",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			if got := DesignThemeClass(tc.design); got != tc.want {
+			if got := DesignClasses(tc.design); got != tc.want {
 				t.Fatalf("%q, ожидалось %q", got, tc.want)
 			}
 		})
 	}
+}
+
+func TestDesignVars_Button(t *testing.T) {
+	t.Run("положение — justify ряда, а не align-self кнопки", func(t *testing.T) {
+		// Кнопка лежит в .rf-nav — это flex-СТРОКА, и align-self двигал бы её по
+		// вертикали, где двигать нечего. Первая редакция слайса ошиблась именно осью:
+		// значение в стиле стояло, а кнопка не двигалась ни на одной поверхности.
+		got := DesignVars(&FormDesign{Button: &DesignButton{Align: "center"}})
+		if got["--rf-submit-justify"] != "center" {
+			t.Fatalf("--rf-submit-justify = %q, ожидалось center", got["--rf-submit-justify"])
+		}
+		if _, ok := got["--rf-submit-self"]; ok {
+			t.Fatal("--rf-submit-self вернулась — положение задаётся рядом, а не кнопкой")
+		}
+	})
+
+	t.Run("во всю ширину плюс центр — обе переменные, центр инертен", func(t *testing.T) {
+		// Растянутой кнопке двигаться некуда, но отдельной ветки для этого нет
+		// намеренно: инертное правило равно отсутствующему (тот же приём, что в
+		// условной логике), а панель этот выбор и так не даёт сделать.
+		got := DesignVars(&FormDesign{Button: &DesignButton{Width: "full", Align: "center"}})
+		if got["--rf-submit-width"] != "100%" {
+			t.Fatalf("--rf-submit-width = %q", got["--rf-submit-width"])
+		}
+		if got["--rf-submit-justify"] != "center" {
+			t.Fatalf("--rf-submit-justify = %q", got["--rf-submit-justify"])
+		}
+	})
+
+	t.Run("средний размер переменных не печатает", func(t *testing.T) {
+		// md — дефолт fields.css; печатать для него переменные значило бы писать в
+		// документ то, что и так есть.
+		got := DesignVars(&FormDesign{Button: &DesignButton{Size: "md"}})
+		if len(got) != 0 {
+			t.Fatalf("средний размер дал переменные: %v", got)
+		}
+	})
+
+	t.Run("крупный размер даёт три метрики", func(t *testing.T) {
+		got := DesignVars(&FormDesign{Button: &DesignButton{Size: "lg"}})
+		want := map[string]string{"--rf-submit-h": "2.75rem", "--rf-submit-px": "2rem", "--rf-submit-ratio": "1"}
+		if len(got) != len(want) {
+			t.Fatalf("состав разошёлся: %v", got)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s = %q, ожидалось %q", k, got[k], v)
+			}
+		}
+	})
 }

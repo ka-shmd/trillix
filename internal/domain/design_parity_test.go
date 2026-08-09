@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -34,6 +35,7 @@ import (
 const (
 	designTSRel   = "../../web/shared/fields/design.ts"
 	entitiesTSRel = "../../web/shared/entities/formSchema.ts"
+	designGoRel   = "design_vars.go"
 )
 
 var (
@@ -42,6 +44,8 @@ var (
 	reTSConstArr = regexp.MustCompile(`export const (DESIGN_[A-Z_]+) = \[(.*?)\] as const`)
 	reTSQuoted   = regexp.MustCompile(`'([a-zA-Z_]+)'`)
 	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS) = (\d+)`)
+	reTSClass    = regexp.MustCompile(`push\('(rf-[a-z-]+)'\)`)
+	reGoClass    = regexp.MustCompile(`append\(out, "(rf-[a-z-]+)"\)`)
 	reLineCmt    = regexp.MustCompile(`(?m)//.*$`)
 )
 
@@ -82,6 +86,67 @@ func TestDesignVarNamesParity(t *testing.T) {
 	if !slices.Equal(got, ts) {
 		t.Fatalf("состав CSS-переменных разошёлся:\n  Go: %v\n  TS: %v", got, ts)
 	}
+}
+
+// Классы контейнера сверяются отдельно от переменных: расхождение здесь тише и
+// потому опаснее. Переменная, забытая на одной стороне, не красит элемент — это
+// видно. Класс, забытый на одной стороне, означает, что сервер напечатал в <head>
+// разметку одной формы, а клиент следом надел другую: контурная кнопка мигнёт
+// заливкой, рамка — тенью. Список читается из designClasses по строковым литералам.
+func TestDesignClassesParity(t *testing.T) {
+	body := readSharedTS(t, designTSRel)
+
+	// Берём только тело designClasses: литералы rf-* встречаются и в комментариях
+	// (их вычистил readSharedTS), и в других функциях файла быть не должно, но
+	// сузить область разбора дешевле, чем однажды это обнаружить.
+	i := strings.Index(body, "export function designClasses")
+	if i < 0 {
+		t.Fatal("designClasses не найдена — разбор fields/design.ts сломался")
+	}
+	var ts []string
+	for _, m := range reTSClass.FindAllStringSubmatch(body[i:], -1) {
+		ts = append(ts, m[1])
+	}
+	if len(ts) == 0 {
+		t.Fatal("классы не разобраны — разбор designClasses сломался")
+	}
+
+	// Go-сторона читается ИЗ ИСХОДНИКА, а не собирается вызовами на подобранных
+	// документах. Первая редакция этого теста перечисляла четыре FormDesign вручную и
+	// сторожила только одно направление: класс, добавленный в TS и забытый в Go,
+	// краснел, а обратный — класс, который печатает сервер и не надевает клиент, —
+	// проходил молча, потому что ни один из подобранных документов новую ветку не
+	// задевал. Именно обратное направление и опаснее: форма мигает одним видом и
+	// устаканивается в другом.
+	got := goClassLiterals(t)
+
+	if !slices.Equal(got, ts) {
+		t.Fatalf("состав классов контейнера разошёлся:\n  Go: %v\n  TS: %v", got, ts)
+	}
+}
+
+// goClassLiterals — классы, которые печатает DesignClasses, прочитанные из её
+// собственного текста. Симметрично разбору TS: обе стороны читаются одинаково, и
+// тест не зависит от того, догадался ли автор подобрать нужный документ.
+func goClassLiterals(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile(designGoRel)
+	if err != nil {
+		t.Fatalf("исходник недоступен (%s): %v", designGoRel, err)
+	}
+	body := reLineCmt.ReplaceAllString(string(raw), "")
+	i := strings.Index(body, "func DesignClasses")
+	if i < 0 {
+		t.Fatal("DesignClasses не найдена — разбор design_vars.go сломался")
+	}
+	var out []string
+	for _, m := range reGoClass.FindAllStringSubmatch(body[i:], -1) {
+		out = append(out, m[1])
+	}
+	if len(out) == 0 {
+		t.Fatal("классы не разобраны — разбор DesignClasses сломался")
+	}
+	return out
 }
 
 func TestDesignEnumsParity(t *testing.T) {

@@ -38,6 +38,12 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   ['--rf-text', (d) => d.palette?.text],
   ['--rf-muted', (d) => d.palette?.muted],
   ['--rf-accent', (d) => d.palette?.accent],
+  // Буквенный бейдж выбранного варианта — свой токен: у Tally он замерен чуть темнее
+  // акцента (rgb(0,112,215) против rgb(0,122,255)), и это соотношение не выражается
+  // ни одним множителем. Дефолт поэтому остаётся замеренным, но КАК ТОЛЬКО автор
+  // задал акцент, бейдж обязан ехать за ним — иначе выбранный вариант получает
+  // синюю метку посреди зелёной формы.
+  ['--rf-accent-badge', (d) => d.palette?.accent],
   ['--rf-primary', (d) => d.palette?.button],
   ['--rf-primary-foreground', (d) => d.palette?.buttonText],
   ['--rf-font-family', (d) => (d.font?.body ? FONT_STACK[d.font.body] : undefined)],
@@ -52,7 +58,24 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   // карточках, прижатых влево.
   ['--rf-align-items', (d) => (d.layout?.align === 'center' ? 'center' : undefined)],
   ['--rf-radius', (d) => (d.controls?.radius === undefined ? undefined : `${d.controls.radius}px`)],
+  // Кнопка. Положение — justify-content РЯДА (.rf-nav), а не align-self самой кнопки:
+  // ряд горизонтальный, и align-self двигал бы её по вертикали, где двигать нечего.
+  // При кнопке во всю ширину настройка инертна — свободного места не остаётся;
+  // отдельной ветки для этого нет намеренно, инертное правило равно отсутствующему.
+  ['--rf-submit-justify', (d) => (d.button?.align === 'center' ? 'center' : undefined)],
+  ['--rf-submit-width', (d) => (d.button?.width === 'full' ? '100%' : undefined)],
+  ['--rf-submit-h', (d) => BUTTON_SIZE[d.button?.size ?? '']?.h],
+  ['--rf-submit-px', (d) => BUTTON_SIZE[d.button?.size ?? '']?.px],
+  ['--rf-submit-ratio', (d) => BUTTON_SIZE[d.button?.size ?? '']?.ratio],
 ]
+
+// Размеры кнопки. `md` в таблице нет намеренно: это дефолт fields.css, и печатать
+// для него переменные значило бы писать в документ то, что и так есть.
+const BUTTON_SIZE: Record<string, { h: string; px: string; ratio: string } | undefined> = {
+  sm: { h: '2rem', px: '1rem', ratio: '0.75' },
+  lg: { h: '2.75rem', px: '2rem', ratio: '1' },
+}
+
 
 // designToVars — переменные оформления для атрибута style контейнера.
 //
@@ -70,13 +93,23 @@ export function designToVars(design: FormDesign | undefined): Record<string, str
   return vars
 }
 
-// themeClass — класс темы для контейнера; пусто у светлой (она же дефолт).
+// designClasses — классы контейнера формы.
 //
-// Класс, а не переменные, по двум причинам. `color-scheme` переменной не выразить,
-// а без него тёмная форма получает светлый скроллбар и белое автозаполнение
-// поверх — заметный брак. И тёмная тема меняет не только цвета: на тёмном холсте
-// слоёная тень не видна вовсе (тень на тёмном — не контур), поэтому кольцо и сила
-// тени переопределяются вместе с палитрой.
-export function themeClass(design: FormDesign | undefined): string {
-  return design?.theme === 'dark' ? 'rf-theme-dark' : ''
+// КЛАССОМ, А НЕ ПЕРЕМЕННОЙ, выражается ровно то, что является другим СПОСОБОМ
+// РИСОВАНИЯ, а не другим значением:
+//   • тема — `color-scheme` переменной не выразить, а без него тёмная форма получает
+//     светлый скроллбар и белое автозаполнение поверх; и на тёмном холсте слоёная
+//     тень не видна вовсе, поэтому кольцо с тенями переопределяются вместе с палитрой;
+//   • контур — «рамка» и «без контура» зависят от темы (светлому холсту нужно тёмное
+//     кольцо, тёмному светлое), и значением, не зная темы, это не выразить;
+//   • контурная кнопка — тот же довод.
+// Всё остальное (цвета, числа, ширины) — переменные: их можно назвать значением.
+export function designClasses(design: FormDesign | undefined): string {
+  if (!design) return ''
+  const out: string[] = []
+  if (design.theme === 'dark') out.push('rf-theme-dark')
+  if (design.controls?.outline === 'border') out.push('rf-outline-border')
+  if (design.controls?.outline === 'none') out.push('rf-outline-none')
+  if (design.button?.variant === 'outline') out.push('rf-btn-outline')
+  return out.join(' ')
 }

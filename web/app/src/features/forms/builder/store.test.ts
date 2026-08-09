@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  type Block,
   formSchemaSchema,
   type FormSchema,
   plainText,
@@ -1077,6 +1078,78 @@ describe('createBuilderStore', () => {
     const store = createBuilderStore()
     store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [] })
     expect('design' in store.getState().toSchema()).toBe(false)
+  })
+
+  // clearTextColors — предложение из панели оформления при тёмной теме (ADR §10:
+  // цвет спана абсолютен и за темой не следует). Семантика нетривиальна в трёх
+  // местах, и все три проверяются: сохранить остальные марки, ничего не делать на
+  // форме без цветов, уложиться в один шаг отмены.
+  describe('clearTextColors', () => {
+    const painted = (): Block[] => [
+      {
+        id: 'b1',
+        type: 'text',
+        groupId: 'g1',
+        settings: {},
+        text: [
+          { t: 'жирный крашеный', m: ['b'], color: '#ff0000' },
+          { t: 'ссылка с заливкой', href: 'https://example.com', bg: '#ffff00' },
+          { t: 'обычный' },
+        ],
+      } as Block,
+    ]
+
+    it('снимает цвет и заливку, но сохраняет остальные марки и ссылку', () => {
+      // Иначе кнопка «снять цвета» уносила бы вместе с цветом жирность и ссылки —
+      // автор нажал на одно, потерял другое.
+      const store = createBuilderStore()
+      store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: painted() })
+      store.getState().clearTextColors()
+
+      expect(store.getState().blocks[0]!.text).toEqual([
+        { t: 'жирный крашеный', m: ['b'] },
+        { t: 'ссылка с заливкой', href: 'https://example.com' },
+        { t: 'обычный' },
+      ])
+    })
+
+    it('ключи удаляются, а не выставляются в undefined', () => {
+      const store = createBuilderStore()
+      store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: painted() })
+      store.getState().clearTextColors()
+      expect('color' in store.getState().blocks[0]!.text![0]!).toBe(false)
+      expect('bg' in store.getState().blocks[0]!.text![1]!).toBe(false)
+    })
+
+    it('на форме без крашеного текста не ставит ни dirty, ни шаг отмены', () => {
+      // Иначе первый Ctrl+Z «съедал» бы нажатие на кнопку, ничего не изменившее.
+      const store = createBuilderStore()
+      store.getState().hydrate({
+        schemaVersion: SCHEMA_VERSION,
+        blocks: [{ id: 'b1', type: 'text', groupId: 'g1', settings: {}, text: [{ t: 'чистый' }] } as Block],
+      })
+      store.getState().clearTextColors()
+      expect(store.getState().dirty).toBe(false)
+      expect(store.getState().past).toHaveLength(0)
+    })
+
+    it('один шаг отмены на весь документ', () => {
+      // Это одно решение автора, и отменяться оно обязано одним Ctrl+Z, а не по блоку.
+      const store = createBuilderStore()
+      store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [...painted(), ...painted()] })
+      store.getState().clearTextColors()
+      expect(store.getState().past).toHaveLength(1)
+
+      store.getState().undo()
+      expect(store.getState().blocks[0]!.text![0]!.color).toBe('#ff0000')
+    })
+
+    it('схема после снятия остаётся валидной', () => {
+      const store = createBuilderStore()
+      store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: painted() })
+      store.getState().clearTextColors()
+      expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+    })
   })
 
   it('setAfterSubmit — один шаг отмены на оба поля', () => {

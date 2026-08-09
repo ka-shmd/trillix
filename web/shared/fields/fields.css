@@ -114,6 +114,19 @@
   --rf-align: left;
   --rf-align-items: flex-start;
 
+  /* КНОПКА ОТПРАВКИ (фаза 22, слайс 4). Токенами, а не набором классов на каждое
+     сочетание: вид кнопки — это четыре независимые настройки, и классов на их
+     произведение потребовалось бы двадцать четыре. */
+  /* Положение кнопки — JUSTIFY-CONTENT РЯДА, а не align-self самой кнопки. Первая
+     редакция этого слайса ставила align-self и не работала нигде: кнопка лежит в
+     .rf-nav (фаза 19) — это flex-СТРОКА, у которой align-self управляет вертикалью,
+     а на полотне редактора она и вовсе не flex-элемент. Настройка была во всех трёх
+     поверхностях и не давала эффекта ни в одной; поймано ревью, а не замером —
+     значение `center` в стиле честно стояло, ошибка была в оси. */
+  --rf-submit-justify: flex-start;
+  --rf-submit-width: auto;
+  --rf-submit-px: 1.5rem;
+
   /* КОНТУР КОНТРОЛА — ТЕНЬ, А НЕ BORDER. Это главное отличие вида Tally от
      «обычной формы», и подгонкой размеров его не получить. У Tally поле — белая
      карточка, лежащая на холсте: border нет вовсе (замерено: border-style none),
@@ -132,6 +145,9 @@
      выберет автор. Композиты остаются — их читают десятки правил ниже; меняются
      теперь ЧЕТЫРЕ токена под ними. */
   --rf-ring: rgb(61 59 53 / 0.16); /* кольцо в 1px — во всех трёх композитах */
+  /* Кольцо режима «рамка»: заметнее обычного, потому что там оно рисует контур в
+     одиночку — слоёной тени под ним нет. */
+  --rf-ring-strong: rgb(61 59 53 / 0.32);
   --rf-shadow-near: rgb(0 0 0 / 0.12); /* короткая тень под верхней кромкой */
   --rf-shadow-far: rgb(61 59 53 / 0.08); /* мягкое рассеивание вниз */
 
@@ -173,6 +189,9 @@
   --rf-font-family-heading: var(--rf-font-family);
   /* Фокус выводится из акцента: автор с зелёным акцентом получает зелёное свечение. */
   --rf-focus-ring: color-mix(in srgb, var(--rf-accent) 77.25%, white);
+  /* Высота и кегль кнопки ссылаются на другие токены, поэтому живут здесь же. */
+  --rf-submit-h: var(--rf-control-h);
+  --rf-submit-ratio: var(--rf-ratio-small);
 
   --rf-field-shadow:
     0 1px 1px 0 var(--rf-shadow-near), 0 0 0 1px var(--rf-ring),
@@ -221,6 +240,7 @@
 
   /* Контур: кольцо светлое и заметное, тени почти сняты (см. выше). */
   --rf-ring: rgb(255 255 255 / 0.16);
+  --rf-ring-strong: rgb(255 255 255 / 0.34);
   --rf-shadow-near: rgb(0 0 0 / 0.3);
   --rf-shadow-far: rgb(0 0 0 / 0.2);
 
@@ -239,6 +259,42 @@
 .rf-theme {
   background: var(--rf-canvas);
   color: var(--rf-text);
+}
+
+/* ВИД КОНТУРА КОНТРОЛА (фаза 22, слайс 4) — классом на контейнере, а не набором
+   переменных из панели. Причина: «рамка» и «без контура» это не другой цвет, а другой
+   СПОСОБ рисования, и выразить его значением, не зная темы, нельзя — светлому холсту
+   нужно тёмное кольцо, тёмному светлое. Класс живёт на том же элементе, что и тема,
+   поэтому берёт её --rf-ring-strong сам.
+
+   Тень остаётся дефолтом и своего класса не имеет: у неё нет и не должно быть
+   правила, которое можно забыть снять. */
+.rf-outline-border {
+  /* Контур рисует одно кольцо; слои тени сняты — с ними «рамка» выглядела бы той же
+     приподнятой карточкой, только жирнее обведённой. */
+  --rf-ring: var(--rf-ring-strong);
+  --rf-shadow-near: transparent;
+  --rf-shadow-far: transparent;
+}
+
+.rf-outline-none {
+  /* Поле сливается с холстом: так собирают формы, где вопросы важнее полей. Заливка
+     остаётся — она отличает поле от фона, когда цвета холста и поля разные. */
+  --rf-field-shadow: none;
+}
+
+/* ВИД КНОПКИ ОТПРАВКИ — контурная. Тоже класс, по той же причине: это другой способ
+   рисования, а не другое значение. Цвет берётся из --rf-primary, поэтому кнопка
+   остаётся фирменной и в контурном виде. */
+.rf-btn-outline .rf-submit {
+  background: transparent;
+  color: var(--rf-primary);
+  box-shadow: inset 0 0 0 1px var(--rf-primary);
+}
+
+.rf-btn-outline .rf-submit:hover {
+  background: color-mix(in srgb, var(--rf-primary) 8%, transparent);
+  opacity: 1;
 }
 
 /* Холст формы: заголовок, поля, кнопка отправки. Ширину и поля холста (max-width,
@@ -387,18 +443,18 @@
 
 /* Кнопка отправки — shadcn primary size=lg редактора (h-10, px-6, text-sm/500). */
 .rf-submit {
-  align-self: flex-start;
+  width: var(--rf-submit-width);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: var(--rf-control-h);
-  padding: 0 1.5rem;
+  height: var(--rf-submit-h);
+  padding: 0 var(--rf-submit-px);
   border: 0;
   border-radius: var(--rf-radius);
   background: var(--rf-primary);
   color: var(--rf-primary-foreground);
   font-family: inherit;
-  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  font-size: calc(var(--rf-font-size) * var(--rf-submit-ratio));
   font-weight: 500;
   line-height: 1.25rem;
   cursor: pointer;
@@ -432,22 +488,35 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  /* Положение кнопки отправки (фаза 22). Ряд растянут во всю колонку (он flex-элемент
+     колонки .rf-page), поэтому именно здесь у кнопки появляется свободное место, в
+     котором её есть куда двигать. При кнопке во всю ширину настройка инертна —
+     двигать нечего, и это то же «инертное правило равно отсутствующему», что в
+     условной логике. */
+  justify-content: var(--rf-submit-justify);
 }
 
 /* Кнопка «Назад» — вторичная: тот же размер и радиус, что у отправки (высота одна на
-   всё полотно), но контуром. Она не действие формы, а возврат. */
+   всё полотно), но контуром. Она не действие формы, а возврат.
+
+   Размер берётся из ТЕХ ЖЕ токенов, что у отправки, хотя настройка называется
+   «кнопка отправки». Иначе на второй странице в одном ряду стоят две разновысокие
+   кнопки: «Далее» носит .rf-submit и за размером едет, а «Назад» осталась бы на
+   36px — прямое нарушение правила, записанного в :root («высота контрола одна на всё
+   полотно; разъезжающиеся высоты — главный источник неопрятности»). Горизонтальные
+   поля у неё свои: она короче по смыслу. */
 .rf-back {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: var(--rf-control-h);
+  height: var(--rf-submit-h);
   padding: 0 1.25rem;
   border: 1px solid var(--rf-muted);
   border-radius: var(--rf-radius);
   background: transparent;
   color: var(--rf-text);
   font-family: inherit;
-  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  font-size: calc(var(--rf-font-size) * var(--rf-submit-ratio));
   font-weight: 500;
   line-height: 1.25rem;
   cursor: pointer;

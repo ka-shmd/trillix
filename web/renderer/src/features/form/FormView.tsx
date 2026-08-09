@@ -10,7 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
-import { designToVars, themeClass } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
@@ -158,11 +158,13 @@ export function FormView({
     const root = document.documentElement
     const vars = designToVars(form.schema.design)
     for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
-    const cls = themeClass(form.schema.design)
-    if (cls) root.classList.add(cls)
+    // Классов может быть несколько (тема + контур + вид кнопки), а classList.add со
+    // строкой «a b» бросает InvalidCharacterError — поэтому список, а не строка.
+    const cls = designClasses(form.schema.design).split(' ').filter(Boolean)
+    root.classList.add(...cls)
     return () => {
       for (const name of Object.keys(vars)) root.style.removeProperty(name)
-      if (cls) root.classList.remove(cls)
+      root.classList.remove(...cls)
     }
   }, [form.schema.design])
 

@@ -35,7 +35,7 @@ import {
   textFromString,
 } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
-import { designToVars, themeClass } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import {
   groupBlocks,
   groupCanPair,
@@ -855,7 +855,7 @@ export function SlashEditor({
         коробки колонки, но красится тем же холстом, и переменные обязаны накрывать
         обоих. На :root тему ставить нельзя — она перекрасила бы кабинет вокруг. */}
           <div
-            className={`group/canvas rf-theme ${themeClass(design)}`}
+            className={`group/canvas rf-theme ${designClasses(design)}`}
             style={designToVars(design)}
           >
             <CoverArea formId={formId} />
@@ -1650,7 +1650,10 @@ function SubmitButtonEditor() {
 
   return (
     // 48px форма→кнопка отправки = gap .rf-page у превью/рендерера (этап 13.3).
-    <div className="mt-12">
+    // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
+    // задаётся justify-content ряда, и без общей коробки настройка работала бы на
+    // двух поверхностях из трёх. Ряд из одного элемента ничего не портит.
+    <div className="mt-12 rf-nav">
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
