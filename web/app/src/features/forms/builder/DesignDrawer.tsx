@@ -9,7 +9,6 @@ import {
   DESIGN_DENSITIES,
   DESIGN_FONTS,
   DESIGN_OUTLINES,
-  DESIGN_THEMES,
   MAX_FONT_SIZE,
   MAX_COLUMN,
   MAX_RADIUS,
@@ -18,6 +17,16 @@ import {
   MIN_RADIUS,
 } from '@entities/formSchema'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -34,7 +43,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 
 import { ColorPicker } from './ColorPicker'
 import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
-import { currentTheme, withTheme } from './designTheme'
+import { currentTheme, hasCustomFields, resetToTheme, withTheme } from './designTheme'
 import { darkThemeColorClash, lowContrast } from './designWarnings'
 import { useBuilderStore } from './storeContext'
 
@@ -91,6 +100,20 @@ export function DesignDrawer({
   const clash = darkThemeColorClash(design, blocks)
   const contrast = lowContrast(design)
 
+  // Тема, которую автор выбрал, но которая СОТРЁТ его настройки: держим её здесь,
+  // пока он не подтвердит. null — диалога нет.
+  const [pendingTheme, setPendingTheme] = useState<'light' | 'dark' | null>(null)
+
+  // Переход на готовую тему сбрасывает всё своё — поэтому спрашиваем. Если сбрасывать
+  // нечего, спрашивать не о чем: диалог на пустом месте приучает жать «да» не глядя,
+  // и в тот раз, когда он про настоящую потерю, его тоже прожмут не читая.
+  const chooseTheme = (next: string) => {
+    if (next === 'custom') return
+    const base = next as 'light' | 'dark'
+    if (hasCustomFields(design)) setPendingTheme(base)
+    else setDesign(withTheme(design, base))
+  }
+
   // Ширина открытой шторки уезжает на корень документа: открывают её глубоко в
   // фиче, а съезжает оболочка маршрута, и тащить проп через три слоя ради этого
   // незачем. Снимается в cleanup — иначе закрытая панель оставила бы страницу с
@@ -140,13 +163,18 @@ export function DesignDrawer({
         </SheetHeader>
 
         <div className="grid gap-5 px-4 pb-10">
+          {/* Три темы в панели, но ДВЕ в схеме: «Пользовательская» — не значение, а
+              вывод из наличия своих настроек (designTheme.ts). Поэтому она и
+              включается сама при первой же правке цвета, и не выбирается руками:
+              выбрать «мои настройки», не сделав ни одной, нечего. */}
           <Field label="Тема" id="design-theme">
             <Choice
               id="design-theme"
               value={theme}
-              options={DESIGN_THEMES}
+              options={THEME_OPTIONS}
               titles={THEME_TITLES}
-              onChange={(next) => setDesign(withTheme(design, next as 'light' | 'dark'))}
+              disabledOptions={theme === 'custom' ? [] : ['custom']}
+              onChange={chooseTheme}
             />
           </Field>
 
@@ -315,6 +343,34 @@ export function DesignDrawer({
           </Group>
         </div>
       </SheetContent>
+
+      {/* Предупреждение перед сбросом. Диалог, а не «отменить» тостом после: правки
+          оформления копятся долго (семь цветов, шрифт, лэйаут), и восстановить их по
+          памяти дороже, чем один раз прочитать вопрос. */}
+      <AlertDialog open={pendingTheme !== null} onOpenChange={(o) => !o && setPendingTheme(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Вернуться к теме «{pendingTheme ? THEME_TITLES[pendingTheme] : ''}»?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Готовая тема заменит оформление целиком: свои цвета, шрифт, лэйаут, поля и
+              кнопки будут сброшены. Отменить это можно будет через Ctrl+Z.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingTheme) setDesign(resetToTheme(pendingTheme))
+                setPendingTheme(null)
+              }}
+            >
+              Сбросить оформление
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   )
 }
@@ -364,6 +420,7 @@ function Choice({
   titles,
   onChange,
   disabled,
+  disabledOptions,
 }: {
   id: string
   value: string
@@ -371,6 +428,9 @@ function Choice({
   titles: Record<string, string>
   onChange: (value: string) => void
   disabled?: boolean
+  // Выключенные пункты, а не выкинутые из списка: «Пользовательская» обязана
+  // оставаться видимой — она объясняет, ПОЧЕМУ дропдаун показывает не «Светлую».
+  disabledOptions?: readonly string[]
 }) {
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
@@ -379,7 +439,7 @@ function Choice({
       </SelectTrigger>
       <SelectContent>
         {options.map((o) => (
-          <SelectItem key={o} value={o}>
+          <SelectItem key={o} value={o} disabled={disabledOptions?.includes(o)}>
             {titles[o]}
           </SelectItem>
         ))}
@@ -526,7 +586,12 @@ function plural(n: number, one: string, few: string, many: string): string {
 
 // Подписи — здесь, а не в @entities: список значений это контракт (его сверяет
 // паритет-тест с Go), а перевод на человеческий — дело интерфейса.
-const THEME_TITLES: Record<string, string> = { light: 'Светлая', dark: 'Тёмная' }
+const THEME_OPTIONS = ['light', 'dark', 'custom'] as const
+const THEME_TITLES: Record<string, string> = {
+  light: 'Светлая',
+  dark: 'Тёмная',
+  custom: 'Пользовательская',
+}
 const DENSITY_TITLES: Record<string, string> = {
   compact: 'Плотно',
   normal: 'Обычно',
