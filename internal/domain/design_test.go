@@ -298,3 +298,39 @@ func TestDesignVars_Button(t *testing.T) {
 		}
 	})
 }
+
+// Цвет строки браузера: холст автора сильнее темы, тема сильнее умолчания, а
+// умолчание не печатает мету вовсе — светлый холст и так белый, а зафиксированная
+// мета отняла бы у браузера право решать самому.
+func TestDesignThemeColor(t *testing.T) {
+	cases := []struct {
+		name string
+		d    *FormDesign
+		want string
+	}{
+		{"нет оформления", nil, ""},
+		{"светлая по умолчанию", &FormDesign{}, ""},
+		{"тёмная тема", &FormDesign{Theme: "dark"}, designDarkCanvas},
+		{"свой холст", &FormDesign{Palette: &DesignPalette{Canvas: "#fff8e7"}}, "#fff8e7"},
+		{"свой холст поверх тёмной", &FormDesign{Theme: "dark", Palette: &DesignPalette{Canvas: "#101014"}}, "#101014"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := DesignThemeColor(c.d); got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestDesignFontFiles(t *testing.T) {
+	if got := DesignFontFiles(nil); got != nil {
+		t.Fatalf("нет оформления → нечего качать, получено %v", got)
+	}
+	if got := DesignFontFiles(&FormDesign{Font: "system"}); got != nil {
+		t.Fatalf("системный стек весит 0 байт и файлов не имеет, получено %v", got)
+	}
+	if got := DesignFontFiles(&FormDesign{Font: "inter"}); len(got) != 2 || got[0] != "inter-cyrillic" {
+		t.Fatalf("ожидались оба подмножества Inter, кириллица первой; получено %v", got)
+	}
+}

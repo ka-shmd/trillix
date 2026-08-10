@@ -36,9 +36,10 @@ const (
 // имена ассетов (как их отдаёт vite-дефолт), favicon и — намеренно — лишний
 // <link rel="preload">, которого Go «не знает». Тесты формы проверяют, что ВСЁ это
 // доезжает в ответ дословно: доказательство, что добавление ассета в сборку не
-// требует правок Go (DoD фазы 8, шаг 7). Плейсхолдер <!--og-meta--> — точка вставки.
+// требует правок Go (DoD фазы 8, шаг 7). Точек вставки две: data-form-shell в теге
+// <html> (оформление формы, фаза 22) и плейсхолдер og-меты в <head>.
 const builtIndexFixture = `<!doctype html>
-<html lang="ru">
+<html lang="ru" data-form-shell>
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />

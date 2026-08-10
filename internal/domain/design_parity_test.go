@@ -36,6 +36,8 @@ const (
 	designTSRel   = "../../web/shared/fields/design.ts"
 	entitiesTSRel = "../../web/shared/entities/formSchema.ts"
 	designGoRel   = "design_vars.go"
+	fieldsCSSRel  = "../../web/shared/fields/fields.css"
+	fontsDirRel   = "../../web/shared/fonts"
 )
 
 var (
@@ -47,6 +49,7 @@ var (
 	reTSClass    = regexp.MustCompile(`push\('(rf-[a-z-]+)'\)`)
 	reGoClass    = regexp.MustCompile(`append\(out, "(rf-[a-z-]+)"\)`)
 	reLineCmt    = regexp.MustCompile(`(?m)//.*$`)
+	reCSSCanvas  = regexp.MustCompile(`--rf-canvas:\s*([^;]+);`)
 )
 
 func readSharedTS(t *testing.T, path string) string {
@@ -224,6 +227,65 @@ func TestDesignLimitsParity(t *testing.T) {
 	for name := range goLimits {
 		if !found[name] {
 			t.Errorf("граница %s не найдена в TS — зеркало разошлось по составу", name)
+		}
+	}
+}
+
+// Тёмный холст — ЕДИНСТВЕННОЕ значение темы, продублированное в Go (designDarkCanvas):
+// <meta name="theme-color"> принимает только литеральный цвет, var() там не работает.
+// Всё прочее, что делает тёмная тема, приезжает классом на <html> и копии не требует.
+// Разойдётся — строка браузера на публичной форме станет другого цвета, чем сама
+// форма, и заметит это только глаз на телефоне.
+func TestDesignDarkCanvasParity(t *testing.T) {
+	raw, err := os.ReadFile(fieldsCSSRel)
+	if err != nil {
+		t.Fatalf("fields.css недоступен (%s): %v", fieldsCSSRel, err)
+	}
+	body := string(raw)
+	i := strings.Index(body, ".rf-theme-dark {")
+	if i < 0 {
+		t.Fatal(".rf-theme-dark не найден — разбор fields.css сломался")
+	}
+	end := strings.Index(body[i:], "\n}")
+	if end < 0 {
+		t.Fatal("не найден конец правила .rf-theme-dark")
+	}
+	m := reCSSCanvas.FindStringSubmatch(body[i : i+end])
+	if m == nil {
+		t.Fatal("--rf-canvas не найден в .rf-theme-dark — разбор fields.css сломался")
+	}
+	if got := strings.TrimSpace(m[1]); got != designDarkCanvas {
+		t.Fatalf("холст тёмной темы разошёлся:\n  Go:  %q\n  CSS: %q", designDarkCanvas, got)
+	}
+}
+
+// Файлы подмножеств обязаны существовать на диске и покрывать каждое несистемное
+// семейство каталога. Опечатка в базовом имени не ломает ни сборку, ни линт: она
+// даёт <link rel=preload> на несуществующий файл — то есть лишний 404 и молча
+// потерянный preload, ровно ту оптимизацию, ради которой всё и делалось.
+func TestDesignFontFilesExist(t *testing.T) {
+	for _, key := range designFonts {
+		files := designFontFiles[key]
+		if key == "system" {
+			if files != nil {
+				t.Errorf("системному стеку не нужны файлы, а они заданы: %v", files)
+			}
+			continue
+		}
+		if len(files) == 0 {
+			t.Errorf("шрифт %q есть в каталоге, но файлов подмножеств у него нет", key)
+			continue
+		}
+		for _, base := range files {
+			path := fontsDirRel + "/" + base + ".woff2"
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("шрифт %q: файла %s нет на диске (%v)", key, path, err)
+			}
+		}
+	}
+	for key := range designFontFiles {
+		if !slices.Contains(designFonts, key) {
+			t.Errorf("файлы заданы для %q, которого нет в каталоге шрифтов", key)
 		}
 	}
 }

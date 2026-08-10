@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,22 +17,48 @@ import (
 )
 
 // ogMetaMarker — плейсхолдер в собранном index.html рендерера (web/renderer/index.html),
-// на место которого Go подставляет OG-мету формы. Всё вокруг него (ассеты: script,
+// на место которого Go подставляет «голову формы». Всё вокруг него (ассеты: script,
 // link, preload, favicon) — впрыснуто vite и отдаётся дословно: Go список ассетов
 // не ведёт, поэтому расхождение «Go ≠ сборка» невозможно по построению.
+//
+// Имя историческое: кроме OG-меты сюда теперь уезжают theme-color и preload шрифта
+// формы. Переименовать значило бы разойтись с разметкой рендерера ради красоты.
 const ogMetaMarker = "<!--og-meta-->"
 
-// ogMetaTmpl — только «голова формы»: то, что зависит от формы (title/тизер) и
-// потому не может быть в статичном index.html. Подставляется на место ogMetaMarker.
+// shellMarker — ВТОРАЯ точка вставки, в открывающем теге <html>: на её место уезжают
+// класс и стиль оформления формы (фаза 22, слайс 5). Ведущий пробел входит в
+// плейсхолдер, поэтому форма без оформления даёт ровно `<html lang="ru">` — как до
+// фазы, байт в байт.
+//
+// ПОЧЕМУ АТРИБУТЫ, А НЕ <style> В HEAD, как обещала спека §8.1. Тёмная тема — это
+// класс `.rf-theme-dark` на контейнере (там живут и color-scheme, и все дефолты
+// цветов), а класс на <html> из head не поставить. Значит, вариант со <style>
+// заставил бы Go знать наизусть тёмные дефолты холста, поля, текста и приглушённого
+// текста и печатать их с перебивающей класс специфичностью — четыре значения,
+// продублированных в Go навсегда, и правка fields.css, которая молча не доезжает до
+// публичной формы. Атрибуты же печатают РОВНО ТО ЖЕ, что через мгновение наденет
+// клиент (DesignClasses + DesignStyleAttr — те же зеркала), поэтому третьего
+// источника истины не появляется вовсе.
+const shellMarker = " data-form-shell"
+
+// headTmpl — «голова формы»: то, что зависит от формы и потому не может лежать в
+// статичном index.html. Подставляется на место ogMetaMarker.
 //
 // html/template автоэкранирует ВСЕ подстановки в их контексте (Title/Description —
 // пользовательский текст, попадает в атрибут content экранированным: инъекция вида
 // "><script> невозможна; URL'ы фильтруются в src/href-контексте). Никакого «сырого»
 // вывода и никакого dangerouslySetInnerHTML (инвариант безопасности 4). Собранный
 // index.html вокруг — доверенный (наш билд), склеивается как есть.
-var ogMetaTmpl = template.Must(template.New("ogmeta").Parse(
-	`<title>{{.Title}}</title>` +
+//
+// Preload шрифта идёт ПЕРВЫМ: это единственная строка вставки, которая говорит
+// браузеру качать файл, и чем раньше её увидит сканер предзагрузки, тем раньше
+// уйдёт запрос. crossorigin обязателен даже для своего origin — без него шрифт
+// скачается вторым запросом (правило CORS для шрифтов), и preload сработает в минус.
+var headTmpl = template.Must(template.New("head").Parse(
+	`{{range .Preload}}<link rel="preload" as="font" type="font/woff2" crossorigin href="{{.}}">{{end}}` +
+		`<title>{{.Title}}</title>` +
 		`<meta name="description" content="{{.MetaDescription}}">` +
+		`{{if .ThemeColor}}<meta name="theme-color" content="{{.ThemeColor}}">{{end}}` +
 		`<meta property="og:type" content="website">` +
 		`<meta property="og:title" content="{{.Title}}">` +
 		`{{if .Description}}<meta property="og:description" content="{{.Description}}">{{end}}` +
@@ -40,7 +67,7 @@ var ogMetaTmpl = template.Must(template.New("ogmeta").Parse(
 		`<meta name="twitter:card" content="summary_large_image">`,
 ))
 
-type ogMetaData struct {
+type headData struct {
 	Title string
 	// Description — тизер для og:description (заголовки блоков); может быть пустым,
 	// тогда og:description опускается. MetaDescription — стандартный <meta
@@ -49,6 +76,10 @@ type ogMetaData struct {
 	MetaDescription string
 	OGImage         string
 	URL             string
+	// ThemeColor — цвет строки браузера: холст формы. Пусто → меты нет вовсе.
+	ThemeColor string
+	// Preload — URL'ы подмножеств выбранного шрифта в собранной статике.
+	Preload []string
 }
 
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
@@ -65,18 +96,22 @@ const fallbackMetaDescription = "Онлайн-форма — заполните 
 // автор не писал.
 const fallbackFormTitle = "Форма"
 
-// indexDoc — собранный index.html, разложенный вокруг плейсхолдера ogMetaMarker,
-// вместе с приметами файла на диске (mtime+размер), по которым замечаем подмену.
+// indexDoc — собранный index.html, разложенный вокруг двух плейсхолдеров
+// (shellMarker в теге <html>, затем ogMetaMarker в <head>), вместе с приметами файла
+// на диске (mtime+размер), по которым замечаем подмену.
 type indexDoc struct {
-	prefix  []byte
-	suffix  []byte
+	head    []byte // до атрибутов оболочки
+	mid     []byte // между ними и «головой формы»
+	tail    []byte // после «головы формы»
+	fonts   map[string]string
 	modTime time.Time
 	size    int64
 }
 
-// parseIndexHTML читает собранный index.html рендерера и раскладывает его вокруг
-// плейсхолдера ogMetaMarker. Отсутствие маркера или #root — ошибка (на старте это
-// fail-fast «упасть сразу, а не на первом запросе», а не молчаливо битая форма).
+// parseIndexHTML читает собранный index.html рендерера и раскладывает его вокруг двух
+// плейсхолдеров. Отсутствие любого из них, нарушенный порядок или пропавший #root —
+// ошибка (на старте это fail-fast «упасть сразу, а не на первом запросе», а не
+// молчаливо битая форма).
 func parseIndexHTML(path string) (*indexDoc, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -87,19 +122,85 @@ func parseIndexHTML(path string) (*indexDoc, error) {
 		return nil, fmt.Errorf("read renderer index %s: %w", path, err)
 	}
 	html := string(raw)
+	shell := strings.Index(html, shellMarker)
+	if shell < 0 {
+		return nil, fmt.Errorf("renderer index %s: missing %q placeholder", path, shellMarker)
+	}
 	i := strings.Index(html, ogMetaMarker)
 	if i < 0 {
 		return nil, fmt.Errorf("renderer index %s: missing %q placeholder", path, ogMetaMarker)
+	}
+	// Порядок проверяется, потому что склейка идёт по нему: маркер оболочки живёт в
+	// открывающем теге <html>, то есть строго раньше головы. Переставленные местами
+	// плейсхолдеры дали бы не ошибку, а перемешанный документ.
+	if shell > i {
+		return nil, fmt.Errorf("renderer index %s: %q must precede %q", path, shellMarker, ogMetaMarker)
 	}
 	if !strings.Contains(html, `id="root"`) {
 		return nil, fmt.Errorf("renderer index %s: missing #root mount node", path)
 	}
 	return &indexDoc{
-		prefix:  []byte(html[:i]),
-		suffix:  []byte(html[i+len(ogMetaMarker):]),
+		head:    []byte(html[:shell]),
+		mid:     []byte(html[shell+len(shellMarker) : i]),
+		tail:    []byte(html[i+len(ogMetaMarker):]),
+		fonts:   scanFontAssets(path),
 		modTime: fi.ModTime(),
 		size:    fi.Size(),
 	}, nil
+}
+
+// scanFontAssets собирает карту «базовое имя шрифта → URL в собранной статике»,
+// читая каталог ассетов рядом с index.html: vite хеширует имя файла
+// (inter-cyrillic-DqGufNeO.woff2), а Go обязан знать URL, чтобы поставить preload
+// выбранного семейства.
+//
+// ЭТО ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ из правила «Go ассеты не перечисляет», и оно узкое:
+// список файлов не ведётся, читается то, что реально лежит на диске, а имена до
+// хеша заданы каталогом шрифтов (internal/domain/design_vars.go) и сторожатся
+// тестом. Пропавший файл даёт отсутствие preload, а не битую страницу.
+//
+// Пересчитывается вместе с разбором index.html, и этого достаточно: файл шрифта
+// участвует в CSS, значит его подмена меняет хеш CSS, а тот — сам index.html.
+func scanFontAssets(indexPath string) map[string]string {
+	dir := filepath.Join(filepath.Dir(indexPath), "assets")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	fonts := map[string]string{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".woff2") {
+			continue
+		}
+		stem := strings.TrimSuffix(name, ".woff2")
+		cut := strings.LastIndex(stem, "-")
+		if cut <= 0 {
+			continue
+		}
+		fonts[stem[:cut]] = "/assets/" + name
+	}
+	return fonts
+}
+
+// shellAttrs — класс и стиль оформления для открывающего тега <html>: ровно то, что
+// через мгновение наденет на тот же узел клиент (FormView). Пустое оформление даёт
+// пустую строку, и тег остаётся прежним.
+//
+// Экранирование делается ЯВНО, а не html/template: в контексте атрибута style
+// шаблон включает CSS-фильтр, который наши кастомные свойства со стеком шрифтов
+// (кавычки, запятые) вырезает в ZgotmplZ. Значения приходят из закрытых списков
+// валидатора (#rrggbb, целые с px, enum-ключи), но экранируем всё равно — атрибут
+// собирается конкатенацией, и одна кавычка в значении разорвала бы тег.
+func shellAttrs(d *domain.FormDesign) string {
+	var b strings.Builder
+	if cls := domain.DesignClasses(d); cls != "" {
+		b.WriteString(` class="` + template.HTMLEscapeString(cls) + `"`)
+	}
+	if style := domain.DesignStyleAttr(d); style != "" {
+		b.WriteString(` style="` + template.HTMLEscapeString(style) + `"`)
+	}
+	return b.String()
 }
 
 // currentIndex возвращает актуальный разбор index.html, перечитывая файл, если тот
@@ -152,21 +253,24 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	desc := ogDescriptionFromSchema(pf.Schema)
+	// Схема разбирается ОДИН раз на все три её роли в этом ответе: тизер описания,
+	// оформление оболочки и шрифт для preload. Разбор отказоустойчив — битая схема
+	// даёт страницу без тизера и без оформления, а не 500.
+	var design *domain.FormDesign
+	var desc string
+	if schema, err := domain.ValidateSchema(pf.Schema); err == nil {
+		design = schema.Design
+		desc = ogDescription(schema)
+	}
+
 	metaDesc := desc
 	if metaDesc == "" {
 		metaDesc = fallbackMetaDescription
 	}
-	data := ogMetaData{
-		Title:           titleOrFallback(pf.Title),
-		Description:     desc,
-		MetaDescription: metaDesc,
-		OGImage:         h.ogImageURL,
-		URL:             h.publicBaseURL + "/r/" + slug,
-	}
 
-	// prefix + <og-мета> + suffix. Рендерим в буфер: ошибка шаблона (маловероятна —
-	// статичный шаблон) не должна оставить наполовину записанный ответ.
+	// prefix + <атрибуты оболочки> + mid + <голова формы> + tail. Рендерим в буфер:
+	// ошибка шаблона (маловероятна — статичный шаблон) не должна оставить наполовину
+	// записанный ответ.
 	doc := h.currentIndex(r)
 	if doc == nil {
 		// Недостижимо сегодня: Routes регистрирует /r только когда документ загружен
@@ -177,13 +281,25 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, fmt.Errorf("renderer index unavailable for %s", slug))
 		return
 	}
+	data := headData{
+		Title:           titleOrFallback(pf.Title),
+		Description:     desc,
+		MetaDescription: metaDesc,
+		OGImage:         h.ogImageURL,
+		URL:             h.publicBaseURL + "/r/" + slug,
+		ThemeColor:      domain.DesignThemeColor(design),
+		Preload:         fontPreload(doc.fonts, design),
+	}
+
 	var buf bytes.Buffer
-	buf.Write(doc.prefix)
-	if err := ogMetaTmpl.Execute(&buf, data); err != nil {
+	buf.Write(doc.head)
+	buf.WriteString(shellAttrs(design))
+	buf.Write(doc.mid)
+	if err := headTmpl.Execute(&buf, data); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("render form meta %s: %w", slug, err))
 		return
 	}
-	buf.Write(doc.suffix)
+	buf.Write(doc.tail)
 
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
@@ -199,16 +315,36 @@ func titleOrFallback(title string) string {
 	return title
 }
 
-// ogDescriptionFromSchema собирает подзаголовок превью из формы: тексты первых
-// блоков-подписей (title/label) через « · ». Отдельного поля описания у формы нет,
-// поэтому берём осмысленный тизер из её содержимого. ValidateSchema приводит старые
-// версии к текущей на лету (v1→v2→v3); разбор отказоустойчив —
-// сбой даёт пустое описание, а не 500.
+// fontPreload — URL'ы подмножеств выбранного шрифта в собранной статике. Шрифта,
+// которого в сборке не оказалось (собрали без него, файл переименовали), в списке
+// нет: лишний preload на несуществующий адрес — это 404 в консоли респондента и
+// потерянная предзагрузка, то есть хуже, чем её отсутствие.
+func fontPreload(assets map[string]string, d *domain.FormDesign) []string {
+	var out []string
+	for _, base := range domain.DesignFontFiles(d) {
+		if url, ok := assets[base]; ok {
+			out = append(out, url)
+		}
+	}
+	return out
+}
+
+// ogDescriptionFromSchema — тизер по сырой схеме. Отдельно от ogDescription, потому
+// что схему для страницы формы разбирает getHTML (ей нужен ещё и design), а тесту
+// разбора удобнее сырой JSON.
 func ogDescriptionFromSchema(schema json.RawMessage) string {
 	s, err := domain.ValidateSchema(schema)
 	if err != nil {
 		return ""
 	}
+	return ogDescription(s)
+}
+
+// ogDescription собирает подзаголовок превью из формы: тексты первых блоков-подписей
+// (title/label) через « · ». Отдельного поля описания у формы нет, поэтому берём
+// осмысленный тизер из её содержимого. Схему, которую не удалось разобрать, сюда не
+// передают вовсе — тизер тогда пуст, а страница отдаётся как обычно.
+func ogDescription(s domain.FormSchema) string {
 	labels := make([]string, 0, 3)
 	for _, b := range s.Blocks {
 		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
