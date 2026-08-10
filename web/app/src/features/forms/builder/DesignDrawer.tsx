@@ -399,7 +399,7 @@ export function DesignDrawer({
             <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (pendingTheme) setDesign(resetToTheme(pendingTheme))
+                if (pendingTheme) setDesign(resetToTheme(pendingTheme, design))
                 setPendingTheme(null)
               }}
             >

@@ -308,21 +308,38 @@ func TestPublicGet_BadgeState_ChangesETag(t *testing.T) {
 
 // Бейдж стоит и на экране «приём закрыт»: иначе он снимается разглядыванием
 // второго экрана.
-func TestPublicGet_Closed_CarriesBadge(t *testing.T) {
-	svc := brandingForm(t, false, false)
-	svc.pf.Status = domain.FormStatusClosed
+func TestPublicGet_Closed_CarriesBadgeDecision(t *testing.T) {
+	// ОБЕ ветки, а не одна: тест, проверяющий только «бейдж есть», прошёл бы и при
+	// зашитой константе — то есть не заметил бы, что закрытая форма потеряла
+	// намерение автора и показывает бейдж оплаченной подписке.
+	cases := []struct {
+		name    string
+		removed bool
+		allowed bool
+		want    bool
+	}{
+		{"намерения нет", false, true, true},
+		{"намерение есть и оплачено", true, true, false},
+		{"намерение есть, тариф не даёт", true, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svc := brandingForm(t, c.removed, c.allowed)
+			svc.pf.Status = domain.FormStatusClosed
 
-	rec := httptest.NewRecorder()
-	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
-	if rec.Code != http.StatusGone {
-		t.Fatalf("статус %d, ожидалось 410", rec.Code)
-	}
-	var body closedFormResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("тело не парсится: %v", err)
-	}
-	if !body.ShowBadge {
-		t.Fatal("на экране закрытой формы бейджа не оказалось")
+			rec := httptest.NewRecorder()
+			newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
+			if rec.Code != http.StatusGone {
+				t.Fatalf("статус %d, ожидалось 410", rec.Code)
+			}
+			var body closedFormResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("тело не парсится: %v", err)
+			}
+			if body.ShowBadge != c.want {
+				t.Fatalf("showBadge = %v, ожидалось %v", body.ShowBadge, c.want)
+			}
+		})
 	}
 }
 

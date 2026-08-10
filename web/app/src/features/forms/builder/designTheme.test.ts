@@ -84,3 +84,19 @@ describe('withTheme', () => {
     expect(withTheme(withTheme(undefined, 'dark'), 'light')).toBeUndefined()
   })
 })
+
+describe('resetToTheme — бейдж', () => {
+  it('переживает сброс оформления', () => {
+    // Сброс возвращает к готовой теме ОФОРМЛЕНИЕ; бейдж — не оформление, а
+    // покупка. Первая редакция его теряла: автор соглашался «сбросить цвета» и
+    // молча получал бейдж обратно на форму.
+    const design = { theme: 'dark', palette: { accent: '#12ab34' }, branding: false } as const
+    expect(resetToTheme('dark', design)).toEqual({ theme: 'dark', branding: false })
+    expect(resetToTheme('light', design)).toEqual({ branding: false })
+  })
+
+  it('без снятого бейджа сброс даёт ровно готовую тему', () => {
+    expect(resetToTheme('light', { palette: { accent: '#12ab34' } })).toBeUndefined()
+    expect(resetToTheme('dark', { palette: { accent: '#12ab34' } })).toEqual({ theme: 'dark' })
+  })
+})

@@ -121,8 +121,11 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, h.now().UTC()) {
 		w.Header().Set("Cache-Control", "no-store")
 		httpserver.WriteJSON(w, r, http.StatusGone, closedFormResponse{
-			Closed:    true,
-			ShowBadge: h.showBadge(r, pf),
+			Closed: true,
+			// Свой разбор снапшота: ветка редкая (форма закрыта), и тащить его
+			// выше общего пути ради неё незачем. Битая схема бейджу не мешает —
+			// намерения в ней просто нет.
+			ShowBadge: h.showBadge(r, pf.WorkspaceID, designOf(pf.Schema)),
 			// Экран «приём закрыт» — единственное место рендерера, где заголовок
 			// показывается БЕЗ схемы (её в 410 нет вовсе), поэтому пустоту здесь
 			// замещаем так же, как в <title> вкладки.
@@ -139,7 +142,17 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// от смены тарифа, а не от переиздания. Без него подписавшийся автор получал бы
 	// на каждый повторный запрос 304 с прежним телом — то есть бейдж оставался бы у
 	// всех, кто уже открывал форму, пока не сменится версия.
-	showBadge := h.showBadge(r, pf)
+	// Снапшот разбирается ОДИН раз на обе его роли в этом ответе: намерение автора
+	// про бейдж и канон схемы для рендерера. Разбор — самая дорогая операция на этом
+	// пути (документ формы целиком), и делать его дважды ради одного булева поля
+	// значило бы платить за бейдж на каждой публичной загрузке.
+	parsed, perr := domain.ValidateSchema(pf.Schema)
+	var design *domain.FormDesign
+	if perr == nil {
+		design = parsed.Design
+	}
+
+	showBadge := h.showBadge(r, pf.WorkspaceID, design)
 	etag := `"` + pf.VersionID.String() + badgeETagSuffix(showBadge) + `"`
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("ETag", etag)
@@ -149,10 +162,15 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Рендерер знает только текущий формат — старая опубликованная версия
-	// апгрейдится до v3 на отдаче (иммутабельный снапшот в БД не трогаем).
-	schema, err := domain.CanonicalV4(pf.Schema)
+	// апгрейдится до v4 на отдаче (иммутабельный снапшот в БД не трогаем).
+	// Апгрейд уже сделан разбором выше; здесь остаётся сериализация.
+	if perr != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), perr))
+		return
+	}
+	schema, err := json.Marshal(parsed)
 	if err != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), err))
+		httpserver.WriteError(w, r, fmt.Errorf("marshal public schema %s: %w", r.PathValue("slug"), err))
 		return
 	}
 
@@ -174,17 +192,23 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 // Схема разбирается ОТКАЗОУСТОЙЧИВО и только ради одного поля — намерения автора.
 // Битая схема на этом пути невозможна (снапшот проверен при публикации), но
 // возвращать из-за неё 500 незачем: бейдж по умолчанию стоит.
-func (h *PublicHandler) showBadge(r *http.Request, pf PublicForm) bool {
-	var design *domain.FormDesign
-	if parsed, err := domain.ValidateSchema(pf.Schema); err == nil {
-		design = parsed.Design
-	}
-	show, err := h.svc.ShowBadge(r.Context(), pf.WorkspaceID, design)
+func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, design *domain.FormDesign) bool {
+	show, err := h.svc.ShowBadge(r.Context(), workspaceID, design)
 	if err != nil {
 		httpserver.LoggerFrom(r.Context()).Error("проверка тарифа для бейджа",
-			slog.String("workspace_id", pf.WorkspaceID.String()), slog.String("error", err.Error()))
+			slog.String("workspace_id", workspaceID.String()), slog.String("error", err.Error()))
 	}
 	return show
+}
+
+// designOf — оформление из снапшота, отказоустойчиво: неразбираемая схема даёт nil,
+// то есть «намерения снять бейдж нет». Публичный путь из-за разбора не падает.
+func designOf(raw json.RawMessage) *domain.FormDesign {
+	parsed, err := domain.ValidateSchema(raw)
+	if err != nil {
+		return nil
+	}
+	return parsed.Design
 }
 
 // badgeETagSuffix — метка состояния бейджа в ETag. Отдельной функцией, а не

@@ -46,8 +46,18 @@ export function currentTheme(design: FormDesign | undefined): ThemeChoice {
 // фазы: форма, у которой тему включили и выключили, обязана стать байт в байт
 // прежней; сохранённое 'light' дало бы документ, отличающийся от исходного при
 // одинаковом виде, и это расхождение живёт вечно.
-export function resetToTheme(theme: 'light' | 'dark'): FormDesign | undefined {
-  return theme === 'dark' ? { theme: 'dark' } : undefined
+//
+// БЕЙДЖ ПЕРЕЖИВАЕТ СБРОС, и это не исключение из правила, а само правило: сброс
+// возвращает ОФОРМЛЕНИЕ к готовой теме, а `branding` — не оформление, а покупка.
+// Первая редакция его теряла: автор соглашался «сбросить цвета» и молча получал
+// обратно бейдж на форму, причём диалог об этом не предупреждал (нашло ревью).
+export function resetToTheme(
+  theme: 'light' | 'dark',
+  design?: FormDesign | undefined,
+): FormDesign | undefined {
+  const kept = design?.branding === false ? { branding: false as const } : undefined
+  if (theme === 'dark') return { theme: 'dark', ...kept }
+  return kept
 }
 
 // withTheme — смена базы БЕЗ сброса своих значений. Нужна там, где сбрасывать
