@@ -122,14 +122,21 @@ func parseIndexHTML(path string) (*indexDoc, error) {
 		return nil, fmt.Errorf("read renderer index %s: %w", path, err)
 	}
 	html := string(raw)
+	// СЧИТАЕМ, А НЕ ИЩЕМ ПЕРВЫЙ: подстановка идёт в ОДНО место, и второе вхождение
+	// маркера означает, что мы вставим документ не туда. Ровно это и случилось при
+	// первой сборке слайса 5: поясняющий комментарий над тегом <html> начинался со
+	// слов «data-form-shell — …», то есть содержал искомую подстроку вместе с ведущим
+	// пробелом. Маркер «нашёлся» в комментарии, оформление уехало внутрь него, тег
+	// <html> остался голым — и ни ошибки, ни падения: страница отдавалась, просто
+	// светлой. Дубль обязан ронять старт, а не тихо переезжать.
+	if n := strings.Count(html, shellMarker); n != 1 {
+		return nil, fmt.Errorf("renderer index %s: %q must occur exactly once, found %d", path, shellMarker, n)
+	}
+	if n := strings.Count(html, ogMetaMarker); n != 1 {
+		return nil, fmt.Errorf("renderer index %s: %q must occur exactly once, found %d", path, ogMetaMarker, n)
+	}
 	shell := strings.Index(html, shellMarker)
-	if shell < 0 {
-		return nil, fmt.Errorf("renderer index %s: missing %q placeholder", path, shellMarker)
-	}
 	i := strings.Index(html, ogMetaMarker)
-	if i < 0 {
-		return nil, fmt.Errorf("renderer index %s: missing %q placeholder", path, ogMetaMarker)
-	}
 	// Порядок проверяется, потому что склейка идёт по нему: маркер оболочки живёт в
 	// открывающем теге <html>, то есть строго раньше головы. Переставленные местами
 	// плейсхолдеры дали бы не ошибку, а перемешанный документ.
@@ -161,6 +168,11 @@ func parseIndexHTML(path string) (*indexDoc, error) {
 //
 // Пересчитывается вместе с разбором index.html, и этого достаточно: файл шрифта
 // участвует в CSS, значит его подмена меняет хеш CSS, а тот — сам index.html.
+//
+// Сопоставление идёт ОТ ИЗВЕСТНОГО ИМЕНИ К ФАЙЛУ, а не разбором имени файла: хеш
+// rollup'а пишется алфавитом base64url, где дефис — обычный символ (в той же сборке
+// лежит `index-mIztBLt-.css`). Первая редакция резала имя по последнему дефису и на
+// таком хеше молча теряла preload.
 func scanFontAssets(indexPath string) map[string]string {
 	dir := filepath.Join(filepath.Dir(indexPath), "assets")
 	entries, err := os.ReadDir(dir)
@@ -173,12 +185,12 @@ func scanFontAssets(indexPath string) map[string]string {
 		if e.IsDir() || !strings.HasSuffix(name, ".woff2") {
 			continue
 		}
-		stem := strings.TrimSuffix(name, ".woff2")
-		cut := strings.LastIndex(stem, "-")
-		if cut <= 0 {
-			continue
+		for _, base := range domain.DesignFontBases() {
+			if strings.HasPrefix(name, base+"-") {
+				fonts[base] = "/assets/" + name
+				break
+			}
 		}
-		fonts[stem[:cut]] = "/assets/" + name
 	}
 	return fonts
 }
@@ -288,7 +300,7 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		OGImage:         h.ogImageURL,
 		URL:             h.publicBaseURL + "/r/" + slug,
 		ThemeColor:      domain.DesignThemeColor(design),
-		Preload:         fontPreload(doc.fonts, design),
+		Preload:         h.fontPreload(doc, design),
 	}
 
 	var buf bytes.Buffer
@@ -319,9 +331,27 @@ func titleOrFallback(title string) string {
 // которого в сборке не оказалось (собрали без него, файл переименовали), в списке
 // нет: лишний preload на несуществующий адрес — это 404 в консоли респондента и
 // потерянная предзагрузка, то есть хуже, чем её отсутствие.
-func fontPreload(assets map[string]string, d *domain.FormDesign) []string {
+//
+// ПРОМАХ ПЕРЕЧИТЫВАЕТ КАТАЛОГ. Карта снята вместе с разбором index.html, а выкатка
+// раскладывает статику не мгновенно (deploy/remote-update.sh чистит каталог и
+// распаковывает архив): запрос, попавший в окно «index.html уже записан, woff2 ещё
+// нет», иначе запомнил бы пустую карту на весь релиз — молча, потому что документ
+// после этого считается актуальным. В здоровой сборке промаха не бывает, поэтому
+// лишним чтением каталога это не оборачивается.
+func (h *PublicHandler) fontPreload(doc *indexDoc, d *domain.FormDesign) []string {
+	bases := domain.DesignFontFiles(d)
+	if len(bases) == 0 {
+		return nil
+	}
+	assets := doc.fonts
+	for _, base := range bases {
+		if _, ok := assets[base]; !ok {
+			assets = scanFontAssets(h.indexPath)
+			break
+		}
+	}
 	var out []string
-	for _, base := range domain.DesignFontFiles(d) {
+	for _, base := range bases {
 		if url, ok := assets[base]; ok {
 			out = append(out, url)
 		}

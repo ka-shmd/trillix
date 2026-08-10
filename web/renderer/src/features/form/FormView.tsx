@@ -10,7 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
-import { designClasses, designToVars } from '@fields/design'
+import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
@@ -156,8 +156,20 @@ export function FormView({
   // их напечатал Go из снапшота (слайс 5, internal/forms/public_page.go), поэтому
   // код ниже застаёт документ уже одетым и ничего не меняет. Он остаётся нужен там,
   // где сервера в этом пути нет: dev-страница отдаётся vite-dev'ом без оболочки.
+  //
+  // И ПОТОМУ ЖЕ ОН СНАЧАЛА СНИМАЕТ ЧУЖОЕ. Оболочку печатает сервер из снапшота, а
+  // схему клиент забирает вторым запросом — это два независимых элемента кеша с
+  // разным временем жизни. Автор переключил тему и переиздал форму: респондент
+  // получает старую оболочку с `rf-theme-dark` и новую, светлую схему. У новой
+  // designClasses пуст, снимать нечего, и форма осталась бы тёмной до истечения
+  // кеша HTML. Поэтому убирается ВСЁ, что могло быть напечатано (классы `rf-` на
+  // корне рендерера ставит только оформление, а переменные известны списком).
   useEffect(() => {
     const root = document.documentElement
+    const stale = Array.from(root.classList).filter((c) => c.startsWith('rf-'))
+    root.classList.remove(...stale)
+    for (const name of DESIGN_VAR_NAMES) root.style.removeProperty(name)
+
     const vars = designToVars(form.schema.design)
     for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
     // Классов может быть несколько (тема + контур + вид кнопки), а classList.add со

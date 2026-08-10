@@ -1,5 +1,5 @@
 import { designSchema, formSchemaSchema, MAX_FONT_SIZE, MIN_FONT_SIZE } from '@entities/formSchema'
-import { designClasses, designToVars } from '@fields/design'
+import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { describe, expect, it } from 'vitest'
 
 // Оформление формы (фаза 22, слайс 2). Таблица кейсов ТОГО ЖЕ СОСТАВА, что
@@ -178,5 +178,30 @@ describe('designToVars — кнопка', () => {
       '--rf-submit-px': '2rem',
       '--rf-submit-ratio': '1',
     })
+  })
+})
+
+describe('DESIGN_VAR_NAMES', () => {
+  it('перечисляет ровно то, что может напечатать designToVars', () => {
+    // Список нужен рендереру, чтобы СНЯТЬ с корня документа оформление, напечатанное
+    // сервером из другого снапшота (оболочка и схема кешируются раздельно). Забытая в
+    // нём переменная — это цвет, который останется от прошлой версии формы.
+    const everything = designToVars({
+      theme: 'dark',
+      palette: {
+        canvas: '#101014',
+        field: '#1a1a20',
+        text: '#f0f0f0',
+        muted: '#9a9a9a',
+        accent: '#12ab34',
+        button: '#12ab34',
+        buttonText: '#ffffff',
+      },
+      font: 'inter',
+      layout: { width: 800, fontSize: 18, density: 'roomy', align: 'center' },
+      controls: { radius: 12, outline: 'border' },
+      button: { variant: 'outline', width: 'full', align: 'center', size: 'lg' },
+    })
+    expect(Object.keys(everything).sort()).toEqual([...DESIGN_VAR_NAMES].sort())
   })
 })

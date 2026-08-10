@@ -1,6 +1,7 @@
 package forms
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -418,5 +419,112 @@ func TestParseIndexHTML_MissingShellMarker_Fails(t *testing.T) {
 	}
 	if _, err := parseIndexHTML(path); err == nil {
 		t.Fatal("ожидалась ошибка разбора index.html без плейсхолдера оболочки")
+	}
+}
+
+// РАЗБОР НАСТОЯЩЕЙ ОБОЛОЧКИ РЕНДЕРЕРА, а не рукописной фикстуры. Фикстура — это то,
+// что автор Go считает разметкой рендерера; расходится она с ней молча. Первая
+// редакция слайса 5 именно так и уехала в прод-негодность: поясняющий комментарий
+// над тегом <html> начинался со слов «data-form-shell — …», маркер нашёлся в нём, и
+// оформление подставлялось ВНУТРЬ КОММЕНТАРИЯ при семи зелёных тестах на фикстуре.
+//
+// vite комментарии из index.html не вырезает, поэтому проверять надо исходник: он
+// же и уезжает в сборку почти дословно (меняются только теги ассетов).
+func TestParseIndexHTML_RealRendererTemplate(t *testing.T) {
+	const real = "../../web/renderer/index.html"
+	doc, err := parseIndexHTML(real)
+	if err != nil {
+		t.Fatalf("настоящий index.html рендерера не разбирается: %v", err)
+	}
+
+	var buf bytes.Buffer
+	buf.Write(doc.head)
+	buf.WriteString(shellAttrs(&domain.FormDesign{Theme: "dark"}))
+	buf.Write(doc.mid)
+	buf.WriteString("<!--мета-->")
+	buf.Write(doc.tail)
+	page := buf.String()
+
+	if !strings.Contains(page, `<html lang="ru" class="rf-theme-dark">`) {
+		t.Fatalf("оформление подставлено не в тег <html>:\n%s", page)
+	}
+}
+
+// Хеш rollup'а пишется алфавитом base64url, где дефис — обычный символ (в сборке
+// рядом лежит index-mIztBLt-.css). Разбор имени файла «до последнего дефиса» на
+// таком хеше молча терял preload — сторожим именно такое имя.
+func TestScanFontAssets_HashWithDash(t *testing.T) {
+	dir := t.TempDir()
+	assets := filepath.Join(dir, "assets")
+	if err := os.Mkdir(assets, 0o755); err != nil {
+		t.Fatalf("создание каталога ассетов: %v", err)
+	}
+	const name = "inter-latin-Dx4-XJAl.woff2"
+	if err := os.WriteFile(filepath.Join(assets, name), []byte("x"), 0o600); err != nil {
+		t.Fatalf("запись ассета: %v", err)
+	}
+
+	got := scanFontAssets(filepath.Join(dir, "index.html"))
+	if got["inter-latin"] != "/assets/"+name {
+		t.Fatalf("шрифт с дефисом в хеше не найден: %v", got)
+	}
+}
+
+// Второе вхождение маркера где угодно в файле обязано ронять старт: подставить
+// оболочку в одно из двух мест «на выбор» нельзя, а тихий выбор не того — это
+// светлая форма при зелёном деплое.
+func TestParseIndexHTML_DuplicateShellMarker_Fails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "index.html")
+	doubled := strings.Replace(builtIndexFixture, "<!doctype html>",
+		"<!doctype html>\n<!-- атрибут data-form-shell ставит Go -->", 1)
+	if err := os.WriteFile(path, []byte(doubled), 0o600); err != nil {
+		t.Fatalf("запись фикстуры: %v", err)
+	}
+	if _, err := parseIndexHTML(path); err == nil {
+		t.Fatal("ожидалась ошибка: маркер оболочки встречается дважды")
+	}
+}
+
+// Карта шрифтов снимается вместе с разбором index.html, а выкатка раскладывает
+// статику не мгновенно: запрос, попавший в окно «index.html записан, woff2 ещё нет»,
+// запомнил бы пустую карту на весь релиз — молча, потому что документ после этого
+// считается актуальным. Промах обязан перечитывать каталог.
+func TestPublicHTML_FontsAppearAfterIndex_PreloadRecovers(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(path, []byte(builtIndexFixture), 0o600); err != nil {
+		t.Fatalf("запись фикстуры index.html: %v", err)
+	}
+	svc := designedForm(t, `{"font":"inter"}`)
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	get := func() string {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
+		return rec.Body.String()
+	}
+
+	// Проверяем НАШ preload (у него href идёт последним), а не те теги фикстуры,
+	// которые доезжают дословно — «ассет, которого Go не знает», и таблицу стилей.
+	if strings.Contains(get(), `type="font/woff2" crossorigin href=`) {
+		t.Fatal("preload напечатан до того, как шрифты появились в статике")
+	}
+
+	// Распаковка догнала: файлы легли рядом, index.html при этом не менялся.
+	assets := filepath.Join(dir, "assets")
+	if err := os.Mkdir(assets, 0o755); err != nil {
+		t.Fatalf("создание каталога ассетов: %v", err)
+	}
+	const name = "inter-cyrillic-DqGufNeO.woff2"
+	if err := os.WriteFile(filepath.Join(assets, name), []byte("x"), 0o600); err != nil {
+		t.Fatalf("запись ассета: %v", err)
+	}
+
+	if !strings.Contains(get(), `href="/assets/`+name+`"`) {
+		t.Fatalf("preload не восстановился после появления файлов:\n%s", get())
 	}
 }
