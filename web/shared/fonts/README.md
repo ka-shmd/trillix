@@ -6,8 +6,14 @@
 
 | Файл | Семейство | Лицензия | Источник |
 |---|---|---|---|
-| `inter-cyrillic.woff2`, `inter-latin.woff2` | Inter | SIL OFL 1.1 | Google Fonts, `css2?family=Inter:wght@400..800` |
-| `golos-cyrillic.woff2`, `golos-latin.woff2` | Golos Text | SIL OFL 1.1 | Google Fonts, `css2?family=Golos+Text:wght@400..800` |
+| `inter-cyrillic.woff2`, `inter-latin.woff2` | Inter | SIL OFL 1.1 — [`OFL-inter.txt`](OFL-inter.txt) | Google Fonts, `css2?family=Inter:wght@400..800` |
+| `golos-cyrillic.woff2`, `golos-latin.woff2` | Golos Text | SIL OFL 1.1 — [`OFL-golos-text.txt`](OFL-golos-text.txt) | Google Fonts, `css2?family=Golos+Text:wght@400..800` |
+
+**Текст лицензии лежит рядом с файлами, а не только назван в таблице.** OFL требует,
+чтобы лицензия сопровождала распространяемое Font Software, а мы именно распространяем:
+woff2 уезжают браузеру каждого респондента со своего origin. Файлы взяты дословно из
+`google/fonts` (`ofl/inter/OFL.txt`, `ofl/golostext/OFL.txt`) — тело у них общее,
+различаются строкой копирайта, поэтому и хранятся по одному на семейство.
 
 Файлы **вариативные** (один на всё семейство, веса 100–900 либо 400–900): полотно
 использует пять весов, и статикой это было бы десять файлов вместо двух.
@@ -22,8 +28,9 @@
 Суммарный вес сторожит `npm run check:bundle` в рендерере — отдельным порогом от
 бюджета JS: шрифт не в бандле, но респондент его качает.
 
-**Добавляя семейство:** файл сюда, строка в таблицу выше (лицензия обязательна,
-кириллица во всех весах обязательна), два `@font-face` в `fields.css`, значение в
+**Добавляя семейство:** файл сюда, **текст лицензии отдельным файлом рядом**, строка
+в таблицу выше (лицензия обязательна, кириллица во всех весах обязательна), два
+`@font-face` в `fields.css`, значение в
 `DESIGN_FONTS` (`web/shared/entities/formSchema.ts`) и в `designFonts`
 (`internal/domain/design.go`) — состав сверяется паритет-тестом, — стек в
 `FONT_STACK`/`designFontStack` обоих зеркал и подпись в панели оформления.
