@@ -10,6 +10,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { customStyleSheet } from '@fields/customCss'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
@@ -449,14 +450,23 @@ export function FormView({
     }
   }
 
+  // CSS автора действует на всей странице формы, включая экран «Спасибо»: это те же
+  // глаза того же респондента, и форма, теряющая фирменный вид на последнем шаге,
+  // выглядит как чужая страница (тот же довод, по которому туда доехала тема).
+  const customCss = customStyleSheet(form.schema.design?.css)
+  const authorStyle = customCss ? <style>{customCss}</style> : null
+
   if (phase === 'done') {
     return (
-      <ThankYou
-        text={form.schema.thankYouText ?? ''}
-        redirectUrl={form.schema.redirectUrl ?? ''}
-        bridge={redirectSelf ? null : bridge}
-        badge={form.showBadge}
-      />
+      <>
+        {authorStyle}
+        <ThankYou
+          text={form.schema.thankYouText ?? ''}
+          redirectUrl={form.schema.redirectUrl ?? ''}
+          bridge={redirectSelf ? null : bridge}
+          badge={form.showBadge}
+        />
+      </>
     )
   }
 
@@ -473,6 +483,11 @@ export function FormView({
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
     <>
+      {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
+          ПОСЛЕ наших правил: в каскаде выигрывает последний при равной специфичности,
+          поэтому автор перебивает вид, не трогая fields.css. Следом идёт сторож
+          текста согласия (customCss.ts) — порог, а не стена, и это записано там же. */}
+      {authorStyle}
       <CoverBand cover={cover} />
       <main className={pageClass(cover)}>
         {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}

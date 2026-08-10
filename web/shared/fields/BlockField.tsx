@@ -33,6 +33,12 @@ type BlockFieldProps = {
   onBlur?: () => void
 }
 
+// cx — склейка классов без зависимостей: в @fields нет ни Tailwind, ни clsx (бюджет
+// рендерера). Пустое имя не должно давать висячий пробел в атрибуте.
+function cx(...names: (string | undefined)[]): string {
+  return names.filter(Boolean).join(' ')
+}
+
 export function BlockField({
   block,
   captionText,
@@ -45,6 +51,11 @@ export function BlockField({
 }: BlockFieldProps) {
   // Неотвечаемый (контентный) блок — статический контент: без подписи-вопроса,
   // звёздочки, контрола и ошибок.
+  // СВОЁ ИМЯ БЛОКА (фаза 22, слайс 7) едет на КОРЕНЬ его элемента, рядом с нашими
+  // rf-*. Не обёрткой: лишний div сдвинул бы блок в потоке .rf-group, где ритм
+  // держится соседством, — и вид формы поехал бы у всех, включая тех, кто своим CSS
+  // не пользуется.
+  const own = block.class
   if (isContentType(block.type)) {
     // image: картинка по ключу. Без ключа (недособранный черновик) блок не
     // схлопывается, а держит место высотой с зону загрузки редактора (rf-image-empty).
@@ -56,21 +67,21 @@ export function BlockField({
     if (block.type === 'image') {
       const key = block.settings?.imageKey
       return key ? (
-        <img className="rf-image" src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
+        <img className={cx('rf-image', own)} src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
       ) : (
-        <div className="rf-image-empty" aria-hidden="true" />
+        <div className={cx('rf-image-empty', own)} aria-hidden="true" />
       )
     }
     // text — статический абзац. Пустой блок держит место (одна строка rf-text), а не
     // схлопывается: недособранный черновик остаётся видимым пустым пространством.
-    return <ContentBlock block={block} required={captionRequired} inert={disabled} />
+    return <ContentBlock block={block} required={captionRequired} inert={disabled} own={own} />
   }
 
   const errorId = error ? `${block.id}-error` : undefined
   // aria отвечаемого поля: подпись группы, иначе плейсхолдер, иначе фолбэк.
   const aria = captionText?.trim() || block.settings?.placeholder?.trim() || 'Поле'
   return (
-    <FieldShell error={error} errorId={errorId}>
+    <FieldShell error={error} errorId={errorId} own={own}>
       <FieldControl
         block={block}
         label={aria}
@@ -102,17 +113,20 @@ function ContentBlock({
   block,
   required,
   inert,
+  own,
 }: {
   block: Block
   required?: boolean
   inert?: boolean
+  /** Своё имя блока для CSS автора (фаза 22). */
+  own?: string
 }) {
   if (block.type === 'image') {
     const key = block.settings?.imageKey
     return key ? (
-      <img className="rf-image" src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
+      <img className={cx('rf-image', own)} src={mediaSrc(key)} alt="" loading="lazy" decoding="async" />
     ) : (
-      <div className="rf-image-empty" aria-hidden="true" />
+      <div className={cx('rf-image-empty', own)} aria-hidden="true" />
     )
   }
   // Разрыв страницы у респондента не рисуется: он граница, а не элемент страницы, и
@@ -129,14 +143,14 @@ function ContentBlock({
   // заголовок намеренно.
   if (block.type === 'form_title') {
     return text ? (
-      <h1 className="rf-title">
+      <h1 className={cx('rf-title', own)}>
         <RichText spans={block.text} inert={inert} />
       </h1>
     ) : null
   }
   if (block.type === 'title' || block.type === 'label') {
     return (
-      <div className={block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label'}>
+      <div className={cx(block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label', own)}>
         {text ? <RichText spans={block.text} inert={inert} /> : 'Без названия'}
         {required && (
           <span className="rf-required" aria-hidden="true">
@@ -149,7 +163,7 @@ function ContentBlock({
   }
   if (block.type === 'heading') {
     return (
-      <div className="rf-heading">
+      <div className={cx('rf-heading', own)}>
         {text ? <RichText spans={block.text} inert={inert} /> : 'Заголовок раздела'}
       </div>
     )
