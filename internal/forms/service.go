@@ -488,6 +488,23 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 		}
 	}
 
+	// СВОЙ CSS — ОТДЕЛЬНЫЙ КЛЮЧ И ОТДЕЛЬНАЯ ПРОВЕРКА, а не строка в списке платных
+	// настроек выше: это не настройка, а доступ к вёрстке, и стоит он дороже (спека
+	// §9.1). Слить их в один ключ значило бы навсегда лишить себя возможности продать
+	// цвета дешевле CSS — а именно так тариф и раскладывается.
+	//
+	// Спрашивается вторым: у автора, которому не хватает обоих, первым в отказе
+	// назовётся оформление — то, что он трогал руками в панели, а не поле для CSS.
+	if parsed.Design != nil && strings.TrimSpace(parsed.Design.CSS) != "" {
+		d, e := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormCustomCSS)
+		if e != nil {
+			return Form{}, e
+		}
+		if !d.Allowed {
+			return Form{}, fmt.Errorf("%w: свой CSS доступен на платном тарифе", domain.ErrPlanRequired)
+		}
+	}
+
 	snapshot, err := json.Marshal(parsed)
 	if err != nil {
 		return Form{}, fmt.Errorf("marshal schema: %w", err)

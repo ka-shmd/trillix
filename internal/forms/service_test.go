@@ -227,13 +227,16 @@ func (a *fakeAccess) Can(_ context.Context, _, _ uuid.UUID, action domain.Action
 // запрещающий фейк красил бы их все.
 type fakePlans struct {
 	allowed bool
+	// deny — точечный запрет по ключу поверх allowed: без него тест не может
+	// отличить два ключа друг от друга (разрешено всё, кроме одного).
+	deny    map[entitlements.Key]bool
 	err     error
 	gotKeys []entitlements.Key
 }
 
 func (p *fakePlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitlements.Key) (entitlements.Decision, error) {
 	p.gotKeys = append(p.gotKeys, key)
-	return entitlements.Decision{Allowed: p.allowed}, p.err
+	return entitlements.Decision{Allowed: p.allowed && !p.deny[key]}, p.err
 }
 
 func newTestService(store *fakeStore) *Service {
@@ -1216,5 +1219,69 @@ func TestShowBadge_IntentAsksPlanAndObeysIt(t *testing.T) {
 	}
 	if !show {
 		t.Fatal("после даунгрейда бейдж обязан вернуться")
+	}
+}
+
+// Свой CSS — отдельный ключ каталога, а не строка в списке платных настроек: это
+// доступ к вёрстке, и он дороже. Проверяется тем же порядком (после авторизации).
+func TestPublish_CustomCSSWithoutPlan_Returns402(t *testing.T) {
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"css":".rf-page{padding:0}"}`)},
+		nextVersion: 1,
+	}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if !strings.Contains(err.Error(), "CSS") {
+		t.Fatalf("отказ обязан называть причину: %v", err)
+	}
+	if len(plans.gotKeys) != 1 || plans.gotKeys[0] != entitlements.FormCustomCSS {
+		t.Fatalf("спрошены ключи %v, ожидался только form_custom_css", plans.gotKeys)
+	}
+	if store.versionInserted {
+		t.Fatal("отказ по тарифу не должен снапшотить версию")
+	}
+}
+
+// Оформление и CSS — ДВА ключа: разрешённое оформление не открывает CSS.
+func TestPublish_DesignAllowedButCSSNot_StillRefuses(t *testing.T) {
+	store := &fakeStore{
+		form: Form{
+			WorkspaceID: domain.NewID(),
+			DraftSchema: designDraft(`{"palette":{"accent":"#12ab34"},"css":".rf-page{padding:0}"}`),
+		},
+		nextVersion: 1,
+	}
+	// Фейк разрешает ВСЁ, кроме своего CSS: иначе тест не отличил бы два ключа.
+	plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormCustomCSS: true}}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if len(plans.gotKeys) != 2 {
+		t.Fatalf("спрошены ключи %v, ожидались оба", plans.gotKeys)
+	}
+}
+
+// Пустой и пробельный CSS тарифа не касаются: платят за правило, а не за поле.
+func TestPublish_BlankCSS_DoesNotGate(t *testing.T) {
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"css":"   "}`)},
+		nextVersion: 1,
+	}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	if _, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID()); err != nil {
+		t.Fatalf("пробельный CSS не должен держать публикацию: %v", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен из-за пустого CSS: %v", plans.gotKeys)
 	}
 }
