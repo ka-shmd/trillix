@@ -365,3 +365,44 @@ func TestValidateDesign_Branding(t *testing.T) {
 		t.Fatalf("незаданный branding не должен появляться в документе: %s", raw)
 	}
 }
+
+// Свой CSS формы: два рубежа — объём и `</`. Разобрать CSS валидатор не может и не
+// пытается; всё остальное закрывает CSP (спека §10.1).
+func TestValidateDesign_CustomCSS(t *testing.T) {
+	ok := func(css string) *FormDesign { return &FormDesign{CSS: css} }
+
+	if err := validateDesign(ok(".rf-page { padding: 0 }")); err != nil {
+		t.Fatalf("обычный CSS обязан приниматься: %v", err)
+	}
+	// Руны, а не байты: кириллица в комментарии не должна съедать лимит вдвое быстрее.
+	if err := validateDesign(ok(strings.Repeat("я", MaxCustomCSSLen))); err != nil {
+		t.Fatalf("CSS ровно по лимиту обязан приниматься: %v", err)
+	}
+	if err := validateDesign(ok(strings.Repeat("я", MaxCustomCSSLen+1))); err == nil {
+		t.Fatal("CSS сверх лимита обязан отвергаться")
+	}
+	for _, bad := range []string{"</style><script>alert(1)</script>", ".a{}\n</STYLE"} {
+		if err := validateDesign(ok(bad)); err == nil {
+			t.Fatalf("`</` обязано отвергаться: %q", bad)
+		}
+	}
+}
+
+// Своё имя блока — строгая форма. Пробел означал бы второй класс, заглавные — пару
+// `.Foo`/`.foo`, которую автор не сможет воспроизвести.
+func TestValidateSchema_BlockClass(t *testing.T) {
+	schema := func(cls string) json.RawMessage {
+		return json.RawMessage(`{"schemaVersion":4,"blocks":[
+			{"id":"b1","groupId":"g1","type":"short_text","class":"` + cls + `"}]}`)
+	}
+	for _, good := range []string{"promo", "my-block", "a", "a1-b2"} {
+		if _, err := ValidateSchema(schema(good)); err != nil {
+			t.Errorf("class %q обязан приниматься: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"Promo", "two words", "-lead", "1st", "very-long-name-that-goes-past-the-limit"} {
+		if _, err := ValidateSchema(schema(bad)); err == nil {
+			t.Errorf("class %q обязан отвергаться", bad)
+		}
+	}
+}

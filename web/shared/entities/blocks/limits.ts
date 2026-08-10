@@ -59,3 +59,12 @@ export const SCALE_LOWER_BOUND = 0
 export const SCALE_UPPER_BOUND = 10
 export const DEFAULT_SCALE_MIN = 1
 export const DEFAULT_SCALE_MAX = 5
+// Свой CSS формы (фаза 22, слайс 7). Зеркалят MaxCustomCSSLen/MaxBlockClassLen.
+// Потолок объёма — одна из трёх мер против того, чего валидатор проверить не может:
+// разобрать CSS мы не умеем, поэтому ограничиваем объём, тариф и ставим правило-сторож
+// после авторского текста.
+export const MAX_CUSTOM_CSS_LEN = 10000
+export const MAX_BLOCK_CLASS_LEN = 32
+// Форма своего имени блока: строчная латиница, цифры и дефис, первым символом буква.
+// Зеркалит reBlockClass в internal/domain/design.go.
+export const BLOCK_CLASS_RE = /^[a-z][a-z0-9-]{0,31}$/

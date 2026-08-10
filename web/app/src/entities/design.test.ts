@@ -1,4 +1,10 @@
-import { designSchema, formSchemaSchema, MAX_FONT_SIZE, MIN_FONT_SIZE } from '@entities/formSchema'
+import {
+  designSchema,
+  formSchemaSchema,
+  MAX_CUSTOM_CSS_LEN,
+  MAX_FONT_SIZE,
+  MIN_FONT_SIZE,
+} from '@entities/formSchema'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { describe, expect, it } from 'vitest'
 
@@ -30,6 +36,7 @@ describe('designSchema — валидатор', () => {
     'кегль на верхней границе': { layout: { fontSize: MAX_FONT_SIZE } },
     'радиус ноль — прямые углы': { controls: { radius: 0 } },
     'бейдж снят': { branding: false },
+    'свой CSS': { css: '.rf-page { padding: 0 }' },
   }
 
   const bad: Record<string, unknown> = {
@@ -42,6 +49,10 @@ describe('designSchema — валидатор', () => {
     // «Показывать бейдж» выражается отсутствием ключа: true — второе представление
     // того же состояния, и принимать его нельзя.
     'бейдж true': { branding: true },
+    // `</` — второй рубеж после текстового узла React: единственная точка, где
+    // авторский текст соседствует с HTML по существу.
+    'CSS с закрывающим тегом': { css: '</style><script>alert(1)</script>' },
+    'CSS сверх лимита': { css: 'a'.repeat(MAX_CUSTOM_CSS_LEN + 1) },
     'ширина ниже границы': { layout: { width: 399 } },
     'ширина выше границы': { layout: { width: 1201 } },
     'ширина дробная': { layout: { width: 700.5 } },

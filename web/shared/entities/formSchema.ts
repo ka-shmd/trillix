@@ -4,10 +4,12 @@ import { BLOCK_TYPES } from './blocks/contract'
 // отдаёт наружу, идут реэкспортом ниже (иначе линтер справедливо считает их неиспользованными).
 import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/index'
 import {
+  BLOCK_CLASS_RE,
   COVER_Y_MAX,
   COVER_Y_MIN,
   DEFAULT_COVER_Y,
   MAX_BLOCKS,
+  MAX_CUSTOM_CSS_LEN,
   MAX_FORM_TITLE_LEN,
   MAX_IMAGE_KEY_LEN,
   MAX_QUESTION_NAME_LEN,
@@ -257,6 +259,11 @@ export const blockSchema = z
     visibleIf: ruleSchema.optional(),
     requiredIf: ruleSchema.optional(),
     jumpIf: jumpIfSchema.optional(),
+    // Своё имя блока для CSS автора (фаза 22, слайс 7): уезжает в атрибут class
+    // рядом с нашими rf-*. Строгая форма, а не любая строка — в значении не должно
+    // быть ни пробела (второй класс это второе имя), ни заглавных, ни чего-либо,
+    // чем можно разорвать атрибут.
+    class: z.string().regex(BLOCK_CLASS_RE, 'строчные латинские буквы, цифры и дефис').optional(),
   })
   .superRefine((b, ctx) => {
     // Собственный text — только у carriesText-типов (подписи, контент, consent).
@@ -500,6 +507,15 @@ export const designSchema = z.strictObject({
   // светлая тема. Два представления одного состояния — это два места, где однажды
   // разойдутся.
   branding: z.literal(false).optional(),
+  // Свой CSS формы (слайс 7). Уезжает в <style> ПОСЛЕ наших правил — и только в
+  // рендерере с превью: полотно редактора правило автора ломало бы как инструмент.
+  // `</` отвергается вторым рубежом (первый — текстовый узел React'а): это
+  // единственная точка, где авторский текст соседствует с HTML по существу.
+  css: z
+    .string()
+    .max(MAX_CUSTOM_CSS_LEN)
+    .refine((v) => !v.includes('</'), 'последовательность "</" не допускается')
+    .optional(),
 })
 export type FormDesign = z.infer<typeof designSchema>
 
