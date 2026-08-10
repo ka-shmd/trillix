@@ -334,3 +334,34 @@ func TestDesignFontFiles(t *testing.T) {
 		t.Fatalf("ожидались оба подмножества Inter, кириллица первой; получено %v", got)
 	}
 }
+
+// branding — намерение «бейдж не показывать», и значение у него ровно одно.
+// Указатель, а не bool: omitempty стёр бы false при канонизации снапшота, то есть
+// публикация молча возвращала бы бейдж на форму, с которой его сняли.
+func TestValidateDesign_Branding(t *testing.T) {
+	no := false
+	yes := true
+
+	if err := validateDesign(&FormDesign{Branding: &no}); err != nil {
+		t.Fatalf("branding: false обязан приниматься: %v", err)
+	}
+	if err := validateDesign(&FormDesign{Branding: &yes}); err == nil {
+		t.Fatal("branding: true обязан отвергаться — «показывать» это отсутствие ключа")
+	}
+
+	// Канонизация: false переживает marshal→unmarshal, отсутствие остаётся отсутствием.
+	raw, err := json.Marshal(&FormDesign{Branding: &no})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"branding":false`) {
+		t.Fatalf("branding: false потерялся при сериализации: %s", raw)
+	}
+	raw, err = json.Marshal(&FormDesign{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "branding") {
+		t.Fatalf("незаданный branding не должен появляться в документе: %s", raw)
+	}
+}

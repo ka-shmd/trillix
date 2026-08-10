@@ -67,7 +67,8 @@ func newServer(t *testing.T) *httptest.Server {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
@@ -91,7 +92,8 @@ func publishedForm(t *testing.T) string {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 
 	user, _, err := authSvc.Register(ctx, "vis-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {
@@ -333,7 +335,8 @@ func funnelService() *visits.Service {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 }
 

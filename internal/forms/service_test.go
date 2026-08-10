@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -221,8 +222,22 @@ func (a *fakeAccess) Can(_ context.Context, _, _ uuid.UUID, action domain.Action
 	return a.err
 }
 
+// fakePlans — тариф в юнитах. Разрешающий по умолчанию: гейт оформления проверяется
+// СВОИМИ тестами (ниже), а остальным сотне сценариев тариф безразличен, и молчаливо
+// запрещающий фейк красил бы их все.
+type fakePlans struct {
+	allowed bool
+	err     error
+	gotKeys []entitlements.Key
+}
+
+func (p *fakePlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitlements.Key) (entitlements.Decision, error) {
+	p.gotKeys = append(p.gotKeys, key)
+	return entitlements.Decision{Allowed: p.allowed}, p.err
+}
+
 func newTestService(store *fakeStore) *Service {
-	return NewService(nil, fakeTx{}, store, &fakeAccess{})
+	return NewService(nil, fakeTx{}, store, &fakeAccess{}, &fakePlans{allowed: true})
 }
 
 // newDeniedService — сервис, у которого проверка прав отвечает «нельзя».
@@ -230,7 +245,7 @@ func newTestService(store *fakeStore) *Service {
 // проверяют анти-IDOR-тесты ниже (участник без нужной роли получает 403 — это
 // проверяется в workspaces, где живёт матрица).
 func newDeniedService(store *fakeStore) *Service {
-	return NewService(nil, fakeTx{}, store, &fakeAccess{err: domain.ErrNotFound})
+	return NewService(nil, fakeTx{}, store, &fakeAccess{err: domain.ErrNotFound}, &fakePlans{allowed: true})
 }
 
 func strptr(s string) *string { return &s }
@@ -572,6 +587,97 @@ func TestPublish_Success_SnapshotsAndSetsVersion(t *testing.T) {
 	}
 	if form.PublishedVersion == nil || *form.PublishedVersion != 1 {
 		t.Fatalf("publishedVersion = %v, ожидалась 1", form.PublishedVersion)
+	}
+}
+
+// --- Гейт своего оформления (фаза 22, слайс 6) ---
+//
+// Гейт стоит на ПУБЛИКАЦИИ, а не на сохранении: автосейв не имеет права вернуть 402
+// посреди набора. Из этого три проверяемых утверждения — платное без тарифа не
+// публикуется, тема без тарифа публикуется, и тариф спрашивается только после
+// авторизации.
+
+// designDraft — черновик с заданным оформлением.
+func designDraft(design string) json.RawMessage {
+	return json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":` + design + `}`)
+}
+
+func TestPublish_PaidDesignWithoutPlan_Returns402(t *testing.T) {
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"palette":{"accent":"#12ab34"},"font":"inter"}`)},
+		nextVersion: 1,
+	}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	// В теле — что именно мешает: «своё оформление недоступно» без перечня
+	// заставляет автора гадать, что снять.
+	if !strings.Contains(err.Error(), "цвета") || !strings.Contains(err.Error(), "шрифт") {
+		t.Fatalf("в отказе нет списка мешающего: %v", err)
+	}
+	if store.versionInserted || store.published {
+		t.Fatal("отказ по тарифу не должен снапшотить версию")
+	}
+	if len(plans.gotKeys) != 1 || plans.gotKeys[0] != entitlements.FormDesignCustom {
+		t.Fatalf("спрошены ключи %v, ожидался только form_design_custom", plans.gotKeys)
+	}
+}
+
+func TestPublish_ThemeOnly_PublishesOnAnyPlan(t *testing.T) {
+	// Обе темы бесплатны намеренно (спека §9.1): гейт ставится на созданную
+	// ценность, а не на настройку. Тариф при этом не спрашивается вовсе — платить
+	// нечем, и лишняя поездка в БД не нужна.
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"theme":"dark"}`)},
+		nextVersion: 1,
+	}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	if _, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID()); err != nil {
+		t.Fatalf("тёмная тема обязана публиковаться на любом тарифе: %v", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен без единой платной настройки: %v", plans.gotKeys)
+	}
+}
+
+// Бейдж гейтится НЕ на публикации, а при отдаче: снимать его намерением автор может
+// на любом тарифе, а сработает ли намерение — решает выдача.
+func TestPublish_BrandingIntent_DoesNotGate(t *testing.T) {
+	store := &fakeStore{
+		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"branding":false}`)},
+		nextVersion: 1,
+	}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	if _, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID()); err != nil {
+		t.Fatalf("намерение снять бейдж не должно мешать публикации: %v", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на публикации из-за бейджа: %v", plans.gotKeys)
+	}
+}
+
+// ПОРЯДОК ПРОВЕРОК: чужая форма — 404, и тариф не спрашивается вовсе. Иначе код
+// ответа рассказывал бы постороннему о существовании формы и о плане чужого
+// воркспейса (BILLING.md §8).
+func TestPublish_ForeignForm_404BeforePlanGate(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"palette":{"accent":"#12ab34"}}`)}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{err: domain.ErrNotFound}, plans)
+
+	_, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен до авторизации: %v", plans.gotKeys)
 	}
 }
 
@@ -1046,7 +1152,7 @@ func TestOperations_AskTheRightAction(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			access := &fakeAccess{}
-			svc := NewService(nil, fakeTx{}, &fakeStore{form: Form{WorkspaceID: domain.NewID()}}, access)
+			svc := NewService(nil, fakeTx{}, &fakeStore{form: Form{WorkspaceID: domain.NewID()}}, access, &fakePlans{allowed: true})
 			_ = tc.call(svc)
 			if len(access.gotActions) == 0 {
 				t.Fatalf("%s не спросил права вовсе", tc.name)

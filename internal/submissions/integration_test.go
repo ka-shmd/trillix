@@ -64,7 +64,8 @@ func newServer(t *testing.T) *httptest.Server {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
@@ -86,7 +87,8 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {

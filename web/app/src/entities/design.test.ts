@@ -29,6 +29,7 @@ describe('designSchema — валидатор', () => {
     'кегль на нижней границе': { layout: { fontSize: MIN_FONT_SIZE } },
     'кегль на верхней границе': { layout: { fontSize: MAX_FONT_SIZE } },
     'радиус ноль — прямые углы': { controls: { radius: 0 } },
+    'бейдж снят': { branding: false },
   }
 
   const bad: Record<string, unknown> = {
@@ -38,6 +39,9 @@ describe('designSchema — валидатор', () => {
     'цвет короткой формой': { palette: { canvas: '#abc' } },
     'цвет свободной нотацией': { palette: { field: 'rgb(0,0,0)' } },
     'шрифт вне списка': { font: 'comic' },
+    // «Показывать бейдж» выражается отсутствием ключа: true — второе представление
+    // того же состояния, и принимать его нельзя.
+    'бейдж true': { branding: true },
     'ширина ниже границы': { layout: { width: 399 } },
     'ширина выше границы': { layout: { width: 1201 } },
     'ширина дробная': { layout: { width: 700.5 } },
