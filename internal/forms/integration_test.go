@@ -56,13 +56,14 @@ func resetDB(t *testing.T) {
 }
 
 // newStack собирает реальную вертикаль auth+forms поверх контейнерного пула.
-// fixtureIndexPath кладёт минимальный собранный index.html рендерера (с плейсхолдером
-// <!--og-meta-->) во временный файл — так же, как его получит api из смонтированной
-// статики в проде. Нужен, чтобы Go регистрировал и обслуживал /r в этом стеке.
+// fixtureIndexPath кладёт минимальный собранный index.html рендерера (с обеими
+// точками вставки — оформления в теге <html> и головы формы в <head>) во временный
+// файл — так же, как его получит api из смонтированной статики в проде. Нужен, чтобы
+// Go регистрировал и обслуживал /r в этом стеке.
 func fixtureIndexPath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "index.html")
-	const html = `<!doctype html><html lang="ru"><head>` +
+	const html = `<!doctype html><html lang="ru" data-form-shell><head>` +
 		`<link rel="icon" type="image/svg+xml" href="/favicon.svg" />` +
 		`<!--og-meta-->` +
 		`<script type="module" crossorigin src="/assets/index-ByZMBI6C.js"></script>` +
