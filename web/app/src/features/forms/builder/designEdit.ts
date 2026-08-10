@@ -50,7 +50,7 @@ export const SWATCHES = [
 // оно же выражает «показывать бейдж»: снятие ключа и есть включённый бейдж.
 export function patchTop(
   design: FormDesign | undefined,
-  key: 'theme' | 'font' | 'branding',
+  key: 'theme' | 'font' | 'branding' | 'css',
   value: string | false | undefined,
 ): FormDesign | undefined {
   const next: Record<string, unknown> = { ...design }

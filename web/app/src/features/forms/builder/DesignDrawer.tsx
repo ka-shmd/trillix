@@ -4,6 +4,7 @@ import { Lock, TriangleAlert } from 'lucide-react'
 
 import {
   DESIGN_ALIGNS,
+  MAX_CUSTOM_CSS_LEN,
   DESIGN_BUTTON_SIZES,
   DESIGN_BUTTON_VARIANTS,
   DESIGN_BUTTON_WIDTHS,
@@ -40,6 +41,7 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
 import { useFeatureAllowed } from '../../plan/useFeature'
@@ -101,6 +103,7 @@ export function DesignDrawer({
   // посмотреть, за что он платит, — то есть сам повод заплатить.
   const canCustomize = useFeatureAllowed('form_design_custom')
   const canRemoveBadge = useFeatureAllowed('form_branding')
+  const canUseCSS = useFeatureAllowed('form_custom_css')
 
   // Тема, которую автор выбрал, но которая СОТРЁТ его настройки: держим её здесь,
   // пока он не подтвердит. null — диалога нет.
@@ -138,6 +141,12 @@ export function DesignDrawer({
     // склеивать там нечего, а склеенный он «проглатывал» бы соседний.
     tag?: string,
   ) => setDesign(patch(design, group, key, value), tag)
+
+  // Набор CSS — непрерывный жест, как подбор цвета: без ключа коалесинга каждая
+  // буква становилась бы шагом отмены и вытесняла из истории работу над формой
+  // (ровно тот дефект, который ревью нашло у выборщика цвета в слайсе 4).
+  const setCss = (value: string) =>
+    setDesign(patchTop(design, 'css', value.trim() === '' ? undefined : value), 'design:css')
 
   // «Показывать» = отсутствие ключа, «не показывать» = false. Второго
   // представления у первого состояния нет — этого же требует валидатор.
@@ -349,6 +358,43 @@ export function DesignDrawer({
                 onChange={(v) => set('button', 'size', dflt(v, 'md'))}
               />
             </Field>
+          </Group>
+
+          <Separator />
+
+          {/* СВОЙ CSS — последней секцией, и это не про важность: остальные настройки
+              покрывают то, что должно быть под рукой, а сюда спускаются, когда их не
+              хватило. Поле голое, без подсветки и автодополнения: редактор кода в
+              шторке шириной в 26rem — это обещание удобства, которого мы не дадим,
+              а CSS сюда приносят готовым. */}
+          <Group title="Свой CSS" locked={!canUseCSS}>
+            <Wide>
+              <Textarea
+                id="design-css"
+                value={design?.css ?? ''}
+                onChange={(e) => setCss(e.target.value)}
+                maxLength={MAX_CUSTOM_CSS_LEN}
+                spellCheck={false}
+                rows={8}
+                className="font-mono text-xs"
+                placeholder={'.my-block .rf-input {\n  border-radius: 0;\n}'}
+              />
+            </Wide>
+            <Wide>
+              <p className="text-muted-foreground text-xs">
+                Правила применяются к форме у респондента и в превью — на полотно
+                редактора они не действуют. Пометьте блок своим именем в его настройках
+                и обращайтесь к нему как к классу.
+              </p>
+            </Wide>
+            {design?.css && !canUseCSS && (
+              <Wide>
+                <Warning>
+                  На бесплатном тарифе форму с этим CSS не опубликовать. Черновик
+                  сохранится.
+                </Warning>
+              </Wide>
+            )}
           </Group>
 
           <Separator />
