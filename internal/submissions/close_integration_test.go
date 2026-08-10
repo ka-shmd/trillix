@@ -34,7 +34,8 @@ func closableForm(t *testing.T) (slug string, userID, formID uuid.UUID, formsSvc
 	formsSvc = forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 
 	user, _, err := authSvc.Register(ctx, "own-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {

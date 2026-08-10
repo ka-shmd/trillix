@@ -7,7 +7,7 @@ import { fetchPublicForm, type PublicForm } from './api'
 export type FormState =
   | { status: 'loading' }
   | { status: 'ok'; form: PublicForm }
-  | { status: 'closed'; title: string; message: string }
+  | { status: 'closed'; title: string; message: string; showBadge: boolean }
   | { status: 'notfound' }
   | { status: 'error'; message: string }
 

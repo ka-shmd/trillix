@@ -41,7 +41,8 @@ func fullStack(t *testing.T) *httptest.Server {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
@@ -97,7 +98,8 @@ func publishFormFor(t *testing.T, userID uuid.UUID, schema string) string {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	form, err := formsSvc.Create(ctx, userID, "Анкета", nil)
 	if err != nil {
 		t.Fatalf("create form: %v", err)
@@ -278,7 +280,8 @@ func TestListSubmissions_OverQuotaHiddenUntilRevealed(t *testing.T) {
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"))
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	card, err := formsSvc.Get(context.Background(), userID, formID)
 	if err != nil {
 		t.Fatalf("get form: %v", err)

@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { Copy, GitBranch, Replace, Trash2 } from 'lucide-react'
 import {
+  BLOCK_CLASS_RE,
+  MAX_BLOCK_CLASS_LEN,
   MAX_QUESTION_NAME_LEN,
   isAnswerableType,
   isCaptionType,
@@ -65,6 +67,45 @@ function QuestionNameSetting({ block }: { block: Block }) {
       maxLength={MAX_QUESTION_NAME_LEN}
       onChange={(v) => updateBlock(block.id, { name: v === '' ? undefined : v })}
     />
+  )
+}
+
+// ClassSetting — СВОЁ ИМЯ БЛОКА для CSS автора (фаза 22, слайс 7). Стоит здесь, а не
+// в шторке «Оформление», по той же причине, по какой там стоит имя вопроса: это
+// свойство ЭТОГО блока, и задаётся оно там, где на блок смотрят.
+//
+// Показывается всегда, а не только на платном тарифе: пометить блок можно и не имея
+// CSS — гейт стоит на публикации формы С правилами, а не на самой пометке. Пустая
+// строка кладётся отсутствием ключа, как и имя вопроса.
+//
+// Ввод НЕ фильтруется на лету (только maxLength): вычищать заглавные и пробелы прямо
+// под курсором значит драться с автором посреди слова. Невалидное имя краснеет
+// подсказкой, а автосейв его не отправляет — иначе схема ловила бы 422 на каждой
+// промежуточной букве.
+function ClassSetting({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const [draft, setDraft] = useState<string | null>(null)
+  const value = draft ?? block.class ?? ''
+  const invalid = value !== '' && !BLOCK_CLASS_RE.test(value)
+  return (
+    <>
+      <TextSetting
+        label="Имя для CSS"
+        value={value}
+        placeholder="promo-block"
+        maxLength={MAX_BLOCK_CLASS_LEN}
+        onChange={(v) => {
+          setDraft(v)
+          if (v === '') updateBlock(block.id, { class: undefined })
+          else if (BLOCK_CLASS_RE.test(v)) updateBlock(block.id, { class: v })
+        }}
+      />
+      {invalid && (
+        <p className="text-muted-foreground px-2 pb-1 text-xs">
+          Строчные латинские буквы, цифры и дефис — например <code>promo-block</code>.
+        </p>
+      )}
+    </>
   )
 }
 
@@ -217,6 +258,7 @@ export function BlockActionMenu({
               {(named || Settings || requiredFor) && (
                 <div className="border-b py-1">
                   {named && <QuestionNameSetting block={subject} />}
+                  <ClassSetting block={subject} />
                   {requiredFor && (
                     <RequiredSetting
                       block={requiredFor}

@@ -13,6 +13,12 @@ const publicFormSchema = z.object({
   version: z.number().int(),
   schema: formSchemaSchema,
   token: z.string(),
+  // Бейдж «Сделано в Trillix» — решение СЕРВЕРА (намерение автора в схеме плюс
+  // разрешение тарифа), поэтому поле, а не вывод из схемы: тариф клиенту знать
+  // неоткуда. Дефолт true, а не обязательное поле: тело живёт в кеше 60 секунд, и
+  // на выкатке браузер может предъявить ответ прошлой версии — падать из-за этого
+  // всей формой нельзя, а бейдж по умолчанию стоит.
+  showBadge: z.boolean().default(true),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
@@ -22,6 +28,8 @@ const closedFormSchema = z.object({
   closed: z.literal(true),
   title: z.string(),
   closedMessage: z.string(),
+  // Бейдж стоит и на этом экране: иначе он снимается разглядыванием второго.
+  showBadge: z.boolean().default(true),
 })
 
 // Результат загрузки формы. 'notfound' — черновик и несуществующая форма (404,
@@ -31,7 +39,7 @@ const closedFormSchema = z.object({
 // исключение, хук переведёт их в 'error'.
 export type LoadResult =
   | { status: 'ok'; form: PublicForm }
-  | { status: 'closed'; title: string; message: string }
+  | { status: 'closed'; title: string; message: string; showBadge: boolean }
   | { status: 'notfound' }
 
 export async function fetchPublicForm(slug: string): Promise<LoadResult> {
@@ -43,7 +51,7 @@ export async function fetchPublicForm(slug: string): Promise<LoadResult> {
   }
   if (res.status === 410) {
     const body = closedFormSchema.parse(await res.json())
-    return { status: 'closed', title: body.title, message: body.closedMessage }
+    return { status: 'closed', title: body.title, message: body.closedMessage, showBadge: body.showBadge }
   }
   if (!res.ok) {
     throw new Error(`форма не загрузилась: HTTP ${res.status}`)

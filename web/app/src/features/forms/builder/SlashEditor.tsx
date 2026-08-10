@@ -35,6 +35,7 @@ import {
   textFromString,
 } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
+import { designClasses, designToVars } from '@fields/design'
 import {
   groupBlocks,
   groupCanPair,
@@ -108,6 +109,10 @@ export function SlashEditor({
   // Обложка нужна полотну только затем, чтобы поджать верхний отступ: сама она
   // рисуется внутри CoverArea.
   const cover = useBuilderStore((s) => s.cover)
+  // Подписка ТОЧЕЧНАЯ, на s.design, а не на стор целиком: полотно перерисовывается
+  // на каждый символ, и подписка на что-то, меняющееся при вводе, обходит memo строк
+  // (фаза 21 поймала этот класс дважды — STATUS.md).
+  const design = useBuilderStore((s) => s.design)
   // Заголовок формы (фаза 15) — блок документа, но рисуется ВНЕ потока вопросов, тем
   // же разделителем, что у превью и рендерера: внутри .rf-form он получил бы ритм
   // «между вопросами» вместо своего. Всё остальное полотно (группы, dnd, обход
@@ -846,7 +851,13 @@ export function SlashEditor({
           {/* Обложка — во всю ширину полотна, поэтому ВНЕ коробки max-w-[860px]
         (та же граница, что в рендерере: обложка сестра .rf-page). group/canvas —
         якорь наведения для кнопок «Добавить обложку/логотип» ниже. */}
-          <div className="group/canvas">
+          {/* КОНТЕЙНЕР ТЕМЫ (фаза 22) — здесь, а не глубже: обложка стоит ВНЕ
+        коробки колонки, но красится тем же холстом, и переменные обязаны накрывать
+        обоих. На :root тему ставить нельзя — она перекрасила бы кабинет вокруг. */}
+          <div
+            className={`group/canvas rf-theme ${designClasses(design)}`}
+            style={designToVars(design)}
+          >
             <CoverArea formId={formId} />
             {/* relative — якорь координат оверлеев драга (updateFrame меряет относительно него).
           Верхний отступ с обложкой поджимается: 96px пустоты над заголовком там уже
@@ -854,7 +865,7 @@ export function SlashEditor({
           (fields.css) — правишь там, правь и здесь. */}
             <div
               ref={canvasRef}
-              className={`relative mx-auto max-w-[860px] px-5 pb-16 sm:px-20 sm:pb-24 ${
+              className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 sm:px-20 sm:pb-24 ${
                 cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-24'
               }`}
             >
@@ -1639,7 +1650,10 @@ function SubmitButtonEditor() {
 
   return (
     // 48px форма→кнопка отправки = gap .rf-page у превью/рендерера (этап 13.3).
-    <div className="mt-12">
+    // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
+    // задаётся justify-content ряда, и без общей коробки настройка работала бы на
+    // двух поверхностях из трёх. Ряд из одного элемента ничего не портит.
+    <div className="mt-12 rf-nav">
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">

@@ -12,6 +12,7 @@ import { groupBlocks, packOptionRows, packRows, splitPages } from '@fields/group
 import {
   captionLoss,
   createBuilderStore,
+  DOCUMENT_FIELDS,
   planBlockDrop,
   rowBoundaryGroup,
   rowBoundaryTarget,
@@ -1052,6 +1053,31 @@ describe('createBuilderStore', () => {
     expect(schema.thankYouText).toBe('Ждём вас на встрече!')
     expect(schema.redirectUrl).toBe('https://example.com/thanks')
     expect(formSchemaSchema.safeParse(schema).success).toBe(true)
+  })
+
+  // ОФОРМЛЕНИЕ ЕДЕТ НАСКВОЗЬ (фаза 22, слайс 2). Способа изменить его в этом слайсе
+  // нет — панель приезжает слайсом 3, — но контракт PATCH /forms/{id} поле уже
+  // принимает. Без переноса через стор существовал бы путь «записал оформление
+  // запросом → открыл билдер → автосейв молча стёр»: toSchema собирает документ из
+  // полей стора, и чего в сторе нет, того в сохранённой схеме не будет.
+  it('hydrate → toSchema не теряет оформление, которого редактор не знает', () => {
+    const store = createBuilderStore()
+    const design = {
+      theme: 'dark',
+      palette: { accent: '#00aa55' },
+      layout: { fontSize: 18 },
+    } as const
+
+    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [], design })
+    expect(store.getState().toSchema().design).toEqual(design)
+  })
+
+  it('форма без оформления не получает ключ design', () => {
+    // Контракт фазы: документ, которого оформление не касалось, обязан остаться
+    // байт в байт прежним. Пустой объект тут был бы правкой документа на пустом месте.
+    const store = createBuilderStore()
+    store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: [] })
+    expect('design' in store.getState().toSchema()).toBe(false)
   })
 
   it('setAfterSubmit — один шаг отмены на оба поля', () => {
@@ -2877,4 +2903,23 @@ describe('createBuilderStore — обложка и логотип', () => {
     store.getState().setLogo({ imageKey: 'ws/logo.png' })
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
+})
+
+// СОСТАВ ДОКУМЕНТА СВЕРЯЕТСЯ МАШИННО. Список DOCUMENT_FIELDS — то, по чему автосейв
+// узнаёт о правке; toSchema — то, что уезжает на сервер. Разойдись они, и поле
+// сохраняется только «за компанию» с чужой правкой: в фазе 22 так молча потерялось
+// оформление — шторка ставила dirty, но сохранение не планировала.
+//
+// Тест строит документ, в котором заданы ВСЕ необязательные поля: иначе toSchema их
+// опускает (ключа нет, когда значения нет), и сверять было бы нечего.
+it('DOCUMENT_FIELDS покрывает весь состав toSchema', () => {
+  const store = createBuilderStore()
+  store.getState().setSubmitLabel('Готово')
+  store.getState().setAfterSubmit({ thankYouText: 'Спасибо', redirectUrl: 'https://example.com' })
+  store.getState().setCover({ imageKey: 'k' })
+  store.getState().setLogo({ imageKey: 'k' })
+  store.getState().setDesign({ theme: 'dark' })
+
+  const keys = Object.keys(store.getState().toSchema()).filter((k) => k !== 'schemaVersion')
+  expect(keys.sort()).toEqual([...DOCUMENT_FIELDS].sort())
 })

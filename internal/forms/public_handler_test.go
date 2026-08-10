@@ -3,6 +3,7 @@ package forms
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,10 +20,29 @@ import (
 type fakePublicSvc struct {
 	pf  PublicForm
 	err error
+	// badgeAllowed — разрешает ли тариф снимать бейдж (ключ form_branding).
+	badgeAllowed bool
+	badgeErr     error
 }
 
 func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, error) {
 	return f.pf, f.err
+}
+
+// ShowBadge в фейке повторяет ПРАВИЛО, а не результат: нет намерения — бейдж
+// стоит; есть намерение — решает подставленный тариф (badgeAllowed). Фейк,
+// возвращающий константу, пропустил бы ровно тот дефект, ради которого поле и
+// заведено, — потерянное намерение автора.
+func (f fakePublicSvc) ShowBadge(_ context.Context, _ uuid.UUID, design *domain.FormDesign) (bool, error) {
+	if design == nil || design.Branding == nil {
+		return true, nil
+	}
+	if f.badgeErr != nil {
+		// «Спросить не удалось» — не «можно»: настоящий сервис в этом случае
+		// оставляет бейдж, и фейк обязан повторять правило, а не упрощать его.
+		return true, f.badgeErr
+	}
+	return !f.badgeAllowed, nil
 }
 
 var testSecret = []byte("dev-only-form-token-secret-not-a-real-key")
@@ -36,9 +56,10 @@ const (
 // имена ассетов (как их отдаёт vite-дефолт), favicon и — намеренно — лишний
 // <link rel="preload">, которого Go «не знает». Тесты формы проверяют, что ВСЁ это
 // доезжает в ответ дословно: доказательство, что добавление ассета в сборку не
-// требует правок Go (DoD фазы 8, шаг 7). Плейсхолдер <!--og-meta--> — точка вставки.
+// требует правок Go (DoD фазы 8, шаг 7). Точек вставки две: data-form-shell в теге
+// <html> (оформление формы, фаза 22) и плейсхолдер og-меты в <head>.
 const builtIndexFixture = `<!doctype html>
-<html lang="ru">
+<html lang="ru" data-form-shell>
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -104,8 +125,10 @@ func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("статус %d, ожидалось 200", rec.Code)
 	}
-	if got := rec.Header().Get("ETag"); got != `"`+vid.String()+`"` {
-		t.Fatalf("ETag = %q, ожидался id версии", got)
+	// В ETag не только id версии, но и состояние бейджа: тариф меняется без
+	// переиздания, и без метки клиент вечно получал бы 304 с прежним телом.
+	if got := rec.Header().Get("ETag"); got != `"`+vid.String()+`+b`+`"` {
+		t.Fatalf("ETag = %q, ожидался id версии с меткой бейджа", got)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=60" {
 		t.Fatalf("Cache-Control = %q", cc)
@@ -198,7 +221,7 @@ func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	vid := uuid.New()
 	svc := fakePublicSvc{pf: PublicForm{Title: "x", Version: 1, Schema: json.RawMessage(`{}`), VersionID: vid, Status: domain.FormStatusPublished}}
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil)
-	req.Header.Set("If-None-Match", `"`+vid.String()+`"`)
+	req.Header.Set("If-None-Match", `"`+vid.String()+`+b`+`"`)
 
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, req)
@@ -208,6 +231,129 @@ func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Fatalf("304 не должен нести тело, получено %d байт", rec.Body.Len())
+	}
+}
+
+// --- Бейдж «Сделано в Trillix» (фаза 22, слайс 6) ---
+//
+// Решение принимается ПРИ ОТДАЧЕ: намерение автора из схемы плюс разрешение
+// тарифа. Отсюда три утверждения ниже.
+
+func brandingForm(t *testing.T, removed bool, allowed bool) fakePublicSvc {
+	t.Helper()
+	schema := `{"schemaVersion":4,"blocks":[]}`
+	if removed {
+		schema = `{"schemaVersion":4,"blocks":[],"design":{"branding":false}}`
+	}
+	if _, err := domain.ValidateSchema(json.RawMessage(schema)); err != nil {
+		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)
+	}
+	return fakePublicSvc{
+		pf: PublicForm{
+			Title: "Опрос", Version: 1, Schema: json.RawMessage(schema),
+			VersionID: uuid.New(), Status: domain.FormStatusPublished,
+		},
+		badgeAllowed: allowed,
+	}
+}
+
+func getPublicJSON(t *testing.T, svc fakePublicSvc) (*httptest.ResponseRecorder, publicFormResponse) {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
+	var body publicFormResponse
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("тело не парсится: %v", err)
+		}
+	}
+	return rec, body
+}
+
+func TestPublicGet_Badge_ThreeCombinations(t *testing.T) {
+	cases := []struct {
+		name    string
+		removed bool // автор просил снять
+		allowed bool // тариф это разрешает
+		want    bool // показывать бейдж
+	}{
+		{"намерения нет, тариф платный", false, true, true},
+		{"намерение есть, тариф не даёт", true, false, true},
+		{"намерение есть, тариф даёт", true, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, body := getPublicJSON(t, brandingForm(t, c.removed, c.allowed))
+			if body.ShowBadge != c.want {
+				t.Fatalf("showBadge = %v, ожидалось %v", body.ShowBadge, c.want)
+			}
+		})
+	}
+}
+
+// Смена тарифа не меняет версию формы — значит обязана менять ETag, иначе
+// подписавшийся автор получал бы 304 с прежним телом и бейджем у всех, кто форму
+// уже открывал.
+func TestPublicGet_BadgeState_ChangesETag(t *testing.T) {
+	svc := brandingForm(t, true, false)
+	withBadge, _ := getPublicJSON(t, svc)
+
+	svc.badgeAllowed = true // тариф оплачен
+	withoutBadge, _ := getPublicJSON(t, svc)
+
+	if withBadge.Header().Get("ETag") == withoutBadge.Header().Get("ETag") {
+		t.Fatalf("ETag не изменился со сменой тарифа: %q", withBadge.Header().Get("ETag"))
+	}
+}
+
+// Бейдж стоит и на экране «приём закрыт»: иначе он снимается разглядыванием
+// второго экрана.
+func TestPublicGet_Closed_CarriesBadgeDecision(t *testing.T) {
+	// ОБЕ ветки, а не одна: тест, проверяющий только «бейдж есть», прошёл бы и при
+	// зашитой константе — то есть не заметил бы, что закрытая форма потеряла
+	// намерение автора и показывает бейдж оплаченной подписке.
+	cases := []struct {
+		name    string
+		removed bool
+		allowed bool
+		want    bool
+	}{
+		{"намерения нет", false, true, true},
+		{"намерение есть и оплачено", true, true, false},
+		{"намерение есть, тариф не даёт", true, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svc := brandingForm(t, c.removed, c.allowed)
+			svc.pf.Status = domain.FormStatusClosed
+
+			rec := httptest.NewRecorder()
+			newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
+			if rec.Code != http.StatusGone {
+				t.Fatalf("статус %d, ожидалось 410", rec.Code)
+			}
+			var body closedFormResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("тело не парсится: %v", err)
+			}
+			if body.ShowBadge != c.want {
+				t.Fatalf("showBadge = %v, ожидалось %v", body.ShowBadge, c.want)
+			}
+		})
+	}
+}
+
+// Сбой опроса тарифа не имеет права уронить публичную форму: бейдж остаётся.
+func TestPublicGet_PlanLookupFails_KeepsBadgeAndServes(t *testing.T) {
+	svc := brandingForm(t, true, true)
+	svc.badgeErr = errors.New("база недоступна")
+
+	rec, body := getPublicJSON(t, svc)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200 — форма не должна падать из-за тарифов", rec.Code)
+	}
+	if !body.ShowBadge {
+		t.Fatal("при сбое опроса тарифа бейдж обязан остаться")
 	}
 }
 

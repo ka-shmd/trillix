@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -51,6 +52,13 @@ const (
 // чужого не раскрывается), участник без права → ErrForbidden (403).
 type Access interface {
 	Can(ctx context.Context, workspaceID, userID uuid.UUID, action domain.Action) error
+}
+
+// Plans — тарифы глазами этого модуля: узкий интерфейс на стороне потребителя, как
+// у submissions и visits. Формам нужен ровно один вопрос — «можно ли воркспейсу
+// такую возможность»; счётчики расхода и расчётный период их не касаются.
+type Plans interface {
+	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
 }
 
 // Store — доступ к данным forms, объявленный на стороне потребителя (сервиса).
@@ -153,10 +161,11 @@ type Service struct {
 	tx     Transactor    // для атомарной публикации (версия + published_version_id)
 	repo   Store
 	access Access // права в пространстве: спрашиваются по действию, не по роли
+	plans  Plans  // тариф: спрашивается на публикации, не на сохранении
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access) *Service {
-	return &Service{db: db, tx: tx, repo: repo, access: access}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, plans Plans) *Service {
+	return &Service{db: db, tx: tx, repo: repo, access: access, plans: plans}
 }
 
 // resolveWorkspace превращает «в каком пространстве работаем» в id и проверяет
@@ -454,6 +463,48 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 	if err != nil {
 		return Form{}, err
 	}
+
+	// ГЕЙТ ОФОРМЛЕНИЯ — ЗДЕСЬ, А НЕ НА СОХРАНЕНИИ (спека design/theme.md §9.3).
+	// Автосейв не имеет права вернуть 402 посреди набора: промежуточное состояние
+	// документа обязано сохраняться — тот же довод, по которому фаза 21 отказалась
+	// от кросс-блочной валидации. Черновик со своими цветами на бесплатном тарифе
+	// живёт и сохраняется; стена встаёт ровно на публикации.
+	//
+	// Порядок проверок обязателен: авторизация уже прошла выше (formForUser), тариф
+	// спрашивается только после неё — иначе код ответа рассказывал бы постороннему о
+	// существовании чужой формы и о плане чужого воркспейса (BILLING.md §8).
+	//
+	// Даунгрейд ничего не замораживает: опубликованный снапшот иммутабелен, форма
+	// продолжает выглядеть как выглядела — за неё платили тогда. Стена встаёт на
+	// СЛЕДУЮЩЕЙ публикации.
+	if paid := domain.DesignPaidFeatures(parsed.Design); len(paid) > 0 {
+		d, e := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormDesignCustom)
+		if e != nil {
+			return Form{}, e
+		}
+		if !d.Allowed {
+			return Form{}, fmt.Errorf("%w: своё оформление доступно на платном тарифе — мешает: %s",
+				domain.ErrPlanRequired, strings.Join(paid, ", "))
+		}
+	}
+
+	// СВОЙ CSS — ОТДЕЛЬНЫЙ КЛЮЧ И ОТДЕЛЬНАЯ ПРОВЕРКА, а не строка в списке платных
+	// настроек выше: это не настройка, а доступ к вёрстке, и стоит он дороже (спека
+	// §9.1). Слить их в один ключ значило бы навсегда лишить себя возможности продать
+	// цвета дешевле CSS — а именно так тариф и раскладывается.
+	//
+	// Спрашивается вторым: у автора, которому не хватает обоих, первым в отказе
+	// назовётся оформление — то, что он трогал руками в панели, а не поле для CSS.
+	if parsed.Design != nil && strings.TrimSpace(parsed.Design.CSS) != "" {
+		d, e := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormCustomCSS)
+		if e != nil {
+			return Form{}, e
+		}
+		if !d.Allowed {
+			return Form{}, fmt.Errorf("%w: свой CSS доступен на платном тарифе", domain.ErrPlanRequired)
+		}
+	}
+
 	snapshot, err := json.Marshal(parsed)
 	if err != nil {
 		return Form{}, fmt.Errorf("marshal schema: %w", err)
@@ -537,6 +588,33 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 		}
 	}
 	return pf, nil
+}
+
+// ShowBadge — показывать ли бейдж «Сделано в Trillix» на публичной форме.
+//
+// РЕШАЕТСЯ ПРИ ОТДАЧЕ, А НЕ ПРИ ПУБЛИКАЦИИ, и это осознанно (спека §9.4). В схеме
+// лежит только НАМЕРЕНИЕ автора (`design.branding: false`), а факт — намерение плюс
+// разрешение тарифа. Положи мы факт в снапшот, один месяц оплаты навсегда снял бы
+// бейдж со всех опубликованных в этот месяц форм: это не подписка, а разовая
+// покупка. Обратная сторона того же решения — даунгрейд возвращает бейдж на уже
+// опубликованную форму, в отличие от цветов, которые снапшот переживают.
+//
+// ЦЕНА ГЕЙТА НА ГОРЯЧЕМ ПУБЛИЧНОМ ПУТИ (тот самый вопрос спеки) оказалась нулевой
+// для большинства форм: без намерения автора спрашивать нечего — бейдж стоит, и в
+// БД мы не идём вовсе. Платит только форма, которая бейдж снимала, и ровно одним
+// чтением по первичным ключам.
+func (s *Service) ShowBadge(ctx context.Context, workspaceID uuid.UUID, design *domain.FormDesign) (bool, error) {
+	if design == nil || design.Branding == nil {
+		return true, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormBranding)
+	if err != nil {
+		// «Спросить не удалось» — не «можно» (BILLING.md §9). Бейдж остаётся:
+		// публичная форма из-за сбоя тарифов упасть не имеет права, а лишний бейдж
+		// у платящего — меньшее из зол, чем снятый у неплатящего.
+		return true, err
+	}
+	return !d.Allowed, nil
 }
 
 // Versions возвращает все опубликованные версии формы (снапшоты схем) для её автора.

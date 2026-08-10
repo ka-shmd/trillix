@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 
 import { type Block, plainText } from '@entities/formSchema'
 import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
+import { planRequiredMessage } from '../plan/planError'
 import { EmbedSection } from './EmbedSection'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
@@ -184,9 +185,15 @@ function ManageSection({ form }: { form: Form }) {
 
       {(publish.isError || unpublish.isError) && (
         <p className="mt-2 text-sm text-destructive" role="alert">
-          {publish.isError
-            ? 'Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.'
-            : 'Не удалось выполнить действие. Попробуйте ещё раз.'}
+          {/* Перепубликация — вторая точка того же гейта, и общий текст про
+              заголовки вопросов на отказе по тарифу прямо врал: автор шёл чинить
+              то, что не сломано. Сообщение сервера здесь то же, что в шапке
+              редактора, и берётся одним помощником — разъехавшись, две точки
+              объясняли бы один 402 по-разному. */}
+          {planRequiredMessage(publish.error) ??
+            (publish.isError
+              ? 'Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.'
+              : 'Не удалось выполнить действие. Попробуйте ещё раз.')}
         </p>
       )}
     </div>

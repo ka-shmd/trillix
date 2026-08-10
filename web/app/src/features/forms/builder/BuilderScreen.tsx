@@ -3,12 +3,15 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
-import { ChevronRight, Eye, House, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
+import { ChevronRight, Eye, House, Palette, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { displayFormName, type FormDetail } from '../../../entities/form'
+import { useFeatureAllowed } from '../../plan/useFeature'
 import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
+import { DesignDrawer } from './DesignDrawer'
 import { FormSettings } from './FormSettings'
+import { PreviewFrame } from './PreviewFrame'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
@@ -33,6 +36,10 @@ type Mode = 'edit' | 'preview' | 'settings'
 // Стор создаётся один раз на инстанс и сразу гидрируется черновиком; маршрут
 // монтирует экран с key={formId}, поэтому переход на другую форму даёт свежий стор.
 export function BuilderScreen({ detail }: { detail: FormDetail }) {
+  // Тариф спрашивается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
+  // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
+  // потребовался бы каждому, кто его рисует, включая тесты раскладки.
+  const canRemoveBadge = useFeatureAllowed('form_branding')
   const [store] = useState(() => {
     const s = createBuilderStore()
     s.getState().hydrate(detail.draftSchema)
@@ -48,6 +55,10 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   const headerSlot = useHeaderSlot()
   const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+  // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
+  // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
+  // бы полотно и превратил подбор темы в угадывание.
+  const [designOpen, setDesignOpen] = useState(false)
 
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
@@ -141,6 +152,23 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                   </>
                 )}
               </Button>
+              {/* Оформление — ТУМБЛЕР шторки, а не вход в режим (в отличие от
+                  настроек ниже): она выезжает сбоку, ОТОДВИГАЯ оболочку, а не
+                  закрывая полотно, и второго выхода мимо чего-либо тут нет —
+                  закрывать нечему. Отдельно от настроек ещё и потому, что
+                  сохраняется иначе: тема применяется сразу и уезжает автосейвом,
+                  настройки — явной кнопкой. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className={designOpen ? '' : 'text-muted-foreground'}
+                aria-pressed={designOpen}
+                onClick={() => setDesignOpen((v) => !v)}
+                aria-label="Оформление формы"
+                title="Оформление формы"
+              >
+                <Palette className="size-4" />
+              </Button>
               {/* Настройки формы — только вход, не тумблер: назад уводит кнопка на
                   самой странице. Тумблер здесь был бы вторым выходом мимо диалога
                   о несохранённых правках — и неочевидным (по иконке не догадаться,
@@ -166,9 +194,15 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {status === 'conflict' && <ConflictBanner />}
 
       {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
+      {/* Превью — в СВОЁМ документе (TD-60): свой CSS автора обязан быть здесь виден
+          и обязан не покидать фрейм, иначе `.rf-input{display:none}` из формы погасил
+          бы поля самого кабинета. Стор передаётся пропом — контекст через границу
+          корней React не проходит (PreviewFrame.tsx). */}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
-          <PreviewPane title={detail.title} />
+          <PreviewFrame store={store}>
+            <PreviewPane title={detail.title} canRemoveBadge={canRemoveBadge} />
+          </PreviewFrame>
         </section>
       )}
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
@@ -176,6 +210,14 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {mode === 'settings' && (
         <FormSettings detail={detail} onBack={() => setMode('edit')} onSaved={saveNow} />
       )}
+      {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
+          проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,
+          и видно, что это два разных элемента. Урок фазы 21 («закрытые диалоги не
+          монтировать») тут не работает против нас: он про диалоги, подписанные на
+          s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
+          подписана на s.design — он при вводе не меняется. Только в режиме полотна:
+          поверх превью или настроек шторке нечего показывать. */}
+      {mode === 'edit' && <DesignDrawer open={designOpen} onOpenChange={setDesignOpen} />}
     </BuilderStoreContext.Provider>
   )
 }

@@ -43,14 +43,20 @@ function SheetContent({
   children,
   side = 'right',
   showCloseButton = true,
+  // showOverlay — наша добавка к вендоренному компоненту (фаза 22). Затемнение
+  // предполагает, что шторка забирает внимание целиком, но у панели оформления
+  // задача обратная: автор смотрит НЕ на неё, а на полотно за ней — тема меняется
+  // у него на глазах. Затемнённое полотно этот смысл убивает.
+  showOverlay = true,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: 'top' | 'right' | 'bottom' | 'left'
   showCloseButton?: boolean
+  showOverlay?: boolean
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      {showOverlay && <SheetOverlay />}
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(

@@ -8,13 +8,16 @@ export function FieldShell({
   children,
   error,
   errorId,
+  own,
 }: {
   children: ReactNode
   error?: string
   errorId?: string
+  /** Своё имя блока для CSS автора (фаза 22, слайс 7) — рядом с нашим rf-field. */
+  own?: string
 }) {
   return (
-    <div className="rf-field">
+    <div className={own ? `rf-field ${own}` : 'rf-field'}>
       {children}
       {error && (
         <p className="rf-error" id={errorId} role="alert">

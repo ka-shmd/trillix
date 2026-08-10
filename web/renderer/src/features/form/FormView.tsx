@@ -10,11 +10,14 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { customStyleSheet } from '@fields/customCss'
+import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
+import { Badge } from '@fields/Badge'
 import { applyPrefill, type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,
@@ -141,6 +144,45 @@ export function FormView({
       active.current = false
     }
   }, [])
+
+  // ОФОРМЛЕНИЕ НАДЕВАЕТСЯ НА КОРЕНЬ ДОКУМЕНТА, а не на контейнер, как в кабинете, и
+  // это не расхождение: в рендерере вся страница И ЕСТЬ форма. Фон за её пределами —
+  // область оверскролла и полоса под коротким документом — красится только через
+  // body, который читает --rf-canvas; повесь мы переменные на обёртку, тёмная форма
+  // получила бы белые поля вокруг себя.
+  //
+  // Эффектом, а не в разметке, по той же причине, по какой main.tsx ставит data-embed
+  // до первой отрисовки: свойство принадлежит документу, а не узлу.
+  //
+  // ПЕРВЫЙ КАДР — НЕ ЗДЕСЬ: в проде тот же класс и тот же стиль уже стоят на <html>,
+  // их напечатал Go из снапшота (слайс 5, internal/forms/public_page.go), поэтому
+  // код ниже застаёт документ уже одетым и ничего не меняет. Он остаётся нужен там,
+  // где сервера в этом пути нет: dev-страница отдаётся vite-dev'ом без оболочки.
+  //
+  // И ПОТОМУ ЖЕ ОН СНАЧАЛА СНИМАЕТ ЧУЖОЕ. Оболочку печатает сервер из снапшота, а
+  // схему клиент забирает вторым запросом — это два независимых элемента кеша с
+  // разным временем жизни. Автор переключил тему и переиздал форму: респондент
+  // получает старую оболочку с `rf-theme-dark` и новую, светлую схему. У новой
+  // designClasses пуст, снимать нечего, и форма осталась бы тёмной до истечения
+  // кеша HTML. Поэтому убирается ВСЁ, что могло быть напечатано (классы `rf-` на
+  // корне рендерера ставит только оформление, а переменные известны списком).
+  useEffect(() => {
+    const root = document.documentElement
+    const stale = Array.from(root.classList).filter((c) => c.startsWith('rf-'))
+    root.classList.remove(...stale)
+    for (const name of DESIGN_VAR_NAMES) root.style.removeProperty(name)
+
+    const vars = designToVars(form.schema.design)
+    for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
+    // Классов может быть несколько (тема + контур + вид кнопки), а classList.add со
+    // строкой «a b» бросает InvalidCharacterError — поэтому список, а не строка.
+    const cls = designClasses(form.schema.design).split(' ').filter(Boolean)
+    root.classList.add(...cls)
+    return () => {
+      for (const name of Object.keys(vars)) root.style.removeProperty(name)
+      root.classList.remove(...cls)
+    }
+  }, [form.schema.design])
 
   useEffect(() => {
     saveAnswers(slug, form.version, answers)
@@ -408,13 +450,23 @@ export function FormView({
     }
   }
 
+  // CSS автора действует на всей странице формы, включая экран «Спасибо»: это те же
+  // глаза того же респондента, и форма, теряющая фирменный вид на последнем шаге,
+  // выглядит как чужая страница (тот же довод, по которому туда доехала тема).
+  const customCss = customStyleSheet(form.schema.design?.css)
+  const authorStyle = customCss ? <style>{customCss}</style> : null
+
   if (phase === 'done') {
     return (
-      <ThankYou
-        text={form.schema.thankYouText ?? ''}
-        redirectUrl={form.schema.redirectUrl ?? ''}
-        bridge={redirectSelf ? null : bridge}
-      />
+      <>
+        {authorStyle}
+        <ThankYou
+          text={form.schema.thankYouText ?? ''}
+          redirectUrl={form.schema.redirectUrl ?? ''}
+          bridge={redirectSelf ? null : bridge}
+          badge={form.showBadge}
+        />
+      </>
     )
   }
 
@@ -431,6 +483,11 @@ export function FormView({
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
     <>
+      {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
+          ПОСЛЕ наших правил: в каскаде выигрывает последний при равной специфичности,
+          поэтому автор перебивает вид, не трогая fields.css. Следом идёт сторож
+          текста согласия (customCss.ts) — порог, а не стена, и это записано там же. */}
+      {authorStyle}
       <CoverBand cover={cover} />
       <main className={pageClass(cover)}>
         {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}
@@ -548,6 +605,9 @@ export function FormView({
             {notice}
           </p>
         )}
+        {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
+            а не про форму, и лезть выше содержимого автора ему незачем. */}
+        {form.showBadge && <Badge />}
       </main>
     </>
   )

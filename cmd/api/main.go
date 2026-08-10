@@ -247,7 +247,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc)
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
 	if err != nil {

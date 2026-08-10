@@ -37,6 +37,27 @@ const (
 	// AnalyticsSources — источники трафика (utm). Ключ заведён, экрана ещё нет;
 	// гейт включится вместе с экраном.
 	AnalyticsSources Key = "analytics_sources"
+	// FormDesignCustom — свои значения оформления: цвета, шрифт, ширина, кегль,
+	// скругление, кнопка (фаза 22). ОБЕ ТЕМЫ, светлая и тёмная, бесплатны
+	// намеренно: гейт ставится на созданную ценность, а не на настройку, и право
+	// выбрать одну из двух тем — это право завести пустую папку. Новичок должен
+	// получить «выглядит прилично» даром; платят за «выглядит как мы».
+	//
+	// Спрашивается на ПУБЛИКАЦИИ, а не на сохранении: автосейв не имеет права
+	// вернуть 402 посреди набора (спека design/theme.md §9.3).
+	FormDesignCustom Key = "form_design_custom"
+	// FormCustomCSS — свой CSS формы. Отдельным ключом от остального оформления и
+	// дороже: это не настройка, а доступ к вёрстке. Ключ заведён, точки применения
+	// ещё нет — она приезжает слайсом 7 (как сегодня у analytics_sources).
+	FormCustomCSS Key = "form_custom_css"
+	// FormBranding — право снять бейдж «Сделано в Trillix» с публичной формы.
+	//
+	// ГЕЙТ ДРУГОЙ ПРИРОДЫ, чем у оформления, и это осознанно: цвет уехал в снапшот
+	// и обязан пережить даунгрейд (за него платили тогда), а бейдж — свойство
+	// ВЫДАЧИ, а не документа. Лежи он в снапшоте, один месяц оплаты навсегда снял
+	// бы бейдж со всех опубликованных в этот месяц форм — это не подписка, а
+	// разовая покупка. Поэтому спрашивается при отдаче публичной формы.
+	FormBranding Key = "form_branding"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -104,6 +125,9 @@ var CatalogOrder = []Key{
 	MembersPerWorkspace,
 	AnalyticsFunnel,
 	AnalyticsSources,
+	FormDesignCustom,
+	FormCustomCSS,
+	FormBranding,
 	Workspaces,
 }
 
@@ -113,4 +137,7 @@ var Catalog = map[Key]Feature{
 	MembersPerWorkspace: {Kind: Quota, Scope: WorkspaceScope, Meter: MembersMeter, Title: "Участников"},
 	AnalyticsFunnel:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Воронка отвала"},
 	AnalyticsSources:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Источники трафика"},
+	FormDesignCustom:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё оформление"},
+	FormCustomCSS:       {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Свой CSS"},
+	FormBranding:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Без бейджа Trillix"},
 }

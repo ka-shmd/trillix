@@ -65,14 +65,14 @@ export function ImageField({ block, formId }: { block: Block; formId: string }) 
               <button
                 type="button"
                 onClick={pick}
-                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-text))]"
+                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]"
               >
                 <RefreshCw className="size-3.5" /> Заменить
               </button>
               <button
                 type="button"
                 onClick={() => updateBlock(block.id, { settings: {} })}
-                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-surface)] px-3 py-1.5 text-sm font-medium text-[var(--rf-danger)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-surface)_92%,var(--rf-danger))]"
+                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-danger)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-danger))]"
               >
                 <Trash2 className="size-3.5" /> Удалить
               </button>

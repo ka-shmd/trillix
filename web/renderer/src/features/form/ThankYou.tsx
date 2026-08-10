@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { DEFAULT_THANK_YOU_TITLE } from '@entities/formSchema'
 
+import { Badge } from '@fields/Badge'
 import { type HostBridge } from './embed'
 import { planThankYou } from './thankYouPlan'
 
@@ -16,10 +17,13 @@ export function ThankYou({
   text,
   redirectUrl,
   bridge,
+  badge,
 }: {
   text: string
   redirectUrl: string
   bridge: HostBridge | null
+  /** Бейдж площадки: решение сервера, то же, что на самой форме. */
+  badge: boolean
 }) {
   const { message, target, delayMs } = planThankYou(text, redirectUrl)
   // Ссылка-запасной путь показывается, когда переход уже запущен: если он не
@@ -58,6 +62,7 @@ export function ThankYou({
           {stalled ? <a href={target}>Перейти на сайт</a> : 'Сейчас перенаправим…'}
         </p>
       )}
+      {badge && <Badge />}
     </main>
   )
 }

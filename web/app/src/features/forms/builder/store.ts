@@ -4,6 +4,7 @@ import {
   type Block,
   type BlockType,
   type FormCover,
+  type FormDesign,
   type FormLogo,
   type FormSchema,
   type LogicCondition,
@@ -59,7 +60,10 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // как name и required. Носителя (голову группы) выбирает вызывающий — стор про
 // семантику правил не знает, ему хватает того, что это поле документа.
 export type BlockPatch = Partial<
-  Pick<Block, 'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf' | 'jumpIf'>
+  Pick<
+    Block,
+    'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf' | 'jumpIf' | 'class'
+  >
 >
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
@@ -78,6 +82,7 @@ export type Snapshot = {
   redirectUrl: string
   cover: FormCover | undefined
   logo: FormLogo | undefined
+  design: FormDesign | undefined
 }
 
 // Потолок глубины истории: длинная сессия не должна расти в памяти без предела.
@@ -96,6 +101,13 @@ export type BuilderState = {
   // пустого объекта в схеме не бывает (ADR §10).
   cover: FormCover | undefined
   logo: FormLogo | undefined
+  // ОФОРМЛЕНИЕ ФОРМЫ (фаза 22) — тема, цвета, шрифт, лэйаут. Слайс 2 везёт его
+  // НАСКВОЗЬ, без единого способа изменить: панель приезжает слайсом 3, а контракт
+  // PATCH /forms/{id} поле уже принимает — то есть без переноса через стор путь
+  // «записал через API → открыл билдер → автосейв стёр оформление» существовал бы
+  // уже сегодня. Поле документа, поэтому едет и в историю (Snapshot): undo обязан
+  // возвращать тот документ, который был.
+  design: FormDesign | undefined
   // dirty — есть несохранённые правки. Ставится любой мутацией документа, снимается
   // hydrate (загрузка с сервера) и markSaved (успешный автосейв). Выбор блока не
   // считается правкой и dirty не трогает.
@@ -245,6 +257,16 @@ export type BuilderActions = {
   // не знает состояния «и то, и другое», и стор не должен уметь его выразить даже на
   // мгновение — иначе автосейв поймает 422 посреди жеста.
   setCover: (cover: FormCover | undefined) => void
+  // Оформление целиком, а не по полю: панель сама собирает следующий документ
+  // (designEdit.patch), а стору остаётся его положить.
+  //
+  // tag — ключ КОАЛЕСИНГА непрерывного жеста, как у обложки ('cc') и у цвета спана.
+  // Он обязателен для выборщика цвета: тот зовёт onChange раз в кадр перетаскивания,
+  // и без склейки две секунды подбора акцента клали в историю ~120 снапшотов при
+  // потолке в 100 — вся предыдущая работа над формой вытеснялась, а Ctrl+Z откатывал
+  // подбор по одному кадру. Дискретный выбор (тема, дропдаун) тега не передаёт: там
+  // склеивать нечего.
+  setDesign: (design: FormDesign | undefined, tag?: string) => void
   setLogo: (logo: FormLogo | undefined) => void
   // setCoverY двигает точку фокуса картинки. Свой тег коалесинга: жест перетаскивания
   // коммитится один раз на отпускании, но повторные жесты подряд остаются разными
@@ -262,6 +284,24 @@ export type BuilderActions = {
 }
 
 export type BuilderStore = BuilderState & BuilderActions
+
+// DOCUMENT_FIELDS — поля стора, из которых собирается ДОКУМЕНТ (toSchema). Список, а
+// не рассыпанные сравнения: по нему автосейв решает, была ли правка, и поле, забытое
+// там, ставит dirty, но НЕ планирует сохранение — правка молча ждёт, пока её унесёт
+// чужой автосейв (а если автор больше ничего не трогал, не уносит никто).
+//
+// Так и потерялось оформление в фазе 22: `design` появился в сторе слайсом 3, а в
+// подписку автосейва не попал. Теперь список один, и тест сверяет его с составом
+// toSchema — новое поле документа краснеет, а не пропадает.
+export const DOCUMENT_FIELDS = [
+  'blocks',
+  'submitLabel',
+  'thankYouText',
+  'redirectUrl',
+  'cover',
+  'logo',
+  'design',
+] as const
 
 // newBlock создаёт валидный черновой блок: скелет (пустой text, выведенный позже
 // groupId, пустые настройки) плюс дефолты своего типа — они объявлены в файле типа
@@ -1090,6 +1130,7 @@ const snapshot = (s: BuilderState): Snapshot => ({
   redirectUrl: s.redirectUrl,
   cover: s.cover,
   logo: s.logo,
+  design: s.design,
 })
 
 // updateBlockTag коалесит непрерывный ввод через updateBlock: правки текстовых полей
@@ -1166,6 +1207,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       redirectUrl: '',
       cover: undefined,
       logo: undefined,
+      design: undefined,
       dirty: false,
       past: [],
       future: [],
@@ -1182,6 +1224,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           redirectUrl: schema.redirectUrl ?? '',
           cover: schema.cover,
           logo: schema.logo,
+          design: schema.design,
           dirty: false,
           past: [],
           future: [],
@@ -1907,6 +1950,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       // тег держится до первого действия с другим тегом. Это ровно то же поведение,
       // что у правок текста блока (updateBlockTag), и заводить ему исключение
       // значило бы объяснять, почему у цвета обложки история дробится мельче.
+      setDesign: (design, tag) =>
+        commit(tag ?? null, (s) => (s.design === design ? null : { design })),
+
       setCover: (cover) =>
         commit(cover?.color && get().cover?.color ? 'cc' : null, (s) =>
           s.cover === cover ? null : { cover },
@@ -1972,6 +2018,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         // Ключа нет, когда оформления нет: пустой объект контракт отвергает (422).
         ...(get().cover ? { cover: get().cover } : {}),
         ...(get().logo ? { logo: get().logo } : {}),
+        // У design, в отличие от обложки, пустой объект контракт ПРИНИМАЕТ («всё по
+        // умолчанию»), но печатать его на форме, где оформления не трогали, всё равно
+        // нельзя: документ обязан остаться байт в байт прежним.
+        ...(get().design ? { design: get().design } : {}),
       }),
     }
   })
