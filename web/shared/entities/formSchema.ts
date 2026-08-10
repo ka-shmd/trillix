@@ -7,6 +7,7 @@ import {
   BLOCK_CLASS_RE,
   COVER_Y_MAX,
   COVER_Y_MIN,
+  CSS_MARKUP_ESCAPE,
   DEFAULT_COVER_Y,
   MAX_BLOCKS,
   MAX_CUSTOM_CSS_LEN,
@@ -514,7 +515,7 @@ export const designSchema = z.strictObject({
   css: z
     .string()
     .max(MAX_CUSTOM_CSS_LEN)
-    .refine((v) => !v.includes('</'), 'последовательность "</" не допускается')
+    .refine((v) => !v.includes(CSS_MARKUP_ESCAPE), 'последовательность "</" не допускается')
     .optional(),
 })
 export type FormDesign = z.infer<typeof designSchema>

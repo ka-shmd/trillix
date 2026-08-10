@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { Lock, TriangleAlert } from 'lucide-react'
 
 import {
+  CSS_MARKUP_ESCAPE,
   DESIGN_ALIGNS,
   MAX_CUSTOM_CSS_LEN,
   DESIGN_BUTTON_SIZES,
@@ -145,8 +146,26 @@ export function DesignDrawer({
   // Набор CSS — непрерывный жест, как подбор цвета: без ключа коалесинга каждая
   // буква становилась бы шагом отмены и вытесняла из истории работу над формой
   // (ровно тот дефект, который ревью нашло у выборщика цвета в слайсе 4).
-  const setCss = (value: string) =>
+  //
+  // ОТВЕРГНУТОЕ ЗНАЧЕНИЕ ДО СТОРА НЕ ДОЕЗЖАЕТ — тот же приём, что у имени блока
+  // (ClassSetting). Валидатор не принимает `</` (единственная точка, где авторский
+  // текст соседствует с разметкой по существу), и вход бытовой: сниппет копируют
+  // вместе с обёрткой `<style>…</style>`. Без задержки здесь автосейв ловил бы 422 и
+  // показывал автору общий индикатор ошибки, из которого причины не видно вовсе.
+  //
+  // Драфт живёт РОВНО ПОКА ТЕКСТ НЕВАЛИДЕН и снимается на первом же годном значении:
+  // иначе он навсегда заслонил бы стор и отменил бы undo для этого поля.
+  const [cssDraft, setCssDraft] = useState<string | null>(null)
+  const cssValue = cssDraft ?? design?.css ?? ''
+  const cssInvalid = cssValue.includes(CSS_MARKUP_ESCAPE)
+  const setCss = (value: string) => {
+    if (value.includes(CSS_MARKUP_ESCAPE)) {
+      setCssDraft(value)
+      return
+    }
+    setCssDraft(null)
     setDesign(patchTop(design, 'css', value.trim() === '' ? undefined : value), 'design:css')
+  }
 
   // «Показывать» = отсутствие ключа, «не показывать» = false. Второго
   // представления у первого состояния нет — этого же требует валидатор.
@@ -377,7 +396,7 @@ export function DesignDrawer({
             <Wide>
               <Textarea
                 id="design-css"
-                value={design?.css ?? ''}
+                value={cssValue}
                 onChange={(e) => setCss(e.target.value)}
                 maxLength={MAX_CUSTOM_CSS_LEN}
                 spellCheck={false}
@@ -386,11 +405,21 @@ export function DesignDrawer({
                 placeholder={'.my-block .rf-input {\n  border-radius: 0;\n}'}
               />
             </Wide>
+            {cssInvalid && (
+              <Wide>
+                <p className="text-muted-foreground text-xs">
+                  Последовательность <code>&lt;/</code> не допускается — уберите теги{' '}
+                  <code>&lt;style&gt;</code>, оставьте только правила. Пока она есть,
+                  CSS не сохраняется.
+                </p>
+              </Wide>
+            )}
             <Wide>
               <p className="text-muted-foreground text-xs">
-                Правила применяются к форме у респондента и в превью — на полотно
-                редактора они не действуют. Пометьте блок своим именем в его настройках
-                и обращайтесь к нему как к классу.
+                Правила применяются к форме у респондента. Ни полотно редактора, ни
+                превью их пока не показывают — результат виден на опубликованной
+                форме. Пометьте блок своим именем в его настройках и обращайтесь к
+                нему как к классу.
               </p>
             </Wide>
             {design?.css && !canUseCSS && (
