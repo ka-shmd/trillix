@@ -6,6 +6,7 @@ import { BlockField } from '@fields/BlockField'
 import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
 import { Badge } from '@fields/Badge'
+import { customStyleSheet } from '@fields/customCss'
 import { designClasses, designToVars, showFormBadge } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
@@ -30,6 +31,9 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
   // него запрос чужой фичи значит требовать провайдер Query от каждого, кто его
   // рисует (включая тесты раскладки, которым до тарифов дела нет).
   const badge = showFormBadge(design, canRemoveBadge)
+  // Тот же вывод, что у респондента: правила автора плюс сторож согласия. Пусто,
+  // если автор ничего не писал, — печатать один сторож незачем.
+  const customCss = customStyleSheet(design?.css)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   // Заголовок формы — блок документа (фаза 15), рисуется вне потока вопросов, тем же
   // разделителем, что у рендерера. Проп title остаётся фолбэком: форму, которую
@@ -80,6 +84,12 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
     // вёрстке в двух местах.
     // Контейнер темы обнимает обложку и страницу разом — как на полотне.
     <div className={`rf-theme ${designClasses(design)}`} style={designToVars(design)}>
+      {/* СВОЙ CSS АВТОРА — ровно теми же двумя строками, что у респондента
+          (FormView): правила автора, следом сторож текста согласия. Безопасно это
+          не потому, что мы что-то вычистили, а потому, что превью живёт в отдельном
+          документе (PreviewFrame, TD-60) — за его пределы стиль не выходит физически.
+          React вставляет строку текстовым узлом, а не разметкой (инвариант 4). */}
+      {customCss && <style>{customCss}</style>}
       <CoverBand cover={chrome ? cover : undefined} />
       <div className={pageClass(chrome ? cover : undefined)}>
         {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}

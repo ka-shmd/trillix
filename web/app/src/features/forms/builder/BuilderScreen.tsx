@@ -11,6 +11,7 @@ import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
 import { DesignDrawer } from './DesignDrawer'
 import { FormSettings } from './FormSettings'
+import { PreviewFrame } from './PreviewFrame'
 import { PreviewPane } from './PreviewPane'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
@@ -193,9 +194,15 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {status === 'conflict' && <ConflictBanner />}
 
       {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
+      {/* Превью — в СВОЁМ документе (TD-60): свой CSS автора обязан быть здесь виден
+          и обязан не покидать фрейм, иначе `.rf-input{display:none}` из формы погасил
+          бы поля самого кабинета. Стор передаётся пропом — контекст через границу
+          корней React не проходит (PreviewFrame.tsx). */}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
-          <PreviewPane title={detail.title} canRemoveBadge={canRemoveBadge} />
+          <PreviewFrame store={store}>
+            <PreviewPane title={detail.title} canRemoveBadge={canRemoveBadge} />
+          </PreviewFrame>
         </section>
       )}
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
