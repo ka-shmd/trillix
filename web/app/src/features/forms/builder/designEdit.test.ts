@@ -79,3 +79,15 @@ describe('PALETTE_FIELDS', () => {
     expect(PALETTE_FIELDS.map((f) => f.key)).toEqual(inSchema)
   })
 })
+
+describe('patchTop — бейдж', () => {
+  it('выключенный переключатель пишет false, включённый снимает ключ', () => {
+    // «Показывать» выражается ОТСУТСТВИЕМ ключа: второе представление того же
+    // состояния валидатор не примет (design.branding допускает только false).
+    expect(patchTop(undefined, 'branding', false)).toEqual({ branding: false })
+    expect(patchTop({ branding: false }, 'branding', undefined)).toBeUndefined()
+    expect(patchTop({ theme: 'dark', branding: false }, 'branding', undefined)).toEqual({
+      theme: 'dark',
+    })
+  })
+})

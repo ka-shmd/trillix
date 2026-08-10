@@ -42,15 +42,16 @@ export const SWATCHES = [
   '#b91c1c',
 ] as const
 
-// patchTop — заменить поле ВЕРХНЕГО уровня (тема, шрифт). Отдельно от patch, потому
-// что это не группа: `font` стал скаляром, когда шрифт свели к одному на форму, и
-// звать для него групповую правку значило бы получить `{font: {'': 'inter'}}`.
+// patchTop — заменить поле ВЕРХНЕГО уровня (тема, шрифт, бейдж). Отдельно от patch,
+// потому что это не группа: `font` стал скаляром, когда шрифт свели к одному на
+// форму, и звать для него групповую правку значило бы получить `{font: {'': 'inter'}}`.
 //
-// Схлопывание пустого — то же самое и по той же причине (см. patch ниже).
+// Схлопывание пустого — то же самое и по той же причине (см. patch ниже). У `branding`
+// оно же выражает «показывать бейдж»: снятие ключа и есть включённый бейдж.
 export function patchTop(
   design: FormDesign | undefined,
-  key: 'theme' | 'font',
-  value: string | undefined,
+  key: 'theme' | 'font' | 'branding',
+  value: string | false | undefined,
 ): FormDesign | undefined {
   const next: Record<string, unknown> = { ...design }
   if (value === undefined) delete next[key]

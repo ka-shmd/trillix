@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { TriangleAlert } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { Lock, TriangleAlert } from 'lucide-react'
 
 import {
   DESIGN_ALIGNS,
@@ -38,7 +39,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+
+import { useFeatureAllowed } from '../../plan/useFeature'
 
 import { ColorPicker } from './ColorPicker'
 import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
@@ -91,6 +95,13 @@ export function DesignDrawer({
   const theme = currentTheme(design)
   const contrast = lowContrast(design)
 
+  // ГЕЙТЫ ТАРИФА ПОКАЗЫВАЮТСЯ, НО НИЧЕГО НЕ ЗАПИРАЮТ (спека §9.3). Черновик со
+  // своими цветами обязан сохраняться на любом тарифе — стена стоит на публикации,
+  // и она на бэке. Панель, отключающая контролы, отняла бы у автора возможность
+  // посмотреть, за что он платит, — то есть сам повод заплатить.
+  const canCustomize = useFeatureAllowed('form_design_custom')
+  const canRemoveBadge = useFeatureAllowed('form_branding')
+
   // Тема, которую автор выбрал, но которая СОТРЁТ его настройки: держим её здесь,
   // пока он не подтвердит. null — диалога нет.
   const [pendingTheme, setPendingTheme] = useState<'light' | 'dark' | null>(null)
@@ -128,6 +139,11 @@ export function DesignDrawer({
     tag?: string,
   ) => setDesign(patch(design, group, key, value), tag)
 
+  // «Показывать» = отсутствие ключа, «не показывать» = false. Второго
+  // представления у первого состояния нет — этого же требует валидатор.
+  const patchBranding = (show: boolean) =>
+    setDesign(patchTop(design, 'branding', show ? undefined : false))
+
   // dflt — выбор значения по умолчанию снимает ключ, а не пишет его.
   const dflt = (value: string, fallback: string) => (value === fallback ? undefined : value)
 
@@ -154,6 +170,19 @@ export function DesignDrawer({
         </SheetHeader>
 
         <div className="grid gap-5 px-4 pb-10">
+          {!canCustomize && (
+            <p className="text-muted-foreground bg-muted/50 flex gap-2 rounded-md p-3 text-sm">
+              <Lock className="mt-0.5 size-4 shrink-0" />
+              <span>
+                Своё оформление — на платном тарифе. Настроить и посмотреть можно уже
+                сейчас, черновик сохранится; опубликовать форму с ним не получится.{' '}
+                <Link to="/settings/plan" className="underline underline-offset-2">
+                  Тариф
+                </Link>
+              </span>
+            </p>
+          )}
+
           {/* Три темы в панели, но ДВЕ в схеме: «Пользовательская» — не значение, а
               вывод из наличия своих настроек (designTheme.ts). Поэтому она и
               включается сама при первой же правке цвета, и не выбирается руками:
@@ -171,7 +200,7 @@ export function DesignDrawer({
 
           <Separator />
 
-          <Group title="Цвета">
+          <Group title="Цвета" locked={!canCustomize}>
             {PALETTE_FIELDS.map(({ key, title }) => (
               <ColorRow
                 key={key}
@@ -195,7 +224,7 @@ export function DesignDrawer({
 
           <Separator />
 
-          <Group title="Лэйаут">
+          <Group title="Лэйаут" locked={!canCustomize}>
             {/* Шрифт ОДИН на всю форму (решение владельца 2026-08-09): раздельные
                 семейства для текста и заголовков были заведены и убраны — на форме
                 из десяти строк это читается не как брендирование, а как небрежность. */}
@@ -280,7 +309,7 @@ export function DesignDrawer({
               кнопками шага, включая «Назад» и «Далее» многостраничной формы (решение
               владельца 2026-08-09). Вид остаётся только у главного действия: «Назад»
               контурная всегда — уравнять «вернуться» с «отправить» нельзя. */}
-          <Group title="Кнопки">
+          <Group title="Кнопки" locked={!canCustomize}>
             <Field label="Вид" id="design-btn-variant">
               <Choice
                 id="design-btn-variant"
@@ -320,6 +349,34 @@ export function DesignDrawer({
                 onChange={(v) => set('button', 'size', dflt(v, 'md'))}
               />
             </Field>
+          </Group>
+
+          <Separator />
+
+          {/* БЕЙДЖ — переключатель, а не дропдаун: состояний два, и «показывать» это
+              отсутствие ключа в схеме. Гейт у него ДРУГОЙ природы, чем у остального
+              оформления: публикацию он не держит (снять намерение можно на любом
+              тарифе), а срабатывает при отдаче формы — поэтому на бесплатном тарифе
+              выключенный переключатель честно предупреждает, что бейдж всё равно
+              останется. */}
+          <Group title="Бейдж" locked={!canRemoveBadge}>
+            <Wide>
+              <label className="flex items-center justify-between gap-3 text-sm">
+                <span>Показывать «Сделано в Trillix»</span>
+                <Switch
+                  checked={design?.branding !== false}
+                  onCheckedChange={(on) => patchBranding(on)}
+                />
+              </label>
+            </Wide>
+            {design?.branding === false && !canRemoveBadge && (
+              <Wide>
+                <Warning>
+                  На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и
+                  сработает сразу после перехода на платный.
+                </Warning>
+              </Wide>
+            )}
           </Group>
         </div>
       </SheetContent>
@@ -362,10 +419,26 @@ const DRAWER_WIDTH = '26rem'
 // Две колонки (решение владельца 2026-08-09): контролов в панели полтора десятка, и
 // в один столбец они уезжают за пределы экрана — до кнопки приходилось скроллить,
 // не видя формы, ради которой панель и открыта. Заголовок группы занимает обе.
-function Group({ title, children }: { title: string; children: ReactNode }) {
+// locked — замок у заголовка группы. Именно замок, а не disabled у контролов:
+// настройка остаётся доступной (черновик сохранится), закрыт только результат —
+// публикация. Показывает панель, отказывает бэк (инвариант 3).
+function Group({
+  title,
+  children,
+  locked = false,
+}: {
+  title: string
+  children: ReactNode
+  locked?: boolean
+}) {
   return (
     <section className="grid grid-cols-2 gap-x-3 gap-y-3">
-      <h3 className="col-span-2 text-sm font-medium">{title}</h3>
+      <h3 className="col-span-2 flex items-center gap-1.5 text-sm font-medium">
+        {title}
+        {locked && (
+          <Lock className="text-muted-foreground size-3.5" aria-label="на платном тарифе" />
+        )}
+      </h3>
       {children}
     </section>
   )
