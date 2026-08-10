@@ -35,7 +35,8 @@
 - **PostgreSQL 16** — 19 миграций (`0001`…`0019_paid_css_and_branding`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
-  36.67 КиБ). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59).
+  38.05 КиБ). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59),
+  и самохостные шрифты формы — **свой порог 200 КиБ** (сейчас 124, фаза 22).
 - **e2e** — восемь Playwright-сценариев против prod-local: `full-loop`, `builder-keyboard`,
   `form-settings`, `visits-funnel`, `workspace-team`, `multipage`, `embed`, `logic`.
 - **Эксплуатация** — бэкапы БД в Yandex (`deploy/backup.sh` в cron, восстановление
