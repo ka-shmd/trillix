@@ -24,7 +24,7 @@
 | [`multipage.md`](multipage.md) | фаза 19, многостраничные формы | `v0.19.0` | [`EDITOR.md`](../EDITOR.md) §1/§6, [`ANALYTICS.md`](../ANALYTICS.md) |
 | [`embed.md`](embed.md) | фаза 20 `DEV-PLAN`, встраивание в чужие сайты | **не закрыта** — спека живая | [`EMBED.md`](../EMBED.md) |
 | [`logic.md`](logic.md) | фаза 21, условная логика в формах | `v0.21.0` | [`EDITOR.md`](../EDITOR.md) §15, [`SCHEMA.md`](../SCHEMA.md) |
-| [`theme.md`](theme.md) | фаза 22 `DEV-PLAN`, оформление формы | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md), [`BILLING.md`](../BILLING.md), [`fields/README.md`](../../web/shared/fields/README.md) |
+| [`theme.md`](theme.md) | фаза 22, оформление формы: тема, цвета, шрифт, лэйаут, свой CSS | `v0.22.0` | [`EDITOR.md`](../EDITOR.md) §16, [`BILLING.md`](../BILLING.md), [`fields/README.md`](../../web/shared/fields/README.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).
