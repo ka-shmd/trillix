@@ -605,6 +605,37 @@ func designDraft(design string) json.RawMessage {
 	return json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":` + design + `}`)
 }
 
+// ПЕРВАЯ ПОЛОВИНА УТВЕРЖДЕНИЯ «сохраняется 200, публикуется 402» — и та, которую
+// забыть легче: вторая половина краснеет сама, если гейт сломался, а эта краснеет
+// только если гейт переехал НЕ ТУДА. Переезд на сохранение выглядел бы как 402
+// посреди набора текста, и тест здесь именно затем, чтобы такой переезд не прошёл
+// молча. Тариф на этом пути не спрашивается вовсе — не «спрашивается и разрешает».
+func TestUpdateDraftSchema_PaidDesign_SavesAndDoesNotAskPlans(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	in := designDraft(`{"palette":{"accent":"#12ab34"},"font":"inter","css":".rf-page{padding:0}"}`)
+	if _, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), in, time.Now()); err != nil {
+		t.Fatalf("автосейв обязан проходить на любом тарифе: %v", err)
+	}
+	if !store.schemaSaved {
+		t.Fatal("черновик с платным оформлением должен сохраниться")
+	}
+	var saved domain.FormSchema
+	if err := json.Unmarshal(store.lastSchema, &saved); err != nil {
+		t.Fatalf("сохранённая схема не парсится: %v", err)
+	}
+	// Не просто «прошло», а «доехало»: канонизация не имеет права вычистить платные
+	// поля по дороге — иначе автосейв тихо стирал бы работу автора.
+	if saved.Design == nil || saved.Design.Font != "inter" || saved.Design.CSS == "" {
+		t.Fatalf("оформление не доехало до БД: %+v", saved.Design)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на сохранении черновика: %v", plans.gotKeys)
+	}
+}
+
 func TestPublish_PaidDesignWithoutPlan_Returns402(t *testing.T) {
 	store := &fakeStore{
 		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"palette":{"accent":"#12ab34"},"font":"inter"}`)},
