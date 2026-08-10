@@ -1202,3 +1202,26 @@ textarea.rf-input {
   outline: none;
   box-shadow: var(--rf-focus-shadow);
 }
+
+/* БЕЙДЖ ПЛОЩАДКИ (фаза 22, слайс 6) — служебный ярус шкалы, приглушённый цвет: он
+   про площадку, а не про форму, и спорить с содержимым автора ему нечем.
+
+   Живёт здесь, а не в стилях рендерера, с тех пор как бейдж понадобился ОБЕИМ
+   поверхностям — форме респондента и превью билдера. Полотно редактора его не носит:
+   там автор форму собирает, а не смотрит на неё чужими глазами. */
+.rf-badge {
+  margin: 2rem 0 0;
+  text-align: center;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  color: var(--rf-muted);
+}
+
+.rf-badge a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.rf-badge a:hover {
+  text-decoration: underline;
+}
+

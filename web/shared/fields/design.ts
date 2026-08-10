@@ -120,3 +120,16 @@ export function designClasses(design: FormDesign | undefined): string {
   if (design.button?.variant === 'outline') out.push('rf-btn-outline')
   return out.join(' ')
 }
+
+// showFormBadge — рисовать ли бейдж «Сделано в Trillix». Намерение автора из схемы
+// плюс разрешение тарифа: бейдж есть ВСЕГДА, кроме случая «автор просил снять И тариф
+// это разрешает».
+//
+// Близнец Go-метода forms.Service.ShowBadge, но живёт для другого потребителя:
+// РЕСПОНДЕНТУ решение печатает сервер (поле showBadge в ответе — клиенту про тарифы
+// знать неоткуда), а АВТОРУ его считает кабинет, у которого снимок тарифа уже в руках.
+// Правило одно, и оно записано в одном выражении на каждой стороне — расхождение
+// означало бы, что превью показывает автору не ту форму, которую увидят люди.
+export function showFormBadge(design: FormDesign | undefined, canRemove: boolean): boolean {
+  return !(design?.branding === false && canRemove)
+}

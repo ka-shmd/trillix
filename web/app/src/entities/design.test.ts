@@ -5,7 +5,7 @@ import {
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
 } from '@entities/formSchema'
-import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
+import { designClasses, DESIGN_VAR_NAMES, designToVars, showFormBadge } from '@fields/design'
 import { describe, expect, it } from 'vitest'
 
 // Оформление формы (фаза 22, слайс 2). Таблица кейсов ТОГО ЖЕ СОСТАВА, что
@@ -218,5 +218,18 @@ describe('DESIGN_VAR_NAMES', () => {
       button: { variant: 'outline', width: 'full', align: 'center', size: 'lg' },
     })
     expect(Object.keys(everything).sort()).toEqual([...DESIGN_VAR_NAMES].sort())
+  })
+})
+
+describe('showFormBadge', () => {
+  it('бейдж есть всегда, кроме «просил снять И тариф даёт»', () => {
+    // Правило одно на две стороны: сервер печатает его респонденту, кабинет считает
+    // тем же выражением для превью. Разойдись они — превью показывало бы автору не ту
+    // форму, которую увидят люди (ровно этот дефект и нашёлся в слайсе 6).
+    expect(showFormBadge(undefined, true)).toBe(true)
+    expect(showFormBadge({}, true)).toBe(true)
+    expect(showFormBadge({ theme: 'dark' }, true)).toBe(true)
+    expect(showFormBadge({ branding: false }, false)).toBe(true)
+    expect(showFormBadge({ branding: false }, true)).toBe(false)
   })
 })

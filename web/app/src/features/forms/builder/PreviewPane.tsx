@@ -5,9 +5,12 @@ import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
-import { designClasses, designToVars } from '@fields/design'
+import { Badge } from '@fields/Badge'
+import { designClasses, designToVars, showFormBadge } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
+
+import { useFeatureAllowed } from '../../plan/useFeature'
 
 import { useBuilderStore } from './storeContext'
 
@@ -20,6 +23,11 @@ export function PreviewPane({ title }: { title: string }) {
   const cover = useBuilderStore((s) => s.cover)
   const logo = useBuilderStore((s) => s.logo)
   const design = useBuilderStore((s) => s.design)
+  // Бейдж площадки — часть того, что увидит респондент, значит часть превью. Правило
+  // общее с сервером (showFormBadge): намерение автора плюс разрешение тарифа. Первая
+  // редакция слайса 6 нарисовала бейдж только у респондента, и превью — единственное
+  // место, где автор смотрит на форму его глазами, — про бейдж молчало.
+  const badge = showFormBadge(design, useFeatureAllowed('form_branding'))
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   // Заголовок формы — блок документа (фаза 15), рисуется вне потока вопросов, тем же
   // разделителем, что у рендерера. Проп title остаётся фолбэком: форму, которую
@@ -173,6 +181,7 @@ export function PreviewPane({ title }: { title: string }) {
         {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
             правило «кликом только назад» — часть WYSIWYG. */}
         <StepBar pages={pages.length} page={page} onGo={setPage} />
+        {badge && <Badge />}
       </div>
     </div>
   )

@@ -17,7 +17,7 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
-import { Badge } from './Badge'
+import { Badge } from '@fields/Badge'
 import { applyPrefill, type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,

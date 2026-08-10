@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { DEFAULT_THANK_YOU_TITLE } from '@entities/formSchema'
 
-import { Badge } from './Badge'
+import { Badge } from '@fields/Badge'
 import { type HostBridge } from './embed'
 import { planThankYou } from './thankYouPlan'
 

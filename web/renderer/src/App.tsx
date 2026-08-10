@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-import { Badge } from './features/form/Badge'
+import { Badge } from '@fields/Badge'
 import { type HostBridge } from './features/form/embed'
 import { FormView } from './features/form/FormView'
 import { slugFromPath } from './features/form/slug'
