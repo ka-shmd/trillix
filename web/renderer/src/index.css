@@ -116,6 +116,26 @@ body {
   color: var(--rf-text);
 }
 
+/* БЕЙДЖ ПЛОЩАДКИ (фаза 22, слайс 6) — служебный ярус шкалы, приглушённый цвет: он
+   про площадку, а не про форму, и спорить с содержимым автора ему нечем. Класс
+   `form-*`, а не `rf-*`: бейджа нет ни в редакторе, ни в превью — показывать его
+   там значило бы решать за сервер, чей это тариф. */
+.form-badge {
+  margin: 2rem 0 0;
+  text-align: center;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  color: var(--rf-muted);
+}
+
+.form-badge a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.form-badge a:hover {
+  text-decoration: underline;
+}
+
 .status-detail {
   margin: 0;
   color: var(--rf-muted);

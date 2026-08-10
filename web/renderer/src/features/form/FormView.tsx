@@ -16,6 +16,7 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
+import { Badge } from './Badge'
 import { applyPrefill, type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,
@@ -454,6 +455,7 @@ export function FormView({
         text={form.schema.thankYouText ?? ''}
         redirectUrl={form.schema.redirectUrl ?? ''}
         bridge={redirectSelf ? null : bridge}
+        badge={form.showBadge}
       />
     )
   }
@@ -588,6 +590,9 @@ export function FormView({
             {notice}
           </p>
         )}
+        {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
+            а не про форму, и лезть выше содержимого автора ему незачем. */}
+        {form.showBadge && <Badge />}
       </main>
     </>
   )

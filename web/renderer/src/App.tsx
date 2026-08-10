@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { Badge } from './features/form/Badge'
 import { type HostBridge } from './features/form/embed'
 import { FormView } from './features/form/FormView'
 import { slugFromPath } from './features/form/slug'
@@ -29,7 +30,7 @@ export function App({
     case 'closed':
       // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
       // название и текст владельца, а не безликое «недоступна» (шаг 4).
-      return <StatusScreen title={state.title} detail={state.message} />
+      return <StatusScreen title={state.title} detail={state.message} badge={state.showBadge} />
     case 'notfound':
       // Черновик и несуществующая форма неотличимы (404, инвариант 5) — один экран.
       return (
@@ -69,11 +70,24 @@ function useHostHeight(bridge: HostBridge | null) {
   }, [bridge])
 }
 
-function StatusScreen({ title, detail }: { title: string; detail?: string }) {
+// badge — только там, где сервер о нём высказался. На «Загрузке», «Форма
+// недоступна» и ошибке его нет намеренно: схемы мы не получили, чья это форма и что
+// разрешает её тариф — неизвестно, а бейдж на чужой опечатке в адресе никому не
+// нужен.
+function StatusScreen({
+  title,
+  detail,
+  badge = false,
+}: {
+  title: string
+  detail?: string
+  badge?: boolean
+}) {
   return (
     <main className="status">
       <h1 className="status-title">{title}</h1>
       {detail && <p className="status-detail">{detail}</p>}
+      {badge && <Badge />}
     </main>
   )
 }
