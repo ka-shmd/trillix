@@ -27,7 +27,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -44,7 +43,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { ColorPicker } from './ColorPicker'
 import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
 import { currentTheme, hasCustomFields, resetToTheme, withTheme } from './designTheme'
-import { darkThemeColorClash, lowContrast } from './designWarnings'
+import { lowContrast } from './designWarnings'
 import { useBuilderStore } from './storeContext'
 
 // ПАНЕЛЬ «ОФОРМЛЕНИЕ» — ВЫЕЗЖАЮЩАЯ ШТОРКА (фаза 22; вид согласован с владельцем
@@ -83,13 +82,6 @@ export function DesignDrawer({
 }) {
   const design = useBuilderStore((s) => s.design)
   const setDesign = useBuilderStore((s) => s.setDesign)
-  // Подписка на blocks — только ради счётчика крашеного текста. Панель живёт в
-  // портале и полотно своей перерисовкой не трогает, но сама она перерисуется на
-  // каждый символ: счётчик считается по всему документу, поэтому память о фазе 21
-  // тут уместна — если панель начнёт тормозить набор, первым делом мемоизировать
-  // именно этот подсчёт.
-  const blocks = useBuilderStore((s) => s.blocks)
-  const clearTextColors = useBuilderStore((s) => s.clearTextColors)
 
   // Обе тонкости выбора темы («светлая = отсутствие ключа», «пустой остаток =
   // undefined») живут в designTheme.ts отдельным модулем — ровно чтобы их можно было
@@ -97,7 +89,6 @@ export function DesignDrawer({
   // через разметку эта логика непокрываема. По той же причине отдельно живут patch()
   // и обе проверки-предупреждения.
   const theme = currentTheme(design)
-  const clash = darkThemeColorClash(design, blocks)
   const contrast = lowContrast(design)
 
   // Тема, которую автор выбрал, но которая СОТРЁТ его настройки: держим её здесь,
@@ -177,17 +168,6 @@ export function DesignDrawer({
               onChange={chooseTheme}
             />
           </Field>
-
-          {clash > 0 && (
-            <Warning>
-              {clash} {plural(clash, 'кусок', 'куска', 'кусков')} текста покрашены вручную —
-              на тёмном фоне цвет может пропасть. Внутри строки он абсолютный и за темой
-              не следует.
-              <Button variant="outline" size="sm" className="mt-2" onClick={clearTextColors}>
-                Снять цвета текста
-              </Button>
-            </Warning>
-          )}
 
           <Separator />
 
@@ -573,15 +553,6 @@ function Warning({ children }: { children: ReactNode }) {
       <span>{children}</span>
     </p>
   )
-}
-
-// Склонение после числа: русский требует трёх форм — 1 кусок, 2 куска, 5 кусков.
-function plural(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10
-  const mod100 = n % 100
-  if (mod10 === 1 && mod100 !== 11) return one
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
-  return many
 }
 
 // Подписи — здесь, а не в @entities: список значений это контракт (его сверяет

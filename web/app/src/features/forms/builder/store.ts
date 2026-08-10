@@ -264,10 +264,6 @@ export type BuilderActions = {
   // подбор по одному кадру. Дискретный выбор (тема, дропдаун) тега не передаёт: там
   // склеивать нечего.
   setDesign: (design: FormDesign | undefined, tag?: string) => void
-  // Снять цвета текста со всех блоков — предложение из панели оформления при тёмной
-  // теме (ADR §10: цвет спана абсолютен и за темой не следует). Один шаг истории:
-  // это одно решение автора, и отменяться оно обязано одним Ctrl+Z, а не по блоку.
-  clearTextColors: () => void
   setLogo: (logo: FormLogo | undefined) => void
   // setCoverY двигает точку фокуса картинки. Свой тег коалесинга: жест перетаскивания
   // коммитится один раз на отпускании, но повторные жесты подряд остаются разными
@@ -1933,31 +1929,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       // тег держится до первого действия с другим тегом. Это ровно то же поведение,
       // что у правок текста блока (updateBlockTag), и заводить ему исключение
       // значило бы объяснять, почему у цвета обложки история дробится мельче.
-      clearTextColors: () =>
-        commit(null, (s) => {
-          let touched = false
-          const blocks = s.blocks.map((b) => {
-            if (!b.text?.some((sp) => sp.color || sp.bg)) return b
-            touched = true
-            return {
-              ...b,
-              // Ключи именно УДАЛЯЮТСЯ, а не ставятся в undefined: strictObject Zod
-              // пропустит и то и другое, но undefined-ключ уедет в JSON как
-              // отсутствующий только после сериализации — а сравнение документов в
-              // сторе (dirty, история) увидит другой объект.
-              text: b.text.map((sp) => {
-                const next = { ...sp }
-                delete next.color
-                delete next.bg
-                return next
-              }),
-            }
-          })
-          // null = ничего не менялось: без этой ветки нажатие на «снять цвета» на
-          // форме без крашеного текста ставило бы dirty и шаг истории на пустом месте.
-          return touched ? { blocks } : null
-        }),
-
       setDesign: (design, tag) =>
         commit(tag ?? null, (s) => (s.design === design ? null : { design })),
 
