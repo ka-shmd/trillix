@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
@@ -22,6 +25,9 @@ const defaultClosedMessage = "Приём ответов на эту форму �
 // publicFormService — часть сервиса форм, нужная публичному транспорту.
 type publicFormService interface {
 	PublicForm(ctx context.Context, slug string) (PublicForm, error)
+	// ShowBadge — решение о бейдже «Сделано в Trillix»: намерение автора из схемы
+	// плюс разрешение тарифа. Свойство выдачи, а не документа (спека §9.4).
+	ShowBadge(ctx context.Context, workspaceID uuid.UUID, design *domain.FormDesign) (bool, error)
 }
 
 // PublicHandler — публичный транспорт форм (без авторизации и CSRF): отдаёт схему
@@ -82,6 +88,11 @@ type publicFormResponse struct {
 	Version int32           `json:"version"`
 	Schema  json.RawMessage `json:"schema"`
 	Token   string          `json:"token"`
+	// ShowBadge — рисовать ли бейдж «Сделано в Trillix». Решение СЕРВЕРА и
+	// свойство выдачи, а не документа: в схеме лежит лишь намерение автора, а
+	// разрешает его тариф (спека §9.4). Поле, а не вывод клиента из схемы, ровно
+	// поэтому — тариф клиенту знать неоткуда и незачем.
+	ShowBadge bool `json:"showBadge"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
@@ -91,6 +102,9 @@ type closedFormResponse struct {
 	Closed        bool   `json:"closed"`
 	Title         string `json:"title"`
 	ClosedMessage string `json:"closedMessage"`
+	// Бейдж стоит и на этом экране: иначе он снимается разглядыванием второго
+	// экрана — открыл закрытую форму, и бренда нет.
+	ShowBadge bool `json:"showBadge"`
 }
 
 func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +121,8 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, h.now().UTC()) {
 		w.Header().Set("Cache-Control", "no-store")
 		httpserver.WriteJSON(w, r, http.StatusGone, closedFormResponse{
-			Closed: true,
+			Closed:    true,
+			ShowBadge: h.showBadge(r, pf),
 			// Экран «приём закрыт» — единственное место рендерера, где заголовок
 			// показывается БЕЗ схемы (её в 410 нет вовсе), поэтому пустоту здесь
 			// замещаем так же, как в <title> вкладки.
@@ -119,7 +134,13 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	// ETag = id опубликованной версии: иммутабелен, меняется только при новой
 	// публикации. Кэш 60 с — терпимо для формы (правки видны после переиздания).
-	etag := `"` + pf.VersionID.String() + `"`
+	//
+	// ПЛЮС СОСТОЯНИЕ БЕЙДЖА: оно не часть версии, а часть ПРЕДСТАВЛЕНИЯ, и меняется
+	// от смены тарифа, а не от переиздания. Без него подписавшийся автор получал бы
+	// на каждый повторный запрос 304 с прежним телом — то есть бейдж оставался бы у
+	// всех, кто уже открывал форму, пока не сменится версия.
+	showBadge := h.showBadge(r, pf)
+	etag := `"` + pf.VersionID.String() + badgeETagSuffix(showBadge) + `"`
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -138,11 +159,42 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// Токен выдаётся на каждый ответ; при кэшировании его возраст растёт, но это
 	// только усиливает проверку «не раньше 3 с» (свежий мгновенный токен — бот).
 	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
-		Title:   pf.Title,
-		Version: pf.Version,
-		Schema:  schema,
-		Token:   token.Issue(h.tokenSecret, h.now().UTC()),
+		Title:     pf.Title,
+		Version:   pf.Version,
+		Schema:    schema,
+		Token:     token.Issue(h.tokenSecret, h.now().UTC()),
+		ShowBadge: showBadge,
 	})
+}
+
+// showBadge — решение «рисовать ли бейдж» для этой выдачи. Сбой опроса тарифа не
+// имеет права уронить публичную форму: бейдж остаётся, причина уходит в лог с
+// request_id (лишний бейдж у платящего дешевле, чем пятисотка респонденту).
+//
+// Схема разбирается ОТКАЗОУСТОЙЧИВО и только ради одного поля — намерения автора.
+// Битая схема на этом пути невозможна (снапшот проверен при публикации), но
+// возвращать из-за неё 500 незачем: бейдж по умолчанию стоит.
+func (h *PublicHandler) showBadge(r *http.Request, pf PublicForm) bool {
+	var design *domain.FormDesign
+	if parsed, err := domain.ValidateSchema(pf.Schema); err == nil {
+		design = parsed.Design
+	}
+	show, err := h.svc.ShowBadge(r.Context(), pf.WorkspaceID, design)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("проверка тарифа для бейджа",
+			slog.String("workspace_id", pf.WorkspaceID.String()), slog.String("error", err.Error()))
+	}
+	return show
+}
+
+// badgeETagSuffix — метка состояния бейджа в ETag. Отдельной функцией, а не
+// тернарником по месту: суффикс участвует в сравнении с If-None-Match, и обе
+// стороны обязаны считать его одинаково.
+func badgeETagSuffix(showBadge bool) string {
+	if showBadge {
+		return "+b"
+	}
+	return ""
 }
 
 // closedMessageOrDefault — свой текст владельца, если задан, иначе дефолт.

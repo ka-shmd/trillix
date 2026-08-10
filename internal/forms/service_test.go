@@ -1163,3 +1163,58 @@ func TestOperations_AskTheRightAction(t *testing.T) {
 		})
 	}
 }
+
+// --- Бейдж: цена гейта на публичном пути (спека §9.4) ---
+//
+// Замер 2026-08-10 на сидированной базе: сам опрос тарифа — 198 мкс на запрос
+// против 56 мкс у «SELECT 1» (то есть ~140 мкс сверху), план — четыре index scan
+// в nested loop, execution 0.088 мс, ни одного seq scan. Это терпимо; но главный
+// рычаг не в скорости запроса, а в том, что для большинства форм его НЕТ ВОВСЕ —
+// что и сторожит тест ниже. Сломается он молча: лишняя поездка в БД на каждой
+// публичной форме не роняет ничего, её видно только в графиках.
+func TestShowBadge_NoIntent_DoesNotAskPlans(t *testing.T) {
+	plans := &fakePlans{allowed: true}
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
+
+	for _, design := range []*domain.FormDesign{nil, {}, {Theme: "dark"}} {
+		show, err := svc.ShowBadge(context.Background(), domain.NewID(), design)
+		if err != nil {
+			t.Fatalf("ShowBadge: %v", err)
+		}
+		if !show {
+			t.Fatalf("без намерения автора бейдж обязан стоять (design=%+v)", design)
+		}
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен там, где спрашивать нечего: %v", plans.gotKeys)
+	}
+}
+
+func TestShowBadge_IntentAsksPlanAndObeysIt(t *testing.T) {
+	no := false
+	design := &domain.FormDesign{Branding: &no}
+
+	plans := &fakePlans{allowed: true} // тариф разрешает снять
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
+	show, err := svc.ShowBadge(context.Background(), domain.NewID(), design)
+	if err != nil {
+		t.Fatalf("ShowBadge: %v", err)
+	}
+	if show {
+		t.Fatal("тариф разрешает, автор просил — бейдж обязан исчезнуть")
+	}
+	if len(plans.gotKeys) != 1 || plans.gotKeys[0] != entitlements.FormBranding {
+		t.Fatalf("спрошены ключи %v, ожидался form_branding", plans.gotKeys)
+	}
+
+	// Даунгрейд возвращает бейдж на уже опубликованную форму — в отличие от цветов,
+	// которые уехали в снапшот. Это и есть «гейт другой природы» (спека §9.4).
+	svc = NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
+	show, err = svc.ShowBadge(context.Background(), domain.NewID(), design)
+	if err != nil {
+		t.Fatalf("ShowBadge: %v", err)
+	}
+	if !show {
+		t.Fatal("после даунгрейда бейдж обязан вернуться")
+	}
+}
