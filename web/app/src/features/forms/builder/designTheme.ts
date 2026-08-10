@@ -23,6 +23,11 @@ export type ThemeChoice = 'light' | 'dark' | 'custom'
 
 // Ключи, наличие которых и делает оформление пользовательским. `theme` не в счёт —
 // он и есть база, поверх которой всё остальное.
+//
+// `branding` и `css` сюда НЕ входят, и по той же причине, по которой переживают
+// сброс: они не про вид темы. Форма со снятым бейджем и парой правил CSS остаётся
+// «Светлой» — иначе дропдаун показывал бы «Пользовательскую» автору, который цветов
+// не касался вовсе.
 const CUSTOM_KEYS = ['palette', 'font', 'layout', 'controls', 'button'] as const
 
 export function hasCustomFields(design: FormDesign | undefined): boolean {
@@ -47,17 +52,23 @@ export function currentTheme(design: FormDesign | undefined): ThemeChoice {
 // прежней; сохранённое 'light' дало бы документ, отличающийся от исходного при
 // одинаковом виде, и это расхождение живёт вечно.
 //
-// БЕЙДЖ ПЕРЕЖИВАЕТ СБРОС, и это не исключение из правила, а само правило: сброс
-// возвращает ОФОРМЛЕНИЕ к готовой теме, а `branding` — не оформление, а покупка.
-// Первая редакция его теряла: автор соглашался «сбросить цвета» и молча получал
-// обратно бейдж на форму, причём диалог об этом не предупреждал (нашло ревью).
+// БЕЙДЖ И СВОЙ CSS ПЕРЕЖИВАЮТ СБРОС, и это не исключение из правила, а само правило:
+// сброс возвращает к готовой теме ОФОРМЛЕНИЕ — цвета, шрифт, лэйаут, контролы и
+// кнопки, то есть ровно то, что диалог и перечисляет. `branding` — не оформление, а
+// покупка; `css` — не оформление, а код автора, и терять его от смены темы значит
+// стереть работу, которой в диалоге даже не обещано.
+//
+// Первая редакция теряла бейдж (нашло ревью), вторая — CSS: оба раза потому, что
+// «сбросить всё» писалось короче, чем «сбросить перечисленное».
 export function resetToTheme(
   theme: 'light' | 'dark',
   design?: FormDesign | undefined,
 ): FormDesign | undefined {
-  const kept = design?.branding === false ? { branding: false as const } : undefined
-  if (theme === 'dark') return { theme: 'dark', ...kept }
-  return kept
+  const kept: FormDesign = {}
+  if (design?.branding === false) kept.branding = false
+  if (design?.css) kept.css = design.css
+  if (theme === 'dark') kept.theme = 'dark'
+  return Object.keys(kept).length === 0 ? undefined : kept
 }
 
 // withTheme — смена базы БЕЗ сброса своих значений. Нужна там, где сбрасывать

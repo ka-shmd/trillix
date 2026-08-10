@@ -6,7 +6,7 @@ import { ApiError } from '../../../shared/api/errors'
 import { type FormDetail } from '../../../entities/form'
 import { formKeys } from '../keys'
 import { saveDraftSchema } from './api'
-import { type BuilderStore } from './store'
+import { DOCUMENT_FIELDS, type BuilderStore } from './store'
 
 export type SaveStatus = 'saved' | 'saving' | 'error' | 'conflict'
 
@@ -139,19 +139,15 @@ export function useAutosave(
     // thankYouText/redirectUrl; выбор блока (selectedId) документ не трогает и
     // сохранение не будит.
     //
-    // Сверяются ВСЕ поля документа: поле, забытое здесь, не планирует сохранение —
-    // правка ставит dirty и молча ждёт, пока её унесёт чужой автосейв. Настройки
-    // приходят сюда только кнопкой «Сохранить» (она же сохраняет сразу, без
-    // дебаунса), но через undo/redo они меняются как обычный документ — и тогда
-    // сохранить их должна подписка.
+    // Сверяются ВСЕ поля документа, и список у них ОДИН на стор (DOCUMENT_FIELDS):
+    // поле, забытое здесь, не планирует сохранение — правка ставит dirty и молча
+    // ждёт, пока её унесёт чужой автосейв. Ровно так фаза 22 потеряла оформление:
+    // `design` был в сторе и в toSchema, но не в этом перечислении, и шторка
+    // сохранялась только вместе с правкой блока. Настройки приходят сюда только
+    // кнопкой «Сохранить» (она же сохраняет сразу, без дебаунса), но через undo/redo
+    // они меняются как обычный документ — и тогда сохранить их должна подписка.
     const unsub = store.subscribe((state, prev) => {
-      const changed =
-        state.blocks !== prev.blocks ||
-        state.submitLabel !== prev.submitLabel ||
-        state.thankYouText !== prev.thankYouText ||
-        state.redirectUrl !== prev.redirectUrl ||
-        state.cover !== prev.cover ||
-        state.logo !== prev.logo
+      const changed = DOCUMENT_FIELDS.some((f) => state[f] !== prev[f])
       if (changed && !conflictRef.current) schedule()
     })
 

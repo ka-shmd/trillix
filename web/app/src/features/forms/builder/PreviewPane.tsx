@@ -10,14 +10,12 @@ import { designClasses, designToVars, showFormBadge } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
-import { useFeatureAllowed } from '../../plan/useFeature'
-
 import { useBuilderStore } from './storeContext'
 
 // Превью — форма как её увидит респондент: заголовок, поля стора и кнопка отправки.
 // Тот же вид (rf-*), что и у рендерера и у редактора — WYSIWYG. Заголовок приходит
 // пропом (forms.title сохраняется отдельно от схемы), кнопка/блоки — из стора.
-export function PreviewPane({ title }: { title: string }) {
+export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemoveBadge: boolean }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const cover = useBuilderStore((s) => s.cover)
@@ -27,7 +25,11 @@ export function PreviewPane({ title }: { title: string }) {
   // общее с сервером (showFormBadge): намерение автора плюс разрешение тарифа. Первая
   // редакция слайса 6 нарисовала бейдж только у респондента, и превью — единственное
   // место, где автор смотрит на форму его глазами, — про бейдж молчало.
-  const badge = showFormBadge(design, useFeatureAllowed('form_branding'))
+  //
+  // Тариф приходит ПРОПОМ, а не хуком отсюда: превью — чистый вид стора, и тянуть в
+  // него запрос чужой фичи значит требовать провайдер Query от каждого, кто его
+  // рисует (включая тесты раскладки, которым до тарифов дела нет).
+  const badge = showFormBadge(design, canRemoveBadge)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
   // Заголовок формы — блок документа (фаза 15), рисуется вне потока вопросов, тем же
   // разделителем, что у рендерера. Проп title остаётся фолбэком: форму, которую

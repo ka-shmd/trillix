@@ -200,9 +200,15 @@ export function DesignDrawer({
             <Choice
               id="design-theme"
               value={theme}
-              options={THEME_OPTIONS}
+              // «Пользовательская» ПОЯВЛЯЕТСЯ В СПИСКЕ, только когда она и есть
+              // текущая (решение владельца 2026-08-10). Раньше она стояла там всегда,
+              // выключенной, — «выбор», которого нет: выбрать «мои настройки», не
+              // сделав ни одной, нечего, а пункт создавал впечатление, что можно.
+              // Пока она текущая, из списка её убирать нельзя: она объясняет, ПОЧЕМУ
+              // дропдаун показывает не «Светлую».
+              options={theme === 'custom' ? THEME_OPTIONS : THEME_OPTIONS_BASE}
               titles={THEME_TITLES}
-              disabledOptions={theme === 'custom' ? [] : ['custom']}
+              disabledOptions={['custom']}
               onChange={chooseTheme}
             />
           </Field>
@@ -465,9 +471,13 @@ const DRAWER_WIDTH = '26rem'
 // Две колонки (решение владельца 2026-08-09): контролов в панели полтора десятка, и
 // в один столбец они уезжают за пределы экрана — до кнопки приходилось скроллить,
 // не видя формы, ради которой панель и открыта. Заголовок группы занимает обе.
-// locked — замок у заголовка группы. Именно замок, а не disabled у контролов:
-// настройка остаётся доступной (черновик сохранится), закрыт только результат —
-// публикация. Показывает панель, отказывает бэк (инвариант 3).
+// locked — метка «Pro» у заголовка группы. Именно метка, а не disabled у контролов:
+// настройка остаётся доступной (черновик сохранится на любом тарифе), закрыт только
+// результат — публикация или отдача. Показывает панель, отказывает бэк (инвариант 3).
+//
+// Слово, а не один замок (решение владельца 2026-08-10): замок сообщает «нельзя», но
+// не сообщает ЧТО с этим делать, и на секции, где половина настроек бесплатна, читался
+// как поломка. «Pro» называет тариф, на котором это работает.
 function Group({
   title,
   children,
@@ -481,12 +491,24 @@ function Group({
     <section className="grid grid-cols-2 gap-x-3 gap-y-3">
       <h3 className="col-span-2 flex items-center gap-1.5 text-sm font-medium">
         {title}
-        {locked && (
-          <Lock className="text-muted-foreground size-3.5" aria-label="на платном тарифе" />
-        )}
+        {locked && <ProTag />}
       </h3>
       {children}
     </section>
+  )
+}
+
+// ProTag — метка платной возможности. Ссылка, а не подпись: автор, увидевший её,
+// должен иметь возможность узнать цену тем же жестом, каким заметил ограничение.
+function ProTag() {
+  return (
+    <Link
+      to="/settings/plan"
+      className="text-muted-foreground border-border hover:text-foreground inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase"
+    >
+      <Lock className="size-3" aria-hidden="true" />
+      Pro
+    </Link>
   )
 }
 
@@ -676,7 +698,8 @@ function Warning({ children }: { children: ReactNode }) {
 
 // Подписи — здесь, а не в @entities: список значений это контракт (его сверяет
 // паритет-тест с Go), а перевод на человеческий — дело интерфейса.
-const THEME_OPTIONS = ['light', 'dark', 'custom'] as const
+const THEME_OPTIONS_BASE = ['light', 'dark'] as const
+const THEME_OPTIONS = [...THEME_OPTIONS_BASE, 'custom'] as const
 const THEME_TITLES: Record<string, string> = {
   light: 'Светлая',
   dark: 'Тёмная',

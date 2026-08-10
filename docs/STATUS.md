@@ -32,7 +32,7 @@
   (`auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `httpserver`, `mail`, `media`,
   `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`, `submissions`, `token`, `visits`,
   `workspaces`).
-- **PostgreSQL 16** — 18 миграций (`0001`…`0018_design_plan_keys`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 19 миграций (`0001`…`0019_paid_css_and_branding`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
   36.67 КиБ). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59).

@@ -6,6 +6,7 @@ import { useStore } from 'zustand'
 import { ChevronRight, Eye, House, Palette, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { displayFormName, type FormDetail } from '../../../entities/form'
+import { useFeatureAllowed } from '../../plan/useFeature'
 import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
 import { DesignDrawer } from './DesignDrawer'
@@ -34,6 +35,10 @@ type Mode = 'edit' | 'preview' | 'settings'
 // Стор создаётся один раз на инстанс и сразу гидрируется черновиком; маршрут
 // монтирует экран с key={formId}, поэтому переход на другую форму даёт свежий стор.
 export function BuilderScreen({ detail }: { detail: FormDetail }) {
+  // Тариф спрашивается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
+  // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
+  // потребовался бы каждому, кто его рисует, включая тесты раскладки.
+  const canRemoveBadge = useFeatureAllowed('form_branding')
   const [store] = useState(() => {
     const s = createBuilderStore()
     s.getState().hydrate(detail.draftSchema)
@@ -190,7 +195,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
       {mode === 'preview' && (
         <section aria-label="Просмотр формы">
-          <PreviewPane title={detail.title} />
+          <PreviewPane title={detail.title} canRemoveBadge={canRemoveBadge} />
         </section>
       )}
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,

@@ -100,3 +100,31 @@ describe('resetToTheme — бейдж', () => {
     expect(resetToTheme('dark', { palette: { accent: '#12ab34' } })).toEqual({ theme: 'dark' })
   })
 })
+
+describe('resetToTheme — свой CSS', () => {
+  it('переживает сброс вместе с бейджем', () => {
+    // Диалог обещает сбросить цвета, шрифт, лэйаут, поля и кнопки — и только их.
+    // CSS автора это не оформление, а код: терять его от смены темы значит стереть
+    // работу, о которой в диалоге не сказано ни слова.
+    const design = {
+      theme: 'dark',
+      palette: { accent: '#12ab34' },
+      branding: false,
+      css: '.rf-page{padding:0}',
+    } as const
+    expect(resetToTheme('light', design)).toEqual({ branding: false, css: '.rf-page{padding:0}' })
+    expect(resetToTheme('dark', design)).toEqual({
+      theme: 'dark',
+      branding: false,
+      css: '.rf-page{padding:0}',
+    })
+  })
+
+  it('CSS и бейдж не делают тему пользовательской', () => {
+    // Иначе автор, не тронувший ни одного цвета, видел бы в дропдауне
+    // «Пользовательскую» — и не смог бы объяснить, что именно он настроил.
+    expect(hasCustomFields({ css: '.a{}' })).toBe(false)
+    expect(hasCustomFields({ branding: false })).toBe(false)
+    expect(currentTheme({ css: '.a{}', theme: 'dark' })).toBe('dark')
+  })
+})

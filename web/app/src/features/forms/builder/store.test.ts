@@ -12,6 +12,7 @@ import { groupBlocks, packOptionRows, packRows, splitPages } from '@fields/group
 import {
   captionLoss,
   createBuilderStore,
+  DOCUMENT_FIELDS,
   planBlockDrop,
   rowBoundaryGroup,
   rowBoundaryTarget,
@@ -2902,4 +2903,23 @@ describe('createBuilderStore — обложка и логотип', () => {
     store.getState().setLogo({ imageKey: 'ws/logo.png' })
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
+})
+
+// СОСТАВ ДОКУМЕНТА СВЕРЯЕТСЯ МАШИННО. Список DOCUMENT_FIELDS — то, по чему автосейв
+// узнаёт о правке; toSchema — то, что уезжает на сервер. Разойдись они, и поле
+// сохраняется только «за компанию» с чужой правкой: в фазе 22 так молча потерялось
+// оформление — шторка ставила dirty, но сохранение не планировала.
+//
+// Тест строит документ, в котором заданы ВСЕ необязательные поля: иначе toSchema их
+// опускает (ключа нет, когда значения нет), и сверять было бы нечего.
+it('DOCUMENT_FIELDS покрывает весь состав toSchema', () => {
+  const store = createBuilderStore()
+  store.getState().setSubmitLabel('Готово')
+  store.getState().setAfterSubmit({ thankYouText: 'Спасибо', redirectUrl: 'https://example.com' })
+  store.getState().setCover({ imageKey: 'k' })
+  store.getState().setLogo({ imageKey: 'k' })
+  store.getState().setDesign({ theme: 'dark' })
+
+  const keys = Object.keys(store.getState().toSchema()).filter((k) => k !== 'schemaVersion')
+  expect(keys.sort()).toEqual([...DOCUMENT_FIELDS].sort())
 })
