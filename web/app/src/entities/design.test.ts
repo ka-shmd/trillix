@@ -4,6 +4,7 @@ import {
   MAX_CUSTOM_CSS_LEN,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
+  SCHEMA_VERSION,
 } from '@entities/formSchema'
 import { designClasses, DESIGN_VAR_NAMES, designToVars, showFormBadge } from '@fields/design'
 import { describe, expect, it } from 'vitest'
@@ -89,9 +90,9 @@ describe('designSchema в составе схемы формы', () => {
     expect(formSchemaSchema.safeParse({ blocks: [], design: { theme: 'auto' } }).success).toBe(false)
   })
 
-  it('schemaVersion не поднимается — документ v4 с оформлением валиден', () => {
+  it('оформление версию формата не двигает — документ текущей версии валиден', () => {
     const parsed = formSchemaSchema.safeParse({
-      schemaVersion: 4,
+      schemaVersion: SCHEMA_VERSION,
       blocks: [],
       design: { theme: 'dark' },
     })

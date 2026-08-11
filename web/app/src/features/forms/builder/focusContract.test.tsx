@@ -575,7 +575,7 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
     const before = el()
     fireEvent.keyDown(before, rowKey('right'))
     const opts = () => store.getState().blocks[0]!.settings!.options!
-    expect(opts()[1]?.column).toBe('right')
+    expect(opts()[1]?.column).toBe(2)
     // Вопрос не тронут: жест на варианте — про вариант (§5.1).
     expect(handlers.onRowShift).not.toHaveBeenCalled()
     expect(el()).toBe(before)
@@ -643,7 +643,7 @@ describe('ось колонок: каретка едет с блоком чер�
 
     shift('right')
 
-    expect(cols(store)).toEqual(['left', 'right'])
+    expect(cols(store)).toEqual([1, 2])
     expect(caretBlock()).toBe('b')
   })
 
@@ -653,7 +653,7 @@ describe('ось колонок: каретка едет с блоком чер�
     shift('right') // секция [a | b]
     engine.focusBlock('c', 'start')
     shift('right') // c в правую колонку: [a | b, c]
-    expect(cols(store)).toEqual(['left', 'right', 'right'])
+    expect(cols(store)).toEqual([1, 2, 2])
 
     shift('left') // c переезжает в левую колонку — это ДРУГАЯ ячейка разметки
 
@@ -667,12 +667,12 @@ describe('ось колонок: каретка едет с блоком чер�
     shift('right') // [a | b]
     engine.focusBlock('c', 'start')
     shift('left') // c в левую колонку: [a, c | b]
-    expect(cols(store)).toEqual(['left', 'left', 'right'])
+    expect(cols(store)).toEqual([1, 1, 2])
 
     shift('left') // c выходит из секции — и уезжает ПОД неё
 
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['a', 'b', 'c'])
-    expect(cols(store)).toEqual(['left', 'right', '-'])
+    expect(cols(store)).toEqual([1, 2, '-'])
     expect(caretBlock()).toBe('c')
   })
 
@@ -698,7 +698,7 @@ describe('ось колонок: каретка едет с блоком чер�
     )
     engine.focusBlock('b', 'start')
     shift('right') // секция [вопрос | b]
-    expect(cols(store)).toEqual(['left', '-', 'right'])
+    expect(cols(store)).toEqual([1, '-', 2])
     engine.focusBlock('ca', 'end') // каретка в ЛЕВОЙ колонке
 
     fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
@@ -707,7 +707,7 @@ describe('ось колонок: каретка едет с блоком чер�
     expect(ids.slice(0, 3)).toEqual(['ca', 'fa', 'b'])
     expect(ids).toHaveLength(4)
     const fresh = ids[3]! // новая строка последняя, то есть под всей секцией
-    expect(cols(store)).toEqual(['left', '-', 'right', '-'])
+    expect(cols(store)).toEqual([1, '-', 2, '-'])
     expect(caretBlock()).toBe(fresh)
   })
 })

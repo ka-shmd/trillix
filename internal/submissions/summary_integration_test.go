@@ -23,12 +23,12 @@ import (
 )
 
 const summarySchemaV1 = `{"blocks":[
-	{"id":"b_intro","type":"text","label":"Здравствуйте","description":"","required":false,"settings":{}},
-	{"id":"b_src","type":"single_choice","label":"Источник","description":"","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
-	{"id":"b_rate","type":"scale","label":"Оценка","description":"","required":false,"settings":{"scaleMin":1,"scaleMax":5}},
-	{"id":"b_ok","type":"consent","label":"Согласен на рассылку","description":"","required":false,"settings":{}},
-	{"id":"b_age","type":"number","label":"Возраст","description":"","required":false,"settings":{}},
-	{"id":"b_note","type":"long_text","label":"Комментарий","description":"","required":false,"settings":{}}
+	{"id":"b_intro","groupId":"g_b_intro","type":"text","text":[{"t":"Здравствуйте"}],"required":false,"settings":{}},
+	{"id":"t_b_src","groupId":"g_b_src","type":"title","text":[{"t":"Источник"}]},{"id":"b_src","groupId":"g_b_src","type":"single_choice","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
+	{"id":"t_b_rate","groupId":"g_b_rate","type":"title","text":[{"t":"Оценка"}]},{"id":"b_rate","groupId":"g_b_rate","type":"scale","required":false,"settings":{"scaleMin":1,"scaleMax":5}},
+	{"id":"b_ok","groupId":"g_b_ok","type":"consent","text":[{"t":"Согласен на рассылку"}],"required":false,"settings":{}},
+	{"id":"t_b_age","groupId":"g_b_age","type":"title","text":[{"t":"Возраст"}]},{"id":"b_age","groupId":"g_b_age","type":"number","required":false,"settings":{}},
+	{"id":"t_b_note","groupId":"g_b_note","type":"title","text":[{"t":"Комментарий"}]},{"id":"b_note","groupId":"g_b_note","type":"long_text","required":false,"settings":{}}
 ]}`
 
 // DTO ответа сводки — зеркалит summaryResponse транспорта (тест ходит через HTTP,

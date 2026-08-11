@@ -120,10 +120,10 @@ describe('formSchemaSchema — валидные', () => {
     },
     // Фаза 13.6: бит ряда у whitelist-типов и у вариантов.
     'column right у short_text': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'right' } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 2 } }],
     },
     'column right у dropdown': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'dropdown', settings: { column: 'right', options: [{ id: 'o1', label: 'Мск' }] } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'dropdown', settings: { column: 2, options: [{ id: 'o1', label: 'Мск' }] } }],
     },
     'column right у варианта': {
       blocks: [
@@ -131,7 +131,7 @@ describe('formSchemaSchema — валидные', () => {
           id: 'b',
           groupId: 'g1',
           type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет', column: 'right' }] },
+          settings: { options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет', column: 2 }] },
         },
       ],
     },
@@ -139,12 +139,12 @@ describe('formSchemaSchema — валидные', () => {
     // иначе undo и промежуточные состояния драга ловили бы отказ автосейва.
     'column right у первого блока — инертен, но валиден': {
       blocks: [
-        { id: 'b', groupId: 'g1', type: 'email', settings: { column: 'right' } },
+        { id: 'b', groupId: 'g1', type: 'email', settings: { column: 2 } },
         { id: 'b2', groupId: 'g2', type: 'long_text', settings: {} },
       ],
     },
     'column right у первого варианта — инертен': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'multi_choice', settings: { options: [{ id: 'o1', label: 'Go', column: 'right' }] } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'multi_choice', settings: { options: [{ id: 'o1', label: 'Go', column: 2 }] } }],
     },
     // Фаза 15 (спека §6.3): подпись — законный носитель бита. На первом блоке группы
     // он значит «моя группа справа от предыдущей» (носитель переехал сюда апгрейдом
@@ -154,14 +154,14 @@ describe('formSchemaSchema — валидные', () => {
       blocks: [
         { id: 't1', groupId: 'g1', type: 'title', text: [{ t: 'Город' }], settings: {} },
         { id: 'f1', groupId: 'g1', type: 'short_text', settings: {} },
-        { id: 't2', groupId: 'g2', type: 'title', text: [{ t: 'Индекс' }], settings: { column: 'right' } },
+        { id: 't2', groupId: 'g2', type: 'title', text: [{ t: 'Индекс' }], settings: { column: 2 } },
         { id: 'f2', groupId: 'g2', type: 'short_text', settings: {} },
       ],
     },
     'column right у label внутри группы — ряд «подпись | поле»': {
       blocks: [
         { id: 't', groupId: 'g1', type: 'label', text: [{ t: 'Индекс' }], settings: {} },
-        { id: 'f', groupId: 'g1', type: 'short_text', settings: { column: 'right' } },
+        { id: 'f', groupId: 'g1', type: 'short_text', settings: { column: 2 } },
       ],
     },
     // Двухколоночная секция (спека §11, решение владельца 2026-07-29): у ключа два
@@ -169,13 +169,13 @@ describe('formSchemaSchema — валидные', () => {
     // так выглядят формы, собранные до этапа. Зеркало TestValidateSchema_Valid в Go.
     'column left у обоих участников левой колонки': {
       blocks: [
-        { id: 'l1', groupId: 'g1', type: 'short_text', settings: { column: 'left' } },
-        { id: 'l2', groupId: 'g2', type: 'email', settings: { column: 'left' } },
-        { id: 'r1', groupId: 'g3', type: 'phone', settings: { column: 'right' } },
+        { id: 'l1', groupId: 'g1', type: 'short_text', settings: { column: 1 } },
+        { id: 'l2', groupId: 'g2', type: 'email', settings: { column: 1 } },
+        { id: 'r1', groupId: 'g3', type: 'phone', settings: { column: 2 } },
       ],
     },
     'column left у подписи': {
-      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: [{ t: 'Город' }], settings: { column: 'left' } }],
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: [{ t: 'Город' }], settings: { column: 1 } }],
     },
     'column left у варианта': {
       blocks: [
@@ -183,7 +183,7 @@ describe('formSchemaSchema — валидные', () => {
           id: 'b',
           groupId: 'g1',
           type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Да', column: 'left' }, { id: 'o2', label: 'Нет', column: 'right' }] },
+          settings: { options: [{ id: 'o1', label: 'Да', column: 1 }, { id: 'o2', label: 'Нет', column: 2 }] },
         },
       ],
     },
@@ -191,13 +191,13 @@ describe('formSchemaSchema — валидные', () => {
     // включая длинный ответ, шкалу, выбор и лэйаут-блоки. Что читается в половину
     // колонки — решает автор формы, а не схема.
     'column right у long_text': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { column: 'right' } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'long_text', settings: { column: 2 } }],
     },
     'column right у single_choice': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { column: 'right' } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: { column: 2 } }],
     },
     'column right у контентного text': {
-      blocks: [{ id: 'b', groupId: 'g1', type: 'text', text: [{ t: 'абзац' }], settings: { column: 'right' } }],
+      blocks: [{ id: 'b', groupId: 'g1', type: 'text', text: [{ t: 'абзац' }], settings: { column: 2 } }],
     },
     // Фаза 15: заголовок формы — блок документа (спека §3.2), зеркало
     // TestValidateSchema_Valid в Go.
@@ -434,7 +434,7 @@ describe('formSchemaSchema — невалидные', () => {
     // фазы 13.6): заголовок формы. Исключён по устройству, а не по виду — он рисуется
     // вне потока вопросов, и соседей по ряду у него не бывает.
     'column у form_title': {
-      blocks: [{ id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }], settings: { column: 'right' } }],
+      blocks: [{ id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }], settings: { column: 2 } }],
     },
     'column третьего значения': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { column: 'middle' } }],

@@ -25,8 +25,8 @@ func getHTMLPage(t *testing.T, svc publicFormService, slug string) *httptest.Res
 
 func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[
-		{"id":"b1","type":"short_text","label":"Ваше имя"},
-		{"id":"b2","type":"short_text","label":"Оценка"}]}`)
+		{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Ваше имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text"},
+		{"id":"t_b2","groupId":"g_b2","type":"title","text":[{"t":"Оценка"}]},{"id":"b2","groupId":"g_b2","type":"short_text"}]}`)
 	svc := fakePublicSvc{pf: PublicForm{Title: "Опрос клиентов", Version: 1, Schema: schema, VersionID: uuid.New()}}
 
 	rec := getHTMLPage(t, svc, "abc123")
@@ -126,18 +126,18 @@ func TestOGDescriptionFromSchema(t *testing.T) {
 	// пустые, режет по рунам. Схема валидируется (апгрейд v1→v2 на лету).
 	long := strings.Repeat("я", 250)
 	title := func(id, text string) string {
-		return `{"id":"` + id + `","groupId":"g_` + id + `","type":"title","text":"` + text + `"}`
+		return `{"id":"` + id + `","groupId":"g_` + id + `","type":"title","text":[{"t":"` + text + `"}]}`
 	}
 	cases := []struct {
 		name   string
 		schema string
 		want   string
 	}{
-		{"три блока", `{"schemaVersion":2,"blocks":[` + title("a", "A") + `,` + title("b", "B") + `,` + title("c", "C") + `,` + title("d", "D") + `]}`, "A · B · C"},
-		{"пустые пропускаются", `{"schemaVersion":2,"blocks":[` + title("a", "  ") + `,` + title("b", "X") + `]}`, "X"},
+		{"три блока", `{"schemaVersion":1,"blocks":[` + title("a", "A") + `,` + title("b", "B") + `,` + title("c", "C") + `,` + title("d", "D") + `]}`, "A · B · C"},
+		{"пустые пропускаются", `{"schemaVersion":1,"blocks":[` + title("a", "  ") + `,` + title("b", "X") + `]}`, "X"},
 		{"нет блоков", `{"blocks":[]}`, ""},
 		{"битая схема", `{oops`, ""},
-		{"обрезка по рунам", `{"schemaVersion":2,"blocks":[` + title("a", long) + `]}`, string([]rune(long)[:200]) + "…"},
+		{"обрезка по рунам", `{"schemaVersion":1,"blocks":[` + title("a", long) + `]}`, string([]rune(long)[:200]) + "…"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -306,7 +306,7 @@ func getHTMLPageWithFonts(t *testing.T, svc publicFormService) string {
 
 func designedForm(t *testing.T, design string) fakePublicSvc {
 	t.Helper()
-	schema := json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":` + design + `}`)
+	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[],"design":` + design + `}`)
 	if _, err := domain.ValidateSchema(schema); err != nil {
 		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestPublicHTML_NoDesign_ShellUnchanged(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{
 		Title:     "Форма",
 		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":4,"blocks":[]}`),
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
 		VersionID: uuid.New(),
 	}}
 	body := getHTMLPageWithFonts(t, svc)

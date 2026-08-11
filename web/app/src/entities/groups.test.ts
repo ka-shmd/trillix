@@ -10,7 +10,7 @@ const field = (id: string, right = false, type: BlockType = 'short_text'): Block
   id,
   groupId: id,
   type,
-  ...(right ? { settings: { column: 'right' } } : {}),
+  ...(right ? { settings: { column: 2 } } : {}),
 })
 
 const caption = (id: string, groupId: string, right = false): Block => ({
@@ -18,7 +18,7 @@ const caption = (id: string, groupId: string, right = false): Block => ({
   groupId,
   type: 'title',
   text: textFromString('Q'),
-  ...(right ? { settings: { column: 'right' } } : {}),
+  ...(right ? { settings: { column: 2 } } : {}),
 })
 
 // Ряд печатаем колонками: ['a', 'b'] — по одному в каждой, ['a', 'b+c'] — стопка из
@@ -26,7 +26,7 @@ const caption = (id: string, groupId: string, right = false): Block => ({
 const rows = (blocks: Block[]): string[][] =>
   packRows(groupBlocks(blocks)).map((row) => row.map((cell) => cell.map((g) => g.id).join('+')))
 
-const opt = (id: string, right = false): Option => ({ id, label: id, ...(right ? { column: 'right' as const } : {}) })
+const opt = (id: string, right = false): Option => ({ id, label: id, ...(right ? { column: 2 as const } : {}) })
 
 const optRows = (options: Option[]): string[][] =>
   packOptionRows(options).map((row) => row.map((cell) => cell.map((o) => o.id).join('+')))
@@ -81,7 +81,7 @@ describe('packRows', () => {
       groupId: id,
       type: 'heading',
       text: textFromString('Раздел'),
-      ...(right ? { settings: { column: 'right' } } : {}),
+      ...(right ? { settings: { column: 2 } } : {}),
     })
     // Лэйаут справа от вопроса…
     expect(rows([field('a'), heading('h', true)])).toEqual([['a', 'h']])
@@ -125,8 +125,8 @@ describe('packRows', () => {
 // состояния, в каждой колонке сколько угодно элементов, а элемент без ключа секцию
 // ЗАКРЫВАЕТ. Печатаем колонками, стопку внутри колонки — через «+».
 describe('packRows — секция', () => {
-  const left = (id: string): Block => ({ id, groupId: id, type: 'short_text', settings: { column: 'left' } })
-  const right = (id: string): Block => ({ id, groupId: id, type: 'short_text', settings: { column: 'right' } })
+  const left = (id: string): Block => ({ id, groupId: id, type: 'short_text', settings: { column: 1 } })
+  const right = (id: string): Block => ({ id, groupId: id, type: 'short_text', settings: { column: 2 } })
 
   it('в каждой колонке сколько угодно элементов', () => {
     expect(rows([left('a'), left('b'), left('c'), right('d'), right('e')])).toEqual([['a+b+c', 'd+e']])

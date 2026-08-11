@@ -568,39 +568,39 @@ func TestNormalizeAnswers(t *testing.T) {
 
 func TestValidateSchema_LogicValid(t *testing.T) {
 	cases := map[string]string{
-		"visibleIf листом": `{"schemaVersion":4,"blocks":[
+		"visibleIf листом": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
 			{"id":"b","groupId":"g2","type":"short_text","visibleIf":{"blockId":"a","op":"is","value":"o1"},"settings":{}}
 		]}`,
-		"visibleIf вложенными группами": `{"schemaVersion":4,"blocks":[
+		"visibleIf вложенными группами": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"any":[
 				{"all":[{"blockId":"a","op":"answered"},{"blockId":"a","op":"is","value":"x"}]},
 				{"blockId":"a","op":"is","value":"y"}
 			]}}
 		]}`,
-		"значение не выбрано — законный черновик": `{"schemaVersion":4,"blocks":[
+		"значение не выбрано — законный черновик": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":""}}
 		]}`,
-		"ссылка вперёд — инертна, но валидна": `{"schemaVersion":4,"blocks":[
+		"ссылка вперёд — инертна, но валидна": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"answered"}},
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}}
 		]}`,
-		"ссылка на удалённый блок — инертна, но валидна": `{"schemaVersion":4,"blocks":[
+		"ссылка на удалённый блок — инертна, но валидна": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"призрак","op":"answered"}}
 		]}`,
-		"requiredIf у отвечаемого": `{"schemaVersion":4,"blocks":[
+		"requiredIf у отвечаемого": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"b","groupId":"g2","type":"phone","settings":{},"requiredIf":{"blockId":"a","op":"answered"}}
 		]}`,
-		"visibleIf у варианта": `{"schemaVersion":4,"blocks":[
+		"visibleIf у варианта": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"b","groupId":"g2","type":"multi_choice","settings":{"options":[
 				{"id":"o1","label":"Поводок","visibleIf":{"blockId":"a","op":"is","value":"dog"}}
 			]}}
 		]}`,
-		"переходы у разрыва": `{"schemaVersion":4,"blocks":[
+		"переходы у разрыва": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"br","groupId":"g2","type":"page_break","jumpIf":[
 				{"when":{"blockId":"a","op":"empty"},"to":"br2"},
@@ -608,7 +608,7 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 			]},
 			{"id":"c","groupId":"g3","type":"short_text","settings":{}}
 		]}`,
-		"глубина ровно в лимит": `{"schemaVersion":4,"blocks":[
+		"глубина ровно в лимит": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":
 				{"all":[{"any":[{"all":[{"blockId":"a","op":"answered"}]}]}]}}
@@ -629,60 +629,60 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 	long := strings.Repeat("я", MaxLogicValueLen+1)
 
 	cases := map[string]string{
-		"пустое условие": `{"schemaVersion":4,"blocks":[
+		"пустое условие": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{}}
 		]}`,
-		"пустая группа": `{"schemaVersion":4,"blocks":[
+		"пустая группа": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"all":[]}}
 		]}`,
-		"all и any одновременно": `{"schemaVersion":4,"blocks":[
+		"all и any одновременно": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{
 				"all":[{"blockId":"a","op":"answered"}],"any":[{"blockId":"a","op":"empty"}]}}
 		]}`,
-		"группа с полями листа": `{"schemaVersion":4,"blocks":[
+		"группа с полями листа": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{
 				"all":[{"blockId":"a","op":"answered"}],"blockId":"a","op":"is","value":"x"}}
 		]}`,
-		"неизвестный оператор": `{"schemaVersion":4,"blocks":[
+		"неизвестный оператор": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"matches","value":"x"}}
 		]}`,
-		"оператора нет вовсе": `{"schemaVersion":4,"blocks":[
+		"оператора нет вовсе": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a"}}
 		]}`,
-		"пустой blockId": `{"schemaVersion":4,"blocks":[
+		"пустой blockId": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"","op":"answered","value":"x"}}
 		]}`,
-		"значение у answered": `{"schemaVersion":4,"blocks":[
+		"значение у answered": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"answered","value":"x"}}
 		]}`,
-		"значение длиннее лимита": `{"schemaVersion":4,"blocks":[
+		"значение длиннее лимита": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":"` + long + `"}}
 		]}`,
-		"вложенность глубже лимита": `{"schemaVersion":4,"blocks":[
+		"вложенность глубже лимита": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":` + deep + `}
 		]}`,
-		"лишний ключ в условии": `{"schemaVersion":4,"blocks":[
+		"лишний ключ в условии": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":"x","not":true}}
 		]}`,
-		"requiredIf у неотвечаемого": `{"schemaVersion":4,"blocks":[
+		"requiredIf у неотвечаемого": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"heading","text":[{"t":"Раздел"}],"requiredIf":{"blockId":"a","op":"answered"}}
 		]}`,
-		"required и requiredIf вместе": `{"schemaVersion":4,"blocks":[
+		"required и requiredIf вместе": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"required":true,"requiredIf":{"blockId":"a","op":"answered"}}
 		]}`,
-		"visibleIf у разрыва страницы": `{"schemaVersion":4,"blocks":[
+		"visibleIf у разрыва страницы": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","visibleIf":{"blockId":"a","op":"answered"}}
 		]}`,
-		"переходы не у разрыва": `{"schemaVersion":4,"blocks":[
+		"переходы не у разрыва": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{},"jumpIf":[{"when":{"blockId":"a","op":"answered"},"end":true}]}
 		]}`,
-		"переход без условия": `{"schemaVersion":4,"blocks":[
+		"переход без условия": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"end":true}]}
 		]}`,
-		"переход без цели": `{"schemaVersion":4,"blocks":[
+		"переход без цели": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"answered"}}]}
 		]}`,
-		"переход с двумя целями": `{"schemaVersion":4,"blocks":[
+		"переход с двумя целями": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"answered"},"to":"br2","end":true}]}
 		]}`,
 	}
@@ -708,7 +708,7 @@ func TestValidateSchema_LogicNodeLimit(t *testing.T) {
 		leaves = append(leaves, `{"blockId":"a","op":"answered"}`)
 	}
 	doc := func(n int) string {
-		return `{"schemaVersion":4,"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"all":[` +
+		return `{"schemaVersion":1,"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"all":[` +
 			strings.Join(leaves[:n], ",") + `]}}]}`
 	}
 
@@ -724,7 +724,7 @@ func TestValidateSchema_LogicNodeLimit(t *testing.T) {
 func TestValidateSchema_LogicCanonical(t *testing.T) {
 	// Правила переживают канонизацию: то, что сохранил автор, читатель получает
 	// байт в байт (иначе автосейв гонял бы бесконечный дифф).
-	raw := `{"schemaVersion":4,"blocks":[
+	raw := `{"schemaVersion":1,"blocks":[
 		{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","visibleIf":{"blockId":"z","op":"answered"}}]}},
 		{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"all":[{"blockId":"a","op":"is","value":"o1"}]},"requiredIf":{"blockId":"a","op":"answered"}},
 		{"id":"br","groupId":"g3","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"empty"},"end":true}]},

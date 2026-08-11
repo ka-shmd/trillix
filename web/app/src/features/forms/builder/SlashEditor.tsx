@@ -30,6 +30,7 @@ import {
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
+  MAX_COLUMNS,
   MAX_SUBMIT_LABEL_LEN,
   plainText,
   textFromString,
@@ -195,9 +196,7 @@ export function SlashEditor({
   // Зона под курсором — по ней рисуется ДУБЛЁР (§5): тусклая копия перетаскиваемого
   // вопроса на его будущем месте. Отклик у жеста один и он показывает результат, а не
   // намерение.
-  const [hoverZone, setHoverZone] = useState<{ groupId: string; side: 'left' | 'right' } | null>(
-    null,
-  )
+  const [hoverZone, setHoverZone] = useState<RowZone | null>(null)
   // То же на втором уровне (ряд ВНУТРИ вопроса): id подписи, у зоны которой стоит курсор.
   const [hoverCell, setHoverCell] = useState<string | null>(null)
   // Замер оверлеев гонит rAF-цикл, а не события драга: строки доигрывают свой
@@ -541,7 +540,11 @@ export function SlashEditor({
     if (!over || active.id === over.id) return
     const zoneTarget = rowZoneTarget(over.id)
     if (zoneTarget !== null) {
-      if (candidate) captionGuard(() => placeInRow(candidate, zoneTarget.groupId, zoneTarget.side))
+      if (candidate) {
+        captionGuard(() =>
+          placeInRow(candidate, zoneTarget.groupId, zoneTarget.col, zoneTarget.insert),
+        )
+      }
       return
     }
     // Зона второго уровня: ряд внутри вопроса. Заголовка здесь не теряет никто (обе
@@ -977,9 +980,15 @@ export function SlashEditor({
                       // как key ряда обязан оставаться стабильным — иначе смена адреса
                       // посреди драга ремаунтила бы весь ряд.
                       const zones = hasGroup(row, inviteRow)
-                      const hot = hasGroup(row, hoverZone?.groupId ?? null)
-                        ? hoverZone!.side
-                        : null
+                      const hot = hasGroup(row, hoverZone?.groupId ?? null) ? hoverZone : null
+                      // Колонок в ряду СЕЙЧАС — от этого зависит, какие зоны показывать:
+                      // границ на одну больше, чем колонок, а подвал есть у каждой
+                      // колонки настоящей секции (у полноширинного ряда колонок нет, и
+                      // «в стопку» там значить нечему — placeInRow такой дроп отвергнет).
+                      // Границы гаснут на потолке: обещать колонку, которой не будет,
+                      // нельзя.
+                      const cols = row.length
+                      const canAdd = cols < MAX_COLUMNS
                       // Дублёр (§5): пока курсор в зоне, будущее место занимает тусклая
                       // копия перетаскиваемого вопроса, а ряд перестраивается в секцию —
                       // автор видит РЕЗУЛЬТАТ, а не отклик, который надо расшифровать.
@@ -992,8 +1001,20 @@ export function SlashEditor({
                       const cellNodes = cells.map((c, i) => (
                         <div
                           key={c[0]?.id ?? `ghost${i}`}
-                          className="flex min-w-0 flex-1 flex-col gap-7"
+                          className="relative flex min-w-0 flex-1 flex-col gap-7"
                         >
+                          {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
+                              жёлобе слева от неё, подвал — под ней. Первая колонка
+                              границы не показывает: слева от неё внешняя полоса, у
+                              которой для этого есть поле полотна. Пока идёт дублёр,
+                              зоны считаются по настоящему ряду (cells может быть его
+                              прогнозом), поэтому индексы берутся у row. */}
+                          {zones && i > 0 && i < cols && canAdd && (
+                            <GapDropZone rowId={inviteRow!} col={i + 1} />
+                          )}
+                          {zones && cols > 1 && i < cols && (
+                            <FootDropZone rowId={inviteRow!} col={i + 1} />
+                          )}
                           {c.map((g) =>
                             g === null ? (
                               <GhostGroup key="ghost" group={ghostGroup!} />
@@ -1010,11 +1031,21 @@ export function SlashEditor({
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
                         <div key={rowId} className="relative flex flex-col gap-7 sm:flex-row">
-                          {zones && (
-                            <SideDropZone rowId={inviteRow!} side="left" railOff={zoneRailOff} />
+                          {zones && canAdd && (
+                            <SideDropZone
+                              rowId={inviteRow!}
+                              side="left"
+                              col={1}
+                              railOff={zoneRailOff}
+                            />
                           )}
-                          {zones && (
-                            <SideDropZone rowId={inviteRow!} side="right" railOff={zoneRailOff} />
+                          {zones && canAdd && (
+                            <SideDropZone
+                              rowId={inviteRow!}
+                              side="right"
+                              col={cols + 1}
+                              railOff={zoneRailOff}
+                            />
                           )}
                           {cellNodes}
                         </div>
@@ -1203,19 +1234,23 @@ function setRect(set: Dispatch<SetStateAction<Rect | null>>, next: Rect | null):
 // groupId, ни с block-id.
 const ROW_ZONE = 'rowzone:'
 // Адрес ряда — id его ПЕРВОЙ группы (зона висит на ряде, а не на группе; см.
-// SideDropZone). Для placeInRow это обычная цель: команда сама находит ряд цели и
-// кладёт элемент в конец нужной колонки, поэтому какой именно участник ряда назван
-// адресом, ей безразлично.
-const rowZoneId = (rowId: string, side: 'left' | 'right') => `${ROW_ZONE}${side}:${rowId}`
-// Возвращает цель И сторону: с какой стороны отпустили кнопку, с той элемент и встаёт
-// (решение владельца 2026-07-29). Без левой зоны «поставить блок слева от вопроса»
-// требовало тащить не тот элемент, о котором думает автор.
-const rowZoneTarget = (id: string | number): { groupId: string; side: 'left' | 'right' } | null => {
+// SideDropZone). Для placeInRow это обычная цель: команда сама находит ряд цели,
+// поэтому какой именно участник ряда назван адресом, ей безразлично.
+//
+// ГЕОМЕТРИЯ ЗОНЫ НАЗЫВАЕТ КОМАНДУ, и в этом весь смысл двух её видов (2026-08-10):
+// вертикальная полоса на ГРАНИЦЕ колонок открывает новую колонку (insert), полоса в
+// ПОДВАЛЕ колонки кладёт элемент в её стопку. Пока колонок было две, обе команды делила
+// одна полоса у края ряда, и «в стопку» она означала просто потому, что третьей колонке
+// было неоткуда взяться; при четырёх колонках это уже два разных места.
+export type RowZone = { groupId: string; col: number; insert: boolean }
+const rowZoneId = (rowId: string, col: number, insert: boolean) =>
+  `${ROW_ZONE}${insert ? 'b' : 'c'}${col}:${rowId}`
+const rowZoneTarget = (id: string | number): RowZone | null => {
   const s = String(id)
   if (!s.startsWith(ROW_ZONE)) return null
   const rest = s.slice(ROW_ZONE.length)
   const at = rest.indexOf(':')
-  return { side: rest.slice(0, at) as 'left' | 'right', groupId: rest.slice(at + 1) }
+  return { insert: rest[0] === 'b', col: Number(rest.slice(1, at)), groupId: rest.slice(at + 1) }
 }
 
 // Зона второго уровня (§6.6): правая треть строки ПОДПИСИ, пока тащат поле её же
@@ -1256,22 +1291,24 @@ const zoneFill = (hot: boolean) =>
     hot ? 'bg-primary/20' : 'bg-primary/[0.07]'
   }`
 
-// SideDropZone — приглашение «встань в эту колонку» у ближайшего к элементу РЯДА, с
-// той стороны, с какой элемент встанет. Якорь — контейнер ряда, а не группа: дублёр
-// ужимает группу вдвое, и зона, привязанная к её краю, уехала бы из-под курсора ровно
-// в тот момент, когда автор увидел результат (зона гасила бы сама себя, и жест
-// мигал бы). Вне потока и pointer-events-none: dnd-kit меряет rect, а не ловит
-// события, а занимающий место контрол схлопнул бы строку на mousedown (урок TD-22).
+// SideDropZone — приглашение «открой здесь НОВУЮ колонку» на внешней границе ряда.
+// Якорь — контейнер ряда, а не группа: дублёр ужимает группу, и зона, привязанная к её
+// краю, уехала бы из-под курсора ровно в тот момент, когда автор увидел результат (зона
+// гасила бы сама себя, и жест мигал бы). Вне потока и pointer-events-none: dnd-kit
+// меряет rect, а не ловит события, а занимающий место контрол схлопнул бы строку на
+// mousedown (урок TD-22).
 function SideDropZone({
   rowId,
   side,
+  col,
   railOff,
 }: {
   rowId: string
   side: 'left' | 'right'
+  col: number
   railOff: boolean
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, side) })
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, true) })
   return (
     <>
       {!railOff && <span aria-hidden="true" className={zoneRail(side, isOver)} />}
@@ -1279,6 +1316,53 @@ function SideDropZone({
         ref={setNodeRef}
         aria-hidden="true"
         className={`${zoneFill(isOver)} ${side === 'right' ? ZONE_RIGHT : ZONE_LEFT}`}
+      />
+    </>
+  )
+}
+
+// GapDropZone — та же команда на ВНУТРЕННЕЙ границе: полоса в 28px-жёлобе между
+// колонками, открывающая новую колонку между ними. Снаружи ряда для этого есть поле
+// полотна, внутри — только жёлоб, поэтому зона садится на левый край своей колонки и
+// сдвигается на половину себя влево: её площадь = сам жёлоб, ничей контент она не
+// перекрывает.
+function GapDropZone({ rowId, col }: { rowId: string; col: number }) {
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, true) })
+  return (
+    <>
+      <span aria-hidden="true" className={`${zoneRail('left', isOver)} -left-3.5`} />
+      <div
+        ref={setNodeRef}
+        aria-hidden="true"
+        className={`${zoneFill(isOver)} -left-3.5 w-7 -translate-x-1/2`}
+      />
+    </>
+  )
+}
+
+// FootDropZone — вторая команда ряда: «встань в СТОПКУ этой колонки». Полоса лежит в
+// подвале колонки, поперёк, — горизонтальная там, где «новая колонка» вертикальная, и
+// автору не нужно запоминать, какая полоса что делает: направление полосы и есть
+// направление, в котором вырастет ряд.
+//
+// Живёт в жёлобе МЕЖДУ рядами (28px), а не поверх контента: перекрыв низ колонки, она
+// отбирала бы у вертикального дропа последнюю строку вопроса.
+function FootDropZone({ rowId, col }: { rowId: string; col: number }) {
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, false) })
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 -bottom-2 z-20 h-0.5 rounded-full bg-primary transition-opacity ${
+          isOver ? 'opacity-100' : 'opacity-40'
+        }`}
+      />
+      <div
+        ref={setNodeRef}
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 -bottom-3.5 z-10 h-7 rounded-md transition-colors ${
+          isOver ? 'bg-primary/20' : 'bg-primary/[0.07]'
+        }`}
       />
     </>
   )

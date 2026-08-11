@@ -241,9 +241,9 @@ func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 
 func brandingForm(t *testing.T, removed bool, allowed bool) fakePublicSvc {
 	t.Helper()
-	schema := `{"schemaVersion":4,"blocks":[]}`
+	schema := `{"schemaVersion":1,"blocks":[]}`
 	if removed {
-		schema = `{"schemaVersion":4,"blocks":[],"design":{"branding":false}}`
+		schema = `{"schemaVersion":1,"blocks":[],"design":{"branding":false}}`
 	}
 	if _, err := domain.ValidateSchema(json.RawMessage(schema)); err != nil {
 		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)

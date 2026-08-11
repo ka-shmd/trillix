@@ -10,7 +10,7 @@ const block = (id: string, type: BlockType = 'short_text', right = false): Block
   id,
   groupId: id,
   type,
-  ...(right ? { settings: { column: 'right' } } : {}),
+  ...(right ? { settings: { column: 2 } } : {}),
 })
 
 const brk = (id: string): Block => ({ id, groupId: id, type: 'page_break' })

@@ -22,9 +22,17 @@ import (
 // отдельным блоком, поэтому у поля своего текста нет — кроме consent, у которого
 // текст согласия интринсик контрола (рендерится рядом с галочкой).
 
-// SchemaVersion — текущая версия формата. Старые документы апгрейдятся на чтении
-// цепочкой v1→v2→v3→v4 (ValidateSchema) без миграции БД.
-const SchemaVersion = 4
+// SchemaVersion — версия формата, ЗАМОРОЖЕННАЯ на единице до релиза (решение
+// владельца 2026-08-10). Прежде номер поднимался при смене формата, а старые
+// документы апгрейдились на чтении цепочкой v1→v2→v3→v4; цепочку удалили вместе с
+// её тестами: пользователей ещё нет, и сопровождать конвертеры ради данных, которых
+// нет, дороже, чем починить базу разово.
+//
+// Правило до релиза: формат меняется в лоб, документы в БД чинятся одноразовой
+// правкой в том же PR, номер не двигается. Поле остаётся петлёй под первую
+// настоящую миграцию после релиза — завести его заново дороже, чем держать здесь.
+// Зеркалит SCHEMA_VERSION в formSchema.ts.
+const SchemaVersion = 1
 
 // Лимиты схемы. Верхние границы — защита от раздутого документа; длины строк
 // считаются в рунах. Заведомо просторны для нормальной анкеты, но конечны.
@@ -77,19 +85,14 @@ const (
 	MaxBlockClassLen = 32
 )
 
-// Значения бита колонки (спека §11): элемент стоит в левой или в правой колонке
-// ДВУХКОЛОНОЧНОЙ СЕКЦИИ, а отсутствие ключа = полная ширина и конец секции. Секция
-// сущностью схемы не является — её выводит раскладчик, как groupId выводит regroup.
+// MaxColumns — колонок в одном ряду (секции). Зеркалит MAX_COLUMNS в limits.ts.
 //
-// ColumnLeft добавлен решением владельца 2026-07-29 (ADR §10). До него канон хранил
-// только отклонение ("right"), и это делало левую колонку невыразимой: второй элемент
-// БЕЗ ключа не продолжает её, а закрывает ряд. Расширение множества принимаемых
-// документов подъёма schemaVersion не требует — старые формы валидны как были.
-// Зеркалит COLUMN_LEFT/COLUMN_RIGHT в formSchema.ts.
-const (
-	ColumnLeft  = "left"
-	ColumnRight = "right"
-)
+// До 2026-08-10 колонок было ровно две ("left"/"right" у того же ключа), и упиралось
+// это не в раскладчик, а в число значений: ряд из трёх элементов был невыразим.
+// Потолок — про ВИД: при ширине формы 700px четыре колонки дают по 154px, и это
+// последнее число, при котором в колонку помещается короткое поле с подписью. Что
+// читается в такой колонке, решает автор формы (ADR §10).
+const MaxColumns = 4
 
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
@@ -214,11 +217,11 @@ func (t BlockType) canShareRow() bool { return t != BlockFormTitle && t != Block
 type Option struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
-	// Column — тот же бит ряда, что у блока (спека §5.1): "right" = «встань в ряд
-	// с предыдущим вариантом», пусто = свой ряд. У опций dropdown инертен (список
-	// живёт в нативном select) — и потому не запрещён, как и любой другой флаг,
-	// которому некуда примениться.
-	Column string `json:"column,omitempty"`
+	// Column — тот же НОМЕР КОЛОНКИ, что у блока (спека §5.1): 1..MaxColumns =
+	// «я в этой колонке текущего ряда», 0 (пусто) = свой ряд во всю ширину. У опций
+	// dropdown инертен (список живёт в нативном select) — и потому не запрещён, как
+	// и любой другой флаг, которому некуда примениться.
+	Column int `json:"column,omitempty"`
 	// VisibleIf — условие показа ВАРИАНТА (фаза 21, каскадные списки): то же дерево,
 	// что у вопроса, носитель — сам вариант. Позиция носителя для «ссылка смотрит
 	// назад» — позиция его блока: вариант живёт там же, где список. См. logic.go.
@@ -238,14 +241,17 @@ type BlockSettings struct {
 	ImageKey    string   `json:"imageKey,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
-	// Column — ряд из двух вопросов (спека §5): "right" на отвечаемом блоке
-	// читается как «встань в ряд с предыдущим вопросом», пусто = свой ряд.
+	// Column — НОМЕР КОЛОНКИ ряда (спека §5): 1..MaxColumns читается как «я в этой
+	// колонке текущего ряда», 0 (пусто) = свой ряд во всю ширину и конец секции.
 	// Ширина не хранится вовсе — её выводит раскладчик. Только у canShareRow-типов.
 	//
-	// Кросс-блочное условие «левый сосед существует и умеет делить ряд» здесь
+	// Нумерация с единицы — из-за `omitempty`: нулевой индекс исчез бы при
+	// сериализации, и первая колонка стала бы полной шириной.
+	//
+	// Кросс-блочное условие «соседняя колонка существует и умеет делить ряд» здесь
 	// НЕ проверяется намеренно: флаг, которому некуда примениться, инертен и
 	// легален, иначе undo и промежуточные состояния драга ловили бы 422.
-	Column string `json:"column,omitempty"`
+	Column int `json:"column,omitempty"`
 }
 
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
@@ -320,9 +326,12 @@ type FormSchema struct {
 	Design *FormDesign `json:"design,omitempty"`
 }
 
-// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы. Старые
-// документы (по schemaVersion 0/1/2) сперва апгрейдятся цепочкой до текущей версии —
-// читатель приводит формат на лету, БД не мигрируется (ARCHITECTURE 3.4).
+// ValidateSchema строго разбирает и проверяет JSONB-документ схемы формы.
+//
+// Цепочки апгрейдов на чтении здесь БОЛЬШЕ НЕТ (решение владельца 2026-08-10):
+// до релиза формат меняется в лоб, а документы в БД чинятся одноразовой правкой в том
+// же PR. Версия ниже текущей — это документ, не пережившей такой правки, и молча
+// прочитать его нельзя: отвергаем.
 //
 // Лишние поля запрещены (DisallowUnknownFields) — расхождение контракта ловится
 // сразу, а не оседает мусором в JSONB. Все нарушения возвращаются как
@@ -335,45 +344,6 @@ type FormSchema struct {
 // ≥1 опция», стоявшее здесь с фазы 4, больше не даётся — форма публикуется в
 // любом состоянии.
 func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
-	// Пик версии без строгого разбора: у v1-документа поля label/description,
-	// которых нет в v2-структуре, и строгий декодер упал бы до апгрейда.
-	var probe struct {
-		SchemaVersion int `json:"schemaVersion"`
-	}
-	if err := json.Unmarshal(raw, &probe); err != nil {
-		return FormSchema{}, schemaErr("не удалось разобрать схему: %v", err)
-	}
-	// Апгрейд ЦЕПОЧКОЙ, а не отдельным конвертером на каждую пару версий: v1
-	// поднимается до v2, v2 — до v3, v3 — до v4, и следующая версия будет означать
-	// одну новую функцию и одну строку здесь, а не N² переходов.
-	switch probe.SchemaVersion {
-	case SchemaVersion:
-		// уже v4
-	case 0, 1, 2, 3:
-		if probe.SchemaVersion < 2 {
-			// v1 (или дефолт БД '{"blocks":[]}' без версии).
-			upgraded, err := upgradeV1toV2(raw)
-			if err != nil {
-				return FormSchema{}, err
-			}
-			raw = upgraded
-		}
-		if probe.SchemaVersion < 3 {
-			upgraded, err := upgradeV2toV3(raw)
-			if err != nil {
-				return FormSchema{}, err
-			}
-			raw = upgraded
-		}
-		upgraded, err := upgradeV3toV4(raw)
-		if err != nil {
-			return FormSchema{}, err
-		}
-		raw = upgraded
-	default:
-		return FormSchema{}, schemaErr("неизвестная schemaVersion %d", probe.SchemaVersion)
-	}
-
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 
@@ -385,8 +355,8 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 		return FormSchema{}, schemaErr("лишние данные после схемы")
 	}
 
-	// После апгрейда schemaVersion всегда текущая; отсутствие трактуем как текущую
-	// (апгрейд её проставляет, но пустой дефолт мог прийти уже канонический).
+	// Отсутствие версии трактуем как текущую: дефолт БД — '{"blocks":[]}' без поля,
+	// и он обязан оставаться валидным документом пустой формы.
 	if s.SchemaVersion == 0 {
 		s.SchemaVersion = SchemaVersion
 	}
@@ -625,14 +595,14 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if b.Type != BlockImage && b.Settings.ImageKey != "" {
 		return schemaErr("%s: тип %q не имеет картинки", at, b.Type)
 	}
-	// column — "left"/"right" у любого типа, кроме заголовка формы (canShareRow).
+	// column — номер 1..MaxColumns у любого типа, кроме заголовка формы (canShareRow).
 	// Секция — свойство РАСКЛАДКИ, а не типа: где именно окажется элемент, решает
 	// раскладчик (автомат по потоку, §11.3 спеки), и поблочная проверка его условий
 	// не видит — как не видит и кросс-блочного «секция открыта», которое здесь
 	// намеренно не проверяется (см. Column в BlockSettings).
-	if b.Settings.Column != "" {
-		if b.Settings.Column != ColumnLeft && b.Settings.Column != ColumnRight {
-			return schemaErr("%s: неизвестная колонка %q", at, b.Settings.Column)
+	if b.Settings.Column != 0 {
+		if b.Settings.Column < 0 || b.Settings.Column > MaxColumns {
+			return schemaErr("%s: колонка %d вне диапазона 1..%d", at, b.Settings.Column, MaxColumns)
 		}
 		if !b.Type.canShareRow() {
 			return schemaErr("%s: тип %q не может делить ряд", at, b.Type)
@@ -670,10 +640,10 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		if n := utf8.RuneCountInString(o.Label); n > MaxOptionLabelLen {
 			return schemaErr("%s: опция #%d: label длиннее %d символов", at, j, MaxOptionLabelLen)
 		}
-		// Тот же бит колонки, что у блока (спека §5.1): те же два значения и тот же
+		// Тот же номер колонки, что у блока (спека §5.1): тот же диапазон и тот же
 		// раскладчик. Открыта ли секция — не проверяется, как и у блока: флаг инертен.
-		if o.Column != "" && o.Column != ColumnLeft && o.Column != ColumnRight {
-			return schemaErr("%s: опция #%d: неизвестная колонка %q", at, j, o.Column)
+		if o.Column != 0 && (o.Column < 0 || o.Column > MaxColumns) {
+			return schemaErr("%s: опция #%d: колонка %d вне диапазона 1..%d", at, j, o.Column, MaxColumns)
 		}
 		if err := validateCondition(o.VisibleIf, fmt.Sprintf("опция #%d: visibleIf", j)); err != nil {
 			return schemaErr("%s: %s", at, err)

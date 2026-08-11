@@ -57,7 +57,7 @@ describe('inviteRowId', () => {
   // ничего. Найдено ревью.
   it('адресует ряд участником, ОТЛИЧНЫМ от перетаскиваемого', () => {
     const left = blk('short_text')
-    const right = blk('email', { settings: { column: 'right' } })
+    const right = blk('email', { settings: { column: 2 } })
     const rows = layout([left, right])
 
     expect(rows[0]).toHaveLength(2)
@@ -86,7 +86,7 @@ describe('inviteRowId', () => {
     // placeInRow дроп отверг бы — приглашать нельзя.
     const gid = 'q'
     const caption = blk('title', { groupId: gid })
-    const field = blk('short_text', { groupId: gid, settings: { column: 'right' } })
+    const field = blk('short_text', { groupId: gid, settings: { column: 2 } })
     const other = blk('email')
     const rows = layout([caption, field, other])
     const near = rows[0]![0]![0]!.id
@@ -98,7 +98,7 @@ describe('inviteRowId', () => {
 
   it('секция приглашает обеими сторонами — в неё кладут ТРЕТИЙ элемент', () => {
     const left = blk('short_text')
-    const right = blk('email', { settings: { column: 'right' } })
+    const right = blk('email', { settings: { column: 2 } })
     const active = blk('text')
     const rows = layout([left, right, active])
 
@@ -110,23 +110,45 @@ describe('inviteRowId', () => {
 describe('previewCells', () => {
   const g = (id: string) => ({ id, blocks: [] as Block[] })
 
-  it('полноширинный ряд: сторона зоны выбирает колонку активного', () => {
+  it('полноширинный ряд: граница выбирает, с какой стороны встанет активный', () => {
     const row = [[g('a')]]
 
-    expect(previewCells(row, 'right')).toEqual([[g('a')], [null]])
-    expect(previewCells(row, 'left')).toEqual([[null], [g('a')]])
+    expect(previewCells(row, { col: 2, insert: true })).toEqual([[g('a')], [null]])
+    expect(previewCells(row, { col: 1, insert: true })).toEqual([[null], [g('a')]])
   })
 
-  it('секция: дублёр встаёт в КОНЕЦ колонки-получателя, вторая колонка цела', () => {
+  it('граница ВНУТРИ секции: новая колонка на её месте, соседи разъезжаются', () => {
     const row = [[g('a')], [g('b'), g('c')]]
 
-    expect(previewCells(row, 'right')).toEqual([[g('a')], [g('b'), g('c'), null]])
-    expect(previewCells(row, 'left')).toEqual([[g('a'), null], [g('b'), g('c')]])
+    expect(previewCells(row, { col: 2, insert: true })).toEqual([
+      [g('a')],
+      [null],
+      [g('b'), g('c')],
+    ])
+    expect(previewCells(row, { col: 3, insert: true })).toEqual([
+      [g('a')],
+      [g('b'), g('c')],
+      [null],
+    ])
+  })
+
+  it('подвал колонки: дублёр встаёт в КОНЕЦ её стопки, соседняя цела', () => {
+    const row = [[g('a')], [g('b'), g('c')]]
+
+    expect(previewCells(row, { col: 2, insert: false })).toEqual([
+      [g('a')],
+      [g('b'), g('c'), null],
+    ])
+    expect(previewCells(row, { col: 1, insert: false })).toEqual([
+      [g('a'), null],
+      [g('b'), g('c')],
+    ])
   })
 
   it('исходный ряд не мутируется — раскладка полотна переживает наведение', () => {
     const row = [[g('a')], [g('b')]]
-    previewCells(row, 'left')
+    previewCells(row, { col: 1, insert: true })
+    previewCells(row, { col: 2, insert: false })
     expect(row).toEqual([[g('a')], [g('b')]])
   })
 })

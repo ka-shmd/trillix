@@ -158,7 +158,7 @@ func TestValidateSchema_RichText(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+			raw := json.RawMessage(`{"schemaVersion":1,"blocks":[
 				{"id":"t","groupId":"g","type":"title","text":` + tc.text + `,"settings":{}},
 				{"id":"f","groupId":"g","type":"short_text","settings":{}}
 			]}`)
@@ -181,7 +181,7 @@ func TestValidateSchema_RichText(t *testing.T) {
 
 // Отвечаемое поле собственного текста не несёт — правило v2 в силе и для спанов.
 func TestValidateSchema_NonCarrierRejectsSpans(t *testing.T) {
-	raw := json.RawMessage(`{"schemaVersion":3,"blocks":[
+	raw := json.RawMessage(`{"schemaVersion":1,"blocks":[
 		{"id":"f","groupId":"g","type":"short_text","text":[{"t":"нельзя"}],"settings":{}}
 	]}`)
 	_, err := ValidateSchema(raw)
