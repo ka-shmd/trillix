@@ -168,15 +168,40 @@ describe('pickDropTarget — вопрос из нескольких строк',
     })
   })
 
-  it('групповой слой внутрь вопроса не заходит: любая его строка — «после вопроса»', () => {
+  // ЯКОРЬ ГРУППЫ — ЕЁ ПОСЛЕДНЯЯ СТРОКА, и это не деталь, а суть правила (владелец
+  // 2026-08-11: «подсказка появляется, как только я на группу навожусь»). Полоса цели
+  // «под этим вопросом» начинается у верха его ПОСЛЕДНЕЙ строки; заголовок вопроса ещё
+  // принадлежит цели выше.
+  it('групповой слой: «под вопросом» загорается на его ПОСЛЕДНЕЙ строке, не на заголовке', () => {
+    const above = blk('text')
     const { caption, field } = question()
-    const other = blk('text')
-    const blocks = [caption, field, other]
+    const blocks = [above, caption, field]
 
-    const atCaption = pick(blocks, caption.id, other.groupId, 'group')
-    const atField = pick(blocks, field.id, other.groupId, 'group')
-    expect(atCaption).toEqual(atField)
-    expect(atCaption).toEqual({ afterId: field.id, lineIds: [caption.id, field.id], before: false })
+    // Указатель на заголовке вопроса — вопрос ещё не назван, цель прежняя (абзац выше).
+    expect(pick(blocks, caption.id, 'таскаем-другую-группу', 'group')).toEqual({
+      afterId: above.id,
+      lineIds: [above.id],
+      before: false,
+    })
+    // Дошли до последней строки — вот теперь «под вопросом», во всю его ширину.
+    expect(pick(blocks, field.id, 'таскаем-другую-группу', 'group')).toEqual({
+      afterId: field.id,
+      lineIds: [caption.id, field.id],
+      before: false,
+    })
+  })
+
+  it('групповой слой внутрь вопроса не заходит: своих строк вопрос целями не даёт', () => {
+    const { caption, field } = question()
+    const tail = blk('text')
+    const blocks = [caption, field, tail]
+
+    // На заголовке первого вопроса цели выше нет вовсе — это «встать первым».
+    expect(pick(blocks, caption.id, tail.groupId, 'group')).toEqual({
+      afterId: null,
+      lineIds: [caption.id, field.id],
+      before: true,
+    })
   })
 })
 
