@@ -210,7 +210,6 @@ export function SlashEditor({
   const planRef = useRef<{
     key: string | null
     railIds: string[]
-    railSide: 'left' | 'right'
     lossIds: string[]
   } | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
@@ -326,25 +325,21 @@ export function SlashEditor({
   const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
   const blockIds = useIdList(blocks)
 
-  // Сторона группы в ряду (WYSIWYG, спека §5): раскладчик тот же, что у превью и
-  // рендерера (packRows). Ряд двигает кластеры значков: у правой колонки они
-  // зеркалятся вправо (левый кластер лёг бы в 28px-жёлоб и наехал на соседа).
   // Ряды видны ВСЕГДА, включая время драга: в столбике ряд распадается и появляется
   // цель «между левым и правым», которая после упаковки значит не то, что показала.
   // В двумерном полотне такой цели нет — вертикально вставляются между рядами
   // (границу держит rowBoundaryTarget).
   const rows = useMemo(() => packRows(groups), [groups])
-  const rowSide = useMemo(() => {
-    const m = new Map<string, 'left' | 'right'>()
-    for (const [leftCell, rightCell] of rows) {
-      if (!rightCell) continue
-      m.set(leftCell![0]!.id, 'left')
-      // В правой колонке — СТОПКА (§5): сторона у всех её групп одна, а полколонки
-      // им задаёт ячейка, поэтому ширина каждой остаётся полной внутри ячейки.
-      for (const g of rightCell) m.set(g.id, 'right')
-    }
-    return m
-  }, [rows])
+  // Группы, стоящие в СЕКЦИИ. Раньше здесь считалась ещё и сторона: кластер значков и
+  // рейл у правой колонки зеркалились вправо, потому что слева от неё 28px-жёлоб и
+  // сосед. При четырёх колонках зеркалить некуда — у средних колонок «своей» стороны
+  // нет вовсе, — поэтому кластер у всех слева, а от наезда на соседа его держит
+  // подложка в цвет холста (BlockRow). Остался один вопрос, ради которого карта и
+  // нужна: стоит ли вопрос в секции (тогда он не показывает зону второго уровня).
+  const inSection = useMemo(
+    () => new Set(rows.filter((r) => r.length > 1).flatMap((r) => r.flat().map((g) => g.id))),
+    [rows],
+  )
 
   // Жест ряда (спека §5): пока тащат подходящий элемент, у БЛИЖАЙШЕГО ряда горят обе
   // полосы — левая и правая. Кандидат — группа активного элемента:
@@ -380,7 +375,7 @@ export function SlashEditor({
     // молча развалил бы секцию, в которой вопрос стоит, — обещание зоны и её
     // последствие разошлись бы. Заодно снаружи такого вопроса нет поля полотна: зона
     // легла бы в 28px-жёлоб и наехала на соседнюю колонку.
-    if (rowSide.has(g.id)) return null
+    if (inSection.has(g.id)) return null
     const caption = g.blocks.find((x) => isCaptionType(x.type))
     if (!caption || caption.id === b.id) return null
     // Ячейка подписи занята (ряд уже собран) — приглашать некуда.
@@ -388,7 +383,7 @@ export function SlashEditor({
       r.some((c) => c.some((x) => x.id === caption.id)),
     )
     return row?.length === 1 ? caption.id : null
-  }, [drag, groups, blocks, rowSide])
+  }, [drag, groups, blocks, inSection])
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
@@ -481,19 +476,13 @@ export function SlashEditor({
       // Старожилы будущей группы — без активной строки: она следует за курсором, и её
       // rect растянул бы рейл туда, где вопроса нет.
       const residents = (plan?.groupIds ?? []).filter((id) => id !== activeId)
-      // Группа-хозяйка будущего рейла в ТЕКУЩЕЙ раскладке: по первому старожилу.
-      // Прогноз колонок не меняет, а группа целиком стоит в одной колонке.
-      const host = blocks.find((b) => b.id === residents[0])?.groupId ?? null
       planRef.current = {
         key: planTarget,
-        // Сторона рейла — та же, что у группы в покое: у правой колонки ряда левый
-        // жёлоб занят соседом (см. GroupRow).
-        railSide: rowSide.get(host ?? '') ?? 'left',
         railIds: residents,
         lossIds: plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : [],
       }
     }
-    setRect(setRail, measureRail(root, planRef.current.railIds, planRef.current.railSide))
+    setRect(setRail, measureRail(root, planRef.current.railIds))
     setRect(setWarnFrame, measureUnion(root, planRef.current.lossIds))
   }
 
@@ -811,7 +800,6 @@ export function SlashEditor({
       firstGroup={g.id === groups[0]?.id}
       formId={formId}
       blockIds={blockIds}
-      side={rowSide.get(g.id) ?? null}
       // Зона второго уровня: id подписи, у которой горит приглашение собрать ряд
       // внутри вопроса (null — не в этой группе). Ближним рядом не ограничивается:
       // цель здесь ровно одна на всё полотно — подпись СВОЕЙ же группы.
@@ -1183,11 +1171,11 @@ function hasGroup(row: GroupRef[][], id: string | null): boolean {
 const RAIL_W = 2
 const RAIL_GAP = 8
 const ROW_PAD = 6
-function measureRail(root: HTMLElement, ids: string[], side: 'left' | 'right'): Rect | null {
+function measureRail(root: HTMLElement, ids: string[]): Rect | null {
   const u = measureUnion(root, ids)
   if (!u) return null
   return {
-    x: side === 'right' ? u.x + u.w + RAIL_GAP - RAIL_W : u.x - RAIL_GAP,
+    x: u.x - RAIL_GAP,
     y: u.y + ROW_PAD,
     w: RAIL_W,
     h: Math.max(0, u.h - ROW_PAD * 2),
@@ -1458,11 +1446,6 @@ type GroupRowProps = {
   firstGroup: boolean
   formId: string
   blockIds: string[]
-  // Сторона в ряду (спека §5): left/right — группа занимает полколонки
-  // (calc(50% − 14px), полряда flex-wrap полотна), null — во всю ширину. right
-  // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Ряды видны
-  // и во время драга (WYSIWYG) — сторона не гасится.
-  side: 'left' | 'right' | null
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
   // (SlashEditor), потому что группа под дублёром ужимается, а зона двигаться не
   // вправе. Здесь остаётся только второй уровень.
@@ -1523,7 +1506,6 @@ function sameGroupProps(a: GroupRowProps, b: GroupRowProps): boolean {
 const BY_REFERENCE = Object.keys({
   firstGroup: true,
   formId: true,
-  side: true,
   cellZone: true,
   cellGhost: true,
   rail: true,
@@ -1546,7 +1528,6 @@ const GroupRow = memo(function GroupRow({
   firstGroup,
   formId,
   blockIds,
-  side,
   cellZone,
   cellGhost,
   rail,
@@ -1602,14 +1583,13 @@ const GroupRow = memo(function GroupRow({
           вне потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
           BlockRow), чтобы не наезжать. top/bottom-0 = ровно высота текста группы:
           -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент.
-          У правой колонки ряда рейл зеркалится в правый жёлоб — левый занят
-          соседней группой. */}
+          СЛЕВА ВСЕГДА, в любой колонке (2026-08-11): зеркалить рейл вправо было
+          осмысленно, пока колонок было две, — при четырёх у средних колонок «своей»
+          стороны нет, и одинаковое место читается лучше, чем угадываемое. */}
       {group.blocks.length > 1 && rail !== 'off' && (
         <span
           aria-hidden="true"
-          className={`pointer-events-none absolute top-0 bottom-0 w-0.5 rounded-full bg-primary/40 ${
-            side === 'right' ? '-right-2' : '-left-2'
-          } ${
+          className={`pointer-events-none absolute top-0 bottom-0 -left-2 w-0.5 rounded-full bg-primary/40 ${
             rail === 'on'
               ? ''
               : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
@@ -1659,12 +1639,6 @@ const GroupRow = memo(function GroupRow({
                       : isAnswerableType(b.type) && !hasCaption
                         ? b
                         : undefined
-                  }
-                  // Правая колонка ряда зеркалит кластеры значков (спека §5): левый
-                  // кластер лёг бы в жёлоб между колонками и наехал на соседа. Правая
-                  // ячейка ряда ВНУТРИ вопроса — тот же случай, тот же ответ.
-                  mirrored={
-                    side === 'right' || (innerRow.length > 1 && innerRow[1]![0]!.id === b.id)
                   }
                   // Голой строке ответа предлагается дать заголовок (§4.4 спеки фазы 15):
                   // тем же предикатом, которым шпаргалка решает, обещать ли Mod+Alt+T.

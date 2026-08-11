@@ -88,10 +88,6 @@ export interface BlockRowProps {
   // (там пустой текст = начало формы, и подсказка зовёт добавить вопрос).
   insideQuestion?: boolean
   firstOfForm?: boolean
-  // mirrored — строка стоит в ПРАВОЙ колонке ряда (спека §5): кластер значков
-  // зеркалится в правое поле (левый лёг бы в 28px-жёлоб между колонками и наехал
-  // на соседнюю группу), тогл обязательности остаётся у правого края текста.
-  mirrored?: boolean
   // needsCaption — строка ответа стоит без заголовка. С фазы 15 это ЗАКОННОЕ
   // состояние (правило requiresCaption понижено до правила вставки, §4.4 спеки), и
   // вместо сопротивления строка предлагает недостающее действие: чип «Mod+Alt+T —
@@ -153,7 +149,7 @@ export interface BlockRowProps {
 // `memo` перестанет срабатывать МОЛЧА и цена вернётся целиком; сторож — замер
 // `e2e/perf` (окно «СТАРТ ЖЕСТА») и `canvasRerender.test.tsx`.
 export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
-  const { block, groupHandle, requiredFor, mirrored = false, needsCaption = false } = props
+  const { block, groupHandle, requiredFor, needsCaption = false } = props
   const engine = useFocusEngine()
   const captionGuard = useCaptionGuard(engine)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
@@ -276,11 +272,11 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         <div
           // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
           // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
-          // mirrored (правая колонка ряда): кластер уезжает в ПРАВОЕ поле, за
-          // тогл обязательности (тот стоит на left-full ml-1, ширина 24px → ml-7).
-          className={`absolute top-1.5 flex ${
-            mirrored ? 'left-full ml-7 flex-row-reverse' : 'right-full mr-2.5'
-          } ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+          // СЛЕВА ВСЕГДА (2026-08-11): прежде у правой колонки ряда кластер зеркалился
+          // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
+          // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
+          // стороны кластер получил подложку (CLUSTER_BACKDROP) и слой поверх соседа.
+          className={`${CLUSTER_BACKDROP} absolute top-1.5 right-full mr-2.5 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -365,6 +361,21 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
 const ICON_BTN =
   'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
+// CLUSTER_BACKDROP — подложка под кластером значков: непрозрачный прямоугольник в цвет
+// ХОЛСТА ФОРМЫ и слой поверх соседей.
+//
+// Нужен обоим соседям кластера, и по разным причинам. Слева от колонки может стоять
+// чужая колонка: кластер висит absolute вне потока, а сосед — обычный элемент дальше по
+// документу, поэтому он рисуется ПОВЕРХ, и значки оказывались нажимаемыми не везде
+// (найдено владельцем 2026-08-11). `z-20` ставит кластер выше, подложка прячет то, что
+// под ним осталось. Прозрачный кластер поверх чужого текста был бы кашей.
+//
+// Цвет — `--rf-canvas`, тот же токен, которым красит страницу `.rf-theme` (fields.css):
+// оформление формы (фаза 22) меняет холст, и подложка обязана ехать за ним, иначе на
+// тёмной форме под значками светилось бы белое пятно. Tailwind-цвет кабинета здесь не
+// годится по той же причине.
+const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+
 // Опции сенсора списка вариантов — МОДУЛЬНАЯ КОНСТАНТА, по той же причине, что у
 // полотна (см. POINTER_OPTIONS в SlashEditor): `useSensor` мемоизирует дескриптор по
 // ССЫЛКЕ на объект опций, поэтому литерал в теле компонента = новый дескриптор на
@@ -386,7 +397,6 @@ const BlockRowBody = memo(function BlockRowBody({
   requiredFor,
   insideQuestion = false,
   firstOfForm = false,
-  mirrored = false,
   needsCaption = false,
   openMenuOnMount,
   actionOpen,
@@ -765,7 +775,6 @@ const BlockRowBody = memo(function BlockRowBody({
         <div className="min-w-0">
           <OptionsInline
             block={block}
-            mirrored={mirrored}
             onLeaveTop={() => onArrow(block.id, 'up')}
             onArrow={onArrow}
             onAddBelow={onAddBelow}
@@ -1175,7 +1184,6 @@ const optCellOption = (id: string | number): string | null => {
 
 function OptionsInline({
   block,
-  mirrored,
   onLeaveTop,
   onArrow,
   onAddBelow,
@@ -1185,9 +1193,6 @@ function OptionsInline({
   onRowShift,
 }: {
   block: Block
-  // Вся группа стоит в правой колонке ряда вопросов — кластеры значков уезжают
-  // вправо, включая значки вариантов (см. OptionCard).
-  mirrored: boolean
   onLeaveTop: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
@@ -1450,7 +1455,6 @@ function OptionsInline({
                     // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
                     // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
                     index={index.get(o.id)!}
-                    mirrored={mirrored}
                     inputRef={(el) => {
                       optionRefs.current.set(o.id, el)
                     }}
@@ -1669,7 +1673,6 @@ function OptionCard({
   block,
   option,
   index,
-  mirrored,
   inputRef,
   onKeyDown,
   onRemove,
@@ -1679,12 +1682,6 @@ function OptionCard({
   block: Block
   option: NonNullable<NonNullable<Block['settings']>['options']>[number]
   index: number
-  // mirrored — вся группа стоит в правой колонке ряда ВОПРОСОВ (см. BlockRow): слева
-  // от неё чужой вопрос во всю ширину, поэтому кластер уезжает вправо вместе с
-  // кластерами строк. Внутри списка вариантов сторона не меняется никогда — даже у
-  // правого варианта ряда: карточка обнимает текст, и слева от неё есть место
-  // (решение владельца 2026-07-26: варианты выглядят как блоки вопросов).
-  mirrored: boolean
   inputRef: (el: HTMLInputElement | null) => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
@@ -1737,9 +1734,7 @@ function OptionCard({
           прямо на линию. Ручки вариантов и ручки строк выстраиваются в одну
           вертикаль — у обоих кластеров правый край на 10px левее колонки. */}
       <div
-        className={`absolute flex ${
-          mirrored ? 'left-full ml-2.5 flex-row-reverse' : 'right-full mr-2.5'
-        } items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
+        className={`${CLUSTER_BACKDROP} absolute right-full mr-2.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
       >
         <button
           type="button"
