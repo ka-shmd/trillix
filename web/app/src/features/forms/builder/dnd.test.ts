@@ -1,17 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import { closestCenter, type ClientRect, type CollisionDetection } from '@dnd-kit/core'
-import { verticalListSortingStrategy } from '@dnd-kit/sortable'
 
-import { canvasSorting, closestVertical } from './dnd'
+import { closestVertical } from './dnd'
 
-// Стратегия расступания строк (2026-08-02). Проверяется РЕЗУЛЬТАТ, а не формула: пока
-// элемент тащат, две строки не имеют права оказаться в одном месте. Это ровно то, что
-// владелец увидел на полотне глазами («вытаскиваем блок из ряда — блоки под рядом
-// наезжают на ряд»), и ровно то, чего родная verticalListSortingStrategy не даёт:
-// каждый тест ниже предъявляет её падение на тех же данных.
-//
-// Числа — как в живом DOM: строка меряется border-box'ом (BlockRow добавляет py-1.5 и
+// Числа — как в живом DOM: строка меряется border-box'ом (BlockRow добавляет py-1.5, li
 // гасит его -my-1.5), поэтому просвет 14px ритма даёт 2px между прямоугольниками, а
 // 28px — 16px. Полоса полотна — 700px, колонка секции — 336px при 28px-жёлобе.
 
@@ -28,192 +21,13 @@ const rect = (top: number, height: number, left = 0, width = CANVAS): ClientRect
   right: left + width,
 })
 
-// Столбик из [высота, просвет, высота, просвет, …].
-function column(spec: number[], left = 0, width = CANVAS, from = 0): ClientRect[] {
-  const out: ClientRect[] = []
-  let y = from
-  for (let i = 0; i < spec.length; i += 2) {
-    out.push(rect(y, spec[i]!, left, width))
-    y += spec[i]! + (spec[i + 1] ?? 0)
-  }
-  return out
-}
 
-type Placed = { index: number; top: number; bottom: number; left: number; width: number }
+// Тесты расступания строк сняты вместе с самим расступанием (2026-08-11, решение
+// владельца): соседи при перетаскивании больше не двигаются, место вставки называет
+// линия поверх неподвижной раскладки. Проверять «кто куда сдвинулся» стало нечего —
+// стратегия трогает только сам перетаскиваемый элемент (drop-анимация и клавиатурный
+// перенос), а геометрия линии живёт в SlashEditor и меряется по живому DOM.
 
-// Куда строки приедут: применяем стратегию ко ВСЕМ индексам и складываем сдвиг с
-// исходным прямоугольником. Активный исключён — под указателем он едет за курсором и в
-// чужую геометрию не вписывается.
-function settle(
-  strategy: typeof canvasSorting,
-  rects: ClientRect[],
-  activeIndex: number,
-  overIndex: number,
-): Placed[] {
-  return rects
-    .map((r, index) => {
-      const t = strategy({
-        rects,
-        activeIndex,
-        overIndex,
-        index,
-        activeNodeRect: rects[activeIndex]!,
-      })
-      return {
-        index,
-        top: r.top + (t?.y ?? 0),
-        bottom: r.top + r.height + (t?.y ?? 0),
-        left: r.left,
-        width: r.width,
-      }
-    })
-    .filter((r) => r.index !== activeIndex)
-}
-
-// Наложение — пара строк, которые пересеклись И по вертикали, и по горизонтали.
-// Соседство по РЯДУ (одна вертикаль, разные колонки) наложением не является: так стоят
-// участники секции.
-function overlaps(placed: Placed[]): string[] {
-  const bad: string[] = []
-  for (let i = 0; i < placed.length; i++) {
-    for (let j = i + 1; j < placed.length; j++) {
-      const a = placed[i]!
-      const b = placed[j]!
-      const v = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)
-      const h = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
-      if (v > 0 && h > 0) bad.push(`${a.index}↔${b.index}`)
-    }
-  }
-  return bad
-}
-
-// Полотно с СЕКЦИЕЙ наверху: ряд из двух колонок, под ним обычные полноширинные строки.
-// Порядок в документе колоночный (§13): сперва вся левая колонка, потом вся правая.
-//   0 — левая колонка ряда (40px)
-//   1 — правая колонка ряда (76px, ряд держит она)
-//   2,3 — строки под рядом
-function sectionCanvas(): ClientRect[] {
-  const rowTop = 0
-  const rowBottom = 76
-  return [
-    rect(rowTop, 40, 0, COL),
-    rect(rowTop, 76, COL + GUTTER, COL),
-    ...column([36, 2, 36], 0, CANVAS, rowBottom + 16),
-  ]
-}
-
-describe('canvasSorting', () => {
-  // Ключевой сценарий разбора: блок вынимают ИЗ КОЛОНКИ ряда и ведут по полотну. Старое
-  // место не отдаёт ничего (ряд держит вторая колонка), но новое обязано раскрыться —
-  // иначе полотно вообще не разъезжается и место дропа невидимо. Цель — строка 2, то
-  // есть ЗА ней есть строка 3: именно она и должна уступить место.
-  it('блок, вынутый из колонки ряда, раскрывает щель на НОВОМ месте', () => {
-    const rects = sectionCanvas()
-    const placed = settle(canvasSorting, rects, 0, 2)
-    expect(overlaps(placed)).toEqual([])
-    // Ряд держит правая колонка — старое место не схлопывается: строки до цели стоят.
-    expect(placed.find((p) => p.index === 1)!.top).toBe(rects[1]!.top)
-    expect(placed.find((p) => p.index === 2)!.top).toBe(rects[2]!.top)
-    // А за целью открывается щель: высота блока плюс просвет ритма (16 по border-box).
-    // Просвет отмерян от НИЗА РЯДА, а не от низа самого блока: сосед по списку у него —
-    // вторая колонка, она стоит вровень, и по ней просвет вышел бы бессмысленным.
-    expect(placed.find((p) => p.index === 3)!.top).toBe(rects[3]!.top + rects[0]!.height + 16)
-  })
-
-  it('родная стратегия на тех же данных сажает строки на ряд', () => {
-    const placed = settle(verticalListSortingStrategy, sectionCanvas(), 0, 2)
-    expect(overlaps(placed).length).toBeGreaterThan(0)
-  })
-
-  it('перенос ВВЕРХ из-под ряда: щель открывается над целью, ряд уезжает вниз', () => {
-    const rects = sectionCanvas()
-    // Строка 3 уходит наверх, цель — левая колонка ряда: вопрос встанет НАД рядом.
-    const placed = settle(canvasSorting, rects, 3, 0)
-    expect(overlaps(placed)).toEqual([])
-    // Ряд стоит ниже точки вставки — едет вниз ЦЕЛИКОМ, обеими колонками.
-    const shift = placed.find((p) => p.index === 0)!.top - rects[0]!.top
-    expect(shift).toBeGreaterThan(0)
-    expect(placed.find((p) => p.index === 1)!.top - rects[1]!.top).toBe(shift)
-    expect(placed.find((p) => p.index === 2)!.top - rects[2]!.top).toBe(shift)
-  })
-
-  it('если уходящий был в ряду самым низким — отдаётся ровно разница низов', () => {
-    // Зеркало предыдущего: теперь ряд держит ЛЕВАЯ колонка (76px), уходит правая (40px),
-    // а ниже неё в документе строки. Вынимая её, ряд не меняется вовсе.
-    const rects = [
-      rect(0, 76, 0, COL),
-      rect(0, 40, COL + GUTTER, COL),
-      ...column([36, 2, 36], 0, CANVAS, 92),
-    ]
-    expect(settle(canvasSorting, rects, 1, 3).every((p) => p.top === rects[p.index]!.top)).toBe(true)
-
-    // А теперь уходит тот, кто ряд и держал: освобождается 76 − 40 = 36.
-    const tallLeaves = settle(canvasSorting, rects, 0, 3)
-    expect(overlaps(tallLeaves)).toEqual([])
-    expect(tallLeaves.find((p) => p.index === 2)!.top).toBe(rects[2]!.top - 36)
-  })
-
-  it('строки чужой колонки не двигаются вовсе', () => {
-    const rects = sectionCanvas()
-    const t = canvasSorting({
-      rects,
-      activeIndex: 0,
-      overIndex: 3,
-      index: 1,
-      activeNodeRect: rects[0]!,
-    })
-    expect(t).toBeNull()
-  })
-
-  describe('обычный полноширинный столбик', () => {
-    // Ритм полотна: 14px внутри вопроса и 28px между вопросами → 2px и 16px по
-    // border-box'ам.
-    const canvas = column([40, 2, 36, 16, 40, 2, 36, 16, 36])
-
-    it('перенос вниз: смещаемые едут все на одно расстояние и не накладываются', () => {
-      const placed = settle(canvasSorting, canvas, 0, 3)
-      expect(overlaps(placed)).toEqual([])
-      const moved = placed.filter((p) => p.index >= 1 && p.index <= 3)
-      const shifts = new Set(moved.map((p) => p.top - canvas[p.index]!.top))
-      expect(shifts.size).toBe(1)
-      // Освобождается высота уходящего плюс его собственный просвет: 40 + 2.
-      expect([...shifts][0]).toBe(-42)
-    })
-
-    it('перенос вверх: то же зеркально', () => {
-      const placed = settle(canvasSorting, canvas, 4, 1)
-      expect(overlaps(placed)).toEqual([])
-      const moved = placed.filter((p) => p.index >= 1 && p.index <= 3)
-      const shifts = new Set(moved.map((p) => p.top - canvas[p.index]!.top))
-      expect(shifts.size).toBe(1)
-      // Уходящий (36) отдаёт свою высоту и просвет НАД собой (16).
-      expect([...shifts][0]).toBe(52)
-    })
-
-    it('ритм не перетасовывается: просветы между смещаемыми те же, что были', () => {
-      const placed = settle(canvasSorting, canvas, 0, 3).filter((p) => p.index <= 3)
-      const gaps = placed.slice(1).map((p, i) => p.top - placed[i]!.bottom)
-      expect(gaps).toEqual([16, 2])
-      // Родная стратегия на тех же данных просветы сдвигает по кругу.
-      const native = settle(verticalListSortingStrategy, canvas, 0, 3).filter((p) => p.index <= 3)
-      expect(native.slice(1).map((p, i) => p.top - native[i]!.bottom)).not.toEqual([16, 2])
-    })
-  })
-
-  it('молчит, когда двигать некого', () => {
-    const one = column([36])
-    expect(
-      canvasSorting({ rects: one, activeIndex: 0, overIndex: 0, index: 0, activeNodeRect: one[0]! }),
-    ).toBeNull()
-  })
-})
-
-// Полотно из разбора владельца 2026-08-03: текст, текст, РЯД из двух текстов, короткий
-// ответ, короткий ответ. Именно на нём «блоки вокруг ряда склеиваются, и расклеить не
-// получается»: closestCenter меряет расстояние по обеим осям, а участник ряда стоит
-// центром своей полуколонки — на 182px вбок от центра полноширинного блока. Эти 182px
-// входят в расстояние ВСЕГДА, поэтому обычный блок выигрывает конкурс, даже будучи на
-// сотню пикселей дальше по вертикали, и ряд как цель просто не выбирается.
 describe('closestVertical', () => {
   const named: Record<string, ClientRect> = {
     textA: rect(0, 36),
