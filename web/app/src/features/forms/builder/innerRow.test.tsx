@@ -26,7 +26,7 @@ const caption = (id: string, groupId: string, right = false) => ({
   groupId,
   type: 'title' as const,
   text: textFromString('Индекс'),
-  ...(right ? { settings: { column: 'right' as const } } : {}),
+  ...(right ? { settings: { column: 2 as const } } : {}),
 })
 
 const field = (
@@ -38,7 +38,7 @@ const field = (
   id,
   groupId,
   type,
-  ...(right ? { settings: { column: 'right' as const } } : {}),
+  ...(right ? { settings: { column: 2 as const } } : {}),
 })
 
 function preview(s: FormSchema) {
@@ -84,23 +84,15 @@ describe('ряд внутри вопроса в превью', () => {
 // же, что у пары и у стопки — .rf-row → .rf-cell → группы; отличается только число
 // групп в ячейке. Проверяем превью (общий с рендерером раскладчик и общий fields.css).
 describe('двухколоночная секция в превью', () => {
-  const col = (id: string, side: 'left' | 'right') => ({
+  const col = (id: string, column: number) => ({
     id,
     groupId: id,
     type: 'short_text' as const,
-    settings: { column: side },
+    settings: { column },
   })
 
   it('три элемента слева и два справа — две ячейки, 3 и 2 группы', () => {
-    const form = preview(
-      schema(
-        col('l1', 'left'),
-        col('l2', 'left'),
-        col('l3', 'left'),
-        col('r1', 'right'),
-        col('r2', 'right'),
-      ),
-    )
+    const form = preview(schema(col('l1', 1), col('l2', 1), col('l3', 1), col('r1', 2), col('r2', 2)))
 
     const rows = form.querySelectorAll(':scope > .rf-row')
     expect(rows).toHaveLength(1)
@@ -110,10 +102,19 @@ describe('двухколоночная секция в превью', () => {
     expect(cells[1]!.querySelectorAll(':scope > .rf-group')).toHaveLength(2)
   })
 
+  it('четыре колонки — потолок ряда: четыре ячейки, в каждой своя группа', () => {
+    // Колонок стало до MAX_COLUMNS (2026-08-11): раскладчик тот же, номер колонки — тот
+    // же ключ, и превью обязано показать ровно столько ячеек, сколько номеров в
+    // документе.
+    const form = preview(schema(col('c1', 1), col('c2', 2), col('c3', 3), col('c4', 4)))
+
+    const cells = form.querySelectorAll(':scope > .rf-row > .rf-cell')
+    expect(cells).toHaveLength(4)
+    for (const cell of cells) expect(cell.querySelectorAll(':scope > .rf-group')).toHaveLength(1)
+  })
+
   it('блок без бита под секцией — прямой ребёнок .rf-form, во всю ширину', () => {
-    const form = preview(
-      schema(col('l1', 'left'), col('r1', 'right'), field('f', 'gf')),
-    )
+    const form = preview(schema(col('l1', 1), col('r1', 2), field('f', 'gf')))
 
     expect(form.querySelectorAll(':scope > .rf-row')).toHaveLength(1)
     // Полноширинный блок в ряд не заворачивается вовсе — он прямой ребёнок формы.

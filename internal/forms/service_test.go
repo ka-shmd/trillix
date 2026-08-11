@@ -406,7 +406,7 @@ func TestDuplicate_NotMember_ReturnsNotFound(t *testing.T) {
 
 func TestDuplicate_CleanTitle_SuffixInName(t *testing.T) {
 	wsID := domain.NewID()
-	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя"}]}`)
+	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text"}]}`)
 	store := &fakeStore{
 		// У оригинала имя не задано (name=nil) — база берётся из title.
 		form: Form{WorkspaceID: wsID, Title: "Анкета", Slug: "old-slug", Status: "published", DraftSchema: schema},
@@ -554,7 +554,7 @@ func TestPublish_NotMember_ReturnsNotFound(t *testing.T) {
 
 func TestPublish_InvalidDraft_Rejected(t *testing.T) {
 	// Черновик с неизвестным типом блока — ValidateSchema отвергает до снапшота.
-	bad := json.RawMessage(`{"blocks":[{"id":"b","type":"slider","label":"x"}]}`)
+	bad := json.RawMessage(`{"blocks":[{"id":"b","groupId":"g_b","type":"slider"}]}`)
 	store := &fakeStore{form: Form{DraftSchema: bad}}
 	svc := newTestService(store)
 
@@ -602,7 +602,7 @@ func TestPublish_Success_SnapshotsAndSetsVersion(t *testing.T) {
 
 // designDraft — черновик с заданным оформлением.
 func designDraft(design string) json.RawMessage {
-	return json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":` + design + `}`)
+	return json.RawMessage(`{"schemaVersion":1,"blocks":[],"design":` + design + `}`)
 }
 
 // ПЕРВАЯ ПОЛОВИНА УТВЕРЖДЕНИЯ «сохраняется 200, публикуется 402» — и та, которую
@@ -757,7 +757,7 @@ func TestUpdateDraftSchema_InvalidSchema_Rejected(t *testing.T) {
 	svc := newTestService(store)
 
 	// Неизвестный тип блока — ValidateSchema отвергает до всякого доступа к БД.
-	bad := json.RawMessage(`{"blocks":[{"id":"b","type":"slider","label":"x"}]}`)
+	bad := json.RawMessage(`{"blocks":[{"id":"b","groupId":"g_b","type":"slider"}]}`)
 	_, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), bad, time.Now())
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("err = %v, want ErrValidation", err)
@@ -799,7 +799,7 @@ func TestUpdateDraftSchema_Valid_CanonicalizesAndPassesExpected(t *testing.T) {
 
 	expected := time.Now().Truncate(time.Microsecond)
 	// Без schemaVersion — канонизация должна её проставить (=1).
-	in := json.RawMessage(`{"blocks":[{"id":"b","type":"short_text","label":"Имя"}]}`)
+	in := json.RawMessage(`{"blocks":[{"id":"t_b","groupId":"g_b","type":"title","text":[{"t":"Имя"}]},{"id":"b","groupId":"g_b","type":"short_text"}]}`)
 	if _, err := svc.UpdateDraftSchema(context.Background(), domain.NewID(), domain.NewID(), in, expected); err != nil {
 		t.Fatalf("UpdateDraftSchema: %v", err)
 	}
@@ -1071,19 +1071,19 @@ func TestUpdateDraftSchema_MirrorsTitleFromDocument(t *testing.T) {
 		want   *string
 	}{
 		"документ не высказался — колонка не трогается": {
-			schema: `{"schemaVersion":4,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
 			want:   nil,
 		},
 		"заголовок с текстом — едет в колонку": {
-			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Анкета ","m":["b"]},{"t":"2026"}]}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Анкета ","m":["b"]},{"t":"2026"}]}]}`,
 			want:   strptr("Анкета 2026"),
 		},
 		"заголовок стёрт — колонка получает служебное имя": {
-			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
 			want:   strptr(defaultFormTitle),
 		},
 		"пробелы вокруг заголовка обрезаются": {
-			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"  Анкета  "}]}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"  Анкета  "}]}]}`,
 			want:   strptr("Анкета"),
 		},
 	}
@@ -1119,17 +1119,17 @@ func TestPublicForm_TitleFromPublishedSchema(t *testing.T) {
 	}{
 		"версия до фазы (блока нет) — фолбэк на колонку": {
 			column: "Старое название",
-			schema: `{"schemaVersion":3,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"b","groupId":"g","type":"short_text","settings":{}}]}`,
 			want:   "Старое название",
 		},
 		"версия с заголовком — колонка игнорируется": {
 			column: "Живое имя из колонки",
-			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опубликованный заголовок"}]}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опубликованный заголовок"}]}]}`,
 			want:   "Опубликованный заголовок",
 		},
 		"автор стёр заголовок — пусто, а не служебное имя": {
 			column: defaultFormTitle,
-			schema: `{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
+			schema: `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[]}]}`,
 			want:   "",
 		},
 	}

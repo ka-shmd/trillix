@@ -27,14 +27,14 @@ import (
 
 const (
 	exportSchemaV1 = `{"blocks":[
-		{"id":"b_name","type":"short_text","label":"Имя","description":"","required":true,"settings":{}},
-		{"id":"b_src","type":"single_choice","label":"Источник","description":"","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
-		{"id":"b_phone","type":"short_text","label":"Телефон","description":"","required":false,"settings":{}}
+		{"id":"t_b_name","groupId":"g_b_name","type":"title","text":[{"t":"Имя"}]},{"id":"b_name","groupId":"g_b_name","type":"short_text","required":true,"settings":{}},
+		{"id":"t_b_src","groupId":"g_b_src","type":"title","text":[{"t":"Источник"}]},{"id":"b_src","groupId":"g_b_src","type":"single_choice","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
+		{"id":"t_b_phone","groupId":"g_b_phone","type":"title","text":[{"t":"Телефон"}]},{"id":"b_phone","groupId":"g_b_phone","type":"short_text","required":false,"settings":{}}
 	]}`
 	exportSchemaV2 = `{"blocks":[
-		{"id":"b_name","type":"short_text","label":"Имя","description":"","required":true,"settings":{}},
-		{"id":"b_src","type":"single_choice","label":"Источник","description":"","required":false,"settings":{"options":[{"id":"o1","label":"Друзья (реф.)"},{"id":"o2","label":"Поиск"}]}},
-		{"id":"b_city","type":"short_text","label":"Город","description":"","required":false,"settings":{}}
+		{"id":"t_b_name","groupId":"g_b_name","type":"title","text":[{"t":"Имя"}]},{"id":"b_name","groupId":"g_b_name","type":"short_text","required":true,"settings":{}},
+		{"id":"t_b_src","groupId":"g_b_src","type":"title","text":[{"t":"Источник"}]},{"id":"b_src","groupId":"g_b_src","type":"single_choice","required":false,"settings":{"options":[{"id":"o1","label":"Друзья (реф.)"},{"id":"o2","label":"Поиск"}]}},
+		{"id":"t_b_city","groupId":"g_b_city","type":"title","text":[{"t":"Город"}]},{"id":"b_city","groupId":"g_b_city","type":"short_text","required":false,"settings":{}}
 	]}`
 )
 

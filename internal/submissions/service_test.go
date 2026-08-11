@@ -139,7 +139,7 @@ func validPublishedForm(notify bool) forms.PublicForm {
 	return forms.PublicForm{
 		FormID:             uuid.New(),
 		Status:             domain.FormStatusPublished,
-		Schema:             json.RawMessage(`{"schemaVersion":2,"blocks":[]}`),
+		Schema:             json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
 		NotifyOnSubmission: notify,
 	}
 }

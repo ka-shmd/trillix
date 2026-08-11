@@ -30,6 +30,7 @@ import {
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
+  MAX_COLUMNS,
   MAX_SUBMIT_LABEL_LEN,
   plainText,
   textFromString,
@@ -165,11 +166,15 @@ export function SlashEditor({
   // контуром — цену дропа автор видит ДО того, как отпустит кнопку, а не узнаёт из
   // тоста после.
   //
-  // Про МЕСТО вставки она не говорит ничего — это работа расступающихся строк. Обе
-  // подсказки, которые про место говорили, сняты 2026-08-05: обводка будущей группы
-  // (её роль забрал рейл выше — одной линией вместо рамки) и линия дропа, которая
-  // показывала место неверно.
+  // Про МЕСТО вставки она не говорит ничего — это работа ЛИНИИ (dropLine ниже). Линия
+  // уже снималась однажды, 2026-08-05, как «показывающая место неверно»: тогда строки
+  // расступались, и о месте говорили ДВОЕ — линия и щель между строками, — расходясь
+  // между собой. Расступания больше нет, и говорящий о месте остался ровно один.
   const [warnFrame, setWarnFrame] = useState<Rect | null>(null)
+  // ЛИНИЯ ВСТАВКИ (2026-08-11) — то, что говорит «сюда встанет», вместо расступания
+  // строк. Соседи неподвижны, поэтому цель не уезжает из-под курсора; линия рисуется
+  // оверлеем по живым rect'ам, как рейл и рамка, и живёт ровно столько же.
+  const [dropLine, setDropLine] = useState<Rect | null>(null)
   // Цель коллизии, от которой считается прогноз дропа. Совпадает с e.over везде, кроме
   // подмены границей ряда (rowBoundaryTarget): там полотно кладёт в ref уже
   // подменённую цель — по сырой прогноз описывал бы дроп, которого не будет.
@@ -195,14 +200,12 @@ export function SlashEditor({
   // Зона под курсором — по ней рисуется ДУБЛЁР (§5): тусклая копия перетаскиваемого
   // вопроса на его будущем месте. Отклик у жеста один и он показывает результат, а не
   // намерение.
-  const [hoverZone, setHoverZone] = useState<{ groupId: string; side: 'left' | 'right' } | null>(
-    null,
-  )
+  const [hoverZone, setHoverZone] = useState<RowZone | null>(null)
   // То же на втором уровне (ряд ВНУТРИ вопроса): id подписи, у зоны которой стоит курсор.
   const [hoverCell, setHoverCell] = useState<string | null>(null)
   // Замер оверлеев гонит rAF-цикл, а не события драга: строки доигрывают свой
   // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
-  // оверлеи отставали от расступающихся строк. Цикл меряет каждый кадр; аргументы
+  // оверлеи отставали от едущих строк. Цикл меряет каждый кадр; аргументы
   // (активный блок и цель) обновляют обработчики. Пустой ref = цикл остановлен.
   const frameArgsRef = useRef<{ activeId: string; overId: string | null } | null>(null)
   const frameRafRef = useRef(0)
@@ -211,7 +214,6 @@ export function SlashEditor({
   const planRef = useRef<{
     key: string | null
     railIds: string[]
-    railSide: 'left' | 'right'
     lossIds: string[]
   } | null>(null)
   const [menuForId, setMenuForId] = useState<string | null>(null)
@@ -300,7 +302,7 @@ export function SlashEditor({
   // ОДНА сортируемая вселенная: каждый GroupRow оборачивает свои строки в
   // SortableContext с ОБЩИМ списком всех block-id (blockIds), поэтому индексы
   // глобальны и анимация полностью родная — активная строка следует за курсором,
-  // строки всех групп расступаются. Нарезка items по группам ломала драг: over в
+  // строка едет через границы групп. Нарезка items по группам ломала драг: over в
   // чужом контексте → overIndex −1 → dnd-kit гасит все трансформы (элемент замирал
   // под мышкой). Слои НЕ конкурируют за коллизии: collisionDetection фильтрует
   // droppable'ы по слою активного элемента — тащат группу → только группы, тащат
@@ -327,25 +329,21 @@ export function SlashEditor({
   const groupIds = useMemo(() => new Set(groupIdList), [groupIdList])
   const blockIds = useIdList(blocks)
 
-  // Сторона группы в ряду (WYSIWYG, спека §5): раскладчик тот же, что у превью и
-  // рендерера (packRows). Ряд двигает кластеры значков: у правой колонки они
-  // зеркалятся вправо (левый кластер лёг бы в 28px-жёлоб и наехал на соседа).
   // Ряды видны ВСЕГДА, включая время драга: в столбике ряд распадается и появляется
   // цель «между левым и правым», которая после упаковки значит не то, что показала.
   // В двумерном полотне такой цели нет — вертикально вставляются между рядами
   // (границу держит rowBoundaryTarget).
   const rows = useMemo(() => packRows(groups), [groups])
-  const rowSide = useMemo(() => {
-    const m = new Map<string, 'left' | 'right'>()
-    for (const [leftCell, rightCell] of rows) {
-      if (!rightCell) continue
-      m.set(leftCell![0]!.id, 'left')
-      // В правой колонке — СТОПКА (§5): сторона у всех её групп одна, а полколонки
-      // им задаёт ячейка, поэтому ширина каждой остаётся полной внутри ячейки.
-      for (const g of rightCell) m.set(g.id, 'right')
-    }
-    return m
-  }, [rows])
+  // Группы, стоящие в СЕКЦИИ. Раньше здесь считалась ещё и сторона: кластер значков и
+  // рейл у правой колонки зеркалились вправо, потому что слева от неё 28px-жёлоб и
+  // сосед. При четырёх колонках зеркалить некуда — у средних колонок «своей» стороны
+  // нет вовсе, — поэтому кластер у всех слева, а от наезда на соседа его держит
+  // подложка в цвет холста (BlockRow). Остался один вопрос, ради которого карта и
+  // нужна: стоит ли вопрос в секции (тогда он не показывает зону второго уровня).
+  const inSection = useMemo(
+    () => new Set(rows.filter((r) => r.length > 1).flatMap((r) => r.flat().map((g) => g.id))),
+    [rows],
+  )
 
   // Жест ряда (спека §5): пока тащат подходящий элемент, у БЛИЖАЙШЕГО ряда горят обе
   // полосы — левая и правая. Кандидат — группа активного элемента:
@@ -381,7 +379,7 @@ export function SlashEditor({
     // молча развалил бы секцию, в которой вопрос стоит, — обещание зоны и её
     // последствие разошлись бы. Заодно снаружи такого вопроса нет поля полотна: зона
     // легла бы в 28px-жёлоб и наехала на соседнюю колонку.
-    if (rowSide.has(g.id)) return null
+    if (inSection.has(g.id)) return null
     const caption = g.blocks.find((x) => isCaptionType(x.type))
     if (!caption || caption.id === b.id) return null
     // Ячейка подписи занята (ряд уже собран) — приглашать некуда.
@@ -389,7 +387,7 @@ export function SlashEditor({
       r.some((c) => c.some((x) => x.id === caption.id)),
     )
     return row?.length === 1 ? caption.id : null
-  }, [drag, groups, blocks, rowSide])
+  }, [drag, groups, blocks, inSection])
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
@@ -455,8 +453,41 @@ export function SlashEditor({
     return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
   }
 
-  // Пересчёт кадра драга: ближайшее место для приглашения «встань в ряд», рейл будущей
-  // группы и предупреждающая рамка. Состав обоих оверлеев даёт прогноз planBlockDrop
+  // planDropLine — ЧТО обвести линией и с какой стороны цели. Возвращает id строк, чей
+  // union меряется, и сторону: `before` = элемент встанет ПЕРЕД целью.
+  //
+  // Сторона выводится из порядка документа, как её выводит сам dnd-kit: элемент,
+  // приехавший снизу (индекс больше), встаёт на место цели и толкает её вниз — линия
+  // сверху; приехавший сверху встаёт за ней — линия снизу.
+  //
+  // Ширина линии — по РЯДУ, а не по цели, когда вставка идёт на его внешнюю границу:
+  // блок встанет во всю ширину под секцией (или над ней), и линия шириной в одну
+  // колонку обещала бы колонку. Внутри ряда цель — сама строка, и линия остаётся
+  // колоночной: там блок и правда встанет в колонку.
+  function planDropLine(
+    activeId: string,
+    overId: string,
+    isGroupDrag: boolean,
+  ): { ids: string[]; before: boolean } | null {
+    const items = isGroupDrag ? groups.map((g) => g.id) : blocks.map((b) => b.id)
+    const ai = items.indexOf(activeId)
+    const ti = items.indexOf(overId)
+    if (ai < 0 || ti < 0 || ai === ti) return null
+    const before = ai > ti
+    const targetGroup = isGroupDrag
+      ? groups.find((g) => g.id === overId)
+      : groups.find((g) => g.blocks.some((b) => b.id === overId))
+    const ownIds = isGroupDrag ? (targetGroup?.blocks.map((b) => b.id) ?? []) : [overId]
+    const row = rows.find((r) => r.some((c) => c.some((g) => g.id === targetGroup?.id)))
+    if (!row || row.length < 2) return { ids: ownIds, before }
+    const parts = row.flat()
+    const rowIds = parts.flatMap((g) => g.blocks.map((b) => b.id))
+    const edge = before ? rowIds[0] : rowIds[rowIds.length - 1]
+    return { ids: ownIds.includes(edge!) ? rowIds : ownIds, before }
+  }
+
+  // Пересчёт кадра драга: линия вставки, ближайшее место для приглашения «встань в ряд»,
+  // рейл будущей группы и предупреждающая рамка. Состав обоих оверлеев даёт прогноз planBlockDrop
   // (рейлу — сама будущая группа, рамке — captionLoss по тому же прогнозу), геометрию —
   // живой DOM по data-block-id. Пустой состав — оверлея нет.
   function updateFrame(activeId: string, overId: string | null) {
@@ -464,9 +495,22 @@ export function SlashEditor({
     // Ближайшее место — в состояние тем же кадром, что и оверлеи: по нему полотно решает,
     // у какой группы зажечь приглашение. setState тем же значением React гасит сам.
     setNearGroup(nearGroupRef.current)
-    // Групповой драг оверлеям не адресован: вопрос переезжает целиком, ни в чей состав
-    // не входит и ничьего заголовка не забирает. Его рейл ведёт сама группа (проп rail).
-    if (!root || !overId || groupIds.has(activeId)) {
+    if (!root || !overId) {
+      setRail(null)
+      setWarnFrame(null)
+      setDropLine(null)
+      return
+    }
+    // ЛИНИЯ ВСТАВКИ — единственное, что теперь называет место, и она нужна ОБОИМ слоям:
+    // соседи не расступаются, поэтому без неё групповой драг остался бы вовсе без
+    // отклика. Цель дропа берётся уже подменённая (rawOverRef): по сырой линия обещала
+    // бы щель внутри ряда, куда блок не встанет.
+    const plan = planDropLine(activeId, rawOverRef.current ?? overId, groupIds.has(activeId))
+    setRect(setDropLine, plan && measureLine(root, plan.ids, plan.before))
+    // Дальше — оверлеи, адресованные только БЛОЧНОМУ драгу: вопрос переезжает целиком,
+    // ни в чей состав не входит и ничьего заголовка не забирает. Его рейл ведёт сама
+    // группа (проп rail).
+    if (groupIds.has(activeId)) {
       setRail(null)
       setWarnFrame(null)
       return
@@ -482,19 +526,13 @@ export function SlashEditor({
       // Старожилы будущей группы — без активной строки: она следует за курсором, и её
       // rect растянул бы рейл туда, где вопроса нет.
       const residents = (plan?.groupIds ?? []).filter((id) => id !== activeId)
-      // Группа-хозяйка будущего рейла в ТЕКУЩЕЙ раскладке: по первому старожилу.
-      // Прогноз колонок не меняет, а группа целиком стоит в одной колонке.
-      const host = blocks.find((b) => b.id === residents[0])?.groupId ?? null
       planRef.current = {
         key: planTarget,
-        // Сторона рейла — та же, что у группы в покое: у правой колонки ряда левый
-        // жёлоб занят соседом (см. GroupRow).
-        railSide: rowSide.get(host ?? '') ?? 'left',
         railIds: residents,
         lossIds: plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : [],
       }
     }
-    setRect(setRail, measureRail(root, planRef.current.railIds, planRef.current.railSide))
+    setRect(setRail, measureRail(root, planRef.current.railIds))
     setRect(setWarnFrame, measureUnion(root, planRef.current.lossIds))
   }
 
@@ -515,6 +553,7 @@ export function SlashEditor({
     cancelAnimationFrame(frameRafRef.current)
     setRail(null)
     setWarnFrame(null)
+    setDropLine(null)
     setHoverZone(null)
     setHoverCell(null)
     setNearGroup(null)
@@ -541,7 +580,11 @@ export function SlashEditor({
     if (!over || active.id === over.id) return
     const zoneTarget = rowZoneTarget(over.id)
     if (zoneTarget !== null) {
-      if (candidate) captionGuard(() => placeInRow(candidate, zoneTarget.groupId, zoneTarget.side))
+      if (candidate) {
+        captionGuard(() =>
+          placeInRow(candidate, zoneTarget.groupId, zoneTarget.col, zoneTarget.insert),
+        )
+      }
       return
     }
     // Зона второго уровня: ряд внутри вопроса. Заголовка здесь не теряет никто (обе
@@ -791,8 +834,8 @@ export function SlashEditor({
   )
   // Во время БЛОЧНОГО драга зона своей линии не рисует (заливка остаётся). Причина не
   // в тесноте, а в правде: рейл зоны висит на контейнере РЯДА, а ряд во время такого
-  // жеста меняет вид, не меняя своего бокса — строки внутри группы расступаются
-  // трансформами. Статичная линия при этом обнимает не то, что видит автор: в одной
+  // жеста меняет вид, не меняя своего бокса, — а дублёр внутри него меняет и то и
+  // другое. Статичная линия при этом обнимает не то, что видит автор: в одной
   // колонке ряда стоит стопка вопросов, и в неё попадают чужие строки. Линия в жёлобе
   // остаётся одна, измеренная, и принадлежит она вопросу (см. rail).
   const zoneRailOff = drag?.kind === 'block'
@@ -808,7 +851,6 @@ export function SlashEditor({
       firstGroup={g.id === groups[0]?.id}
       formId={formId}
       blockIds={blockIds}
-      side={rowSide.get(g.id) ?? null}
       // Зона второго уровня: id подписи, у которой горит приглашение собрать ряд
       // внутри вопроса (null — не в этой группе). Ближним рядом не ограничивается:
       // цель здесь ровно одна на всё полотно — подпись СВОЕЙ же группы.
@@ -887,6 +929,22 @@ export function SlashEditor({
                   transform: `translate(${rail.x}px, ${rail.y}px)`,
                   width: rail.w,
                   height: rail.h,
+                }}
+              />
+            )}
+            {/* ЛИНИЯ ВСТАВКИ: где элемент окажется, если отпустить сейчас. Соседи с
+          2026-08-11 неподвижны (стратегия расступания снята), и место называет только
+          она. Ширина линии — часть сообщения: во всю форму значит «между рядами», в
+          одну колонку — «в эту колонку». Тот же слой и тот же способ позиционирования,
+          что у рейла: absolute-оверлей по измеренным rect'ам, без своей анимации. */}
+            {dropLine && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute top-0 left-0 z-20 rounded-full bg-primary"
+                style={{
+                  transform: `translate(${dropLine.x}px, ${dropLine.y}px)`,
+                  width: dropLine.w,
+                  height: dropLine.h,
                 }}
               />
             )}
@@ -977,12 +1035,21 @@ export function SlashEditor({
                       // как key ряда обязан оставаться стабильным — иначе смена адреса
                       // посреди драга ремаунтила бы весь ряд.
                       const zones = hasGroup(row, inviteRow)
-                      const hot = hasGroup(row, hoverZone?.groupId ?? null)
-                        ? hoverZone!.side
-                        : null
+                      const hot = hasGroup(row, hoverZone?.groupId ?? null) ? hoverZone : null
+                      // Колонок в ряду СЕЙЧАС — от этого зависит, какие зоны показывать:
+                      // границ на одну больше, чем колонок, а подвал есть у каждой
+                      // колонки настоящей секции (у полноширинного ряда колонок нет, и
+                      // «в стопку» там значить нечему — placeInRow такой дроп отвергнет).
+                      // Границы гаснут на потолке: обещать колонку, которой не будет,
+                      // нельзя.
+                      const cols = row.length
+                      const canAdd = cols < MAX_COLUMNS
                       // Дублёр (§5): пока курсор в зоне, будущее место занимает тусклая
                       // копия перетаскиваемого вопроса, а ряд перестраивается в секцию —
                       // автор видит РЕЗУЛЬТАТ, а не отклик, который надо расшифровать.
+                      // Расступание соседей снято (2026-08-11), а дублёр остаётся: он не
+                      // «сдвиг раскладки», а показ результата на его будущем месте, и
+                      // живёт ровно там, куда автор целится (решение владельца).
                       // Раскладку копии считает previewCells (rowZones.ts) — она
                       // повторяет placeInRow и покрыта тестом; здесь остаётся подставить
                       // узел в помеченную null ячейку. Оригинал при этом остаётся под
@@ -992,8 +1059,20 @@ export function SlashEditor({
                       const cellNodes = cells.map((c, i) => (
                         <div
                           key={c[0]?.id ?? `ghost${i}`}
-                          className="flex min-w-0 flex-1 flex-col gap-7"
+                          className="relative flex min-w-0 flex-1 flex-col gap-7"
                         >
+                          {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
+                              жёлобе слева от неё, подвал — под ней. Первая колонка
+                              границы не показывает: слева от неё внешняя полоса, у
+                              которой для этого есть поле полотна. Пока идёт дублёр,
+                              зоны считаются по настоящему ряду (cells может быть его
+                              прогнозом), поэтому индексы берутся у row. */}
+                          {zones && i > 0 && i < cols && canAdd && (
+                            <GapDropZone rowId={inviteRow!} col={i + 1} />
+                          )}
+                          {zones && cols > 1 && i < cols && (
+                            <FootDropZone rowId={inviteRow!} col={i + 1} />
+                          )}
                           {c.map((g) =>
                             g === null ? (
                               <GhostGroup key="ghost" group={ghostGroup!} />
@@ -1010,11 +1089,21 @@ export function SlashEditor({
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
                         <div key={rowId} className="relative flex flex-col gap-7 sm:flex-row">
-                          {zones && (
-                            <SideDropZone rowId={inviteRow!} side="left" railOff={zoneRailOff} />
+                          {zones && canAdd && (
+                            <SideDropZone
+                              rowId={inviteRow!}
+                              side="left"
+                              col={1}
+                              railOff={zoneRailOff}
+                            />
                           )}
-                          {zones && (
-                            <SideDropZone rowId={inviteRow!} side="right" railOff={zoneRailOff} />
+                          {zones && canAdd && (
+                            <SideDropZone
+                              rowId={inviteRow!}
+                              side="right"
+                              col={cols + 1}
+                              railOff={zoneRailOff}
+                            />
                           )}
                           {cellNodes}
                         </div>
@@ -1152,14 +1241,35 @@ function hasGroup(row: GroupRef[][], id: string | null): boolean {
 const RAIL_W = 2
 const RAIL_GAP = 8
 const ROW_PAD = 6
-function measureRail(root: HTMLElement, ids: string[], side: 'left' | 'right'): Rect | null {
+function measureRail(root: HTMLElement, ids: string[]): Rect | null {
   const u = measureUnion(root, ids)
   if (!u) return null
   return {
-    x: side === 'right' ? u.x + u.w + RAIL_GAP - RAIL_W : u.x - RAIL_GAP,
+    x: u.x - RAIL_GAP,
     y: u.y + ROW_PAD,
     w: RAIL_W,
     h: Math.max(0, u.h - ROW_PAD * 2),
+  }
+}
+
+// measureLine — ЛИНИЯ ВСТАВКИ: горизонтальная черта в просвете у края цели, там, где
+// элемент окажется после дропа (2026-08-11). Заменила расступание строк: раскладка
+// стоит неподвижно, а место называет линия.
+//
+// Ширина — по ЦЕЛИ, а не по холсту, и это несёт смысл: линия во всю колонку значит
+// «встанешь в эту колонку», линия во всю ширину формы — «встанешь между рядами».
+// Половина просвета (LINE_GAP) ставит её ровно посередине между соседями — так же, как
+// её ставит глаз, когда решает, «куда это упадёт».
+const LINE_H = 2
+const LINE_GAP = 7
+function measureLine(root: HTMLElement, ids: string[], before: boolean): Rect | null {
+  const u = measureUnion(root, ids)
+  if (!u) return null
+  return {
+    x: u.x,
+    y: (before ? u.y - LINE_GAP : u.y + u.h + LINE_GAP) - LINE_H / 2,
+    w: u.w,
+    h: LINE_H,
   }
 }
 
@@ -1203,19 +1313,23 @@ function setRect(set: Dispatch<SetStateAction<Rect | null>>, next: Rect | null):
 // groupId, ни с block-id.
 const ROW_ZONE = 'rowzone:'
 // Адрес ряда — id его ПЕРВОЙ группы (зона висит на ряде, а не на группе; см.
-// SideDropZone). Для placeInRow это обычная цель: команда сама находит ряд цели и
-// кладёт элемент в конец нужной колонки, поэтому какой именно участник ряда назван
-// адресом, ей безразлично.
-const rowZoneId = (rowId: string, side: 'left' | 'right') => `${ROW_ZONE}${side}:${rowId}`
-// Возвращает цель И сторону: с какой стороны отпустили кнопку, с той элемент и встаёт
-// (решение владельца 2026-07-29). Без левой зоны «поставить блок слева от вопроса»
-// требовало тащить не тот элемент, о котором думает автор.
-const rowZoneTarget = (id: string | number): { groupId: string; side: 'left' | 'right' } | null => {
+// SideDropZone). Для placeInRow это обычная цель: команда сама находит ряд цели,
+// поэтому какой именно участник ряда назван адресом, ей безразлично.
+//
+// ГЕОМЕТРИЯ ЗОНЫ НАЗЫВАЕТ КОМАНДУ, и в этом весь смысл двух её видов (2026-08-10):
+// вертикальная полоса на ГРАНИЦЕ колонок открывает новую колонку (insert), полоса в
+// ПОДВАЛЕ колонки кладёт элемент в её стопку. Пока колонок было две, обе команды делила
+// одна полоса у края ряда, и «в стопку» она означала просто потому, что третьей колонке
+// было неоткуда взяться; при четырёх колонках это уже два разных места.
+export type RowZone = { groupId: string; col: number; insert: boolean }
+const rowZoneId = (rowId: string, col: number, insert: boolean) =>
+  `${ROW_ZONE}${insert ? 'b' : 'c'}${col}:${rowId}`
+const rowZoneTarget = (id: string | number): RowZone | null => {
   const s = String(id)
   if (!s.startsWith(ROW_ZONE)) return null
   const rest = s.slice(ROW_ZONE.length)
   const at = rest.indexOf(':')
-  return { side: rest.slice(0, at) as 'left' | 'right', groupId: rest.slice(at + 1) }
+  return { insert: rest[0] === 'b', col: Number(rest.slice(1, at)), groupId: rest.slice(at + 1) }
 }
 
 // Зона второго уровня (§6.6): правая треть строки ПОДПИСИ, пока тащат поле её же
@@ -1256,22 +1370,24 @@ const zoneFill = (hot: boolean) =>
     hot ? 'bg-primary/20' : 'bg-primary/[0.07]'
   }`
 
-// SideDropZone — приглашение «встань в эту колонку» у ближайшего к элементу РЯДА, с
-// той стороны, с какой элемент встанет. Якорь — контейнер ряда, а не группа: дублёр
-// ужимает группу вдвое, и зона, привязанная к её краю, уехала бы из-под курсора ровно
-// в тот момент, когда автор увидел результат (зона гасила бы сама себя, и жест
-// мигал бы). Вне потока и pointer-events-none: dnd-kit меряет rect, а не ловит
-// события, а занимающий место контрол схлопнул бы строку на mousedown (урок TD-22).
+// SideDropZone — приглашение «открой здесь НОВУЮ колонку» на внешней границе ряда.
+// Якорь — контейнер ряда, а не группа: дублёр ужимает группу, и зона, привязанная к её
+// краю, уехала бы из-под курсора ровно в тот момент, когда автор увидел результат (зона
+// гасила бы сама себя, и жест мигал бы). Вне потока и pointer-events-none: dnd-kit
+// меряет rect, а не ловит события, а занимающий место контрол схлопнул бы строку на
+// mousedown (урок TD-22).
 function SideDropZone({
   rowId,
   side,
+  col,
   railOff,
 }: {
   rowId: string
   side: 'left' | 'right'
+  col: number
   railOff: boolean
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, side) })
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, true) })
   return (
     <>
       {!railOff && <span aria-hidden="true" className={zoneRail(side, isOver)} />}
@@ -1279,6 +1395,53 @@ function SideDropZone({
         ref={setNodeRef}
         aria-hidden="true"
         className={`${zoneFill(isOver)} ${side === 'right' ? ZONE_RIGHT : ZONE_LEFT}`}
+      />
+    </>
+  )
+}
+
+// GapDropZone — та же команда на ВНУТРЕННЕЙ границе: полоса в 28px-жёлобе между
+// колонками, открывающая новую колонку между ними. Снаружи ряда для этого есть поле
+// полотна, внутри — только жёлоб, поэтому зона садится на левый край своей колонки и
+// сдвигается на половину себя влево: её площадь = сам жёлоб, ничей контент она не
+// перекрывает.
+function GapDropZone({ rowId, col }: { rowId: string; col: number }) {
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, true) })
+  return (
+    <>
+      <span aria-hidden="true" className={`${zoneRail('left', isOver)} -left-3.5`} />
+      <div
+        ref={setNodeRef}
+        aria-hidden="true"
+        className={`${zoneFill(isOver)} -left-3.5 w-7 -translate-x-1/2`}
+      />
+    </>
+  )
+}
+
+// FootDropZone — вторая команда ряда: «встань в СТОПКУ этой колонки». Полоса лежит в
+// подвале колонки, поперёк, — горизонтальная там, где «новая колонка» вертикальная, и
+// автору не нужно запоминать, какая полоса что делает: направление полосы и есть
+// направление, в котором вырастет ряд.
+//
+// Живёт в жёлобе МЕЖДУ рядами (28px), а не поверх контента: перекрыв низ колонки, она
+// отбирала бы у вертикального дропа последнюю строку вопроса.
+function FootDropZone({ rowId, col }: { rowId: string; col: number }) {
+  const { setNodeRef, isOver } = useDroppable({ id: rowZoneId(rowId, col, false) })
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 -bottom-2 z-20 h-0.5 rounded-full bg-primary transition-opacity ${
+          isOver ? 'opacity-100' : 'opacity-40'
+        }`}
+      />
+      <div
+        ref={setNodeRef}
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-0 -bottom-3.5 z-10 h-7 rounded-md transition-colors ${
+          isOver ? 'bg-primary/20' : 'bg-primary/[0.07]'
+        }`}
       />
     </>
   )
@@ -1364,9 +1527,9 @@ function GhostBlock({ block, caption }: { block: Block; caption?: string }) {
 // середину чужой группы; групповой драг туда не умеет (только границы групп).
 // blockIds — ОБЩИЙ список всех block-id полотна: items вложенного SortableContext
 // одинаковы у всех групп, чтобы блочный слой был одной сортируемой вселенной
-// (глобальные индексы → родная анимация через границы групп; см. коммент у blockIds
-// в SlashEditor). Отклик блочного драга над группой — расступающиеся строки и линия
-// дропа полотна; GroupRow своей подсветки не несёт.
+// (глобальные индексы → перенос через границы групп; см. коммент у blockIds
+// в SlashEditor). Отклик блочного драга над группой — линия вставки и оверлеи полотна;
+// GroupRow своей подсветки не несёт.
 type GroupRowProps = {
   group: { id: string; blocks: Block[] }
   // Первая группа полотна: её первая строка — начало формы, у пустого текста там
@@ -1374,11 +1537,6 @@ type GroupRowProps = {
   firstGroup: boolean
   formId: string
   blockIds: string[]
-  // Сторона в ряду (спека §5): left/right — группа занимает полколонки
-  // (calc(50% − 14px), полряда flex-wrap полотна), null — во всю ширину. right
-  // зеркалит кластеры значков строк (mirrored у BlockRow) и рейл группы. Ряды видны
-  // и во время драга (WYSIWYG) — сторона не гасится.
-  side: 'left' | 'right' | null
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
   // (SlashEditor), потому что группа под дублёром ужимается, а зона двигаться не
   // вправе. Здесь остаётся только второй уровень.
@@ -1439,7 +1597,6 @@ function sameGroupProps(a: GroupRowProps, b: GroupRowProps): boolean {
 const BY_REFERENCE = Object.keys({
   firstGroup: true,
   formId: true,
-  side: true,
   cellZone: true,
   cellGhost: true,
   rail: true,
@@ -1462,7 +1619,6 @@ const GroupRow = memo(function GroupRow({
   firstGroup,
   formId,
   blockIds,
-  side,
   cellZone,
   cellGhost,
   rail,
@@ -1518,14 +1674,13 @@ const GroupRow = memo(function GroupRow({
           вне потока (урок TD-22); кластер значков строк отодвинут левее (mr-2.5 в
           BlockRow), чтобы не наезжать. top/bottom-0 = ровно высота текста группы:
           -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент.
-          У правой колонки ряда рейл зеркалится в правый жёлоб — левый занят
-          соседней группой. */}
+          СЛЕВА ВСЕГДА, в любой колонке (2026-08-11): зеркалить рейл вправо было
+          осмысленно, пока колонок было две, — при четырёх у средних колонок «своей»
+          стороны нет, и одинаковое место читается лучше, чем угадываемое. */}
       {group.blocks.length > 1 && rail !== 'off' && (
         <span
           aria-hidden="true"
-          className={`pointer-events-none absolute top-0 bottom-0 w-0.5 rounded-full bg-primary/40 ${
-            side === 'right' ? '-right-2' : '-left-2'
-          } ${
+          className={`pointer-events-none absolute top-0 bottom-0 -left-2 w-0.5 rounded-full bg-primary/40 ${
             rail === 'on'
               ? ''
               : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
@@ -1575,12 +1730,6 @@ const GroupRow = memo(function GroupRow({
                       : isAnswerableType(b.type) && !hasCaption
                         ? b
                         : undefined
-                  }
-                  // Правая колонка ряда зеркалит кластеры значков (спека §5): левый
-                  // кластер лёг бы в жёлоб между колонками и наехал на соседа. Правая
-                  // ячейка ряда ВНУТРИ вопроса — тот же случай, тот же ответ.
-                  mirrored={
-                    side === 'right' || (innerRow.length > 1 && innerRow[1]![0]!.id === b.id)
                   }
                   // Голой строке ответа предлагается дать заголовок (§4.4 спеки фазы 15):
                   // тем же предикатом, которым шпаргалка решает, обещать ли Mod+Alt+T.

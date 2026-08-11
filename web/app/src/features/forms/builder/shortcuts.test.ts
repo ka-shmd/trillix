@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { MAX_COLUMNS } from '@entities/formSchema'
 import {
   arrowDir,
   BLOCK_COMMON,
@@ -177,26 +178,40 @@ describe('ярусы карты — общее вынесено из конте�
     const hint = (row: RowPosition, keys: 'Mod+Alt+→' | 'Mod+Alt+←') =>
       shortcutsFor('field', { row }).find((s) => s.label === keys)?.hint
 
+    const inRow = (col: number, cols: number, alone: boolean): RowPosition => ({
+      kind: 'in',
+      col,
+      cols,
+      alone,
+    })
+
     // Первый вопрос полотна: в ряд не с кем, из ряда некуда — обоих пунктов нет.
-    expect(hint('solo', 'Mod+Alt+→')).toBeUndefined()
-    expect(hint('solo', 'Mod+Alt+←')).toBeUndefined()
+    expect(hint({ kind: 'solo' }, 'Mod+Alt+→')).toBeUndefined()
+    expect(hint({ kind: 'solo' }, 'Mod+Alt+←')).toBeUndefined()
 
-    // Из полной ширины работают ОБЕ клавиши: цель одна (предыдущий вопрос), колонку
+    // Из полной ширины работают ОБЕ клавиши: цель одна (предыдущий вопрос), край
     // выбирает направление.
-    expect(hint('enter', 'Mod+Alt+→')).toBe('В ряд с предыдущим вопросом')
-    expect(hint('enter', 'Mod+Alt+←')).toBe('В левую колонку ряда')
+    expect(hint({ kind: 'enter' }, 'Mod+Alt+→')).toBe('В ряд с предыдущим вопросом')
+    expect(hint({ kind: 'enter' }, 'Mod+Alt+←')).toBe('В первую колонку ряда')
 
-    expect(hint('left', 'Mod+Alt+→')).toBe('В правую колонку ряда')
-    expect(hint('left', 'Mod+Alt+←')).toBe('Вернуть своим рядом')
+    // Первая колонка ряда из двух: вправо — переезд во вторую, влево — выход.
+    expect(hint(inRow(1, 2, false), 'Mod+Alt+→')).toBe('В 2-ю колонку ряда')
+    expect(hint(inRow(1, 2, false), 'Mod+Alt+←')).toBe('Вернуть своим рядом')
 
-    // Правая колонка — правый край оси; шаг влево из неё зависит от стопки: одиночка
-    // выходит из ряда (колонка опустела бы), из стопки элемент переезжает налево.
-    expect(hint('rightSolo', 'Mod+Alt+→')).toBeUndefined()
-    expect(hint('rightSolo', 'Mod+Alt+←')).toBe('Вернуть своим рядом')
-    expect(hint('rightStack', 'Mod+Alt+←')).toBe('В левую колонку ряда')
+    // Последняя колонка: шаг вправо ОТКРЫВАЕТ следующую, пока элемент в колонке не
+    // один (иначе она закрылась бы за спиной) и пока не упёрлись в потолок.
+    expect(hint(inRow(2, 2, false), 'Mod+Alt+→')).toBe('Новой колонкой справа')
+    expect(hint(inRow(2, 2, true), 'Mod+Alt+→')).toBeUndefined()
+    expect(hint(inRow(MAX_COLUMNS, MAX_COLUMNS, false), 'Mod+Alt+→')).toBeUndefined()
+
+    // Влево из середины — переезд в предыдущую колонку; из одиночки в ряду из двух —
+    // выход (переезд оставил бы колонку пустой).
+    expect(hint(inRow(3, 3, false), 'Mod+Alt+←')).toBe('В 2-ю колонку ряда')
+    expect(hint(inRow(2, 2, true), 'Mod+Alt+←')).toBe('Вернуть своим рядом')
+    expect(hint(inRow(3, 3, true), 'Mod+Alt+←')).toBe('В 2-ю колонку ряда')
 
     // Кроме двух пунктов оси, состав списка флаг не трогает.
-    expect(shortcutsFor('field', { row: 'left' }).map((s) => s.label)).toEqual(
+    expect(shortcutsFor('field', { row: inRow(1, 2, false) }).map((s) => s.label)).toEqual(
       shortcutsFor('field').map((s) => s.label),
     )
   })
@@ -206,7 +221,8 @@ describe('ярусы карты — общее вынесено из конте�
     // снимок шпаргалки приезжает позиция её БЛОКА — а Mod+Alt+←/→ на варианте работают на
     // своей оси (ряды вариантов внутри choice). Позиция вопроса о них не говорит ничего, и
     // пункты, которые на варианте работают, из карты исчезать не должны.
-    for (const row of ['solo', 'rightSolo'] as const) {
+    const rows: RowPosition[] = [{ kind: 'solo' }, { kind: 'in', col: 2, cols: 2, alone: true }]
+    for (const row of rows) {
       expect(shortcutsFor('option', { row })).toEqual(shortcutsFor('option'))
     }
     expect(shortcutsFor('option').find((s) => s.label === 'Mod+Alt+→')?.hint).toBe(

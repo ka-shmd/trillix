@@ -76,7 +76,7 @@ func TestValidateDesign(t *testing.T) {
 // и проверка, вызываемая только в тесте, не защищает ничего.
 func TestValidateSchema_Design(t *testing.T) {
 	t.Run("принимается в составе схемы", func(t *testing.T) {
-		raw := json.RawMessage(`{"schemaVersion":4,"blocks":[],
+		raw := json.RawMessage(`{"schemaVersion":1,"blocks":[],
 			"design":{"theme":"dark","font":"inter","palette":{"accent":"#00aa55"},"layout":{"fontSize":18}}}`)
 		s, err := ValidateSchema(raw)
 		if err != nil {
@@ -91,7 +91,7 @@ func TestValidateSchema_Design(t *testing.T) {
 	})
 
 	t.Run("мусор внутри design даёт 422", func(t *testing.T) {
-		raw := json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":{"theme":"auto"}}`)
+		raw := json.RawMessage(`{"schemaVersion":1,"blocks":[],"design":{"theme":"auto"}}`)
 		if _, err := ValidateSchema(raw); err == nil {
 			t.Fatal("схема с неизвестной темой принята")
 		}
@@ -101,7 +101,7 @@ func TestValidateSchema_Design(t *testing.T) {
 		// DisallowUnknownFields обязан работать и на вложенном объекте: опечатка в
 		// ключе оформления иначе осела бы мусором в JSONB и однажды была бы прочитана
 		// как настройка.
-		raw := json.RawMessage(`{"schemaVersion":4,"blocks":[],"design":{"themee":"dark"}}`)
+		raw := json.RawMessage(`{"schemaVersion":1,"blocks":[],"design":{"themee":"dark"}}`)
 		if _, err := ValidateSchema(raw); err == nil {
 			t.Fatal("схема с лишним ключом оформления принята")
 		}
@@ -110,7 +110,7 @@ func TestValidateSchema_Design(t *testing.T) {
 	t.Run("документ без design не меняется", func(t *testing.T) {
 		// Контракт фазы: форма, у которой оформления не трогали, обязана вести себя
 		// как до неё. Здесь это значит «поле остаётся nil и не синтезируется».
-		s, err := ValidateSchema(json.RawMessage(`{"schemaVersion":4,"blocks":[]}`))
+		s, err := ValidateSchema(json.RawMessage(`{"schemaVersion":1,"blocks":[]}`))
 		if err != nil {
 			t.Fatalf("схема без оформления отвергнута: %v", err)
 		}
@@ -392,7 +392,7 @@ func TestValidateDesign_CustomCSS(t *testing.T) {
 // `.Foo`/`.foo`, которую автор не сможет воспроизвести.
 func TestValidateSchema_BlockClass(t *testing.T) {
 	schema := func(cls string) json.RawMessage {
-		return json.RawMessage(`{"schemaVersion":4,"blocks":[
+		return json.RawMessage(`{"schemaVersion":1,"blocks":[
 			{"id":"b1","groupId":"g1","type":"short_text","class":"` + cls + `"}]}`)
 	}
 	for _, good := range []string{"promo", "my-block", "a", "a1-b2"} {

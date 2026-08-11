@@ -146,7 +146,7 @@ func TestForms_CRUDFlow(t *testing.T) {
 	// колонка forms.title — его плоское зеркало. Проверяем весь путь целиком, до
 	// настоящей БД: ручки PATCH {title} больше нет вовсе.
 	titled := patchDraftSchema(t, c, srv, created.ID,
-		`{"schemaVersion":4,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опрос клиентов"}]}]}`,
+		`{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опрос клиентов"}]}]}`,
 		detail.UpdatedAt, http.StatusOK)
 	if titled.Title != "Опрос клиентов" {
 		t.Fatalf("зеркало заголовка в колонке = %q", titled.Title)
@@ -226,7 +226,7 @@ func TestForms_Duplicate(t *testing.T) {
 	bob := registerUser(t, srv, "bob@example.com")
 
 	form := createForm(t, alice, srv, "Анкета")
-	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	patchDraftSchema(t, alice, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 
 	dup := duplicateForm(t, alice, srv, form.ID, http.StatusCreated)
@@ -371,7 +371,7 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	form := createForm(t, c, srv, "Анкета")
 
 	// Валидное сохранение: schemaVersion опущен — сервер обязан канонизировать (=1).
-	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	saved := patchDraftSchema(t, c, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 	if saved.UpdatedAt == form.UpdatedAt {
 		t.Fatalf("updated_at не сдвинулся после сохранения: %s", saved.UpdatedAt)
@@ -396,7 +396,7 @@ func TestForms_DraftSchemaAutosave(t *testing.T) {
 	}
 
 	// Мусор (неизвестный тип блока) с актуальным updated_at → 422.
-	garbage := `{"blocks":[{"id":"b1","type":"slider","label":"x"}]}`
+	garbage := `{"blocks":[{"id":"b1","groupId":"g_b1","type":"slider"}]}`
 	patchDraftSchema(t, c, srv, form.ID, garbage, saved.UpdatedAt, http.StatusUnprocessableEntity)
 
 	// Устаревший updated_at (исходный, уже сдвинутый первым сохранением) → 409.
@@ -425,7 +425,7 @@ func TestForms_PublishVersioning(t *testing.T) {
 	}
 
 	// Кладём непустой черновик, чтобы снапшот был осмысленным.
-	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	_ = patchDraftSchema(t, c, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 
 	// Первая публикация → версия 1, статус published, id версии выдан.
@@ -476,7 +476,7 @@ func TestForms_HasUnpublishedChanges(t *testing.T) {
 	c := registerUser(t, srv, "badge@example.com")
 
 	form := createForm(t, c, srv, "Анкета")
-	schemaA := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schemaA := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	_ = patchDraftSchema(t, c, srv, form.ID, schemaA, form.UpdatedAt, http.StatusOK)
 
 	// Неопубликованная форма — бейджа нет (сравнивать не с чем).
@@ -500,7 +500,7 @@ func TestForms_HasUnpublishedChanges(t *testing.T) {
 	// Правка черновика → расходится с версией → бейдж. updated_at сдвинут
 	// публикацией и переименованием — берём свежий из GET.
 	cur := getFormDetail(t, c, srv, form.ID, http.StatusOK)
-	schemaB := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя и фамилия","description":"","required":true,"settings":{}}]}`
+	schemaB := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя и фамилия"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	_ = patchDraftSchema(t, c, srv, form.ID, schemaB, cur.UpdatedAt, http.StatusOK)
 	if !getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
 		t.Fatal("после правки черновика ожидались неопубликованные изменения")
@@ -545,7 +545,7 @@ func TestForms_PublicFetch(t *testing.T) {
 	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
 
 	// Публикуем непустую схему.
-	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 	publishForm(t, owner, srv, form.ID, http.StatusOK)
 
@@ -591,7 +591,7 @@ func TestForms_RichTextSurvivesRoundTrip(t *testing.T) {
 
 	form := createForm(t, owner, srv, "Опрос с оформлением")
 
-	schema := `{"schemaVersion":3,"blocks":[
+	schema := `{"schemaVersion":1,"blocks":[
 		{"id":"t1","groupId":"g1","type":"title","text":[
 			{"t":"Ваше "},
 			{"t":"имя","m":["b","i"],"color":"#c026d3","bg":"#ffff00"},
@@ -654,7 +654,7 @@ func TestForms_PublicHTMLPage(t *testing.T) {
 	}
 	closeBody(t, r)
 
-	schema := `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 	publishForm(t, owner, srv, form.ID, http.StatusOK)
 

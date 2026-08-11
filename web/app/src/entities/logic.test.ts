@@ -344,7 +344,7 @@ describe('stripHiddenAnswers', () => {
 
 // ---------- форма правил в схеме (зеркало TestValidateSchema_Logic*) ----------
 
-const doc = (blocks: unknown[]): unknown => ({ schemaVersion: 4, blocks })
+const doc = (blocks: unknown[]): unknown => ({ schemaVersion: 1, blocks })
 
 describe('схема: форма правил', () => {
   const valid: [string, unknown][] = [

@@ -17,7 +17,7 @@ afterEach(cleanup)
 // Одиночный выбор: у него карточки с буквенным бейджем, и в текстовом содержимом
 // карточки видно и букву, и подпись. У множественного бейджей нет вовсе (обычные
 // чекбоксы, 2026-07-26) — раскладку рядов это не меняет, её проверяют те же тесты.
-const choice = (...options: { id: string; label: string; column?: 'right' }[]): Block => ({
+const choice = (...options: { id: string; label: string; column?: number }[]): Block => ({
   id: 'ch',
   groupId: 'g1',
   type: 'single_choice',
@@ -28,7 +28,7 @@ const list = () => document.querySelector('.rf-options')!
 
 describe('ряды вариантов в @fields/BlockField', () => {
   it('ряд из двоих — .rf-row с двумя ячейками, в каждой по карточке', () => {
-    render(<BlockField block={choice({ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет', column: 'right' })} />)
+    render(<BlockField block={choice({ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет', column: 2 })} />)
 
     const rows = list().querySelectorAll(':scope > .rf-row')
     expect(rows).toHaveLength(1)
@@ -49,7 +49,7 @@ describe('ряды вариантов в @fields/BlockField', () => {
       <BlockField
         block={choice(
           { id: 'o1', label: 'A-вариант' },
-          { id: 'o2', label: 'B-вариант', column: 'right' },
+          { id: 'o2', label: 'B-вариант', column: 2 },
           { id: 'o3', label: 'C-вариант' },
         )}
       />,

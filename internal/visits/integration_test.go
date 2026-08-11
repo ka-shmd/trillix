@@ -82,7 +82,7 @@ func newServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-const oneQuestionSchema = `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+const oneQuestionSchema = `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 
 // publishedForm создаёт пользователя, форму и публикует её; возвращает slug.
 func publishedForm(t *testing.T) string {

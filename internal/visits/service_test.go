@@ -308,7 +308,7 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 	}}
 	svc := NewService(nil, fakeForms{versions: []forms.Version{{
 		Number: 1,
-		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":false,"settings":{}}]}`),
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":false,"settings":{}}]}`),
 	}}}, openPlans(), store)
 
 	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())

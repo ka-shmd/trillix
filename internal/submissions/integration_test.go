@@ -132,7 +132,7 @@ func countSubmissions(t *testing.T) int {
 	return n
 }
 
-const requiredNameSchema = `{"blocks":[{"id":"b1","type":"short_text","label":"Имя","description":"","required":true,"settings":{}}]}`
+const requiredNameSchema = `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 
 // Сквозной успех: валидный ответ ложится в БД с id опубликованной версии.
 func TestSubmit_EndToEnd_StoresAnswerWithVersion(t *testing.T) {
@@ -448,7 +448,7 @@ func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
 
 // Условная логика на приёме (фаза 21, слайс 2). Форма: «Есть питомец?» (single_choice)
 // и обязательный «Какой?» за условием «выбрано Да».
-const logicSchema = `{"schemaVersion":4,"blocks":[
+const logicSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
 	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{},"visibleIf":{"all":[{"blockId":"pet","op":"is","value":"yes"}]}}
 ]}`
@@ -523,7 +523,7 @@ func TestSubmit_VisibleRequired_422(t *testing.T) {
 // Обязательность по условию (слайс 3): телефон обязателен только при выборе «хочу
 // звонок». Проверяем сквозь HTTP, а не только в домене: путь ответа проходит через
 // нормализацию, и «обязателен» здесь означает 422 респонденту.
-const requiredIfSchema = `{"schemaVersion":4,"blocks":[
+const requiredIfSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"how","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"call","label":"Звонок"},{"id":"mail","label":"Почта"}]}},
 	{"id":"phone","groupId":"g2","type":"phone","settings":{},"requiredIf":{"all":[{"blockId":"how","op":"is","value":"call"}]}}
 ]}`
@@ -553,7 +553,7 @@ func TestSubmit_RequiredIf(t *testing.T) {
 
 // Скрытие вариантов (слайс 4): выбранный скрытый вариант не принимается — даже если его
 // прислать вручную. Проверяем сквозь HTTP: это про то, что попадёт в базу и в выгрузку.
-const optionRuleSchema = `{"schemaVersion":4,"blocks":[
+const optionRuleSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"dog","label":"Собака"},{"id":"cat","label":"Кот"}]}},
 	{"id":"stuff","groupId":"g2","type":"multi_choice","settings":{"options":[
 		{"id":"leash","label":"Поводок","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"dog"}]}},
@@ -595,7 +595,7 @@ func TestSubmit_HiddenOption_StrippedFromAnswer(t *testing.T) {
 // Переходы между страницами (слайс 5): страница, которую перескочили, не собрана —
 // ответы на её вопросы не сохраняются, а её обязательные поля не мешают отправке.
 // Сервер считает обход сам: тело запроса ему в этом не указ.
-const jumpSchema = `{"schemaVersion":4,"blocks":[
+const jumpSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
 	{"id":"br1","groupId":"g2","type":"page_break","jumpIf":[{"when":{"all":[{"blockId":"pet","op":"is","value":"no"}]},"to":"br2"}]},
 	{"id":"kind","groupId":"g3","type":"short_text","required":true,"settings":{}},
