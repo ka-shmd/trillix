@@ -335,10 +335,10 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
     expect(b.map((x) => x.type)).toEqual(['text', 'text', 'title', 'email'])
     const gQuestion = b[2]!.groupId
-    const gText2 = b[1]!.groupId
+    const gText1 = b[0]!.groupId
 
-    // Тащим группу вопроса на позицию text2 → встаёт между text1 и text2.
-    store.getState().reorderGroups(gQuestion, gText2)
+    // Тащим группу вопроса ПОД text1 → встаёт между text1 и text2.
+    store.getState().reorderGroups(gQuestion, gText1)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['text', 'title', 'email', 'text'])
@@ -527,7 +527,7 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
-  it('reorderBlocks переносит блок на позицию другого (dnd)', () => {
+  it('reorderBlocks ставит блок ПОСЛЕ адреса, null — первым (dnd)', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     store.getState().addBlock('email')
@@ -538,10 +538,15 @@ describe('createBuilderStore', () => {
     expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
     expect(store.getState().dirty).toBe(true)
 
+    store.getState().reorderBlocks(a!, null) // адрес null — встать первым
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([a, b, c])
+
+    // Свой же id, неизвестный адрес и адрес «там, где уже стою» — no-op.
     store.getState().markSaved()
     store.getState().reorderBlocks(b!, b!)
     store.getState().reorderBlocks('нет', c!)
-    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    store.getState().reorderBlocks(b!, a!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([a, b, c])
     expect(store.getState().dirty).toBe(false)
   })
 
@@ -556,8 +561,8 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
     expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'text', 'email'])
 
-    // Тащим email на f1 — «между подписью и полем» чужого вопроса.
-    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+    // Тащим email под подпись — «между подписью и полем» чужого вопроса.
+    store.getState().reorderBlocks(b[3]!.id, b[0]!.id)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['title', 'email', 'short_text', 'text'])
@@ -574,7 +579,7 @@ describe('createBuilderStore', () => {
     store.getState().addBlock('label') // сирота-подпись в конце
     const b = store.getState().blocks
 
-    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+    store.getState().reorderBlocks(b[3]!.id, b[0]!.id)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['title', 'label', 'short_text', 'text'])
@@ -590,7 +595,7 @@ describe('createBuilderStore', () => {
     store.getState().addBlock('label')
     const [email, label] = store.getState().blocks.map((x) => x.id)
 
-    store.getState().reorderBlocks(label!, email!)
+    store.getState().reorderBlocks(label!, null)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['label', 'email'])
@@ -605,7 +610,7 @@ describe('createBuilderStore', () => {
 
     // Подпись летит над голое поле: рейл зажжётся у пары «подпись+поле», которой
     // ещё нет — вопрос рождается этим самым дропом.
-    const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
+    const join = planBlockDrop(b, b[1]!.id, null)
     expect(join?.groupIds).toEqual([b[1]!.id, b[0]!.id])
   })
 
@@ -616,16 +621,16 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
 
     // Два голых поля: перестановка их не роднит, каждое само себе вопрос.
-    expect(planBlockDrop(b, b[1]!.id, b[0]!.id)?.groupIds).toEqual([])
+    expect(planBlockDrop(b, b[1]!.id, null)?.groupIds).toEqual([])
   })
 
-  it('planBlockDrop: дроп внутрь чужого вопроса — плоский сплайс, как arrayMove', () => {
+  it('planBlockDrop: дроп внутрь чужого вопроса — плоский сплайс по адресу', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('email') // голое поле сразу под группой
     const b = store.getState().blocks
 
-    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — между подписью и полем
+    const plan = planBlockDrop(b, b[2]!.id, b[0]!.id) // email — между подписью и полем
     expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'email', 'short_text'])
     // Вопрос = группа, в которую войдёт САМ активный блок: заголовок достаётся ему.
     expect(plan!.groupIds).toEqual([b[0]!.id, b[2]!.id])
@@ -658,12 +663,12 @@ describe('createBuilderStore', () => {
     })
 
     it('дроп: чужое поле между подписью и полем крадёт заголовок у прежнего', () => {
-      const { store, field, bare } = canvas()
+      const { store, cap, field, bare } = canvas()
       const before = store.getState().blocks
 
       // Прогноз драга: сырая раскладка planBlockDrop (groupId там ещё старые) —
       // именно её полотно отдаёт в подсветку жертвы, не дожидаясь дропа.
-      const plan = planBlockDrop(before, bare.id, field.id)
+      const plan = planBlockDrop(before, bare.id, cap.id)
 
       expect(captionLoss(before, plan!.blocks)).toEqual([{ id: field.id, caption: 'Имя' }])
     })
@@ -1818,8 +1823,8 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 
   it('дроп группы на правого участника не собирает ряд молча', () => {
     const store = paired('short_text', 'email', 'phone')
-    const [, right, c] = store.getState().blocks
-    store.getState().reorderGroups(c!.groupId, right!.groupId)
+    const [left, right, c] = store.getState().blocks
+    store.getState().reorderGroups(c!.groupId, left!.groupId)
     expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
     expect(rows(store)).toEqual([1, 1, 1])
   })
@@ -2677,7 +2682,7 @@ describe('createBuilderStore — целая группа не принимает
 
     // Целимся в середину чужой группы: вставка сюда не пускает, перенос — пускает
     // (§4.1 спеки фазы 15), и подпись оказывается ближайшей к полю.
-    const plan = planBlockDrop(b, lone.id, b[1]!.id)
+    const plan = planBlockDrop(b, lone.id, b[0]!.id)
 
     expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'label', 'text', 'short_text'])
   })
@@ -2741,7 +2746,7 @@ describe('createBuilderStore — заголовок формы приколот 
     // Прямой вызов операции dnd: в UI зона заголовка недостижима (его нет в
     // sortable-вселенной), но стор обязан оставаться честным сам по себе —
     // страховка живёт в structural(), а не в каждой команде.
-    store.getState().reorderBlocks('q1', 'ft_x')
+    store.getState().reorderBlocks('q1', null)
 
     expect(store.getState().blocks[0]!.type).toBe('form_title')
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)

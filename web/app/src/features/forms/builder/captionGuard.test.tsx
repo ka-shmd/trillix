@@ -111,7 +111,7 @@ describe('captionGuard', () => {
     // Голое поле встаёт между вторым заголовком и его полем: заголовок «Почта»
     // достаётся пришельцу, f2 остаётся голым. Заодно уносим f1 из его вопроса.
     guard(() => {
-      store.getState().reorderBlocks('lone', 'f2')
+      store.getState().reorderBlocks('lone', 'c2')
       store.getState().moveBlock('f1', 'up')
     })
 

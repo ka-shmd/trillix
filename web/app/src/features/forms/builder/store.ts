@@ -175,15 +175,15 @@ export type BuilderActions = {
   // едет целиком, внутренний порядок цел, каретка остаётся на том же блоке (id
   // стабилен). На границе полотна — no-op (dirty не трогает).
   moveGroup: (id: string, dir: 'up' | 'down') => void
-  // reorderBlocks переносит БЛОК activeId на позицию overId (блочный слой dnd —
-  // плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как единицы —
-  // reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
+  // reorderBlocks ставит БЛОК activeId сразу ПОСЛЕ afterId; null — первым в документе
+  // (блочный слой dnd — плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как
+  // единицы — reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
   // попадает. Неизвестный id или та же позиция — no-op (dirty не трогает).
-  reorderBlocks: (activeId: string, overId: string) => void
-  // reorderGroups переносит ГРУППУ activeGroupId на позицию группы overGroupId
-  // (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
+  reorderBlocks: (activeId: string, afterId: string | null) => void
+  // reorderGroups ставит ГРУППУ activeGroupId сразу ПОСЛЕ группы afterGroupId; null —
+  // первой (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
   // блоков группы сохраняется. Неизвестный id или та же группа — no-op.
-  reorderGroups: (activeGroupId: string, overGroupId: string) => void
+  reorderGroups: (activeGroupId: string, afterGroupId: string | null) => void
   // duplicateBlock кладёт копию блока сразу за оригиналом. Поле, которому обязателен
   // заголовок (requiresCaption), дублируется вопросом целиком — иначе копия осталась
   // бы голым полем такого типа, а их не бывает.
@@ -945,9 +945,18 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
   return sectionSpanEnd(blocks, i) + 1
 }
 
-// planBlockDrop — чистый расчёт блочного дропа: activeId переносится на позицию
-// overId (плоский сплайс, как arrayMove у sortable). Строка роняется в ЛЮБУЮ
-// позицию полотна, включая середину чужого вопроса: замок «отвечаемый блок и
+// planBlockDrop — чистый расчёт блочного дропа: activeId встаёт СРАЗУ ПОСЛЕ afterId
+// (null — первым в документе).
+//
+// Адрес «после такого-то», а не «на позицию такого-то» (2026-08-11, вместе с новым
+// прицеливанием). Прежняя подпись несла swap-семантику dnd-kit: перенос шёл на ИНДЕКС
+// цели в списке без активного, и одна и та же цель значила «перед ней» либо «за ней» в
+// зависимости от того, откуда элемент приехал. Полотно теперь адресует щель напрямую
+// (`dropTarget.ts`), и разворачивать её обратно в «на позицию» на каждом вызове значило
+// бы писать код, который при чтении врёт. Направления у этого адреса нет вовсе.
+//
+// Строка роняется в ЛЮБУЮ позицию полотна, включая середину чужого вопроса: замок
+// «отвечаемый блок и
 // подпись приземляются ПОД чужой мульти-группой» снят фазой 15 (§4.1 спеки).
 // Он охранял единственный реальный ущерб — кражу подписи (regroup отдаёт заголовок
 // пришельцу, прежнее поле остаётся голым, и колонка CSV молча переименовывается);
@@ -964,15 +973,19 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
 export function planBlockDrop(
   blocks: Block[],
   activeId: string,
-  overId: string,
+  afterId: string | null,
 ): { blocks: Block[]; groupIds: string[] } | null {
   const from = blocks.findIndex((b) => b.id === activeId)
-  const to = blocks.findIndex((b) => b.id === overId)
-  if (from < 0 || to < 0 || from === to) return null
-  const active = blocks[from]!
+  if (from < 0 || afterId === activeId) return null
   const next = blocks.slice()
-  next.splice(from, 1)
-  next.splice(to, 0, active) // вставка на индекс overId в списке БЕЗ активного = arrayMove
+  const [active] = next.splice(from, 1)
+  // Адрес ищется в списке БЕЗ активного: «после X» — это место сразу за X, каким бы ни
+  // было исходное соседство. Отсутствующий адрес — не «в конец», а отказ: полотно такой
+  // цели не называло, и молча приземлить строку куда-то ещё значило бы соврать.
+  const to = afterId === null ? 0 : next.findIndex((b) => b.id === afterId) + 1
+  if (to === 0 && afterId !== null) return null
+  if (to === from) return null // встал бы ровно туда, где стоял
+  next.splice(to, 0, active!)
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
@@ -1632,30 +1645,33 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return blocks ? structural({ blocks }) : null
         }),
 
-      reorderBlocks: (activeId, overId) =>
+      reorderBlocks: (activeId, afterId) =>
         commit(null, (s) => {
-          // Плоский перенос одной строки через planBlockDrop: arrayMove — как
-          // sortable и показывает. Куда именно строка приземлится, метод не
+          // Плоский перенос одной строки через planBlockDrop: строка встаёт сразу за
+          // адресом. Куда именно строка приземлится, метод не
           // ограничивает (замок снят, §4.1 спеки фазы 15): принадлежность группам
           // после переноса выводит regroup, а потерю заголовка называет полотно
           // (captionLoss). Целостность мульти-группы при переносе ЕЁ САМОЙ охраняет
           // не этот метод, а UI: подпись мульти-группы несёт групповую ручку →
           // reorderGroups.
-          const plan = planBlockDrop(s.blocks, activeId, overId)
+          const plan = planBlockDrop(s.blocks, activeId, afterId)
           return plan ? structural({ blocks: plan.blocks }) : null
         }),
 
-      reorderGroups: (activeGroupId, overGroupId) =>
+      reorderGroups: (activeGroupId, afterGroupId) =>
         commit(null, (s) => {
           // Группы смежны (regroup), поэтому достаточно разложить полотно на группы,
-          // переставить одну (arrayMove — как sortable и показывает) и склеить
-          // обратно. Внутренний порядок блоков группы не меняется.
-          if (activeGroupId === overGroupId) return null
+          // переставить одну и склеить обратно. Внутренний порядок блоков группы не
+          // меняется. Адрес — «после такой-то», как и у reorderBlocks: направления у
+          // него нет, и вычитать его из индексов не нужно.
+          if (activeGroupId === afterGroupId) return null
           const groups = groupBlocks(s.blocks)
           const from = groups.findIndex((g) => g.id === activeGroupId)
-          const to = groups.findIndex((g) => g.id === overGroupId)
-          if (from < 0 || to < 0) return null
+          if (from < 0) return null
           const [moved] = groups.splice(from, 1)
+          const to = afterGroupId === null ? 0 : groups.findIndex((g) => g.id === afterGroupId) + 1
+          if (to === 0 && afterGroupId !== null) return null
+          if (to === from) return null
           groups.splice(to, 0, moved!)
           return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
