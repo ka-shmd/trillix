@@ -46,23 +46,12 @@ import {
   splitFormTitle,
 } from '@fields/groups'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
-import {
-  captionLoss,
-  needsCaptionFor,
-  planBlockDrop,
-  rowBoundaryGroup,
-  rowBoundaryTarget,
-  rowPosition,
-} from './store'
+import { captionLoss, needsCaptionFor, planBlockDrop, rowPosition } from './store'
 import { inviteRowId, previewCells } from './rowZones'
+import { type Box, type DropTarget, pickDropTarget } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
-import {
-  canvasSorting,
-  closestVertical,
-  DRAG_ACTIVATION_DISTANCE,
-  noLayoutAnimation,
-} from './dnd'
+import { canvasSorting, DRAG_ACTIVATION_DISTANCE, flatRect, noLayoutAnimation } from './dnd'
 import { BlockRow } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
@@ -175,10 +164,13 @@ export function SlashEditor({
   // строк. Соседи неподвижны, поэтому цель не уезжает из-под курсора; линия рисуется
   // оверлеем по живым rect'ам, как рейл и рамка, и живёт ровно столько же.
   const [dropLine, setDropLine] = useState<Rect | null>(null)
-  // Цель коллизии, от которой считается прогноз дропа. Совпадает с e.over везде, кроме
-  // подмены границей ряда (rowBoundaryTarget): там полотно кладёт в ref уже
-  // подменённую цель — по сырой прогноз описывал бы дроп, которого не будет.
-  const rawOverRef = useRef<string | null>(null)
+  // ЦЕЛЬ ЖЕСТА — один ответ на всё: где линия, что за прогноз дропа и какую команду
+  // выполнит отпускание кнопки. Считает её `pickDropTarget` по УКАЗАТЕЛЮ (dropTarget.ts),
+  // а не dnd-kit по центрам, поэтому она и живёт в ref, а не выводится из `e.over`:
+  // `over` остаётся у dnd-kit ради его собственных нужд (drop-анимация, клавиатурный
+  // сенсор), но полотну он больше ничего не сообщает. Один источник вместо прежних
+  // двух (сырая цель + подменённая) — расходиться нечему.
+  const targetRef = useRef<DropTarget | null>(null)
   // Во время драга рейлом групп управляет не hover (курсор с таскаемым элементом
   // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
   // рейл у группы-цели постоянно, блочный — гасит рейлы совсем: рейлы мульти-групп
@@ -207,7 +199,7 @@ export function SlashEditor({
   // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
   // оверлеи отставали от едущих строк. Цикл меряет каждый кадр; аргументы
   // (активный блок и цель) обновляют обработчики. Пустой ref = цикл остановлен.
-  const frameArgsRef = useRef<{ activeId: string; overId: string | null } | null>(null)
+  const frameArgsRef = useRef<{ activeId: string } | null>(null)
   const frameRafRef = useRef(0)
   // Прогноз дропа под текущую цель: состав обоих оверлеев и сторона рейла.
   // Пересчитывается на смене цели, а не каждый кадр (см. updateFrame).
@@ -391,122 +383,87 @@ export function SlashEditor({
 
   const collisionDetection: CollisionDetection = (args) => {
     const isGroupDrag = groupIds.has(String(args.active.id))
-    // Цель вертикальной вставки выбирается closestVertical, а не closestCenter (dnd.ts):
-    // евклидово расстояние даёт участнику ряда постоянный горизонтальный штраф в
-    // полколонки, и ряд проигрывает конкурс любому полноширинному блоку поблизости.
-    const collisions = closestVertical({
-      ...args,
-      droppableContainers: args.droppableContainers.filter(
-        (c) => !isRowZone(c.id) && groupIds.has(String(c.id)) === isGroupDrag,
-      ),
-    })
-    // Ближайшее место считается ВСЕГДА и ДО зон — по тем же центрам, что ведут
-    // вертикальную вставку. Внутри зоны оно обязано остаться прежним: зоны рисуются
-    // по нему, и, пересчитайся оно от попадания курсора в зону, зона гасила бы сама
-    // себя, едва курсор в неё войдёт.
-    const near = collisions[0] ? String(collisions[0].id) : null
-    nearGroupRef.current =
-      near === null
-        ? null
-        : isGroupDrag
-          ? near
-          : (blocks.find((b) => b.id === near)?.groupId ?? null)
-    // Зоны жеста спрашиваются указателем, а не центрами: зона намеренная, попадание в
-    // неё однозначно, а конкурс по центрам тянул бы её к строкам и мазал.
-    // Слоёв это не смешивает — зона отдельный вид droppable'а и из фильтра выше
-    // исключена.
+    // ЗОНЫ ЖЕСТА спрашиваются первыми и указателем: зона намеренная, попадание в неё
+    // однозначно, и своя команда у неё тоже своя (placeInRow, не перенос). Слоёв это не
+    // смешивает — зона отдельный вид droppable'а со своим пространством id.
     const zones = args.droppableContainers.filter((c) => isRowZone(c.id))
     if (zones.length > 0) {
       const hit = pointerWithin({ ...args, droppableContainers: zones })
       if (hit.length > 0) {
-        // Сырую цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
-        // прогноз описывал бы вертикальный дроп, которого не будет.
-        rawOverRef.current = null
+        // Вертикальную цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
+        // полотно рисовало бы линию к дропу, которого не будет.
+        targetRef.current = null
         return hit
       }
     }
-    if (collisions.length === 0) return collisions
-    const activeId = String(args.active.id)
-    // Групповой слой подчиняется тому же правилу «ряд — одна цель», что и блочный
-    // (§5): без него arrayMove по группам кладёт пришельца МЕЖДУ колонками, и
-    // раскладчик собирает из него ряд с новым составом.
-    if (isGroupDrag) {
-      const fixed = rowBoundaryGroup(blocks, activeId, String(collisions[0]!.id))
-      if (fixed === null) return collisions
-      const hit = collisions.find((c) => String(c.id) === fixed)
-      return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
+    // ПРИЦЕЛ — УКАЗАТЕЛЬ. Клавиатурному драгу указателя не выдают вовсе, и там прицелом
+    // работает центр едущего элемента: сенсор двигает именно его, и другой точки,
+    // выражающей намерение, в клавиатурном жесте нет.
+    const point =
+      args.pointerCoordinates ??
+      (() => {
+        const r = flatRect(args.collisionRect)
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      })()
+    // Прямоугольники берутся у dnd-kit (он их уже измерил на старте жеста), а не
+    // меряются заново: своё измерение здесь стоило бы прохода по DOM на каждое движение
+    // указателя. flatRect обязателен — у ClientRect'ов dnd-kit `top`/`left` не поля, а
+    // геттеры со чтением scroll (TD-55).
+    const boxes = new Map<string, Box>()
+    for (const c of args.droppableContainers) {
+      const raw = args.droppableRects.get(c.id)
+      if (raw) boxes.set(String(c.id), flatRect(raw))
     }
-    const rawOver = String(collisions[0]!.id)
-    rawOverRef.current = rawOver
-    // Единственная цель, которую полотно подменяет, — щель между участниками ряда:
-    // ряд атомарен для вертикальной вставки (§5), и уронённый туда блок его рвёт, а
-    // щель показывала не это. Прежняя вторая подмена (отвечаемый/подпись не падают
-    // внутрь чужой мульти-группы) снята фазой 15: дроп туда легален, а его цену
-    // называют подсветка жертвы и тост (§4.1, §4.3). Подмена — перестановкой внутри
-    // списка коллизий (там все кандидаты слоя): у dnd-kit over = collisions[0].
-    const rowFixed = rowBoundaryTarget(blocks, activeId, rawOver)
-    if (!rowFixed) return collisions
-    // Рамке тоже отдаём легальную цель: по сырой она обвела бы состав, который
-    // после подмены не сложится (блок ляжет под ряд, а не в группу участника).
-    rawOverRef.current = rowFixed
-    const hit = collisions.find((c) => String(c.id) === rowFixed)
-    return hit ? [hit, ...collisions.filter((c) => c !== hit)] : collisions
-  }
-
-  // planDropLine — ЧТО обвести линией и с какой стороны цели. Возвращает id строк, чей
-  // union меряется, и сторону: `before` = элемент встанет ПЕРЕД целью.
-  //
-  // Сторона выводится из порядка документа, как её выводит сам dnd-kit: элемент,
-  // приехавший снизу (индекс больше), встаёт на место цели и толкает её вниз — линия
-  // сверху; приехавший сверху встаёт за ней — линия снизу.
-  //
-  // Ширина линии — по РЯДУ, а не по цели, когда вставка идёт на его внешнюю границу:
-  // блок встанет во всю ширину под секцией (или над ней), и линия шириной в одну
-  // колонку обещала бы колонку. Внутри ряда цель — сама строка, и линия остаётся
-  // колоночной: там блок и правда встанет в колонку.
-  function planDropLine(
-    activeId: string,
-    overId: string,
-    isGroupDrag: boolean,
-  ): { ids: string[]; before: boolean } | null {
-    const items = isGroupDrag ? groups.map((g) => g.id) : blocks.map((b) => b.id)
-    const ai = items.indexOf(activeId)
-    const ti = items.indexOf(overId)
-    if (ai < 0 || ti < 0 || ai === ti) return null
-    const before = ai > ti
-    const targetGroup = isGroupDrag
-      ? groups.find((g) => g.id === overId)
-      : groups.find((g) => g.blocks.some((b) => b.id === overId))
-    const ownIds = isGroupDrag ? (targetGroup?.blocks.map((b) => b.id) ?? []) : [overId]
-    const row = rows.find((r) => r.some((c) => c.some((g) => g.id === targetGroup?.id)))
-    if (!row || row.length < 2) return { ids: ownIds, before }
-    const parts = row.flat()
-    const rowIds = parts.flatMap((g) => g.blocks.map((b) => b.id))
-    const edge = before ? rowIds[0] : rowIds[rowIds.length - 1]
-    return { ids: ownIds.includes(edge!) ? rowIds : ownIds, before }
+    const target = pickDropTarget(rows, boxes, point, {
+      layer: isGroupDrag ? 'group' : 'block',
+      activeId: String(args.active.id),
+    })
+    targetRef.current = target
+    // Ближайшее место для приглашения «встань в ряд» — вопрос, названный ЦЕЛЬЮ. Прежде
+    // это был отдельный конкурс по центрам, и он мог указать не туда, куда показывала
+    // линия: два ответа на один вопрос «куда автор целится».
+    nearGroupRef.current =
+      target === null
+        ? null
+        : (blocks.find((b) => b.id === target.afterId)?.groupId ?? groups[0]?.id ?? null)
+    if (target === null) return []
+    // dnd-kit по-прежнему нужен `over`: им живут drop-анимация и клавиатурный сенсор.
+    // Отдаём ему droppable АДРЕСА цели — ближайшее к правде, что у нас есть; команду
+    // полотно всё равно берёт из targetRef, поэтому расхождение здесь безвредно.
+    const overId =
+      target.afterId === null
+        ? null
+        : isGroupDrag
+          ? (blocks.find((b) => b.id === target.afterId)?.groupId ?? null)
+          : target.afterId
+    const hit =
+      overId === null
+        ? undefined
+        : args.droppableContainers.find((c) => String(c.id) === overId)
+    return hit ? [{ id: hit.id, data: { droppableContainer: hit, value: 0 } }] : []
   }
 
   // Пересчёт кадра драга: линия вставки, ближайшее место для приглашения «встань в ряд»,
   // рейл будущей группы и предупреждающая рамка. Состав обоих оверлеев даёт прогноз planBlockDrop
   // (рейлу — сама будущая группа, рамке — captionLoss по тому же прогнозу), геометрию —
   // живой DOM по data-block-id. Пустой состав — оверлея нет.
-  function updateFrame(activeId: string, overId: string | null) {
+  function updateFrame(activeId: string) {
     const root = canvasRef.current
     // Ближайшее место — в состояние тем же кадром, что и оверлеи: по нему полотно решает,
     // у какой группы зажечь приглашение. setState тем же значением React гасит сам.
     setNearGroup(nearGroupRef.current)
-    if (!root || !overId) {
+    const target = targetRef.current
+    if (!root || !target) {
       setRail(null)
       setWarnFrame(null)
       setDropLine(null)
       return
     }
-    // ЛИНИЯ ВСТАВКИ — единственное, что теперь называет место, и она нужна ОБОИМ слоям:
-    // соседи не расступаются, поэтому без неё групповой драг остался бы вовсе без
-    // отклика. Цель дропа берётся уже подменённая (rawOverRef): по сырой линия обещала
-    // бы щель внутри ряда, куда блок не встанет.
-    const plan = planDropLine(activeId, rawOverRef.current ?? overId, groupIds.has(activeId))
-    setRect(setDropLine, plan && measureLine(root, plan.ids, plan.before))
+    // ЛИНИЯ ВСТАВКИ — единственное, что называет место, и она нужна ОБОИМ слоям: соседи
+    // не расступаются, поэтому без неё групповой драг остался бы вовсе без отклика. Что
+    // мерить и с какой стороны, полотно больше не выводит само — это сказала цель
+    // (dropTarget.ts), и говорящих о месте по-прежнему ровно один.
+    setRect(setDropLine, measureLine(root, target.lineIds, target.before))
     // Дальше — оверлеи, адресованные только БЛОЧНОМУ драгу: вопрос переезжает целиком,
     // ни в чей состав не входит и ничьего заголовка не забирает. Его рейл ведёт сама
     // группа (проп rail).
@@ -520,14 +477,13 @@ export function SlashEditor({
     // цель и лежит в ref: planBlockDrop копирует весь документ и выводит groupId,
     // captionLoss идёт по нему ещё раз, и делать это 60 раз в секунду ради неизменного
     // ответа — чистый мусор для сборщика на длинной форме.
-    const planTarget = rawOverRef.current ?? overId
-    if (planRef.current?.key !== planTarget) {
-      const plan = planBlockDrop(blocks, activeId, planTarget)
+    if (planRef.current === null || planRef.current.key !== target.afterId) {
+      const plan = planBlockDrop(blocks, activeId, target.afterId)
       // Старожилы будущей группы — без активной строки: она следует за курсором, и её
       // rect растянул бы рейл туда, где вопроса нет.
       const residents = (plan?.groupIds ?? []).filter((id) => id !== activeId)
       planRef.current = {
-        key: planTarget,
+        key: target.afterId,
         railIds: residents,
         lossIds: plan ? captionLoss(blocks, plan.blocks).map((l) => l.id) : [],
       }
@@ -537,12 +493,12 @@ export function SlashEditor({
   }
 
   function startFrameLoop(activeId: string) {
-    frameArgsRef.current = { activeId, overId: null }
+    frameArgsRef.current = { activeId }
     cancelAnimationFrame(frameRafRef.current)
     const tick = () => {
       const a = frameArgsRef.current
       if (!a) return
-      updateFrame(a.activeId, a.overId)
+      updateFrame(a.activeId)
       frameRafRef.current = requestAnimationFrame(tick)
     }
     frameRafRef.current = requestAnimationFrame(tick)
@@ -557,7 +513,7 @@ export function SlashEditor({
     setHoverZone(null)
     setHoverCell(null)
     setNearGroup(null)
-    rawOverRef.current = null
+    targetRef.current = null
     nearGroupRef.current = null
     planRef.current = null
   }
@@ -572,33 +528,50 @@ export function SlashEditor({
   // «эта команда заголовок не отнимает» — знание, которое протухает, а обёртка на
   // безобидной ветке не стоит ничего (потери нет — тоста нет).
   function onDragEnd(e: DragEndEvent) {
+    // Цель снимается ДО остановки цикла: stopFrameLoop её и гасит.
+    const target = targetRef.current
     stopFrameLoop()
     const candidate = rowCandidate
     const cellCand = cellCandidate
     setDrag(null)
     const { active, over } = e
-    if (!over || active.id === over.id) return
-    const zoneTarget = rowZoneTarget(over.id)
-    if (zoneTarget !== null) {
-      if (candidate) {
-        captionGuard(() =>
-          placeInRow(candidate, zoneTarget.groupId, zoneTarget.col, zoneTarget.insert),
-        )
+    // Зоны жеста опознаются по `over`: у них своя команда (placeInRow), и вертикальной
+    // цели полотно в зоне не считает вовсе.
+    if (over) {
+      const zoneTarget = rowZoneTarget(over.id)
+      if (zoneTarget !== null) {
+        if (candidate) {
+          captionGuard(() =>
+            placeInRow(candidate, zoneTarget.groupId, zoneTarget.col, zoneTarget.insert),
+          )
+        }
+        return
       }
-      return
+      // Зона второго уровня: ряд внутри вопроса. Заголовка здесь не теряет никто (обе
+      // строки остаются в своей группе), но идём через тот же captionGuard — цену
+      // структурных команд называет одно место, и исключений у него нет.
+      const cellTarget = cellZoneBlock(over.id)
+      if (cellTarget !== null) {
+        const dragged = String(active.id)
+        if (cellCand === cellTarget) captionGuard(() => placeBlockInRow(dragged, cellTarget))
+        return
+      }
     }
-    // Зона второго уровня: ряд внутри вопроса. Заголовка здесь не теряет никто (обе
-    // строки остаются в своей группе), но идём через тот же captionGuard — цену
-    // структурных команд называет одно место, и исключений у него нет.
-    const cellTarget = cellZoneBlock(over.id)
-    if (cellTarget !== null) {
-      const dragged = String(active.id)
-      if (cellCand === cellTarget) captionGuard(() => placeBlockInRow(dragged, cellTarget))
-      return
-    }
+    // Вертикальный дроп исполняет ТУ ЖЕ цель, которую всё это время рисовала линия, — не
+    // `over`. Иначе показанное и сделанное расходились бы ровно там, где полотно и
+    // dnd-kit считают цель по-разному, а считают они её по-разному всегда: у dnd-kit
+    // центры, у полотна указатель.
+    if (!target) return
     const activeId = String(active.id)
-    if (groupIds.has(activeId)) captionGuard(() => reorderGroups(activeId, String(over.id)))
-    else captionGuard(() => reorderBlocks(activeId, String(over.id)))
+    if (groupIds.has(activeId)) {
+      const afterGroup =
+        target.afterId === null
+          ? null
+          : (blocks.find((b) => b.id === target.afterId)?.groupId ?? null)
+      captionGuard(() => reorderGroups(activeId, afterGroup))
+    } else {
+      captionGuard(() => reorderBlocks(activeId, target.afterId))
+    }
   }
 
   // Создаёт новую текстовую строку и фокусирует её. Enter (§3.2) кладёт строку ПОСЛЕ
@@ -1000,7 +973,6 @@ export function SlashEditor({
                   // дублёр встанет не туда, куда упадёт блок.
                   setHoverZone(overId === null ? null : rowZoneTarget(overId))
                   setHoverCell(overId === null ? null : cellZoneBlock(overId))
-                  if (frameArgsRef.current) frameArgsRef.current.overId = overId
                 }}
                 onDragEnd={onDragEnd}
                 onDragCancel={() => {

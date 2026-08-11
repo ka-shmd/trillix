@@ -60,16 +60,18 @@ export function pickDropTarget(
   pointer: { x: number; y: number },
   opts: PickOpts,
 ): DropTarget | null {
-  // Активный элемент вычёркивается ВЕЗДЕ — и из адреса, и из состава линии. Он едет за
-  // курсором, поэтому его бокс всегда под указателем (иначе он выигрывал бы конкурс у
-  // любой настоящей цели), «после самого себя» не позиция, а линия, измеренная вместе с
-  // ним, растянулась бы до курсора. Полосу, которую он освободил, забирает элемент
-  // сверху — как и всякий просвет.
+  // Активный элемент вычёркивается ВЕЗДЕ — и из адреса, и из состава линии. Причин две
+  // и они разные. «После самого себя» не позиция вовсе: слот, который активный занимает
+  // в раскладке, по праву принадлежит элементу СВЕРХУ, как и всякий просвет, — иначе
+  // автор, потянувший строку чуть в сторону, целился бы в собственное пустое место.
+  // А состав линии его не терпит потому, что меряется она по ЖИВОМУ DOM: активная
+  // строка едет за курсором трансформой, и линия, измеренная вместе с ней, растянулась
+  // бы до указателя.
   const ctx: Ctx = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
 
   const measured: { row: Row<Group>; box: Box }[] = []
   for (const row of rows) {
-    const box = union(ctx, rowBlocks(row))
+    const box = rowUnion(ctx, row)
     if (box) measured.push({ row, box })
   }
   if (measured.length === 0) return null
@@ -125,7 +127,8 @@ function pickInRow(
 
   const cells: { groups: Group[]; box: Box }[] = []
   for (const cell of row) {
-    const box = union(ctx, cell.flatMap((g) => g.blocks))
+    let box: Box | null = null
+    for (const g of cell) box = merge(box, union(ctx, g.blocks))
     if (box) cells.push({ groups: cell, box })
   }
   if (cells.length === 0) return afterRow
@@ -193,13 +196,17 @@ function activeBlockIds(rows: Row<Group>[], opts: PickOpts): string[] {
   return []
 }
 
+// Замеры идут на КАЖДОЕ движение указателя и по всему полотну, поэтому промежуточных
+// массивов здесь нет: активный отсеивается на месте (§5.3 EDITOR.md — правила кадра
+// драга; цена мусора на форме в двести блоков уже была измерена в TD-55).
 function union(ctx: Ctx, blocks: Block[]): Box | null {
   let top = Infinity
   let bottom = -Infinity
   let left = Infinity
   let right = -Infinity
-  for (const id of liveIds(ctx, blocks)) {
-    const b = ctx.boxes.get(id)
+  for (const block of blocks) {
+    if (ctx.active.has(block.id)) continue
+    const b = ctx.boxes.get(block.id)
     if (!b) continue
     top = Math.min(top, b.top)
     bottom = Math.max(bottom, b.bottom)
@@ -209,18 +216,34 @@ function union(ctx: Ctx, blocks: Block[]): Box | null {
   return top === Infinity ? null : { top, bottom, left, right }
 }
 
+function rowUnion(ctx: Ctx, row: Row<Group>): Box | null {
+  let box: Box | null = null
+  for (const cell of row) for (const g of cell) box = merge(box, union(ctx, g.blocks))
+  return box
+}
+
+const merge = (a: Box | null, b: Box | null): Box | null =>
+  a === null || b === null
+    ? (a ?? b)
+    : {
+        top: Math.min(a.top, b.top),
+        bottom: Math.max(a.bottom, b.bottom),
+        left: Math.min(a.left, b.left),
+        right: Math.max(a.right, b.right),
+      }
+
 // Расстояние от точки до отрезка: ноль внутри, иначе промах в пикселях.
 const gap = (v: number, lo: number, hi: number): number => Math.max(lo - v, v - hi, 0)
 
 function nearest<T>(items: T[], distance: (item: T) => number): T {
-  let best = items[0]!
-  let bestD = distance(best)
-  for (const item of items) {
-    const d = distance(item)
+  let best = 0
+  let bestD = distance(items[0]!)
+  for (let i = 1; i < items.length; i++) {
+    const d = distance(items[i]!)
     if (d < bestD) {
-      best = item
+      best = i
       bestD = d
     }
   }
-  return best
+  return items[best]!
 }

@@ -249,6 +249,26 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     expect(t).toEqual({ afterId: right.id, lineIds: [left.id, right.id], before: false })
   })
 
+  // Порт сценария, которым прежде проверялся rowBoundaryTarget: исключение «свой ряд»
+  // обязано быть именно СВОИМ. Участник верхнего ряда для нижнего такой же чужак, как
+  // всякий одиночка, и щель нижнего ему не полагается.
+  it('участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
+    const a = blk('short_text')
+    const b = blk('email', { settings: { column: 2 } })
+    const c = blk('phone')
+    const d = blk('number', { settings: { column: 2 } })
+    const rows = layout([a, b, c, d])
+    expect(rows).toHaveLength(2)
+    expect(rows[1]).toHaveLength(2)
+
+    // b из верхнего ряда целится в c — левого участника нижнего.
+    expect(pick([a, b, c, d], c.id, b.id)).toEqual({
+      afterId: d.id,
+      lineIds: [c.id, d.id],
+      before: false,
+    })
+  })
+
   it('вставка контента ВНУТРЬ участника ряда остаётся легальной', () => {
     const gid = 'q'
     const caption = blk('title', { groupId: gid })
