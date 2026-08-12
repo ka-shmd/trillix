@@ -15,8 +15,6 @@ import {
   createBuilderStore,
   DOCUMENT_FIELDS,
   planBlockDrop,
-  rowBoundaryGroup,
-  rowBoundaryTarget,
   rowPosition,
 } from './store'
 
@@ -335,10 +333,10 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
     expect(b.map((x) => x.type)).toEqual(['text', 'text', 'title', 'email'])
     const gQuestion = b[2]!.groupId
-    const gText2 = b[1]!.groupId
+    const gText1 = b[0]!.groupId
 
-    // Тащим группу вопроса на позицию text2 → встаёт между text1 и text2.
-    store.getState().reorderGroups(gQuestion, gText2)
+    // Тащим группу вопроса ПОД text1 → встаёт между text1 и text2.
+    store.getState().reorderGroups(gQuestion, gText1)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['text', 'title', 'email', 'text'])
@@ -527,7 +525,7 @@ describe('createBuilderStore', () => {
     expect(store.getState().dirty).toBe(false)
   })
 
-  it('reorderBlocks переносит блок на позицию другого (dnd)', () => {
+  it('reorderBlocks ставит блок ПОСЛЕ адреса, null — первым (dnd)', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     store.getState().addBlock('email')
@@ -538,10 +536,15 @@ describe('createBuilderStore', () => {
     expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
     expect(store.getState().dirty).toBe(true)
 
+    store.getState().reorderBlocks(a!, null) // адрес null — встать первым
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([a, b, c])
+
+    // Свой же id, неизвестный адрес и адрес «там, где уже стою» — no-op.
     store.getState().markSaved()
     store.getState().reorderBlocks(b!, b!)
     store.getState().reorderBlocks('нет', c!)
-    expect(store.getState().blocks.map((x) => x.id)).toEqual([b, c, a])
+    store.getState().reorderBlocks(b!, a!)
+    expect(store.getState().blocks.map((x) => x.id)).toEqual([a, b, c])
     expect(store.getState().dirty).toBe(false)
   })
 
@@ -556,8 +559,8 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
     expect(b.map((x) => x.type)).toEqual(['title', 'short_text', 'text', 'email'])
 
-    // Тащим email на f1 — «между подписью и полем» чужого вопроса.
-    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+    // Тащим email под подпись — «между подписью и полем» чужого вопроса.
+    store.getState().reorderBlocks(b[3]!.id, b[0]!.id)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['title', 'email', 'short_text', 'text'])
@@ -574,7 +577,7 @@ describe('createBuilderStore', () => {
     store.getState().addBlock('label') // сирота-подпись в конце
     const b = store.getState().blocks
 
-    store.getState().reorderBlocks(b[3]!.id, b[1]!.id)
+    store.getState().reorderBlocks(b[3]!.id, b[0]!.id)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['title', 'label', 'short_text', 'text'])
@@ -588,9 +591,9 @@ describe('createBuilderStore', () => {
     const store = createBuilderStore()
     store.getState().addBlock('email') // голое поле
     store.getState().addBlock('label')
-    const [email, label] = store.getState().blocks.map((x) => x.id)
+    const [, label] = store.getState().blocks.map((x) => x.id)
 
-    store.getState().reorderBlocks(label!, email!)
+    store.getState().reorderBlocks(label!, null)
 
     const s = store.getState().blocks
     expect(s.map((x) => x.type)).toEqual(['label', 'email'])
@@ -605,7 +608,7 @@ describe('createBuilderStore', () => {
 
     // Подпись летит над голое поле: рейл зажжётся у пары «подпись+поле», которой
     // ещё нет — вопрос рождается этим самым дропом.
-    const join = planBlockDrop(b, b[1]!.id, b[0]!.id)
+    const join = planBlockDrop(b, b[1]!.id, null)
     expect(join?.groupIds).toEqual([b[1]!.id, b[0]!.id])
   })
 
@@ -616,16 +619,16 @@ describe('createBuilderStore', () => {
     const b = store.getState().blocks
 
     // Два голых поля: перестановка их не роднит, каждое само себе вопрос.
-    expect(planBlockDrop(b, b[1]!.id, b[0]!.id)?.groupIds).toEqual([])
+    expect(planBlockDrop(b, b[1]!.id, null)?.groupIds).toEqual([])
   })
 
-  it('planBlockDrop: дроп внутрь чужого вопроса — плоский сплайс, как arrayMove', () => {
+  it('planBlockDrop: дроп внутрь чужого вопроса — плоский сплайс по адресу', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // title, f1
     store.getState().addBlock('email') // голое поле сразу под группой
     const b = store.getState().blocks
 
-    const plan = planBlockDrop(b, b[2]!.id, b[1]!.id) // email — между подписью и полем
+    const plan = planBlockDrop(b, b[2]!.id, b[0]!.id) // email — между подписью и полем
     expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'email', 'short_text'])
     // Вопрос = группа, в которую войдёт САМ активный блок: заголовок достаётся ему.
     expect(plan!.groupIds).toEqual([b[0]!.id, b[2]!.id])
@@ -658,12 +661,12 @@ describe('createBuilderStore', () => {
     })
 
     it('дроп: чужое поле между подписью и полем крадёт заголовок у прежнего', () => {
-      const { store, field, bare } = canvas()
+      const { store, cap, field, bare } = canvas()
       const before = store.getState().blocks
 
       // Прогноз драга: сырая раскладка planBlockDrop (groupId там ещё старые) —
       // именно её полотно отдаёт в подсветку жертвы, не дожидаясь дропа.
-      const plan = planBlockDrop(before, bare.id, field.id)
+      const plan = planBlockDrop(before, bare.id, cap.id)
 
       expect(captionLoss(before, plan!.blocks)).toEqual([{ id: field.id, caption: 'Имя' }])
     })
@@ -709,85 +712,6 @@ describe('createBuilderStore', () => {
     })
   })
 
-  it('rowBoundaryTarget: щель между участниками ряда подменяется границей ряда', () => {
-    const store = createBuilderStore()
-    store.getState().addBlock('text') // контент НАД рядом
-    store.getState().addBlock('short_text') // левый участник
-    store.getState().addBlock('email') // правый участник
-    store.getState().addBlock('number') // голое поле ПОД рядом
-    const [txt, left, right, below] = store.getState().blocks
-    store.getState().placeInRow(right!.groupId, left!.groupId, 2, true)
-    const blocks = store.getState().blocks
-
-    // Сверху щель между участниками даёт цель «левый участник» → подмена на конец ряда.
-    expect(rowBoundaryTarget(blocks, txt!.id, left!.id)).toBe(right!.id)
-    // Снизу её даёт цель «правый участник» → строка за рядом (здесь — сам активный).
-    expect(rowBoundaryTarget(blocks, below!.id, right!.id)).toBe(below!.id)
-    // Прочие цели легальны: дроп над рядом и под ним ряд не рвёт.
-    expect(rowBoundaryTarget(blocks, below!.id, left!.id)).toBeNull()
-    expect(rowBoundaryTarget(blocks, txt!.id, right!.id)).toBeNull()
-    // Участник ряда, переставляемый внутри своего ряда, правилу не подчиняется.
-    expect(rowBoundaryTarget(blocks, left!.id, right!.id)).toBeNull()
-  })
-
-  // Групповой слой правила не имел вовсе, и arrayMove по группам клал пришельца МЕЖДУ
-  // колонками: раскладчик читал это буквально и собирал ряд с новым составом — вопрос,
-  // который тащили «в щель над рядом», склеивался с правой колонкой (владелец,
-  // 2026-08-02).
-  it('rowBoundaryGroup: ряд для вертикальной вставки групп — ОДНА цель', () => {
-    const store = createBuilderStore()
-    store.getState().addBlock('text') // одиночка НАД рядом
-    store.getState().addBlock('short_text') // левый участник
-    store.getState().addBlock('email') // правый участник
-    store.getState().addBlock('number') // одиночка ПОД рядом
-    const [txt, left, right, below] = store.getState().blocks
-    store.getState().placeInRow(right!.groupId, left!.groupId, 2, true)
-    const blocks = store.getState().blocks
-
-    // Сверху вниз: любой участник ряда как цель значит «под ряд».
-    expect(rowBoundaryGroup(blocks, txt!.groupId, left!.groupId)).toBe(right!.groupId)
-    expect(rowBoundaryGroup(blocks, txt!.groupId, right!.groupId)).toBe(right!.groupId)
-    // Снизу вверх: «над рядом».
-    expect(rowBoundaryGroup(blocks, below!.groupId, right!.groupId)).toBe(left!.groupId)
-    expect(rowBoundaryGroup(blocks, below!.groupId, left!.groupId)).toBe(left!.groupId)
-    // Цель вне ряда подмены не требует.
-    expect(rowBoundaryGroup(blocks, below!.groupId, txt!.groupId)).toBeNull()
-    // Перестановка ВНУТРИ своего ряда свободна: там щель между колонками — цель.
-    expect(rowBoundaryGroup(blocks, left!.groupId, right!.groupId)).toBeNull()
-  })
-
-  // Предъявление дефекта результатом: без подмены дроп «в щель над рядом» менял состав
-  // ряда, а не порядок полотна.
-  it('rowBoundaryGroup: подменённая цель оставляет ряд прежним составом', () => {
-    const store = createBuilderStore()
-    store.getState().addBlock('text')
-    store.getState().addBlock('short_text')
-    store.getState().addBlock('email')
-    const [txt, left, right] = store.getState().blocks
-    store.getState().placeInRow(right!.groupId, left!.groupId, 2, true)
-    const blocks = store.getState().blocks
-    const rowOf = () =>
-      packRows(groupBlocks(store.getState().blocks))
-        .find((r) => r.length > 1)
-        ?.flat()
-        .map((g) => g.blocks[0]!.type) ?? null
-
-    // Сырая цель «левая колонка» при переносе сверху вниз — ровно тот дроп, о котором
-    // речь: arrayMove кладёт пришельца ЗА цель, то есть МЕЖДУ колонками. Пришелец без
-    // бита закрывает секцию, и от ряда не остаётся ничего — автор целился в щель НАД
-    // рядом, а разобрал ряд.
-    store.getState().reorderGroups(txt!.groupId, left!.groupId)
-    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'text', 'email'])
-    expect(rowOf()).toBeNull()
-
-    // С подменой ряд цел прежним составом, а одиночка встаёт за ним.
-    store.getState().undo()
-    const fixed = rowBoundaryGroup(blocks, txt!.groupId, left!.groupId)!
-    store.getState().reorderGroups(txt!.groupId, fixed)
-    expect(rowOf()).toEqual(['short_text', 'email'])
-    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email', 'text'])
-  })
-
   // Вертикальный дроп обязан бит СНИМАТЬ (§13). Он же его и рождал: блок, унесённый из
   // ряда внутрь чужого вопроса, отдавал свой бит голове ЭТОГО вопроса (reanchorRowBits
   // писался под другой случай — «полю дали заголовок»), и вопрос вставал справа от
@@ -810,65 +734,6 @@ describe('createBuilderStore', () => {
     // возникло: ни одного бита на полотне не осталось.
     expect(blocks.every((b) => b.settings?.column === undefined)).toBe(true)
     expect(packRows(groupBlocks(blocks)).every((r) => r.length === 1)).toBe(true)
-  })
-
-  it('rowBoundaryTarget: участник ВЕРХНЕГО ряда не роняет блок в щель нижнего', () => {
-    const store = createBuilderStore()
-    for (const t of ['short_text', 'email', 'phone', 'number'] as const)
-      store.getState().addBlock(t)
-    const [a, b, c, d] = store.getState().blocks
-    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true) // ряд [a, b]
-    store.getState().placeInRow(d!.groupId, c!.groupId, 2, true) // ряд [c, d]
-    const blocks = store.getState().blocks
-
-    // b из верхнего ряда тащат на c — щель между c и d. Правило обязано подменить цель
-    // концом нижнего ряда: без этого b занял бы ячейку c, а d вылетел бы своим рядом.
-    expect(rowBoundaryTarget(blocks, b!.id, c!.id)).toBe(d!.id)
-    // И наоборот: c из нижнего ряда на b (снизу щель между a и b даёт цель «b») —
-    // подмена на строку за верхним рядом, то есть на сам c: остаться на месте.
-    expect(rowBoundaryTarget(blocks, c!.id, b!.id)).toBe(c!.id)
-    // Дроп снизу на a — это позиция НАД рядом, она легальна и подмены не требует.
-    expect(rowBoundaryTarget(blocks, c!.id, a!.id)).toBeNull()
-  })
-
-  it('rowBoundaryTarget: вставка контента ВНУТРЬ участника ряда остаётся легальной', () => {
-    const store = createBuilderStore()
-    store.getState().addQuestionAfter(null, 'short_text') // title + поле (левый)
-    store.getState().addQuestionAfter(store.getState().blocks[1]!.id, 'email') // правый
-    store.getState().addBlock('text') // контент в конце
-    const b0 = store.getState().blocks
-    const rightField = b0[3]!
-    store.getState().placeInRow(rightField.groupId, b0[1]!.groupId, 2, true)
-    const blocks = store.getState().blocks
-    const [leftTitle, , rightTitle, , txt] = blocks
-
-    // Цель «поле правого участника» — это вставка МЕЖДУ подписью и полем внутри
-    // вопроса: участник остаётся участником, ряд цел, правило молчит.
-    expect(rowBoundaryTarget(blocks, txt!.id, rightField.id)).toBeNull()
-    // А цель «подпись правого» снизу — та самая щель между участниками.
-    expect(rowBoundaryTarget(blocks, txt!.id, rightTitle!.id)).toBe(txt!.id)
-    // Строки самого ряда правилу не подчиняются — внутри ряда перестановка свободна.
-    expect(rowBoundaryTarget(blocks, leftTitle!.id, rightTitle!.id)).toBeNull()
-  })
-
-  // Второй уровень (§6.6): щель между подписью и полем, стоящими в ряду ВНУТРИ
-  // вопроса, — та же ложь verticalListSortingStrategy и то же лечение.
-  it('rowBoundaryTarget: щель внутри ряда «подпись | поле» подменяется границей', () => {
-    const store = createBuilderStore()
-    store.getState().addBlock('text') // контент НАД вопросом
-    store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'short_text')
-    store.getState().addBlock('number') // голое поле ПОД вопросом
-    const [txt, caption, field, below] = store.getState().blocks
-    store.getState().placeBlockInRow(field!.id, caption!.id)
-    const blocks = store.getState().blocks
-
-    // Сверху щель даёт цель «подпись» → подмена на конец ряда, то есть на поле.
-    expect(rowBoundaryTarget(blocks, txt!.id, caption!.id)).toBe(field!.id)
-    // Снизу её даёт цель «поле» → строка за рядом (здесь — сам активный).
-    expect(rowBoundaryTarget(blocks, below!.id, field!.id)).toBe(below!.id)
-    // Прочие цели легальны, а строки самого ряда правилу не подчиняются.
-    expect(rowBoundaryTarget(blocks, below!.id, caption!.id)).toBeNull()
-    expect(rowBoundaryTarget(blocks, caption!.id, field!.id)).toBeNull()
   })
 
   it('duplicateBlock вставляет глубокую копию сразу за оригиналом с новым id', () => {
@@ -1484,6 +1349,35 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     return store
   }
 
+  // ВЫТАЩИТЬ УЧАСТНИКА ВНИЗ — жест, который не работал (владелец, 2026-08-12): в порядке
+  // документа правый участник УЖЕ стоит после левого, менялся только бит колонки, и
+  // команда выходила в no-op. Вертикальный дроп бит снимает (§13) — этим он и отличается
+  // от перестановки внутри ряда.
+  it('дроп участника ПОД свой ряд делает его полноширинным, а не no-op', () => {
+    const store = paired('short_text', 'email')
+    const [left, right] = store.getState().blocks
+    store.getState().markSaved()
+
+    // Цель полотна здесь — граница ряда: «после левого», линия во всю ширину.
+    store.getState().reorderGroups(right!.groupId, left!.groupId)
+
+    expect(rows(store)).toEqual([1, 1])
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('строка из колонки: вертикальный дроп снимает бит и у блочного слоя', () => {
+    const store = paired('short_text', 'email')
+    const [left, right] = store.getState().blocks
+    store.getState().markSaved()
+
+    store.getState().reorderBlocks(right!.id, left!.id)
+
+    expect(rows(store)).toEqual([1, 1])
+    expect(cols(store)).toEqual(['-', '-'])
+  })
+
   it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {
     const store = paired('short_text', 'email')
     expect(cols(store)).toEqual([1, 2])
@@ -1818,8 +1712,8 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 
   it('дроп группы на правого участника не собирает ряд молча', () => {
     const store = paired('short_text', 'email', 'phone')
-    const [, right, c] = store.getState().blocks
-    store.getState().reorderGroups(c!.groupId, right!.groupId)
+    const [left, , c] = store.getState().blocks
+    store.getState().reorderGroups(c!.groupId, left!.groupId)
     expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'phone', 'email'])
     expect(rows(store)).toEqual([1, 1, 1])
   })
@@ -2677,7 +2571,7 @@ describe('createBuilderStore — целая группа не принимает
 
     // Целимся в середину чужой группы: вставка сюда не пускает, перенос — пускает
     // (§4.1 спеки фазы 15), и подпись оказывается ближайшей к полю.
-    const plan = planBlockDrop(b, lone.id, b[1]!.id)
+    const plan = planBlockDrop(b, lone.id, b[0]!.id)
 
     expect(plan!.blocks.map((x) => x.type)).toEqual(['title', 'label', 'text', 'short_text'])
   })
@@ -2741,9 +2635,36 @@ describe('createBuilderStore — заголовок формы приколот 
     // Прямой вызов операции dnd: в UI зона заголовка недостижима (его нет в
     // sortable-вселенной), но стор обязан оставаться честным сам по себе —
     // страховка живёт в structural(), а не в каждой команде.
-    store.getState().reorderBlocks('q1', 'ft_x')
+    store.getState().reorderBlocks('a1', null)
 
-    expect(store.getState().blocks[0]!.type).toBe('form_title')
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'a1', 'q1', 'q2', 'a2'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // Дно полотна — не нулевой индекс списка, и стоит это ровно того же, что и граница
+  // сверху у Alt+↑: адрес «встать первым» у элемента, который уже первый, обязан быть
+  // no-op'ом. Через ноль дроп проходил бы сквозь оба замка (`to === from` считает индекс
+  // в списке БЕЗ активного, а заголовок сдвигает его на единицу), pinFormTitle возвращал
+  // бы документ назад, и автор получал бы dirty, шаг истории и PATCH на правку, которой
+  // не было. Достижимо это самым частым жестом: взять верхний блок и отпустить там же.
+  it('«встать первым» у того, кто уже первый, — no-op на обоих слоях', () => {
+    const store = loaded()
+
+    store.getState().reorderBlocks('q1', null)
+    store.getState().reorderGroups('g_a1', null)
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q1', 'a1', 'q2', 'a2'])
+    expect(store.getState().dirty).toBe(false)
+    expect(store.getState().past).toEqual([])
+  })
+
+  it('дроп ГРУППЫ первой встаёт под заголовок, а не над ним', () => {
+    const store = loaded()
+
+    store.getState().reorderGroups('g_a2', null)
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q2', 'a2', 'q1', 'a1'])
+    expect(store.getState().dirty).toBe(true)
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 

@@ -3,13 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { type Block, textFromString } from '@entities/formSchema'
 import { groupBlocks, packRows } from '@fields/groups'
 
-import { inviteRowId, previewCells } from './rowZones'
+import { inviteRowId } from './rowZones'
 
 // Правила приглашения «встань в ряд» (решение владельца 2026-08-02). Сам жест —
 // перетаскивание мышью, и в vitest он не воспроизводится; поэтому проверяются два
-// решения, которые жест принимает ДО всякой геометрии: у какого ряда гореть зоне и
-// как ляжет дублёр. Оба — чистые функции над раскладкой, и оба молча ломались бы
-// правкой соседнего кода.
+// решение, которое жест принимает ДО всякой геометрии: у какого ряда гореть зоне.
+// Функция чистая, над раскладкой, и молча ломалась бы правкой соседнего кода.
 
 let seq = 0
 const blk = (type: Block['type'], extra: Partial<Block> = {}): Block => ({
@@ -53,8 +52,8 @@ describe('inviteRowId', () => {
 
   // Адрес уезжает целью в placeInRow, а та выходит по active === target. С адресом
   // «первая группа ряда» перенос между колонками СВОЕЙ секции (стою слева, тяну
-  // вправо) молча становился бы no-op'ом: дублёр рисует результат, дроп не делает
-  // ничего. Найдено ревью.
+  // вправо) молча становился бы no-op'ом: зона горит, а дроп не делает ничего.
+  // Найдено ревью.
   it('адресует ряд участником, ОТЛИЧНЫМ от перетаскиваемого', () => {
     const left = blk('short_text')
     const right = blk('email', { settings: { column: 2 } })
@@ -104,51 +103,5 @@ describe('inviteRowId', () => {
 
     expect(rows[0]).toHaveLength(2)
     expect(inviteRowId(rows, right.groupId, active.groupId)).toBe(left.groupId)
-  })
-})
-
-describe('previewCells', () => {
-  const g = (id: string) => ({ id, blocks: [] as Block[] })
-
-  it('полноширинный ряд: граница выбирает, с какой стороны встанет активный', () => {
-    const row = [[g('a')]]
-
-    expect(previewCells(row, { col: 2, insert: true })).toEqual([[g('a')], [null]])
-    expect(previewCells(row, { col: 1, insert: true })).toEqual([[null], [g('a')]])
-  })
-
-  it('граница ВНУТРИ секции: новая колонка на её месте, соседи разъезжаются', () => {
-    const row = [[g('a')], [g('b'), g('c')]]
-
-    expect(previewCells(row, { col: 2, insert: true })).toEqual([
-      [g('a')],
-      [null],
-      [g('b'), g('c')],
-    ])
-    expect(previewCells(row, { col: 3, insert: true })).toEqual([
-      [g('a')],
-      [g('b'), g('c')],
-      [null],
-    ])
-  })
-
-  it('подвал колонки: дублёр встаёт в КОНЕЦ её стопки, соседняя цела', () => {
-    const row = [[g('a')], [g('b'), g('c')]]
-
-    expect(previewCells(row, { col: 2, insert: false })).toEqual([
-      [g('a')],
-      [g('b'), g('c'), null],
-    ])
-    expect(previewCells(row, { col: 1, insert: false })).toEqual([
-      [g('a'), null],
-      [g('b'), g('c')],
-    ])
-  })
-
-  it('исходный ряд не мутируется — раскладка полотна переживает наведение', () => {
-    const row = [[g('a')], [g('b')]]
-    previewCells(row, { col: 1, insert: true })
-    previewCells(row, { col: 2, insert: false })
-    expect(row).toEqual([[g('a')], [g('b')]])
   })
 })

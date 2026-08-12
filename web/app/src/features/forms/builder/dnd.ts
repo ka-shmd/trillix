@@ -1,4 +1,4 @@
-import { type ClientRect, type CollisionDetection } from '@dnd-kit/core'
+import { type ClientRect } from '@dnd-kit/core'
 import { type AnimateLayoutChanges, type SortingStrategy } from '@dnd-kit/sortable'
 
 // После дропа dnd-kit «доигрывает» layout-анимацию перетащенного элемента от его
@@ -10,6 +10,22 @@ import { type AnimateLayoutChanges, type SortingStrategy } from '@dnd-kit/sortab
 // анимирует (defaultAnimateLayoutChanges срабатывает только при wasDragging).
 export const noLayoutAnimation: AnimateLayoutChanges = () => false
 
+// ВИД ПЕРЕТАСКИВАЕМОГО ЭЛЕМЕНТА (решение владельца 2026-08-12). Он едет НАД полотном, и
+// нужно от него одно: видеть, ЧТО едет, не заслоняя того, что под ним. Отсюда три части,
+// и все три про одно — «это сейчас не строка формы, а её тень»:
+//   • непрозрачность ниже прежней (было 70%);
+//   • книзу элемент РАСТВОРЯЕТСЯ маской-градиентом: у курсора он читается, а его низ
+//     уходит в полотно — линия вставки и соседи видны сквозь него;
+//   • у инпутов внутри гаснут фон и тень, остаётся текст. Белые прямоугольники полей
+//     держат внимание сильнее всего остального жеста, а сказать им во время переноса
+//     нечего.
+//
+// Маска — ИНЛАЙНОВЫМ стилем, а не классом: `-webkit-mask-image` из Tailwind не приедет,
+// а без префикса маску не видит Safari.
+export const DRAGGED_LOOK = 'opacity-60 [&_.rf-input]:bg-transparent [&_.rf-input]:shadow-none'
+const DRAG_FADE = 'linear-gradient(to bottom, #000 0%, #0006 100%)'
+export const DRAGGED_FADE = { maskImage: DRAG_FADE, WebkitMaskImage: DRAG_FADE }
+
 // Порог активации перетаскивания (px). Ниже порога жест — КЛИК, и с фазы 16 клик по
 // грипу открывает настройки блока (§4.1 спеки: тащим — драг, кликаем — настройки; так
 // ведёт себя Notion). Поэтому число перестало быть настройкой одного сенсора: по нему
@@ -18,47 +34,6 @@ export const noLayoutAnimation: AnimateLayoutChanges = () => false
 // драга). Два места с одним смыслом обязаны читать одну константу — разъехавшись, они
 // дадут «иногда после переноса выскакивает меню», а это не воспроизводится по заказу.
 export const DRAG_ACTIVATION_DISTANCE = 6
-
-// closestVertical — выбор цели по ВЕРТИКАЛИ и только по ней. Заменяет closestCenter,
-// который на полотне делает ряд практически недостижимой целью (найдено владельцем
-// 2026-08-03: «блоки вокруг ряда склеиваются, расклеить не получается»).
-//
-// closestCenter меряет ЕВКЛИДОВО расстояние между центрами. Полноширинный блок стоит
-// центром посреди холста, а участник ряда — центром своей полуколонки, то есть примерно
-// в 182px вбок (холст 700, колонка 336, жёлоб 28). Для цели-участника эти 182px входят
-// в расстояние всегда, и обычный блок выигрывает конкурс, даже когда он на сотню
-// пикселей ДАЛЬШЕ по вертикали: √(100² + 0²) < √(0² + 182²). Отсюда всё, что видно
-// глазами: место «между блоком и рядом» не выбирается, перенос через ряд перепрыгивает
-// его целиком, а блок, который тянут к ряду, уходит внутрь следующего вопроса — его
-// подпись полноширинная и потому «ближе».
-//
-// Вертикальная вставка — одномерная задача («где в порядке документа»), и горизонтали в
-// ней нет вовсе. Колонку выбирают не эти коллизии, а зоны жеста (pointerWithin,
-// SlashEditor) — им горизонталь как раз важна, и они спрашиваются отдельно.
-export const closestVertical: CollisionDetection = ({
-  collisionRect,
-  droppableRects,
-  droppableContainers,
-}) => {
-  // Через снимок: цикл ниже обходит ВСЕ droppable'ы полотна на каждое движение
-  // указателя, и каждое `rect.top` — это чтение scroll-свойства (см. flatRect).
-  const active = flatRect(collisionRect)
-  const centerY = active.top + active.height / 2
-  // Обычный цикл, а не flatMap: функция бежит на КАЖДОЕ движение указателя по всем
-  // droppable'ам полотна, и промежуточный массив на каждый из них — мусор на ровном
-  // месте (так же устроен и родной closestCenter).
-  const collisions = []
-  for (const droppableContainer of droppableContainers) {
-    const raw = droppableRects.get(droppableContainer.id)
-    if (!raw) continue
-    const rect = flatRect(raw)
-    collisions.push({
-      id: droppableContainer.id,
-      data: { droppableContainer, value: Math.abs(rect.top + rect.height / 2 - centerY) },
-    })
-  }
-  return collisions.sort((a, b) => a.data.value - b.data.value)
-}
 
 // ПЛОСКИЙ СНИМОК ПРЯМОУГОЛЬНИКА — самая дорогая находка разбора драга (TD-55).
 //

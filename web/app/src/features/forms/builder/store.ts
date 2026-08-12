@@ -175,15 +175,15 @@ export type BuilderActions = {
   // едет целиком, внутренний порядок цел, каретка остаётся на том же блоке (id
   // стабилен). На границе полотна — no-op (dirty не трогает).
   moveGroup: (id: string, dir: 'up' | 'down') => void
-  // reorderBlocks переносит БЛОК activeId на позицию overId (блочный слой dnd —
-  // плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как единицы —
-  // reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
+  // reorderBlocks ставит БЛОК activeId сразу ПОСЛЕ afterId; null — первым в документе
+  // (блочный слой dnd — плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как
+  // единицы — reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
   // попадает. Неизвестный id или та же позиция — no-op (dirty не трогает).
-  reorderBlocks: (activeId: string, overId: string) => void
-  // reorderGroups переносит ГРУППУ activeGroupId на позицию группы overGroupId
-  // (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
+  reorderBlocks: (activeId: string, afterId: string | null) => void
+  // reorderGroups ставит ГРУППУ activeGroupId сразу ПОСЛЕ группы afterGroupId; null —
+  // первой (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
   // блоков группы сохраняется. Неизвестный id или та же группа — no-op.
-  reorderGroups: (activeGroupId: string, overGroupId: string) => void
+  reorderGroups: (activeGroupId: string, afterGroupId: string | null) => void
   // duplicateBlock кладёт копию блока сразу за оригиналом. Поле, которому обязателен
   // заголовок (requiresCaption), дублируется вопросом целиком — иначе копия осталась
   // бы голым полем такого типа, а их не бывает.
@@ -906,6 +906,12 @@ function pinFormTitle(blocks: Block[]): Block[] {
 // возвращал бы всё назад — правка, которой не было, но с dirty и лишним PATCH.
 const canvasFloor = (blocks: Block[]): number => (blocks[0]?.type === 'form_title' ? 1 : 0)
 
+// То же дно, но в списке ГРУПП: заголовок формы одиночка по построению (regroup), то
+// есть занимает нулевую группу целиком. Нужен `reorderGroups` — единственной команде
+// переноса, которая адресует группы, а не строки.
+const groupFloor = (groups: { blocks: Block[] }[]): number =>
+  groups[0]?.blocks[0]?.type === 'form_title' ? 1 : 0
+
 // groupSpan — [начало, конец] непрерывного участка группы блока с индексом i.
 // Группа смежна (гарантирует regroup), поэтому участок односвязный.
 function groupSpan(blocks: Block[], i: number): [number, number] {
@@ -945,9 +951,18 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
   return sectionSpanEnd(blocks, i) + 1
 }
 
-// planBlockDrop — чистый расчёт блочного дропа: activeId переносится на позицию
-// overId (плоский сплайс, как arrayMove у sortable). Строка роняется в ЛЮБУЮ
-// позицию полотна, включая середину чужого вопроса: замок «отвечаемый блок и
+// planBlockDrop — чистый расчёт блочного дропа: activeId встаёт СРАЗУ ПОСЛЕ afterId
+// (null — первым в документе).
+//
+// Адрес «после такого-то», а не «на позицию такого-то» (2026-08-11, вместе с новым
+// прицеливанием). Прежняя подпись несла swap-семантику dnd-kit: перенос шёл на ИНДЕКС
+// цели в списке без активного, и одна и та же цель значила «перед ней» либо «за ней» в
+// зависимости от того, откуда элемент приехал. Полотно теперь адресует щель напрямую
+// (`dropTarget.ts`), и разворачивать её обратно в «на позицию» на каждом вызове значило
+// бы писать код, который при чтении врёт. Направления у этого адреса нет вовсе.
+//
+// Строка роняется в ЛЮБУЮ позицию полотна, включая середину чужого вопроса: замок
+// «отвечаемый блок и
 // подпись приземляются ПОД чужой мульти-группой» снят фазой 15 (§4.1 спеки).
 // Он охранял единственный реальный ущерб — кражу подписи (regroup отдаёт заголовок
 // пришельцу, прежнее поле остаётся голым, и колонка CSV молча переименовывается);
@@ -964,15 +979,33 @@ function groupEndAfter(blocks: Block[], afterId: string | null): number {
 export function planBlockDrop(
   blocks: Block[],
   activeId: string,
-  overId: string,
+  afterId: string | null,
 ): { blocks: Block[]; groupIds: string[] } | null {
   const from = blocks.findIndex((b) => b.id === activeId)
-  const to = blocks.findIndex((b) => b.id === overId)
-  if (from < 0 || to < 0 || from === to) return null
-  const active = blocks[from]!
+  if (from < 0 || afterId === activeId) return null
   const next = blocks.slice()
-  next.splice(from, 1)
-  next.splice(to, 0, active) // вставка на индекс overId в списке БЕЗ активного = arrayMove
+  const [raw] = next.splice(from, 1)
+  // ВЕРТИКАЛЬНЫЙ ДРОП СНИМАЕТ БИТ КОЛОНКИ (§13): элемент встаёт во всю ширину — собрать
+  // или переставить колонки умеет только зона ряда. Раньше бит снимался «сам»: его гасил
+  // normalizeColumns, увидев, что компания секции сменилась. Там, где компания та же,
+  // правило молчало — и жест «вытащить участника ВНИЗ, под свой ряд» не делал ничего: в
+  // порядке документа элемент уже стоит после соседа, менялся только бит, а команда
+  // выходила в no-op (найдено владельцем 2026-08-12).
+  // Адрес ищется в списке БЕЗ активного: «после X» — это место сразу за X, каким бы ни
+  // было исходное соседство. Отсутствующий адрес — не «в конец», а отказ: полотно такой
+  // цели не называло, и молча приземлить строку куда-то ещё значило бы соврать.
+  //
+  // `null` значит «первым НА ПОЛОТНЕ», а не «нулевым в списке»: нулевую строку занимает
+  // приколотый заголовок формы (canvasFloor). Через ноль дроп остался бы правкой на
+  // бумаге — pinFormTitle в structural вернул бы всё назад, — но с dirty, шагом истории
+  // и лишним PATCH: ровно то, что запрещено для «двинуть вверх» на первой строке.
+  const active = withoutColumn(raw!)
+  const to = afterId === null ? canvasFloor(next) : next.findIndex((b) => b.id === afterId) + 1
+  if (to === 0 && afterId !== null) return null
+  // «Туда, где стоял» — no-op, только если и бит не изменился: снятый бит и есть та
+  // правка, ради которой автор тянул элемент из колонки вниз.
+  if (to === from && active === raw) return null
+  next.splice(to, 0, active)
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
@@ -1064,123 +1097,6 @@ export function captionLoss(before: Block[], after: Block[]): { id: string; capt
     if ((nowMeta.get(survivor.groupId)?.caption ?? '') === '') lost.push({ id: b.id, caption })
   }
   return lost
-}
-
-// rowBoundaryTarget — РЯД АТОМАРЕН ДЛЯ ВЕРТИКАЛЬНОЙ ВСТАВКИ (спека §5). Полотно во
-// время драга остаётся двумерным (в столбик не сворачивается), и ровно в одной позиции
-// verticalListSortingStrategy врёт: цель «щель между участниками ряда». Уронённый туда
-// блок либо сам занимает левую ячейку правого участника, либо гасит его бит — в обоих
-// случаях ряд рвётся, а щель показывала не это. Лечится подменой цели границей ряда:
-// сверху — последняя строка ряда (блок ложится под ряд), снизу — строка за рядом.
-//
-// С фазы 15 это ЕДИНСТВЕННАЯ подмена цели на полотне: правило «отвечаемый блок и
-// подпись не приземляются внутрь чужой мульти-группы» снято вместе со своим слоем
-// отклика (remapDropTarget), и композиции двух подмен больше нет.
-//
-// Вставки ВНУТРЬ участника ряда это не касается: контент, добавленный в вопрос, ряд не
-// рвёт (участник остаётся тем же участником) — и остаётся легальным, как был.
-export function rowBoundaryTarget(
-  blocks: Block[],
-  activeId: string,
-  overId: string,
-): string | null {
-  const ai = blocks.findIndex((b) => b.id === activeId)
-  const ti = blocks.findIndex((b) => b.id === overId)
-  if (ai < 0 || ti < 0 || ai === ti) return null
-  const at = (id: string) => blocks.findIndex((b) => b.id === id)
-  // Пролёты рядов ОБОИХ уровней (§6.6): ряд из двух вопросов и ряд «подпись | поле»
-  // внутри вопроса — одна и та же ложь verticalListSortingStrategy и одно лечение.
-  // Пересечься они не могут: группа с внутренним рядом в кросс-групповой не встаёт
-  // (§6.5), поэтому порядок проверки пролётов ни на что не влияет.
-  //
-  //   rs — первая строка ряда, re — последняя, mids — первые строки КАЖДОГО участника
-  // после первого. Границ в ряду столько же, сколько участников минус один: правая
-  // колонка это стопка (§5), и щель между её элементами — та же ложь, что щель между
-  // колонками. Прочие цели внутри ряда легальны: вставка ВНУТРЬ участника (контент в
-  // вопрос) ряд не рвёт — участник остаётся тем же участником.
-  const groups = rowGroups(blocks)
-  const spans: { rs: number; re: number; mids: number[] }[] = []
-  for (const row of packRows(groups)) {
-    const participants = row.flat()
-    if (participants.length < 2) continue
-    const lastGroup = participants[participants.length - 1]!.blocks
-    spans.push({
-      rs: at(participants[0]!.blocks[0]!.id),
-      re: at(lastGroup[lastGroup.length - 1]!.id),
-      mids: participants.slice(1).map((g) => at(g.blocks[0]!.id)),
-    })
-  }
-  for (const g of groups) {
-    for (const row of packGroupRows(g.blocks)) {
-      const participants = row.flat()
-      if (participants.length < 2) continue
-      spans.push({
-        rs: at(participants[0]!.id),
-        re: at(participants[participants.length - 1]!.id),
-        mids: participants.slice(1).map((b) => at(b.id)),
-      })
-    }
-  }
-  for (const { rs, re, mids } of spans) {
-    // Сначала «цель не в этом ряду» и только потом «активный из этого ряда»: обратный
-    // порядок выходил из ЦИКЛА на первом же ряду, где нашёлся активный, и защита не
-    // доставалась ни одному ряду ниже — участник верхнего ряда мог уронить блок в
-    // щель нижнего.
-    if (ti < rs || ti > re) continue
-    if (ai >= rs && ai <= re) return null // цель в СВОЁМ ряду — перестановка свободна
-    // Позиция вставки = индекс цели в исходном списке (арифметика planBlockDrop).
-    // Сверху щель даёт цель «последняя строка участника ДО границы» → подменяем концом
-    // ряда (блок ложится под ряд); снизу — «первая строка участника ПОСЛЕ границы» →
-    // строкой за рядом.
-    for (const mid of mids) {
-      if (ai < rs) {
-        if (ti === mid - 1) return blocks[re]!.id
-      } else if (ti === mid) return blocks[re + 1]?.id ?? null
-    }
-    return null
-  }
-  return null
-}
-
-// rowBoundaryGroup — то же правило «ряд атомарен для вертикальной вставки» (§5), но на
-// ГРУППОВОМ слое, где его не было вовсе (найдено владельцем 2026-08-02: «таскаю группу
-// и не могу поставить её между обычным блоком и рядом — они склеиваются, как будто это
-// группа»).
-//
-// Причина ровно та же, что у блочного правила, но последствие грубее. `reorderGroups` —
-// голый arrayMove по группам, и цель «правая колонка ряда» при переносе сверху вниз
-// кладёт группу МЕЖДУ колонками. Дальше раскладчик читает получившийся список буквально
-// (§13): пришелец без бита закрывает секцию, левый участник выпадает во всю ширину, а
-// правый со своим `'right'` открывает НОВУЮ секцию и забирает в неё пришельца. Автор
-// целился в щель над рядом, а получил ряд с новым составом — «склеились».
-//
-// Лечение — то, что §5 уже обещает: **ряд для вертикальной вставки одна цель**. Тащат
-// сверху — кладём ПОД ряд (цель = последний участник), снизу — НАД ним (цель = первый).
-// Так ряд ведёт себя как один высокий блок, чем он для этого жеста и является.
-// Перестановка ВНУТРИ своего ряда правилу не подчиняется: там щель между колонками —
-// законная цель, ею меняют участников местами.
-export function rowBoundaryGroup(
-  blocks: Block[],
-  activeGroupId: string,
-  overGroupId: string,
-): string | null {
-  const groups = rowGroups(blocks)
-  const at = (id: string) => groups.findIndex((g) => g.id === id)
-  const ai = at(activeGroupId)
-  const ti = at(overGroupId)
-  if (ai < 0 || ti < 0 || ai === ti) return null
-  for (const row of packRows(groups)) {
-    // Участники ряда смежны в списке групп (ряды собираются из идущих подряд), поэтому
-    // границы пролёта — индексы первого и последнего.
-    const participants = row.flat()
-    if (participants.length < 2) continue
-    const rs = at(participants[0]!.id)
-    const re = at(participants[participants.length - 1]!.id)
-    if (ti < rs || ti > re) continue
-    if (ai >= rs && ai <= re) return null
-    return ai < rs ? groups[re]!.id : groups[rs]!.id
-  }
-  return null
 }
 
 // cloneBlock — глубокая копия, чтобы стор владел своими блоками и правка одного
@@ -1632,31 +1548,46 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return blocks ? structural({ blocks }) : null
         }),
 
-      reorderBlocks: (activeId, overId) =>
+      reorderBlocks: (activeId, afterId) =>
         commit(null, (s) => {
-          // Плоский перенос одной строки через planBlockDrop: arrayMove — как
-          // sortable и показывает. Куда именно строка приземлится, метод не
+          // Плоский перенос одной строки через planBlockDrop: строка встаёт сразу за
+          // адресом. Куда именно строка приземлится, метод не
           // ограничивает (замок снят, §4.1 спеки фазы 15): принадлежность группам
           // после переноса выводит regroup, а потерю заголовка называет полотно
           // (captionLoss). Целостность мульти-группы при переносе ЕЁ САМОЙ охраняет
           // не этот метод, а UI: подпись мульти-группы несёт групповую ручку →
           // reorderGroups.
-          const plan = planBlockDrop(s.blocks, activeId, overId)
+          const plan = planBlockDrop(s.blocks, activeId, afterId)
           return plan ? structural({ blocks: plan.blocks }) : null
         }),
 
-      reorderGroups: (activeGroupId, overGroupId) =>
+      reorderGroups: (activeGroupId, afterGroupId) =>
         commit(null, (s) => {
           // Группы смежны (regroup), поэтому достаточно разложить полотно на группы,
-          // переставить одну (arrayMove — как sortable и показывает) и склеить
-          // обратно. Внутренний порядок блоков группы не меняется.
-          if (activeGroupId === overGroupId) return null
+          // переставить одну и склеить обратно. Внутренний порядок блоков группы не
+          // меняется. Адрес — «после такой-то», как и у reorderBlocks: направления у
+          // него нет, и вычитать его из индексов не нужно. `null` — «первой на полотне»,
+          // то есть за приколотым заголовком (groupFloor), а не нулевой в списке.
+          if (activeGroupId === afterGroupId) return null
           const groups = groupBlocks(s.blocks)
           const from = groups.findIndex((g) => g.id === activeGroupId)
-          const to = groups.findIndex((g) => g.id === overGroupId)
-          if (from < 0 || to < 0) return null
-          const [moved] = groups.splice(from, 1)
-          groups.splice(to, 0, moved!)
+          if (from < 0) return null
+          const [raw] = groups.splice(from, 1)
+          // Бит колонки у ГРУППЫ несёт её первый блок (§13), и вертикальный дроп его
+          // снимает — иначе вопрос нельзя вытащить из колонки вниз: в порядке документа
+          // он уже стоит после соседа по секции, и менять команде было бы нечего.
+          const head = raw!.blocks[0]!
+          const moved =
+            head.settings?.column === undefined
+              ? raw!
+              : { ...raw!, blocks: [withoutColumn(head), ...raw!.blocks.slice(1)] }
+          const to =
+            afterGroupId === null
+              ? groupFloor(groups)
+              : groups.findIndex((g) => g.id === afterGroupId) + 1
+          if (to === 0 && afterGroupId !== null) return null
+          if (to === from && moved === raw) return null
+          groups.splice(to, 0, moved)
           return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
 
