@@ -51,16 +51,32 @@ export type Box = { top: number; bottom: number; left: number; right: number }
 //             Флага «во всю ширину» поэтому нет: ширину называет сам состав.
 //   before  — линия НАД union'ом. Верно только у позиции «первым»: примкнуть к нижнему
 //             краю ей не к чему.
+//
+// Флага «во всю ширину» у цели НЕТ, и это не упущение: вертикальный дроп во всю ширину
+// ВСЕГДА — бит колонки он снимает (§13, `planBlockDrop`). Собрать или переставить
+// колонки можно только зоной ряда (§5.1), у неё своя команда.
 export type DropTarget = { afterId: string | null; lineIds: string[]; before: boolean }
 
 // Слой драга задаёт ЛИСТ обхода, и только его: тащат вопрос — лист группа, тащат
 // строку — лист блок. Правила полос и легальности у слоёв общие.
 export type PickOpts = { layer: 'block' | 'group'; activeId: string }
 
-// Кандидат = цель плюс верх её якоря. Полоса кандидата тянется от `anchorTop` до
-// `anchorTop` следующего; своего «низа» у полосы нет, поэтому просветы между элементами
-// не достаются никому дважды и не остаются ничьими.
-type Cand = DropTarget & { anchorTop: number }
+// Кандидат = цель плюс верх её якоря. Полоса начинается у `anchorTop`, а кончается у
+// ВЕРХА СЛЕДУЮЩЕГО ЭЛЕМЕНТА СЛОЯ — не у якоря следующей цели (2026-08-12, найдено
+// владельцем: «щель появляется, когда ты только на первом блоке нижней группы»).
+//
+// Разница видна только там, где якорь элемента не совпадает с его верхом, то есть на
+// ГРУППОВОМ слое: якорь вопроса — его последняя строка. Пока полоса тянулась до якоря
+// следующего вопроса, она накрывала и его заголовок — и «щель между A и B» горела уже
+// тогда, когда указатель стоял на первой строке B. Теперь полоса кончается там, где
+// начинается B, а на его заголовке цели нет вовсе: указатель стоит на вопросе, а не на
+// щели, и полотну сказать нечего.
+//
+// `until` считается по КОЛОНКЕ под указателем (а у границы ряда — по следующему ряду):
+// у секции колонки разной высоты, и под короткой лежит пустое место, где указатель ни
+// на чём не стоит. Оборви полосу там верхом чужой строки из соседней колонки — и это
+// место осталось бы без цели на ровном месте.
+type Cand = DropTarget & { anchorTop: number; until: number }
 
 // pickDropTarget — цель под указателем. null значит «мерить нечего»: полотно пусто либо
 // ни одна чужая строка не доехала до DOM.
@@ -80,13 +96,33 @@ export function pickDropTarget(
   // курсором трансформой, и линия, измеренная вместе с ней, растянулась бы до указателя.
   const ctx: Ctx = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
 
-  const cands: Cand[] = []
-  let firstRowIds: string[] | null = null
+  // Первый проход — только живые строки рядов и ВЕРХ каждого ряда: полоса последней
+  // цели ряда кончается там, где начинается ряд следующий (см. Cand), и знать это надо
+  // до того, как разбирать ряд текущий.
+  const live: string[][] = []
+  const tops: number[] = []
   for (const row of rows) {
     const ids = liveIds(ctx, rowBlocks(row))
+    live.push(ids)
+    tops.push(ids.length === 0 ? Infinity : topOf(ctx, ids))
+  }
+
+  const cands: Cand[] = []
+  let firstRowIds: string[] | null = null
+  let firstRowTop = Infinity
+  for (let i = 0; i < rows.length; i++) {
+    const ids = live[i]!
     if (ids.length === 0) continue
-    if (firstRowIds === null) firstRowIds = ids
-    collectRow(ctx, row, ids, pointer.x, cands)
+    if (firstRowIds === null) {
+      firstRowIds = ids
+      firstRowTop = tops[i]!
+    }
+    // Верх СЛЕДУЮЩЕГО живого ряда: ниже него цели этого ряда не действуют.
+    let next = Infinity
+    for (let j = i + 1; j < rows.length && next === Infinity; j++) {
+      if (live[j]!.length > 0) next = tops[j]!
+    }
+    collectRow(ctx, rows[i]!, ids, pointer.x, next, cands)
   }
   if (firstRowIds === null) return null
 
@@ -103,11 +139,83 @@ export function pickDropTarget(
     if (c.anchorTop > pointer.y) continue
     if (hit === null || c.anchorTop > hit.anchorTop) hit = c
   }
-  // Ни одна полоса ещё не началась — указатель выше первого якоря. Это «встать первым»,
-  // единственная позиция, у которой элемента сверху нет: линия ложится НАД первым рядом,
-  // то есть в 48px-просвете под заголовком формы.
-  if (hit === null) return { afterId: null, lineIds: firstRowIds, before: true }
+  // Ни одна полоса не началась — указатель выше всех якорей. Это «встать первым», но
+  // только пока он выше и самого ПЕРВОГО ряда: линия ложится над ним, в 48px-просвете
+  // под заголовком формы. Заехал на первый вопрос, но не дошёл до его якоря — это уже
+  // не «первым», а «ни над какой щелью» (см. ниже).
+  if (hit === null) {
+    return pointer.y < firstRowTop
+      ? { afterId: null, lineIds: firstRowIds, before: true }
+      : null
+  }
+  // Полоса кончилась, а следующая ещё не началась: указатель стоит на элементе, но не
+  // на том его месте, которое называет щель. Цели нет — и это ответ, а не пробел:
+  // показать линию было бы обещанием дропа, которого автор не просил.
+  if (pointer.y >= hit.until) return null
   return { afterId: hit.afterId, lineIds: hit.lineIds, before: hit.before }
+}
+
+// Верх набора строк.
+function topOf(ctx: Ctx, ids: string[]): number {
+  let top = Infinity
+  for (const id of ids) {
+    const box = ctx.boxes.get(id)
+    if (box && box.top < top) top = box.top
+  }
+  return top
+}
+
+// Ближайший верх СТРОГО ниже якоря, иначе — низ ряда (верх следующего). Совпадение
+// верхов штатное (колонки секции начинаются на одной высоте), поэтому строго.
+function endOfStripe(tops: number[], anchorTop: number, rowEnd: number): number {
+  let best = rowEnd
+  for (const t of tops) if (t > anchorTop && t < best) best = t
+  return best
+}
+
+// pickHoverGroup — вопрос, НАД КОТОРЫМ указатель. Второй ответ полотна о жесте, и он
+// намеренно не совпадает с целью дропа (2026-08-12, найдено владельцем).
+//
+// Совпадение и было дефектом: у цели якорь — ХВОСТ вопроса (линия ложится под ним,
+// §5.2), поэтому приглашение «встань в ряд», взятое от цели, загоралось только когда
+// указатель доходил до последней строки вопроса. Колонку предлагают вопросу целиком, и
+// ждать его хвоста незачем.
+//
+// «Два ответа на один вопрос» это не возвращает — вопроса два, и они разные: линия
+// отвечает «куда встанет», приглашение — «над чем стою». Одно про щель между вопросами,
+// другое про вопрос.
+//
+// Ближайший, а не «строго внутри»: между рядами 28px жёлоб, снаружи колонок — поле
+// полотна, и «мимо всех» там штатное состояние. Меряется вертикаль, горизонталь только
+// разводит колонки, стоящие на одной высоте.
+export function pickHoverGroup(
+  rows: Row<Group>[],
+  boxes: Map<string, Box>,
+  pointer: { x: number; y: number },
+  opts: PickOpts,
+): string | null {
+  const ctx: Ctx = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
+  let best: string | null = null
+  let bestV = Infinity
+  let bestH = Infinity
+  for (const row of rows) {
+    for (const cell of row) {
+      for (const group of cell) {
+        // Активный вычеркнут теми же двумя причинами, что и в целях: сам себе он не
+        // сосед по ряду, а его живой rect уехал за курсором.
+        const box = union(ctx, group.blocks)
+        if (box === null) continue
+        const v = gap(pointer.y, box.top, box.bottom)
+        const h = gap(pointer.x, box.left, box.right)
+        if (v < bestV || (v === bestV && h < bestH)) {
+          best = group.id
+          bestV = v
+          bestH = h
+        }
+      }
+    }
+  }
+  return best
 }
 
 type Ctx = { boxes: Map<string, Box>; active: Set<string>; opts: PickOpts }
@@ -127,13 +235,25 @@ type Ctx = { boxes: Map<string, Box>; active: Set<string>; opts: PickOpts }
 // потому что arrayMove значил разное в зависимости от направления. У адреса «после
 // такого-то» направления нет вовсе, и правило стало односложным.
 //
-// Исключение то же, что и было: активный элемент — сам участник этого ряда. Тогда он
-// биты не ломает (состав секции не меняется, меняется порядок), и щель между
-// участниками — законная цель, ею участников и переставляют местами.
-function collectRow(ctx: Ctx, row: Row<Group>, ids: string[], x: number, out: Cand[]): void {
+// ИСКЛЮЧЕНИЙ У ПРАВИЛА НЕТ — с 2026-08-12 в том числе для участников самого ряда.
+// Прежде им щель между колонками полагалась: считалось, что перестановка внутри своего
+// ряда состав секции не меняет. Обещание было ложным — вертикальный дроп секцию
+// РАСПУСКАЕТ на любом адресе (§13, два давних теста в `store.test.ts`), колонки
+// собирает и переставляет только зона ряда. А платил за это жест: у ряда «один блок
+// слева, стопка справа» щель внутри чужой стопки занимала половину высоты, и автор,
+// тянувший свой блок ВНИЗ из колонки, всю дорогу видел линию в одну колонку вместо
+// «под рядом» (владелец, 2026-08-12: «нужно навестись именно на последний блок второй
+// колонки — это очень неочевидно»). Теперь ряд — одна цель для всех, и она начинается
+// у нижнего края его содержимого.
+function collectRow(
+  ctx: Ctx,
+  row: Row<Group>,
+  ids: string[],
+  x: number,
+  rowEnd: number,
+  out: Cand[],
+): void {
   const tail = ids[ids.length - 1]!
-  const ownRow = ownsRow(ctx, rowBlocks(row))
-  const single = row.flat().length === 1
 
   // Колонку выбирает X — единственное место жеста, где горизонталь что-то значит. Не
   // «попадание», а БЛИЖАЙШАЯ: указатель гуляет по 28px-жёлобу между колонками и по полю
@@ -149,6 +269,24 @@ function collectRow(ctx: Ctx, row: Row<Group>, ids: string[], x: number, out: Ca
   let anchor = tail
   if (cells.length > 0) {
     const cell = nearest(cells, (c) => gap(x, c.box.left, c.box.right))
+    // Верхи элементов ВЫБРАННОЙ КОЛОНКИ: ими кончаются полосы её целей (см. Cand).
+    // Именно колонки, а не всего полотна: у секции колонки разной высоты, и под
+    // короткой ещё лежит пустое место, где указатель не стоит ни на чём. Полоса,
+    // оборванная там верхом чужой строки из соседней колонки, оставила бы это место
+    // без цели на ровном месте.
+    const colTops: number[] = []
+    for (const group of cell.groups) {
+      if (ctx.opts.layer === 'group') {
+        const box = union(ctx, group.blocks)
+        if (box !== null) colTops.push(box.top)
+        continue
+      }
+      for (const block of group.blocks) {
+        if (ctx.active.has(block.id)) continue
+        const box = ctx.boxes.get(block.id)
+        if (box) colTops.push(box.top)
+      }
+    }
     for (const group of cell.groups) {
       const gIds = liveIds(ctx, group.blocks)
       if (gIds.length === 0) continue
@@ -159,47 +297,62 @@ function collectRow(ctx: Ctx, row: Row<Group>, ids: string[], x: number, out: Ca
       // самой правой колонке) открывал бы полосу «под всей секцией» с самого верха ряда
       // и съедал бы позиции внутри левых колонок.
       anchor = gTail
-      if (ctx.opts.layer === 'block') collectInsideGroup(ctx, group, gTail, out)
-      // «После этой группы»: если группа замыкает ряд, это граница ряда — её добавит
-      // строка ниже, во всю ширину. Иначе это щель между участниками, законная своему.
-      if (gTail === tail) continue
-      if (!single && !ownRow) continue
-      push(ctx, out, { afterId: gTail, lineIds: gIds, before: false }, gTail)
+      if (ctx.opts.layer === 'block') collectInsideGroup(ctx, group, gTail, colTops, rowEnd, out)
     }
   }
   // Граница ряда: линия во всю его ширину, элемент встаёт ПОД рядом целиком. Адрес —
   // последняя строка ряда в порядке документа (туда он и приземлится), якорь — конец
-  // колонки под указателем: просвет под ней и есть то место, где ряд кончился.
-  push(ctx, out, { afterId: tail, lineIds: ids, before: false }, anchor)
+  // колонки под указателем: просвет под ней и есть то место, где ряд кончился. Полоса
+  // тянется до следующего РЯДА, а не до следующего элемента колонки: ниже её якоря в
+  // ряду ничего своего уже нет, и пустое место под короткой колонкой принадлежит ей.
+  push(ctx, out, { afterId: tail, lineIds: ids, before: false }, anchor, EMPTY, rowEnd)
 }
+
+// Полоса без «своих» верхов: кончается концом ряда и только им.
+const EMPTY: number[] = []
 
 // collectInsideGroup — позиции ВНУТРИ вопроса (только блочный слой). У вопроса свои ряды
 // (§6.6 «подпись | поле»), и та же атомарность действует внутри него: щель МЕЖДУ
 // участниками внутреннего ряда рвёт его так же, как внешнего, и легализует её только
 // активный из этого же ряда. Хвост вопроса сюда не попадает — он граница группы и
 // решается уровнем выше.
-function collectInsideGroup(ctx: Ctx, group: Group, gTail: string, out: Cand[]): void {
+//
+// Отдельной проверки «щель между участниками ВНУТРЕННЕГО ряда» здесь нет, потому что
+// такой щели не бывает: `packGroupRows` пускает в ряд только пару «подпись + отвечаемое»
+// (`groups.ts`), отвечаемый у группы один (`regroup`), и он группу замыкает — значит
+// внутренний ряд из двоих всегда последний и уходит выше по `tail === gTail`.
+function collectInsideGroup(
+  ctx: Ctx,
+  group: Group,
+  gTail: string,
+  colTops: number[],
+  rowEnd: number,
+  out: Cand[],
+): void {
   for (const inner of packGroupRows(group.blocks)) {
     const blocks = inner.flat()
     const innerIds = liveIds(ctx, blocks)
     const tail = innerIds[innerIds.length - 1]
     if (tail === undefined || tail === gTail) continue
-    if (blocks.length > 1 && !ownsRow(ctx, blocks)) continue
-    push(ctx, out, { afterId: tail, lineIds: innerIds, before: false }, tail)
+    push(ctx, out, { afterId: tail, lineIds: innerIds, before: false }, tail, colTops, rowEnd)
   }
 }
 
 // Кандидат без измеренного якоря выбрасывается: полосы у него нет, а цель, которую
 // нельзя показать, хуже отсутствующей.
-function push(ctx: Ctx, out: Cand[], target: DropTarget, anchorId: string): void {
+function push(
+  ctx: Ctx,
+  out: Cand[],
+  target: DropTarget,
+  anchorId: string,
+  colTops: number[],
+  rowEnd: number,
+): void {
   const box = ctx.boxes.get(anchorId)
-  if (box) out.push({ ...target, anchorTop: box.top })
+  if (box) {
+    out.push({ ...target, anchorTop: box.top, until: endOfStripe(colTops, box.top, rowEnd) })
+  }
 }
-
-// Активный элемент — участник этого ряда: тогда щели между его участниками легальны,
-// потому что состав секции от перестановки не меняется.
-const ownsRow = (ctx: Ctx, blocks: Block[]): boolean =>
-  blocks.some((b) => b.id === ctx.opts.activeId || b.groupId === ctx.opts.activeId)
 
 const rowBlocks = (row: Row<Group>): Block[] => row.flat().flatMap((g) => g.blocks)
 

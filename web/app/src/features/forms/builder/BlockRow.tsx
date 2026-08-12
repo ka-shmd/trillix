@@ -43,7 +43,7 @@ import { OptionRuleDialog } from './logic/LogicDialog'
 import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
-import { DRAG_ACTIVATION_DISTANCE, noLayoutAnimation } from './dnd'
+import { DRAG_ACTIVATION_DISTANCE, DRAGGED_FADE, DRAGGED_LOOK, noLayoutAnimation } from './dnd'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
@@ -175,7 +175,11 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   // этого он визуально сжимался/растягивался при перетаскивании. Translate.toString
   // берёт только сдвиг (translate3d), scaleX/scaleY отбрасывает — блок сохраняет
   // свою высоту. Смещение соседей (scale=1) от этого не страдает.
-  const style = { transform: CSS.Translate.toString(transform), transition }
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    ...(isDragging ? DRAGGED_FADE : null),
+  }
 
   // Слушатели драга грипа: у подписи мульти-группы — групповые (тащится вопрос
   // целиком), у всех остальных — свои. Одна переменная на оба случая, потому что грип
@@ -237,7 +241,12 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
       // любой из них, и ни одна этот аккорд не перехватывает.
       onKeyDown={onRowKeyDown}
-      className={`group relative rounded-md -my-1.5 py-1.5 ${isDragging ? 'z-10 opacity-70' : ''}`}
+      // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
+      // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
+      // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
+      className={`group relative rounded-md -my-1.5 py-1.5 ${
+        isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''
+      }`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Проявляются по hover/фокусу строки;

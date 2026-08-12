@@ -906,6 +906,12 @@ function pinFormTitle(blocks: Block[]): Block[] {
 // возвращал бы всё назад — правка, которой не было, но с dirty и лишним PATCH.
 const canvasFloor = (blocks: Block[]): number => (blocks[0]?.type === 'form_title' ? 1 : 0)
 
+// То же дно, но в списке ГРУПП: заголовок формы одиночка по построению (regroup), то
+// есть занимает нулевую группу целиком. Нужен `reorderGroups` — единственной команде
+// переноса, которая адресует группы, а не строки.
+const groupFloor = (groups: { blocks: Block[] }[]): number =>
+  groups[0]?.blocks[0]?.type === 'form_title' ? 1 : 0
+
 // groupSpan — [начало, конец] непрерывного участка группы блока с индексом i.
 // Группа смежна (гарантирует regroup), поэтому участок односвязный.
 function groupSpan(blocks: Block[], i: number): [number, number] {
@@ -978,14 +984,28 @@ export function planBlockDrop(
   const from = blocks.findIndex((b) => b.id === activeId)
   if (from < 0 || afterId === activeId) return null
   const next = blocks.slice()
-  const [active] = next.splice(from, 1)
+  const [raw] = next.splice(from, 1)
+  // ВЕРТИКАЛЬНЫЙ ДРОП СНИМАЕТ БИТ КОЛОНКИ (§13): элемент встаёт во всю ширину — собрать
+  // или переставить колонки умеет только зона ряда. Раньше бит снимался «сам»: его гасил
+  // normalizeColumns, увидев, что компания секции сменилась. Там, где компания та же,
+  // правило молчало — и жест «вытащить участника ВНИЗ, под свой ряд» не делал ничего: в
+  // порядке документа элемент уже стоит после соседа, менялся только бит, а команда
+  // выходила в no-op (найдено владельцем 2026-08-12).
   // Адрес ищется в списке БЕЗ активного: «после X» — это место сразу за X, каким бы ни
   // было исходное соседство. Отсутствующий адрес — не «в конец», а отказ: полотно такой
   // цели не называло, и молча приземлить строку куда-то ещё значило бы соврать.
-  const to = afterId === null ? 0 : next.findIndex((b) => b.id === afterId) + 1
+  //
+  // `null` значит «первым НА ПОЛОТНЕ», а не «нулевым в списке»: нулевую строку занимает
+  // приколотый заголовок формы (canvasFloor). Через ноль дроп остался бы правкой на
+  // бумаге — pinFormTitle в structural вернул бы всё назад, — но с dirty, шагом истории
+  // и лишним PATCH: ровно то, что запрещено для «двинуть вверх» на первой строке.
+  const active = withoutColumn(raw!)
+  const to = afterId === null ? canvasFloor(next) : next.findIndex((b) => b.id === afterId) + 1
   if (to === 0 && afterId !== null) return null
-  if (to === from) return null // встал бы ровно туда, где стоял
-  next.splice(to, 0, active!)
+  // «Туда, где стоял» — no-op, только если и бит не изменился: снятый бит и есть та
+  // правка, ради которой автор тянул элемент из колонки вниз.
+  if (to === from && active === raw) return null
+  next.splice(to, 0, active)
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
@@ -1546,16 +1566,28 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // Группы смежны (regroup), поэтому достаточно разложить полотно на группы,
           // переставить одну и склеить обратно. Внутренний порядок блоков группы не
           // меняется. Адрес — «после такой-то», как и у reorderBlocks: направления у
-          // него нет, и вычитать его из индексов не нужно.
+          // него нет, и вычитать его из индексов не нужно. `null` — «первой на полотне»,
+          // то есть за приколотым заголовком (groupFloor), а не нулевой в списке.
           if (activeGroupId === afterGroupId) return null
           const groups = groupBlocks(s.blocks)
           const from = groups.findIndex((g) => g.id === activeGroupId)
           if (from < 0) return null
-          const [moved] = groups.splice(from, 1)
-          const to = afterGroupId === null ? 0 : groups.findIndex((g) => g.id === afterGroupId) + 1
+          const [raw] = groups.splice(from, 1)
+          // Бит колонки у ГРУППЫ несёт её первый блок (§13), и вертикальный дроп его
+          // снимает — иначе вопрос нельзя вытащить из колонки вниз: в порядке документа
+          // он уже стоит после соседа по секции, и менять команде было бы нечего.
+          const head = raw!.blocks[0]!
+          const moved =
+            head.settings?.column === undefined
+              ? raw!
+              : { ...raw!, blocks: [withoutColumn(head), ...raw!.blocks.slice(1)] }
+          const to =
+            afterGroupId === null
+              ? groupFloor(groups)
+              : groups.findIndex((g) => g.id === afterGroupId) + 1
           if (to === 0 && afterGroupId !== null) return null
-          if (to === from) return null
-          groups.splice(to, 0, moved!)
+          if (to === from && moved === raw) return null
+          groups.splice(to, 0, moved)
           return structural({ blocks: groups.flatMap((g) => g.blocks) })
         }),
 

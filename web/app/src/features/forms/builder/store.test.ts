@@ -1349,6 +1349,35 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     return store
   }
 
+  // ВЫТАЩИТЬ УЧАСТНИКА ВНИЗ — жест, который не работал (владелец, 2026-08-12): в порядке
+  // документа правый участник УЖЕ стоит после левого, менялся только бит колонки, и
+  // команда выходила в no-op. Вертикальный дроп бит снимает (§13) — этим он и отличается
+  // от перестановки внутри ряда.
+  it('дроп участника ПОД свой ряд делает его полноширинным, а не no-op', () => {
+    const store = paired('short_text', 'email')
+    const [left, right] = store.getState().blocks
+    store.getState().markSaved()
+
+    // Цель полотна здесь — граница ряда: «после левого», линия во всю ширину.
+    store.getState().reorderGroups(right!.groupId, left!.groupId)
+
+    expect(rows(store)).toEqual([1, 1])
+    expect(cols(store)).toEqual(['-', '-'])
+    expect(store.getState().blocks.map((b) => b.type)).toEqual(['short_text', 'email'])
+    expect(store.getState().dirty).toBe(true)
+  })
+
+  it('строка из колонки: вертикальный дроп снимает бит и у блочного слоя', () => {
+    const store = paired('short_text', 'email')
+    const [left, right] = store.getState().blocks
+    store.getState().markSaved()
+
+    store.getState().reorderBlocks(right!.id, left!.id)
+
+    expect(rows(store)).toEqual([1, 1])
+    expect(cols(store)).toEqual(['-', '-'])
+  })
+
   it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {
     const store = paired('short_text', 'email')
     expect(cols(store)).toEqual([1, 2])
@@ -2606,9 +2635,36 @@ describe('createBuilderStore — заголовок формы приколот 
     // Прямой вызов операции dnd: в UI зона заголовка недостижима (его нет в
     // sortable-вселенной), но стор обязан оставаться честным сам по себе —
     // страховка живёт в structural(), а не в каждой команде.
-    store.getState().reorderBlocks('q1', null)
+    store.getState().reorderBlocks('a1', null)
 
-    expect(store.getState().blocks[0]!.type).toBe('form_title')
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'a1', 'q1', 'q2', 'a2'])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  // Дно полотна — не нулевой индекс списка, и стоит это ровно того же, что и граница
+  // сверху у Alt+↑: адрес «встать первым» у элемента, который уже первый, обязан быть
+  // no-op'ом. Через ноль дроп проходил бы сквозь оба замка (`to === from` считает индекс
+  // в списке БЕЗ активного, а заголовок сдвигает его на единицу), pinFormTitle возвращал
+  // бы документ назад, и автор получал бы dirty, шаг истории и PATCH на правку, которой
+  // не было. Достижимо это самым частым жестом: взять верхний блок и отпустить там же.
+  it('«встать первым» у того, кто уже первый, — no-op на обоих слоях', () => {
+    const store = loaded()
+
+    store.getState().reorderBlocks('q1', null)
+    store.getState().reorderGroups('g_a1', null)
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q1', 'a1', 'q2', 'a2'])
+    expect(store.getState().dirty).toBe(false)
+    expect(store.getState().past).toEqual([])
+  })
+
+  it('дроп ГРУППЫ первой встаёт под заголовок, а не над ним', () => {
+    const store = loaded()
+
+    store.getState().reorderGroups('g_a2', null)
+
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['ft_x', 'q2', 'a2', 'q1', 'a1'])
+    expect(store.getState().dirty).toBe(true)
     expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
   })
 
