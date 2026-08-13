@@ -15,7 +15,8 @@ import (
 // /api/v1/account/* регистрирует AccountRoutes, и обычный newTestHandler их не
 // знает.
 func newTestAccountHandler(svc authService) http.Handler {
-	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false)
+	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
+		WithAccount(ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 	return mux
@@ -125,5 +126,96 @@ func TestUpdateProfile_RejectsOversizedBody(t *testing.T) {
 	}
 	if svc.profileFirstName != "" {
 		t.Error("сервис не должен вызываться при превышении лимита тела")
+	}
+}
+
+func postPassword(srv http.Handler, body string, authed bool, csrf bool) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if authed {
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
+		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
+	}
+	if csrf {
+		req.Header.Set(csrfHeaderName, "tok")
+	}
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestChangePassword_ReissuesSessionCookie(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestAccountHandler(svc)
+
+	rec := postPassword(srv, `{"currentPassword":"old-password","newPassword":"new-password"}`, true, true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("статус = %d, ожидалось 204; тело=%s", rec.Code, rec.Body)
+	}
+
+	// Сервис рвёт ВСЕ сессии, включая текущую, и возвращает токен новой.
+	// Не переставить cookie здесь — значит разлогинить человека в тот момент,
+	// когда он сменил себе пароль.
+	session := cookieByName(rec.Result().Cookies(), sessionCookieName)
+	if session == nil || session.Value != "new-session-token" {
+		t.Fatalf("cookie сессии не переставлена: %+v", session)
+	}
+	if session.Value == "live-session" {
+		t.Fatal("осталась прежняя сессия — ротация не произошла")
+	}
+	// CSRF-токен выдаётся парой к сессии: без него следующая мутация получит 403.
+	if csrf := cookieByName(rec.Result().Cookies(), csrfCookieName); csrf == nil {
+		t.Fatal("csrf-cookie не переставлена вместе с сессией")
+	}
+	// Тело пустое: токен сессии в JSON не отдаётся никогда.
+	if rec.Body.Len() != 0 {
+		t.Fatalf("тело ответа не пустое: %s", rec.Body)
+	}
+}
+
+func TestChangePassword_WrongCurrentGives401(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}, passwordErr: domain.ErrInvalidCredentials}
+	srv := newTestAccountHandler(svc)
+
+	rec := postPassword(srv, `{"currentPassword":"wrong","newPassword":"new-password"}`, true, true)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("статус = %d, ожидалось 401", rec.Code)
+	}
+	// Провал не должен трогать cookie: человек остаётся в кабинете.
+	if cookieByName(rec.Result().Cookies(), sessionCookieName) != nil {
+		t.Error("при неверном текущем пароле переставлена cookie сессии")
+	}
+}
+
+func TestChangePassword_RequiresAuthAndCSRF(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestAccountHandler(svc)
+
+	if rec := postPassword(srv, `{"currentPassword":"a","newPassword":"b"}`, false, false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("без сессии статус = %d, ожидалось 401", rec.Code)
+	}
+	if rec := postPassword(srv, `{"currentPassword":"a","newPassword":"b"}`, true, false); rec.Code != http.StatusForbidden {
+		t.Fatalf("без CSRF-заголовка статус = %d, ожидалось 403", rec.Code)
+	}
+	if svc.passwordNew != "" {
+		t.Error("сервис вызван при провале авторизации или CSRF")
+	}
+}
+
+func TestChangePassword_RateLimitedPerUser(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
+		WithAccount(denyLimiter{})
+	mux := http.NewServeMux()
+	h.AccountRoutes(mux)
+
+	// Ведро по пользователю — щит не от подбора (сессия своя), а от argon2id:
+	// 64 МиБ на вызов, и кнопка в цикле кладёт процесс.
+	rec := postPassword(mux, `{"currentPassword":"old-password","newPassword":"new-password"}`, true, true)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("статус = %d, ожидалось 429", rec.Code)
+	}
+	if svc.passwordNew != "" {
+		t.Error("сервис вызван, хотя ведро пусто — argon2 всё равно отработал")
 	}
 }

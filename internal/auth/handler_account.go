@@ -17,7 +17,15 @@ import (
 // и RequireCSRF: это мутации над собственным аккаунтом, и ни одна из них не
 // имеет анонимного применения.
 func (h *Handler) AccountRoutes(mux *http.ServeMux) {
+	// Забытый WithAccount иначе обнаруживается первым же запросом человека —
+	// паникой на nil-лимитере внутри хендлера. Конфигурация проверяется на
+	// старте процесса, а не на первом запросе (internal/CLAUDE.md).
+	if h.passwordChangeLimiter == nil {
+		panic("auth: AccountRoutes вызван без WithAccount — ведро лимита не задано")
+	}
+
 	mux.Handle("PATCH /api/v1/account/profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.updateProfile))))
+	mux.Handle("POST /api/v1/account/password", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.changePassword))))
 }
 
 type updateProfileRequest struct {
@@ -53,4 +61,47 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(updated))
+}
+
+type changePasswordRequest struct {
+	// CurrentPassword необязателен ровно в одном случае — у аккаунта без пароля
+	// (заведён через провайдера). Во всех остальных пустая строка не пройдёт
+	// проверку в сервисе.
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+}
+
+// changePassword ставит новый пароль, рвёт все сессии пользователя и открывает
+// взамен новую — поэтому в ответе переставляются cookie сессии и CSRF. Тела нет:
+// профиль сменой пароля не меняется, а токен в JSON не отдаётся никогда.
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	// Лимит по пользователю, а не по IP: ключ есть только после RequireAuth, и
+	// защищаем мы не от подбора (сессия уже своя), а от argon2id — каждый вызов
+	// стоит 64 МиБ памяти, и кнопка, нажатая в цикле, кладёт процесс.
+	if !h.passwordChangeLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много смен пароля", domain.ErrRateLimited))
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req changePasswordRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+
+	token, err := h.svc.ChangePassword(r.Context(), user, req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	h.startSession(w, token)
+	w.WriteHeader(http.StatusNoContent)
 }

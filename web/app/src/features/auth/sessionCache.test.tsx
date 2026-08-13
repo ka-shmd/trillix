@@ -23,6 +23,7 @@ const userB = {
   // на границе, и мутация упадёт ещё до onSuccess.
   firstName: '',
   lastName: '',
+  hasPassword: true,
 }
 
 beforeEach(() => {

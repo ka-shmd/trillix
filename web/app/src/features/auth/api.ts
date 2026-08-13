@@ -54,6 +54,12 @@ export function updateProfile(body: { firstName: string; lastName: string }): Pr
   return apiRequest('/account/profile', { method: 'PATCH', body, schema: userSchema })
 }
 
+// Смена пароля. Ответ 204 без тела: бэк рвёт все сессии и ставит cookie новой —
+// клиенту ловить нечего, кроме успеха.
+export function changePassword(body: { currentPassword: string; newPassword: string }): Promise<void> {
+  return apiRequest('/account/password', { method: 'POST', body })
+}
+
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,
 // кнопки не рисуем (мёртвая кнопка хуже отсутствующей).
 export function getProviders(): Promise<string[]> {

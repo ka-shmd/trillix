@@ -35,6 +35,22 @@ type fakeAuthService struct {
 	profileUser      uuid.UUID // id, дошедший до сервиса
 	profileFirstName string    // строки как есть, до нормализации сервисом
 	profileLastName  string
+
+	// Смена пароля (фаза 23, слайс C).
+	passwordErr     error
+	passwordCurrent string
+	passwordNew     string
+	passwordUser    uuid.UUID
+}
+
+func (f *fakeAuthService) ChangePassword(_ context.Context, user User, currentPassword, newPassword string) (string, error) {
+	f.passwordUser = user.ID
+	f.passwordCurrent = currentPassword
+	f.passwordNew = newPassword
+	if f.passwordErr != nil {
+		return "", f.passwordErr
+	}
+	return "new-session-token", nil
 }
 
 func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, firstName, lastName string) (User, error) {

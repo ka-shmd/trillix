@@ -2,14 +2,15 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { meQueryOptions, useUpdateProfile } from '../../features/auth/queries'
+import { meQueryOptions, useChangePassword, useUpdateProfile } from '../../features/auth/queries'
+import { ApiError } from '../../shared/api/errors'
 import type { User } from '../../entities/user'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN, слайс A: пока один
-// раздел — профиль. Дальше сюда приезжают пароль, почта, второй фактор, способы
+// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN: профиль (слайс A) и
+// пароль (слайс C). Дальше сюда приезжают смена почты, второй фактор, способы
 // входа и удаление аккаунта (docs/design/account-settings.md).
 export const Route = createFileRoute('/_app/settings/account')({
   component: AccountPage,
@@ -28,7 +29,12 @@ function AccountPage() {
   // сбрасывать черновик формы, иначе она покажет имя предыдущего пользователя.
   // Ремаунтом, а не эффектом-синхронизатором: setState в теле эффекта запрещён
   // линтом (react-hooks/set-state-in-effect) и даёт каскадный ререндер.
-  return <AccountForm key={user.id} user={user} />
+  return (
+    <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 p-6">
+      <AccountForm key={user.id} user={user} />
+      <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
+    </div>
+  )
 }
 
 function AccountForm({ user }: { user: User }) {
@@ -46,7 +52,7 @@ function AccountForm({ user }: { user: User }) {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-8 p-6">
+    <div className="flex flex-col gap-8">
       <section>
         <h1 className="text-lg font-medium">Аккаунт</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -111,4 +117,113 @@ function AccountForm({ user }: { user: User }) {
       </form>
     </div>
   )
+}
+
+// MIN_PASSWORD_LEN зеркалит minPasswordLen из internal/auth/service.go.
+const MIN_PASSWORD_LEN = 8
+
+// PasswordForm — «Сменить пароль», а у аккаунта через провайдера «Задать
+// пароль»: пароля у него нет, текущий спрашивать не с чего, и доказательством
+// служит живая сессия.
+function PasswordForm({ hasPassword }: { hasPassword: boolean }) {
+  const change = useChangePassword()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+
+  const tooShort = next.length > 0 && next.length < MIN_PASSWORD_LEN
+  const ready = next.length >= MIN_PASSWORD_LEN && (!hasPassword || current !== '')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!ready) return
+    change.mutate(
+      { currentPassword: current, newPassword: next },
+      {
+        // Поля чистятся только на успехе: при неверном текущем пароле человек
+        // должен видеть, что именно он вводил, а не пустую форму.
+        onSuccess: () => {
+          setCurrent('')
+          setNext('')
+        },
+      },
+    )
+  }
+
+  return (
+    <section className="flex flex-col gap-4 border-t pt-8">
+      <div>
+        <h2 className="text-lg font-medium">{hasPassword ? 'Пароль' : 'Пароль не задан'}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {hasPassword
+            ? 'После смены все остальные устройства выйдут из аккаунта, а на почту придёт уведомление.'
+            : 'Вы входите через провайдера. Пароль позволит войти и без него.'}
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        {hasPassword && (
+          <div>
+            <Label htmlFor="current-password" className="mb-2 block">
+              Текущий пароль
+            </Label>
+            <Input
+              id="current-password"
+              type="password"
+              autoComplete="current-password"
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+            />
+          </div>
+        )}
+        <div>
+          <Label htmlFor="new-password" className="mb-2 block">
+            {hasPassword ? 'Новый пароль' : 'Пароль'}
+          </Label>
+          <Input
+            id="new-password"
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            onChange={(e) => setNext(e.target.value)}
+          />
+          {tooShort && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Не короче {MIN_PASSWORD_LEN} символов.
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={!ready || change.isPending}>
+            {change.isPending ? 'Сохраняем…' : hasPassword ? 'Сменить пароль' : 'Задать пароль'}
+          </Button>
+          {change.isSuccess && next === '' && (
+            <span className="text-sm text-muted-foreground">Пароль изменён</span>
+          )}
+        </div>
+
+        {change.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {passwordErrorText(change.error)}
+          </p>
+        )}
+      </form>
+    </section>
+  )
+}
+
+// Ветвимся по code, а не по тексту ошибки: у каждого отказа свой совет, и
+// «что-то пошло не так» здесь бесполезно — человек не поймёт, что чинить.
+function passwordErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return 'Текущий пароль неверный.'
+      case 'validation_failed':
+        return `Пароль должен быть не короче ${MIN_PASSWORD_LEN} символов.`
+      case 'rate_limited':
+        return 'Слишком много попыток. Подождите минуту и попробуйте снова.'
+    }
+  }
+  return 'Не удалось сменить пароль. Попробуйте ещё раз.'
 }

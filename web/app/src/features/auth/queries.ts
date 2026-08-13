@@ -8,6 +8,7 @@ import {
   login,
   logout,
   register,
+  changePassword,
   resendVerification,
   resetPassword,
   updateProfile,
@@ -122,5 +123,16 @@ export function useUpdateProfile() {
   return useMutation({
     mutationFn: updateProfile,
     onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+  })
+}
+
+// Смена пароля. Кэш профиля не трогаем: в объекте пользователя меняется только
+// hasPassword, и то лишь у аккаунта, который пароль ЗАДАЁТ, — поэтому me
+// инвалидируется, а не патчится (тела у ответа нет).
+export function useChangePassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: changePassword,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
   })
 }

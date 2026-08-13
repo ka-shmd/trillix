@@ -38,6 +38,7 @@ type authService interface {
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, user User) error
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
+	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -75,7 +76,10 @@ type Handler struct {
 	// баннере не должна слать письма пачками).
 	verifyLimiter RateLimiter
 	resendLimiter RateLimiter
-	cookieSecure  bool
+	// passwordChangeLimiter — по пользователю на POST /account/password (фаза 23).
+	// Не от подбора (сессия уже своя), а от argon2id: 64 МиБ на вызов.
+	passwordChangeLimiter RateLimiter
+	cookieSecure          bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
@@ -111,6 +115,14 @@ func (h *Handler) WithPasswordReset(forgotIP, forgotEmail, reset RateLimiter) *H
 func (h *Handler) WithEmailVerification(verify, resend RateLimiter) *Handler {
 	h.verifyLimiter = verify
 	h.resendLimiter = resend
+	return h
+}
+
+// WithAccount подключает настройки аккаунта с их ведром лимита (по образцу
+// WithPasswordReset). Без него AccountRoutes регистрировать нельзя — лимитер
+// будет nil.
+func (h *Handler) WithAccount(passwordChange RateLimiter) *Handler {
+	h.passwordChangeLimiter = passwordChange
 	return h
 }
 
@@ -159,6 +171,11 @@ type userResponse struct {
 	// приведение делается здесь, в одном месте.
 	FirstName string `json:"firstName"`
 	LastName  string `json:"lastName"`
+	// HasPassword — есть ли у аккаунта пароль вообще (у заведённого через
+	// провайдера его нет). Кабинету это нужно, чтобы решить, спрашивать ли
+	// текущий пароль и как назвать раздел: «Сменить пароль» или «Задать».
+	// Наружу едет ФАКТ, а не хеш.
+	HasPassword bool `json:"hasPassword"`
 }
 
 func toUserResponse(u User) userResponse {
@@ -168,6 +185,7 @@ func toUserResponse(u User) userResponse {
 		EmailVerified: u.EmailVerifiedAt != nil,
 		FirstName:     strOrEmpty(u.FirstName),
 		LastName:      strOrEmpty(u.LastName),
+		HasPassword:   u.PasswordHash != nil,
 	}
 }
 

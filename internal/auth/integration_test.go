@@ -75,7 +75,8 @@ func newStack(t *testing.T) *httptest.Server {
 	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
-		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{})
+		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).
+		WithAccount(ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.AccountRoutes(mux)

@@ -13,6 +13,9 @@ export const userSchema = z.object({
   // разбирался бы с null сам, а показать он всё равно может только строку.
   firstName: z.string(),
   lastName: z.string(),
+  // Есть ли у аккаунта пароль: у заведённого через провайдера его нет, и
+  // раздел настроек называется «Задать пароль», а текущий не спрашивается.
+  hasPassword: z.boolean(),
 })
 
 export type User = z.infer<typeof userSchema>

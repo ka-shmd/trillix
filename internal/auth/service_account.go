@@ -7,8 +7,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/mail"
 )
 
 // Настройки аккаунта (фаза 23 DEV-PLAN). Живут в модуле auth, а не в отдельном
@@ -32,6 +34,64 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, firstName
 		return User{}, err
 	}
 	return s.repo.UpdateProfile(ctx, s.db, userID, first, last)
+}
+
+// ChangePassword меняет пароль текущего пользователя и **рвёт все его сессии**,
+// включая ту, из которой пришёл запрос; взамен открывается новая — её сырой
+// токен и возвращается, чтобы транспорт переставил cookie. Человек, сидящий в
+// кабинете, остаётся в нём, все остальные устройства разлогиниваются.
+//
+// Почему не «удалить все, кроме текущей»: смена пароля — событие безопасности, и
+// токен сессии по нему ротируется, а не доживает свой месяц. Цена — один
+// лишний INSERT; выгода — украденный ранее токен не переживает смену пароля даже
+// в том маловероятном случае, если он совпал с текущим.
+//
+// currentPassword у аккаунта БЕЗ пароля (заведён через провайдера) не
+// спрашивается: его не существует, и требовать его значит запереть человека в
+// собственном аккаунте. Доказательством в этом случае служит живая сессия.
+func (s *Service) ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error) {
+	if err := validatePassword(newPassword); err != nil {
+		return "", err
+	}
+
+	if user.PasswordHash != nil {
+		ok, err := VerifyPassword(*user.PasswordHash, currentPassword)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", domain.ErrInvalidCredentials
+		}
+	}
+
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return "", err
+	}
+
+	// Хеш, разрыв сессий и письмо — одной транзакцией: пароль, сменившийся без
+	// разрыва чужих сессий, оставляет вошедшему по старому паролю доступ, ради
+	// закрытия которого пароль и меняли.
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if e := s.repo.SetUserPassword(ctx, tx, user.ID, hash); e != nil {
+			return e
+		}
+		if e := s.repo.DeleteSessionsByUser(ctx, tx, user.ID); e != nil {
+			return e
+		}
+		// Единственный способ узнать об угоне — письмо: сам угонщик о смене
+		// пароля хозяину не сообщит.
+		return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+			To:       user.Email,
+			Template: mail.TemplatePasswordChanged,
+			Data:     map[string]any{"link": s.appBaseURL + "/forgot-password"},
+		})
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return s.createSession(ctx, user.ID)
 }
 
 // normalizePersonName приводит присланную строку к тому, что ложится в колонку:

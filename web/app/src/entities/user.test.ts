@@ -9,6 +9,7 @@ function user(patch: Partial<User> = {}): User {
     emailVerified: true,
     firstName: '',
     lastName: '',
+    hasPassword: true,
     ...patch,
   }
 }

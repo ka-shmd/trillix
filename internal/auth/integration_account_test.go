@@ -3,6 +3,7 @@
 package auth_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -112,5 +113,66 @@ func TestAccountProfile_TouchesOnlyOwnAccount(t *testing.T) {
 	}
 	if first, _ := profileOf(t, get(t, b, srv.URL+"/api/v1/auth/me")); first != "Борис" {
 		t.Fatalf("профиль B: имя=%q, ожидалось «Борис»", first)
+	}
+}
+
+// Смена пароля: чужие сессии умирают, текущая живёт дальше, письмо ложится в
+// outbox. Третий пункт критерия приёмки фазы 23.
+func TestAccountPassword_KillsOtherSessionsKeepsCurrent(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+
+	const email = "user@example.com"
+	const oldPassword = "supersecret1"
+	const newPassword = "supersecret2"
+
+	// Два браузера одного человека: в первом он сейчас сменит пароль.
+	here := newClient(t)
+	if r := post(t, here, srv.URL+"/api/v1/auth/register",
+		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusCreated {
+		t.Fatalf("register: статус %d", r.StatusCode)
+	}
+	elsewhere := newClient(t)
+	if r := post(t, elsewhere, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("login во втором браузере: статус %d", r.StatusCode)
+	}
+
+	resp := post(t, here, srv.URL+"/api/v1/account/password",
+		`{"currentPassword":"`+oldPassword+`","newPassword":"`+newPassword+`"}`, csrfHeader(t, here, srv.URL))
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("смена пароля: статус %d; тело=%s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+
+	// Тот, кто менял, остаётся внутри: cookie переставлена ответом.
+	if me := get(t, here, srv.URL+"/api/v1/auth/me"); me.StatusCode != http.StatusOK {
+		t.Fatalf("me в том же браузере: статус %d, ожидалось 200 — человек разлогинен своей же сменой пароля", me.StatusCode)
+	}
+	// Второй браузер выкинут: ровно ради этого пароль и меняют.
+	if me := get(t, elsewhere, srv.URL+"/api/v1/auth/me"); me.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("me во втором браузере: статус %d, ожидалось 401", me.StatusCode)
+	}
+
+	// Старый пароль больше не пускает, новый пускает.
+	fresh := newClient(t)
+	if r := post(t, fresh, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("вход старым паролем: статус %d, ожидалось 401", r.StatusCode)
+	}
+	if r := post(t, fresh, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+email+`","password":"`+newPassword+`"}`, ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("вход новым паролем: статус %d, ожидалось 200", r.StatusCode)
+	}
+
+	// Письмо-уведомление — единственный способ узнать об угоне; оно обязано
+	// лечь в ту же транзакцию, что и смена (transactional outbox).
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE payload->>'template' = 'password_changed'`).Scan(&n); err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("писем о смене пароля в outbox: %d, ожидалось 1", n)
 	}
 }

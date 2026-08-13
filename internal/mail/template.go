@@ -21,6 +21,10 @@ const (
 	// TemplateSubmissionDigest — дайджест новых ответов владельцу. Data:
 	// {"form_title": "<название>", "link": "<url таблицы>", "count": <N>}.
 	TemplateSubmissionDigest Template = "submission_digest"
+	// TemplatePasswordChanged — уведомление о смене пароля (фаза 23, слайс C).
+	// Data: {"link": "<url восстановления>"}. Ссылки-токена в нём нет: письмо не
+	// даёт никаких прав, а только сообщает о случившемся.
+	TemplatePasswordChanged Template = "password_changed"
 )
 
 type mailTemplate struct {
@@ -76,6 +80,18 @@ var templates = map[Template]mailTemplate{
 				"Открыть таблицу ответов:\n\n" +
 				"{{.link}}\n\n" +
 				"Уведомления можно отключить в настройках формы.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplatePasswordChanged: {
+		subject: "Пароль в Trillix изменён",
+		body: template.Must(template.New("password_changed").Parse(
+			"Здравствуйте!\n\n" +
+				"Пароль от вашего аккаунта в Trillix только что изменён, а все " +
+				"остальные сеансы завершены.\n\n" +
+				"Если это сделали вы — ничего делать не нужно.\n\n" +
+				"Если нет — восстановите доступ по ссылке «Забыли пароль?»:\n\n" +
+				"{{.link}}\n\n" +
 				"— Trillix",
 		)),
 	},

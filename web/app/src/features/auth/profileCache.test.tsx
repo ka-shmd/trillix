@@ -17,6 +17,7 @@ const saved = {
   emailVerified: true,
   firstName: 'Иван',
   lastName: 'Петров',
+  hasPassword: true,
 }
 
 beforeEach(() => {

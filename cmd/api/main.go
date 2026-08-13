@@ -88,6 +88,13 @@ const (
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
 
+	// Смена пароля в настройках (фаза 23). Ведро по ПОЛЬЗОВАТЕЛЮ и щедрое по
+	// сравнению с логином: перебирать тут нечего (сессия уже своя), режем только
+	// поток argon2id — 64 МиБ на вызов. Три подряд (опечатался в текущем пароле —
+	// пробуй ещё), дальше по одному в минуту.
+	passwordChangeRatePerSec = 1.0 / 60.0
+	passwordChangeBurst      = 3
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -219,6 +226,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
 	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
 	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
+	authHandler = authHandler.WithAccount(ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst))
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.
