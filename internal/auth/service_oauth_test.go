@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,7 @@ func TestLoginWithIdentity_KnownIdentity(t *testing.T) {
 	store := &fakeStore{identityExists: true, identityUser: known}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), "yandex", "1234567", "user@yandex.ru")
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -34,7 +35,7 @@ func TestLoginWithIdentity_NewUser(t *testing.T) {
 	store := &fakeStore{identityExists: false, userExists: false}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), "yandex", "1234567", "  New@Yandex.RU ")
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "  New@Yandex.RU "})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestLoginWithIdentity_ExistingEmailRequiresPassword(t *testing.T) {
 	}
 	svc := newService(store)
 
-	_, token, err := svc.LoginWithIdentity(context.Background(), "yandex", "attacker-id", "victim@yandex.ru")
+	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "attacker-id", Email: "victim@yandex.ru"})
 	if !errors.Is(err, ErrPasswordLinkRequired) {
 		t.Fatalf("err = %v, want ErrPasswordLinkRequired", err)
 	}
@@ -104,7 +105,7 @@ func TestLoginWithIdentity_ExistingPasswordlessAccount(t *testing.T) {
 	}
 	svc := newService(store)
 
-	_, token, err := svc.LoginWithIdentity(context.Background(), "yandex", "new-id", "user@yandex.ru")
+	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "new-id", Email: "user@yandex.ru"})
 	if !errors.Is(err, ErrProviderOnlyAccount) {
 		t.Fatalf("err = %v, want ErrProviderOnlyAccount", err)
 	}
@@ -130,7 +131,7 @@ func TestLoginWithIdentity_ConcurrentSignupLetsIn(t *testing.T) {
 	}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), "yandex", "1234567", "user@yandex.ru")
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v — гонка двух вкладок не должна быть отказом", err)
 	}
@@ -211,5 +212,87 @@ func TestLinkIdentityWithPassword_TimingEqualized(t *testing.T) {
 
 	if unknown < wrongPw/5 {
 		t.Fatalf("отказ на несуществующем аккаунте слишком быстр (%v против %v) — адреса перечислимы", unknown, wrongPw)
+	}
+}
+
+// Профиль из провайдера (фаза 23, слайс B). Правило одно: заполняем пустое,
+// не трогаем заполненное.
+
+func TestLoginWithIdentity_NewUserGetsProviderName(t *testing.T) {
+	store := &fakeStore{identityExists: false, userExists: false}
+	svc := newService(store)
+
+	user, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
+		Provider: "yandex", ProviderUserID: "1234567", Email: "new@yandex.ru",
+		FirstName: "Иван", LastName: "Петров",
+	})
+	if err != nil {
+		t.Fatalf("LoginWithIdentity: %v", err)
+	}
+	if user.FirstName == nil || *user.FirstName != "Иван" || user.LastName == nil || *user.LastName != "Петров" {
+		t.Fatalf("профиль нового аккаунта не заполнен из провайдера: %v / %v", user.FirstName, user.LastName)
+	}
+}
+
+func TestLoginWithIdentity_ProviderDoesNotOverwriteName(t *testing.T) {
+	own := "СвоёИмя"
+	known := User{ID: domain.NewID(), Email: "user@yandex.ru", FirstName: &own, CreatedAt: time.Now()}
+	store := &fakeStore{identityExists: true, identityUser: known, user: known}
+	svc := newService(store)
+
+	// Имя, вписанное в кабинете руками, обязано пережить вход через Яндекс —
+	// иначе правка профиля живёт до следующего входа.
+	user, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
+		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
+		FirstName: "ИзЯндекса", LastName: "Петров",
+	})
+	if err != nil {
+		t.Fatalf("LoginWithIdentity: %v", err)
+	}
+	if user.FirstName == nil || *user.FirstName != own {
+		t.Fatalf("имя перетёрто провайдером: %v", user.FirstName)
+	}
+	// А пустая фамилия при этом заполняется: правило про поле, а не про запись.
+	if user.LastName == nil || *user.LastName != "Петров" {
+		t.Fatalf("пустая фамилия не заполнена из провайдера: %v", user.LastName)
+	}
+}
+
+func TestLoginWithIdentity_NoNameNoWrite(t *testing.T) {
+	known := User{ID: domain.NewID(), Email: "user@yandex.ru", CreatedAt: time.Now()}
+	store := &fakeStore{identityExists: true, identityUser: known, user: known}
+	svc := newService(store)
+
+	// Провайдер имени не отдал (нет разрешения login:info) — запроса в базу
+	// быть не должно вовсе: это вход, а не правка профиля.
+	if _, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
+		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
+	}); err != nil {
+		t.Fatalf("LoginWithIdentity: %v", err)
+	}
+	if store.profileFilled {
+		t.Error("пустой профиль провайдера всё равно пошёл в базу")
+	}
+}
+
+func TestLoginWithIdentity_OversizedProviderNameDoesNotBlockLogin(t *testing.T) {
+	known := User{ID: domain.NewID(), Email: "user@yandex.ru", CreatedAt: time.Now()}
+	store := &fakeStore{identityExists: true, identityUser: known, user: known}
+	svc := newService(store)
+
+	// Имя длиннее лимита — не повод отказать во входе: оно приезжает побочным
+	// эффектом, а не по просьбе человека. Поле остаётся пустым.
+	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
+		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
+		FirstName: strings.Repeat("я", MaxPersonNameLen+1),
+	})
+	if err != nil {
+		t.Fatalf("вход отвергнут из-за длинного имени у провайдера: %v", err)
+	}
+	if token == "" {
+		t.Fatal("сессия не выдана")
+	}
+	if store.profileFilled {
+		t.Error("негодное имя всё равно пошло в базу")
 	}
 }

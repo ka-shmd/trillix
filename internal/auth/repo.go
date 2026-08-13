@@ -174,6 +174,20 @@ func (Repo) UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUI
 	return userFromRow(row), nil
 }
 
+// FillEmptyProfile заполняет ПУСТЫЕ имя и фамилию (данные провайдера); уже
+// заполненное не трогает.
+func (Repo) FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	row, err := postgres.New(db).FillEmptyProfile(ctx, postgres.FillEmptyProfileParams{
+		ID:        userID,
+		FirstName: pgText(firstName),
+		LastName:  pgText(lastName),
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("fill empty profile: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
 // SetUserPassword ставит новый хеш пароля (сброс). hash непустой — nil-семантики
 // «убрать пароль» тут нет.
 func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error {

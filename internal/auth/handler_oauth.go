@@ -40,7 +40,7 @@ type oauthProviders map[string]oauth.Provider
 
 // oauthService — то, что транспорту нужно от сервиса сверх authService.
 type oauthService interface {
-	LoginWithIdentity(ctx context.Context, provider, providerUserID, email string) (User, string, error)
+	LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error)
 	LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error)
 }
 
@@ -137,7 +137,13 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, token, err := h.oauthSvc.LoginWithIdentity(r.Context(), name, profile.ID, profile.Email)
+	_, token, err := h.oauthSvc.LoginWithIdentity(r.Context(), IdentityProfile{
+		Provider:       name,
+		ProviderUserID: profile.ID,
+		Email:          profile.Email,
+		FirstName:      profile.FirstName,
+		LastName:       profile.LastName,
+	})
 	switch {
 	case err == nil:
 		h.startSession(w, token)

@@ -674,6 +674,39 @@ func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) er
 	return err
 }
 
+const fillEmptyProfile = `-- name: FillEmptyProfile :one
+UPDATE users
+   SET first_name = COALESCE(first_name, $2),
+       last_name  = COALESCE(last_name,  $3)
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+`
+
+type FillEmptyProfileParams struct {
+	ID        uuid.UUID
+	FirstName pgtype.Text
+	LastName  pgtype.Text
+}
+
+// Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
+// присваивание: заполненное поле остаётся как есть, иначе каждый вход через
+// Яндекс затирал бы имя, введённое в кабинете руками. NULL в аргументе означает
+// «этого поля провайдер не дал» и тоже ничего не трогает.
+func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, fillEmptyProfile, arg.ID, arg.FirstName, arg.LastName)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
+	)
+	return i, err
+}
+
 const getAccessContext = `-- name: GetAccessContext :one
 SELECT m.role,
        (w.personal_user_id IS NOT NULL)::bool AS is_personal,

@@ -79,6 +79,7 @@ type fakeStore struct {
 	// Профиль (фаза 23, слайс A). Указатели, а не строки: тесту нужно отличать
 	// «стереть» (nil) от «поставить пустое» — второго быть не должно.
 	profileUpdated   bool
+	profileFilled    bool
 	profileUser      uuid.UUID
 	profileFirstName *string
 	profileLastName  *string
@@ -165,6 +166,26 @@ func (f *fakeStore) UpdateProfile(_ context.Context, _ postgres.DBTX, userID uui
 	u.ID = userID
 	u.FirstName = firstName
 	u.LastName = lastName
+	return u, nil
+}
+
+// FillEmptyProfile — фейк с той же семантикой, что SQL-запрос: COALESCE, то
+// есть заполненное поле не трогается. Фейк, повторяющий запрос неверно, врал бы
+// ровно в том тесте, ради которого написан.
+func (f *fakeStore) FillEmptyProfile(_ context.Context, _ postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	f.profileFilled = true
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	u := f.user
+	u.ID = userID
+	if u.FirstName == nil {
+		u.FirstName = firstName
+	}
+	if u.LastName == nil {
+		u.LastName = lastName
+	}
+	f.user = u
 	return u, nil
 }
 

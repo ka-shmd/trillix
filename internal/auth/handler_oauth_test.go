@@ -30,14 +30,17 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (oauth.Profile, 
 	return f.profile, nil
 }
 
-// fakeOAuthService фиксирует, дошёл ли до сервиса вход вообще.
+// fakeOAuthService фиксирует, дошёл ли до сервиса вход вообще, и с каким
+// профилем (фаза 23: имя обязано доехать от провайдера до сервиса целиком).
 type fakeOAuthService struct {
-	called bool
-	err    error
+	called  bool
+	err     error
+	profile IdentityProfile
 }
 
-func (f *fakeOAuthService) LoginWithIdentity(context.Context, string, string, string) (User, string, error) {
+func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfile) (User, string, error) {
 	f.called = true
+	f.profile = p
 	return User{}, "session-token", f.err
 }
 

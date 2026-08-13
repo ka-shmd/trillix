@@ -39,6 +39,7 @@ func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.OAuthRoutes(mux)
+	h.AccountRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -244,5 +245,45 @@ func TestOAuth_ExistingEmail_RequiresPasswordThenLinks(t *testing.T) {
 	}
 	if !hasSessionCookie(c2, srv, t) {
 		t.Fatal("после привязки вход в один клик не работает")
+	}
+}
+
+// Имя из провайдера: приезжает при первом входе, не затирает введённое руками
+// и дозаполняет то, что человек оставил пустым. Второй пункт критерия приёмки
+// фазы 23 (docs/design/account-settings.md §1) плюс правило слайса B.
+func TestOAuth_ProviderNameFillsEmptyOnly(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{
+		ID: "1234567", Email: "new@yandex.ru", FirstName: "Иван", LastName: "Петров",
+	})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+	if !hasSessionCookie(c, srv, t) {
+		t.Fatal("сессия не выдана — дальше проверять нечего")
+	}
+	if first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); first != "Иван" || last != "Петров" {
+		t.Fatalf("после входа через провайдера имя=%q фамилия=%q, ожидались Иван/Петров", first, last)
+	}
+
+	// Человек переименовал себя в кабинете и стёр фамилию.
+	upd := patch(t, c, srv.URL+"/api/v1/account/profile",
+		`{"firstName":"Кирилл","lastName":""}`, csrfHeader(t, c, srv.URL))
+	if upd.StatusCode != http.StatusOK {
+		t.Fatalf("patch profile: статус %d; тело=%s", upd.StatusCode, body(t, upd))
+	}
+	_ = upd.Body.Close()
+
+	// Повторный вход через того же провайдера с тем же профилем.
+	resp2 := walkStartAndCallback(t, srv, c)
+	_ = resp2.Body.Close()
+
+	first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me"))
+	if first != "Кирилл" {
+		t.Errorf("имя = %q: провайдер затёр введённое руками", first)
+	}
+	if last != "Петров" {
+		t.Errorf("фамилия = %q: пустое поле не дозаполнено провайдером", last)
 	}
 }

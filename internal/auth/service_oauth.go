@@ -32,17 +32,42 @@ var ErrPasswordLinkRequired = errors.New("auth: требуется вход па
 // разбирается руками — TD-34.
 var ErrProviderOnlyAccount = errors.New("auth: аккаунт доступен только через прежнего провайдера")
 
+// IdentityProfile — то, что провайдер рассказал о пришедшем человеке, в виде,
+// понятном сервису (пакет oauth сюда не импортируется: слой не должен зависеть
+// от того, откуда именно приехали эти строки).
+//
+// Структурой, а не шестью строковыми аргументами подряд: email, имя и фамилия
+// одного типа, и перепутанные местами при вызове они не вызовут ни ошибки
+// компиляции, ни падения теста — просто человека будут звать своим адресом.
+type IdentityProfile struct {
+	Provider       string
+	ProviderUserID string
+	Email          string
+	// FirstName/LastName — необязательны и могут быть пустыми (провайдер не
+	// отдал). Пустые ничего не перетирают.
+	FirstName string
+	LastName  string
+}
+
 // LoginWithIdentity — вход через внешнего провайдера.
 //
 // Три исхода: привязка найдена — вход; аккаунта с таким email нет — заводим
 // новый без пароля; аккаунт есть, привязки нет — ErrPasswordLinkRequired.
 // Автосвязывания нет ни при каких условиях.
-func (s *Service) LoginWithIdentity(ctx context.Context, provider, providerUserID, email string) (User, string, error) {
-	email = normalizeEmail(email)
+func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error) {
+	email := normalizeEmail(p.Email)
 
-	user, err := s.repo.GetUserByIdentity(ctx, s.db, provider, providerUserID)
+	user, err := s.repo.GetUserByIdentity(ctx, s.db, p.Provider, p.ProviderUserID)
 	switch {
 	case err == nil:
+		// Профиль дозаполняется на КАЖДОМ входе, но только пустые поля: у
+		// аккаунта, заведённого до фазы 23, имени нет, и первый же вход через
+		// Яндекс его проставит. Затирать введённое руками нельзя — иначе правка
+		// имени в кабинете живёт до следующего входа.
+		user, err = s.fillProfileFromProvider(ctx, user, p)
+		if err != nil {
+			return User{}, "", err
+		}
 		token, err := s.createSession(ctx, user.ID)
 		if err != nil {
 			return User{}, "", err
@@ -65,13 +90,13 @@ func (s *Service) LoginWithIdentity(ctx context.Context, provider, providerUserI
 		return User{}, "", err
 	}
 
-	user, err = s.createUserWithIdentity(ctx, email, provider, providerUserID)
+	user, err = s.createUserWithIdentity(ctx, email, p)
 	if err != nil {
 		if errors.Is(err, errConcurrentSignup) {
 			// Тот же адрес завели параллельно — почти всегда это тот же человек
 			// в двух вкладках. Соседняя транзакция уже создала и аккаунт, и
 			// привязку, поэтому повторный поиск даёт вход, а не тупик.
-			return s.resolveAfterRace(ctx, provider, providerUserID, email)
+			return s.resolveAfterRace(ctx, p, email)
 		}
 		return User{}, "", err
 	}
@@ -87,8 +112,8 @@ var errConcurrentSignup = errors.New("auth: аккаунт с этим email с�
 
 // resolveAfterRace разбирает исход гонки: привязка соседней транзакции — вход;
 // иначе адрес занят кем-то ещё, и работают обычные правила.
-func (s *Service) resolveAfterRace(ctx context.Context, provider, providerUserID, email string) (User, string, error) {
-	user, err := s.repo.GetUserByIdentity(ctx, s.db, provider, providerUserID)
+func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email string) (User, string, error) {
+	user, err := s.repo.GetUserByIdentity(ctx, s.db, p.Provider, p.ProviderUserID)
 	if err == nil {
 		token, err := s.createSession(ctx, user.ID)
 		if err != nil {
@@ -116,6 +141,11 @@ func (s *Service) resolveAfterRace(ctx context.Context, provider, providerUserID
 // Пароль здесь проверяется ровно как в Login, включая выравнивание времени:
 // эндпоинт принимает пароль, значит он ещё одна дверь для перебора и обязан
 // вести себя как основная.
+// Имя провайдера здесь не проставляется, и это не упущение: на этом шаге его
+// физически нет. Профиль читается на колбэке, а до сюда доезжает только
+// подписанная cookie с парой (провайдер, идентификатор) — класть в неё ещё и
+// ФИО значит возить чужие ПДн через браузер ради поля, которое всё равно
+// приедет на ближайшем входе через того же провайдера.
 func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error) {
 	email = normalizeEmail(email)
 
@@ -156,11 +186,37 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 	return user, token, nil
 }
 
+// fillProfileFromProvider проставляет имя из профиля провайдера, НЕ трогая уже
+// заполненное. Пустой профиль (провайдер имени не отдал) — не повод для запроса
+// в базу вовсе.
+func (s *Service) fillProfileFromProvider(ctx context.Context, user User, p IdentityProfile) (User, error) {
+	first, last := providerName(p.FirstName), providerName(p.LastName)
+	if first == nil && last == nil {
+		return user, nil
+	}
+	return s.repo.FillEmptyProfile(ctx, s.db, user.ID, first, last)
+}
+
+// providerName приводит имя из чужого профиля к тому, что можно положить в
+// колонку: пустое и негодное — nil.
+//
+// Негодное здесь именно ИГНОРИРУЕТСЯ, а не отвергает запрос: имя приезжает
+// побочным эффектом входа, и отказать человеку войти из-за того, что у него в
+// профиле Яндекса 300 символов, было бы обменом рабочего входа на украшение.
+// В форме кабинета то же значение даст честные 422 — там его печатает человек.
+func providerName(v string) *string {
+	name, err := normalizePersonName(v, "имя")
+	if err != nil {
+		return nil
+	}
+	return name
+}
+
 // createUserWithIdentity заводит пользователя без пароля вместе с личным
 // воркспейсом и привязкой — одной транзакцией. Инвариант «регистрация = user +
 // workspace + membership» (internal/CLAUDE.md) распространяется и на этот путь:
 // аккаунт без воркспейса нерабочий, а привязка без аккаунта — мусор.
-func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, providerUserID string) (User, error) {
+func (s *Service) createUserWithIdentity(ctx context.Context, email string, p IdentityProfile) (User, error) {
 	userID := domain.NewID()
 	wsID := domain.NewID()
 
@@ -176,6 +232,16 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, p
 			return e
 		}
 		user = u
+		// Имя ставится ТОЙ ЖЕ транзакцией, что и аккаунт: отдельным запросом
+		// после коммита оно потерялось бы при любом сбое между ними, и человек
+		// увидел бы пустой профиль там, где провайдер имя отдал.
+		if first, last := providerName(p.FirstName), providerName(p.LastName); first != nil || last != nil {
+			filled, e := s.repo.FillEmptyProfile(ctx, tx, userID, first, last)
+			if e != nil {
+				return e
+			}
+			user = filled
+		}
 		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName, userID); e != nil {
 			return e
 		}
@@ -185,7 +251,7 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email, provider, p
 		if e := s.repo.CreateSubscription(ctx, tx, userID, defaultPlanCode); e != nil {
 			return e
 		}
-		if e := s.repo.CreateIdentity(ctx, tx, provider, providerUserID, userID); e != nil {
+		if e := s.repo.CreateIdentity(ctx, tx, p.Provider, p.ProviderUserID, userID); e != nil {
 			return e
 		}
 		// Вход через провайдера считаем подтверждением email: чтобы завести аккаунт

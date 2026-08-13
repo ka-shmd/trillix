@@ -66,6 +66,17 @@ UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
 RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
 
+-- name: FillEmptyProfile :one
+-- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
+-- присваивание: заполненное поле остаётся как есть, иначе каждый вход через
+-- Яндекс затирал бы имя, введённое в кабинете руками. NULL в аргументе означает
+-- «этого поля провайдер не дал» и тоже ничего не трогает.
+UPDATE users
+   SET first_name = COALESCE(first_name, $2),
+       last_name  = COALESCE(last_name,  $3)
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
 -- password_hash из NULL в значение — так закрывается TD-34 (аккаунт становится
