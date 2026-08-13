@@ -181,9 +181,16 @@ export function cutRange(spans: Span[], from: number, to: number): Span[] {
 // внутрь которого попала позиция, разрезается; оформление вокруг сохраняется, но на сам
 // чип не переносится: имя вопроса — служебная подпись, а не текст автора, и жирным его
 // делает только явное решение.
+//
+// ЗА ЧИПОМ СТАВИТСЯ ПРОБЕЛ (решение владельца 2026-08-13), если его там ещё нет: после
+// вставки автор продолжает писать, и «Имяукажите телефон» — то, что он получал бы каждый
+// раз. Пробел отдельным куском, а не частью `t`: внутри чипа он попал бы в имя вопроса,
+// то есть в заголовок колонки CSV, и вдобавок стал бы неудаляемым — чип неделим.
 export function insertMention(spans: Span[], at: number, label: string, ref: string): Span[] {
   const chip: Span = { t: label, ref }
   const where = Math.max(at, 0)
+  const after = spans.reduce((t, s) => t + s.t, '').slice(where)
+  const tail: Span[] = after.startsWith(' ') ? [] : [{ t: ' ' }]
   const out: Span[] = []
   let pos = 0
   let placed = false
@@ -201,13 +208,13 @@ export function insertMention(spans: Span[], at: number, label: string, ref: str
     const st = styleOf(s)
     const cut = where - start
     if (cut > 0) out.push(mkSpan(s.t.slice(0, cut), st))
-    out.push(chip)
+    out.push(chip, ...tail)
     placed = true
     if (cut < s.t.length) out.push(mkSpan(s.t.slice(cut), st))
   }
   // Вставка в конец строки (и в пустую строку) — единственный случай, когда ни один
   // кусок точку не содержит.
-  if (!placed) out.push(chip)
+  if (!placed) out.push(chip, ...tail)
   return normalize(out)
 }
 

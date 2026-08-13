@@ -57,9 +57,10 @@ test('билдер без мыши: форма собирается клавиа
   const phoneQ = 'Телефон для связи'
   const srcQ = 'Как вы о нас узнали'
   const cityQ = 'Город'
-  // Подпись с подстановкой: чип «Ваше имя» плюс хвост. В данных вопрос назовётся
-  // «Ваше имя, кем вы работаете?» — именем источника, а не чьим-то ответом.
-  const jobTail = ', кем вы работаете?'
+  // Подпись с подстановкой: чип «Ваше имя», за ним пробел (его ставит вставка) и хвост.
+  // В данных вопрос назовётся «Ваше имя кем вы работаете?» — именем источника, а не
+  // чьим-то ответом.
+  const jobTail = 'кем вы работаете?'
   const nameA = `Иван ${uniq}`
   const mailA = `ivan-${uniq}@example.com`
   const srcA = 'Друзья'
@@ -268,8 +269,9 @@ test('билдер без мыши: форма собирается клавиа
   // Чип неделим и виден на полотне отдельным узлом; текст его — имя вопроса.
   const chip = canvasTitles.nth(5).locator('.rf-mention')
   await expect(chip).toHaveText(nameQ)
+  // Печатается сразу слово: пробел за чипом уже стоит.
   await page.keyboard.type(jobTail)
-  await expect(canvasTitles.nth(5)).toHaveText(`${nameQ}${jobTail}`)
+  await expect(canvasTitles.nth(5)).toHaveText(`${nameQ} ${jobTail}`)
 
   // 8. Публикация — тоже без мыши: кнопка активна, только когда автосейв догнал
   // редактор; фокусируем и жмём Enter.
@@ -337,8 +339,8 @@ test('билдер без мыши: форма собирается клавиа
   expect(phoneBox.y).toBeGreaterThan(mailBox.y)
   expect(Math.abs(phoneBox.x - mailBox.x)).toBeLessThan(4)
 
-  // ПОДСТАНОВКА У РЕСПОНДЕНТА: пока «Ваше имя» пусто, на месте чипа НИЧЕГО, и подпись
-  // начинается с запятой. Чипа на публичной форме нет вовсе — там обычный текст.
+  // ПОДСТАНОВКА У РЕСПОНДЕНТА: пока «Ваше имя» пусто, на месте чипа НИЧЕГО. Чипа на
+  // публичной форме нет вовсе — там обычный текст.
   const jobLabel = formPage.locator('.rf-label', { hasText: 'кем вы работаете' })
   await expect(jobLabel).toHaveText(jobTail)
   await expect(formPage.locator('.rf-mention')).toHaveCount(0)
@@ -346,7 +348,7 @@ test('билдер без мыши: форма собирается клавиа
   await nameField.fill(nameA)
   // ЖИВОСТЬ — сердце критерия: ответ доезжает до подписи по мере ввода, без перехода
   // на следующий шаг и без отправки.
-  await expect(jobLabel).toHaveText(`${nameA}${jobTail}`)
+  await expect(jobLabel).toHaveText(`${nameA} ${jobTail}`)
   await nameField.fill('')
   await expect(jobLabel).toHaveText(jobTail)
   await nameField.fill(nameA)
@@ -412,8 +414,8 @@ test('билдер без мыши: форма собирается клавиа
   expect(csv).toContain(nameQ)
   // Подстановка в данные не протекает: колонка названа ИМЕНЕМ вопроса-источника, а не
   // ответом респондента и не служебным id.
-  expect(csv).toContain(`${nameQ}${jobTail}`)
-  expect(csv).not.toContain(`${nameA}${jobTail}`)
+  expect(csv).toContain(`${nameQ} ${jobTail}`)
+  expect(csv).not.toContain(`${nameA} ${jobTail}`)
   // Разметка в CSV выглядела бы либо тегом, либо сырым спаном — обе формы ловим здесь,
   // потому что обе означают одно: выгрузку открыли в Excel и увидели мусор.
   expect(csv).not.toMatch(/<span|rf-b|"m":/)

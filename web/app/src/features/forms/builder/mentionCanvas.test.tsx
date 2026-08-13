@@ -122,7 +122,8 @@ describe('«@» на полотне', () => {
       fireEvent.keyDown(line(), { code: 'Enter' })
     })
     // Источник — ОТВЕЧАЕМЫЙ блок вопроса (на него ссылаются ответы), а не его подпись.
-    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }])
+    // Следом за чипом — пробел: после вставки автор продолжает писать.
+    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }, { t: ' ' }])
     expect(menuText()).toBeNull()
   })
 
@@ -153,8 +154,9 @@ describe('«@» на полотне', () => {
     const sel = document.getSelection()!
     expect(sel.anchorNode).not.toBeNull()
     expect(chip.contains(sel.anchorNode)).toBe(false)
-    // В координатах плоского текста это по-прежнему «сразу за именем».
-    expect(richCaret(line()).text().caret).toBe('Имя'.length)
+    // За пробелом, который вставка поставила следом за чипом: печатать автор
+    // продолжает с нового слова.
+    expect(richCaret(line()).text().caret).toBe('Имя '.length)
   })
 
   // Почта в тексте вопроса — обычное дело, и меню, всплывающее посреди неё, было бы
@@ -205,16 +207,16 @@ describe('имя в чипе живёт', () => {
     act(() => {
       fireEvent.keyDown(line(), { code: 'Enter' })
     })
-    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }])
+    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }, { t: ' ' }])
     act(() => {
       store.getState().updateBlock('cap1', { text: textFromString('Как вас зовут') })
     })
-    expect(textOf(store, 'cap2')).toEqual([{ t: 'Как вас зовут', ref: 'q1' }])
+    expect(textOf(store, 'cap2')).toEqual([{ t: 'Как вас зовут', ref: 'q1' }, { t: ' ' }])
     // Один шаг истории, а не два: undo возвращает и имя вопроса, и подпись чипа.
     act(() => {
       store.getState().undo()
     })
-    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }])
+    expect(textOf(store, 'cap2')).toEqual([{ t: 'Имя', ref: 'q1' }, { t: ' ' }])
   })
 
   it('документ без чипов уборка не трогает — тот же массив блоков', () => {

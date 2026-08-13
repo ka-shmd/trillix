@@ -22,32 +22,6 @@ export function setCaret(el: HTMLElement, offset: number): void {
   sel.addRange(range)
 }
 
-// setCaretAfterNode ставит каретку СРАЗУ ЗА узлом — единственный способ вернуть её на
-// место после вставки чипа подстановки (docs/design/mentions.md §7).
-//
-// Обычный setCaret по смещению плоского текста здесь не годится и это не мелочь:
-// смещение «конец имени» разрешается в позицию ВНУТРИ узла чипа, а он
-// contenteditable=false — каретку внутри такого узла браузер не рисует вовсе, и автор
-// видит, что после вставки печатать некуда.
-//
-// Пустой текстовый узел за чипом создаётся намеренно: без него каретка после последнего
-// узла строки живёт «между элементом и ничем», и часть браузеров её тоже не показывает.
-// Для модели такого узла не существует — spansFromDom выбрасывает пустые куски.
-export function setCaretAfterNode(el: HTMLElement, node: Node): void {
-  const sel = win(el)?.getSelection()
-  if (!sel) return
-  let after = node.nextSibling
-  if (!after || after.nodeType !== 3) {
-    after = el.ownerDocument.createTextNode('')
-    node.parentNode?.insertBefore(after, node.nextSibling)
-  }
-  const range = el.ownerDocument.createRange()
-  range.setStart(after, 0)
-  range.collapse(true)
-  sel.removeAllRanges()
-  sel.addRange(range)
-}
-
 // setSelection восстанавливает выделение по смещениям в плоском тексте. Нужно после
 // каждой команды форматирования: разрезание спанов меняет DOM-позиции, а смещения в
 // тексте — нет, поэтому выделение переживает наложение марки и его видно на месте.
