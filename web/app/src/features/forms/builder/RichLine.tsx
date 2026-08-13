@@ -39,7 +39,14 @@ import {
 import { MentionMenu, type MentionItem } from './MentionMenu'
 import { sourceLabel, sourcesFor } from './logic/model'
 import { useBuilderStore } from './storeContext'
-import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
+import {
+  richCaret,
+  selectionRange,
+  selectionRect,
+  setCaret,
+  setCaretAfterNode,
+  setSelection,
+} from './richCaret'
 import type { UpdateKind } from './store'
 import { FormatBar } from './FormatBar'
 import { lockScroll } from './scrollLock'
@@ -327,9 +334,26 @@ export function RichLine({
       toast.error(`В одной строке не больше ${MAX_SPANS} кусков оформления`)
       return
     }
-    const caret = at.start + item.label.length
     spansToDom(el, next)
-    setCaret(el, caret)
+    // Каретка встаёт ЗА чипом, а не на смещение «конец имени»: то смещение попадает
+    // внутрь узла чипа, а он contenteditable=false — каретки там браузер не рисует, и
+    // после вставки автору некуда печатать (найдено владельцем в браузере).
+    //
+    // Узел ищется по позиции в модели: spansToDom печатает по узлу на кусок и в том же
+    // порядке, а чип по построению начинается ровно на at.start.
+    let idx = 0
+    let pos = 0
+    for (const [i, s] of next.entries()) {
+      if (pos === at.start) {
+        idx = i
+        break
+      }
+      pos += s.t.length
+    }
+    const chipNode = el.childNodes[idx]
+    el.focus({ preventScroll: true })
+    if (chipNode) setCaretAfterNode(el, chipNode)
+    const caret = at.start + item.label.length
     last.current = next
     onChange(next, caret, 'mention')
     setAt(null)

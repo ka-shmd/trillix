@@ -11,7 +11,7 @@ import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockRow } from './BlockRow'
-import { setCaret } from './richCaret'
+import { richCaret, setCaret } from './richCaret'
 
 // Подстановка ответа на ПОЛОТНЕ (docs/design/mentions.md §7): «@» открывает меню
 // вопросов выше, выбор ставит неделимый чип, переименование источника чип
@@ -137,6 +137,24 @@ describe('«@» на полотне', () => {
     expect(chip.dataset.ref).toBe('q1')
     expect(chip.getAttribute('contenteditable')).toBe('false')
     expect(chip.className).toContain('rf-mention')
+  })
+
+  // Каретка внутри contenteditable=false не рисуется вовсе, поэтому смещение «конец
+  // имени» после вставки означало бы для автора «печатать некуда» (дефект, найденный
+  // владельцем в браузере).
+  it('после вставки каретка стоит ЗА чипом, а не внутри него', () => {
+    canvas()
+    line().focus()
+    typeRich('@')
+    act(() => {
+      fireEvent.keyDown(line(), { code: 'Enter' })
+    })
+    const chip = line().querySelector('[data-ref]') as HTMLElement
+    const sel = document.getSelection()!
+    expect(sel.anchorNode).not.toBeNull()
+    expect(chip.contains(sel.anchorNode)).toBe(false)
+    // В координатах плоского текста это по-прежнему «сразу за именем».
+    expect(richCaret(line()).text().caret).toBe('Имя'.length)
   })
 
   // Почта в тексте вопроса — обычное дело, и меню, всплывающее посреди неё, было бы
