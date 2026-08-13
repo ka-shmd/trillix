@@ -10,6 +10,7 @@ import {
   register,
   resendVerification,
   resetPassword,
+  updateProfile,
   verifyEmail,
 } from './api'
 import type { User } from '../../entities/user'
@@ -110,5 +111,16 @@ export function useLinkProvider() {
     // сессия предыдущего аккаунта могла истечь без logout, и его данные лежат в
     // кэше этой вкладки, пока сюда приходит другая личность.
     onSuccess: (user: User) => adoptSession(qc, user),
+  })
+}
+
+// Правка профиля. Ответ — весь объект пользователя, поэтому кэш ПАТЧИТСЯ им, а
+// не инвалидируется: инвалидация дала бы лишний GET /auth/me и мигание имени в
+// сайдбаре между ответом и рефетчем.
+export function useUpdateProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: updateProfile,
+    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
   })
 }

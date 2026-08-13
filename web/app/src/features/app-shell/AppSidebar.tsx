@@ -25,6 +25,10 @@ import {
 // (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
 export interface AppSidebarProps {
   userEmail: string
+  // userName — как звать человека: имя с фамилией, если он их указал, иначе
+  // email (entities/user.ts, displayName). Считает вызывающий: сайдбар
+  // презентационный и в фичи не ходит.
+  userName: string
   onCreateForm: () => void
   creatingForm: boolean
   onLogout: () => void
@@ -33,6 +37,7 @@ export interface AppSidebarProps {
 
 export function AppSidebar({
   userEmail,
+  userName,
   onCreateForm,
   creatingForm,
   onLogout,
@@ -41,6 +46,7 @@ export function AppSidebar({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
   const planActive = pathname.startsWith('/settings/plan')
+  const accountActive = pathname.startsWith('/settings/account')
   const workspacesActive = pathname.startsWith('/workspaces')
 
   return (
@@ -93,9 +99,11 @@ export function AppSidebar({
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton disabled tooltip="Скоро">
-                  <Settings className="size-4" />
-                  <span>Настройки</span>
+                <SidebarMenuButton asChild isActive={accountActive} tooltip="Настройки">
+                  <Link to="/settings/account">
+                    <Settings className="size-4" />
+                    <span>Настройки</span>
+                  </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -113,9 +121,9 @@ export function AppSidebar({
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
                   <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground">
-                    {userEmail.charAt(0).toUpperCase()}
+                    {userName.charAt(0).toUpperCase()}
                   </span>
-                  <span className="truncate text-sm">{userEmail}</span>
+                  <span className="truncate text-sm">{userName}</span>
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-56">
@@ -123,6 +131,12 @@ export function AppSidebar({
                   {userEmail}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/settings/account">
+                    <Settings className="size-4" />
+                    Настройки
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem onClick={onLogout} disabled={loggingOut}>
                   <LogOut className="size-4" />
                   {loggingOut ? 'Выходим…' : 'Выйти'}

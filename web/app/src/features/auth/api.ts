@@ -45,6 +45,15 @@ export function resendVerification(): Promise<void> {
   return apiRequest('/auth/resend-verification', { method: 'POST' })
 }
 
+// Настройки аккаунта — /api/v1/account/*. Живут в фиче auth, а не в своей:
+// они правят того же самого текущего пользователя, чей профиль (me) здесь и
+// лежит, а импорт одной фичи из другой запрещён (web/CLAUDE.md).
+//
+// Оба поля шлются всегда: пустая строка означает «стереть».
+export function updateProfile(body: { firstName: string; lastName: string }): Promise<User> {
+  return apiRequest('/account/profile', { method: 'PATCH', body, schema: userSchema })
+}
+
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,
 // кнопки не рисуем (мёртвая кнопка хуже отсутствующей).
 export function getProviders(): Promise<string[]> {

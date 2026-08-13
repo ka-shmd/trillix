@@ -23,6 +23,7 @@ import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
+import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
@@ -99,6 +100,11 @@ const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
   path: '/settings/plan',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsAccountRoute = AppSettingsAccountRouteImport.update({
+  id: '/settings/account',
+  path: '/settings/account',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsSlugEditRoute = AppFormsSlugEditRouteImport.update({
   id: '/forms/$slug/edit',
   path: '/forms/$slug/edit',
@@ -142,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
+  '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms/': typeof AppFormsIndexRoute
@@ -162,6 +169,7 @@ export interface FileRoutesByTo {
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
+  '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms': typeof AppFormsIndexRoute
@@ -185,6 +193,7 @@ export interface FileRoutesById {
   '/_auth/register': typeof AuthRegisterRoute
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/_app/forms/': typeof AppFormsIndexRoute
@@ -207,6 +216,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
     | '/forms/'
@@ -227,6 +237,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
     | '/forms'
@@ -249,6 +260,7 @@ export interface FileRouteTypes {
     | '/_auth/register'
     | '/_auth/reset-password'
     | '/_app/'
+    | '/_app/settings/account'
     | '/_app/settings/plan'
     | '/_app/workspaces/$workspaceId'
     | '/_app/forms/'
@@ -368,6 +380,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsPlanRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/settings/account': {
+      id: '/_app/settings/account'
+      path: '/settings/account'
+      fullPath: '/settings/account'
+      preLoaderRoute: typeof AppSettingsAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/$slug/edit': {
       id: '/_app/forms/$slug/edit'
       path: '/forms/$slug/edit'
@@ -432,6 +451,7 @@ const AppFormsSlugManageRouteWithChildren =
 
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
+  AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
   AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
@@ -442,6 +462,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
+  AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
   AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,

@@ -38,8 +38,13 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `password_hash` | `TEXT` | argon2id (не логируется); `NULL` с `0009` — аккаунт заведён через провайдера, войти паролем нельзя |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | `email_verified_at` | `TIMESTAMPTZ` | nullable (`0012`); `NULL` = email не подтверждён (кабинет рисует баннер). Мягкое подтверждение: аккаунт работает и без него. Аккаунты без пароля (вход через провайдера) считаются подтверждёнными — проставляется при OAuth-регистрации и разово бэкфиллом в `0012` |
+| `first_name` | `TEXT` | nullable (`0021`); `NULL` = не указано. Пустая строка сюда не пишется — «не указано» имеет ровно одно представление |
+| `last_name` | `TEXT` | nullable (`0021`); то же |
 
-## `user_identities` (0009)
+Имя ничего не гейтит: кабинет показывает его вместо email, когда оно есть. Правится
+`PATCH /account/profile`, у аккаунтов через Яндекс заполняется на входе (фаза 23, слайс B).
+
+## `user_identities` (0009, `provider_email` — 0021)
 
 Способы входа через внешних провайдеров. Аккаунт на адрес один (`users.email` остаётся `UNIQUE`), способов входа в него несколько: пароль и/или провайдеры.
 
@@ -49,6 +54,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `provider_user_id` | `TEXT` | идентификатор аккаунта у провайдера |
 | `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+| `provider_email` | `TEXT` | nullable (`0021`); адрес аккаунта **у провайдера** — подпись под карточкой «Яндекс · ivan@yandex.ru». Это не `users.email`: они расходятся после смены почты у нас или привязки Яндекса с другим ящиком, и расхождение здесь полезно (сюжет TD-34). `NULL` у привязок, сделанных до `0021`: токен провайдера одноразовый (ADR §10), адрес заполнится на ближайшем входе |
 | | | PK — `(provider, provider_user_id)`; индекс `idx_user_identities_user` по `user_id` |
 
 ## `workspaces` (0002, `personal_user_id` — 0016)

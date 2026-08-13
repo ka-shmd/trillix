@@ -8,6 +8,19 @@ export const userSchema = z.object({
   // Подтверждён ли email (слайс C): по нему кабинет рисует баннер «подтвердите
   // почту». Приезжает во всех ответах /auth/* (register/login/me/link).
   emailVerified: z.boolean(),
+  // Имя человека (фаза 23). Пустая строка = не указано: в БД там NULL, но на
+  // границе оба состояния сведены к строке — иначе каждый потребитель имени
+  // разбирался бы с null сам, а показать он всё равно может только строку.
+  firstName: z.string(),
+  lastName: z.string(),
 })
 
 export type User = z.infer<typeof userSchema>
+
+// displayName — как человека зовут в интерфейсе: имя, если оно есть, иначе
+// email. Одна точка на весь кабинет: сайдбар, шапка и список участников обязаны
+// звать человека одинаково.
+export function displayName(user: User): string {
+  const full = [user.firstName, user.lastName].filter((p) => p !== '').join(' ')
+  return full === '' ? user.email : full
+}
