@@ -26,3 +26,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: check-docs
         run: ./scripts/check-docs.sh
+      # Регистр комментариев — здесь же, а не в ci-code.yml: проверка такая же
+      # лёгкая (греп по репозиторию, без тулчейнов), а её отчёт о доле токенов
+      # полезен и на docs-only изменениях.
+      - name: check-comments
+        run: ./scripts/check-comments.sh
