@@ -16,6 +16,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FocusEvent,
@@ -26,6 +27,8 @@ import { MAX_SPANS, type Mark, type Span, plainText, sameRichText } from '@entit
 import { chords, markChord } from './shortcuts'
 import {
   activeStyle,
+  cutRange,
+  insertMention,
   setBg,
   setColor,
   setHref,
@@ -33,6 +36,9 @@ import {
   spansToDom,
   toggleMark,
 } from './richText'
+import { MentionMenu, type MentionItem } from './MentionMenu'
+import { sourceLabel, sourcesFor } from './logic/model'
+import { useBuilderStore } from './storeContext'
 import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
 import type { UpdateKind } from './store'
 import { FormatBar } from './FormatBar'
@@ -84,7 +90,18 @@ export interface RichLineProps {
   onFocus: () => void
   onBlur: (e: FocusEvent<HTMLElement>) => void
   elRef: (el: HTMLDivElement | null) => void
+  // id блока, которому принадлежит строка. Есть — в строке работает подстановка ответа
+  // по «@» (docs/design/mentions.md); нет — не работает вовсе. Заголовку формы её не
+  // передают намеренно: он стоит первой строкой документа, вопросов выше него не бывает,
+  // и меню там показывало бы пустоту всегда.
+  mentionsFor?: string
 }
+
+// Пустой список источников — СТАБИЛЬНАЯ ссылка. Селектор стора возвращает её, пока
+// подстановка строке не нужна (чипов нет и меню закрыто): свежий массив на каждый вызов
+// означал бы ре-рендер этой строки на каждую правку ЛЮБОГО блока полотна — ровно тот
+// механизм, которым фаза 21 дважды роняла перф (STATUS, «подписка на s.blocks»).
+const NO_BLOCKS: never[] = []
 
 export function RichLine({
   value,
@@ -96,6 +113,7 @@ export function RichLine({
   onFocus,
   onBlur,
   elRef,
+  mentionsFor,
 }: RichLineProps) {
   const ref = useRef<HTMLDivElement>(null)
   // last — что мы сами в последний раз отдали наружу. Отличие пришедшего value от него
@@ -110,6 +128,38 @@ export function RichLine({
   // нужен снимок, а не живой DOM.
   const [sel, setSel] = useState<Sel | null>(null)
   const [linkOpen, setLinkOpen] = useState(false)
+  // Инлайн-«@» (mentions.md §7) — та же машинерия, что у слеш-меню в BlockRow: `at`
+  // это null (закрыто) либо {start, query}, где start — индекс «@» в ПЛОСКОМ тексте, а
+  // query — набранное после него до каретки. Живёт здесь, а не в строке полотна,
+  // потому что вставка чипа — операция над текстом: ей нужны модель, каретка и DOM,
+  // которыми владеет эта поверхность (слеш-меню, наоборот, меняет ТИП блока — операция
+  // строки).
+  const [at, setAt] = useState<{ start: number; query: string } | null>(null)
+  const [atIndex, setAtIndex] = useState(0)
+  const menuOpen = at !== null
+  // Документ нужен строке в двух случаях: пока открыто меню (собрать список вопросов) и
+  // пока в строке есть хоть один чип (пометить те, что перестали разрешаться). В
+  // остальное время селектор отдаёт стабильную пустоту и строка на правки документа не
+  // реагирует.
+  const needsDoc = Boolean(mentionsFor) && (menuOpen || value.some((s) => s.ref))
+  const docBlocks = useBuilderStore((s) => (needsDoc ? s.blocks : NO_BLOCKS))
+  // Что вообще можно подставить в эту строку: отвечаемые вопросы ВЫШЕ неё. Правило и
+  // функция — те же, что у условной логики: одна модель на две возможности, автору
+  // нечего запоминать.
+  const sources = useMemo(
+    () => (needsDoc && mentionsFor ? sourcesFor(docBlocks, mentionsFor) : NO_BLOCKS),
+    [needsDoc, mentionsFor, docBlocks],
+  )
+  // Имена считаются ТОЛЬКО пока меню открыто: derivedQuestionName проходит по документу
+  // ради каждого источника, и делать это на каждую правку любого блока ради чипа,
+  // который и так знает своё имя, незачем.
+  const items: MentionItem[] = useMemo(() => {
+    if (!menuOpen) return []
+    const q = (at?.query ?? '').trim().toLowerCase()
+    return sources
+      .map((b) => ({ id: b.id, label: sourceLabel(docBlocks, b) }))
+      .filter((it) => q === '' || it.label.toLowerCase().includes(q))
+  }, [menuOpen, at?.query, sources, docBlocks])
 
   // Выделение отслеживается на документе: внутри contenteditable его меняют и мышь, и
   // клавиатура, и события у них разные — один `selectionchange` покрывает оба.
@@ -200,6 +250,24 @@ export function RichLine({
     if (hadFocus) setCaret(el, Math.min(at, plainText(value).length))
   }, [value])
 
+  // Мёртвый чип — тот, чей источник удалён или уехал НИЖЕ этой строки: подстановки у
+  // респондента не будет (§4 спеки). Признак ставится атрибутом прямо в DOM, а не
+  // перепечаткой поверхности: перепечатка роняет каретку, а измениться тут может только
+  // вид. В модели ему места нет — он вычисляется от документа, а документ и так рядом.
+  //
+  // СТОИТ ПОСЛЕ ресинка намеренно: тот перепечатывает поверхность целиком, и пометки,
+  // расставленные до него, исчезли бы вместе со старыми узлами. Эффекты идут в порядке
+  // объявления, и этот порядок здесь — часть работы, а не оформление.
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const live = new Set(sources.map((b) => b.id))
+    for (const chip of el.querySelectorAll<HTMLElement>('[data-ref]')) {
+      if (live.has(chip.dataset.ref ?? '')) delete chip.dataset.dead
+      else chip.dataset.dead = ''
+    }
+  }, [sources, value])
+
   // commit — единственный путь наружу: сериализуем поверхность в модель и отдаём её
   // вместе с позицией каретки.
   function commit(): void {
@@ -207,7 +275,64 @@ export function RichLine({
     if (!el) return
     const spans = spansFromDom(el)
     last.current = spans
-    onChange(spans, richCaret(el).text().caret)
+    const { value: text, caret } = richCaret(el).text()
+    onChange(spans, caret)
+    syncMention(text, caret)
+  }
+
+  // Ведёт инлайн-«@» по плоскому тексту и позиции каретки — ровно так же, как BlockRow
+  // ведёт слеш-меню, и в тех же координатах.
+  //
+  // ТРИГГЕР — «@» В НАЧАЛЕ СЛОВА (начало строки либо пробел перед ним). Иначе меню
+  // открывалось бы посреди набора почты: «ivan@» в тексте вопроса — обычное дело, и
+  // всплывающий там список вопросов был бы дефектом, а не подсказкой.
+  function syncMention(text: string, pos: number): void {
+    if (!mentionsFor) return
+    setAtIndex(0)
+    setAt((cur) => {
+      if (cur) {
+        // Каретка ушла за «@» или сам «@» стёрли — меню закрыто, набранное остаётся
+        // текстом. Пробел в фильтре тоже закрывает: имя вопроса бывает из двух слов, но
+        // тогда автор дописывает его уже без меню, а не ищет по фразе.
+        if (pos <= cur.start || text[cur.start] !== '@') return null
+        const query = text.slice(cur.start + 1, pos)
+        if (/\s/.test(query)) return null
+        return query === cur.query ? cur : { start: cur.start, query }
+      }
+      if (pos === 0 || text[pos - 1] !== '@') return null
+      const before = pos >= 2 ? text[pos - 2] : undefined
+      return before === undefined || /\s/.test(before) ? { start: pos - 1, query: '' } : null
+    })
+  }
+
+  const closeMention = () => setAt(null)
+
+  // Выбор источника: вырезаем «@» с набранным фильтром и ставим на его место чип.
+  //
+  // Работает как `apply` и по той же причине: строка НЕуправляемая, и ресинк из стора
+  // придёт с кареткой, снятой ДО правки, — то есть встанет в конец стёртого фильтра.
+  // Поэтому поверхность перепечатывается и каретка ставится здесь же, за чипом, а
+  // наружу уходит уже готовая модель.
+  function pickMention(item: MentionItem): void {
+    const el = ref.current
+    if (!el || !at) return
+    const end = at.start + 1 + at.query.length
+    const next = insertMention(
+      cutRange(spansFromDom(el), at.start, end),
+      at.start,
+      item.label,
+      item.id,
+    )
+    if (next.length > MAX_SPANS) {
+      toast.error(`В одной строке не больше ${MAX_SPANS} кусков оформления`)
+      return
+    }
+    const caret = at.start + item.label.length
+    spansToDom(el, next)
+    setCaret(el, caret)
+    last.current = next
+    onChange(next, caret, 'mention')
+    setAt(null)
   }
 
   // apply — команда форматирования: над МОДЕЛЬЮ, не над DOM. Выделение восстанавливается
@@ -254,6 +379,30 @@ export function RichLine({
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
+    // Открытое «@»-меню забирает навигацию — как слеш-меню в строке полотна: ↑/↓ по
+    // пунктам, Enter — выбор, Esc — закрыть (набранное остаётся текстом). Backspace
+    // уходит нативному вводу: он сотрёт символ, а `commit` пересчитает фильтр или
+    // закроет меню.
+    if (menuOpen) {
+      if (chords.arrowDown(e)) {
+        e.preventDefault()
+        return setAtIndex((i) => (items.length ? (i + 1) % items.length : 0))
+      }
+      if (chords.arrowUp(e)) {
+        e.preventDefault()
+        return setAtIndex((i) => (items.length ? (i - 1 + items.length) % items.length : 0))
+      }
+      if (chords.enter(e)) {
+        e.preventDefault()
+        const item = items[atIndex]
+        if (item) pickMention(item)
+        return
+      }
+      if (chords.escape(e)) {
+        e.preventDefault()
+        return closeMention()
+      }
+    }
     // Форматирование — до потока строки. Mod+B/I/U гасим ЯВНО и останавливаем всплытие:
     //   • без preventDefault браузер сам применит своё жирное внутри contenteditable и
     //     вставит теги мимо модели;
@@ -341,7 +490,20 @@ export function RichLine({
 
   return (
     <>
-      {surface}
+      {mentionsFor ? (
+        <MentionMenu
+          open={menuOpen}
+          items={items}
+          activeIndex={atIndex}
+          onActiveChange={setAtIndex}
+          onPick={pickMention}
+          onClose={closeMention}
+        >
+          {surface}
+        </MentionMenu>
+      ) : (
+        surface
+      )}
       {sel && (
         <FormatBar
           rect={sel.rect}

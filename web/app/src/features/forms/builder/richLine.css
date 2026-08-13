@@ -26,3 +26,32 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* Чип подстановки ответа (docs/design/mentions.md): имя вопроса-источника плашкой
+   прямо в тексте. Вид живёт ЗДЕСЬ, а не в общем fields.css, по обратной причине, чем у
+   марок: у респондента чипа нет вовсе — там стоит его собственный ответ обычным
+   текстом. Плашка нужна только автору, и только пока он собирает форму.
+
+   Вертикальные отступы нулевые, а фон и скругление — да: строка полотна держит ритм
+   line-height'ом (этап 13.3), и чип, добавивший себе высоту, растолкал бы строки. */
+[data-rich-line] .rf-mention {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  border-radius: 0.25rem;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+  /* Каретка внутрь не заходит (contenteditable=false), поэтому текстовый курсор над
+     чипом врал бы про то, что его можно править посередине. */
+  cursor: default;
+}
+
+/* Источник удалён или уехал ниже носителя — подстановки не будет (mentions.md §4).
+   Схему это не ломает, но молчать нельзя: чип выглядит рабочим, а на форме от него
+   останется пустота. Признак ставит строка, а не модель: он вычисляется от документа
+   и в схеме ему не место. */
+[data-rich-line] .rf-mention[data-dead] {
+  background: transparent;
+  color: var(--muted-foreground);
+  box-shadow: inset 0 0 0 1px var(--border);
+  text-decoration: line-through;
+}

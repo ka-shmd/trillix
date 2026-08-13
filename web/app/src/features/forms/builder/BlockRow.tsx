@@ -762,6 +762,11 @@ const BlockRowBody = memo(function BlockRowBody({
                 value={block.text ?? []}
                 placeholder={captionPh}
                 label={captionName}
+                // Подстановка ответа по «@» (docs/design/mentions.md): доступна в любой
+                // текстовой строке полотна — подписи вопроса, заголовке раздела, абзаце,
+                // тексте согласия. Источники ищутся ОТ ЭТОГО блока, поэтому строка и
+                // передаёт свой id.
+                mentionsFor={block.id}
                 onChange={onLabelChange}
                 onFocus={() => {
                   setLabelFocused(true)

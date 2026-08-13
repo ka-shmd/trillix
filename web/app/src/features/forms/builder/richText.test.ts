@@ -4,7 +4,9 @@ import { plainText, type Span } from '@entities/formSchema'
 import {
   activeStyle,
   caretOffset,
+  cutRange,
   hasMarkThroughout,
+  insertMention,
   markClass,
   normalize,
   pointAt,
@@ -79,6 +81,69 @@ describe('переключатель марки', () => {
   })
 })
 
+// Чип подстановки (docs/design/mentions.md §7) — кусок текста с полем ref, и всё
+// отличие от обычного куска в одном: он НЕДЕЛИМ. Здесь проверяется ровно это — каждая
+// операция модели либо накрывает его целиком, либо не трогает вовсе.
+describe('чип подстановки неделим', () => {
+  const chip: Span = { t: 'Имя', ref: 'q1' }
+
+  it('канон не склеивает два чипа, даже если источник у них один', () => {
+    expect(normalize([chip, { ...chip }])).toEqual([chip, { ...chip }])
+  })
+
+  it('канон не приклеивает к чипу соседний текст', () => {
+    expect(normalize([{ t: 'Здравствуйте, ' }, chip, { t: '!' }])).toHaveLength(3)
+  })
+
+  it('форматирование накрывает чип целиком, а не режет пополам', () => {
+    // Выделение с середины имени: у обычного куска здесь был бы разрез на три.
+    const out = toggleMark([chip], 1, 2, 'b')
+    expect(out).toEqual([{ t: 'Имя', ref: 'q1', m: ['b'] }])
+  })
+
+  it('форматирование строки с чипом сохраняет ссылку', () => {
+    const out = toggleMark([{ t: 'Привет, ' }, chip], 0, 11, 'b')
+    expect(out).toEqual([
+      { t: 'Привет, ', m: ['b'] },
+      { t: 'Имя', ref: 'q1', m: ['b'] },
+    ])
+  })
+
+  it('вырезание уносит задетый чип целиком', () => {
+    const out = cutRange([{ t: 'а' }, chip, { t: 'б' }], 1, 2)
+    expect(out).toEqual([{ t: 'аб' }])
+  })
+})
+
+describe('вставка чипа', () => {
+  it('в середину куска — с разрезом и сохранением оформления вокруг', () => {
+    const out = insertMention([{ t: 'абвг', m: ['b'] }], 2, 'Имя', 'q1')
+    expect(out).toEqual([
+      { t: 'аб', m: ['b'] },
+      { t: 'Имя', ref: 'q1' },
+      { t: 'вг', m: ['b'] },
+    ])
+  })
+
+  it('на стыке кусков не плодит пустых половинок', () => {
+    const out = insertMention([{ t: 'аб' }, { t: 'вг', m: ['b'] }], 2, 'Имя', 'q1')
+    expect(out).toEqual([{ t: 'аб' }, { t: 'Имя', ref: 'q1' }, { t: 'вг', m: ['b'] }])
+  })
+
+  it('в конец строки и в пустую строку', () => {
+    expect(insertMention([{ t: 'аб' }], 2, 'Имя', 'q1')).toEqual([
+      { t: 'аб' },
+      { t: 'Имя', ref: 'q1' },
+    ])
+    expect(insertMention([], 0, 'Имя', 'q1')).toEqual([{ t: 'Имя', ref: 'q1' }])
+  })
+
+  it('оформление соседа на сам чип не переносится', () => {
+    const out = insertMention([{ t: 'абвг', color: '#c026d3' }], 2, 'Имя', 'q1')
+    expect(out[1]).toEqual({ t: 'Имя', ref: 'q1' })
+  })
+})
+
 describe('DOM ↔ модель', () => {
   it('круговой перевод сохраняет модель', () => {
     const spans: Span[] = [{ t: 'а' }, { t: 'бв', m: ['b'] }, { t: 'г', color: '#c026d3' }]
@@ -92,6 +157,34 @@ describe('DOM ↔ модель', () => {
     spansToDom(el, [{ t: 'просто' }])
     expect(el.childNodes).toHaveLength(1)
     expect(el.childNodes[0]!.nodeType).toBe(3)
+  })
+
+  it('чип печатается неделимым узлом и читается обратно', () => {
+    const el = div()
+    const spans: Span[] = [{ t: 'Привет, ' }, { t: 'Имя', ref: 'q1' }, { t: '!' }]
+    spansToDom(el, spans)
+    const chip = el.querySelector('[data-ref]') as HTMLElement
+    expect(chip.dataset.ref).toBe('q1')
+    expect(chip.contentEditable).toBe('false')
+    expect(spansFromDom(el)).toEqual(spans)
+  })
+
+  it('ref НЕ наследуется вглубь, в отличие от оформления', () => {
+    // Браузер, набирая на границе, клонирует узел вместе с атрибутами. Унаследуйся
+    // ref — и набранное внутри чипа стало бы второй подстановкой того же вопроса.
+    const el = div()
+    const chip = document.createElement('span')
+    chip.dataset.ref = 'q1'
+    chip.appendChild(document.createTextNode('Имя'))
+    const inner = document.createElement('span')
+    inner.className = 'rf-b'
+    inner.appendChild(document.createTextNode('хвост'))
+    chip.appendChild(inner)
+    el.appendChild(chip)
+    expect(spansFromDom(el)).toEqual([
+      { t: 'Имя', ref: 'q1' },
+      { t: 'хвост', m: ['b'] },
+    ])
   })
 
   it('вложенные span (браузер набирает на границе) читаются плоско', () => {
