@@ -1,5 +1,7 @@
 import { type Span, isHttpUrl } from '@entities/formSchema'
 
+import { useMentionResolver } from './mention'
+
 // RichText — вывод богатого текста блока (фаза 14, §3.1 спеки). Один `.map`: кусок без
 // оформления печатается как есть, оформленный — в <span> с классами булевых марок
 // (`rf-b`/`rf-i`/`rf-u`/`rf-s`, вид в fields.css) и inline-стилем цвета; кусок со
@@ -19,13 +21,39 @@ import { type Span, isHttpUrl } from '@entities/formSchema'
 // ровно так же (вид трёх поверхностей обязан совпадать), но никуда не ведёт: клик по
 // ней в превью уводил бы АВТОРА с полотна посреди сборки формы. У респондента
 // (`disabled={false}`) ссылка живая — она для него и делалась.
-export function RichText({ spans, inert }: { spans: Span[] | undefined; inert?: boolean }) {
+// `carrier` — id блока, которому этот текст принадлежит. Нужен ровно подстановке: без
+// него не проверить, что источник стоит ВЫШЕ носителя (mention.ts), а сам текст своего
+// блока не знает. Передают его те, кто блок и рисует, — BlockField и контрол согласия.
+export function RichText({
+  spans,
+  inert,
+  carrier,
+}: {
+  spans: Span[] | undefined
+  inert?: boolean
+  carrier?: string
+}) {
+  const resolve = useMentionResolver()
   if (!spans?.length) return null
   return (
     <>
       {spans.map((s, i) => {
         const cls = s.m?.length ? s.m.map((m) => `rf-${m}`).join(' ') : undefined
         const style = s.color || s.bg ? { color: s.color, backgroundColor: s.bg } : undefined
+        // Подстановка ответа. Разрешает её резолвер поверхности; нет резолвера — кусок
+        // печатается своим текстом (именем вопроса), как и в данных. Марки и цвет
+        // остаются на подставленном значении: оформление принадлежит куску, а не
+        // тому, что в нём написано.
+        if (s.ref) {
+          const value = resolve ? resolve(s.ref, carrier ?? '') : s.t
+          if (!value) return null
+          if (!cls && !style) return value
+          return (
+            <span key={i} className={cls} style={style}>
+              {value}
+            </span>
+          )
+        }
         if (s.href && isHttpUrl(s.href)) {
           return (
             <a

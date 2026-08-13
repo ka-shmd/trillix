@@ -24,13 +24,15 @@ export const consentControl: Control = (p) => {
       />
       <span className="rf-consent">
         {plainText(p.block.text).trim() ? (
-          <RichText spans={p.block.text} inert={p.disabled} />
+          <RichText spans={p.block.text} inert={p.disabled} carrier={p.block.id} />
         ) : (
           'Текст согласия'
         )}
         {p.block.required && (
           /* Пробел внутри строки, а не {' '} рядом с «*»: тот же текстовый узел, что до переезда. */
-          <span className="rf-required" aria-hidden="true">{' *'}</span>
+          <span className="rf-required" aria-hidden="true">
+            {' *'}
+          </span>
         )}
       </span>
     </label>

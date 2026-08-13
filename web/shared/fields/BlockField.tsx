@@ -144,14 +144,14 @@ function ContentBlock({
   if (block.type === 'form_title') {
     return text ? (
       <h1 className={cx('rf-title', own)}>
-        <RichText spans={block.text} inert={inert} />
+        <RichText spans={block.text} inert={inert} carrier={block.id} />
       </h1>
     ) : null
   }
   if (block.type === 'title' || block.type === 'label') {
     return (
       <div className={cx(block.type === 'label' ? 'rf-label rf-label--sm' : 'rf-label', own)}>
-        {text ? <RichText spans={block.text} inert={inert} /> : 'Без названия'}
+        {text ? <RichText spans={block.text} inert={inert} carrier={block.id} /> : 'Без названия'}
         {required && (
           <span className="rf-required" aria-hidden="true">
             {' '}
@@ -164,11 +164,19 @@ function ContentBlock({
   if (block.type === 'heading') {
     return (
       <div className={cx('rf-heading', own)}>
-        {text ? <RichText spans={block.text} inert={inert} /> : 'Заголовок раздела'}
+        {text ? (
+          <RichText spans={block.text} inert={inert} carrier={block.id} />
+        ) : (
+          'Заголовок раздела'
+        )}
       </div>
     )
   }
-  return <p className="rf-text">{text ? <RichText spans={block.text} inert={inert} /> : ' '}</p>
+  return (
+    <p className="rf-text">
+      {text ? <RichText spans={block.text} inert={inert} carrier={block.id} /> : ' '}
+    </p>
+  )
 }
 
 // FieldControl — диспетчер по реестру контролов (kinds/index.ts). Ветвления по типу
