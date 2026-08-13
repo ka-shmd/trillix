@@ -1,0 +1,17 @@
+/* Вид поля ТОЛЬКО на полотне редактора: класс носит FIELD_CLS, а он живёт в builder/
+   и никуда больше не едет. Правило здесь, а не в fields.css, чтобы превью и рендерер
+   его не унаследовали — там свечение фокуса в цвет акцента автора уместно.
+
+   Пара классов даёт специфичность выше одиночного .rf-input в fields.css, поэтому
+   перебивка не зависит от порядка подключения файлов. */
+.rf-input.canvas-field:focus-visible {
+  box-shadow: var(--rf-field-shadow);
+}
+
+/* Тень на hover — те же три слоя, что у --rf-field-shadow, с усиленным far. */
+.rf-input.canvas-field:hover {
+  box-shadow:
+    0 1px 1px 0 var(--rf-shadow-near),
+    0 0 0 1px var(--rf-ring),
+    0 4px 12px 0 var(--rf-shadow-far);
+}

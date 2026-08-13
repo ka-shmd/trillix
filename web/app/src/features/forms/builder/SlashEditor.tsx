@@ -64,7 +64,7 @@ import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
 import { BlockTypeDialog } from './BlockTypeDialog'
-import { chords, formatLabel, type ShortcutContext, type ShortcutFilters } from './shortcuts'
+import { chords, type ShortcutContext, type ShortcutFilters } from './shortcuts'
 import { useGlobalChord } from './useGlobalChord'
 import { ShortcutSheet } from './ShortcutSheet'
 import {
@@ -283,7 +283,6 @@ export function SlashEditor({
         : {},
     }
   }
-  const openSheet = () => setSheet({ open: true, ...snapshot() })
   // globalThis.KeyboardEvent — нативное событие окна: имя KeyboardEvent в этом файле
   // занято React-синтетическим (импорт сверху). Правило цели — в useGlobalChord: в
   // поле попапа «/» остаётся литералом, а сама шпаргалка (диалог без полей) закрывается
@@ -1175,11 +1174,10 @@ export function SlashEditor({
               </DndContext>
             )}
 
-            {/* Служебный ярус под полотном: вставка блока мышью и вход в шпаргалку. Указатель
-          на Mod+/ стоит здесь потому, что общие клавиши из строк вынесены (§7) — без
-          него шпаргалку с ними никто не найдёт. */}
-            <div className="mt-4 flex items-center gap-4 text-sm text-muted-foreground">
-              {blocks.length > 0 && (
+            {/* Служебный ярус под полотном: вставка блока мышью. Вход в шпаргалку
+          отсюда не ведёт — она открывается только аккордом Mod+/ (useGlobalChord). */}
+            {blocks.length > 0 && (
+              <div className="mt-4 flex items-center text-sm text-muted-foreground">
                 <button
                   type="button"
                   onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
@@ -1187,19 +1185,8 @@ export function SlashEditor({
                 >
                   + Добавить блок
                 </button>
-              )}
-              <button
-                type="button"
-                // mousedown гасим: иначе клик уводит фокус со строки ДО обработчика, активная
-                // строка гаснет, и шпаргалка открылась бы без контекста. Заодно Radix вернёт
-                // каретку в ту же строку при закрытии.
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={openSheet}
-                className="ml-auto hover:text-foreground"
-              >
-                {formatLabel('Mod+/')} — горячие клавиши
-              </button>
-            </div>
+              </div>
+            )}
 
             <BlockTypeDialog
               open={insertOpen}

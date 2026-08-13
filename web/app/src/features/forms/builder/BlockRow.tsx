@@ -498,6 +498,10 @@ const BlockRowBody = memo(function BlockRowBody({
     isTextRow && row.placeholderOnFocusOnly ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
   const isConsent = isTextRow && row.mark === 'check'
+  // Звёздочка есть только у обязательного вопроса; обратный вход — тумблер в попапе.
+  // Считается ЗДЕСЬ, а не внутри RequiredToggle: от неё зависит и раскладка текстовой
+  // строки (см. ниже).
+  const showRequired = Boolean(requiredFor && (requiredFor.required || requiredFor.requiredIf))
   // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
@@ -727,12 +731,9 @@ const BlockRowBody = memo(function BlockRowBody({
         }}
       />
 
-      {/* Обязательность — в правом поле блока (за колонкой вопроса), зеркально
-          левому кластеру значков. Показывает её ПОДПИСЬ вопроса (как превью и
-          рендерер, §6), а пишет в отвечаемый блок группы — носитель флага не менялся.
-          У группы без подписи звёздочка остаётся на самом поле: показать её больше
-          негде. Контент ответов не собирает — там её нет вовсе. */}
-      {requiredFor ? <RequiredToggle block={requiredFor} lineH={rowLineH} /> : null}
+      {/* Второе место звёздочки: у поля БЕЗ подписи текстовой строки нет, и она
+          стоит в правом поле блока. Инлайн-место — в ветке hasTextLine ниже. */}
+      {showRequired && !hasTextLine ? <RequiredToggle block={requiredFor!} lineH={rowLineH} /> : null}
 
       {/* Бейдж условной логики (фаза 21): вопрос за условием обязан быть виден на
           полотне как таковой — иначе автор смотрит на форму, где часть вопросов
@@ -762,7 +763,7 @@ const BlockRowBody = memo(function BlockRowBody({
           onClose={closeSlash}
         >
           <div className="min-w-0">
-            <div className={isConsent ? 'flex items-start gap-2' : undefined}>
+            <div className={isConsent || showRequired ? 'flex items-start gap-2' : undefined}>
               {isConsent && (
                 <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
               )}
@@ -788,8 +789,14 @@ const BlockRowBody = memo(function BlockRowBody({
                   textFocus.onBlur(e)
                 }}
                 onKeyDown={onLabelKeyDown}
-                className={`block w-full bg-transparent outline-none ${captionCls}`}
+                // МИНА: вернёшь w-full под звёздочкой — она уедет к правому краю строки,
+                // а не встанет за текстом (строка растянется на весь flex-ряд). Без него
+                // строка сжимается по содержимому, max-w-full держит длинное слово.
+                className={`block bg-transparent outline-none ${captionCls} ${
+                  showRequired ? 'max-w-full' : 'w-full'
+                }`}
               />
+              {showRequired && <RequiredToggle block={requiredFor!} lineH={rowLineH} inline />}
             </div>
           </div>
         </SlashMenu>
@@ -877,54 +884,45 @@ function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
   )
 }
 
-// RequiredToggle — контрол обязательности в правом поле блока (absolute left-full),
-// зеркально левому кластеру значков. Это редактируемый контрол, а не индикатор:
-// совпадать видом с звёздочкой rf-required рендерера не обязан, только менять
-// block.required. Включённым виден всегда и подсвечен (показывает состояние),
-// выключенным — проявляется на hover/фокусе строки. Настоящий <button aria-pressed>
-// в Tab-обходе; текст состояния — в title/aria-label (значок компактен, как слева).
-// lineH — высота строки блока (h-6/h-7), приходит из BlockRow: значок обязан стоять
-// на уровне первой строки текста, а она разной высоты у вопроса и у согласия.
-function RequiredToggle({ block, lineH }: { block: Block; lineH: string }) {
+// RequiredToggle — звёздочка обязательности. Монтируется только у обязательного
+// вопроса (showRequired в BlockRow), поэтому действие у неё одно: снять обязательность.
+//
+// inline — значок внутри flex-ряда подписи, сразу за текстом: там же, где его увидит
+// респондент (rf-required, BlockField.tsx). Без него — absolute в правом поле блока
+// (у поля без подписи текстовой строки нет).
+//
+// lineH — высота первой строки блока (h-6/h-7): значок центрируется по ней, а она
+// разной высоты у вопроса и у согласия.
+function RequiredToggle({
+  block,
+  lineH,
+  inline = false,
+}: {
+  block: Block
+  lineH: string
+  inline?: boolean
+}) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   // Третье состояние (фаза 21): обязателен ПО УСЛОВИЮ. Звёздочка показывает его
   // приглушённо — «иногда обязателен» это не то же, что «обязателен», и рисовать их
-  // одинаково значило бы врать про форму. Клик снимает условие (обязательности больше
-  // нет): у переключателя два положения, а потеря правила лечится Ctrl+Z.
+  // одинаково значило бы врать про форму. Клик снимает и его: у звёздочки одно
+  // действие, а потеря правила лечится Ctrl+Z.
   const conditional = Boolean(block.requiredIf)
-  const required = block.required || conditional
   return (
     <div
-      className={`absolute left-full top-1.5 ml-1 flex ${lineH} items-center transition-opacity ${
-        required
-          ? 'opacity-100'
-          : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
-      }`}
+      className={
+        inline
+          ? `flex shrink-0 ${lineH} items-center`
+          : `absolute left-full top-1.5 ml-1 flex ${lineH} items-center`
+      }
     >
       <button
         type="button"
-        aria-pressed={required}
-        aria-label={
-          conditional
-            ? 'Обязателен по условию — снять'
-            : required
-              ? 'Обязательный вопрос'
-              : 'Сделать вопрос обязательным'
-        }
-        title={
-          conditional
-            ? 'Обязателен по условию — снять'
-            : required
-              ? 'Обязательный вопрос'
-              : 'Сделать обязательным'
-        }
-        onClick={() => updateBlock(block.id, { required: !required, requiredIf: undefined })}
+        aria-label={conditional ? 'Обязателен по условию — снять' : 'Обязательный вопрос — снять'}
+        title={conditional ? 'Обязателен по условию — снять' : 'Обязательный вопрос — снять'}
+        onClick={() => updateBlock(block.id, { required: false, requiredIf: undefined })}
         className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
-          conditional
-            ? 'text-primary/60'
-            : required
-              ? 'text-primary'
-              : 'text-muted-foreground hover:text-foreground'
+          conditional ? 'text-primary/60' : 'text-primary'
         }`}
       >
         <Asterisk className="size-4" />

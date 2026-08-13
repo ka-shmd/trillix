@@ -352,27 +352,43 @@ describe('голая строка ответа', () => {
   })
 })
 
+// Звёздочка — индикатор с одним действием, а не двухпозиционный переключатель: есть
+// только у обязательного вопроса и только снимает обязательность.
 describe('звёздочка обязательности', () => {
-  it('живёт на подписи вопроса, а пишет в его поле', () => {
-    const { store } = setup(QUESTION)
-    expect(controls('inp')).not.toContain('Сделать вопрос обязательным')
+  const STAR = 'Обязательный вопрос — снять'
+  const REQUIRED: FormSchema = {
+    ...QUESTION,
+    blocks: QUESTION.blocks.map((b) =>
+      b.id === 'inp' || b.id === 'bare' ? { ...b, required: true } : b,
+    ),
+  }
 
-    row('cap').getByLabelText('Сделать вопрос обязательным').click()
+  it('живёт на подписи вопроса, а пишет в его поле', () => {
+    const { store } = setup(REQUIRED)
+    expect(controls('inp')).not.toContain(STAR)
+
+    row('cap').getByLabelText(STAR).click()
 
     // Носитель флага не поменялся — им остаётся отвечаемый блок группы.
-    expect(store.getState().blocks.find((b) => b.id === 'inp')?.required).toBe(true)
+    expect(store.getState().blocks.find((b) => b.id === 'inp')?.required).toBe(false)
     expect(store.getState().blocks.find((b) => b.id === 'cap')?.required).toBeFalsy()
   })
 
   it('у голого поля остаётся на нём самом — показать её больше негде', () => {
-    const { store } = setup(QUESTION)
-    row('bare').getByLabelText('Сделать вопрос обязательным').click()
-    expect(store.getState().blocks.find((b) => b.id === 'bare')?.required).toBe(true)
+    const { store } = setup(REQUIRED)
+    row('bare').getByLabelText(STAR).click()
+    expect(store.getState().blocks.find((b) => b.id === 'bare')?.required).toBe(false)
+  })
+
+  it('у необязательного вопроса её нет вовсе — ни на подписи, ни у голого поля', () => {
+    setup(QUESTION)
+    expect(controls('cap')).not.toContain(STAR)
+    expect(controls('bare')).not.toContain(STAR)
   })
 
   it('у одиночного абзаца её нет — ответов он не собирает', () => {
-    setup(QUESTION)
-    expect(controls('para')).not.toContain('Сделать вопрос обязательным')
+    setup(REQUIRED)
+    expect(controls('para')).not.toContain(STAR)
   })
 })
 

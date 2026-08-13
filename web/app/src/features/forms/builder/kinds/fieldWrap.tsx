@@ -3,10 +3,12 @@ import { type ReactNode } from 'react'
 import { type Block } from '@entities/formSchema'
 
 import { typeIcon } from '../blockTypeIcons'
+import './fieldWrap.css'
 
 // Вид поля на полотне — общий rf-input (единый с превью и рендерером); rf-input-typed
-// даёт место под глиф типа справа (см. index.css).
-export const FIELD_CLS = 'rf-input rf-input-typed'
+// даёт место под глиф типа справа (см. index.css). canvas-field — свой, полотный:
+// снимает голубое кольцо фокуса fields.css и добавляет тень на hover (fieldWrap.css).
+export const FIELD_CLS = 'rf-input rf-input-typed canvas-field'
 
 // FieldWrap — обёртка поля: якорь глифа типа. Ширину берёт из .rf-field-wrap (index.css),
 // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (14px) даёт

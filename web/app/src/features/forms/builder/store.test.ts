@@ -1095,14 +1095,16 @@ describe('createBuilderStore — undo/redo', () => {
     store.getState().addBlock('short_text')
     const id = store.getState().blocks[0]!.id
     store.getState().updateBlock(id, { settings: { placeholder: 'подсказка' } })
-    store.getState().updateBlock(id, { required: true }) // дискретно — свой шаг
+    // Снимаем, а не ставим: вопрос рождается обязательным, и `required: true` был бы
+    // здесь no-op'ом — шаг истории проверялся бы на правке, которой нет.
+    store.getState().updateBlock(id, { required: false }) // дискретно — свой шаг
     store.getState().updateBlock(id, { settings: { placeholder: 'другая' } })
 
     store.getState().undo() // снимает последний placeholder
     expect(store.getState().blocks[0]!.settings?.placeholder).toBe('подсказка')
-    expect(store.getState().blocks[0]!.required).toBe(true)
-    store.getState().undo() // снимает required
     expect(store.getState().blocks[0]!.required).toBe(false)
+    store.getState().undo() // снимает required
+    expect(store.getState().blocks[0]!.required).toBe(true)
   })
 
   // Демо-критерий этапа 16.4: имя из двадцати символов — один шаг Mod+Z, а не
@@ -1735,8 +1737,10 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     const [a, b] = store.getState().blocks
     store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
     const once = JSON.stringify(store.getState().toSchema())
-    store.getState().updateBlock(a!.id, { required: true })
+    // Круг «правка → возврат» обязан вернуть документ побайтно. Начинаем со снятия:
+    // вопрос рождается обязательным, и обратный порядок кончился бы не в исходном.
     store.getState().updateBlock(a!.id, { required: false })
+    store.getState().updateBlock(a!.id, { required: true })
     expect(JSON.stringify(store.getState().toSchema())).toBe(once)
   })
 
