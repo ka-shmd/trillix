@@ -37,7 +37,7 @@
 
 ---
 
-## 1. Модель: блок и группа (schemaVersion 4)
+## 1. Модель: блок и группа (модель v4; номер в документе — 1, §8)
 
 Блок — строка полотна: `{id, groupId, type, text?, required?, settings?}`, где `text` — **массив спанов**, а не строка (фаза 14, §14): `[{t, m?, color?, bg?, href?}]`. Плоский текст блока всюду, где разметка не нужна (аналитика, CSV, `og:description`, доступные имена), даёт `plainText()`. Типы делятся предикатами (Go `internal/domain/schema.go` ↔ Zod `web/shared/entities/formSchema.ts`, всегда зеркально):
 
