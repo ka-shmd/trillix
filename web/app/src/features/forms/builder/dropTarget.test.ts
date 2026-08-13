@@ -439,6 +439,113 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     expect(packRows(groupBlocks(after)).map((r) => r.length)).toEqual([2, 1])
   })
 
+  // ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ — ЩЕЛЬ ВНУТРИ КОЛОНКИ (владелец, 2026-08-13; ADR §10 «Щель
+  // внутри колонки»): такая цель несёт номер, и команда бит не снимает. Даёт её колонка,
+  // в которую указатель ПОПАЛ по горизонтали, — и «свой» участник ряда от пришельца
+  // снаружи здесь ничем не отличается.
+  //
+  // Стопка из ТРЁХ, а не из двух: вычеркнув активного, в стопке из двух остаётся один
+  // живой участник, он же последний, — щели там нет по построению, её место у границы
+  // ряда. Тест на двух прошёл бы при любой реализации.
+  describe('щель внутри колонки', () => {
+    const stack = () => ({
+      a: blk('short_text', { settings: { column: 1 } }),
+      b: blk('email', { settings: { column: 1 } }),
+      c: blk('phone', { settings: { column: 1 } }),
+      d: blk('number', { settings: { column: 2 } }),
+    })
+
+    it('пришелец снаружи ряда встаёт МЕЖДУ участниками колонки', () => {
+      const { a, b, c, d } = stack()
+      const outsider = blk('text')
+      const blocks = [a, b, c, d, outsider]
+      expect(layout(blocks)[0]).toHaveLength(2)
+
+      // Одиночка из-под ряда целится в первого участника стопки — и получает место в её
+      // середине, а не «под всем рядом».
+      expect(pick(blocks, a.id, outsider.id)).toEqual({
+        afterId: a.id,
+        lineIds: [a.id],
+        before: false,
+        column: 1,
+      })
+      // Тот же ответ соседу по секции: «свой» и «чужой» здесь не различаются, различает
+      // только попадание указателя в колонку.
+      expect(pick(blocks, a.id, d.groupId, 'group')).toEqual({
+        afterId: a.id,
+        lineIds: [a.id],
+        before: false,
+        column: 1,
+      })
+    })
+
+    it('участник стопки целится в своего соседа — линия в ширину КОЛОНКИ', () => {
+      const { a, b, c, d } = stack()
+      const blocks = [a, b, c, d]
+      expect(layout(blocks)[0]).toHaveLength(2)
+
+      // Тащим c (третий в своей колонке), указатель на a — первом её живом участнике.
+      expect(pick(blocks, a.id, c.id)).toEqual({
+        afterId: a.id,
+        lineIds: [a.id],
+        before: false,
+        column: 1,
+      })
+      // Групповой слой отвечает то же самое: правило про колонку, а не про слой.
+      expect(pick(blocks, a.id, c.groupId, 'group')).toEqual({
+        afterId: a.id,
+        lineIds: [a.id],
+        before: false,
+        column: 1,
+      })
+    })
+
+    it('после ПОСЛЕДНЕГО живого участника колонки — по-прежнему граница ряда', () => {
+      const { a, b, c, d } = stack()
+      const blocks = [a, b, c, d]
+
+      // b — последний живой в колонке, раз c уехал: тут «вытащить вниз, во всю ширину».
+      const t = pick(blocks, b.id, c.id)
+      expect(t).toEqual({ afterId: d.id, lineIds: [a.id, b.id, d.id], before: false })
+      expect(t?.column).toBeUndefined()
+    })
+
+    // ЖАЛОБА 2026-08-12 ЦЕЛА, и держится она на ПОПАДАНИИ: снаружи колонки её щелей нет,
+    // сколько бы ни была она ближайшей. Иначе автор, тянущий свой единственный блок вниз
+    // по своей (уже опустевшей) половине, снова всю дорогу видит линию внутри чужой
+    // стопки вместо «под рядом».
+    it('снаружи колонки её щелей нет, даже когда она ближайшая', () => {
+      const alone = blk('short_text', { settings: { column: 1 } })
+      const r1 = blk('email', { settings: { column: 2 } })
+      const r2 = blk('phone', { settings: { column: 2 } })
+      const r3 = blk('number', { settings: { column: 2 } })
+      const rows = layout([alone, r1, r2, r3])
+      expect(rows[0]).toHaveLength(2)
+      const boxes = boxesOf(rows)
+      const opts = { layer: 'group' as const, activeId: alone.groupId }
+
+      // Курсор в ЛЕВОЙ половине: своя колонка опустела, ближайшей стала чужая стопка.
+      for (const id of [r1.id, r2.id]) {
+        const y = boxes.get(id)!.top + H / 2
+        expect(pickDropTarget(rows, boxes, { x: 40, y }, opts)).toBeNull()
+      }
+      // На высоте последнего блока стопки — «под рядом», во всю ширину, как и было.
+      expect(pickDropTarget(rows, boxes, { x: 40, y: boxes.get(r3.id)!.top + H / 2 }, opts))
+        .toEqual({ afterId: r3.id, lineIds: [r1.id, r2.id, r3.id], before: false })
+      // А стоит увести курсор В стопку — и её щель называется: попадание, а не близость.
+      expect(pickDropTarget(rows, boxes, { x: W - 40, y: boxes.get(r1.id)!.top + H / 2 }, opts))
+        .toEqual({ afterId: r1.id, lineIds: [r1.id], before: false, column: 2 })
+    })
+
+    it('ряд из одной колонки щелей не даёт: секции нет — нечего и сохранять', () => {
+      const a = blk('short_text')
+      const b = blk('email')
+      const c = blk('phone')
+
+      expect(pick([a, b, c], a.id, c.id)?.column).toBeUndefined()
+    })
+  })
+
   it('внутренний ряд «подпись | поле»: щель между ними — не позиция', () => {
     const gid = 'q'
     const caption = blk('title', { groupId: gid })

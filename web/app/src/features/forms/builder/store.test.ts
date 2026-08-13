@@ -1340,6 +1340,10 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
   // Ряды колонками: [['a'], ['b', 'c']] — во втором ряду правая колонка из двух.
   const cells = (store: ReturnType<typeof createBuilderStore>) =>
     packRows(groupBlocks(store.getState().blocks)).map((row) => row.map((cell) => cell.length))
+  // Порядок документа: внутри секции он колоночный (канон), поэтому перестановка внутри
+  // колонки видна именно здесь.
+  const order = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.id)
 
   // Ряд из двух полей: второе уезжает в правую ячейку первого.
   const paired = (...types: ('short_text' | 'email' | 'phone' | 'long_text')[]) => {
@@ -1376,6 +1380,96 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
 
     expect(rows(store)).toEqual([1, 1])
     expect(cols(store)).toEqual(['-', '-'])
+  })
+
+  // ЩЕЛЬ ВНУТРИ СВОЕЙ КОЛОНКИ (владелец, 2026-08-13; ADR §10 «Щель внутри колонки»).
+  // Обратная сторона двух тестов выше: тот же вертикальный дроп, но цель принесла НОМЕР
+  // колонки — секция цела, элемент переехал внутри стопки. Кто вправе такой номер
+  // назвать, решает полотно (`dropTarget.test.ts`), стор исполняет названное.
+  it('дроп с номером колонки переставляет стопку, не распуская секцию', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true) // [a | b]
+    store.getState().placeInRow(c!.groupId, a!.groupId, 1, false) // [a, c | b]
+    store.getState().placeInRow(d!.groupId, a!.groupId, 1, false) // [a, c, d | b]
+    expect(cells(store)).toEqual([[3, 1]])
+    store.getState().markSaved()
+
+    // d уезжает под a — внутрь СВОЕЙ колонки.
+    store.getState().reorderGroups(d!.groupId, a!.groupId, 1)
+
+    expect(cells(store)).toEqual([[3, 1]])
+    expect(order(store)).toEqual([a!.id, d!.id, c!.id, b!.id])
+    expect(cols(store)).toEqual([1, 1, 1, 2])
+    expect(store.getState().dirty).toBe(true)
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+
+    // И тот же дроп БЕЗ номера остаётся тем, чем был: элемент уходит под ряд во всю
+    // ширину. Адрес — хвост РЯДА по документу (b), потому что именно его называет
+    // граница ряда; адрес внутри секции полноширинный элемент разрезал бы её пополам.
+    store.getState().reorderGroups(d!.groupId, b!.groupId)
+    expect(cells(store)).toEqual([[2, 1], [1]])
+    expect(cols(store)).toEqual([1, 1, 2, '-'])
+  })
+
+  it('пришелец из-под ряда встаёт В КОЛОНКУ, а не под секцию', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true) // [a | b]
+    store.getState().placeInRow(c!.groupId, a!.groupId, 1, false) // [a, c | b], d ниже ряда
+    expect(cells(store)).toEqual([[2, 1], [1]])
+
+    // d в секции не стоял вовсе — бит ему СТАВИТ команда, а не сохраняет.
+    store.getState().reorderGroups(d!.groupId, a!.groupId, 1)
+
+    expect(cells(store)).toEqual([[3, 1]])
+    expect(order(store)).toEqual([a!.id, d!.id, c!.id, b!.id])
+    expect(cols(store)).toEqual([1, 1, 1, 2])
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('блочный слой: строка с номером колонки остаётся в ней', () => {
+    const store = fields('short_text', 'email', 'phone', 'long_text')
+    const [a, b, c, d] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
+    store.getState().placeInRow(c!.groupId, a!.groupId, 1, false)
+    store.getState().placeInRow(d!.groupId, a!.groupId, 1, false) // [a, c, d | b]
+
+    store.getState().reorderBlocks(d!.id, a!.id, 1)
+
+    expect(cells(store)).toEqual([[3, 1]])
+    expect(order(store)).toEqual([a!.id, d!.id, c!.id, b!.id])
+    expect(cols(store)).toEqual([1, 1, 1, 2])
+  })
+
+  // НОМЕР КОЛОНКИ ЖИВЁТ ТОЛЬКО НА ГОЛОВЕ ГРУППЫ, и команда обязана это удержать: тот же
+  // ключ на второй строке значит ряд ВНУТРИ вопроса (§13). Без проверки один дроп ронял
+  // всю секцию — вопрос с внутренним рядом занимает всю ширину, ряд перестаёт
+  // складываться, и ключи соседей гаснут как инертные.
+  it('строка, приземлившаяся не головой, приезжает в колонку БЕЗ ключа', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email') // колонка 1
+    const email = store.getState().blocks[0]!
+    store.getState().addQuestionAfter(email.id, 'short_text') // «подпись + поле» — колонка 2
+    store.getState().addBlock('phone') // второй в колонке 2
+    const gEmail = email.groupId
+    const gTitle = store.getState().blocks[1]!.groupId
+    const gPhone = store.getState().blocks.find((b) => b.type === 'phone')!.groupId
+    store.getState().placeInRow(gTitle, gEmail, 2, true)
+    store.getState().placeInRow(gPhone, gTitle, 2, false)
+    expect(cells(store)).toEqual([[1, 2]])
+    const before = cols(store)
+    store.getState().markSaved()
+
+    // Поле вопроса роняем на его же подпись: в колонке оно и так стоит, а ключ на второй
+    // строке собрал бы вопросу внутренний ряд.
+    const title = store.getState().blocks.find((b) => b.type === 'title')!
+    const field = store.getState().blocks.find((b) => b.type === 'short_text')!
+    store.getState().reorderBlocks(field.id, title.id, 2)
+
+    expect(cells(store)).toEqual([[1, 2]])
+    expect(cols(store)).toEqual(before)
+    expect(store.getState().dirty).toBe(false) // no-op не тратит ни истории, ни PATCH
   })
 
   it('placeInRow ставит бит правому и остаётся одним шагом undo', () => {

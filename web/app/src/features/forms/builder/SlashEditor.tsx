@@ -622,9 +622,9 @@ export function SlashEditor({
         target.afterId === null
           ? null
           : (blocks.find((b) => b.id === target.afterId)?.groupId ?? null)
-      captionGuard(() => reorderGroups(activeId, afterGroup))
+      captionGuard(() => reorderGroups(activeId, afterGroup, target.column))
     } else {
-      captionGuard(() => reorderBlocks(activeId, target.afterId))
+      captionGuard(() => reorderBlocks(activeId, target.afterId, target.column))
     }
   }
 

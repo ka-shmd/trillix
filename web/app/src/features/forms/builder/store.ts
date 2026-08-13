@@ -177,11 +177,15 @@ export type BuilderActions = {
   // (блочный слой dnd — плоский сплайс; regroup пересчитает группы). Перенос ГРУППЫ как
   // единицы — reorderGroups: UI даёт подписи мульти-группы групповую ручку, сюда она не
   // попадает. Неизвестный id или та же позиция — no-op (dirty не трогает).
-  reorderBlocks: (activeId: string, afterId: string | null) => void
+  //
+  // column — номер колонки, в которой элемент остаётся (щель ВНУТРИ своей колонки, ADR
+  // §10 «Щель внутри колонки»). Не передан — дроп полноширинный и бит снимает, как
+  // раньше. Обе команды переноса принимают его одинаково.
+  reorderBlocks: (activeId: string, afterId: string | null, column?: number) => void
   // reorderGroups ставит ГРУППУ activeGroupId сразу ПОСЛЕ группы afterGroupId; null —
   // первой (dnd уровня групп — группа перетаскивается как единица). Внутренний порядок
   // блоков группы сохраняется. Неизвестный id или та же группа — no-op.
-  reorderGroups: (activeGroupId: string, afterGroupId: string | null) => void
+  reorderGroups: (activeGroupId: string, afterGroupId: string | null, column?: number) => void
   // duplicateBlock вставляет копию сразу за оригиналом и ВОЗВРАЩАЕТ id её первой строки —
   // для каретки (§12). Подпись собранного вопроса и поле, которому обязателен заголовок
   // (requiresCaption), дублируются вопросом целиком: иначе копия осталась бы голым полем
@@ -956,16 +960,22 @@ export function planBlockDrop(
   blocks: Block[],
   activeId: string,
   afterId: string | null,
+  column?: number,
 ): { blocks: Block[]; groupIds: string[] } | null {
   const from = blocks.findIndex((b) => b.id === activeId)
   if (from < 0 || afterId === activeId) return null
   const next = blocks.slice()
   const [raw] = next.splice(from, 1)
   // ВЕРТИКАЛЬНЫЙ ДРОП СНИМАЕТ БИТ КОЛОНКИ (§13): элемент встаёт во всю ширину — собрать
-  // или переставить колонки умеет только зона ряда. Снимается здесь ЯВНО: пока бит гасил
-  // normalizeColumns, увидев смену компании секции, жест «вытащить участника ВНИЗ, под
-  // свой ряд» выходил в no-op — компания там та же, в порядке документа элемент уже стоит
-  // после соседа, и менялся только бит.
+  // колонки умеет только зона ряда. Снимается здесь ЯВНО: пока бит гасил normalizeColumns,
+  // увидев смену компании секции, жест «вытащить участника ВНИЗ, под свой ряд» выходил в
+  // no-op — компания там та же, в порядке документа элемент уже стоит после соседа, и
+  // менялся только бит.
+  //
+  // Исключение — щель ВНУТРИ своей колонки (2026-08-13, ADR §10 «Щель внутри колонки»):
+  // цель приносит номер, и тогда бит не снимается, а ставится. Кто вправе такой номер
+  // назвать, решает полотно (`dropTarget.ts`), а не команда: здесь он значит ровно
+  // «оставить в этой колонке».
   //
   // Адрес ищется в списке БЕЗ активного: «после X» — это место сразу за X, каким бы ни
   // было исходное соседство. Отсутствующий адрес — не «в конец», а отказ: полотно такой
@@ -975,16 +985,25 @@ export function planBlockDrop(
   // приколотый заголовок формы (canvasFloor). Через ноль дроп остался бы правкой на
   // бумаге — pinFormTitle в structural вернул бы всё назад, — но с dirty, шагом истории
   // и лишним PATCH: ровно то, что запрещено для «двинуть вверх» на первой строке.
-  const active = withoutColumn(raw!)
   const to = afterId === null ? canvasFloor(next) : next.findIndex((b) => b.id === afterId) + 1
   if (to === 0 && afterId !== null) return null
-  // «Туда, где стоял» — no-op, только если и бит не изменился: снятый бит и есть та
-  // правка, ради которой автор тянул элемент из колонки вниз.
-  if (to === from && active === raw) return null
-  next.splice(to, 0, active)
+  next.splice(to, 0, raw!)
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
+  // НОМЕР КОЛОНКИ ЗНАЧИМ ТОЛЬКО НА ГОЛОВЕ ГРУППЫ (§13: у остальных блоков тот же ключ
+  // значит ряд ВНУТРИ вопроса). Кем блок станет, решает regroup, поэтому спрашиваем его,
+  // а не тип блока: строка, приземлившаяся в чужой вопрос, приезжает в колонку БЕЗ
+  // ключа — колонку держит голова её новой группы, и она уже в ней стоит.
+  //
+  // Иначе один дроп разваливал секцию целиком: ключ на второй строке собирал вопросу
+  // внутренний ряд «подпись | поле», такая группа занимает всю ширину (`groupCanShareRow`),
+  // ряд перестаёт складываться — и ключи всех соседей гаснут как инертные.
+  const active = withColumn(raw!, members[0]!.id === activeId ? column : undefined)
+  // «Туда, где стоял» — no-op, только если и бит не изменился: снятый бит и есть та
+  // правка, ради которой автор тянул элемент из колонки вниз.
+  if (to === from && active === raw) return null
+  next[to] = active
   return { blocks: next, groupIds: members.length > 1 ? members.map((b) => b.id) : [] }
 }
 
@@ -1523,7 +1542,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return blocks ? structural({ blocks }) : null
         }),
 
-      reorderBlocks: (activeId, afterId) =>
+      reorderBlocks: (activeId, afterId, column) =>
         commit(null, (s) => {
           // Плоский перенос одной строки через planBlockDrop: строка встаёт сразу за
           // адресом. Куда именно строка приземлится, метод не
@@ -1532,11 +1551,18 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // (captionLoss). Целостность мульти-группы при переносе ЕЁ САМОЙ охраняет
           // не этот метод, а UI: подпись мульти-группы несёт групповую ручку →
           // reorderGroups.
-          const plan = planBlockDrop(s.blocks, activeId, afterId)
-          return plan ? structural({ blocks: plan.blocks }) : null
+          //
+          // Бит колонки, поставленный по просьбе цели, идёт в normalizeColumns как
+          // `placed`: иначе правило «компания секции сменилась» погасило бы его в тот же
+          // коммит — состав колонки от перестановки внутри неё не меняется, но проверка
+          // об этом не знает, а знать ей и не надо, у неё другая работа.
+          const plan = planBlockDrop(s.blocks, activeId, afterId, column)
+          return plan
+            ? structural({ blocks: plan.blocks }, column === undefined ? undefined : activeId)
+            : null
         }),
 
-      reorderGroups: (activeGroupId, afterGroupId) =>
+      reorderGroups: (activeGroupId, afterGroupId, column) =>
         commit(null, (s) => {
           // Группы смежны (regroup), поэтому достаточно разложить полотно на группы,
           // переставить одну и склеить обратно. Внутренний порядок блоков группы не
@@ -1550,12 +1576,13 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           const [raw] = groups.splice(from, 1)
           // Бит колонки у ГРУППЫ несёт её первый блок (§13), и вертикальный дроп его
           // снимает — иначе вопрос нельзя вытащить из колонки вниз: в порядке документа
-          // он уже стоит после соседа по секции, и менять команде было бы нечего.
+          // он уже стоит после соседа по секции, и менять команде было бы нечего. Щель
+          // ВНУТРИ своей колонки приносит номер (ADR §10 «Щель внутри колонки») — тогда
+          // бит не снимается, а ставится, и вопрос остаётся в колонке.
           const head = raw!.blocks[0]!
+          const nextHead = withColumn(head, column)
           const moved =
-            head.settings?.column === undefined
-              ? raw!
-              : { ...raw!, blocks: [withoutColumn(head), ...raw!.blocks.slice(1)] }
+            nextHead === head ? raw! : { ...raw!, blocks: [nextHead, ...raw!.blocks.slice(1)] }
           const to =
             afterGroupId === null
               ? groupFloor(groups)
@@ -1563,7 +1590,12 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (to === 0 && afterGroupId !== null) return null
           if (to === from && moved === raw) return null
           groups.splice(to, 0, moved)
-          return structural({ blocks: groups.flatMap((g) => g.blocks) })
+          // `placed` — носитель бита, то есть голова группы (см. reorderBlocks: без него
+          // правило «компания секции сменилась» гасит только что поставленный номер).
+          return structural(
+            { blocks: groups.flatMap((g) => g.blocks) },
+            column === undefined ? undefined : head.id,
+          )
         }),
 
       duplicateBlock: (id) => {
