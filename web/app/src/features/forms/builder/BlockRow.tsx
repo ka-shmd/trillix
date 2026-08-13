@@ -65,6 +65,10 @@ export interface BlockRowProps {
   block: Block
   // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
   formId: string
+  // firstInGroup — строка первая в своём вопросе, и потому интервала перед собой не
+  // несёт: расстояние до предыдущего вопроса держит сам вопрос (mt-7 у li группы).
+  // Позиция, а не свойство строки, — знает её только раскладчик группы (GroupRow).
+  firstInGroup?: boolean
   // groupHandle — attributes+listeners sortable-элемента ГРУППЫ (внешний уровень
   // dnd): грип этой строки тащит всю группу, а не сам блок. Ставится родителем
   // только на подпись мульти-группы («подпись владеет группой»). null/undefined —
@@ -148,7 +152,7 @@ export interface BlockRowProps {
 // `memo` перестанет срабатывать МОЛЧА и цена вернётся целиком; сторож — замер
 // `e2e/perf` (окно «СТАРТ ЖЕСТА») и `canvasRerender.test.tsx`.
 export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
-  const { block, groupHandle, requiredFor, needsCaption = false } = props
+  const { block, groupHandle, requiredFor, needsCaption = false, firstInGroup = false } = props
   const engine = useFocusEngine()
   const captionGuard = useCaptionGuard(engine)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
@@ -229,10 +233,17 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // SlashEditor): getBoundingClientRect по нему учитывает live-трансформы.
       data-block-id={block.id}
       // py-1.5 — вертикальная hover-зона строки (место под absolute-значки), но в
-      // поток она НЕ входит: -my-1.5 гасит её ровно на padding, поэтому flex-gap
-      // контейнеров группы (14px) и полотна (28px) остаётся чистым просветом контента
-      // и совпадает с превью (ритм 13.3). Значки центрируются по top-1.5 = padding →
-      // на первой строке текста. Меняешь padding — правь -my И top-1.5 значков.
+      // поток она НЕ входит: отрицательные отступы гасят её ровно на padding, поэтому
+      // просвет остаётся чистым контентом и совпадает с превью (ритм 13.3). Значки
+      // центрируются по top-1.5 = padding → на первой строке текста. Меняешь padding —
+      // правь отступы И top-1.5 значков.
+      //
+      // ИНТЕРВАЛ ПЕРЕД СТРОКОЙ — её собственный ВЕРХНИЙ отступ (14px внутри вопроса,
+      // см. .rf-group в fields.css), а не gap контейнера: интервал принадлежит блоку и
+      // может быть задан ему отдельно. mt-2 = 8px, потому что 6px из четырнадцати уже
+      // отдал padding предыдущей строки, — то же вычитание, что у -mb-1.5 снизу.
+      // Первая строка вопроса интервала не несёт (его несёт сам вопрос), и её -mt-1.5
+      // оставляет li обнимать чистый контент — на это опирается рейл группы.
       // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
       // строке (дать ей заголовок), а поверхностей у неё несколько — инпут
       // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
@@ -241,7 +252,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
-      className={`group relative rounded-md -my-1.5 py-1.5 ${
+      className={`group relative rounded-md py-1.5 -mb-1.5 ${firstInGroup ? '-mt-1.5' : 'mt-2'} ${
         isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''
       }`}
     >
