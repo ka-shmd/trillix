@@ -57,6 +57,9 @@ test('билдер без мыши: форма собирается клавиа
   const phoneQ = 'Телефон для связи'
   const srcQ = 'Как вы о нас узнали'
   const cityQ = 'Город'
+  // Подпись с подстановкой: чип «Ваше имя» плюс хвост. В данных вопрос назовётся
+  // «Ваше имя, кем вы работаете?» — именем источника, а не чьим-то ответом.
+  const jobTail = ', кем вы работаете?'
   const nameA = `Иван ${uniq}`
   const mailA = `ivan-${uniq}@example.com`
   const srcA = 'Друзья'
@@ -251,6 +254,23 @@ test('билдер без мыши: форма собирается клавиа
     .poll(() => sideBySide(canvasRows.nth(rowCount - 2), canvasRows.nth(rowCount - 1)))
     .toBe(true)
 
+  // 7c. ПОДСТАНОВКА ОТВЕТА (docs/design/mentions.md): «@» в начале подписи открывает
+  // меню вопросов ВЫШЕ, выбор ставит чип. Набирается тоже без мыши — это и есть
+  // сквозная проверка жеста.
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('/Корот')
+  await expect(page.getByRole('option', { name: 'Короткий ответ' }).first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(canvasTitles).toHaveCount(6)
+  await page.keyboard.type('@Ваше')
+  await expect(page.getByRole('option', { name: nameQ }).first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  // Чип неделим и виден на полотне отдельным узлом; текст его — имя вопроса.
+  const chip = canvasTitles.nth(5).locator('.rf-mention')
+  await expect(chip).toHaveText(nameQ)
+  await page.keyboard.type(jobTail)
+  await expect(canvasTitles.nth(5)).toHaveText(`${nameQ}${jobTail}`)
+
   // 8. Публикация — тоже без мыши: кнопка активна, только когда автосейв догнал
   // редактор; фокусируем и жмём Enter.
   const publish = page.getByRole('button', { name: 'Опубликовать' })
@@ -317,6 +337,18 @@ test('билдер без мыши: форма собирается клавиа
   expect(phoneBox.y).toBeGreaterThan(mailBox.y)
   expect(Math.abs(phoneBox.x - mailBox.x)).toBeLessThan(4)
 
+  // ПОДСТАНОВКА У РЕСПОНДЕНТА: пока «Ваше имя» пусто, на месте чипа НИЧЕГО, и подпись
+  // начинается с запятой. Чипа на публичной форме нет вовсе — там обычный текст.
+  const jobLabel = formPage.locator('.rf-label', { hasText: 'кем вы работаете' })
+  await expect(jobLabel).toHaveText(jobTail)
+  await expect(formPage.locator('.rf-mention')).toHaveCount(0)
+
+  await nameField.fill(nameA)
+  // ЖИВОСТЬ — сердце критерия: ответ доезжает до подписи по мере ввода, без перехода
+  // на следующий шаг и без отправки.
+  await expect(jobLabel).toHaveText(`${nameA}${jobTail}`)
+  await nameField.fill('')
+  await expect(jobLabel).toHaveText(jobTail)
   await nameField.fill(nameA)
   await mailField.fill(mailA)
   // Вариант выбирается кликом по КАРТОЧКЕ, а не по радиокнопке: настоящий input
@@ -378,6 +410,10 @@ test('билдер без мыши: форма собирается клавиа
   const csvHref = await page.getByRole('link', { name: 'Экспорт CSV' }).getAttribute('href')
   const csv = await (await page.request.get(csvHref!)).text()
   expect(csv).toContain(nameQ)
+  // Подстановка в данные не протекает: колонка названа ИМЕНЕМ вопроса-источника, а не
+  // ответом респондента и не служебным id.
+  expect(csv).toContain(`${nameQ}${jobTail}`)
+  expect(csv).not.toContain(`${nameA}${jobTail}`)
   // Разметка в CSV выглядела бы либо тегом, либо сырым спаном — обе формы ловим здесь,
   // потому что обе означают одно: выгрузку открыли в Excel и увидели мусор.
   expect(csv).not.toMatch(/<span|rf-b|"m":/)
