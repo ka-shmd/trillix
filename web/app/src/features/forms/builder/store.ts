@@ -323,12 +323,16 @@ export const DOCUMENT_FIELDS = [
 // чужими вариантами внутри, и документ отвергнет ValidateSchema далеко от места ошибки.
 // Клон стоит наносекунды и снимает весь класс.
 function newBlock(type: BlockType): Block {
+  // Вопрос рождается ОБЯЗАТЕЛЬНЫМ; снимается звёздочкой на полотне.
+  // Только отвечаемым типам: у подписи, абзаца и разрыва страницы required — ключ,
+  // которого автор на полотне не увидит и не сотрёт, а схема его не запрещает и
+  // промолчит.
   const base: Block = {
     id: newBlockId(),
     groupId: '', // проставит regroup
     type,
     text: [],
-    required: false,
+    required: isAnswerableType(type),
     settings: {},
   }
   const defaults = editorKind(type).defaults

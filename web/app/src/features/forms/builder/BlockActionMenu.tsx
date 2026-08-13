@@ -12,20 +12,13 @@ import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from
 import { JumpDialog } from './logic/JumpDialog'
 import { BlockRuleDialog } from './logic/LogicDialog'
 import {
-  type RequiredMode,
   jumpSummary,
   requiredMode,
   requiredPatch,
   ruleCarrier,
   ruleSummary,
 } from './logic/model'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
 import { editorKind } from './kinds/index'
@@ -109,36 +102,24 @@ function ClassSetting({ block }: { block: Block }) {
   )
 }
 
-// RequiredSetting — обязательность ТРЕМЯ состояниями (фаза 21, ADR §10): нет / всегда /
-// по условию. Не два флага и не чекбокс с довеском: required и requiredIf схема
-// запрещает вместе, и переключатель, из которого невыразимо «ни то ни другое», рано или
-// поздно соберёт документ, который сервер отвергнет.
+// RequiredSetting — обязательность ТУМБЛЕРОМ: да / нет. Условная обязательность —
+// не третье его положение, а свой пункт в общем списке ниже: у неё жанр правила
+// (дерево условий в диалоге), а не значения из списка, как у «Показывать: …».
 //
-// «По условию» открывает диалог, а не пишет что-то само: правило без единого условия
-// невалидно, и «обязателен по пустому условию» ничего не значит. Пока автор не выбрал
-// условие, режим остаётся прежним.
-function RequiredSetting({ block, onCondition }: { block: Block; onCondition: () => void }) {
+// Модель при этом ТРЁХСОСТОЯНИЯ (фаза 21, ADR §10): required и requiredIf схема
+// запрещает вместе, поэтому пишем не голый флаг, а requiredPatch — он всегда чистит
+// второе поле. Тумблер отвечает на вопрос «обязателен ли вообще» (включён и при
+// условной обязательности), а чем именно — говорит пункт ниже.
+function RequiredSetting({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const mode = requiredMode(block)
-  const pick = (next: RequiredMode) => {
-    if (next === 'conditional') {
-      onCondition()
-      return
-    }
-    updateBlock(block.id, requiredPatch(next))
-  }
   return (
     <SettingRow label="Обязательный">
-      <Select value={mode} onValueChange={(v) => pick(v as RequiredMode)}>
-        <SelectTrigger size="sm" className="h-7 w-36" aria-label="Обязательность вопроса">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="no">Нет</SelectItem>
-          <SelectItem value="always">Всегда</SelectItem>
-          <SelectItem value="conditional">По условию…</SelectItem>
-        </SelectContent>
-      </Select>
+      <Switch
+        checked={mode !== 'no'}
+        aria-label="Обязательность вопроса"
+        onCheckedChange={(on) => updateBlock(block.id, requiredPatch(on ? 'always' : 'no'))}
+      />
     </SettingRow>
   )
 }
@@ -259,15 +240,7 @@ export function BlockActionMenu({
                 <div className="border-b py-1">
                   {named && <QuestionNameSetting block={subject} />}
                   <ClassSetting block={subject} />
-                  {requiredFor && (
-                    <RequiredSetting
-                      block={requiredFor}
-                      onCondition={() => {
-                        onOpenChange(false)
-                        setLogicField('requiredIf')
-                      }}
-                    />
-                  )}
+                  {requiredFor && <RequiredSetting block={requiredFor} />}
                   {Settings && <Settings block={subject} />}
                 </div>
               )}
@@ -283,6 +256,25 @@ export function BlockActionMenu({
                       >
                         <GitBranch className="size-4" />
                         Показывать: {ruleSummary(blocks, carrier.visibleIf)}
+                      </CommandItem>
+                    )}
+                    {/* Условная обязательность (фаза 21) — СВОИМ пунктом, а не третьим
+                        положением тумблера выше: у правила диалог с деревом условий, и
+                        жанр у него тот же, что у «Показывать: …». Пункт открывает диалог,
+                        а не пишет что-то сам: правило без единого условия невалидно, и
+                        «обязателен по пустому условию» ничего не значит — до первого
+                        условия режим остаётся прежним (LogicDialog зовёт requiredPatch). */}
+                    {requiredFor && (
+                      <CommandItem
+                        onSelect={() => {
+                          setLogicField('requiredIf')
+                          onOpenChange(false)
+                        }}
+                      >
+                        <GitBranch className="size-4" />
+                        {requiredFor.requiredIf
+                          ? `Обязателен, если: ${ruleSummary(blocks, requiredFor.requiredIf)}`
+                          : 'Обязателен по условию…'}
                       </CommandItem>
                     )}
                     {jumpsAllowed && (
