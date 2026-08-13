@@ -67,6 +67,7 @@ type Store interface {
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
 	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
+	UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
 	SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error
 	CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	ConsumePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)

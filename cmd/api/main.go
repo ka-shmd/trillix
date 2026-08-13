@@ -276,7 +276,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log, pool,
-		authHandler.Routes, authHandler.OAuthRoutes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
+		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
+		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 

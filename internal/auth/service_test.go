@@ -75,6 +75,13 @@ type fakeStore struct {
 	markVerifiedCalled     bool
 	markVerifiedUser       uuid.UUID
 	verifyTokensPurged     int64
+
+	// Профиль (фаза 23, слайс A). Указатели, а не строки: тесту нужно отличать
+	// «стереть» (nil) от «поставить пустое» — второго быть не должно.
+	profileUpdated   bool
+	profileUser      uuid.UUID
+	profileFirstName *string
+	profileLastName  *string
 }
 
 func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {
@@ -147,6 +154,18 @@ func (f *fakeStore) DeleteSession(_ context.Context, _ postgres.DBTX, _ []byte) 
 
 func (f *fakeStore) DeleteExpiredSessions(_ context.Context, _ postgres.DBTX) (int64, error) {
 	return f.deleteExpiredN, f.deleteExpiredErr
+}
+
+func (f *fakeStore) UpdateProfile(_ context.Context, _ postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	f.profileUpdated = true
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	u := f.user
+	u.ID = userID
+	u.FirstName = firstName
+	u.LastName = lastName
+	return u, nil
 }
 
 func (f *fakeStore) SetUserPassword(_ context.Context, _ postgres.DBTX, userID uuid.UUID, hash string) error {

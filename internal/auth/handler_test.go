@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -27,6 +29,25 @@ type fakeAuthService struct {
 	resendErr      error
 	resendCalled   bool
 	resendUser     User // пользователь, дошедший до ResendVerification
+
+	// Профиль (фаза 23, слайс A).
+	profileErr       error
+	profileUser      uuid.UUID // id, дошедший до сервиса
+	profileFirstName string    // строки как есть, до нормализации сервисом
+	profileLastName  string
+}
+
+func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, firstName, lastName string) (User, error) {
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	if f.profileErr != nil {
+		return User{}, f.profileErr
+	}
+	u := f.user
+	u.FirstName = &firstName
+	u.LastName = &lastName
+	return u, nil
 }
 
 func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string, error) {

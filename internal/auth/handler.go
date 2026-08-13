@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/oauth"
@@ -35,6 +37,7 @@ type authService interface {
 	ResetPassword(ctx context.Context, token, password string) error
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, user User) error
+	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -151,10 +154,28 @@ type userResponse struct {
 	// EmailVerified — подтверждён ли адрес (слайс C). Кабинет по нему рисует баннер
 	// «подтвердите email». Выводится из nullable users.email_verified_at.
 	EmailVerified bool `json:"emailVerified"`
+	// FirstName/LastName — имя человека (фаза 23). Пустая строка = не указано:
+	// null и "" на границе не различаются, а внутри различаются (0021), поэтому
+	// приведение делается здесь, в одном месте.
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
 }
 
 func toUserResponse(u User) userResponse {
-	return userResponse{ID: u.ID.String(), Email: u.Email, EmailVerified: u.EmailVerifiedAt != nil}
+	return userResponse{
+		ID:            u.ID.String(),
+		Email:         u.Email,
+		EmailVerified: u.EmailVerifiedAt != nil,
+		FirstName:     strOrEmpty(u.FirstName),
+		LastName:      strOrEmpty(u.LastName),
+	}
+}
+
+func strOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {

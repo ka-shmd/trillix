@@ -78,6 +78,7 @@ func newStack(t *testing.T) *httptest.Server {
 		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.Routes(mux)
+	h.AccountRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

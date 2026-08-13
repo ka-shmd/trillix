@@ -125,6 +125,8 @@ type User struct {
 	PasswordHash    pgtype.Text
 	CreatedAt       pgtype.Timestamptz
 	EmailVerifiedAt pgtype.Timestamptz
+	FirstName       pgtype.Text
+	LastName        pgtype.Text
 }
 
 type UserIdentity struct {
@@ -132,6 +134,7 @@ type UserIdentity struct {
 	ProviderUserID string
 	UserID         uuid.UUID
 	CreatedAt      pgtype.Timestamptz
+	ProviderEmail  pgtype.Text
 }
 
 type Workspace struct {

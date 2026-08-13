@@ -21,6 +21,10 @@ type User struct {
 	PasswordHash    *string
 	CreatedAt       time.Time
 	EmailVerifiedAt *time.Time // nil = email не подтверждён (баннер в кабинете)
+	// FirstName/LastName — имя человека (0021). nil = не указано: кабинет тогда
+	// показывает email. Ничего не гейтят и обязательными не становятся.
+	FirstName *string
+	LastName  *string
 }
 
 // Workspace — личный воркспейс пользователя.
@@ -157,6 +161,19 @@ func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, prov
 	return nil
 }
 
+// UpdateProfile ставит имя и фамилию целиком; nil — стереть (NULL в БД).
+func (Repo) UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	row, err := postgres.New(db).UpdateUserProfile(ctx, postgres.UpdateUserProfileParams{
+		ID:        userID,
+		FirstName: pgText(firstName),
+		LastName:  pgText(lastName),
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("update profile: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
 // SetUserPassword ставит новый хеш пароля (сброс). hash непустой — nil-семантики
 // «убрать пароль» тут нет.
 func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error {
@@ -254,6 +271,8 @@ func userFromRow(u postgres.User) User {
 		PasswordHash:    ptrStr(u.PasswordHash),
 		CreatedAt:       u.CreatedAt.Time,
 		EmailVerifiedAt: ptrTime(u.EmailVerifiedAt),
+		FirstName:       ptrStr(u.FirstName),
+		LastName:        ptrStr(u.LastName),
 	}
 }
 

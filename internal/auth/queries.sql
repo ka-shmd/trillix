@@ -3,10 +3,10 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
 FROM users
 WHERE email = $1;
 
@@ -34,7 +34,7 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now();
@@ -49,7 +49,7 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2;
@@ -57,6 +57,14 @@ WHERE i.provider = $1 AND i.provider_user_id = $2;
 -- name: CreateIdentity :exec
 INSERT INTO user_identities (provider, provider_user_id, user_id)
 VALUES ($1, $2, $3);
+
+-- name: UpdateUserProfile :one
+-- Имя и фамилия целиком, а не по одному полю: экран настроек шлёт обе строки
+-- разом, и «обновить только непустое» здесь означало бы, что стереть имя
+-- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
+UPDATE users SET first_name = $2, last_name = $3
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит

@@ -411,7 +411,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
 `
 
 type CreateUserParams struct {
@@ -430,6 +430,8 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }
@@ -1217,7 +1219,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now()
@@ -1233,6 +1235,8 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }
@@ -1263,7 +1267,7 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
 FROM users
 WHERE email = $1
 `
@@ -1277,12 +1281,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2
@@ -1305,6 +1311,8 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }
@@ -2356,6 +2364,36 @@ func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFo
 		&i.PublishedVersionID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateUserProfile = `-- name: UpdateUserProfile :one
+UPDATE users SET first_name = $2, last_name = $3
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+`
+
+type UpdateUserProfileParams struct {
+	ID        uuid.UUID
+	FirstName pgtype.Text
+	LastName  pgtype.Text
+}
+
+// Имя и фамилия целиком, а не по одному полю: экран настроек шлёт обе строки
+// разом, и «обновить только непустое» здесь означало бы, что стереть имя
+// нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
+func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserProfile, arg.ID, arg.FirstName, arg.LastName)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }
