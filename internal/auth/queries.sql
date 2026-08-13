@@ -127,3 +127,29 @@ UPDATE users SET email_verified_at = now() WHERE id = $1;
 -- name: DeleteExpiredEmailVerificationTokens :execrows
 -- Фоновая чистка истёкших токенов подтверждения (использованные истекают за 24 часа).
 DELETE FROM email_verification_tokens WHERE expires_at <= now();
+
+-- name: CreateEmailChangeToken :exec
+-- Запрос смены адреса (фаза 23, слайс D). В БД — только SHA-256 сырого токена.
+INSERT INTO email_change_tokens (token_hash, user_id, new_email, expires_at)
+VALUES ($1, $2, $3, $4);
+
+-- name: ConsumeEmailChangeToken :one
+-- Атомарное потребление: одноразовость держится условием used_at IS NULL в том
+-- же UPDATE, а не проверкой перед ним (иначе два параллельных перехода по
+-- ссылке оба сочли бы токен свежим). Ноль строк → ErrNoRows: нет, использован
+-- или истёк — снаружи это один и тот же ответ.
+UPDATE email_change_tokens
+   SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id, new_email;
+
+-- name: UpdateUserEmail :one
+-- Переносит адрес и СРАЗУ помечает его подтверждённым: владение доказано
+-- переходом по ссылке, отправленной именно на него.
+UPDATE users
+   SET email = $2, email_verified_at = now()
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+
+-- name: DeleteExpiredEmailChangeTokens :execrows
+DELETE FROM email_change_tokens WHERE expires_at <= now();

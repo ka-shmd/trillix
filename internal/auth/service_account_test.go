@@ -166,3 +166,130 @@ func TestChangePassword_ValidatesNewPassword(t *testing.T) {
 		t.Error("короткий пароль всё равно поставлен")
 	}
 }
+
+// Смена адреса (фаза 23, слайс D).
+
+func emailChangeUser(t *testing.T) (User, string) {
+	t.Helper()
+	hash, err := HashPassword("old-password")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	return User{ID: domain.NewID(), Email: "old@example.com", PasswordHash: &hash}, hash
+}
+
+func TestRequestEmailChange_QueuesTwoLettersAndKeepsEmail(t *testing.T) {
+	user, _ := emailChangeUser(t)
+	store := &fakeStore{} // userExists=false → новый адрес свободен
+	mailer := &fakeEnqueuer{}
+	svc := newServiceMail(store, mailer)
+
+	if err := svc.RequestEmailChange(context.Background(), user, "  New@Example.COM ", "old-password"); err != nil {
+		t.Fatalf("RequestEmailChange: %v", err)
+	}
+	if !store.createdEmailChangeToken || store.emailChangeTokenUser != user.ID {
+		t.Fatal("токен смены адреса не заведён")
+	}
+	if store.emailChangeTokenEmail != "new@example.com" {
+		t.Fatalf("адрес в токене = %q, ожидался нормализованный", store.emailChangeTokenEmail)
+	}
+	// Адрес аккаунта НЕ меняется до перехода по ссылке: иначе опечатка стоит
+	// аккаунта, а восстанавливать его будет некуда.
+	if store.emailUpdated {
+		t.Fatal("адрес аккаунта изменён до подтверждения")
+	}
+	if len(mailer.msgs) != 2 {
+		t.Fatalf("писем в очереди %d, ожидалось 2 (ссылка на новый адрес, уведомление на старый)", len(mailer.msgs))
+	}
+	if mailer.msgs[0].Template != mail.TemplateEmailChangeConfirm || mailer.msgs[0].To != "new@example.com" {
+		t.Errorf("первое письмо = %q на %q", mailer.msgs[0].Template, mailer.msgs[0].To)
+	}
+	if mailer.msgs[1].Template != mail.TemplateEmailChangeNotice || mailer.msgs[1].To != user.Email {
+		t.Errorf("второе письмо = %q на %q, ожидалось уведомление на СТАРЫЙ адрес", mailer.msgs[1].Template, mailer.msgs[1].To)
+	}
+	// Уведомление на старый адрес не несёт ссылки-токена: оно сообщает, а не даёт прав.
+	if _, ok := mailer.msgs[1].Data["link"]; ok {
+		t.Error("в уведомлении на старый адрес оказалась ссылка с токеном")
+	}
+}
+
+func TestRequestEmailChange_WrongPasswordChangesNothing(t *testing.T) {
+	user, _ := emailChangeUser(t)
+	store := &fakeStore{}
+	mailer := &fakeEnqueuer{}
+	svc := newServiceMail(store, mailer)
+
+	// Пароль — единственное, что отличает «человек меняет свой адрес» от «увели
+	// сессию и уводят аккаунт»: после смены восстановление пойдёт на новый ящик.
+	err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "not-the-password")
+	if !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("ошибка = %v, ожидалась ErrInvalidCredentials", err)
+	}
+	if store.createdEmailChangeToken || len(mailer.msgs) != 0 {
+		t.Fatal("при неверном пароле заведён токен или отправлено письмо")
+	}
+}
+
+func TestRequestEmailChange_RejectsTakenAndSameAddress(t *testing.T) {
+	user, _ := emailChangeUser(t)
+
+	taken := &fakeStore{userExists: true} // адрес занят кем-то ещё
+	if err := newService(taken).RequestEmailChange(context.Background(), user, "busy@example.com", "old-password"); !errors.Is(err, domain.ErrEmailTaken) {
+		t.Fatalf("ошибка на занятый адрес = %v, ожидалась ErrEmailTaken", err)
+	}
+	if taken.createdEmailChangeToken {
+		t.Error("на занятый адрес заведён токен")
+	}
+
+	// Свой же адрес — не смена, а недоразумение: письмо слать некуда и незачем.
+	same := &fakeStore{}
+	if err := newService(same).RequestEmailChange(context.Background(), user, "OLD@example.com", "old-password"); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка на собственный адрес = %v, ожидалась ErrValidation", err)
+	}
+}
+
+func TestConfirmEmailChange_MovesAddress(t *testing.T) {
+	uid := domain.NewID()
+	store := &fakeStore{changeConsumeExists: true, changeConsumeUserID: uid, changeConsumeEmail: "new@example.com"}
+	svc := newService(store)
+
+	if err := svc.ConfirmEmailChange(context.Background(), "raw-token"); err != nil {
+		t.Fatalf("ConfirmEmailChange: %v", err)
+	}
+	if !store.emailUpdated || store.updatedEmail != "new@example.com" {
+		t.Fatalf("адрес не перенесён: updated=%v email=%q", store.emailUpdated, store.updatedEmail)
+	}
+}
+
+func TestConfirmEmailChange_BadTokenIsOneAnswer(t *testing.T) {
+	// Нет, использован, истёк — снаружи один и тот же ответ: различать их значит
+	// рассказывать перебирающему, что он угадал.
+	store := &fakeStore{changeConsumeExists: false}
+	svc := newService(store)
+
+	err := svc.ConfirmEmailChange(context.Background(), "raw-token")
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.emailUpdated {
+		t.Error("адрес перенесён по негодному токену")
+	}
+}
+
+func TestConfirmEmailChange_AddressTakenMeanwhile(t *testing.T) {
+	// Между запросом и подтверждением сутки — адрес могли занять регистрацией.
+	// Явная проверка, а не ловля UNIQUE: 409 с текстом полезнее 500 из драйвера.
+	uid := domain.NewID()
+	store := &fakeStore{
+		changeConsumeExists: true, changeConsumeUserID: uid, changeConsumeEmail: "new@example.com",
+		userExists: true, // адрес уже занят
+	}
+	svc := newService(store)
+
+	if err := svc.ConfirmEmailChange(context.Background(), "raw-token"); !errors.Is(err, domain.ErrEmailTaken) {
+		t.Fatalf("ошибка = %v, ожидалась ErrEmailTaken", err)
+	}
+	if store.emailUpdated {
+		t.Error("адрес перенесён на занятый")
+	}
+}

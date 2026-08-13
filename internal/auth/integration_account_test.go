@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // profileOf разбирает объект пользователя из ответа /auth/* и отдаёт имя и
@@ -174,5 +175,115 @@ func TestAccountPassword_KillsOtherSessionsKeepsCurrent(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("писем о смене пароля в outbox: %d, ожидалось 1", n)
+	}
+}
+
+// Смена адреса: пока по ссылке не перешли, вход остаётся по прежнему адресу;
+// после перехода — по новому, и он сразу подтверждён.
+func TestAccountEmail_TwoStepChange(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := newClient(t)
+
+	const oldEmail = "old@example.com"
+	const newEmail = "new@example.com"
+	const password = "supersecret1"
+
+	if r := post(t, c, srv.URL+"/api/v1/auth/register",
+		`{"email":"`+oldEmail+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusCreated {
+		t.Fatalf("register: статус %d", r.StatusCode)
+	}
+	clearOutbox(t) // письмо подтверждения регистрации мешает считать наши два
+
+	resp := post(t, c, srv.URL+"/api/v1/account/email",
+		`{"newEmail":"`+newEmail+`","currentPassword":"`+password+`"}`, csrfHeader(t, c, srv.URL))
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("запрос смены: статус %d; тело=%s", resp.StatusCode, body(t, resp))
+	}
+	_ = resp.Body.Close()
+
+	// Два письма: ссылка на новый адрес, уведомление на старый.
+	if n := outboxCount(t); n != 2 {
+		t.Fatalf("в outbox %d писем, ожидалось 2", n)
+	}
+	// Адрес аккаунта пока прежний — и вход тоже.
+	var current string
+	if err := testPool.QueryRow(context.Background(), `SELECT email FROM users`).Scan(&current); err != nil {
+		t.Fatalf("select email: %v", err)
+	}
+	if current != oldEmail {
+		t.Fatalf("адрес сменился до подтверждения: %q", current)
+	}
+
+	// Токен лежит только в письме (в БД — его SHA-256). readResetTokenFromOutbox
+	// берёт последнее письмо, а последним поставлено уведомление на старый
+	// адрес — у него ссылки нет, поэтому уведомление сначала убираем.
+	if _, err := testPool.Exec(context.Background(),
+		`DELETE FROM outbox WHERE payload->>'template' = 'email_change_notice'`); err != nil {
+		t.Fatalf("delete notice: %v", err)
+	}
+	token := readResetTokenFromOutbox(t)
+
+	if r := post(t, newClient(t), srv.URL+"/api/v1/auth/confirm-email-change",
+		`{"token":"`+token+`"}`, ""); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("подтверждение: статус %d", r.StatusCode)
+	}
+
+	// Адрес переехал и сразу считается подтверждённым: владение доказано
+	// переходом по ссылке, отправленной именно на него.
+	var verified *time.Time
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT email, email_verified_at FROM users`).Scan(&current, &verified); err != nil {
+		t.Fatalf("select email: %v", err)
+	}
+	if current != newEmail {
+		t.Fatalf("адрес = %q, ожидался %q", current, newEmail)
+	}
+	if verified == nil {
+		t.Fatal("новый адрес не помечен подтверждённым")
+	}
+
+	// Вход теперь по новому адресу, по старому — нет.
+	fresh := newClient(t)
+	if r := post(t, fresh, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+oldEmail+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("вход по старому адресу: статус %d, ожидалось 401", r.StatusCode)
+	}
+	if r := post(t, fresh, srv.URL+"/api/v1/auth/login",
+		`{"email":"`+newEmail+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("вход по новому адресу: статус %d, ожидалось 200", r.StatusCode)
+	}
+
+	// Токен одноразовый: повторный переход по той же ссылке — 422.
+	if r := post(t, newClient(t), srv.URL+"/api/v1/auth/confirm-email-change",
+		`{"token":"`+token+`"}`, ""); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("повторное подтверждение: статус %d, ожидалось 422", r.StatusCode)
+	}
+}
+
+// Занятый адрес отбивается на ПЕРВОМ шаге — письма не уходят вовсе.
+func TestAccountEmail_TakenAddressRejected(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+
+	other := newClient(t)
+	if r := post(t, other, srv.URL+"/api/v1/auth/register",
+		`{"email":"busy@example.com","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
+		t.Fatalf("register чужого: статус %d", r.StatusCode)
+	}
+	c := newClient(t)
+	if r := post(t, c, srv.URL+"/api/v1/auth/register",
+		`{"email":"mine@example.com","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
+		t.Fatalf("register: статус %d", r.StatusCode)
+	}
+	clearOutbox(t)
+
+	r := post(t, c, srv.URL+"/api/v1/account/email",
+		`{"newEmail":"busy@example.com","currentPassword":"supersecret1"}`, csrfHeader(t, c, srv.URL))
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("статус %d, ожидалось 409; тело=%s", r.StatusCode, body(t, r))
+	}
+	if n := outboxCount(t); n != 0 {
+		t.Fatalf("на занятый адрес ушло писем: %d", n)
 	}
 }

@@ -16,7 +16,7 @@ import (
 // знает.
 func newTestAccountHandler(svc authService) http.Handler {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(ratelimit.AllowAll{})
+		WithAccount(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 	return mux
@@ -205,7 +205,7 @@ func TestChangePassword_RequiresAuthAndCSRF(t *testing.T) {
 func TestChangePassword_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(denyLimiter{})
+		WithAccount(denyLimiter{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 

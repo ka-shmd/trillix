@@ -39,6 +39,8 @@ type authService interface {
 	ResendVerification(ctx context.Context, user User) error
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
 	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
+	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword string) error
+	ConfirmEmailChange(ctx context.Context, token string) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -79,7 +81,13 @@ type Handler struct {
 	// passwordChangeLimiter — по пользователю на POST /account/password (фаза 23).
 	// Не от подбора (сессия уже своя), а от argon2id: 64 МиБ на вызов.
 	passwordChangeLimiter RateLimiter
-	cookieSecure          bool
+	// emailChangeLimiter — по пользователю на POST /account/email: письмо уходит
+	// на ПРОИЗВОЛЬНЫЙ адрес, поэтому ведро строгое (нельзя завалить чужой ящик).
+	// confirmEmailLimiter — по IP на публичный шаг подтверждения (перебор токенов).
+	emailChangeLimiter  RateLimiter
+	confirmEmailLimiter RateLimiter
+
+	cookieSecure bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
@@ -121,8 +129,10 @@ func (h *Handler) WithEmailVerification(verify, resend RateLimiter) *Handler {
 // WithAccount подключает настройки аккаунта с их ведром лимита (по образцу
 // WithPasswordReset). Без него AccountRoutes регистрировать нельзя — лимитер
 // будет nil.
-func (h *Handler) WithAccount(passwordChange RateLimiter) *Handler {
+func (h *Handler) WithAccount(passwordChange, emailChange, confirmEmail RateLimiter) *Handler {
 	h.passwordChangeLimiter = passwordChange
+	h.emailChangeLimiter = emailChange
+	h.confirmEmailLimiter = confirmEmail
 	return h
 }
 

@@ -36,7 +36,7 @@ func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false).
 		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret")).
-		WithAccount(ratelimit.AllowAll{})
+		WithAccount(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.OAuthRoutes(mux)

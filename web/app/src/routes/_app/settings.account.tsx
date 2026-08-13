@@ -2,7 +2,12 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { meQueryOptions, useChangePassword, useUpdateProfile } from '../../features/auth/queries'
+import {
+  meQueryOptions,
+  useChangePassword,
+  useRequestEmailChange,
+  useUpdateProfile,
+} from '../../features/auth/queries'
 import { ApiError } from '../../shared/api/errors'
 import type { User } from '../../entities/user'
 import { Button } from '@/components/ui/button'
@@ -32,6 +37,7 @@ function AccountPage() {
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 p-6">
       <AccountForm key={user.id} user={user} />
+      <EmailForm key={`email-${user.email}`} user={user} />
       <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
     </div>
   )
@@ -55,9 +61,7 @@ function AccountForm({ user }: { user: User }) {
     <div className="flex flex-col gap-8">
       <section>
         <h1 className="text-lg font-medium">Аккаунт</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Как вас зовут и на какой адрес приходят письма.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Как вас зовут в кабинете.</p>
       </section>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -86,18 +90,6 @@ function AccountForm({ user }: { user: User }) {
               placeholder="Петров"
             />
           </div>
-        </div>
-
-        <div>
-          <Label htmlFor="account-email" className="mb-2 block">
-            Email
-          </Label>
-          {/* Адрес пока только показывается: смена — слайс D, и делать её видом
-              редактируемого поля до того, как она работает, нельзя. */}
-          <Input id="account-email" value={user.email} readOnly disabled />
-          <p className="mt-2 text-sm text-muted-foreground">
-            {user.emailVerified ? 'Адрес подтверждён.' : 'Адрес не подтверждён.'}
-          </p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -226,4 +218,107 @@ function passwordErrorText(error: unknown): string {
     }
   }
   return 'Не удалось сменить пароль. Попробуйте ещё раз.'
+}
+
+// EmailForm — смена адреса. Двухшаговая: эта форма только отправляет письмо,
+// адрес аккаунта меняется по ссылке из него. Поэтому успех здесь — «письмо
+// отправлено», а не «адрес изменён», и врать об этом нельзя.
+function EmailForm({ user }: { user: User }) {
+  const request = useRequestEmailChange()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+
+  const ready = email.trim() !== '' && (!user.hasPassword || password !== '')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!ready) return
+    request.mutate(
+      { newEmail: email.trim(), currentPassword: password },
+      { onSuccess: () => setPassword('') },
+    )
+  }
+
+  if (request.isSuccess) {
+    return (
+      <section className="flex flex-col gap-2 border-t pt-8">
+        <h2 className="text-lg font-medium">Письмо отправлено</h2>
+        <p className="text-sm text-muted-foreground">
+          Мы написали на {email.trim()}. Аккаунт переедет на этот адрес, когда вы перейдёте по
+          ссылке из письма; до тех пор вход остаётся по {user.email}.
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="flex flex-col gap-4 border-t pt-8">
+      <div>
+        <h2 className="text-lg font-medium">Адрес аккаунта</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Сейчас {user.email}
+          {user.emailVerified ? ' — подтверждён.' : ' — не подтверждён.'} На него приходят
+          письма и восстановление доступа.
+        </p>
+      </div>
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div>
+          <Label htmlFor="new-email" className="mb-2 block">
+            Новый адрес
+          </Label>
+          <Input
+            id="new-email"
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="ivan@example.com"
+          />
+        </div>
+        {user.hasPassword && (
+          <div>
+            <Label htmlFor="email-password" className="mb-2 block">
+              Текущий пароль
+            </Label>
+            <Input
+              id="email-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+        )}
+
+        <div>
+          <Button type="submit" disabled={!ready || request.isPending}>
+            {request.isPending ? 'Отправляем…' : 'Отправить письмо'}
+          </Button>
+        </div>
+
+        {request.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {emailErrorText(request.error)}
+          </p>
+        )}
+      </form>
+    </section>
+  )
+}
+
+function emailErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return 'Текущий пароль неверный.'
+      case 'email_taken':
+        return 'Этот адрес уже занят другим аккаунтом.'
+      case 'validation_failed':
+        return 'Проверьте адрес: похоже, в нём опечатка.'
+      case 'rate_limited':
+        return 'Слишком много запросов. Попробуйте позже.'
+    }
+  }
+  return 'Не удалось отправить письмо. Попробуйте ещё раз.'
 }

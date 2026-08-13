@@ -95,6 +95,14 @@ const (
 	passwordChangeRatePerSec = 1.0 / 60.0
 	passwordChangeBurst      = 3
 
+	// Смена адреса (фаза 23, слайс D). Запрос — по ПОЛЬЗОВАТЕЛЮ и строгий:
+	// письмо уходит на произвольный адрес из формы, то же соображение, что у
+	// приглашений. Подтверждение — по IP, ведро уровня verify (перебор токенов).
+	emailChangeRatePerSec  = 1.0 / 300.0
+	emailChangeBurst       = 3
+	confirmEmailRatePerSec = 1.0 / 12.0
+	confirmEmailBurst      = 5
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -226,7 +234,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
 	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
 	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
-	authHandler = authHandler.WithAccount(ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst))
+	authHandler = authHandler.WithAccount(
+		ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst),
+		ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
+		ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
+	)
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.
@@ -338,6 +350,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("spent invitations purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "email-change-token-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, verificationTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredEmailChangeTokens(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired email change tokens purged", slog.Int64("count", n))
 			}
 			return nil
 		},

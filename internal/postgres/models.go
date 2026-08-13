@@ -9,6 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type EmailChangeToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	NewEmail  string
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type EmailVerificationToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID

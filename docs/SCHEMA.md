@@ -457,6 +457,22 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 
 **Связь с почтой.** Токен создаётся и письмо кладётся в `outbox` **одной транзакцией** (transactional outbox). Письмо ставится при регистрации по паролю; повторно — по кнопке в баннере (`POST /auth/resend-verification`). Подтверждение (`POST /auth/verify-email`) проставляет `users.email_verified_at`.
 
+## `email_change_tokens` (0022)
+
+Смена адреса аккаунта — двухшаговая (фаза 23, слайс D): `users.email` не меняется, пока не перешли по ссылке, отправленной **на новый адрес**. Отдельная таблица, а не колонка в `email_verification_tokens`: тот токен подтверждает адрес, который уже стоит в `users`, этот — переносит адрес на другой.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `token_hash` | `BYTEA` | PK — SHA-256 сырого токена (сам токен только в письме, в логи не попадает) |
+| `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` |
+| `new_email` | `TEXT` | `NOT NULL`, `CHECK (new_email = lower(new_email))` |
+| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` — 24 часа от выдачи |
+| `used_at` | `TIMESTAMPTZ` | nullable; ставится при подтверждении (одноразовость — атомарным `UPDATE`) |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+| | | индекс `idx_email_change_tokens_expires` по `expires_at` (фоновая чистка) |
+
+**`UNIQUE` на `new_email` здесь нет сознательно:** запрос смены — намерение, а не бронь. Занятость проверяется дважды (при запросе и при подтверждении), а единственный настоящий сторож — `UNIQUE` на `users.email`; бронирование строкой в этой таблице дало бы способ занять чужой адрес на сутки, ничего не подтверждая.
+
 ---
 
 ## `invitations` (0017)

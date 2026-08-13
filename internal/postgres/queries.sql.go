@@ -12,6 +12,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeEmailChangeToken = `-- name: ConsumeEmailChangeToken :one
+UPDATE email_change_tokens
+   SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id, new_email
+`
+
+type ConsumeEmailChangeTokenRow struct {
+	UserID   uuid.UUID
+	NewEmail string
+}
+
+// Атомарное потребление: одноразовость держится условием used_at IS NULL в том
+// же UPDATE, а не проверкой перед ним (иначе два параллельных перехода по
+// ссылке оба сочли бы токен свежим). Ноль строк → ErrNoRows: нет, использован
+// или истёк — снаружи это один и тот же ответ.
+func (q *Queries) ConsumeEmailChangeToken(ctx context.Context, tokenHash []byte) (ConsumeEmailChangeTokenRow, error) {
+	row := q.db.QueryRow(ctx, consumeEmailChangeToken, tokenHash)
+	var i ConsumeEmailChangeTokenRow
+	err := row.Scan(&i.UserID, &i.NewEmail)
+	return i, err
+}
+
 const consumeEmailVerificationToken = `-- name: ConsumeEmailVerificationToken :one
 UPDATE email_verification_tokens
 SET used_at = now()
@@ -162,6 +185,29 @@ func (q *Queries) CountWorkspaceMembers(ctx context.Context, workspaceID uuid.UU
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const createEmailChangeToken = `-- name: CreateEmailChangeToken :exec
+INSERT INTO email_change_tokens (token_hash, user_id, new_email, expires_at)
+VALUES ($1, $2, $3, $4)
+`
+
+type CreateEmailChangeTokenParams struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	NewEmail  string
+	ExpiresAt pgtype.Timestamptz
+}
+
+// Запрос смены адреса (фаза 23, слайс D). В БД — только SHA-256 сырого токена.
+func (q *Queries) CreateEmailChangeToken(ctx context.Context, arg CreateEmailChangeTokenParams) error {
+	_, err := q.db.Exec(ctx, createEmailChangeToken,
+		arg.TokenHash,
+		arg.UserID,
+		arg.NewEmail,
+		arg.ExpiresAt,
+	)
+	return err
 }
 
 const createEmailVerificationToken = `-- name: CreateEmailVerificationToken :exec
@@ -480,6 +526,18 @@ type CreateWorkspaceMemberParams struct {
 func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspaceMemberParams) error {
 	_, err := q.db.Exec(ctx, createWorkspaceMember, arg.WorkspaceID, arg.UserID, arg.Role)
 	return err
+}
+
+const deleteExpiredEmailChangeTokens = `-- name: DeleteExpiredEmailChangeTokens :execrows
+DELETE FROM email_change_tokens WHERE expires_at <= now()
+`
+
+func (q *Queries) DeleteExpiredEmailChangeTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredEmailChangeTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteExpiredEmailVerificationTokens = `-- name: DeleteExpiredEmailVerificationTokens :execrows
@@ -2397,6 +2455,35 @@ func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFo
 		&i.PublishedVersionID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateUserEmail = `-- name: UpdateUserEmail :one
+UPDATE users
+   SET email = $2, email_verified_at = now()
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+`
+
+type UpdateUserEmailParams struct {
+	ID    uuid.UUID
+	Email string
+}
+
+// Переносит адрес и СРАЗУ помечает его подтверждённым: владение доказано
+// переходом по ссылке, отправленной именно на него.
+func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserEmail, arg.ID, arg.Email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
 	)
 	return i, err
 }

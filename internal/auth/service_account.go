@@ -2,8 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	netmail "net/mail"
+	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -107,4 +111,109 @@ func normalizePersonName(v, field string) (*string, error) {
 		return nil, fmt.Errorf("%w: %s длиннее %d символов", domain.ErrValidation, field, MaxPersonNameLen)
 	}
 	return &v, nil
+}
+
+// emailChangeTTL — окно жизни ссылки подтверждения нового адреса. Как у
+// подтверждения почты (0012): письмо могут открыть не сразу.
+const emailChangeTTL = 24 * time.Hour
+
+// RequestEmailChange начинает смену адреса: проверяет пароль, кладёт одноразовый
+// токен и ставит в очередь ДВА письма — ссылку на новый адрес и уведомление на
+// старый. `users.email` при этом не меняется: пока по ссылке не перешли, вход
+// остаётся по прежнему адресу.
+//
+// Двухшаговость — не осторожность, а единственный способ не потерять аккаунт на
+// опечатке: email и есть ключ восстановления, сброс пароля ходит туда же.
+func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword string) error {
+	newEmail = normalizeEmail(newEmail)
+	if _, err := netmail.ParseAddress(newEmail); err != nil {
+		return fmt.Errorf("%w: некорректный email", domain.ErrValidation)
+	}
+	if newEmail == user.Email {
+		return fmt.Errorf("%w: это уже адрес вашего аккаунта", domain.ErrValidation)
+	}
+
+	// Пароль — единственное, что отличает «человек меняет свой адрес» от «угнали
+	// сессию и уводят аккаунт»: после смены адреса восстановление пароля пойдёт
+	// на новый ящик. У аккаунта без пароля проверять нечем (§4 спеки), и там
+	// защитой остаётся уведомление на старый адрес — до слайса F, где появится
+	// второй фактор.
+	if user.PasswordHash != nil {
+		ok, err := VerifyPassword(*user.PasswordHash, currentPassword)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return domain.ErrInvalidCredentials
+		}
+	}
+
+	// Первая из двух проверок занятости. Вторая — при подтверждении: между ними
+	// сутки, за которые адрес могут занять регистрацией.
+	if err := s.emailFree(ctx, newEmail); err != nil {
+		return err
+	}
+
+	rawToken, err := newToken()
+	if err != nil {
+		return err
+	}
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if e := s.repo.CreateEmailChangeToken(ctx, tx, hashToken(rawToken), user.ID, newEmail, time.Now().Add(emailChangeTTL)); e != nil {
+			return e
+		}
+		if e := s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+			To:       newEmail,
+			Template: mail.TemplateEmailChangeConfirm,
+			Data:     map[string]any{"link": s.appBaseURL + "/confirm-email-change?token=" + url.QueryEscape(rawToken)},
+		}); e != nil {
+			return e
+		}
+		// Уведомление на СТАРЫЙ адрес — единственный сигнал хозяину, если сессию
+		// увели. Ссылки-токена оно не несёт: письмо сообщает, а не даёт прав.
+		return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
+			To:       user.Email,
+			Template: mail.TemplateEmailChangeNotice,
+			Data:     map[string]any{"new_email": newEmail},
+		})
+	})
+}
+
+// ConfirmEmailChange переносит адрес по одноразовому токену из письма. Сессию не
+// трогает: пароль не менялся, а по ссылке ходят из почтового клиента, где
+// сессии кабинета может не быть вовсе.
+func (s *Service) ConfirmEmailChange(ctx context.Context, rawToken string) error {
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		userID, newEmail, e := s.repo.ConsumeEmailChangeToken(ctx, tx, hashToken(rawToken))
+		if e != nil {
+			if errors.Is(e, pgx.ErrNoRows) {
+				return fmt.Errorf("%w: ссылка недействительна или устарела", domain.ErrValidation)
+			}
+			return e
+		}
+		// Вторая проверка занятости — за сутки адрес могли занять регистрацией.
+		// Явным запросом, а не ловлей UNIQUE-нарушения: 409 с внятным текстом
+		// человеку полезнее, чем 500 из глубины драйвера.
+		if e := s.emailFree(ctx, newEmail); e != nil {
+			return e
+		}
+		_, e = s.repo.UpdateUserEmail(ctx, tx, userID, newEmail)
+		return e
+	})
+}
+
+// emailFree — свободен ли адрес. ErrEmailTaken, если занят.
+func (s *Service) emailFree(ctx context.Context, email string) error {
+	switch _, err := s.repo.GetUserByEmail(ctx, s.db, email); {
+	case err == nil:
+		return domain.ErrEmailTaken
+	case !errors.Is(err, pgx.ErrNoRows):
+		return err
+	}
+	return nil
+}
+
+// PurgeExpiredEmailChangeTokens — фоновая чистка истёкших токенов смены адреса.
+func (s *Service) PurgeExpiredEmailChangeTokens(ctx context.Context) (int64, error) {
+	return s.repo.DeleteExpiredEmailChangeTokens(ctx, s.db)
 }
