@@ -885,11 +885,21 @@ export function SlashEditor({
   // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5). railOff — у ряда горят
   // зоны: рейл группы стоит на том же вылете, что и рейл зоны, и две линии в одном
   // жёлобе читались бы как одна размазанная.
-  const renderGroup = (g: (typeof groups)[number], railOff = false) => (
+  //
+  // headOfCell — вопрос открывает стопку колонки и потому интервала перед собой не
+  // несёт (его несёт ряд). Позиция приезжает ПРОПОМ, а не вариантом `first:`: в боксе
+  // колонки первыми стоят зоны жеста, они появляются с началом драга, и CSS-правило
+  // «первый ребёнок» роняло бы вопросу интервал прямо посреди жеста.
+  const renderGroup = (
+    g: (typeof groups)[number],
+    railOff = false,
+    headOfCell = false,
+  ) => (
     <GroupRow
       key={g.id}
       group={g}
       firstGroup={g.id === groups[0]?.id}
+      headOfCell={headOfCell}
       formId={formId}
       blockIds={blockIds}
       // Зона второго уровня: id подписи, у которой горит приглашение собрать ряд
@@ -1048,12 +1058,15 @@ export function SlashEditor({
                 }}
               >
                 <SortableContext items={groupIdList} strategy={canvasSorting}>
-                  {/* Ритм полотна = ритм превью/рендерера (этап 13.3), задаётся контейнерами:
-                mt-12 (48px) заголовок формы→первый блок = gap у .rf-page; gap-7 (28px)
-                МЕЖДУ группами = .rf-form. Внутри группы шаг 14px даёт GroupRow (gap-3.5).
-                py-1.5 строк в вертикаль НЕ входит (там -my-1.5, см. BlockRow), поэтому
-                flex-gap здесь = чистый просвет контента и совпадает с превью замером
-                (критерий 13.3 — ноль расхождений). */}
+                  {/* Ритм полотна = ритм превью/рендерера (этап 13.3). ИНТЕРВАЛ НЕСЁТ САМ
+                ЭЛЕМЕНТ — это его ВЕРХНИЙ отступ, «место передо мной», а не gap
+                контейнера (2026-08-13, см. .rf-form в fields.css): mt-7 (28px) у ряда
+                и у вопроса в колонке = .rf-form, 14px внутри вопроса даёт строка
+                (BlockRow). У контейнера остаётся только mt-12 (48px) заголовок
+                формы→первый блок = gap у .rf-page.
+                py-1.5 строк в вертикаль НЕ входит (там -mb-1.5 и укороченный на
+                столько же mt, см. BlockRow), поэтому просвет здесь — чистый контент и
+                совпадает с превью замером (критерий 13.3 — ноль расхождений). */}
                   {/* Ряды — НАСТОЯЩИЕ контейнеры (а не flex-wrap с шириной в 50%, как было
                 до появления стопок): правая колонка ряда может держать НЕСКОЛЬКО
                 групп друг под другом (§5), а wrap уложил бы третью полуширинную li
@@ -1061,8 +1074,8 @@ export function SlashEditor({
                 превью и рендерером один в один: .rf-row → .rf-cell → группы.
                 DOM-порядок = порядок документа, sortable-вселенная не тронута —
                 обёртки не заводят вложенных SortableContext, только лэйаут. */}
-                  <ol className="mt-12 flex flex-col gap-7">
-                    {rows.map((row) => {
+                  <ol className="mt-12 flex flex-col">
+                    {rows.map((row, rowIndex) => {
                       const rowId = row[0]![0]!.id
                       // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
                       // полоса ряда неподвижна, её края = края холста при любом
@@ -1097,7 +1110,9 @@ export function SlashEditor({
                           // (ячейка ничего не рисует, дети и так лежат сверху), но это
                           // осознанное расхождение с `.rf-cell` рендерера — там растяжение
                           // безвредно, зон нет.
-                          className="relative flex min-w-0 flex-1 flex-col gap-7 self-start"
+                          // Вертикального зазора у колонки нет: интервал стопки несут сами
+                          // вопросы (mt-7 у li в GroupRow), как .rf-cell у превью.
+                          className="relative flex min-w-0 flex-1 flex-col self-start"
                         >
                           {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
                               жёлобе слева от неё, подвал — под ней. Первая колонка
@@ -1113,7 +1128,7 @@ export function SlashEditor({
                           {zones && cols > 1 && i < cols && (
                             <FootDropZone rowId={inviteRow!} col={i + 1} hot={zoneHot(i + 1, false)} />
                           )}
-                          {c.map((g) => renderGroup(g, zones))}
+                          {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
                         </div>
                       ))
                       return (
@@ -1122,7 +1137,17 @@ export function SlashEditor({
                         // Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
-                        <div key={rowId} className="relative flex flex-col gap-7 sm:flex-row">
+                        // mt-7 — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
+                        // ряда его нет, начало полотна задаёт mt-12 от заголовка формы.
+                        // gap-7 здесь — зазор между КОЛОНКАМИ (на мобильном ряд
+                        // разваливается в стек, и тот же зазор становится вертикальным),
+                        // как .rf-row.
+                        <div
+                          key={rowId}
+                          className={`relative flex flex-col gap-7 sm:flex-row ${
+                            rowIndex === 0 ? '' : 'mt-7'
+                          }`}
+                        >
                           {zones && canAdd && (
                             <SideDropZone
                               rowId={inviteRow!}
@@ -1602,6 +1627,9 @@ type GroupRowProps = {
   // Первая группа полотна: её первая строка — начало формы, у пустого текста там
   // свой плейсхолдер (§7).
   firstGroup: boolean
+  // Вопрос открывает стопку своей колонки: интервала перед собой не несёт, расстояние
+  // до предыдущего ряда держит сам ряд.
+  headOfCell: boolean
   formId: string
   blockIds: string[]
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
@@ -1662,6 +1690,7 @@ function sameGroupProps(a: GroupRowProps, b: GroupRowProps): boolean {
 // обновляться (или, наоборот, memo перестаёт срабатывать).
 const BY_REFERENCE = Object.keys({
   firstGroup: true,
+  headOfCell: true,
   formId: true,
   cellZone: true,
   cellHot: true,
@@ -1683,6 +1712,7 @@ const BY_REFERENCE = Object.keys({
 const GroupRow = memo(function GroupRow({
   group,
   firstGroup,
+  headOfCell,
   formId,
   blockIds,
   cellZone,
@@ -1742,7 +1772,11 @@ const GroupRow = memo(function GroupRow({
       // значит «тащу над этим», а не «хочу это править». Гасится на ГРУППЕ, а не на
       // строке: строка не знает, что тащат её же вопрос. Перетаскиваемой строке
       // наведение возвращает pointer-events-auto (BlockRow) — ей нужен курсор grabbing.
-      className={`group/grp relative w-full rounded-md ${
+      // mt-7 — интервал ПЕРЕД вопросом (28px, .rf-form/.rf-cell у превью): он разводит
+      // стопку в колонке ряда, а у вопроса, открывающего колонку, его нет — там
+      // расстояние держит сам ряд. ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста,
+      // и паддинг увёл бы рейл группы вместе с линией вставки.
+      className={`group/grp relative w-full rounded-md ${headOfCell ? '' : 'mt-7'} ${
         isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''
       }`}
     >
@@ -1776,15 +1810,20 @@ const GroupRow = memo(function GroupRow({
       {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
           одной вертикалью и на секции сажает строку на строку. */}
       <SortableContext items={blockIds} strategy={canvasSorting}>
-        {/* Внутри вопроса блоки стоят теснее — 14px (gap-3.5), как .rf-group у превью.
-            py-1.5 строк скомпенсирован их -my-1.5, поэтому gap = чистый просвет. */}
-        <div className="flex flex-col gap-3.5">
+        {/* Внутри вопроса блоки стоят теснее — 14px, как .rf-group у превью. Интервал
+            несёт САМА СТРОКА (mt у BlockRow), поэтому зазора у колонки нет: у первой
+            строки вопроса интервала нет, и li обнимает чистый контент — от этого
+            зависит рейл группы (top-0 bottom-0). */}
+        <div className="flex flex-col">
           {/* Второй уровень рядов (фаза 15, §6.4/§6.7): пара «подпись | поле» встаёт
               бок о бок. Раскладчик тот же, что у превью и рендерера (packGroupRows),
               и вид тот же: зазор 14px (gap-3.5 = .rf-group) и выравнивание по центру
               (items-center = align-items у .rf-group > .rf-row). Ряд из одного
               остаётся прямой строкой колонки — лишняя обёртка сместила бы кластеры. */}
-          {packGroupRows(group.blocks).map((innerRow) => {
+          {packGroupRows(group.blocks).map((innerRow, ri) => {
+            // Кто в вопросе ПЕРВЫЙ — знает только раскладчик группы, и знание это
+            // позиционное: интервал перед собой несёт строка, а первой его нести
+            // незачем — расстояние до предыдущего вопроса держит сам вопрос (mt-7 у li).
             // Внутри вопроса стопки не бывает (пара — «подпись + поле», а отвечаемый
             // блок в группе один), поэтому ячейка здесь всегда об одном блоке.
             const render = (b: Block) => {
@@ -1794,6 +1833,7 @@ const GroupRow = memo(function GroupRow({
                   key={b.id}
                   block={b}
                   formId={formId}
+                  firstInGroup={ri === 0}
                   groupHandle={group.blocks.length > 1 && i === 0 ? groupHandle : null}
                   groupHasAnswer={hasAnswer}
                   // Чью обязательность представляет строка: ПЕРВАЯ подпись группы — поля
