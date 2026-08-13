@@ -29,6 +29,7 @@ import {
   packRows,
 } from '@fields/groups'
 import { editorKind } from './kinds/index'
+import { derivedQuestionName } from './questionName'
 
 // Стор билдера — высокочастотный локальный документ формы (ARCHITECTURE §5.1):
 // каждая правка text — синхронная операция над стором, мгновенный UI, а
@@ -68,7 +69,9 @@ export type BlockPatch = Partial<
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
 // как класть её в историю (см. updateBlockTag). 'format' — команда панели или аккорд
 // форматирования; отсутствие — обычный набор.
-export type UpdateKind = 'format'
+// 'mention' — вставка чипа подстановки: своя, НИ С ЧЕМ не сливающаяся правка (см.
+// updateBlockTag).
+export type UpdateKind = 'format' | 'mention'
 
 // Snapshot — снимок документа (blocks + поля формы-уровня) для стеков undo/redo.
 // dirty — производный UI, в снапшот не входит. Фокус — не стейт стора (живёт в
@@ -202,12 +205,7 @@ export type BuilderActions = {
   // Ряд цели во всю ширину — insert его и превращает в секцию (col выбирает, слева или
   // справа от цели встанет активный). Потолок колонок исчерпан, пара не сложилась → вся
   // команда откатывается (no-op, историю и dirty не трогает).
-  placeInRow: (
-    activeGroupId: string,
-    targetGroupId: string,
-    col: number,
-    insert: boolean,
-  ) => void
+  placeInRow: (activeGroupId: string, targetGroupId: string, col: number, insert: boolean) => void
   // placeBlockInRow — та же команда переноса на ВТОРОМ уровне (фаза 15, §6.6): поле
   // встаёт в ряд со своей подписью внутри вопроса. Пара обязана быть «подпись +
   // короткое поле» из одной группы, ячейка подписи — свободной; иначе no-op.
@@ -1026,9 +1024,7 @@ export function planBlockDrop(
 // Спрашивается у ПЕРВОЙ строки группы: у остальных ось своя, короче (ряд внутри вопроса
 // — направленная пара «подпись | поле», §6.6), и решает её rowBitOwner.
 export type RowPosition =
-  | { kind: 'solo' }
-  | { kind: 'enter' }
-  | { kind: 'in'; col: number; cols: number; alone: boolean }
+  { kind: 'solo' } | { kind: 'enter' } | { kind: 'in'; col: number; cols: number; alone: boolean }
 
 export function rowPosition(blocks: Block[], id: string): RowPosition {
   const groups = rowGroups(blocks)
@@ -1168,7 +1164,51 @@ const snapshot = (s: BuilderState): Snapshot => ({
 // покрасил» — это один шаг, и первый же Ctrl+Z сносил бы вместе с цветом всю набранную
 // подпись. Внутри самого жеста коалесценция нужна и остаётся: выборщик цвета шлёт
 // правку на каждом кадре перетаскивания, и 60 шагов истории в секунду — не история.
+// refreshMentions — уборка ИМЁН В ЧИПАХ подстановки (docs/design/mentions.md §7).
+// Текст чипа — имя вопроса-источника, снятое в момент вставки; переименуй автор
+// источник, и чип остался бы обещать старое имя, а вместе с ним соврал бы и заголовок
+// колонки CSV (plainText отдаёт именно его).
+//
+// Живёт в СТОРЕ, а не в строке: правится один блок, а меняются другие, и знать об этом
+// может только тот, у кого документ целиком. Идёт тем же коммитом, что переименование, —
+// отдельным шагом истории это означало бы Ctrl+Z, отменяющий переименование наполовину.
+//
+// Возвращает ИСХОДНЫЙ массив, когда править нечего (документ без чипов — обычный
+// случай): свежий массив на каждое нажатие перерисовывал бы полотно мимо memo.
+function refreshMentions(blocks: Block[]): Block[] {
+  const refs = new Set<string>()
+  for (const b of blocks) for (const s of b.text ?? []) if (s.ref) refs.add(s.ref)
+  if (refs.size === 0) return blocks
+  const names = new Map<string, string>()
+  for (const ref of refs) {
+    const src = blocks.find((b) => b.id === ref)
+    // Источника не стало — имя в чипе остаётся последним известным: подстановки не
+    // будет в любом случае (§4 спеки), а стереть автору его собственный текст —
+    // худшее из двух зол. Мёртвым чип нарисует строка.
+    if (src && isAnswerableType(src.type)) names.set(ref, derivedQuestionName(blocks, src))
+  }
+  let touched = false
+  const next = blocks.map((b) => {
+    if (!b.text?.some((s) => s.ref && names.get(s.ref) !== undefined && names.get(s.ref) !== s.t)) {
+      return b
+    }
+    touched = true
+    return {
+      ...b,
+      text: b.text.map((s) => {
+        const name = s.ref ? names.get(s.ref) : undefined
+        return name === undefined || name === s.t ? s : { ...s, t: name }
+      }),
+    }
+  })
+  return touched ? next : blocks
+}
+
 function updateBlockTag(id: string, patch: BlockPatch, kind?: UpdateKind): string | null {
+  // Вставка чипа не коалесится вовсе: два чипа подряд — два разных решения автора, и
+  // один Ctrl+Z, уносящий оба, был бы сюрпризом. Внутри жеста, как у форматирования,
+  // склеивать тут нечего — вставка мгновенная.
+  if (kind === 'mention') return null
   if (kind === 'format') return `ub:${id}:format`
   const keys = Object.keys(patch)
   const textOnly =
@@ -1344,8 +1384,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
               // «Дать вопросу подпись» не должно разваливать ряд. Умеет ли новая
               // группа делить ряд, решит раскладчик: не умеет — normalizeColumns
               // снимет ключ как инертный. Остальные settings подписи не нужны.
-              settings:
-                src.settings?.column !== undefined ? { column: src.settings.column } : {},
+              settings: src.settings?.column !== undefined ? { column: src.settings.column } : {},
               required: false,
             }
             focus = title.id
@@ -1492,7 +1531,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (keys.every(same)) return null
           const blocks = s.blocks.slice()
           blocks[i] = { ...src, ...patch }
-          return { blocks }
+          // Правка могла переименовать вопрос — а его именем подписаны чужие чипы
+          // подстановки. Уборка идёт этим же коммитом и возвращает тот же массив, когда
+          // чипов в документе нет.
+          return { blocks: refreshMentions(blocks) }
         }),
 
       removeBlock: (id) =>
@@ -1652,7 +1694,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (!groupCanPair(targetGroup.blocks)) return null
 
           const rows = planRows(s.blocks)
-          const ti = rows.findIndex((r) => r.some((cell) => cell.some((g) => g.id === targetGroupId)))
+          const ti = rows.findIndex((r) =>
+            r.some((cell) => cell.some((g) => g.id === targetGroupId)),
+          )
           if (ti < 0) return null
           // Активного вырезаем ОТОВСЮДУ до вставки: он мог стоять в этом же ряду
           // (перенос между колонками — обычный жест) или в чужой секции, которая от его

@@ -25,6 +25,14 @@ func TestPlainText(t *testing.T) {
 			"жирно!",
 		},
 		{"ссылка отдаёт только текст, не адрес", []Span{{T: "политика", Href: "https://a.ru/p"}}, "политика"},
+		{
+			// Данные (заголовок колонки CSV, шаг воронки, og:description) получают ИМЯ
+			// вопроса-источника, а не чей-то ответ: подстановка живёт на клиенте, сюда
+			// она не доходит вовсе.
+			"подстановка отдаёт имя вопроса, а не ответ",
+			[]Span{{T: "Имя", Ref: "blk_1"}, {T: ", укажите телефон"}},
+			"Имя, укажите телефон",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +107,25 @@ func TestValidateSpans(t *testing.T) {
 		{name: "ссылка data:", spans: []Span{{T: "а", Href: "data:text/html,x"}}, wantErr: "ссылка"},
 		{name: "ссылка относительная", spans: []Span{{T: "а", Href: "/forms/1"}}, wantErr: "ссылка"},
 		{name: "ссылка без хоста", spans: []Span{{T: "а", Href: "https://"}}, wantErr: "ссылка"},
+		{name: "подстановка ответа", spans: []Span{{T: "Имя", Ref: "blk_1"}}},
+		{
+			// Инертность, а не отказ (mentions.md §4): валидатор не знает состава
+			// документа и знать не должен — иначе автосейв ловил бы 422 на undo и на
+			// удалении вопроса-источника.
+			name:  "подстановка на несуществующий блок — валидна и инертна",
+			spans: []Span{{T: "Имя", Ref: "нет такого блока"}},
+		},
+		{name: "подстановка с маркой", spans: []Span{{T: "Имя", Ref: "blk_1", M: []Mark{MarkBold}}}},
+		{
+			name:    "подстановка id длиннее лимита",
+			spans:   []Span{{T: "Имя", Ref: strings.Repeat("i", MaxIDLen+1)}},
+			wantErr: "подстановка",
+		},
+		{
+			name:    "ссылка и подстановка на одном куске",
+			spans:   []Span{{T: "Имя", Ref: "blk_1", Href: "https://trillix.ru"}},
+			wantErr: "ссылка и подстановка вместе",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -155,6 +182,8 @@ func TestValidateSchema_RichText(t *testing.T) {
 		{name: "javascript-ссылка отвергается", text: `[{"t":"а","href":"javascript:alert(1)"}]`},
 		{name: "строка вместо массива отвергается", text: `"просто строка"`},
 		{name: "лишнее поле спана отвергается", text: `[{"t":"а","bold":true}]`},
+		{name: "подстановка принимается", text: `[{"t":"Имя","ref":"blk_1"},{"t":", телефон"}]`, ok: true},
+		{name: "ссылка вместе с подстановкой отвергается", text: `[{"t":"а","ref":"blk_1","href":"https://a.ru"}]`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

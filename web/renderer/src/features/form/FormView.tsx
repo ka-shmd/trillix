@@ -13,6 +13,7 @@ import {
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
+import { MentionContext, mentionResolver } from '@fields/mention'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { StepBar } from '@fields/stepBar'
 
@@ -115,6 +116,11 @@ export function FormView({
   // пересчитывала бы его на каждое нажатие клавиши. Появится замер, говорящий обратное, —
   // мемоизировать здесь одну строку.
   const plan = planForm(blocks, answers)
+  // Подстановка ответов (`@`): резолвер собирается тут же и по тем же доводам, что
+  // план, — обход документа дешевле мемоизации, которая всё равно пересчитывалась бы на
+  // каждое нажатие. Живость подстановки этим и держится: свежий резолвер на каждый
+  // введённый символ.
+  const mentions = mentionResolver(blocks, answers, plan)
   const pages = plan.pages
   const lastPage = pages.length - 1
   const multi = pages.length > 1
@@ -214,7 +220,6 @@ export function FormView({
     pageRef.current?.focus({ preventScroll: bridge !== null })
     bridge?.page(page)
   }, [page, bridge])
-
 
   // Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: на телефоне ею
   // пользуются вместо экранной, и уход с заполненной формы читается как потеря данных
@@ -354,6 +359,7 @@ export function FormView({
 
   const onBlur = (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId)
+
     if (block) setBlockError(blockId, validateBlock(block, answers[blockId], plan.required.has(blockId)))
   }
 
@@ -482,7 +488,7 @@ export function FormView({
   return (
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
-    <>
+    <MentionContext.Provider value={mentions}>
       {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
           ПОСЛЕ наших правил: в каскаде выигрывает последний при равной специфичности,
           поэтому автор перебивает вид, не трогая fields.css. Следом идёт сторож
@@ -609,6 +615,6 @@ export function FormView({
             а не про форму, и лезть выше содержимого автора ему незачем. */}
         {form.showBadge && <Badge />}
       </main>
-    </>
+    </MentionContext.Provider>
   )
 }

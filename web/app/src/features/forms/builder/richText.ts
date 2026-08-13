@@ -17,9 +17,21 @@ export interface Style {
   color?: string
   bg?: string
   href?: string
+  // Подстановка ответа (docs/design/mentions.md) едет здесь же, хотя оформлением не
+  // является: без этого команда форматирования, накрывшая чип, пересобрала бы его
+  // куском без `ref` — то есть жирный на всю подпись молча превращал бы подстановку в
+  // обычный текст. Всё, что разрезает и собирает спаны, ходит через Style, и место
+  // подстановки — тут.
+  ref?: string
 }
 
-const styleOf = (s: Span): Style => ({ m: s.m, color: s.color, bg: s.bg, href: s.href })
+const styleOf = (s: Span): Style => ({
+  m: s.m,
+  color: s.color,
+  bg: s.bg,
+  href: s.href,
+  ref: s.ref,
+})
 
 // Марки хранятся отсортированными: канон делает сравнение стилей дешёвым (строковое
 // равенство после join) и избавляет от «те же марки в другом порядке — другой спан»,
@@ -34,6 +46,7 @@ export const sameStyle = (a: Style, b: Style): boolean =>
   (a.color ?? '') === (b.color ?? '') &&
   (a.bg ?? '') === (b.bg ?? '') &&
   (a.href ?? '') === (b.href ?? '') &&
+  (a.ref ?? '') === (b.ref ?? '') &&
   (canonMarks(a.m) ?? []).join(',') === (canonMarks(b.m) ?? []).join(',')
 
 const mkSpan = (t: string, st: Style): Span => {
@@ -43,8 +56,15 @@ const mkSpan = (t: string, st: Style): Span => {
   if (st.color) s.color = st.color
   if (st.bg) s.bg = st.bg
   if (st.href) s.href = st.href
+  if (st.ref) s.ref = st.ref
   return s
 }
+
+// Чип подстановки неделим (mentions.md §7): его текст — имя вопроса целиком, а не
+// буквы, которые можно резать и склеивать по отдельности. Отсюда три следствия ниже —
+// склейка соседей его не трогает, форматирование накрывает целиком, вырезание уносит
+// целиком.
+const isMention = (s: Span | Style): boolean => Boolean(s.ref)
 
 // normalize приводит к канону: пустые куски выброшены, соседние с одинаковым стилем
 // склеены. Это обязанность РЕДАКТОРА, а не валидатора (§2.3 спеки): схема с двумя
@@ -55,7 +75,10 @@ export function normalize(spans: Span[]): Span[] {
   for (const s of spans) {
     if (s.t === '') continue
     const prev = out[out.length - 1]
-    if (prev && sameStyle(styleOf(prev), styleOf(s))) {
+    // Два чипа подряд — два чипа, даже когда они ссылаются на один вопрос: склеенные,
+    // они стали бы одним куском с удвоенным именем, который автор не сможет ни разбить,
+    // ни удалить по частям.
+    if (prev && !isMention(prev) && !isMention(s) && sameStyle(styleOf(prev), styleOf(s))) {
       prev.t += s.t
       continue
     }
@@ -81,6 +104,13 @@ export function restyle(spans: Span[], from: number, to: number, f: (st: Style) 
       continue
     }
     const st = styleOf(s)
+    // Чип неделим: выделение, задевшее его хоть на символ, накрывает его целиком.
+    // Разрезанный чип дал бы два куска с одним `ref` и половинами имени — подстановка
+    // из этого получилась бы двойная.
+    if (isMention(s)) {
+      out.push(mkSpan(s.t, f(st)))
+      continue
+    }
     const cutL = Math.max(from - start, 0)
     const cutR = Math.min(to - start, s.t.length)
     if (cutL > 0) out.push(mkSpan(s.t.slice(0, cutL), st))
@@ -111,7 +141,7 @@ export function hasMarkThroughout(spans: Span[], from: number, to: number, mark:
   return true
 }
 
-export const toggleMark =(spans: Span[], from: number, to: number, mark: Mark): Span[] => {
+export const toggleMark = (spans: Span[], from: number, to: number, mark: Mark): Span[] => {
   const on = !hasMarkThroughout(spans, from, to, mark)
   return restyle(spans, from, to, (st) => ({
     ...st,
@@ -136,11 +166,55 @@ export function cutRange(spans: Span[], from: number, to: number): Span[] {
       continue
     }
     const st = styleOf(s)
+    // Чип неделим и здесь: задетый вырезанием, он уходит целиком. Половина имени,
+    // оставшаяся ссылаться на вопрос, — не подстановка, а мусор с виду рабочий.
+    if (isMention(s)) continue
     const cutL = Math.max(from - start, 0)
     const cutR = Math.min(to - start, s.t.length)
     if (cutL > 0) out.push(mkSpan(s.t.slice(0, cutL), st))
     if (cutR < s.t.length) out.push(mkSpan(s.t.slice(cutR), st))
   }
+  return normalize(out)
+}
+
+// insertMention — вставить чип подстановки в позицию `at` плоского текста. Кусок,
+// внутрь которого попала позиция, разрезается; оформление вокруг сохраняется, но на сам
+// чип не переносится: имя вопроса — служебная подпись, а не текст автора, и жирным его
+// делает только явное решение.
+//
+// ЗА ЧИПОМ СТАВИТСЯ ПРОБЕЛ (решение владельца 2026-08-13), если его там ещё нет: после
+// вставки автор продолжает писать, и «Имяукажите телефон» — то, что он получал бы каждый
+// раз. Пробел отдельным куском, а не частью `t`: внутри чипа он попал бы в имя вопроса,
+// то есть в заголовок колонки CSV, и вдобавок стал бы неудаляемым — чип неделим.
+export function insertMention(spans: Span[], at: number, label: string, ref: string): Span[] {
+  const chip: Span = { t: label, ref }
+  const where = Math.max(at, 0)
+  const after = spans.reduce((t, s) => t + s.t, '').slice(where)
+  const tail: Span[] = after.startsWith(' ') ? [] : [{ t: ' ' }]
+  const out: Span[] = []
+  let pos = 0
+  let placed = false
+  for (const s of spans) {
+    const start = pos
+    const end = pos + s.t.length
+    pos = end
+    // Кусок кончился раньше точки вставки — он просто едет дальше. `where >= end`, а
+    // не `>`: на стыке чип встаёт в начало СЛЕДУЮЩЕГО куска (там `cut === 0`), и
+    // пустых половинок не появляется.
+    if (placed || where >= end) {
+      out.push(s)
+      continue
+    }
+    const st = styleOf(s)
+    const cut = where - start
+    if (cut > 0) out.push(mkSpan(s.t.slice(0, cut), st))
+    out.push(chip, ...tail)
+    placed = true
+    if (cut < s.t.length) out.push(mkSpan(s.t.slice(cut), st))
+  }
+  // Вставка в конец строки (и в пустую строку) — единственный случай, когда ни один
+  // кусок точку не содержит.
+  if (!placed) out.push(chip, ...tail)
   return normalize(out)
 }
 
@@ -175,7 +249,7 @@ export function spansToDom(root: HTMLElement, spans: Span[]): void {
   const doc = root.ownerDocument
   for (const s of spans) {
     const st = styleOf(s)
-    if (!st.m?.length && !st.color && !st.bg && !st.href) {
+    if (!st.m?.length && !st.color && !st.bg && !st.href && !st.ref) {
       root.appendChild(doc.createTextNode(s.t))
       continue
     }
@@ -197,6 +271,15 @@ export function spansToDom(root: HTMLElement, spans: Span[]): void {
       el.dataset.href = st.href
       el.classList.add('rf-link')
     }
+    // Чип подстановки: id источника в data-атрибуте (как адрес ссылки), вид — классом
+    // `rf-mention` из richLine.css. contentEditable=false делает его НЕДЕЛИМЫМ: каретка
+    // внутрь не заходит, Backspace сносит целиком, а браузер не вкладывает в него
+    // набираемый текст. У респондента чипа нет вовсе — там на его месте ответ.
+    if (st.ref) {
+      el.dataset.ref = st.ref
+      el.classList.add('rf-mention')
+      el.contentEditable = 'false'
+    }
     el.textContent = s.t
     root.appendChild(el)
   }
@@ -215,6 +298,11 @@ function styleOfEl(el: HTMLElement, inherited: Style): Style {
     color: el.dataset.color || inherited.color,
     bg: el.dataset.bg || inherited.bg,
     href: el.dataset.href || inherited.href,
+    // Подстановка НЕ наследуется вглубь, в отличие от оформления: чип атомарен, и
+    // унаследованный `ref` означал бы, что текст, случайно попавший внутрь его узла
+    // (клонирование при наборе на границе), становится второй подстановкой того же
+    // вопроса.
+    ref: el.dataset.ref,
   }
 }
 

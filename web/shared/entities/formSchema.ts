@@ -174,6 +174,12 @@ export const spanSchema = z.strictObject({
   // Ссылка — единственная марка с угрозой безопасности. Валидатор переиспользуется,
   // а не пишется заново (ADR §10): тот же isHttpUrl, что у redirectUrl.
   href: z.string().max(MAX_REDIRECT_URL_LEN).refine(isHttpUrl, 'нужен http(s)-адрес').optional(),
+  // Подстановка ответа: id отвечаемого блока, чей ответ встанет на место этого куска
+  // у респондента (docs/design/mentions.md). Существование блока НЕ проверяется —
+  // неразрешимая ссылка инертна, а не невалидна (§4 спеки), ровно как у условной
+  // логики: кросс-блочное условие вернуло бы 422 на undo и на удалении вопроса.
+  // t такого куска — имя вопроса, и оно же уезжает в plainText, то есть в данные.
+  ref: idSchema.optional(),
 })
 export type Span = z.infer<typeof spanSchema>
 
@@ -197,6 +203,13 @@ export const richTextSchema = z
       if (dup) {
         ctx.addIssue({ code: 'custom', message: 'повторяющаяся марка', path: [i, 'm'] })
       }
+      // Ссылка наружу и подстановка ответа на одном куске не имеют читаемого смысла
+      // ни на одной из трёх поверхностей, и разрешив пару, её пришлось бы определять
+      // в каждой (ADR §10). Проверка кусочная, а не кросс-блочная, — недособранного
+      // состояния, в котором пара законна, у редактора нет.
+      if (s.ref && s.href) {
+        ctx.addIssue({ code: 'custom', message: 'ссылка и подстановка вместе', path: [i, 'ref'] })
+      }
     }
   })
 
@@ -218,6 +231,10 @@ export const sameRichText = (a: Span[] | undefined, b: Span[] | undefined): bool
   return x.every((s, i) => {
     const o = y[i]!
     if (s.t !== o.t || s.color !== o.color || s.bg !== o.bg || s.href !== o.href) return false
+    // ref сравнивается наравне с остальными: чип, переставший ссылаться (источник
+    // удалён) или нацеленный на другой вопрос, отличается от прежнего ТОЛЬКО этим
+    // полем — при сравнении без него правка не доехала бы ни до истории, ни до PATCH.
+    if (s.ref !== o.ref) return false
     const sm = s.m ?? []
     const om = o.m ?? []
     return sm.length === om.length && sm.every((m, j) => m === om[j])
