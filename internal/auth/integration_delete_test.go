@@ -191,6 +191,35 @@ func TestAccountDelete_OwnerOfEmptyTeamAllowed(t *testing.T) {
 	}
 }
 
+// Третий исход: единственный участник команды сам удалил аккаунт — сиротеть
+// снова некому, и владельца это запирать не должно. Без слепоты в гейте он
+// оставался бы заперт навсегда: уйти владелец не может, а снять оставшегося
+// нельзя — того уже нет ни в составе, ни в счёте мест.
+func TestAccountDelete_OwnerOfTeamWhoseMemberIsDeletedAllowed(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	const email = "owner@example.com"
+	const mate = "mate@example.com"
+	c := registerUser(t, srv.URL, email, "supersecret1")
+	registerUser(t, srv.URL, mate, "supersecret1")
+	addTeam(t, "Отдел маркетинга", userID(t, email), userID(t, mate))
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET deleted_at = now() WHERE email = $1`, mate); err != nil {
+		t.Fatalf("пометить участника удалённым: %v", err)
+	}
+
+	resp := post(t, c, srv.URL+"/api/v1/account/delete",
+		`{"currentPassword":"supersecret1"}`, csrfHeader(t, c, srv.URL))
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление владельца команды с удалённым участником: статус %d, ожидалось 204; тело=%s",
+			resp.StatusCode, body(t, resp))
+	}
+	if at := deletedAt(t, email); at == nil {
+		t.Fatal("deleted_at пуст — аккаунт не помечен удалённым")
+	}
+}
+
 // Неверный пароль удаления не даёт, и это проверяется против настоящего хеша.
 func TestAccountDelete_WrongPasswordKeepsAccount(t *testing.T) {
 	resetDB(t)

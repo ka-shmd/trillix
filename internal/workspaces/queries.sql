@@ -67,14 +67,22 @@ WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
 RETURNING workspace_id, email, role;
 
 -- name: CountWorkspaceMembers :one
-SELECT count(*)::bigint FROM workspace_members WHERE workspace_id = $1;
+-- Удалённые аккаунты не считаются: место занимает тот, кто может войти. Тот же
+-- фильтр — в подсчёте мест у entitlements, и разъехаться им нельзя.
+SELECT count(*)::bigint FROM workspace_members m
+JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+WHERE m.workspace_id = $1;
 
 -- name: GetWorkspaceByID :one
 SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1;
 
 -- name: GetUserIDByEmail :one
-SELECT id FROM users WHERE email = lower($1);
+-- Удалённый аккаунт — «такого нет»: адрес остаётся занятым (войти по нему
+-- нельзя, но и переиспользовать тоже), а приглашать его владельцу незачем.
+-- Слепота обязана совпадать со слепотой списка участников: иначе владелец не
+-- видел бы человека в составе, но получал бы «он уже в пространстве».
+SELECT id FROM users WHERE email = lower($1) AND deleted_at IS NULL;
 
 -- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1;
@@ -82,9 +90,12 @@ SELECT email FROM users WHERE id = $1;
 -- name: ListWorkspaceMembers :many
 -- Участники пространства: кто и в какой роли. Владелец первым (сортировка по
 -- роли), дальше по времени вступления — порядок детерминированный.
+-- Удалённые аккаунты в составе не показываются: строка членства переживает
+-- пометку, но человека за ней уже нет, и владельцу он мешал бы дважды —
+-- непонятной строкой в списке и занятым местом по тарифу.
 SELECT m.user_id, u.email, m.role, m.created_at
 FROM workspace_members m
-JOIN users u ON u.id = m.user_id
+JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
 WHERE m.workspace_id = $1
 ORDER BY (m.role = 'owner') DESC, m.created_at ASC;
 
@@ -146,7 +157,12 @@ DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL;
 SELECT w.name
 FROM workspaces w
 JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner' AND o.user_id = $1
+--
+-- «Кто-то ещё» — только живой аккаунт: удалённый участник иначе запирал бы
+-- владельца в пространстве навсегда (уйти он не может, а снять оставшегося
+-- некого — того уже нет в списке состава).
 WHERE w.personal_user_id IS NULL
   AND EXISTS (SELECT 1 FROM workspace_members m
+               JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
                WHERE m.workspace_id = w.id AND m.user_id <> $1)
 ORDER BY w.created_at;

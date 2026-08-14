@@ -763,6 +763,86 @@ func TestMembers_EditorLeaves(t *testing.T) {
 	}
 }
 
+// Удалённый аккаунт исчезает из чужого пространства целиком: и из состава, и из
+// счёта мест. Строка членства переживает пометку (удаление аккаунта — пометка, а
+// не снос данных), поэтому слепота обязана быть в запросах — и в списке, и в
+// подсчёте квоты, иначе владелец видит непонятную строку и не может позвать
+// замену на освободившееся место.
+func TestMembers_DeletedAccountLeavesNeitherRowNorSeat(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+	registerUser(t, srv, "carol@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	// Мест ровно два, и оба заняты: позвать третьего сейчас нельзя.
+	setMemberLimit(t, "2")
+	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"carol@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("приглашение при занятых местах: статус %d, ожидалось 402", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Боб удаляет аккаунт. Пометкой напрямую: сам эндпоинт удаления живёт в auth
+	// и здесь не зарегистрирован, а проверяем мы следствие пометки, не её саму.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET deleted_at = now() WHERE email = 'bob@example.com'`); err != nil {
+		t.Fatalf("пометить аккаунт удалённым: %v", err)
+	}
+
+	var got membersDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &got)
+	if len(got.Members) != 1 || got.Members[0].Email != "alice@example.com" {
+		t.Fatalf("состав = %+v, ждали одну владелицу — удалённый аккаунт в списке не показывается", got.Members)
+	}
+
+	// Место освободилось: замена зовётся на тот же лимит в двоих.
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"carol@example.com","role":"editor"}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("приглашение замены: статус %d, ожидалось 204 — место удалённого аккаунта осталось занятым", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Приглашать удалённый аккаунт нельзя, и отказ приходит не как «он уже здесь»:
+// в составе его нет, и «уже в пространстве» противоречило бы тому, что видно на
+// экране. Адрес при этом занят навсегда — письмо просто уходит в никуда.
+func TestInvitation_DeletedAccountIsNotAMember(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET deleted_at = now() WHERE email = 'bob@example.com'`); err != nil {
+		t.Fatalf("пометить аккаунт удалённым: %v", err)
+	}
+
+	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`)
+	if r.StatusCode == http.StatusConflict {
+		t.Fatal("отказ «он уже в пространстве» про аккаунт, которого в составе не видно")
+	}
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("приглашение удалённого адреса: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
 // Посторонний «выходит» из чужого пространства — 404: существование не
 // раскрывается даже отказом.
 func TestMembers_StrangerLeaveIsNotFound(t *testing.T) {

@@ -223,9 +223,13 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 }
 
 const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
-SELECT count(*)::bigint FROM workspace_members WHERE workspace_id = $1
+SELECT count(*)::bigint FROM workspace_members m
+JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
+WHERE m.workspace_id = $1
 `
 
+// Удалённые аккаунты не считаются: место занимает тот, кто может войти. Тот же
+// фильтр — в подсчёте мест у entitlements, и разъехаться им нельзя.
 func (q *Queries) CountWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countWorkspaceMembers, workspaceID)
 	var column_1 int64
@@ -1045,7 +1049,9 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
-       (SELECT count(*) FROM workspace_members mm WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
+       (SELECT count(*) FROM workspace_members mm
+          JOIN users mu ON mu.id = mm.user_id AND mu.deleted_at IS NULL
+         WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -1097,7 +1103,9 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
-       (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
+       (SELECT count(*) FROM workspace_members m
+          JOIN users mu ON mu.id = m.user_id AND mu.deleted_at IS NULL
+         WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -1594,9 +1602,13 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 }
 
 const getUserIDByEmail = `-- name: GetUserIDByEmail :one
-SELECT id FROM users WHERE email = lower($1)
+SELECT id FROM users WHERE email = lower($1) AND deleted_at IS NULL
 `
 
+// Удалённый аккаунт — «такого нет»: адрес остаётся занятым (войти по нему
+// нельзя, но и переиспользовать тоже), а приглашать его владельцу незачем.
+// Слепота обязана совпадать со слепотой списка участников: иначе владелец не
+// видел бы человека в составе, но получал бы «он уже в пространстве».
 func (q *Queries) GetUserIDByEmail(ctx context.Context, lower string) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, getUserIDByEmail, lower)
 	var id uuid.UUID
@@ -1967,6 +1979,7 @@ FROM workspaces w
 JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner' AND o.user_id = $1
 WHERE w.personal_user_id IS NULL
   AND EXISTS (SELECT 1 FROM workspace_members m
+               JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
                WHERE m.workspace_id = w.id AND m.user_id <> $1)
 ORDER BY w.created_at
 `
@@ -1976,6 +1989,10 @@ ORDER BY w.created_at
 // (idx_workspace_members_owner), и его уход оставил бы участников в
 // пространстве, работающем по плану несуществующего аккаунта — это TD-53.
 // Личные пропущены: они уходят с хозяином и участников, кроме него, не имеют.
+//
+// «Кто-то ещё» — только живой аккаунт: удалённый участник иначе запирал бы
+// владельца в пространстве навсегда (уйти он не может, а снять оставшегося
+// некого — того уже нет в списке состава).
 func (q *Queries) ListOwnedTeamsWithMembers(ctx context.Context, userID uuid.UUID) ([]string, error) {
 	rows, err := q.db.Query(ctx, listOwnedTeamsWithMembers, userID)
 	if err != nil {
@@ -2180,7 +2197,7 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
 SELECT m.user_id, u.email, m.role, m.created_at
 FROM workspace_members m
-JOIN users u ON u.id = m.user_id
+JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
 WHERE m.workspace_id = $1
 ORDER BY (m.role = 'owner') DESC, m.created_at ASC
 `
@@ -2194,6 +2211,9 @@ type ListWorkspaceMembersRow struct {
 
 // Участники пространства: кто и в какой роли. Владелец первым (сортировка по
 // роли), дальше по времени вступления — порядок детерминированный.
+// Удалённые аккаунты в составе не показываются: строка членства переживает
+// пометку, но человека за ней уже нет, и владельцу он мешал бы дважды —
+// непонятной строкой в списке и занятым местом по тарифу.
 func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceMembersRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspaceMembers, workspaceID)
 	if err != nil {
