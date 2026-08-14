@@ -149,9 +149,13 @@ const (
 	outboxBackoffBase = time.Minute
 	outboxBackoffMax  = time.Hour
 
-	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ — реальный IP
-	// (после TD-1), поэтому карта иначе растёт неограниченно. Вёдра пополняются до
-	// burst за ~минуту простоя, так что 10 минут держат карту около активного набора.
+	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ ведра — реальный
+	// IP (после TD-1) либо id пользователя, поэтому карта иначе растёт неограниченно.
+	// GC удаляет только пополнившиеся дополна ведра, а время полного пополнения у
+	// вёдер разное — от минуты (login, submit, visit) до пятнадцати (resend, forgot
+	// по email, смена почты). Интервал выбран по быстрым вёдрам: они же и растут
+	// быстрее всех, потому что ключуются IP. Медленные переживают лишний проход и
+	// уезжают на следующем — их карты и так малы.
 	ratelimitGCInterval = 10 * time.Minute
 )
 
@@ -267,12 +271,19 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
 	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
 	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
+	// Именованными переменными, а не выражениями в литерале: иначе до вёдер не
+	// добраться из задачи ratelimit-gc — их карты растут без чистки.
+	passwordChangeLimiter := ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst)
+	emailChangeLimiter := ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst)
+	confirmEmailLimiter := ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst)
+	twoFactorLimiter := ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst)
+	deleteAccountLimiter := ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst)
 	authHandler = authHandler.WithAccount(auth.AccountLimits{
-		PasswordChange: ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst),
-		EmailChange:    ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
-		ConfirmEmail:   ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
-		TwoFactor:      ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst),
-		DeleteAccount:  ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst),
+		PasswordChange: passwordChangeLimiter,
+		EmailChange:    emailChangeLimiter,
+		ConfirmEmail:   confirmEmailLimiter,
+		TwoFactor:      twoFactorLimiter,
+		DeleteAccount:  deleteAccountLimiter,
 	})
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
@@ -445,9 +456,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		Name:     "ratelimit-gc",
 		Interval: ratelimitGCInterval,
 		Run: func(context.Context) error {
+			// Сумма обязана перечислять ВСЕ созданные вёдра: забытое здесь ведро
+			// не ломает лимит, а растит карту до конца жизни процесса.
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
+				visitLimiter.GC() + inviteLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
-				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC()
+				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
+				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
+				twoFactorLimiter.GC() + deleteAccountLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
