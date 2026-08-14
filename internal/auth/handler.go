@@ -75,6 +75,12 @@ type Handler struct {
 	// registerLimiter — отдельное ведро на POST /auth/register (argon2id — 64 МиБ на
 	// вызов; отдельное от логина, чтобы брутфорс логина не съедал бюджет регистрации).
 	registerLimiter RateLimiter
+	// loginTwoFactorLimiter — ведро второго шага входа по АККАУНТУ (ключ — id из
+	// подписанного пропуска). Ведро по IP на этом маршруте тоже висит, но
+	// ограничивает не ту величину: код привязан к аккаунту, а не к адресу, и с
+	// пула адресов перебор по IP не ограничен ничем. Не nil никогда — NewHandler
+	// подставляет ведро логина, WithTwoFactorLogin меняет на своё.
+	loginTwoFactorLimiter RateLimiter
 	// Сброс пароля (слайс B). forgotIPLimiter/forgotEmailLimiter — два ведра на
 	// /forgot-password: по IP (флуд с одного адреса) и по email (нельзя завалить
 	// один почтовый ящик письмами, перебирая с разных IP). resetLimiter — по IP
@@ -120,7 +126,27 @@ type Handler struct {
 }
 
 func NewHandler(svc authService, loginLimiter, registerLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
-	return &Handler{svc: svc, loginLimiter: loginLimiter, registerLimiter: registerLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
+	return &Handler{
+		svc:             svc,
+		loginLimiter:    loginLimiter,
+		registerLimiter: registerLimiter,
+		// Ведро второго шага по умолчанию — ведро логина, только ключуемое
+		// аккаунтом. Не «пока сойдёт»: третьим аргументом-лимитером подряд его
+		// можно было бы перепутать местами с двумя соседями, а ноль вместо ведра
+		// снял бы защиту молча. Прод ставит своё, более строгое, через
+		// WithTwoFactorLogin.
+		loginTwoFactorLimiter: loginLimiter,
+		cookieSecure:          cookieSecure,
+		appOrigin:             appOrigin,
+		trustedProxy:          trustedProxy,
+	}
+}
+
+// WithTwoFactorLogin подключает отдельное ведро второго шага входа — по
+// аккаунту. Отдельным методом, а не аргументом NewHandler: см. комментарий там.
+func (h *Handler) WithTwoFactorLogin(limiter RateLimiter) *Handler {
+	h.loginTwoFactorLimiter = limiter
+	return h
 }
 
 // WithPasswordReset подключает эндпоинты сброса пароля с их вёдрами лимита.
@@ -179,8 +205,10 @@ func (h *Handler) WithOAuth(svc oauthService, providers map[string]oauth.Provide
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/register", h.rateLimit(h.registerLimiter, "слишком много регистраций")(http.HandlerFunc(h.register)))
 	mux.Handle("POST /api/v1/auth/login", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.login)))
-	// Второй шаг входа (слайс F) — под ведром ЛОГИНА: иначе перебор
-	// шестизначного кода переезжает на менее защищённую дверь.
+	// Второй шаг входа (слайс F) — под ведром ЛОГИНА по IP: иначе перебор
+	// шестизначного кода переезжает на менее защищённую дверь. Второе ведро, по
+	// аккаунту, стоит внутри хендлера: ключ появляется только после разбора
+	// пропуска, а ограничивать надо именно попытки по аккаунту.
 	mux.Handle("POST /api/v1/auth/login-2fa", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.loginTwoFactor)))
 	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))

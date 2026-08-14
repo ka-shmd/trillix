@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -14,10 +16,18 @@ import (
 // newTestAuthHandler — публичные маршруты auth (вход и второй шаг) с
 // пермиссивными вёдрами.
 func newTestAuthHandler(svc authService) (*Handler, *http.ServeMux) {
+	return newTestAuthHandlerLimited(svc, ratelimit.AllowAll{})
+}
+
+// newTestAuthHandlerLimited — то же, но со своим ведром второго шага по
+// аккаунту. Ведро по IP при этом остаётся пермиссивным: тест лимита по
+// аккаунту не должен проходить за счёт соседнего ведра.
+func newTestAuthHandlerLimited(svc authService, twoFactorLogin RateLimiter) (*Handler, *http.ServeMux) {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
 		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).
-		WithOAuth(&fakeOAuthService{}, nil, ratelimit.AllowAll{}, []byte("test-secret-key-at-least-16"))
+		WithOAuth(&fakeOAuthService{}, nil, ratelimit.AllowAll{}, []byte("test-secret-key-at-least-16")).
+		WithTwoFactorLogin(twoFactorLogin)
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	return h, mux
@@ -88,6 +98,45 @@ func TestLoginTwoFactor_ForgedChallengeIs401(t *testing.T) {
 	}
 	if svc.completedCode != "" {
 		t.Fatal("сервис вызван по поддельному пропуску")
+	}
+}
+
+// Перебор кода ограничен по АККАУНТУ, а не только по адресу. Ведро по IP здесь
+// пермиссивно намеренно: атакующий с пула адресов обходит его бесплатно, и
+// единственная величина, которую этот эндпоинт обязан ограничивать, — попытки
+// по конкретному аккаунту.
+func TestLoginTwoFactor_LimitedPerAccount(t *testing.T) {
+	victim := User{ID: domain.NewID(), Email: "a@b.com"}
+	svc := &fakeAuthService{user: victim, completeErr: domain.ErrInvalidCredentials}
+	// Пополнения нет: ведро отмеряет ровно два неверных кода.
+	h, mux := newTestAuthHandlerLimited(svc, ratelimit.NewTokenBucket(0, 2))
+
+	attempt := func(userID uuid.UUID) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login-2fa", strings.NewReader(`{"code":"123456"}`))
+		req.AddCookie(&http.Cookie{Name: twoFactorCookie, Value: h.signUserIntent(twoFactorIntentLabel, userID)})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for i := range 2 {
+		if code := attempt(victim.ID); code != http.StatusUnauthorized {
+			t.Fatalf("попытка %d: статус = %d, ожидалось 401 (неверный код)", i+1, code)
+		}
+	}
+
+	calls := svc.completeCalls
+	if code := attempt(victim.ID); code != http.StatusTooManyRequests {
+		t.Fatalf("третья попытка: статус = %d, ожидалось 429", code)
+	}
+	if svc.completeCalls != calls {
+		t.Fatal("код ушёл в проверку сверх лимита — ведро не считает попытки, а только красит ответ")
+	}
+
+	// Ключ — аккаунт, а не процесс: сосед, которого никто не перебирает, входит
+	// как ни в чём не бывало. Иначе один перебираемый аккаунт запирал бы всех.
+	if code := attempt(domain.NewID()); code != http.StatusUnauthorized {
+		t.Fatalf("другой аккаунт: статус = %d, ожидалось 401 — ведро оказалось общим", code)
 	}
 }
 

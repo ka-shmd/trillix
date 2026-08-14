@@ -73,6 +73,7 @@ type fakeAuthService struct {
 	completeErr      error
 	completedCode    string
 	completedUser    uuid.UUID
+	completeCalls    int
 
 	// Удаление аккаунта (фаза 23, слайс G).
 	deleteErr      error
@@ -117,6 +118,7 @@ func (f *fakeAuthService) DisableTOTP(_ context.Context, _ User, currentPassword
 func (f *fakeAuthService) CompleteTwoFactorLogin(_ context.Context, userID uuid.UUID, code string) (User, string, error) {
 	f.completedUser = userID
 	f.completedCode = code
+	f.completeCalls++
 	if f.completeErr != nil {
 		return User{}, "", f.completeErr
 	}

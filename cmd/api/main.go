@@ -106,9 +106,22 @@ const (
 	// Второй фактор (фаза 23, слайс F): включение и выключение — по
 	// ПОЛЬЗОВАТЕЛЮ. За выключением стоит argon2id и шестизначный код, за
 	// включением — генерация секрета; ни то ни другое не делают в цикле.
-	// Второй шаг ВХОДА сюда не относится: он под ведром логина.
 	twoFactorRatePerSec = 1.0 / 12.0
 	twoFactorBurst      = 5
+
+	// Второй шаг ВХОДА — своё ведро, по АККАУНТУ, и самое строгое из всех.
+	// Причина в том, что здесь перебирают: пространство шестизначного кода —
+	// 10^6, окно проверки ±1 держит валидными три значения сразу, то есть одна
+	// попытка угадывает с вероятностью ~3·10⁻⁶. Ведро по IP такому перебору не
+	// мешает (адреса дёшевы), а пропуск на второй шаг перевыдаётся паролем —
+	// который в этом сценарии у атакующего уже есть.
+	//
+	// Запас 5 (просроченный код, опечатка, резервный код не с той строки),
+	// дальше по одной попытке в минуту: живому человеку хватает, перебор при
+	// таком темпе становится делом лет. Лока после N неудач нет сознательно —
+	// см. комментарий у loginTwoFactor.
+	loginTwoFactorRatePerSec = 1.0 / 60.0
+	loginTwoFactorBurst      = 5
 
 	// Удаление аккаунта (фаза 23, слайс G) — по ПОЛЬЗОВАТЕЛЮ. За ручкой argon2id
 	// и код второго фактора, а нажимают её один раз в жизни: темп как у смены
@@ -240,7 +253,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		WithTOTPKey(cfg.FormTokenSecret)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
-	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
+	// Именованной переменной, а не выражением в вызове: ведро ключуется id
+	// аккаунта, и без чистки его карта растёт по числу входивших.
+	loginTwoFactorLimiter := ratelimit.NewTokenBucket(loginTwoFactorRatePerSec, loginTwoFactorBurst)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy).
+		WithTwoFactorLogin(loginTwoFactorLimiter)
 
 	// Сброс пароля (слайс B): три ведра — forgot по IP и по email, reset по IP.
 	forgotIPLimiter := ratelimit.NewTokenBucket(forgotIPRatePerSec, forgotIPBurst)
@@ -430,7 +447,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		Run: func(context.Context) error {
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
-				verifyLimiter.GC() + resendLimiter.GC()
+				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
