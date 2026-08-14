@@ -310,6 +310,24 @@ func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.U
 	return nil
 }
 
+// EmailTaken — занят ли адрес кем угодно, ВКЛЮЧАЯ удалённые аккаунты (слайс G).
+func (Repo) EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error) {
+	taken, err := postgres.New(db).EmailTaken(ctx, email)
+	if err != nil {
+		return false, fmt.Errorf("email taken: %w", err)
+	}
+	return taken, nil
+}
+
+// MarkUserDeleted помечает аккаунт удалённым; false — пометка уже стояла.
+func (Repo) MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).MarkUserDeleted(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("mark user deleted: %w", err)
+	}
+	return n > 0, nil
+}
+
 // DeleteSessionsByUser рвёт все сессии пользователя (шаг сброса пароля).
 func (Repo) DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
 	if err := postgres.New(db).DeleteSessionsByUser(ctx, userID); err != nil {

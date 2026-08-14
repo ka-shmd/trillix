@@ -114,6 +114,12 @@ type fakeStore struct {
 	recoveryUsable bool
 	recoveryUsed   bool
 	recoveryWiped  bool
+
+	// Удаление аккаунта (фаза 23, слайс G).
+	emailTaken     bool
+	userDeleted    bool
+	deletedUserID  uuid.UUID
+	alreadyDeleted bool
 }
 
 func (f *fakeStore) UpsertTOTPSecret(_ context.Context, _ postgres.DBTX, _ uuid.UUID, secret []byte) error {
@@ -265,6 +271,19 @@ func (f *fakeStore) GetUserByEmail(_ context.Context, _ postgres.DBTX, _ string)
 		return User{}, pgx.ErrNoRows
 	}
 	return f.user, nil
+}
+
+// EmailTaken — занятость адреса КЕМ УГОДНО, включая удалённых (слайс G). По
+// умолчанию отвечает как GetUserByEmail; emailTaken переопределяет его для
+// случая «адрес держит помеченный аккаунт, которого чтения не видят».
+func (f *fakeStore) EmailTaken(_ context.Context, _ postgres.DBTX, _ string) (bool, error) {
+	return f.userExists || f.emailTaken, nil
+}
+
+func (f *fakeStore) MarkUserDeleted(_ context.Context, _ postgres.DBTX, userID uuid.UUID) (bool, error) {
+	f.userDeleted = true
+	f.deletedUserID = userID
+	return !f.alreadyDeleted, nil
 }
 
 func (f *fakeStore) CreateWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {

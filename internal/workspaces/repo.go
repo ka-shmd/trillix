@@ -184,6 +184,16 @@ func (Repo) ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.
 	return out, nil
 }
 
+// ListOwnedTeamsWithMembers — имена командных пространств, где пользователь
+// владелец и есть кто-то ещё (нужен удалению аккаунта, фаза 23, слайс G).
+func (Repo) ListOwnedTeamsWithMembers(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error) {
+	names, err := postgres.New(db).ListOwnedTeamsWithMembers(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list owned teams with members of %s: %w", userID, err)
+	}
+	return names, nil
+}
+
 func (Repo) ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error) {
 	rows, err := postgres.New(db).ListPendingInvitations(ctx, workspaceID)
 	if err != nil {

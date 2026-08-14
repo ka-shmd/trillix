@@ -23,7 +23,8 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// паникой на nil-лимитере внутри хендлера. Конфигурация проверяется на
 	// старте процесса, а не на первом запросе (internal/CLAUDE.md).
 	if h.passwordChangeLimiter == nil || h.emailChangeLimiter == nil ||
-		h.confirmEmailLimiter == nil || h.twoFactorLimiter == nil {
+		h.confirmEmailLimiter == nil || h.twoFactorLimiter == nil ||
+		h.deleteAccountLimiter == nil {
 		panic("auth: AccountRoutes вызван без WithAccount — вёдра лимита не заданы")
 	}
 
@@ -44,6 +45,9 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/account/2fa/setup", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.setupTOTP))))
 	mux.Handle("POST /api/v1/account/2fa/enable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.enableTOTP))))
 	mux.Handle("POST /api/v1/account/2fa/disable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.disableTOTP))))
+	// Удаление аккаунта (слайс G) — POST, а не DELETE: у запроса есть тело
+	// (подтверждение паролем и кодом), а DELETE с телом читают не все прокси.
+	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
 	// Второй шаг смены адреса — ПУБЛИЧНЫЙ (по ссылке ходят из почтового клиента,
 	// где сессии кабинета может не быть): аутентифицирует сам одноразовый токен,
 	// CSRF не нужен, щит — лимит по IP. Живёт здесь, а не в Routes, потому что
@@ -194,6 +198,45 @@ func (h *Handler) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type deleteAccountRequest struct {
+	// CurrentPassword — необязателен только у аккаунта без пароля; Code — только
+	// при выключенном втором факторе. Проверяет это сервис: транспорт не знает,
+	// чем этот аккаунт вообще может доказать, что он свой.
+	CurrentPassword string `json:"currentPassword"`
+	Code            string `json:"code"`
+}
+
+// deleteAccount помечает аккаунт удалённым и гасит cookie: сессий у него больше
+// нет ни одной, и оставленная cookie означала бы кабинет, который открывается
+// ровно до первого запроса.
+func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	if !h.deleteAccountLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много попыток удаления", domain.ErrRateLimited))
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req deleteAccountRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+
+	if err := h.svc.DeleteAccount(r.Context(), user, req.CurrentPassword, req.Code); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	h.clearSession(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 

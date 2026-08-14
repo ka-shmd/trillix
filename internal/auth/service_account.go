@@ -203,12 +203,17 @@ func (s *Service) ConfirmEmailChange(ctx context.Context, rawToken string) error
 }
 
 // emailFree — свободен ли адрес. ErrEmailTaken, если занят.
+//
+// Спрашивает EmailTaken, а не «есть ли такой пользователь»: удалённый аккаунт
+// из вторых чтений не виден, но свой email держит (слайс G), и слепой здесь
+// код упёрся бы в UNIQUE пятисоткой вместо 409.
 func (s *Service) emailFree(ctx context.Context, email string) error {
-	switch _, err := s.repo.GetUserByEmail(ctx, s.db, email); {
-	case err == nil:
-		return domain.ErrEmailTaken
-	case !errors.Is(err, pgx.ErrNoRows):
+	taken, err := s.repo.EmailTaken(ctx, s.db, email)
+	if err != nil {
 		return err
+	}
+	if taken {
+		return domain.ErrEmailTaken
 	}
 	return nil
 }
@@ -216,4 +221,84 @@ func (s *Service) emailFree(ctx context.Context, email string) error {
 // PurgeExpiredEmailChangeTokens — фоновая чистка истёкших токенов смены адреса.
 func (s *Service) PurgeExpiredEmailChangeTokens(ctx context.Context) (int64, error) {
 	return s.repo.DeleteExpiredEmailChangeTokens(ctx, s.db)
+}
+
+// teamOwnership — узкая зависимость от модуля пространств: мешают ли удалению
+// аккаунта команды, которыми человек владеет. Объявлена на стороне потребителя
+// и подключается в main (WithTeams).
+//
+// Импортом обойтись нельзя: workspaces уже импортирует auth (его handler стоит
+// на RequireAuth), и обратный импорт замкнул бы цикл. Спрашивать самому — тоже:
+// владение выражается ролью, а сравнение с ролью вне пакета workspaces
+// запрещено (internal/CLAUDE.md).
+type teamOwnership interface {
+	TeamsBlockingAccountDeletion(ctx context.Context, userID uuid.UUID) ([]string, error)
+}
+
+// errTeamsNotConfigured — WithTeams не вызван. Ошибка сборки процесса, не
+// пользователя: без ответа на «остаются ли участники» удалять аккаунт нельзя,
+// и «наверное, не остаются» здесь не годится.
+var errTeamsNotConfigured = errors.New("auth: источник владения пространствами не подключён")
+
+// DeleteAccount помечает аккаунт удалённым и рвёт все его сессии. Данные
+// остаются на месте (реальная чистка по 152-ФЗ — отдельная фаза POST-MVP), но
+// становятся недостижимыми: все четыре пути «узнать пользователя» слепы к
+// пометке, а публичная форма его пространства отвечает 404.
+//
+// Подтверждение: пароль, если он есть, И код второго фактора, если тот включён.
+// Спека (§10) требует «пароль ИЛИ код у аккаунта без пароля» — здесь строже, по
+// образцу выключения второго фактора: удаление необратимо, и украденной сессии
+// с известным паролем не должно хватать, чтобы снести аккаунт мимо фактора,
+// ради которого его включали. У аккаунта без пароля и без фактора
+// доказательством остаётся сама сессия — требовать несуществующее нечем.
+func (s *Service) DeleteAccount(ctx context.Context, user User, currentPassword, code string) error {
+	if s.teams == nil {
+		return errTeamsNotConfigured
+	}
+
+	if user.PasswordHash != nil {
+		ok, err := VerifyPassword(*user.PasswordHash, currentPassword)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return domain.ErrInvalidCredentials
+		}
+	}
+	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	if enabled {
+		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
+			return err
+		}
+	}
+
+	// Владелец у пространства ровно один, и он же плательщик: уйдя, он оставил
+	// бы участников в пространстве, работающем по плану несуществующего
+	// аккаунта (TD-53). Личных пространств проверка не касается — они уходят с
+	// хозяином, и участников, кроме него, там нет.
+	teams, err := s.teams.TeamsBlockingAccountDeletion(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	if len(teams) > 0 {
+		return fmt.Errorf("%w: вы владелец пространств (%s) с участниками — передайте владение или удалите их",
+			domain.ErrConflict, strings.Join(teams, ", "))
+	}
+
+	// Пометка и разрыв сессий — одной транзакцией: помеченный аккаунт с живой
+	// cookie означал бы кабинет, который открывается ровно до первого запроса,
+	// а несостоявшаяся пометка при удалённых сессиях — «я нажал удалить, а меня
+	// просто разлогинило».
+	//
+	// Повторный вызов (две вкладки) ноль строк на пометке не считает ошибкой:
+	// запрос идемпотентен, а сессии рвутся в обоих случаях.
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, e := s.repo.MarkUserDeleted(ctx, tx, user.ID); e != nil {
+			return e
+		}
+		return s.repo.DeleteSessionsByUser(ctx, tx, user.ID)
+	})
 }

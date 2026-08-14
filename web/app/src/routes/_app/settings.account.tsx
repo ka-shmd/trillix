@@ -8,6 +8,7 @@ import {
   meQueryOptions,
   providersQueryOptions,
   useChangePassword,
+  useDeleteAccount,
   useDisableTwoFactor,
   useEnableTwoFactor,
   useRequestEmailChange,
@@ -24,9 +25,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN: профиль, адрес,
-// пароль и способы входа. Дальше сюда приезжают второй фактор и удаление
-// аккаунта (docs/design/account-settings.md).
+// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN целиком: профиль,
+// адрес, пароль, способы входа, второй фактор и удаление аккаунта
+// (docs/design/account-settings.md).
 //
 // link — исход возврата от провайдера после привязки (слайс E). Колбэк это
 // навигация браузера, а не вызов API: сказать «получилось» он может только
@@ -61,8 +62,119 @@ function AccountPage() {
       <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
       <IdentitiesSection hasPassword={user.hasPassword} />
       <TwoFactorSection key={`2fa-${user.twoFactorEnabled}`} user={user} />
+      <DeleteAccountSection user={user} />
     </div>
   )
+}
+
+// DeleteAccountSection — удаление аккаунта (слайс G). Форма подтверждения
+// закрыта, пока человек не нажал «Удалить аккаунт»: это единственное необратимое
+// действие на странице, и стоять раскрытым рядом с полями профиля ему незачем.
+function DeleteAccountSection({ user }: { user: User }) {
+  const remove = useDeleteAccount()
+  const navigate = Route.useNavigate()
+  const [open, setOpen] = useState(false)
+  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+
+  // Пароль спрашиваем, если он есть; код — если включён второй фактор. Сервер
+  // проверяет то же самое: у аккаунта через провайдера без фактора
+  // доказательством служит сама сессия.
+  const ready = (!user.hasPassword || password !== '') && (!user.twoFactorEnabled || code.trim() !== '')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!ready) return
+    remove.mutate(
+      { currentPassword: password, code: code.trim() },
+      { onSuccess: () => navigate({ to: '/login' }) },
+    )
+  }
+
+  return (
+    <section className="flex flex-col gap-4 border-t pt-8">
+      <div>
+        <h2 className="text-lg font-medium">Удаление аккаунта</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Вход перестанет работать, а опубликованные формы — открываться и принимать ответы.
+          Отменить это самостоятельно нельзя, и адрес {user.email} останется занятым: завести на
+          него новый аккаунт не получится.
+        </p>
+      </div>
+
+      {!open ? (
+        <div>
+          <Button variant="outline" onClick={() => setOpen(true)}>
+            Удалить аккаунт
+          </Button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {user.hasPassword && (
+            <div>
+              <Label htmlFor="delete-password" className="mb-2 block">
+                Текущий пароль
+              </Label>
+              <Input
+                id="delete-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          )}
+          {user.twoFactorEnabled && (
+            <div>
+              <Label htmlFor="delete-code" className="mb-2 block">
+                Код из приложения или резервный
+              </Label>
+              <Input
+                id="delete-code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="123456"
+              />
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" variant="destructive" disabled={!ready || remove.isPending}>
+              {remove.isPending ? 'Удаляем…' : 'Удалить аккаунт навсегда'}
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+              Отмена
+            </Button>
+          </div>
+
+          {remove.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {deleteErrorText(remove.error)}
+            </p>
+          )}
+        </form>
+      )}
+    </section>
+  )
+}
+
+function deleteErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return 'Пароль или код не подошли. Проверьте и попробуйте ещё раз.'
+      // 409 здесь ровно один: человек — владелец командного пространства, в
+      // котором остались люди. Имена пространств есть в списке пространств, и
+      // тащить их сюда из текста ошибки незачем.
+      case 'conflict':
+        return 'Вы владелец командных пространств, в которых есть участники. Передайте владение или удалите эти пространства.'
+      case 'rate_limited':
+        return 'Слишком много попыток. Подождите минуту и попробуйте снова.'
+    }
+  }
+  return 'Не удалось удалить аккаунт. Попробуйте ещё раз.'
 }
 
 function AccountForm({ user }: { user: User }) {

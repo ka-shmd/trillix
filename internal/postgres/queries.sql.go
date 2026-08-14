@@ -523,7 +523,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 `
 
 type CreateUserParams struct {
@@ -544,6 +544,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -778,6 +779,21 @@ func (q *Queries) DeleteTOTP(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
+const emailTaken = `-- name: EmailTaken :one
+SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken
+`
+
+// Занят ли адрес — вопрос ДРУГОЙ, чем «есть ли такой пользователь»: удалённый
+// аккаунт продолжает держать свой email (UNIQUE никуда не делся, освободить его
+// нечем до реальной чистки по 152-ФЗ). Без этого запроса подтверждение смены
+// адреса на занятый удалённым падало бы на UNIQUE пятисоткой вместо 409.
+func (q *Queries) EmailTaken(ctx context.Context, email string) (bool, error) {
+	row := q.db.QueryRow(ctx, emailTaken, email)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
 const enqueueCoalescedOutbox = `-- name: EnqueueCoalescedOutbox :exec
 INSERT INTO outbox (id, channel, payload, coalesce_key, next_attempt_at)
 VALUES ($1, $2, $3, $4, $5)
@@ -839,7 +855,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 `
 
 type FillEmptyProfileParams struct {
@@ -863,6 +879,7 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1362,6 +1379,8 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
          ELSE 0 END::bigint AS submission_count
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 WHERE f.slug = $1
 `
 
@@ -1391,6 +1410,11 @@ type GetPublicFormBySlugRow struct {
 // источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
 // workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
 // брать его отсюда дешевле, чем отдельным запросом на горячем пути.
+// Владелец пространства обязан быть живым (фаза 23, слайс G): удалённый аккаунт
+// не может принимать чужие персональные данные формой, которую больше некому
+// разбирать. Ноль строк → 404 — тот же ответ, что у черновика, инвариант 5 не
+// трогается. Джойн INNER и по этой же причине отправляет в 404 формы
+// осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
 func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
 	var i GetPublicFormBySlugRow
@@ -1412,10 +1436,10 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
-WHERE s.token_hash = $1 AND s.expires_at > now()
+WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL
 `
 
 // Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
@@ -1430,6 +1454,7 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1477,9 +1502,9 @@ func (q *Queries) GetTOTP(ctx context.Context, userID uuid.UUID) (GetTOTPRow, er
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 FROM users
-WHERE email = $1
+WHERE email = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -1493,16 +1518,32 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 FROM users
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 `
 
+// Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
+// GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
+// стоит `deleted_at IS NULL` (фаза 23, слайс G). Забытое условие в любом из них
+// означает дверь в удалённый аккаунт: вход паролем, вход провайдером, живая
+// сессия и второй шаг входа — четыре разные двери в одну комнату.
+//
+// Занятость адреса спрашивается ОТДЕЛЬНЫМ запросом (EmailTaken): помеченный
+// аккаунт продолжает занимать email, и слепота к нему здесь — не забывчивость,
+// а разные вопросы («кто это» и «свободен ли адрес»).
+//
+// Сама колонка deleted_at при этом стоит в СПИСКАХ выдачи всех запросов по
+// users, хотя доменному User не нужна: набор колонок, совпадающий с таблицей,
+// заставляет sqlc отдавать общий тип postgres.User вместо семи однотипных
+// структур GetUserByEmailRow, GetSessionUserRow и так далее.
 // Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 // кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -1516,15 +1557,16 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
-WHERE i.provider = $1 AND i.provider_user_id = $2
+WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL
 `
 
 type GetUserByIdentityParams struct {
@@ -1546,6 +1588,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -1918,6 +1961,41 @@ func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListI
 	return items, nil
 }
 
+const listOwnedTeamsWithMembers = `-- name: ListOwnedTeamsWithMembers :many
+SELECT w.name
+FROM workspaces w
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner' AND o.user_id = $1
+WHERE w.personal_user_id IS NULL
+  AND EXISTS (SELECT 1 FROM workspace_members m
+               WHERE m.workspace_id = w.id AND m.user_id <> $1)
+ORDER BY w.created_at
+`
+
+// Командные пространства, где спрашивающий — владелец И есть кто-то ещё. Нужен
+// удалению аккаунта (фаза 23, слайс G): у пространства ровно один владелец
+// (idx_workspace_members_owner), и его уход оставил бы участников в
+// пространстве, работающем по плану несуществующего аккаунта — это TD-53.
+// Личные пропущены: они уходят с хозяином и участников, кроме него, не имеют.
+func (q *Queries) ListOwnedTeamsWithMembers(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listOwnedTeamsWithMembers, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingInvitations = `-- name: ListPendingInvitations :many
 SELECT email, role, expires_at
 FROM invitations
@@ -2273,6 +2351,22 @@ type MarkTOTPStepParams struct {
 // last_step может быть NULL (фактор только что подтверждён).
 func (q *Queries) MarkTOTPStep(ctx context.Context, arg MarkTOTPStepParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markTOTPStep, arg.UserID, arg.LastStep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markUserDeleted = `-- name: MarkUserDeleted :execrows
+UPDATE users SET deleted_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Удаление аккаунта пометкой (фаза 23, слайс G). Условие deleted_at IS NULL —
+// не осторожность, а идемпотентность: повторный вызов (две вкладки) даёт ноль
+// строк, а не переставляет дату удаления на новую.
+func (q *Queries) MarkUserDeleted(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markUserDeleted, id)
 	if err != nil {
 		return 0, err
 	}
@@ -2687,7 +2781,7 @@ const updateUserEmail = `-- name: UpdateUserEmail :one
 UPDATE users
    SET email = $2, email_verified_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 `
 
 type UpdateUserEmailParams struct {
@@ -2708,6 +2802,7 @@ func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -2715,7 +2810,7 @@ func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 `
 
 type UpdateUserProfileParams struct {
@@ -2738,6 +2833,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.EmailVerifiedAt,
 		&i.FirstName,
 		&i.LastName,
+		&i.DeletedAt,
 	)
 	return i, err
 }

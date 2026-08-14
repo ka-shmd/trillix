@@ -16,7 +16,7 @@ import (
 // знает.
 func newTestAccountHandler(svc authService) http.Handler {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 	return mux
@@ -205,7 +205,7 @@ func TestChangePassword_RequiresAuthAndCSRF(t *testing.T) {
 func TestChangePassword_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 
@@ -216,6 +216,74 @@ func TestChangePassword_RateLimitedPerUser(t *testing.T) {
 		t.Fatalf("статус = %d, ожидалось 429", rec.Code)
 	}
 	if svc.passwordNew != "" {
+		t.Error("сервис вызван, хотя ведро пусто — argon2 всё равно отработал")
+	}
+}
+
+func postDelete(srv http.Handler, body string, authed bool, csrf bool) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/delete", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if authed {
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
+		req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
+	}
+	if csrf {
+		req.Header.Set(csrfHeaderName, "tok")
+	}
+	srv.ServeHTTP(rec, req)
+	return rec
+}
+
+// Удаление гасит cookie: сессий у аккаунта не осталось ни одной, и оставленная
+// cookie означала бы кабинет, открывающийся ровно до первого запроса.
+func TestDeleteAccount_ClearsSessionCookie(t *testing.T) {
+	user := User{ID: domain.NewID(), Email: "a@b.com"}
+	svc := &fakeAuthService{user: user}
+	srv := newTestAccountHandler(svc)
+
+	rec := postDelete(srv, `{"currentPassword":"right-password","code":"123456"}`, true, true)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("статус = %d, ожидалось 204; тело=%s", rec.Code, rec.Body)
+	}
+	session := cookieByName(rec.Result().Cookies(), sessionCookieName)
+	if session == nil || session.Value != "" || session.MaxAge >= 0 {
+		t.Fatalf("cookie сессии не погашена: %+v", session)
+	}
+	// Подтверждение доезжает до сервиса целиком: обрезать здесь код или пароль
+	// значит удалять аккаунт по одному лишь факту сессии.
+	if svc.deletedUser != user.ID || svc.deletedPass != "right-password" || svc.deletedCode != "123456" {
+		t.Errorf("в сервис уехало (%v, %q, %q)", svc.deletedUser, svc.deletedPass, svc.deletedCode)
+	}
+}
+
+func TestDeleteAccount_RequiresAuthAndCSRF(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestAccountHandler(svc)
+
+	if rec := postDelete(srv, `{"currentPassword":"a"}`, false, true); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("без сессии статус = %d, ожидалось 401", rec.Code)
+	}
+	if rec := postDelete(srv, `{"currentPassword":"a"}`, true, false); rec.Code != http.StatusForbidden {
+		t.Fatalf("без CSRF-заголовка статус = %d, ожидалось 403", rec.Code)
+	}
+	if svc.deleteRequests != 0 {
+		t.Error("сервис вызван при провале авторизации или CSRF")
+	}
+}
+
+func TestDeleteAccount_RateLimitedPerUser(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: denyLimiter{}})
+	mux := http.NewServeMux()
+	h.AccountRoutes(mux)
+
+	rec := postDelete(mux, `{"currentPassword":"right-password"}`, true, true)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("статус = %d, ожидалось 429", rec.Code)
+	}
+	if svc.deleteRequests != 0 {
 		t.Error("сервис вызван, хотя ведро пусто — argon2 всё равно отработал")
 	}
 }

@@ -30,6 +30,7 @@ type Store interface {
 	EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error)
 	InviteStore
 	ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Member, error)
+	ListOwnedTeamsWithMembers(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error)
 	ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error)
 	DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
 	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)

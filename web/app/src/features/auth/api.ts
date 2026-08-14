@@ -131,6 +131,12 @@ export function disableTwoFactor(body: { currentPassword: string; code: string }
   return apiRequest('/account/2fa/disable', { method: 'POST', body })
 }
 
+// Удаление аккаунта (фаза 23, слайс G). POST, а не DELETE: у запроса есть тело
+// с подтверждением. Ответ 204 — cookie сессии бэк гасит сам.
+export function deleteAccount(body: { currentPassword: string; code: string }): Promise<void> {
+  return apiRequest('/account/delete', { method: 'POST', body })
+}
+
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,
 // кнопки не рисуем (мёртвая кнопка хуже отсутствующей).
 export function getProviders(): Promise<string[]> {

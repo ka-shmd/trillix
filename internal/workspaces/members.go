@@ -19,6 +19,18 @@ type Member struct {
 	JoinedAt time.Time
 }
 
+// TeamsBlockingAccountDeletion — имена командных пространств, где человек
+// владелец и есть кто-то ещё. Пустой список означает «удалять аккаунт можно».
+//
+// Вопрос задаёт auth (фаза 23, слайс G), и задаёт он его сюда, а не своим
+// запросом: владение — понятие ЭТОГО модуля, а сравнение с ролью за его
+// пределами запрещено (internal/CLAUDE.md). Импортировать workspaces из auth
+// нельзя — цикл (handler workspaces стоит на RequireAuth), поэтому связь
+// проложена интерфейсом на стороне auth и подключается в main.
+func (s *Service) TeamsBlockingAccountDeletion(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	return s.repo.ListOwnedTeamsWithMembers(ctx, s.db, userID)
+}
+
 // PendingInvite — позвали, но ещё не вошёл. Показывается на той же странице,
 // что и участники: это тоже состояние пространства, и отозвать приглашение
 // человек идёт туда же, куда снимать доступ.

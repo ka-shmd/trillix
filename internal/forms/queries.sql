@@ -241,6 +241,13 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
          ELSE 0 END::bigint AS submission_count
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
+-- Владелец пространства обязан быть живым (фаза 23, слайс G): удалённый аккаунт
+-- не может принимать чужие персональные данные формой, которую больше некому
+-- разбирать. Ноль строк → 404 — тот же ответ, что у черновика, инвариант 5 не
+-- трогается. Джойн INNER и по этой же причине отправляет в 404 формы
+-- осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 WHERE f.slug = $1;
 
 -- name: ListFormVersions :many

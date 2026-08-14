@@ -49,6 +49,7 @@ type authService interface {
 	EnableTOTP(ctx context.Context, user User, code string) ([]string, error)
 	DisableTOTP(ctx context.Context, user User, currentPassword, code string) error
 	CompleteTwoFactorLogin(ctx context.Context, userID uuid.UUID, code string) (User, string, error)
+	DeleteAccount(ctx context.Context, user User, currentPassword, code string) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -97,6 +98,9 @@ type Handler struct {
 	// twoFactorLimiter — по пользователю на включение/выключение второго
 	// фактора: за выключением стоит argon2id и шестизначный код.
 	twoFactorLimiter RateLimiter
+	// deleteAccountLimiter — по пользователю на удаление аккаунта: за ручкой
+	// argon2id и код второго фактора, а нажимают её один раз в жизни.
+	deleteAccountLimiter RateLimiter
 
 	cookieSecure bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
@@ -145,6 +149,7 @@ type AccountLimits struct {
 	EmailChange    RateLimiter
 	ConfirmEmail   RateLimiter
 	TwoFactor      RateLimiter
+	DeleteAccount  RateLimiter
 }
 
 // WithAccount подключает настройки аккаунта с их вёдрами лимита (по образцу
@@ -155,6 +160,7 @@ func (h *Handler) WithAccount(l AccountLimits) *Handler {
 	h.emailChangeLimiter = l.EmailChange
 	h.confirmEmailLimiter = l.ConfirmEmail
 	h.twoFactorLimiter = l.TwoFactor
+	h.deleteAccountLimiter = l.DeleteAccount
 	return h
 }
 

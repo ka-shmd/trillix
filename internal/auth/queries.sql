@@ -3,19 +3,41 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
+
+-- Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
+-- GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
+-- стоит `deleted_at IS NULL` (фаза 23, слайс G). Забытое условие в любом из них
+-- означает дверь в удалённый аккаунт: вход паролем, вход провайдером, живая
+-- сессия и второй шаг входа — четыре разные двери в одну комнату.
+--
+-- Занятость адреса спрашивается ОТДЕЛЬНЫМ запросом (EmailTaken): помеченный
+-- аккаунт продолжает занимать email, и слепота к нему здесь — не забывчивость,
+-- а разные вопросы («кто это» и «свободен ли адрес»).
+--
+-- Сама колонка deleted_at при этом стоит в СПИСКАХ выдачи всех запросов по
+-- users, хотя доменному User не нужна: набор колонок, совпадающий с таблицей,
+-- заставляет sqlc отдавать общий тип postgres.User вместо семи однотипных
+-- структур GetUserByEmailRow, GetSessionUserRow и так далее.
 
 -- name: GetUserByID :one
 -- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 -- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 FROM users
-WHERE id = $1;
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 FROM users
-WHERE email = $1;
+WHERE email = $1 AND deleted_at IS NULL;
+
+-- name: EmailTaken :one
+-- Занят ли адрес — вопрос ДРУГОЙ, чем «есть ли такой пользователь»: удалённый
+-- аккаунт продолжает держать свой email (UNIQUE никуда не делся, освободить его
+-- нечем до реальной чистки по 152-ФЗ). Без этого запроса подтверждение смены
+-- адреса на занятый удалённым падало бы на UNIQUE пятисоткой вместо 409.
+SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken;
 
 -- Личное пространство регистрации: personal_user_id — и пометка «личное», и
 -- ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
@@ -41,10 +63,10 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
-WHERE s.token_hash = $1 AND s.expires_at > now();
+WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL;
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1;
@@ -56,10 +78,10 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
-WHERE i.provider = $1 AND i.provider_user_id = $2;
+WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL;
 
 -- name: CreateIdentity :exec
 INSERT INTO user_identities (provider, provider_user_id, user_id, provider_email)
@@ -93,7 +115,7 @@ DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
 -- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
 
 -- name: FillEmptyProfile :one
 -- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
@@ -104,7 +126,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
@@ -178,7 +200,7 @@ RETURNING user_id, new_email;
 UPDATE users
    SET email = $2, email_verified_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
 
 -- name: DeleteExpiredEmailChangeTokens :execrows
 DELETE FROM email_change_tokens WHERE expires_at <= now();
@@ -221,3 +243,10 @@ WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL;
 
 -- name: DeleteRecoveryCodes :exec
 DELETE FROM totp_recovery_codes WHERE user_id = $1;
+
+-- name: MarkUserDeleted :execrows
+-- Удаление аккаунта пометкой (фаза 23, слайс G). Условие deleted_at IS NULL —
+-- не осторожность, а идемпотентность: повторный вызов (две вкладки) даёт ноль
+-- строк, а не переставляет дату удаления на новую.
+UPDATE users SET deleted_at = now()
+WHERE id = $1 AND deleted_at IS NULL;

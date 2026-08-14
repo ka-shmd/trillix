@@ -136,3 +136,17 @@ WHERE m.workspace_id = $1 AND m.user_id = $2;
 -- ни ссылка, ни история (кто кого звал, видно по членству). Индекс
 -- idx_invitations_expires заведён ровно под этот запрос.
 DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL;
+
+-- name: ListOwnedTeamsWithMembers :many
+-- Командные пространства, где спрашивающий — владелец И есть кто-то ещё. Нужен
+-- удалению аккаунта (фаза 23, слайс G): у пространства ровно один владелец
+-- (idx_workspace_members_owner), и его уход оставил бы участников в
+-- пространстве, работающем по плану несуществующего аккаунта — это TD-53.
+-- Личные пропущены: они уходят с хозяином и участников, кроме него, не имеют.
+SELECT w.name
+FROM workspaces w
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner' AND o.user_id = $1
+WHERE w.personal_user_id IS NULL
+  AND EXISTS (SELECT 1 FROM workspace_members m
+               WHERE m.workspace_id = w.id AND m.user_id <> $1)
+ORDER BY w.created_at;

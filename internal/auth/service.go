@@ -64,6 +64,8 @@ type Store interface {
 	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)
+	EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error)
+	MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
 	CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error
@@ -127,6 +129,18 @@ type Service struct {
 	// фактор не сконфигурирован, и его эндпоинты отвечают ошибкой, а не пишут
 	// в базу мусор (фаза 23, слайс F).
 	totpSecretKey []byte
+	// teams — источник ответа «мешают ли удалению аккаунта его команды»
+	// (реализация — *workspaces.Service, подключается WithTeams). nil =
+	// удаление аккаунта не сконфигурировано и отвечает ошибкой, а не догадкой.
+	teams teamOwnership
+}
+
+// WithTeams подключает вопрос о владении пространствами (нужен удалению
+// аккаунта, слайс G). Отдельный метод, а не аргумент NewService: workspaces
+// собирается ПОЗЖЕ auth — его хендлер стоит на RequireAuth.
+func (s *Service) WithTeams(t teamOwnership) *Service {
+	s.teams = t
+	return s
 }
 
 // WithTOTPKey подключает шифрование секретов второго фактора. Отдельный метод,

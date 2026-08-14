@@ -128,6 +128,13 @@ func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email
 
 	existing, err := s.repo.GetUserByEmail(ctx, s.db, email)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Ни привязки, ни видимого аккаунта, а вставка упёрлась в UNIQUE —
+			// значит адрес держит УДАЛЁННЫЙ аккаунт (слайс G): для чтений он
+			// невидим, а email занимает. Ответ тот же, что при регистрации на
+			// занятый адрес, — нового о чужом аккаунте он не сообщает.
+			return User{}, "", domain.ErrEmailTaken
+		}
 		return User{}, "", err
 	}
 	if existing.PasswordHash == nil {

@@ -73,6 +73,21 @@ type fakeAuthService struct {
 	completeErr      error
 	completedCode    string
 	completedUser    uuid.UUID
+
+	// Удаление аккаунта (фаза 23, слайс G).
+	deleteErr      error
+	deletedUser    uuid.UUID
+	deletedPass    string
+	deletedCode    string
+	deleteRequests int
+}
+
+func (f *fakeAuthService) DeleteAccount(_ context.Context, user User, currentPassword, code string) error {
+	f.deleteRequests++
+	f.deletedUser = user.ID
+	f.deletedPass = currentPassword
+	f.deletedCode = code
+	return f.deleteErr
 }
 
 func (f *fakeAuthService) TwoFactorEnabled(_ context.Context, _ uuid.UUID) (bool, error) {

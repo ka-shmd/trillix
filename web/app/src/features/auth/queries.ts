@@ -10,6 +10,7 @@ import {
   register,
   changePassword,
   confirmEmailChange,
+  deleteAccount,
   disableTwoFactor,
   enableTwoFactor,
   isTwoFactorRequired,
@@ -216,5 +217,16 @@ export function useDisableTwoFactor() {
   return useMutation({
     mutationFn: disableTwoFactor,
     onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Удаление аккаунта (слайс G). Кэш сносится ЦЕЛИКОМ, как при выходе: сессии
+// больше нет, и оставленные в памяти формы прошлого аккаунта дождались бы
+// следующего входа в этой вкладке (TD-40).
+export function useDeleteAccount() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => qc.clear(),
   })
 }

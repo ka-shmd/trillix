@@ -19,7 +19,7 @@ import (
 func newLinkHandler(t *testing.T, p *fakeProvider, authSvc *fakeAuthService, oauthSvc *fakeOAuthService) (*Handler, *http.ServeMux) {
 	t.Helper()
 	h := NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}}).
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}}).
 		WithOAuth(oauthSvc, map[string]oauth.Provider{"fake": p}, ratelimit.AllowAll{}, []byte("test-secret-key-at-least-16"))
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)

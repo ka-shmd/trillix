@@ -110,6 +110,12 @@ const (
 	twoFactorRatePerSec = 1.0 / 12.0
 	twoFactorBurst      = 5
 
+	// Удаление аккаунта (фаза 23, слайс G) — по ПОЛЬЗОВАТЕЛЮ. За ручкой argon2id
+	// и код второго фактора, а нажимают её один раз в жизни: темп как у смены
+	// пароля, три подряд на случай опечатки в подтверждении.
+	deleteAccountRatePerSec = 1.0 / 60.0
+	deleteAccountBurst      = 3
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -249,6 +255,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		EmailChange:    ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
 		ConfirmEmail:   ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
 		TwoFactor:      ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst),
+		DeleteAccount:  ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst),
 	})
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
@@ -275,6 +282,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
 	// Приглашение — единственная ручка, шлющая письмо на произвольный адрес:
 	// ведро по пользователю, темп как у повторного подтверждения почты.
+	// Удаление аккаунта спрашивает у пространств, не осиротеет ли команда
+	// (слайс G). Связь односторонняя и подключается здесь, потому что импортом
+	// её не выразить: workspaces уже стоит на RequireAuth из auth.
+	authSvc.WithTeams(workspacesSvc)
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 

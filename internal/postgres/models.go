@@ -143,6 +143,7 @@ type User struct {
 	EmailVerifiedAt pgtype.Timestamptz
 	FirstName       pgtype.Text
 	LastName        pgtype.Text
+	DeletedAt       pgtype.Timestamptz
 }
 
 type UserIdentity struct {
