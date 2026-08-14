@@ -56,7 +56,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 **Слепота не кончается модулем `auth`: строка в `workspace_members` пометку переживает**, и
 чужому пространству удалённый участник иначе виден дважды — строкой в составе и занятым
 местом по тарифу. Поэтому `deleted_at IS NULL` стоит и в составе (`ListWorkspaceMembers`),
-и в обоих подсчётах мест (`CountWorkspaceMembers`, `members_count` у `entitlements`), и в
+и в подсчёте мест (`members_count` у `entitlements` — единственная точка, где места считают), и в
 резолве адреса при приглашении (`GetUserIDByEmail`), и в гейте удаления
 (`ListOwnedTeamsWithMembers` — иначе удалившийся участник запирал бы владельца в команде
 навсегда). Разъезжаться этим фильтрам нельзя: показать человека в списке, но не считать

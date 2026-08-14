@@ -211,21 +211,6 @@ func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) 
 	return items, nil
 }
 
-const countWorkspaceMembers = `-- name: CountWorkspaceMembers :one
-SELECT count(*)::bigint FROM workspace_members m
-JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
-WHERE m.workspace_id = $1
-`
-
-// Удалённые аккаунты не считаются: место занимает тот, кто может войти. Тот же
-// фильтр — в подсчёте мест у entitlements, и разъехаться им нельзя.
-func (q *Queries) CountWorkspaceMembers(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countWorkspaceMembers, workspaceID)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
 const createEmailChangeToken = `-- name: CreateEmailChangeToken :exec
 INSERT INTO email_change_tokens (token_hash, user_id, new_email, expires_at)
 VALUES ($1, $2, $3, $4)

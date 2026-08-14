@@ -157,7 +157,7 @@ if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormDelete); 
 | Где | Что было бы без слепоты |
 |---|---|
 | `ListWorkspaceMembers` (состав) | владелец видит строку человека, которого нет |
-| `CountWorkspaceMembers`, `members_count` у `entitlements` (места) | место занято навсегда, замену позвать нельзя — `402` |
+| `members_count` у `entitlements` (места — единственная точка подсчёта) | место занято навсегда, замену позвать нельзя — `402` |
 | `GetUserIDByEmail` (приглашение) | «этот человек уже в пространстве» про того, кого в составе не видно |
 | `ListOwnedTeamsWithMembers` (гейт удаления) | владелец заперт в команде: уйти он не может, а снимать некого |
 

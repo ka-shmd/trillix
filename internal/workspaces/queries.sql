@@ -66,13 +66,6 @@ SET used_at = now()
 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
 RETURNING workspace_id, email, role;
 
--- name: CountWorkspaceMembers :one
--- Удалённые аккаунты не считаются: место занимает тот, кто может войти. Тот же
--- фильтр — в подсчёте мест у entitlements, и разъехаться им нельзя.
-SELECT count(*)::bigint FROM workspace_members m
-JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
-WHERE m.workspace_id = $1;
-
 -- name: GetWorkspaceByID :one
 SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1;
