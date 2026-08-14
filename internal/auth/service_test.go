@@ -84,6 +84,13 @@ type fakeStore struct {
 	profileFirstName *string
 	profileLastName  *string
 
+	// Способы входа (фаза 23, слайс E). identities — и список, и счётчик:
+	// «сколько осталось способов войти» считается по нему же.
+	identities             []Identity
+	identityEmail          string
+	identityEmailRefreshed bool
+	deletedIdentity        string
+
 	// Смена адреса (фаза 23, слайс D).
 	createdEmailChangeToken bool
 	emailChangeTokenUser    uuid.UUID
@@ -136,12 +143,32 @@ func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ s
 	return f.identityUser, nil
 }
 
-func (f *fakeStore) CreateIdentity(_ context.Context, _ postgres.DBTX, _, _ string, _ uuid.UUID) error {
+func (f *fakeStore) CreateIdentity(_ context.Context, _ postgres.DBTX, _, _ string, _ uuid.UUID, providerEmail string) error {
 	if f.createIdentityErr != nil {
 		return f.createIdentityErr
 	}
 	f.createdIdentity = true
+	f.identityEmail = providerEmail
 	return nil
+}
+
+func (f *fakeStore) SetIdentityEmail(_ context.Context, _ postgres.DBTX, _, _, providerEmail string) error {
+	f.identityEmailRefreshed = true
+	f.identityEmail = providerEmail
+	return nil
+}
+
+func (f *fakeStore) ListIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Identity, error) {
+	return f.identities, nil
+}
+
+func (f *fakeStore) CountIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int64, error) {
+	return int64(len(f.identities)), nil
+}
+
+func (f *fakeStore) DeleteIdentity(_ context.Context, _ postgres.DBTX, _ uuid.UUID, provider string) (int64, error) {
+	f.deletedIdentity = provider
+	return 1, nil
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error) {

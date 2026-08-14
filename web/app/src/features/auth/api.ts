@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { apiRequest } from '../../shared/api/client'
 import { userSchema, type User } from '../../entities/user'
+import { identitySchema, type Identity } from '../../entities/identity'
 import type { Credentials } from './validation'
 
 // Ответ /auth/providers. Схема на границе: неизвестное имя провайдера не должно
@@ -72,6 +73,23 @@ export function requestEmailChange(body: {
 
 export function confirmEmailChange(body: { token: string }): Promise<void> {
   return apiRequest('/auth/confirm-email-change', { method: 'POST', body })
+}
+
+// Способы входа аккаунта (фаза 23, слайс E).
+export function getIdentities(): Promise<Identity[]> {
+  return apiRequest('/account/identities', { schema: z.array(identitySchema) })
+}
+
+export function unlinkIdentity(provider: string): Promise<void> {
+  return apiRequest(`/account/identities/${provider}`, { method: 'DELETE' })
+}
+
+// Привязка начинается ПЕРЕХОДОМ, а не fetch'ем: браузеру нужно уйти к
+// провайдеру и вернуться, а XHR за редиректом на чужой домен не пойдёт. Адрес
+// свой, а не /auth/oauth/{p}/start: тот публичный (им входят), этот за сессией
+// и ставит подписанное намерение привязки.
+export function identityLinkUrl(provider: string): string {
+  return `/api/v1/account/identities/${provider}/start`
 }
 
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,

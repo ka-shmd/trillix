@@ -49,6 +49,26 @@ type fakeAuthService struct {
 	confirmEmailErr    error
 	confirmEmailToken  string
 	confirmEmailCalled bool
+
+	// Способы входа (фаза 23, слайс E).
+	identities    []Identity
+	identitiesErr error
+	unlinkErr     error
+	unlinkedName  string
+	unlinkedUser  uuid.UUID
+	linkErr       error
+	linkedUser    uuid.UUID
+	linkedProfile IdentityProfile
+}
+
+func (f *fakeAuthService) Identities(_ context.Context, _ uuid.UUID) ([]Identity, error) {
+	return f.identities, f.identitiesErr
+}
+
+func (f *fakeAuthService) UnlinkIdentity(_ context.Context, user User, provider string) error {
+	f.unlinkedUser = user.ID
+	f.unlinkedName = provider
+	return f.unlinkErr
 }
 
 func (f *fakeAuthService) RequestEmailChange(_ context.Context, user User, newEmail, _ string) error {

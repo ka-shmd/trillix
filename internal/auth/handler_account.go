@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/oauth"
 )
 
 // Транспорт настроек аккаунта — /api/v1/account/* (фаза 23 DEV-PLAN).
@@ -27,6 +29,15 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v1/account/profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.updateProfile))))
 	mux.Handle("POST /api/v1/account/password", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.changePassword))))
 	mux.Handle("POST /api/v1/account/email", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.requestEmailChange))))
+	mux.Handle("GET /api/v1/account/identities", h.RequireAuth(http.HandlerFunc(h.listIdentities)))
+	mux.Handle("DELETE /api/v1/account/identities/{provider}",
+		h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.unlinkIdentity))))
+	// Начало привязки — GET-редирект к провайдеру, поэтому CSRF-заголовка на нём
+	// быть не может (это навигация браузера, не fetch). Защищает не он, а то, что
+	// маршрут за RequireAuth и намерение уезжает в HttpOnly-cookie, подписанную
+	// на конкретный аккаунт.
+	mux.Handle("GET /api/v1/account/identities/{provider}/start",
+		h.RequireAuth(http.HandlerFunc(h.startIdentityLink)))
 	// Второй шаг смены адреса — ПУБЛИЧНЫЙ (по ссылке ходят из почтового клиента,
 	// где сессии кабинета может не быть): аутентифицирует сам одноразовый токен,
 	// CSRF не нужен, щит — лимит по IP. Живёт здесь, а не в Routes, потому что
@@ -171,4 +182,79 @@ func (h *Handler) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type identityResponse struct {
+	Provider string `json:"provider"`
+	// ProviderEmail — адрес аккаунта У ПРОВАЙДЕРА; пустой у привязок старше
+	// миграции 0021 (заполнится на ближайшем входе).
+	ProviderEmail string `json:"providerEmail"`
+	ConnectedAt   string `json:"connectedAt"`
+}
+
+func (h *Handler) listIdentities(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	items, err := h.svc.Identities(r.Context(), user.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	out := make([]identityResponse, 0, len(items))
+	for _, it := range items {
+		out = append(out, identityResponse{
+			Provider:      it.Provider,
+			ProviderEmail: strOrEmpty(it.ProviderEmail),
+			ConnectedAt:   it.CreatedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, out)
+}
+
+func (h *Handler) unlinkIdentity(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	if err := h.svc.UnlinkIdentity(r.Context(), user, r.PathValue("provider")); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// startIdentityLink уводит к провайдеру, пометив поход как привязку к текущему
+// аккаунту. Отдельный адрес, а не ?intent=link у общего /auth/oauth/{p}/start:
+// тот публичный (им входят), а этот обязан быть за RequireAuth — иначе намерение
+// привязки мог бы поставить кто угодно.
+func (h *Handler) startIdentityLink(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	provider, ok := h.oauthProviders[r.PathValue("provider")]
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+
+	state, err := oauth.NewSecret()
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	verifier, err := oauth.NewSecret()
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	h.setFlowCookie(w, oauthStateCookie, state+":"+verifier)
+	h.setFlowCookie(w, oauthLinkCookie, h.signLinkIntent(user.ID))
+	http.Redirect(w, r, provider.AuthURL(state, verifier), http.StatusFound)
 }

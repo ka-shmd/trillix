@@ -55,8 +55,30 @@ JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2;
 
 -- name: CreateIdentity :exec
-INSERT INTO user_identities (provider, provider_user_id, user_id)
-VALUES ($1, $2, $3);
+INSERT INTO user_identities (provider, provider_user_id, user_id, provider_email)
+VALUES ($1, $2, $3, $4);
+
+-- name: SetIdentityEmail :exec
+-- Адрес аккаунта У ПРОВАЙДЕРА обновляется на каждом входе (фаза 23, слайс E):
+-- иначе карточка «Яндекс · ivan@yandex.ru» показывала бы адрес двухлетней
+-- давности. Спросить его вне потока входа нечем — токен провайдера одноразовый.
+UPDATE user_identities SET provider_email = $3
+WHERE provider = $1 AND provider_user_id = $2;
+
+-- name: ListIdentities :many
+-- Способы входа через провайдеров у аккаунта — экран настроек. Порядок по дате
+-- привязки: он же порядок появления карточек, и он стабилен.
+SELECT provider, provider_user_id, provider_email, created_at
+FROM user_identities
+WHERE user_id = $1
+ORDER BY created_at;
+
+-- name: CountIdentities :one
+SELECT count(*) FROM user_identities WHERE user_id = $1;
+
+-- name: DeleteIdentity :execrows
+-- Отвязка. Ноль строк — привязки не было (повторный клик), и это не авария.
+DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
 
 -- name: UpdateUserProfile :one
 -- Имя и фамилия целиком, а не по одному полю: экран настроек шлёт обе строки

@@ -90,6 +90,17 @@ func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byt
 	return user_id, err
 }
 
+const countIdentities = `-- name: CountIdentities :one
+SELECT count(*) FROM user_identities WHERE user_id = $1
+`
+
+func (q *Queries) CountIdentities(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countIdentities, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -330,18 +341,24 @@ func (q *Queries) CreateFormWithSchema(ctx context.Context, arg CreateFormWithSc
 }
 
 const createIdentity = `-- name: CreateIdentity :exec
-INSERT INTO user_identities (provider, provider_user_id, user_id)
-VALUES ($1, $2, $3)
+INSERT INTO user_identities (provider, provider_user_id, user_id, provider_email)
+VALUES ($1, $2, $3, $4)
 `
 
 type CreateIdentityParams struct {
 	Provider       string
 	ProviderUserID string
 	UserID         uuid.UUID
+	ProviderEmail  pgtype.Text
 }
 
 func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) error {
-	_, err := q.db.Exec(ctx, createIdentity, arg.Provider, arg.ProviderUserID, arg.UserID)
+	_, err := q.db.Exec(ctx, createIdentity,
+		arg.Provider,
+		arg.ProviderUserID,
+		arg.UserID,
+		arg.ProviderEmail,
+	)
 	return err
 }
 
@@ -592,6 +609,24 @@ type DeleteFormParams struct {
 // (0 → чужая/несуществующая форма).
 func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteForm, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteIdentity = `-- name: DeleteIdentity :execrows
+DELETE FROM user_identities WHERE user_id = $1 AND provider = $2
+`
+
+type DeleteIdentityParams struct {
+	UserID   uuid.UUID
+	Provider string
+}
+
+// Отвязка. Ноль строк — привязки не было (повторный клик), и это не авария.
+func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteIdentity, arg.UserID, arg.Provider)
 	if err != nil {
 		return 0, err
 	}
@@ -1735,6 +1770,47 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 	return items, nil
 }
 
+const listIdentities = `-- name: ListIdentities :many
+SELECT provider, provider_user_id, provider_email, created_at
+FROM user_identities
+WHERE user_id = $1
+ORDER BY created_at
+`
+
+type ListIdentitiesRow struct {
+	Provider       string
+	ProviderUserID string
+	ProviderEmail  pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+}
+
+// Способы входа через провайдеров у аккаунта — экран настроек. Порядок по дате
+// привязки: он же порядок появления карточек, и он стабилен.
+func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListIdentitiesRow, error) {
+	rows, err := q.db.Query(ctx, listIdentities, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIdentitiesRow
+	for rows.Next() {
+		var i ListIdentitiesRow
+		if err := rows.Scan(
+			&i.Provider,
+			&i.ProviderUserID,
+			&i.ProviderEmail,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingInvitations = `-- name: ListPendingInvitations :many
 SELECT email, role, expires_at
 FROM invitations
@@ -2229,6 +2305,25 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setIdentityEmail = `-- name: SetIdentityEmail :exec
+UPDATE user_identities SET provider_email = $3
+WHERE provider = $1 AND provider_user_id = $2
+`
+
+type SetIdentityEmailParams struct {
+	Provider       string
+	ProviderUserID string
+	ProviderEmail  pgtype.Text
+}
+
+// Адрес аккаунта У ПРОВАЙДЕРА обновляется на каждом входе (фаза 23, слайс E):
+// иначе карточка «Яндекс · ivan@yandex.ru» показывала бы адрес двухлетней
+// давности. Спросить его вне потока входа нечем — токен провайдера одноразовый.
+func (q *Queries) SetIdentityEmail(ctx context.Context, arg SetIdentityEmailParams) error {
+	_, err := q.db.Exec(ctx, setIdentityEmail, arg.Provider, arg.ProviderUserID, arg.ProviderEmail)
+	return err
 }
 
 const setUserPassword = `-- name: SetUserPassword :exec

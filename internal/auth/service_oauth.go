@@ -68,6 +68,13 @@ func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (Use
 		if err != nil {
 			return User{}, "", err
 		}
+		// Адрес у провайдера, наоборот, ОСВЕЖАЕТСЯ: он подписывает карточку на
+		// экране настроек, и устаревший там хуже отсутствующего.
+		if p.Email != "" {
+			if e := s.repo.SetIdentityEmail(ctx, s.db, p.Provider, p.ProviderUserID, email); e != nil {
+				return User{}, "", e
+			}
+		}
 		token, err := s.createSession(ctx, user.ID)
 		if err != nil {
 			return User{}, "", err
@@ -170,7 +177,7 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 		return User{}, "", domain.ErrInvalidCredentials
 	}
 
-	if err := s.repo.CreateIdentity(ctx, s.db, provider, providerUserID, user.ID); err != nil {
+	if err := s.repo.CreateIdentity(ctx, s.db, provider, providerUserID, user.ID, ""); err != nil {
 		// Тот же аккаунт провайдера уже привязан (к этому пользователю или к
 		// другому) — повторный клик по «привязать» не должен выглядеть аварией.
 		if isUniqueViolation(err) {
@@ -251,7 +258,7 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email string, p Id
 		if e := s.repo.CreateSubscription(ctx, tx, userID, defaultPlanCode); e != nil {
 			return e
 		}
-		if e := s.repo.CreateIdentity(ctx, tx, p.Provider, p.ProviderUserID, userID); e != nil {
+		if e := s.repo.CreateIdentity(ctx, tx, p.Provider, p.ProviderUserID, userID, email); e != nil {
 			return e
 		}
 		// Вход через провайдера считаем подтверждением email: чтобы завести аккаунт

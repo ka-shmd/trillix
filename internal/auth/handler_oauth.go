@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/oauth"
@@ -29,6 +31,12 @@ const (
 	// oauthPendingCookie несёт подписанное «этот человек подтвердил у провайдера
 	// вот эту личность» между колбэком и вводом пароля.
 	oauthPendingCookie = "oauth_pending"
+	// oauthLinkCookie несёт подписанное «этот поход к провайдеру начат из
+	// настроек ВОТ ЭТОГО аккаунта» (фаза 23, слайс E). HttpOnly и ставится
+	// только эндпоинтом за RequireAuth — в этом вся защита: намерение в
+	// query-параметре означало бы, что жертву можно заманить пройти привязку и
+	// прицепить к её аккаунту ЛИЧНОСТЬ АТАКУЮЩЕГО, получив постоянный вход.
+	oauthLinkCookie = "oauth_link"
 
 	// Человек уходит к провайдеру и возвращается — это минуты, не часы.
 	oauthFlowTTL = 15 * time.Minute
@@ -42,6 +50,7 @@ type oauthProviders map[string]oauth.Provider
 type oauthService interface {
 	LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error)
 	LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error)
+	LinkIdentity(ctx context.Context, userID uuid.UUID, p IdentityProfile) error
 }
 
 // OAuthRoutes регистрирует эндпоинты входа через провайдеров.
@@ -97,6 +106,9 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// нельзя — http.Redirect и WriteError к тому моменту уже записали заголовки,
 	// и Set-Cookie просто не уехал бы, оставив state жить все 15 минут TTL.
 	h.expireCookie(w, oauthStateCookie, true)
+	// Намерение привязки одноразовое ровно так же: читаем из запроса и гасим.
+	linkUserID, isLink := h.readLinkIntent(r)
+	h.expireCookie(w, oauthLinkCookie, true)
 
 	// Провайдер вернул отказ (человек нажал «Отклонить») — это не авария.
 	if r.URL.Query().Get("error") != "" {
@@ -134,6 +146,13 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		// на экран входа.
 		h.logOAuthFailure(r, name, "exchange", err)
 		h.redirectToApp(w, r, "/login?oauth=failed")
+		return
+	}
+
+	// Поход начат из настроек? Тогда это не вход, а привязка к аккаунту, который
+	// уже сидит в этом браузере.
+	if isLink {
+		h.finishLink(w, r, linkUserID, name, profile)
 		return
 	}
 
@@ -279,4 +298,89 @@ func (h *Handler) pendingMAC(payload string) []byte {
 	mac := hmac.New(sha256.New, h.pendingSecret)
 	mac.Write([]byte("oauth-link:" + payload))
 	return mac.Sum(nil)
+}
+
+// linkIntentTTL совпадает с окном самого похода к провайдеру: намерение живёт
+// ровно столько, сколько может длиться редирект туда и обратно.
+
+// signLinkIntent подписывает «привязку начал вот этот аккаунт». Ключ тот же
+// FORM_TOKEN_SECRET, но метка назначения своя — подпись из одного контекста не
+// должна приниматься в другом.
+func (h *Handler) signLinkIntent(userID uuid.UUID) string {
+	payload := fmt.Sprintf("%s:%d", userID, time.Now().Add(oauthFlowTTL).Unix())
+	return payload + ":" + base64.RawURLEncoding.EncodeToString(h.linkMAC(payload))
+}
+
+// readLinkIntent достаёт из запроса намерение привязки: чей аккаунт его начал.
+// Плохая подпись, истёкший срок и отсутствие cookie неразличимы снаружи — все
+// они означают «это обычный вход».
+func (h *Handler) readLinkIntent(r *http.Request) (uuid.UUID, bool) {
+	c, err := r.Cookie(oauthLinkCookie)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	i := strings.LastIndex(c.Value, ":")
+	if i < 0 {
+		return uuid.Nil, false
+	}
+	payload, sig := c.Value[:i], c.Value[i+1:]
+	want, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil || !hmac.Equal(want, h.linkMAC(payload)) {
+		return uuid.Nil, false
+	}
+	rawID, rawExp, found := strings.Cut(payload, ":")
+	if !found {
+		return uuid.Nil, false
+	}
+	exp, err := strconv.ParseInt(rawExp, 10, 64)
+	if err != nil || time.Now().After(time.Unix(exp, 0)) {
+		return uuid.Nil, false
+	}
+	userID, err := uuid.Parse(rawID)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return userID, true
+}
+
+func (h *Handler) linkMAC(payload string) []byte {
+	mac := hmac.New(sha256.New, h.pendingSecret)
+	mac.Write([]byte("oauth-link-intent:" + payload))
+	return mac.Sum(nil)
+}
+
+// finishLink завершает привязку из настроек. Возвращает человека на экран
+// настроек с исходом в параметре — колбэк это навигация браузера, а не вызов
+// API, и JSON-ошибку сюда отдавать нельзя (правило колбэка, фаза 11).
+func (h *Handler) finishLink(w http.ResponseWriter, r *http.Request, linkUserID uuid.UUID, provider string, profile oauth.Profile) {
+	// Подписанная cookie говорит, ЧЕЙ поход, но живой должна быть и сессия, и
+	// именно та же: иначе привязка доезжает до аккаунта, из которого человек уже
+	// вышел, а браузер тем временем занят другим.
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		h.redirectToApp(w, r, "/settings/account?link=expired")
+		return
+	}
+	user, err := h.svc.UserByToken(r.Context(), c.Value)
+	if err != nil || user.ID != linkUserID {
+		h.redirectToApp(w, r, "/settings/account?link=expired")
+		return
+	}
+
+	err = h.oauthSvc.LinkIdentity(r.Context(), linkUserID, IdentityProfile{
+		Provider:       provider,
+		ProviderUserID: profile.ID,
+		Email:          profile.Email,
+		FirstName:      profile.FirstName,
+		LastName:       profile.LastName,
+	})
+	switch {
+	case err == nil:
+		h.redirectToApp(w, r, "/settings/account?link=ok")
+	case errors.Is(err, domain.ErrConflict):
+		h.redirectToApp(w, r, "/settings/account?link=conflict")
+	default:
+		h.logOAuthFailure(r, provider, "link", err)
+		h.redirectToApp(w, r, "/settings/account?link=failed")
+	}
 }

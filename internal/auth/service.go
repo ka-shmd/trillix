@@ -57,7 +57,11 @@ const (
 type Store interface {
 	CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error)
 	GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error)
-	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error
+	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID, providerEmail string) error
+	SetIdentityEmail(ctx context.Context, db postgres.DBTX, provider, providerUserID, providerEmail string) error
+	ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Identity, error)
+	CountIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
+	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error

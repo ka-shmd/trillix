@@ -1,23 +1,40 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { z } from 'zod'
 
 import {
+  identitiesQueryOptions,
   meQueryOptions,
+  providersQueryOptions,
   useChangePassword,
   useRequestEmailChange,
+  useUnlinkIdentity,
   useUpdateProfile,
 } from '../../features/auth/queries'
+import { identityLinkUrl } from '../../features/auth/api'
+import { providerTitle } from '../../entities/identity'
+import { formatDate } from '../../shared/format'
 import { ApiError } from '../../shared/api/errors'
 import type { User } from '../../entities/user'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN: профиль (слайс A) и
-// пароль (слайс C). Дальше сюда приезжают смена почты, второй фактор, способы
-// входа и удаление аккаунта (docs/design/account-settings.md).
+// Страница «Аккаунт» (/settings/account). Фаза 23 DEV-PLAN: профиль, адрес,
+// пароль и способы входа. Дальше сюда приезжают второй фактор и удаление
+// аккаунта (docs/design/account-settings.md).
+//
+// link — исход возврата от провайдера после привязки (слайс E). Колбэк это
+// навигация браузера, а не вызов API: сказать «получилось» он может только
+// параметром адреса. Мусор гасит catch — правка адреса руками не должна ронять
+// экран.
+const accountSearchSchema = z.object({
+  link: z.enum(['ok', 'conflict', 'expired', 'failed']).optional().catch(undefined),
+})
+
 export const Route = createFileRoute('/_app/settings/account')({
+  validateSearch: accountSearchSchema,
   component: AccountPage,
 })
 
@@ -39,6 +56,7 @@ function AccountPage() {
       <AccountForm key={user.id} user={user} />
       <EmailForm key={`email-${user.email}`} user={user} />
       <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
+      <IdentitiesSection hasPassword={user.hasPassword} />
     </div>
   )
 }
@@ -321,4 +339,122 @@ function emailErrorText(error: unknown): string {
     }
   }
   return 'Не удалось отправить письмо. Попробуйте ещё раз.'
+}
+
+// IdentitiesSection — способы входа через провайдеров (слайс E). VK ID появится
+// здесь новой карточкой без правок: список строится из того, что подключено, и
+// того, что вообще включено в окружении бэка.
+function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
+  const { link } = Route.useSearch()
+  const identities = useQuery(identitiesQueryOptions)
+  const providers = useQuery(providersQueryOptions)
+  const unlink = useUnlinkIdentity()
+
+  const connected = identities.data ?? []
+  const available = (providers.data ?? []).filter(
+    (p) => !connected.some((c) => c.provider === p),
+  )
+  // Последний способ войти снять нельзя — кнопку не рисуем и говорим почему.
+  // Сервер ответит 409 в любом случае, но узнавать об этом из ошибки после
+  // нажатия — плохой способ объяснять правило.
+  const lastWayIn = !hasPassword && connected.length <= 1
+
+  return (
+    <section className="flex flex-col gap-4 border-t pt-8">
+      <div>
+        <h2 className="text-lg font-medium">Способы входа</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Аккаунт один, войти в него можно несколькими способами.
+        </p>
+      </div>
+
+      {link && (
+        <p
+          role="status"
+          className={link === 'ok' ? 'text-sm text-muted-foreground' : 'text-sm text-destructive'}
+        >
+          {linkOutcomeText(link)}
+        </p>
+      )}
+
+      {identities.isError ? (
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+          <p className="mb-3 text-sm">Не удалось загрузить способы входа.</p>
+          <Button variant="outline" size="sm" onClick={() => identities.refetch()}>
+            Повторить
+          </Button>
+        </div>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          <li className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <p className="text-sm">Пароль</p>
+              <p className="text-sm text-muted-foreground">
+                {hasPassword ? 'Задан' : 'Не задан'}
+              </p>
+            </div>
+          </li>
+          {connected.map((identity) => (
+            <li
+              key={identity.provider}
+              className="flex items-center justify-between gap-3 rounded-lg border p-3"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm">{providerTitle(identity.provider)}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {identity.providerEmail !== '' && `${identity.providerEmail} · `}
+                  подключён {formatDate(identity.connectedAt)}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={lastWayIn || unlink.isPending}
+                onClick={() => unlink.mutate(identity.provider)}
+              >
+                Отключить
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {lastWayIn && connected.length > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Это единственный способ войти. Чтобы его отключить, сначала задайте пароль.
+        </p>
+      )}
+
+      {available.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {available.map((provider) => (
+            // Ссылка, а не кнопка с fetch: браузеру нужен полноценный переход к
+            // провайдеру и обратно.
+            <Button key={provider} variant="outline" size="sm" asChild>
+              <a href={identityLinkUrl(provider)}>Подключить {providerTitle(provider)}</a>
+            </Button>
+          ))}
+        </div>
+      )}
+
+      {unlink.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          Не удалось отключить. Попробуйте ещё раз.
+        </p>
+      )}
+    </section>
+  )
+}
+
+function linkOutcomeText(link: 'ok' | 'conflict' | 'expired' | 'failed'): string {
+  switch (link) {
+    case 'ok':
+      return 'Способ входа подключён.'
+    case 'conflict':
+      return 'Этот аккаунт провайдера уже привязан.'
+    case 'expired':
+      return 'Привязка не завершена: сеанс истёк. Попробуйте ещё раз.'
+    case 'failed':
+      return 'Не удалось подключить. Попробуйте ещё раз.'
+  }
 }

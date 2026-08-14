@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -36,6 +38,11 @@ type fakeOAuthService struct {
 	called  bool
 	err     error
 	profile IdentityProfile
+
+	// Привязка из настроек (фаза 23, слайс E).
+	linkErr       error
+	linkedUser    uuid.UUID
+	linkedProfile IdentityProfile
 }
 
 func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfile) (User, string, error) {
@@ -47,6 +54,12 @@ func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfil
 func (f *fakeOAuthService) LinkIdentityWithPassword(context.Context, string, string, string, string) (User, string, error) {
 	f.called = true
 	return User{}, "session-token", f.err
+}
+
+func (f *fakeOAuthService) LinkIdentity(_ context.Context, userID uuid.UUID, p IdentityProfile) error {
+	f.linkedUser = userID
+	f.linkedProfile = p
+	return f.linkErr
 }
 
 func newOAuthHandler(t *testing.T, p *fakeProvider, svc *fakeOAuthService) (*Handler, *http.ServeMux) {

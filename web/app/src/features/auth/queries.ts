@@ -10,6 +10,8 @@ import {
   register,
   changePassword,
   confirmEmailChange,
+  getIdentities,
+  unlinkIdentity,
   requestEmailChange,
   resendVerification,
   resetPassword,
@@ -152,5 +154,26 @@ export function useConfirmEmailChange() {
   return useMutation({
     mutationFn: confirmEmailChange,
     onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Способы входа — серверный стейт: список меняется привязкой (через переход к
+// провайдеру и обратно) и отвязкой.
+export const identitiesQueryOptions = queryOptions({
+  queryKey: authKeys.identities(),
+  queryFn: getIdentities,
+  retry: false,
+})
+
+export function useUnlinkIdentity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: unlinkIdentity,
+    // Инвалидируем СПИСОК и профиль: отвязка не меняет hasPassword, но экран
+    // рисует способы входа из обоих источников, и разъехаться им нельзя.
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: authKeys.identities() })
+      await qc.invalidateQueries({ queryKey: authKeys.me() })
+    },
   })
 }

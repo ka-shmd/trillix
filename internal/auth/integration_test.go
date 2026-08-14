@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, outbox CASCADE`)
+		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}

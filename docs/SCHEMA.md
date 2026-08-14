@@ -54,7 +54,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `provider_user_id` | `TEXT` | идентификатор аккаунта у провайдера |
 | `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
-| `provider_email` | `TEXT` | nullable (`0021`); адрес аккаунта **у провайдера** — подпись под карточкой «Яндекс · ivan@yandex.ru». Это не `users.email`: они расходятся после смены почты у нас или привязки Яндекса с другим ящиком, и расхождение здесь полезно (сюжет TD-34). `NULL` у привязок, сделанных до `0021`: токен провайдера одноразовый (ADR §10), адрес заполнится на ближайшем входе |
+| `provider_email` | `TEXT` | nullable (`0021`); адрес аккаунта **у провайдера** — подпись под карточкой «Яндекс · ivan@yandex.ru». Это не `users.email`: они расходятся после смены почты у нас или привязки Яндекса с другим ящиком, и расхождение здесь полезно (сюжет TD-34). `NULL` у привязок, сделанных до `0021`: токен провайдера одноразовый (ADR §10), адрес заполнится на ближайшем входе — он **освежается на каждом входе** через провайдера |
 | | | PK — `(provider, provider_user_id)`; индекс `idx_user_identities_user` по `user_id` |
 
 ## `workspaces` (0002, `personal_user_id` — 0016)

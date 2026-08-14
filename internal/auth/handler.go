@@ -41,6 +41,8 @@ type authService interface {
 	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
 	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword string) error
 	ConfirmEmailChange(ctx context.Context, token string) error
+	Identities(ctx context.Context, userID uuid.UUID) ([]Identity, error)
+	UnlinkIdentity(ctx context.Context, user User, provider string) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —

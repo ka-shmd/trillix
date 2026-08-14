@@ -27,6 +27,15 @@ type User struct {
 	LastName  *string
 }
 
+// Identity — способ входа через провайдера, как его видит экран настроек.
+// ProviderUserID наружу не отдаётся: человеку он ничего не говорит, а карточку
+// подписывает адрес.
+type Identity struct {
+	Provider      string
+	ProviderEmail *string // nil — привязка старше 0021, адрес приедет на ближайшем входе
+	CreatedAt     time.Time
+}
+
 // Workspace — личный воркспейс пользователя.
 type Workspace struct {
 	ID        uuid.UUID
@@ -148,17 +157,68 @@ func (Repo) GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, p
 	return userFromRow(row), nil
 }
 
-// CreateIdentity привязывает аккаунт провайдера к пользователю.
-func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error {
+// CreateIdentity привязывает аккаунт провайдера к пользователю. providerEmail —
+// адрес у провайдера (подпись под карточкой); пустой означает NULL.
+func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID, providerEmail string) error {
 	err := postgres.New(db).CreateIdentity(ctx, postgres.CreateIdentityParams{
 		Provider:       provider,
 		ProviderUserID: providerUserID,
 		UserID:         userID,
+		ProviderEmail:  pgTextOrNull(providerEmail),
 	})
 	if err != nil {
 		return fmt.Errorf("create identity: %w", err)
 	}
 	return nil
+}
+
+// SetIdentityEmail обновляет адрес у провайдера (на каждом входе).
+func (Repo) SetIdentityEmail(ctx context.Context, db postgres.DBTX, provider, providerUserID, providerEmail string) error {
+	err := postgres.New(db).SetIdentityEmail(ctx, postgres.SetIdentityEmailParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+		ProviderEmail:  pgTextOrNull(providerEmail),
+	})
+	if err != nil {
+		return fmt.Errorf("set identity email: %w", err)
+	}
+	return nil
+}
+
+// ListIdentities — способы входа через провайдеров у аккаунта.
+func (Repo) ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Identity, error) {
+	rows, err := postgres.New(db).ListIdentities(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list identities: %w", err)
+	}
+	out := make([]Identity, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Identity{
+			Provider:      r.Provider,
+			ProviderEmail: ptrStr(r.ProviderEmail),
+			CreatedAt:     r.CreatedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// CountIdentities — сколько привязок у аккаунта (гейт «останется ли способ войти»).
+func (Repo) CountIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).CountIdentities(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("count identities: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteIdentity отвязывает провайдера; возвращает число удалённых строк (ноль —
+// привязки не было).
+func (Repo) DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error) {
+	n, err := postgres.New(db).DeleteIdentity(ctx, postgres.DeleteIdentityParams{UserID: userID, Provider: provider})
+	if err != nil {
+		return 0, fmt.Errorf("delete identity: %w", err)
+	}
+	return n, nil
 }
 
 // UpdateProfile ставит имя и фамилию целиком; nil — стереть (NULL в БД).
@@ -347,6 +407,16 @@ func ptrStr(v pgtype.Text) *string {
 	}
 	s := v.String
 	return &s
+}
+
+// pgTextOrNull переводит строку в pgtype.Text, считая ПУСТУЮ строку за NULL:
+// «провайдер адреса не дал» и «адрес пустой» — одно и то же состояние, и двух
+// его представлений в колонке быть не должно.
+func pgTextOrNull(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
 }
 
 // pgText переводит *string в pgtype.Text для параметров запроса: nil → NULL.

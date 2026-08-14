@@ -4,6 +4,7 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -286,5 +287,75 @@ func TestOAuth_ProviderNameFillsEmptyOnly(t *testing.T) {
 	}
 	if last != "Петров" {
 		t.Errorf("фамилия = %q: пустое поле не дозаполнено провайдером", last)
+	}
+}
+
+// Карточка способа входа: адрес у провайдера сохраняется при заведении аккаунта
+// и ОСВЕЖАЕТСЯ на каждом входе. Пятый пункт критерия приёмки фазы 23.
+func TestOAuth_IdentityCardShowsProviderEmail(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{ID: "1234567", Email: "ivan@yandex.ru"})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+
+	var provider, email string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT provider, provider_email FROM user_identities`).Scan(&provider, &email); err != nil {
+		t.Fatalf("select identity: %v", err)
+	}
+	if provider != "yandex" || email != "ivan@yandex.ru" {
+		t.Fatalf("привязка = (%q, %q)", provider, email)
+	}
+
+	// Список для экрана настроек отдаёт то же самое.
+	list := get(t, c, srv.URL+"/api/v1/account/identities")
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("список привязок: статус %d", list.StatusCode)
+	}
+	var cards []struct {
+		Provider      string `json:"provider"`
+		ProviderEmail string `json:"providerEmail"`
+		ConnectedAt   string `json:"connectedAt"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&cards); err != nil {
+		t.Fatalf("разбор списка: %v", err)
+	}
+	_ = list.Body.Close()
+	if len(cards) != 1 || cards[0].ProviderEmail != "ivan@yandex.ru" || cards[0].ConnectedAt == "" {
+		t.Fatalf("карточки = %+v", cards)
+	}
+}
+
+// Отвязать единственный способ войти у аккаунта без пароля нельзя: 409, и
+// привязка остаётся на месте.
+func TestOAuth_UnlinkLastIdentityRefused(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{ID: "1234567", Email: "ivan@yandex.ru"})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/account/identities/yandex", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-CSRF-Token", csrfHeader(t, c, srv.URL))
+	del, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	if del.StatusCode != http.StatusConflict {
+		t.Fatalf("статус %d, ожидалось 409; тело=%s", del.StatusCode, body(t, del))
+	}
+
+	var n int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM user_identities`).Scan(&n); err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("привязок осталось %d, ожидалась 1 — отказ обязан ничего не менять", n)
 	}
 }
