@@ -146,6 +146,9 @@ type requestEmailChangeRequest struct {
 	// CurrentPassword — как и у смены пароля, необязателен только у аккаунта без
 	// пароля (заведён через провайдера).
 	CurrentPassword string `json:"currentPassword"`
+	// Code — код второго фактора; обязателен, если фактор включён. Тот же состав
+	// подтверждения, что у удаления аккаунта.
+	Code string `json:"code"`
 }
 
 // requestEmailChange начинает смену адреса. Адрес в users НЕ меняется: ответ 204
@@ -172,7 +175,7 @@ func (h *Handler) requestEmailChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.RequestEmailChange(r.Context(), user, req.NewEmail, req.CurrentPassword); err != nil {
+	if err := h.svc.RequestEmailChange(r.Context(), user, req.NewEmail, req.CurrentPassword, req.Code); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}

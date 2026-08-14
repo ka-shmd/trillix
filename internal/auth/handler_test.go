@@ -45,6 +45,7 @@ type fakeAuthService struct {
 	// Смена адреса (фаза 23, слайс D).
 	emailChangeErr     error
 	emailChangeNew     string
+	emailChangeCode    string
 	emailChangeUser    uuid.UUID
 	confirmEmailErr    error
 	confirmEmailToken  string
@@ -135,9 +136,10 @@ func (f *fakeAuthService) UnlinkIdentity(_ context.Context, user User, provider 
 	return f.unlinkErr
 }
 
-func (f *fakeAuthService) RequestEmailChange(_ context.Context, user User, newEmail, _ string) error {
+func (f *fakeAuthService) RequestEmailChange(_ context.Context, user User, newEmail, _, code string) error {
 	f.emailChangeUser = user.ID
 	f.emailChangeNew = newEmail
+	f.emailChangeCode = code
 	return f.emailChangeErr
 }
 

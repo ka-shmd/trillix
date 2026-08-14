@@ -86,6 +86,7 @@ export function changePassword(body: { currentPassword: string; newPassword: str
 export function requestEmailChange(body: {
   newEmail: string
   currentPassword: string
+  code: string
 }): Promise<void> {
   return apiRequest('/account/email', { method: 'POST', body })
 }

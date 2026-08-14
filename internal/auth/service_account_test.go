@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -184,7 +185,7 @@ func TestRequestEmailChange_QueuesTwoLettersAndKeepsEmail(t *testing.T) {
 	mailer := &fakeEnqueuer{}
 	svc := newServiceMail(store, mailer)
 
-	if err := svc.RequestEmailChange(context.Background(), user, "  New@Example.COM ", "old-password"); err != nil {
+	if err := svc.RequestEmailChange(context.Background(), user, "  New@Example.COM ", "old-password", ""); err != nil {
 		t.Fatalf("RequestEmailChange: %v", err)
 	}
 	if !store.createdEmailChangeToken || store.emailChangeTokenUser != user.ID {
@@ -221,7 +222,7 @@ func TestRequestEmailChange_WrongPasswordChangesNothing(t *testing.T) {
 
 	// Пароль — единственное, что отличает «человек меняет свой адрес» от «увели
 	// сессию и уводят аккаунт»: после смены восстановление пойдёт на новый ящик.
-	err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "not-the-password")
+	err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "not-the-password", "")
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
 		t.Fatalf("ошибка = %v, ожидалась ErrInvalidCredentials", err)
 	}
@@ -230,11 +231,55 @@ func TestRequestEmailChange_WrongPasswordChangesNothing(t *testing.T) {
 	}
 }
 
+// Второй фактор включён — пароля мало. Смена адреса уводит канал восстановления
+// (сброс пароля пойдёт на новый ящик), поэтому состав подтверждения тот же, что
+// у удаления аккаунта. Мутация «проверять только пароль» роняет этот тест.
+func TestRequestEmailChange_RequiresSecondFactorWhenEnabled(t *testing.T) {
+	user, _ := emailChangeUser(t)
+	store := &fakeStore{}
+	enabledTOTP(t, store)
+	mailer := &fakeEnqueuer{}
+	svc := newServiceMail(store, mailer).WithTOTPKey(testTOTPKey)
+
+	err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "old-password", "")
+	if !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("ошибка = %v, ожидалась ErrInvalidCredentials на пустой код", err)
+	}
+	if store.createdEmailChangeToken || len(mailer.msgs) != 0 {
+		t.Fatal("без кода второго фактора заведён токен или ушло письмо")
+	}
+}
+
+// Аккаунт через провайдера: пароля нет, и до слайса F доказывать было нечем
+// вовсе — угнанной сессии хватало, чтобы увести адрес. Теперь доказывают кодом.
+func TestRequestEmailChange_ProviderOnlyAccountProvesByCode(t *testing.T) {
+	user := User{ID: domain.NewID(), Email: "old@example.com"} // PasswordHash == nil
+	store := &fakeStore{}
+	secret := enabledTOTP(t, store)
+	mailer := &fakeEnqueuer{}
+	svc := newServiceMail(store, mailer).WithTOTPKey(testTOTPKey)
+
+	if err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "", ""); !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("без кода: ошибка = %v, ожидалась ErrInvalidCredentials", err)
+	}
+	if store.createdEmailChangeToken {
+		t.Fatal("адрес уводится одной сессией — у аккаунта без пароля код и есть единственное доказательство")
+	}
+
+	code := totpCode(secret, time.Now().Unix()/30)
+	if err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "", code); err != nil {
+		t.Fatalf("с верным кодом: %v", err)
+	}
+	if !store.createdEmailChangeToken || len(mailer.msgs) != 2 {
+		t.Fatalf("токен=%v, писем=%d — ожидались токен и два письма", store.createdEmailChangeToken, len(mailer.msgs))
+	}
+}
+
 func TestRequestEmailChange_RejectsTakenAndSameAddress(t *testing.T) {
 	user, _ := emailChangeUser(t)
 
 	taken := &fakeStore{userExists: true} // адрес занят кем-то ещё
-	if err := newService(taken).RequestEmailChange(context.Background(), user, "busy@example.com", "old-password"); !errors.Is(err, domain.ErrEmailTaken) {
+	if err := newService(taken).RequestEmailChange(context.Background(), user, "busy@example.com", "old-password", ""); !errors.Is(err, domain.ErrEmailTaken) {
 		t.Fatalf("ошибка на занятый адрес = %v, ожидалась ErrEmailTaken", err)
 	}
 	if taken.createdEmailChangeToken {
@@ -243,7 +288,7 @@ func TestRequestEmailChange_RejectsTakenAndSameAddress(t *testing.T) {
 
 	// Свой же адрес — не смена, а недоразумение: письмо слать некуда и незачем.
 	same := &fakeStore{}
-	if err := newService(same).RequestEmailChange(context.Background(), user, "OLD@example.com", "old-password"); !errors.Is(err, domain.ErrValidation) {
+	if err := newService(same).RequestEmailChange(context.Background(), user, "OLD@example.com", "old-password", ""); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка на собственный адрес = %v, ожидалась ErrValidation", err)
 	}
 }

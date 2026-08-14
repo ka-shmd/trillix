@@ -361,15 +361,27 @@ function EmailForm({ user }: { user: User }) {
   const request = useRequestEmailChange()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
 
-  const ready = email.trim() !== '' && (!user.hasPassword || password !== '')
+  // Тот же состав подтверждения, что у удаления аккаунта: пароль, если он есть,
+  // и код, если включён фактор. Смена адреса уводит канал восстановления, и по
+  // последствиям она ближе к удалению, чем к правке профиля.
+  const ready =
+    email.trim() !== '' &&
+    (!user.hasPassword || password !== '') &&
+    (!user.twoFactorEnabled || code.trim() !== '')
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!ready) return
     request.mutate(
-      { newEmail: email.trim(), currentPassword: password },
-      { onSuccess: () => setPassword('') },
+      { newEmail: email.trim(), currentPassword: password, code: code.trim() },
+      {
+        onSuccess: () => {
+          setPassword('')
+          setCode('')
+        },
+      },
     )
   }
 
@@ -424,6 +436,21 @@ function EmailForm({ user }: { user: User }) {
             />
           </div>
         )}
+        {user.twoFactorEnabled && (
+          <div>
+            <Label htmlFor="email-code" className="mb-2 block">
+              Код из приложения или резервный
+            </Label>
+            <Input
+              id="email-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123456"
+            />
+          </div>
+        )}
 
         <div>
           <Button type="submit" disabled={!ready || request.isPending}>
@@ -444,8 +471,10 @@ function EmailForm({ user }: { user: User }) {
 function emailErrorText(error: unknown): string {
   if (error instanceof ApiError) {
     switch (error.code) {
+      // Отказ один на оба подтверждения — сервер не различает «пароль не тот» и
+      // «код не тот» намеренно, и формулировка обязана это выдерживать.
       case 'invalid_credentials':
-        return 'Текущий пароль неверный.'
+        return 'Пароль или код не подошли. Проверьте и попробуйте ещё раз.'
       case 'email_taken':
         return 'Этот адрес уже занят другим аккаунтом.'
       case 'validation_failed':

@@ -124,7 +124,12 @@ const emailChangeTTL = 24 * time.Hour
 //
 // Двухшаговость — не осторожность, а единственный способ не потерять аккаунт на
 // опечатке: email и есть ключ восстановления, сброс пароля ходит туда же.
-func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword string) error {
+//
+// Подтверждение — пароль, если он есть, И код второго фактора, если тот включён:
+// тот же состав, что у удаления аккаунта, и по той же причине. Смена адреса
+// уводит канал восстановления (сброс пароля пойдёт на новый ящик), то есть по
+// последствиям она ближе к удалению, чем к правке профиля.
+func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error {
 	newEmail = normalizeEmail(newEmail)
 	if _, err := netmail.ParseAddress(newEmail); err != nil {
 		return fmt.Errorf("%w: некорректный email", domain.ErrValidation)
@@ -133,11 +138,8 @@ func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, c
 		return fmt.Errorf("%w: это уже адрес вашего аккаунта", domain.ErrValidation)
 	}
 
-	// Пароль — единственное, что отличает «человек меняет свой адрес» от «угнали
-	// сессию и уводят аккаунт»: после смены адреса восстановление пароля пойдёт
-	// на новый ящик. У аккаунта без пароля проверять нечем (§4 спеки), и там
-	// защитой остаётся уведомление на старый адрес — до слайса F, где появится
-	// второй фактор.
+	// Пароль отличает «человек меняет свой адрес» от «угнали сессию и уводят
+	// аккаунт»: после смены адреса восстановление пароля пойдёт на новый ящик.
 	if user.PasswordHash != nil {
 		ok, err := VerifyPassword(*user.PasswordHash, currentPassword)
 		if err != nil {
@@ -145,6 +147,18 @@ func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, c
 		}
 		if !ok {
 			return domain.ErrInvalidCredentials
+		}
+	}
+	// Мина: у аккаунта, заведённого через провайдера, пароля нет, и без этой
+	// проверки увести адрес можно было бы одной угнанной сессией — доказывать
+	// было бы нечем вообще. Второй фактор здесь и есть то, чем доказывают.
+	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
+	if err != nil {
+		return err
+	}
+	if enabled {
+		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
+			return err
 		}
 	}
 

@@ -40,7 +40,7 @@ type authService interface {
 	ResendVerification(ctx context.Context, user User) error
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
 	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
-	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword string) error
+	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error
 	ConfirmEmailChange(ctx context.Context, token string) error
 	Identities(ctx context.Context, userID uuid.UUID) ([]Identity, error)
 	UnlinkIdentity(ctx context.Context, user User, provider string) error
