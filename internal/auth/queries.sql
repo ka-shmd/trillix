@@ -221,12 +221,16 @@ SELECT secret, confirmed_at, last_step FROM user_totp WHERE user_id = $1;
 UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1;
 
 -- name: MarkTOTPStep :execrows
--- Отметка «этот шаг уже израсходован». Условие last_step IS DISTINCT FROM $2
--- делает её атомарной защитой от повтора: два параллельных запроса с одним и
--- тем же кодом дадут ноль строк второму. IS DISTINCT FROM, а не <>, потому что
--- last_step может быть NULL (фактор только что подтверждён).
+-- Отметка «этот шаг уже израсходован»: ноль строк — код предъявлен повторно.
+-- Условие атомарно, поэтому гонка двух одинаковых кодов даёт успех одному.
+--
+-- Мина: сравнение обязано быть строгим неравенством, а не «шаг отличается от
+-- последнего». Окно проверки — ±1 шаг, то есть валидны три соседних кода
+-- одновременно; при нестрогом условии last_step уезжает назад, и код, уже
+-- потреблённый на шаге N, снова проходит после входа кодом шага N+1. last_step
+-- IS NULL — фактор только что подтверждён, израсходованных шагов ещё нет.
 UPDATE user_totp SET last_step = $2
-WHERE user_id = $1 AND (last_step IS DISTINCT FROM $2);
+WHERE user_id = $1 AND (last_step IS NULL OR last_step < $2);
 
 -- name: DeleteTOTP :exec
 DELETE FROM user_totp WHERE user_id = $1;

@@ -135,7 +135,12 @@ export function useLinkProvider() {
     // сбрасывать кэш надо по той же причине (TD-40). Путь не гипотетический:
     // сессия предыдущего аккаунта могла истечь без logout, и его данные лежат в
     // кэше этой вкладки, пока сюда приходит другая личность.
-    onSuccess: (user: User) => adoptSession(qc, user),
+    //
+    // Требование кода — не вход: сессии нет, класть в кэш нечего (та же
+    // развилка, что у useLogin).
+    onSuccess: (result) => {
+      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+    },
   })
 }
 

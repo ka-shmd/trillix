@@ -494,8 +494,8 @@ func (Repo) ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID,
 	return nil
 }
 
-// MarkTOTPStep помечает шаг израсходованным; false — тот же шаг уже отмечен
-// (повторное предъявление кода).
+// MarkTOTPStep помечает шаг израсходованным; false — шаг не новее последнего
+// отмеченного, то есть код этого шага уже предъявляли.
 func (Repo) MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error) {
 	n, err := postgres.New(db).MarkTOTPStep(ctx, postgres.MarkTOTPStepParams{
 		UserID:   userID,

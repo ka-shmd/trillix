@@ -145,8 +145,12 @@ export function getProviders(): Promise<string[]> {
 
 // Второй шаг привязки: адрес занят, доказываем владение паролем. Cookie
 // oauth_pending ставит бэк на колбэке, JS её не видит и не шлёт руками.
-export function linkProvider(body: Credentials): Promise<User> {
-  return apiRequest('/auth/oauth/link', { method: 'POST', body, schema: userSchema })
+//
+// Исходов, как у входа, два: у аккаунта со вторым фактором бэк отвечает
+// «нужен код» — привязки при этом ещё НЕТ, она создаётся только вместе с
+// сессией во втором запросе, уже с кодом.
+export function linkProvider(body: Credentials & { code?: string }): Promise<LoginResult> {
+  return apiRequest('/auth/oauth/link', { method: 'POST', body, schema: loginResultSchema })
 }
 
 // Ссылка ухода к провайдеру. Именно href, а не fetch: нужен полноценный переход

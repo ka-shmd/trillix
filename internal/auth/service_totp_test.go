@@ -144,6 +144,36 @@ func TestCompleteTwoFactorLogin_CodeWorksOnce(t *testing.T) {
 	}
 }
 
+// Отметка израсходованного шага обязана быть монотонной, а не «шаг отличается
+// от последнего»: окно проверки ±1 держит валидными три соседних кода, поэтому
+// после входа кодом шага N вход кодом N+1 не должен воскрешать код N.
+// Время не двигаем — берём два шага, валидных в одну и ту же секунду.
+func TestCompleteTwoFactorLogin_OlderStepNotRevivedByNewer(t *testing.T) {
+	store := &fakeStore{user: User{Email: "ivan@example.com"}}
+	svc := newTOTPService(store)
+	secret := enabledTOTP(t, store)
+	userID := domain.NewID()
+
+	step := time.Now().Unix() / 30
+	older := totpCode(secret, step-1)
+	newer := totpCode(secret, step)
+
+	if _, token, err := svc.CompleteTwoFactorLogin(context.Background(), userID, older); err != nil || token == "" {
+		t.Fatalf("вход кодом предыдущего шага: err=%v token=%q", err, token)
+	}
+	if _, token, err := svc.CompleteTwoFactorLogin(context.Background(), userID, newer); err != nil || token == "" {
+		t.Fatalf("вход кодом текущего шага: err=%v token=%q", err, token)
+	}
+
+	_, token, err := svc.CompleteTwoFactorLogin(context.Background(), userID, older)
+	if !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Fatalf("повтор израсходованного кода: ошибка = %v, ожидалась ErrInvalidCredentials", err)
+	}
+	if token != "" {
+		t.Fatal("выдана сессия по коду, израсходованному двумя шагами раньше")
+	}
+}
+
 func TestCompleteTwoFactorLogin_WrongCodeNoSession(t *testing.T) {
 	store := &fakeStore{user: User{Email: "ivan@example.com"}}
 	svc := newTOTPService(store)

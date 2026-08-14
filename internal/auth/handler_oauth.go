@@ -49,7 +49,7 @@ type oauthProviders map[string]oauth.Provider
 // oauthService — то, что транспорту нужно от сервиса сверх authService.
 type oauthService interface {
 	LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error)
-	LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error)
+	LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string) (User, string, error)
 	LinkIdentity(ctx context.Context, userID uuid.UUID, p IdentityProfile) error
 }
 
@@ -203,6 +203,9 @@ func (h *Handler) logOAuthFailure(r *http.Request, provider, stage string, err e
 type oauthLinkRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Code — второй фактор, если он включён у аккаунта. Пустой в первом
+	// запросе: фронт не знает про фактор, пока бэк о нём не скажет.
+	Code string `json:"code"`
 }
 
 func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +229,15 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, err := h.oauthSvc.LinkIdentityWithPassword(r.Context(), req.Email, req.Password, name, providerUserID)
+	user, token, err := h.oauthSvc.LinkIdentityWithPassword(r.Context(), req.Email, req.Password, req.Code, name, providerUserID)
+	if errors.Is(err, ErrTwoFactorRequired) {
+		// Пароль верен, но у аккаунта включён второй фактор: привязки ещё нет,
+		// сессии тоже. Пропуск на отдельный шаг здесь не ставится — код
+		// приезжает в повторный запрос той же формой, а cookie oauth_pending
+		// остаётся жить и держит, какую личность привязывать.
+		httpserver.WriteJSON(w, r, http.StatusOK, map[string]bool{"twoFactorRequired": true})
+		return
+	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

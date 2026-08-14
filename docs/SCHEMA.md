@@ -75,7 +75,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `user_id` | `UUID` | PK, FK → `users(id)` `ON DELETE CASCADE` |
 | `secret` | `BYTEA` | `NOT NULL` — **шифротекст** AES-256-GCM (nonce впереди), а не сам секрет: дамп базы не должен давать возможность генерировать коды. Ключ — HKDF от `FORM_TOKEN_SECRET` с отдельной меткой; своей env-переменной нет сознательно, ценой того, что ротация `FORM_TOKEN_SECRET` обнуляет все включённые факторы |
 | `confirmed_at` | `TIMESTAMPTZ` | nullable; `NULL` = настройка начата, но код не подтверждён — **фактор не включён** |
-| `last_step` | `BIGINT` | nullable; номер временного шага последнего принятого кода. Без него перехваченный код работает все свои 30 секунд |
+| `last_step` | `BIGINT` | nullable; номер временного шага последнего принятого кода. Без него перехваченный код работает все свои 30 секунд. Растёт строго вверх (`UPDATE … WHERE last_step IS NULL OR last_step < $2`): окно проверки ±1 держит валидными три соседних кода, и откат номера назад воскресил бы уже израсходованный |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 
 ## `totp_recovery_codes` (0023)

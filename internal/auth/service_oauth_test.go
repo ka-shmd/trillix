@@ -146,7 +146,7 @@ func TestLinkIdentityWithPassword_Success(t *testing.T) {
 	store := &fakeStore{userExists: true, user: owner}
 	svc := newService(store)
 
-	user, token, err := svc.LinkIdentityWithPassword(context.Background(), "owner@yandex.ru", "correct-password", "yandex", "1234567")
+	user, token, err := svc.LinkIdentityWithPassword(context.Background(), "owner@yandex.ru", "correct-password", "", "yandex", "1234567")
 	if err != nil {
 		t.Fatalf("LinkIdentityWithPassword: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestLinkIdentityWithPassword_Rejects(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			svc := newService(c.store)
-			_, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", c.password, "yandex", "1234567")
+			_, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", c.password, "", "yandex", "1234567")
 			if !errors.Is(err, domain.ErrInvalidCredentials) {
 				t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 			}
@@ -194,6 +194,63 @@ func TestLinkIdentityWithPassword_Rejects(t *testing.T) {
 	}
 }
 
+// Второй фактор на шаге привязки. Проверяется не только отказ, но и отсутствие
+// побочного эффекта: привязка, созданная до проверки кода, остаётся навсегда —
+// знающий пароль прицепил бы к чужому аккаунту свою личность у провайдера и
+// получил бы постоянный вход на тот день, когда владелец выключит фактор.
+func TestLinkIdentityWithPassword_TwoFactor(t *testing.T) {
+	setup := func(t *testing.T) (*fakeStore, *Service, []byte) {
+		t.Helper()
+		hash, _ := HashPassword("correct-password")
+		store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "o@y.ru", PasswordHash: &hash}}
+		svc := newTOTPService(store)
+		return store, svc, enabledTOTP(t, store)
+	}
+
+	t.Run("без кода — запрос кода, привязки нет", func(t *testing.T) {
+		store, svc, _ := setup(t)
+
+		_, token, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "", "yandex", "1234567")
+		if !errors.Is(err, ErrTwoFactorRequired) {
+			t.Fatalf("err = %v, want ErrTwoFactorRequired", err)
+		}
+		if token != "" {
+			t.Fatal("выдана сессия без второго фактора")
+		}
+		if store.createdIdentity {
+			t.Fatal("привязка создана до проверки второго фактора")
+		}
+	})
+
+	t.Run("неверный код — отказ, привязки нет", func(t *testing.T) {
+		store, svc, _ := setup(t)
+
+		_, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "000000", "yandex", "1234567")
+		if !errors.Is(err, domain.ErrInvalidCredentials) {
+			t.Fatalf("err = %v, want ErrInvalidCredentials", err)
+		}
+		if store.createdIdentity {
+			t.Fatal("привязка создана по неверному коду")
+		}
+		if store.createdSession {
+			t.Fatal("выдана сессия по неверному коду")
+		}
+	})
+
+	t.Run("верный код — привязка и сессия", func(t *testing.T) {
+		store, svc, secret := setup(t)
+
+		code := totpCode(secret, time.Now().Unix()/30)
+		_, token, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", code, "yandex", "1234567")
+		if err != nil || token == "" {
+			t.Fatalf("привязка с кодом: err=%v token=%q", err, token)
+		}
+		if !store.createdIdentity {
+			t.Fatal("привязка не создана")
+		}
+	})
+}
+
 // Отказ на несуществующем аккаунте не должен быть быстрее отказа по паролю:
 // иначе /link превращается в перечислитель зарегистрированных адресов.
 func TestLinkIdentityWithPassword_TimingEqualized(t *testing.T) {
@@ -202,12 +259,12 @@ func TestLinkIdentityWithPassword_TimingEqualized(t *testing.T) {
 	svc := newService(store)
 
 	start := time.Now()
-	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "wrong-password", "yandex", "1")
+	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "wrong-password", "", "yandex", "1")
 	wrongPw := time.Since(start)
 
 	store.userExists = false
 	start = time.Now()
-	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "missing@y.ru", "any-password", "yandex", "1")
+	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "missing@y.ru", "any-password", "", "yandex", "1")
 	unknown := time.Since(start)
 
 	if unknown < wrongPw/5 {

@@ -146,6 +146,15 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 		t.Fatalf("повтор кода: статус %d, ожидалось 401", replay.StatusCode)
 	}
 
+	// 5b. И код ПРЕДЫДУЩЕГО шага тоже не работает — тот, которым фактор
+	// включали на шаге 2. Окно ±1 держит его валидным арифметически, а вход на
+	// шаге 4 сдвинул отметку вперёд; отметка обязана быть монотонной, иначе
+	// израсходованный код воскресает после каждого следующего входа.
+	older := codeFor(t, setupBody.Secret, time.Now())
+	if r := post(t, third, srv.URL+"/api/v1/auth/login-2fa", `{"code":"`+older+`"}`, ""); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("код предыдущего шага: статус %d, ожидалось 401", r.StatusCode)
+	}
+
 	// 6. Резервный код работает и сгорает.
 	recovery := enableBody.RecoveryCodes[0]
 	if r := post(t, third, srv.URL+"/api/v1/auth/login-2fa", `{"code":"`+recovery+`"}`, ""); r.StatusCode != http.StatusOK {

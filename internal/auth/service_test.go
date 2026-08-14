@@ -145,9 +145,10 @@ func (f *fakeStore) ConfirmTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID,
 	return nil
 }
 
-// MarkTOTPStep повторяет семантику запроса: тот же шаг второй раз даёт false.
+// MarkTOTPStep повторяет семантику запроса: false на любом шаге, который не
+// новее последнего отмеченного, — не только на в точности том же.
 func (f *fakeStore) MarkTOTPStep(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) (bool, error) {
-	if f.totp != nil && f.totp.LastStep != nil && *f.totp.LastStep == step {
+	if f.totp != nil && f.totp.LastStep != nil && *f.totp.LastStep >= step {
 		return false, nil
 	}
 	f.totpStepFresh = true

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,6 +40,9 @@ type fakeOAuthService struct {
 	err     error
 	profile IdentityProfile
 
+	// Код второго фактора, доехавший до сервиса на шаге привязки паролем.
+	linkCode string
+
 	// Привязка из настроек (фаза 23, слайс E).
 	linkErr       error
 	linkedUser    uuid.UUID
@@ -51,8 +55,9 @@ func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfil
 	return User{}, "session-token", f.err
 }
 
-func (f *fakeOAuthService) LinkIdentityWithPassword(context.Context, string, string, string, string) (User, string, error) {
+func (f *fakeOAuthService) LinkIdentityWithPassword(_ context.Context, _, _, code, _, _ string) (User, string, error) {
 	f.called = true
+	f.linkCode = code
 	return User{}, "session-token", f.err
 }
 
@@ -240,6 +245,55 @@ func TestPendingSignature_Expires(t *testing.T) {
 	expired := payload + ":" + base64.RawURLEncoding.EncodeToString(h.pendingMAC(payload))
 	if _, _, ok := h.verifyPending(expired); ok {
 		t.Fatal("просроченное ожидание привязки принято")
+	}
+}
+
+// Второй фактор на привязке — путь, которого транспорт раньше не знал: ошибка
+// уезжала в общий маппинг, а там её нет, и человек получал 500 вместо запроса
+// кода. Cookie ожидания при этом обязана дожить до повторного запроса с кодом.
+func TestOAuthLink_TwoFactorAsksForCode(t *testing.T) {
+	svc := &fakeOAuthService{err: ErrTwoFactorRequired}
+	h, mux := newOAuthHandler(t, &fakeProvider{}, svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/link",
+		strings.NewReader(`{"email":"a@b.ru","password":"secret"}`))
+	req.AddCookie(&http.Cookie{Name: oauthPendingCookie, Value: h.signPending("fake", "1234567")})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код = %d, want 200; тело=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]bool
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("разбор тела: %v", err)
+	}
+	if !body["twoFactorRequired"] {
+		t.Fatalf("тело = %v, ожидалось требование кода", body)
+	}
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			t.Fatal("выдана сессия до второго фактора")
+		}
+		if c.Name == oauthPendingCookie && c.MaxAge < 0 {
+			t.Fatal("cookie ожидания погашена — привязывать на втором шаге будет нечего")
+		}
+	}
+}
+
+// Код из тела доезжает до сервиса: без этого второй шаг формы молча повторял бы
+// первый, и человек видел бы «нужен код» на верный код.
+func TestOAuthLink_PassesCodeToService(t *testing.T) {
+	svc := &fakeOAuthService{}
+	h, mux := newOAuthHandler(t, &fakeProvider{}, svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/link",
+		strings.NewReader(`{"email":"a@b.ru","password":"secret","code":"123456"}`))
+	req.AddCookie(&http.Cookie{Name: oauthPendingCookie, Value: h.signPending("fake", "1234567")})
+	mux.ServeHTTP(httptest.NewRecorder(), req)
+
+	if svc.linkCode != "123456" {
+		t.Fatalf("до сервиса доехал код %q, ожидался 123456", svc.linkCode)
 	}
 }
 

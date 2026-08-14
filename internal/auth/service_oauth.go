@@ -154,7 +154,14 @@ func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email
 // подписанная cookie с парой (провайдер, идентификатор) — класть в неё ещё и
 // ФИО значит возить чужие ПДн через браузер ради поля, которое всё равно
 // приедет на ближайшем входе через того же провайдера.
-func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, provider, providerUserID string) (User, string, error) {
+//
+// У аккаунта с включённым вторым фактором code обязателен: пустой даёт
+// ErrTwoFactorRequired, и транспорт просит код той же формой. Мина: привязка
+// создаётся ПОСЛЕ проверки кода, а не до неё. Иначе знающий пароль, но не
+// знающий кода прицепляет свою личность у провайдера к чужому аккаунту —
+// ровно та атака, ради которой intent=link держат в подписанной cookie
+// (design/account-settings.md, §9), только зашедшая с другой стороны.
+func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string) (User, string, error) {
 	email = normalizeEmail(email)
 
 	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
@@ -178,6 +185,19 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 		return User{}, "", domain.ErrInvalidCredentials
 	}
 
+	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
+	if err != nil {
+		return User{}, "", err
+	}
+	if enabled {
+		if code == "" {
+			return user, "", ErrTwoFactorRequired
+		}
+		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
+			return User{}, "", err
+		}
+	}
+
 	if err := s.repo.CreateIdentity(ctx, s.db, provider, providerUserID, user.ID, ""); err != nil {
 		// Тот же аккаунт провайдера уже привязан (к этому пользователю или к
 		// другому) — повторный клик по «привязать» не должен выглядеть аварией.
@@ -187,7 +207,13 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 		return User{}, "", err
 	}
 
-	return s.sessionOrChallenge(ctx, user)
+	// sessionOrChallenge здесь не зовётся: второй фактор уже разобран выше, до
+	// побочного эффекта. Повторный вызов потребовал бы второй код на тот же вход.
+	token, err := s.createSession(ctx, user.ID)
+	if err != nil {
+		return User{}, "", err
+	}
+	return user, token, nil
 }
 
 // fillProfileFromProvider проставляет имя из профиля провайдера, НЕ трогая уже
