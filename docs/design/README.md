@@ -26,6 +26,7 @@
 | [`logic.md`](logic.md) | фаза 21, условная логика в формах | `v0.21.0` | [`EDITOR.md`](../EDITOR.md) §15, [`SCHEMA.md`](../SCHEMA.md) |
 | [`theme.md`](theme.md) | фаза 22, оформление формы: тема, цвета, шрифт, лэйаут, свой CSS | `v0.22.0` | [`EDITOR.md`](../EDITOR.md) §16, [`BILLING.md`](../BILLING.md), [`fields/README.md`](../../web/shared/fields/README.md) |
 | [`mentions.md`](mentions.md) | задача вне плана, подстановка ответов в тексте формы (`@`) | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §17 (пишется) |
+| [`account-settings.md`](account-settings.md) | фаза 23 `DEV-PLAN`, настройки аккаунта: профиль, пароль, email, второй фактор, способы входа, удаление | **не закрыта** — спека живая | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md), [`WORKSPACES.md`](../WORKSPACES.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).

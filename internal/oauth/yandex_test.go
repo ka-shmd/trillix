@@ -193,3 +193,34 @@ func TestChallenge_IsStableS256(t *testing.T) {
 		t.Fatalf("Challenge = %q, want %q (вектор RFC 7636 B)", got, want)
 	}
 }
+
+func TestYandex_Exchange_ReadsName(t *testing.T) {
+	f := &fakeYandex{infoBody: `{"id":"1234567","default_email":"user@yandex.ru","first_name":"Иван","last_name":"Петров"}`}
+	y := newFake(t, f)
+
+	profile, err := y.Exchange(context.Background(), "auth-code", "verifier-value")
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if profile.FirstName != "Иван" || profile.LastName != "Петров" {
+		t.Fatalf("имя из профиля = %q / %q", profile.FirstName, profile.LastName)
+	}
+}
+
+func TestYandex_Exchange_NameOptional(t *testing.T) {
+	// Разрешения login:info у приложения может не быть — тогда имени в ответе
+	// нет вовсе. Это не сбой входа: профиль просто останется пустым.
+	f := &fakeYandex{infoBody: `{"id":"1234567","default_email":"user@yandex.ru"}`}
+	y := newFake(t, f)
+
+	profile, err := y.Exchange(context.Background(), "auth-code", "verifier-value")
+	if err != nil {
+		t.Fatalf("вход без имени в профиле отвергнут: %v", err)
+	}
+	if profile.FirstName != "" || profile.LastName != "" {
+		t.Fatalf("имя = %q / %q, ожидались пустые", profile.FirstName, profile.LastName)
+	}
+	if profile.ID == "" || profile.Email == "" {
+		t.Fatal("идентификатор и адрес обязаны приехать и без имени")
+	}
+}

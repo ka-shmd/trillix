@@ -4,14 +4,18 @@ package auth_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -35,10 +39,12 @@ func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	t.Helper()
 	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false).
-		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret"))
+		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret")).
+		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.OAuthRoutes(mux)
+	h.AccountRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -244,5 +250,187 @@ func TestOAuth_ExistingEmail_RequiresPasswordThenLinks(t *testing.T) {
 	}
 	if !hasSessionCookie(c2, srv, t) {
 		t.Fatal("после привязки вход в один клик не работает")
+	}
+}
+
+// Имя из провайдера: приезжает при первом входе, не затирает введённое руками
+// и дозаполняет то, что человек оставил пустым. Второй пункт критерия приёмки
+// фазы 23 (docs/design/account-settings.md §1) плюс правило слайса B.
+func TestOAuth_ProviderNameFillsEmptyOnly(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{
+		ID: "1234567", Email: "new@yandex.ru", FirstName: "Иван", LastName: "Петров",
+	})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+	if !hasSessionCookie(c, srv, t) {
+		t.Fatal("сессия не выдана — дальше проверять нечего")
+	}
+	if first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); first != "Иван" || last != "Петров" {
+		t.Fatalf("после входа через провайдера имя=%q фамилия=%q, ожидались Иван/Петров", first, last)
+	}
+
+	// Человек переименовал себя в кабинете и стёр фамилию.
+	upd := patch(t, c, srv.URL+"/api/v1/account/profile",
+		`{"firstName":"Кирилл","lastName":""}`, csrfHeader(t, c, srv.URL))
+	if upd.StatusCode != http.StatusOK {
+		t.Fatalf("patch profile: статус %d; тело=%s", upd.StatusCode, body(t, upd))
+	}
+	_ = upd.Body.Close()
+
+	// Повторный вход через того же провайдера с тем же профилем.
+	resp2 := walkStartAndCallback(t, srv, c)
+	_ = resp2.Body.Close()
+
+	first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me"))
+	if first != "Кирилл" {
+		t.Errorf("имя = %q: провайдер затёр введённое руками", first)
+	}
+	if last != "Петров" {
+		t.Errorf("фамилия = %q: пустое поле не дозаполнено провайдером", last)
+	}
+}
+
+// Карточка способа входа: адрес у провайдера сохраняется при заведении аккаунта
+// и ОСВЕЖАЕТСЯ на каждом входе. Пятый пункт критерия приёмки фазы 23.
+func TestOAuth_IdentityCardShowsProviderEmail(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{ID: "1234567", Email: "ivan@yandex.ru"})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+
+	var provider, email string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT provider, provider_email FROM user_identities`).Scan(&provider, &email); err != nil {
+		t.Fatalf("select identity: %v", err)
+	}
+	if provider != "yandex" || email != "ivan@yandex.ru" {
+		t.Fatalf("привязка = (%q, %q)", provider, email)
+	}
+
+	// Список для экрана настроек отдаёт то же самое.
+	list := get(t, c, srv.URL+"/api/v1/account/identities")
+	if list.StatusCode != http.StatusOK {
+		t.Fatalf("список привязок: статус %d", list.StatusCode)
+	}
+	var cards []struct {
+		Provider      string `json:"provider"`
+		ProviderEmail string `json:"providerEmail"`
+		ConnectedAt   string `json:"connectedAt"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&cards); err != nil {
+		t.Fatalf("разбор списка: %v", err)
+	}
+	_ = list.Body.Close()
+	if len(cards) != 1 || cards[0].ProviderEmail != "ivan@yandex.ru" || cards[0].ConnectedAt == "" {
+		t.Fatalf("карточки = %+v", cards)
+	}
+}
+
+// Отвязать единственный способ войти у аккаунта без пароля нельзя: 409, и
+// привязка остаётся на месте.
+// Две одновременные отвязки РАЗНЫХ провайдеров у аккаунта без пароля: пройти
+// должна ровно одна. Гейт решает по составу привязок, поэтому без блокировки обе
+// транзакции видят «привязок две», обе проходят проверку и обе удаляют — человек
+// остаётся без единого способа войти, и починить это можно только руками в БД.
+//
+// Сегодня сценарий недостижим через HTTP (провайдер реализован один), поэтому
+// тест зовёт сервис напрямую и заводит вторую привязку запросом. Он и есть
+// страховка на день, когда подключат VK ID: правка тогда будет в другом файле, а
+// уронит её этот тест.
+func TestUnlinkIdentity_ConcurrentUnlinksLeaveOneWayIn(t *testing.T) {
+	resetDB(t)
+	svc := newAuthService()
+
+	// Прогонов несколько: гонка выигрывается не всегда, и один прогон на старом
+	// коде мог бы пройти случайно.
+	for range 5 {
+		if _, err := testPool.Exec(context.Background(),
+			`TRUNCATE users, user_identities CASCADE`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		userID := domain.NewID()
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO users (id, email) VALUES ($1, 'ivan@yandex.ru')`, userID); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO user_identities (provider, provider_user_id, user_id)
+			 VALUES ('yandex', '1', $1), ('vk', '2', $1)`, userID); err != nil {
+			t.Fatalf("insert identities: %v", err)
+		}
+
+		// PasswordHash nil — аккаунт заведён через провайдера, и привязки для него
+		// единственный способ войти.
+		user := auth.User{ID: userID, Email: "ivan@yandex.ru"}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		errs := make([]error, 2)
+		for i, provider := range []string{"yandex", "vk"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start // обе отвязки уходят в базу одновременно
+				errs[i] = svc.UnlinkIdentity(context.Background(), user, provider)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		var left int
+		if err := testPool.QueryRow(context.Background(),
+			`SELECT count(*) FROM user_identities WHERE user_id = $1`, userID).Scan(&left); err != nil {
+			t.Fatalf("count identities: %v", err)
+		}
+		if left != 1 {
+			t.Fatalf("привязок осталось %d, ожидалась 1; ошибки отвязок: %v, %v — аккаунт без пароля потерял вход",
+				left, errs[0], errs[1])
+		}
+		// Отказ ровно один, и он внятный: вторая отвязка обязана упереться в гейт,
+		// а не молча ничего не сделать.
+		refused := 0
+		for _, err := range errs {
+			if errors.Is(err, domain.ErrConflict) {
+				refused++
+			}
+		}
+		if refused != 1 {
+			t.Fatalf("отказов ErrConflict = %d, ожидался 1; ошибки: %v, %v", refused, errs[0], errs[1])
+		}
+	}
+}
+
+func TestOAuth_UnlinkLastIdentityRefused(t *testing.T) {
+	resetDB(t)
+	srv := newOAuthStack(t, oauth.Profile{ID: "1234567", Email: "ivan@yandex.ru"})
+	c := noRedirectClient(t)
+
+	resp := walkStartAndCallback(t, srv, c)
+	_ = resp.Body.Close()
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/account/identities/yandex", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-CSRF-Token", csrfHeader(t, c, srv.URL))
+	del, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	if del.StatusCode != http.StatusConflict {
+		t.Fatalf("статус %d, ожидалось 409; тело=%s", del.StatusCode, body(t, del))
+	}
+
+	var n int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM user_identities`).Scan(&n); err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("привязок осталось %d, ожидалась 1 — отказ обязан ничего не менять", n)
 	}
 }

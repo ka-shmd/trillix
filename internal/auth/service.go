@@ -57,8 +57,15 @@ const (
 type Store interface {
 	CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error)
 	GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string) (User, error)
-	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error
+	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID, providerEmail string) error
+	SetIdentityEmail(ctx context.Context, db postgres.DBTX, provider, providerUserID, providerEmail string) error
+	ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Identity, error)
+	LockIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error)
+	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
+	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)
+	EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error)
+	MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
 	CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error
@@ -67,6 +74,8 @@ type Store interface {
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
 	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
+	UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
+	FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
 	SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error
 	CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	ConsumePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)
@@ -74,7 +83,19 @@ type Store interface {
 	CreateEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
 	ConsumeEmailVerificationToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, error)
 	MarkEmailVerified(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	CreateEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, newEmail string, expiresAt time.Time) error
+	ConsumeEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, string, error)
+	UpdateUserEmail(ctx context.Context, db postgres.DBTX, userID uuid.UUID, email string) (User, error)
+	DeleteExpiredEmailChangeTokens(ctx context.Context, db postgres.DBTX) (int64, error)
 	DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgres.DBTX) (int64, error)
+	UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error
+	GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error)
+	ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error
+	MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error)
+	DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error
+	ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error)
+	DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 }
 
 var _ Store = Repo{}
@@ -103,6 +124,31 @@ type Service struct {
 	// appBaseURL — origin кабинета, из которого строится ссылка сброса в письме
 	// (${appBaseURL}/reset-password?token=…). Совпадает с cfg.AppOrigin.
 	appBaseURL string
+	// totpSecretKey — сырой секрет окружения (FORM_TOKEN_SECRET), из которого
+	// HKDF выводит ключ шифрования секретов второго фактора. Пустой = второй
+	// фактор не сконфигурирован, и его эндпоинты отвечают ошибкой, а не пишут
+	// в базу мусор (фаза 23, слайс F).
+	totpSecretKey []byte
+	// teams — источник ответа «мешают ли удалению аккаунта его команды»
+	// (реализация — *workspaces.Service, подключается WithTeams). nil =
+	// удаление аккаунта не сконфигурировано и отвечает ошибкой, а не догадкой.
+	teams teamOwnership
+}
+
+// WithTeams подключает вопрос о владении пространствами (нужен удалению
+// аккаунта, слайс G). Отдельный метод, а не аргумент NewService: workspaces
+// собирается ПОЗЖЕ auth — его хендлер стоит на RequireAuth.
+func (s *Service) WithTeams(t teamOwnership) *Service {
+	s.teams = t
+	return s
+}
+
+// WithTOTPKey подключает шифрование секретов второго фактора. Отдельный метод,
+// а не седьмой аргумент NewService: ключ параметризует один узел, а не всю
+// сборку сервиса (тот же приём, что у WithPasswordReset у транспорта).
+func (s *Service) WithTOTPKey(key []byte) *Service {
+	s.totpSecretKey = key
+	return s
 }
 
 func NewService(db postgres.DBTX, tx Transactor, repo Store, mailer mailEnqueuer, sessionTTL time.Duration, appBaseURL string) *Service {
@@ -191,11 +237,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (User, stri
 		return User{}, "", domain.ErrInvalidCredentials
 	}
 
-	token, err := s.createSession(ctx, user.ID)
-	if err != nil {
-		return User{}, "", err
-	}
-	return user, token, nil
+	// Пароль верен — но это ещё не вход, если включён второй фактор (слайс F).
+	return s.sessionOrChallenge(ctx, user)
 }
 
 // Logout удаляет сессию по её токену. Отсутствие сессии — не ошибка.

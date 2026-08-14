@@ -11,9 +11,11 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as InviteRouteImport } from './routes/invite'
+import { Route as ConfirmEmailChangeRouteImport } from './routes/confirm-email-change'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AuthTwoFactorRouteImport } from './routes/_auth/two-factor'
 import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
@@ -23,6 +25,7 @@ import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
+import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
@@ -40,6 +43,11 @@ const InviteRoute = InviteRouteImport.update({
   path: '/invite',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ConfirmEmailChangeRoute = ConfirmEmailChangeRouteImport.update({
+  id: '/confirm-email-change',
+  path: '/confirm-email-change',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
@@ -52,6 +60,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppRoute,
+} as any)
+const AuthTwoFactorRoute = AuthTwoFactorRouteImport.update({
+  id: '/two-factor',
+  path: '/two-factor',
+  getParentRoute: () => AuthRoute,
 } as any)
 const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
   id: '/reset-password',
@@ -99,6 +112,11 @@ const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
   path: '/settings/plan',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSettingsAccountRoute = AppSettingsAccountRouteImport.update({
+  id: '/settings/account',
+  path: '/settings/account',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsSlugEditRoute = AppFormsSlugEditRouteImport.update({
   id: '/forms/$slug/edit',
   path: '/forms/$slug/edit',
@@ -135,6 +153,7 @@ const AppFormsSlugManageFunnelRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
+  '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -142,6 +161,8 @@ export interface FileRoutesByFullPath {
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
+  '/two-factor': typeof AuthTwoFactorRoute
+  '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms/': typeof AppFormsIndexRoute
@@ -155,6 +176,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
+  '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -162,6 +184,8 @@ export interface FileRoutesByTo {
   '/login': typeof AuthLoginRoute
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
+  '/two-factor': typeof AuthTwoFactorRoute
+  '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/forms': typeof AppFormsIndexRoute
@@ -177,6 +201,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
+  '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/_auth/forgot-password': typeof AuthForgotPasswordRoute
@@ -184,7 +209,9 @@ export interface FileRoutesById {
   '/_auth/login': typeof AuthLoginRoute
   '/_auth/register': typeof AuthRegisterRoute
   '/_auth/reset-password': typeof AuthResetPasswordRoute
+  '/_auth/two-factor': typeof AuthTwoFactorRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
   '/_app/forms/': typeof AppFormsIndexRoute
@@ -200,6 +227,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
     | '/forgot-password'
@@ -207,6 +235,8 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/two-factor'
+    | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
     | '/forms/'
@@ -220,6 +250,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
     | '/forgot-password'
@@ -227,6 +258,8 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/reset-password'
+    | '/two-factor'
+    | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
     | '/forms'
@@ -241,6 +274,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_auth'
+    | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
     | '/_auth/forgot-password'
@@ -248,7 +282,9 @@ export interface FileRouteTypes {
     | '/_auth/login'
     | '/_auth/register'
     | '/_auth/reset-password'
+    | '/_auth/two-factor'
     | '/_app/'
+    | '/_app/settings/account'
     | '/_app/settings/plan'
     | '/_app/workspaces/$workspaceId'
     | '/_app/forms/'
@@ -264,6 +300,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
+  ConfirmEmailChangeRoute: typeof ConfirmEmailChangeRoute
   InviteRoute: typeof InviteRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
 }
@@ -282,6 +319,13 @@ declare module '@tanstack/react-router' {
       path: '/invite'
       fullPath: '/invite'
       preLoaderRoute: typeof InviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/confirm-email-change': {
+      id: '/confirm-email-change'
+      path: '/confirm-email-change'
+      fullPath: '/confirm-email-change'
+      preLoaderRoute: typeof ConfirmEmailChangeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -304,6 +348,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/_auth/two-factor': {
+      id: '/_auth/two-factor'
+      path: '/two-factor'
+      fullPath: '/two-factor'
+      preLoaderRoute: typeof AuthTwoFactorRouteImport
+      parentRoute: typeof AuthRoute
     }
     '/_auth/reset-password': {
       id: '/_auth/reset-password'
@@ -366,6 +417,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/plan'
       fullPath: '/settings/plan'
       preLoaderRoute: typeof AppSettingsPlanRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/account': {
+      id: '/_app/settings/account'
+      path: '/settings/account'
+      fullPath: '/settings/account'
+      preLoaderRoute: typeof AppSettingsAccountRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/forms/$slug/edit': {
@@ -432,6 +490,7 @@ const AppFormsSlugManageRouteWithChildren =
 
 interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
+  AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
   AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
@@ -442,6 +501,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
+  AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
   AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
@@ -458,6 +518,7 @@ interface AuthRouteChildren {
   AuthLoginRoute: typeof AuthLoginRoute
   AuthRegisterRoute: typeof AuthRegisterRoute
   AuthResetPasswordRoute: typeof AuthResetPasswordRoute
+  AuthTwoFactorRoute: typeof AuthTwoFactorRoute
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
@@ -466,6 +527,7 @@ const AuthRouteChildren: AuthRouteChildren = {
   AuthLoginRoute: AuthLoginRoute,
   AuthRegisterRoute: AuthRegisterRoute,
   AuthResetPasswordRoute: AuthResetPasswordRoute,
+  AuthTwoFactorRoute: AuthTwoFactorRoute,
 }
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
@@ -473,6 +535,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
+  ConfirmEmailChangeRoute: ConfirmEmailChangeRoute,
   InviteRoute: InviteRoute,
   VerifyEmailRoute: VerifyEmailRoute,
 }

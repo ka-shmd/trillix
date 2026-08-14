@@ -75,6 +75,149 @@ type fakeStore struct {
 	markVerifiedCalled     bool
 	markVerifiedUser       uuid.UUID
 	verifyTokensPurged     int64
+
+	// Профиль (фаза 23, слайс A). Указатели, а не строки: тесту нужно отличать
+	// «стереть» (nil) от «поставить пустое» — второго быть не должно.
+	profileUpdated   bool
+	profileFilled    bool
+	profileUser      uuid.UUID
+	profileFirstName *string
+	profileLastName  *string
+
+	// Способы входа (фаза 23, слайс E). identities — и список, и счётчик:
+	// «сколько осталось способов войти» считается по нему же.
+	identities             []Identity
+	identityEmail          string
+	identityEmailRefreshed bool
+	deletedIdentity        string
+
+	// Смена адреса (фаза 23, слайс D).
+	createdEmailChangeToken bool
+	emailChangeTokenUser    uuid.UUID
+	emailChangeTokenEmail   string
+	changeConsumeExists     bool // false → ErrNoRows (нет/использован/истёк)
+	changeConsumeUserID     uuid.UUID
+	changeConsumeEmail      string
+	changeConsumeCalled     bool
+	emailUpdated            bool
+	updatedEmail            string
+	changeTokensPurged      int64
+
+	// Второй фактор (фаза 23, слайс F).
+	totp           *TOTPState
+	totpUpserted   bool
+	totpConfirmed  bool
+	totpStep       int64
+	totpStepFresh  bool
+	totpDeleted    bool
+	recoveryHashes [][]byte
+	recoveryUsable bool
+	recoveryUsed   bool
+	recoveryWiped  bool
+
+	// Удаление аккаунта (фаза 23, слайс G).
+	emailTaken     bool
+	userDeleted    bool
+	deletedUserID  uuid.UUID
+	alreadyDeleted bool
+}
+
+func (f *fakeStore) UpsertTOTPSecret(_ context.Context, _ postgres.DBTX, _ uuid.UUID, secret []byte) error {
+	f.totpUpserted = true
+	f.totp = &TOTPState{Secret: secret}
+	return nil
+}
+
+func (f *fakeStore) GetTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (TOTPState, error) {
+	if f.totp == nil {
+		return TOTPState{}, pgx.ErrNoRows
+	}
+	return *f.totp, nil
+}
+
+func (f *fakeStore) ConfirmTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) error {
+	f.totpConfirmed = true
+	f.totpStep = step
+	if f.totp != nil {
+		now := time.Now()
+		f.totp.ConfirmedAt = &now
+	}
+	return nil
+}
+
+// MarkTOTPStep повторяет семантику запроса: false на любом шаге, который не
+// новее последнего отмеченного, — не только на в точности том же.
+func (f *fakeStore) MarkTOTPStep(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) (bool, error) {
+	if f.totp != nil && f.totp.LastStep != nil && *f.totp.LastStep >= step {
+		return false, nil
+	}
+	f.totpStepFresh = true
+	f.totpStep = step
+	if f.totp != nil {
+		v := step
+		f.totp.LastStep = &v
+	}
+	return true, nil
+}
+
+func (f *fakeStore) DeleteTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.totpDeleted = true
+	f.totp = nil
+	return nil
+}
+
+func (f *fakeStore) CreateRecoveryCode(_ context.Context, _ postgres.DBTX, codeHash []byte, _ uuid.UUID) error {
+	f.recoveryHashes = append(f.recoveryHashes, codeHash)
+	return nil
+}
+
+func (f *fakeStore) ConsumeRecoveryCode(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID) (bool, error) {
+	if !f.recoveryUsable {
+		return false, nil
+	}
+	f.recoveryUsable = false
+	f.recoveryUsed = true
+	return true, nil
+}
+
+func (f *fakeStore) DeleteRecoveryCodes(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.recoveryWiped = true
+	f.recoveryHashes = nil
+	return nil
+}
+
+func (f *fakeStore) GetUserByID(_ context.Context, _ postgres.DBTX, id uuid.UUID) (User, error) {
+	u := f.user
+	u.ID = id
+	return u, nil
+}
+
+func (f *fakeStore) CreateEmailChangeToken(_ context.Context, _ postgres.DBTX, _ []byte, userID uuid.UUID, newEmail string, _ time.Time) error {
+	f.createdEmailChangeToken = true
+	f.emailChangeTokenUser = userID
+	f.emailChangeTokenEmail = newEmail
+	return nil
+}
+
+func (f *fakeStore) ConsumeEmailChangeToken(_ context.Context, _ postgres.DBTX, _ []byte) (uuid.UUID, string, error) {
+	f.changeConsumeCalled = true
+	if !f.changeConsumeExists {
+		return uuid.Nil, "", pgx.ErrNoRows
+	}
+	return f.changeConsumeUserID, f.changeConsumeEmail, nil
+}
+
+func (f *fakeStore) UpdateUserEmail(_ context.Context, _ postgres.DBTX, userID uuid.UUID, email string) (User, error) {
+	f.emailUpdated = true
+	f.updatedEmail = email
+	u := f.user
+	u.ID = userID
+	u.Email = email
+	return u, nil
+}
+
+func (f *fakeStore) DeleteExpiredEmailChangeTokens(_ context.Context, _ postgres.DBTX) (int64, error) {
+	return f.changeTokensPurged, nil
 }
 
 func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {
@@ -88,12 +231,38 @@ func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ s
 	return f.identityUser, nil
 }
 
-func (f *fakeStore) CreateIdentity(_ context.Context, _ postgres.DBTX, _, _ string, _ uuid.UUID) error {
+func (f *fakeStore) CreateIdentity(_ context.Context, _ postgres.DBTX, _, _ string, _ uuid.UUID, providerEmail string) error {
 	if f.createIdentityErr != nil {
 		return f.createIdentityErr
 	}
 	f.createdIdentity = true
+	f.identityEmail = providerEmail
 	return nil
+}
+
+func (f *fakeStore) SetIdentityEmail(_ context.Context, _ postgres.DBTX, _, _, providerEmail string) error {
+	f.identityEmailRefreshed = true
+	f.identityEmail = providerEmail
+	return nil
+}
+
+func (f *fakeStore) ListIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Identity, error) {
+	return f.identities, nil
+}
+
+// LockIdentities в фейке блокировать нечего — важно, что состав тот же, что у
+// ListIdentities. Настоящую блокировку проверяет интеграционный тест.
+func (f *fakeStore) LockIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]string, error) {
+	providers := make([]string, len(f.identities))
+	for i, id := range f.identities {
+		providers[i] = id.Provider
+	}
+	return providers, nil
+}
+
+func (f *fakeStore) DeleteIdentity(_ context.Context, _ postgres.DBTX, _ uuid.UUID, provider string) (int64, error) {
+	f.deletedIdentity = provider
+	return 1, nil
 }
 
 func (f *fakeStore) CreateUser(_ context.Context, _ postgres.DBTX, id uuid.UUID, email string, passwordHash *string) (User, error) {
@@ -109,6 +278,19 @@ func (f *fakeStore) GetUserByEmail(_ context.Context, _ postgres.DBTX, _ string)
 		return User{}, pgx.ErrNoRows
 	}
 	return f.user, nil
+}
+
+// EmailTaken — занятость адреса КЕМ УГОДНО, включая удалённых (слайс G). По
+// умолчанию отвечает как GetUserByEmail; emailTaken переопределяет его для
+// случая «адрес держит помеченный аккаунт, которого чтения не видят».
+func (f *fakeStore) EmailTaken(_ context.Context, _ postgres.DBTX, _ string) (bool, error) {
+	return f.userExists || f.emailTaken, nil
+}
+
+func (f *fakeStore) MarkUserDeleted(_ context.Context, _ postgres.DBTX, userID uuid.UUID) (bool, error) {
+	f.userDeleted = true
+	f.deletedUserID = userID
+	return !f.alreadyDeleted, nil
 }
 
 func (f *fakeStore) CreateWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {
@@ -147,6 +329,38 @@ func (f *fakeStore) DeleteSession(_ context.Context, _ postgres.DBTX, _ []byte) 
 
 func (f *fakeStore) DeleteExpiredSessions(_ context.Context, _ postgres.DBTX) (int64, error) {
 	return f.deleteExpiredN, f.deleteExpiredErr
+}
+
+func (f *fakeStore) UpdateProfile(_ context.Context, _ postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	f.profileUpdated = true
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	u := f.user
+	u.ID = userID
+	u.FirstName = firstName
+	u.LastName = lastName
+	return u, nil
+}
+
+// FillEmptyProfile — фейк с той же семантикой, что SQL-запрос: COALESCE, то
+// есть заполненное поле не трогается. Фейк, повторяющий запрос неверно, врал бы
+// ровно в том тесте, ради которого написан.
+func (f *fakeStore) FillEmptyProfile(_ context.Context, _ postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	f.profileFilled = true
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	u := f.user
+	u.ID = userID
+	if u.FirstName == nil {
+		u.FirstName = firstName
+	}
+	if u.LastName == nil {
+		u.LastName = lastName
+	}
+	f.user = u
+	return u, nil
 }
 
 func (f *fakeStore) SetUserPassword(_ context.Context, _ postgres.DBTX, userID uuid.UUID, hash string) error {

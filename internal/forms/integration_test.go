@@ -1360,3 +1360,33 @@ func TestForms_OwnWorkspaceIDAndGarbage(t *testing.T) {
 	}
 	closeBody(t, r)
 }
+
+// Опубликованная форма удалённого владельца отвечает 404 (фаза 23, слайс G) —
+// вторая половина шестого пункта критерия приёмки. Без неё «аккаунт удалён»
+// означало бы форму, которая продолжает принимать чужие персональные данные от
+// имени человека, которого у нас больше нет.
+//
+// Пометка ставится здесь UPDATE-ом, а не ручкой /account/delete: та живёт в auth
+// (и покрыта своим набором), проверяется же тут ПУБЛИЧНЫЙ путь.
+func TestForms_PublicFetch_DeletedOwnerIs404(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "leaving-owner@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, owner, srv, "Опрос уходящего")
+	schema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
+	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, owner, srv, form.ID, http.StatusOK)
+	getPublic(t, anon, srv, form.Slug, http.StatusOK)
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET deleted_at = now() WHERE email = 'leaving-owner@example.com'`); err != nil {
+		t.Fatalf("пометка владельца удалённым: %v", err)
+	}
+
+	// 404, а не 410: у 410 есть смысл «форма была, приём закрыт», и он рассказал
+	// бы о форме удалённого аккаунта больше, чем нужно. 404 — тот же ответ, что
+	// у черновика (инвариант 5).
+	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+}

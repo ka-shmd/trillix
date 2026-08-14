@@ -22,10 +22,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 const testAppOrigin = "http://localhost:5173"
@@ -38,9 +40,16 @@ func newMailSvc() *mail.Service {
 		discard, 50, mail.Backoff{Base: time.Minute, Max: time.Hour})
 }
 
-// newAuthService — реальный сервис auth с подключённой почтой (для сброса пароля).
+// newAuthService — реальный сервис auth с подключённой почтой (для сброса пароля)
+// и настоящим модулем пространств: удаление аккаунта спрашивает у него, не
+// осиротеет ли команда, и фейк здесь проверял бы не тот запрос (слайс G).
 func newAuthService() *auth.Service {
-	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, newMailSvc(), time.Hour, testAppOrigin)
+	mailSvc := newMailSvc()
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), mailSvc, testAppOrigin)
+	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
+		WithTOTPKey([]byte("integration-test-totp-key")).
+		WithTeams(wsSvc)
 }
 
 var testPool *pgxpool.Pool
@@ -61,7 +70,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, outbox CASCADE`)
+		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, user_totp, totp_recovery_codes, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -75,9 +84,11 @@ func newStack(t *testing.T) *httptest.Server {
 	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
-		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{})
+		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).
+		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.Routes(mux)
+	h.AccountRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

@@ -6,9 +6,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
@@ -35,6 +38,18 @@ type authService interface {
 	ResetPassword(ctx context.Context, token, password string) error
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, user User) error
+	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
+	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
+	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error
+	ConfirmEmailChange(ctx context.Context, token string) error
+	Identities(ctx context.Context, userID uuid.UUID) ([]Identity, error)
+	UnlinkIdentity(ctx context.Context, user User, provider string) error
+	TwoFactorEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
+	SetupTOTP(ctx context.Context, user User) (secret, otpauth string, err error)
+	EnableTOTP(ctx context.Context, user User, code string) ([]string, error)
+	DisableTOTP(ctx context.Context, user User, currentPassword, code string) error
+	CompleteTwoFactorLogin(ctx context.Context, userID uuid.UUID, code string) (User, string, error)
+	DeleteAccount(ctx context.Context, user User, currentPassword, code string) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -60,6 +75,12 @@ type Handler struct {
 	// registerLimiter — отдельное ведро на POST /auth/register (argon2id — 64 МиБ на
 	// вызов; отдельное от логина, чтобы брутфорс логина не съедал бюджет регистрации).
 	registerLimiter RateLimiter
+	// loginTwoFactorLimiter — ведро второго шага входа по АККАУНТУ (ключ — id из
+	// подписанного пропуска). Ведро по IP на этом маршруте тоже висит, но
+	// ограничивает не ту величину: код привязан к аккаунту, а не к адресу, и с
+	// пула адресов перебор по IP не ограничен ничем. Не nil никогда — NewHandler
+	// подставляет ведро логина, WithTwoFactorLogin меняет на своё.
+	loginTwoFactorLimiter RateLimiter
 	// Сброс пароля (слайс B). forgotIPLimiter/forgotEmailLimiter — два ведра на
 	// /forgot-password: по IP (флуд с одного адреса) и по email (нельзя завалить
 	// один почтовый ящик письмами, перебирая с разных IP). resetLimiter — по IP
@@ -72,7 +93,22 @@ type Handler struct {
 	// баннере не должна слать письма пачками).
 	verifyLimiter RateLimiter
 	resendLimiter RateLimiter
-	cookieSecure  bool
+	// passwordChangeLimiter — по пользователю на POST /account/password (фаза 23).
+	// Не от подбора (сессия уже своя), а от argon2id: 64 МиБ на вызов.
+	passwordChangeLimiter RateLimiter
+	// emailChangeLimiter — по пользователю на POST /account/email: письмо уходит
+	// на ПРОИЗВОЛЬНЫЙ адрес, поэтому ведро строгое (нельзя завалить чужой ящик).
+	// confirmEmailLimiter — по IP на публичный шаг подтверждения (перебор токенов).
+	emailChangeLimiter  RateLimiter
+	confirmEmailLimiter RateLimiter
+	// twoFactorLimiter — по пользователю на включение/выключение второго
+	// фактора: за выключением стоит argon2id и шестизначный код.
+	twoFactorLimiter RateLimiter
+	// deleteAccountLimiter — по пользователю на удаление аккаунта: за ручкой
+	// argon2id и код второго фактора, а нажимают её один раз в жизни.
+	deleteAccountLimiter RateLimiter
+
+	cookieSecure bool
 	// appOrigin — ожидаемый origin кабинета для проверки заголовка Origin в CSRF.
 	appOrigin string
 	// trustedProxy — стоим ли за доверенным прокси (влияет на извлечение IP клиента
@@ -90,7 +126,27 @@ type Handler struct {
 }
 
 func NewHandler(svc authService, loginLimiter, registerLimiter RateLimiter, cookieSecure bool, appOrigin string, trustedProxy bool) *Handler {
-	return &Handler{svc: svc, loginLimiter: loginLimiter, registerLimiter: registerLimiter, cookieSecure: cookieSecure, appOrigin: appOrigin, trustedProxy: trustedProxy}
+	return &Handler{
+		svc:             svc,
+		loginLimiter:    loginLimiter,
+		registerLimiter: registerLimiter,
+		// Ведро второго шага по умолчанию — ведро логина, только ключуемое
+		// аккаунтом. Не «пока сойдёт»: третьим аргументом-лимитером подряд его
+		// можно было бы перепутать местами с двумя соседями, а ноль вместо ведра
+		// снял бы защиту молча. Прод ставит своё, более строгое, через
+		// WithTwoFactorLogin.
+		loginTwoFactorLimiter: loginLimiter,
+		cookieSecure:          cookieSecure,
+		appOrigin:             appOrigin,
+		trustedProxy:          trustedProxy,
+	}
+}
+
+// WithTwoFactorLogin подключает отдельное ведро второго шага входа — по
+// аккаунту. Отдельным методом, а не аргументом NewHandler: см. комментарий там.
+func (h *Handler) WithTwoFactorLogin(limiter RateLimiter) *Handler {
+	h.loginTwoFactorLimiter = limiter
+	return h
 }
 
 // WithPasswordReset подключает эндпоинты сброса пароля с их вёдрами лимита.
@@ -111,6 +167,29 @@ func (h *Handler) WithEmailVerification(verify, resend RateLimiter) *Handler {
 	return h
 }
 
+// AccountLimits — вёдра эндпоинтов настроек. Структурой, а не четырьмя
+// аргументами одного типа подряд: перепутанные местами вёдра не дадут ни ошибки
+// компиляции, ни падения теста — просто защита окажется не на той двери.
+type AccountLimits struct {
+	PasswordChange RateLimiter
+	EmailChange    RateLimiter
+	ConfirmEmail   RateLimiter
+	TwoFactor      RateLimiter
+	DeleteAccount  RateLimiter
+}
+
+// WithAccount подключает настройки аккаунта с их вёдрами лимита (по образцу
+// WithPasswordReset). Без него AccountRoutes регистрировать нельзя — лимитеры
+// будут nil.
+func (h *Handler) WithAccount(l AccountLimits) *Handler {
+	h.passwordChangeLimiter = l.PasswordChange
+	h.emailChangeLimiter = l.EmailChange
+	h.confirmEmailLimiter = l.ConfirmEmail
+	h.twoFactorLimiter = l.TwoFactor
+	h.deleteAccountLimiter = l.DeleteAccount
+	return h
+}
+
 // WithOAuth включает вход через провайдеров. Отдельный конструктор, а не восемь
 // аргументов в NewHandler: без ключей в окружении провайдеров нет вовсе, и
 // парольный контур не должен об этом знать.
@@ -126,6 +205,11 @@ func (h *Handler) WithOAuth(svc oauthService, providers map[string]oauth.Provide
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/auth/register", h.rateLimit(h.registerLimiter, "слишком много регистраций")(http.HandlerFunc(h.register)))
 	mux.Handle("POST /api/v1/auth/login", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.login)))
+	// Второй шаг входа (слайс F) — под ведром ЛОГИНА по IP: иначе перебор
+	// шестизначного кода переезжает на менее защищённую дверь. Второе ведро, по
+	// аккаунту, стоит внутри хендлера: ключ появляется только после разбора
+	// пропуска, а ограничивать надо именно попытки по аккаунту.
+	mux.Handle("POST /api/v1/auth/login-2fa", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.loginTwoFactor)))
 	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
 	// Сброс пароля — публичные (сессии ещё/уже нет): CSRF не нужен (как login/
@@ -151,10 +235,41 @@ type userResponse struct {
 	// EmailVerified — подтверждён ли адрес (слайс C). Кабинет по нему рисует баннер
 	// «подтвердите email». Выводится из nullable users.email_verified_at.
 	EmailVerified bool `json:"emailVerified"`
+	// FirstName/LastName — имя человека (фаза 23). Пустая строка = не указано:
+	// null и "" на границе не различаются, а внутри различаются (0021), поэтому
+	// приведение делается здесь, в одном месте.
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	// HasPassword — есть ли у аккаунта пароль вообще (у заведённого через
+	// провайдера его нет). Кабинету это нужно, чтобы решить, спрашивать ли
+	// текущий пароль и как назвать раздел: «Сменить пароль» или «Задать».
+	// Наружу едет ФАКТ, а не хеш.
+	HasPassword bool `json:"hasPassword"`
+	// TwoFactorEnabled — включён ли второй фактор (фаза 23, слайс F).
+	TwoFactorEnabled bool `json:"twoFactorEnabled"`
 }
 
-func toUserResponse(u User) userResponse {
-	return userResponse{ID: u.ID.String(), Email: u.Email, EmailVerified: u.EmailVerifiedAt != nil}
+// toUserResponse принимает флаг второго фактора отдельным аргументом: он живёт
+// в другой таблице, и подмешивать ради него запрос в каждый ответ auth не за
+// чем — там, где ответ выдаётся сразу после входа, значение известно и так.
+func toUserResponse(u User, twoFactorEnabled bool) userResponse {
+	return userResponse{
+		ID:            u.ID.String(),
+		Email:         u.Email,
+		EmailVerified: u.EmailVerifiedAt != nil,
+		FirstName:     strOrEmpty(u.FirstName),
+		LastName:      strOrEmpty(u.LastName),
+		HasPassword:   u.PasswordHash != nil,
+
+		TwoFactorEnabled: twoFactorEnabled,
+	}
+}
+
+func strOrEmpty(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +283,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusCreated, toUserResponse(user))
+	httpserver.WriteJSON(w, r, http.StatusCreated, toUserResponse(user, false))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -177,12 +292,21 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, token, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	if errors.Is(err, ErrTwoFactorRequired) {
+		// Пароль верен, но входа ещё нет: сессия не выдаётся, ставится
+		// подписанный пропуск на второй шаг. Тело говорит фронту, куда идти.
+		h.startTwoFactorChallenge(w, user.ID)
+		httpserver.WriteJSON(w, r, http.StatusOK, map[string]bool{"twoFactorRequired": true})
+		return
+	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
+	// Сюда доходит только вход БЕЗ второго фактора: с включённым мы ушли бы в
+	// ветку выше, не выдав сессии.
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, false))
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +326,14 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
+	// Второй фактор живёт в своей таблице, поэтому здесь отдельный запрос: это
+	// профиль, его читают редко, и экран настроек берёт флаг именно отсюда.
+	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), user.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, twoFactor))
 }
 
 type forgotPasswordRequest struct {

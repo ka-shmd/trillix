@@ -21,6 +21,19 @@ type User struct {
 	PasswordHash    *string
 	CreatedAt       time.Time
 	EmailVerifiedAt *time.Time // nil = email не подтверждён (баннер в кабинете)
+	// FirstName/LastName — имя человека (0021). nil = не указано: кабинет тогда
+	// показывает email. Ничего не гейтят и обязательными не становятся.
+	FirstName *string
+	LastName  *string
+}
+
+// Identity — способ входа через провайдера, как его видит экран настроек.
+// ProviderUserID наружу не отдаётся: человеку он ничего не говорит, а карточку
+// подписывает адрес.
+type Identity struct {
+	Provider      string
+	ProviderEmail *string // nil — привязка старше 0021, адрес приедет на ближайшем входе
+	CreatedAt     time.Time
 }
 
 // Workspace — личный воркспейс пользователя.
@@ -45,6 +58,15 @@ func (Repo) CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, emai
 	})
 	if err != nil {
 		return User{}, fmt.Errorf("create user: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+// GetUserByID — пользователь по id (второй шаг входа: сессии ещё нет).
+func (Repo) GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error) {
+	row, err := postgres.New(db).GetUserByID(ctx, id)
+	if err != nil {
+		return User{}, fmt.Errorf("get user by id: %w", err)
 	}
 	return userFromRow(row), nil
 }
@@ -144,17 +166,138 @@ func (Repo) GetUserByIdentity(ctx context.Context, db postgres.DBTX, provider, p
 	return userFromRow(row), nil
 }
 
-// CreateIdentity привязывает аккаунт провайдера к пользователю.
-func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID) error {
+// CreateIdentity привязывает аккаунт провайдера к пользователю. providerEmail —
+// адрес у провайдера (подпись под карточкой); пустой означает NULL.
+func (Repo) CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID, providerEmail string) error {
 	err := postgres.New(db).CreateIdentity(ctx, postgres.CreateIdentityParams{
 		Provider:       provider,
 		ProviderUserID: providerUserID,
 		UserID:         userID,
+		ProviderEmail:  pgTextOrNull(providerEmail),
 	})
 	if err != nil {
 		return fmt.Errorf("create identity: %w", err)
 	}
 	return nil
+}
+
+// SetIdentityEmail обновляет адрес у провайдера (на каждом входе).
+func (Repo) SetIdentityEmail(ctx context.Context, db postgres.DBTX, provider, providerUserID, providerEmail string) error {
+	err := postgres.New(db).SetIdentityEmail(ctx, postgres.SetIdentityEmailParams{
+		Provider:       provider,
+		ProviderUserID: providerUserID,
+		ProviderEmail:  pgTextOrNull(providerEmail),
+	})
+	if err != nil {
+		return fmt.Errorf("set identity email: %w", err)
+	}
+	return nil
+}
+
+// ListIdentities — способы входа через провайдеров у аккаунта.
+func (Repo) ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Identity, error) {
+	rows, err := postgres.New(db).ListIdentities(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list identities: %w", err)
+	}
+	out := make([]Identity, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Identity{
+			Provider:      r.Provider,
+			ProviderEmail: ptrStr(r.ProviderEmail),
+			CreatedAt:     r.CreatedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// LockIdentities — привязки аккаунта под блокировкой до конца транзакции (гейт
+// «останется ли способ войти»). Вызывать только с tx: на пуле блокировка снимется
+// тем же запросом, и гейт снова станет решением по устаревшему снимку.
+func (Repo) LockIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error) {
+	providers, err := postgres.New(db).LockIdentities(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("lock identities: %w", err)
+	}
+	return providers, nil
+}
+
+// DeleteIdentity отвязывает провайдера; возвращает число удалённых строк (ноль —
+// привязки не было).
+func (Repo) DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error) {
+	n, err := postgres.New(db).DeleteIdentity(ctx, postgres.DeleteIdentityParams{UserID: userID, Provider: provider})
+	if err != nil {
+		return 0, fmt.Errorf("delete identity: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateProfile ставит имя и фамилию целиком; nil — стереть (NULL в БД).
+func (Repo) UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	row, err := postgres.New(db).UpdateUserProfile(ctx, postgres.UpdateUserProfileParams{
+		ID:        userID,
+		FirstName: pgText(firstName),
+		LastName:  pgText(lastName),
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("update profile: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+// FillEmptyProfile заполняет ПУСТЫЕ имя и фамилию (данные провайдера); уже
+// заполненное не трогает.
+func (Repo) FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
+	row, err := postgres.New(db).FillEmptyProfile(ctx, postgres.FillEmptyProfileParams{
+		ID:        userID,
+		FirstName: pgText(firstName),
+		LastName:  pgText(lastName),
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("fill empty profile: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+// CreateEmailChangeToken кладёт одноразовый токен смены адреса.
+func (Repo) CreateEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, newEmail string, expiresAt time.Time) error {
+	if err := postgres.New(db).CreateEmailChangeToken(ctx, postgres.CreateEmailChangeTokenParams{
+		TokenHash: tokenHash,
+		UserID:    userID,
+		NewEmail:  newEmail,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create email change token: %w", err)
+	}
+	return nil
+}
+
+// ConsumeEmailChangeToken атомарно потребляет токен и отдаёт, чей он и на какой
+// адрес. ErrNoRows — нет/использован/истёк (снаружи это один ответ).
+func (Repo) ConsumeEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, string, error) {
+	row, err := postgres.New(db).ConsumeEmailChangeToken(ctx, tokenHash)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return row.UserID, row.NewEmail, nil
+}
+
+// UpdateUserEmail переносит адрес аккаунта и помечает его подтверждённым.
+func (Repo) UpdateUserEmail(ctx context.Context, db postgres.DBTX, userID uuid.UUID, email string) (User, error) {
+	row, err := postgres.New(db).UpdateUserEmail(ctx, postgres.UpdateUserEmailParams{ID: userID, Email: email})
+	if err != nil {
+		return User{}, fmt.Errorf("update user email: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
+// DeleteExpiredEmailChangeTokens — фоновая чистка (periodic).
+func (Repo) DeleteExpiredEmailChangeTokens(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredEmailChangeTokens(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired email change tokens: %w", err)
+	}
+	return n, nil
 }
 
 // SetUserPassword ставит новый хеш пароля (сброс). hash непустой — nil-семантики
@@ -167,6 +310,24 @@ func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.U
 		return fmt.Errorf("set user password: %w", err)
 	}
 	return nil
+}
+
+// EmailTaken — занят ли адрес кем угодно, ВКЛЮЧАЯ удалённые аккаунты (слайс G).
+func (Repo) EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error) {
+	taken, err := postgres.New(db).EmailTaken(ctx, email)
+	if err != nil {
+		return false, fmt.Errorf("email taken: %w", err)
+	}
+	return taken, nil
+}
+
+// MarkUserDeleted помечает аккаунт удалённым; false — пометка уже стояла.
+func (Repo) MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).MarkUserDeleted(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("mark user deleted: %w", err)
+	}
+	return n > 0, nil
 }
 
 // DeleteSessionsByUser рвёт все сессии пользователя (шаг сброса пароля).
@@ -254,6 +415,8 @@ func userFromRow(u postgres.User) User {
 		PasswordHash:    ptrStr(u.PasswordHash),
 		CreatedAt:       u.CreatedAt.Time,
 		EmailVerifiedAt: ptrTime(u.EmailVerifiedAt),
+		FirstName:       ptrStr(u.FirstName),
+		LastName:        ptrStr(u.LastName),
 	}
 }
 
@@ -275,10 +438,103 @@ func ptrStr(v pgtype.Text) *string {
 	return &s
 }
 
+// pgTextOrNull переводит строку в pgtype.Text, считая ПУСТУЮ строку за NULL:
+// «провайдер адреса не дал» и «адрес пустой» — одно и то же состояние, и двух
+// его представлений в колонке быть не должно.
+func pgTextOrNull(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
+}
+
 // pgText переводит *string в pgtype.Text для параметров запроса: nil → NULL.
 func pgText(s *string) pgtype.Text {
 	if s == nil {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *s, Valid: true}
+}
+
+// TOTPState — состояние второго фактора у аккаунта. Secret — шифротекст;
+// расшифровывает его сервис, репозиторий про ключ не знает.
+type TOTPState struct {
+	Secret      []byte
+	ConfirmedAt *time.Time // nil = настройка начата, но фактор НЕ включён
+	LastStep    *int64     // номер израсходованного шага (защита от повтора кода)
+}
+
+// UpsertTOTPSecret кладёт свежий секрет, сбрасывая подтверждение: перезапуск
+// настройки обязан обнулять и отметку, и израсходованный шаг.
+func (Repo) UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error {
+	if err := postgres.New(db).UpsertTOTPSecret(ctx, postgres.UpsertTOTPSecretParams{UserID: userID, Secret: secret}); err != nil {
+		return fmt.Errorf("upsert totp secret: %w", err)
+	}
+	return nil
+}
+
+func (Repo) GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error) {
+	row, err := postgres.New(db).GetTOTP(ctx, userID)
+	if err != nil {
+		return TOTPState{}, err
+	}
+	st := TOTPState{Secret: row.Secret, ConfirmedAt: ptrTime(row.ConfirmedAt)}
+	if row.LastStep.Valid {
+		v := row.LastStep.Int64
+		st.LastStep = &v
+	}
+	return st, nil
+}
+
+func (Repo) ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error {
+	if err := postgres.New(db).ConfirmTOTP(ctx, postgres.ConfirmTOTPParams{
+		UserID:   userID,
+		LastStep: pgtype.Int8{Int64: step, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("confirm totp: %w", err)
+	}
+	return nil
+}
+
+// MarkTOTPStep помечает шаг израсходованным; false — шаг не новее последнего
+// отмеченного, то есть код этого шага уже предъявляли.
+func (Repo) MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error) {
+	n, err := postgres.New(db).MarkTOTPStep(ctx, postgres.MarkTOTPStepParams{
+		UserID:   userID,
+		LastStep: pgtype.Int8{Int64: step, Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("mark totp step: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (Repo) DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteTOTP(ctx, userID); err != nil {
+		return fmt.Errorf("delete totp: %w", err)
+	}
+	return nil
+}
+
+func (Repo) CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error {
+	if err := postgres.New(db).CreateRecoveryCode(ctx, postgres.CreateRecoveryCodeParams{CodeHash: codeHash, UserID: userID}); err != nil {
+		return fmt.Errorf("create recovery code: %w", err)
+	}
+	return nil
+}
+
+// ConsumeRecoveryCode атомарно гасит код; false — кода нет или он уже сгорел.
+func (Repo) ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).ConsumeRecoveryCode(ctx, postgres.ConsumeRecoveryCodeParams{CodeHash: codeHash, UserID: userID})
+	if err != nil {
+		return false, fmt.Errorf("consume recovery code: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (Repo) DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteRecoveryCodes(ctx, userID); err != nil {
+		return fmt.Errorf("delete recovery codes: %w", err)
+	}
+	return nil
 }

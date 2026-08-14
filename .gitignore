@@ -22,5 +22,8 @@ dist/
 # Локальная оснастка запуска preview-браузера (не часть продукта)
 .claude/launch.json
 
+# Кэш плагина роутера TanStack (создаётся любой сборкой web/app)
+web/app/.tanstack/
+
 # ОС
 .DS_Store

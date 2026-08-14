@@ -88,6 +88,47 @@ const (
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
 
+	// Смена пароля в настройках (фаза 23). Ведро по ПОЛЬЗОВАТЕЛЮ и щедрое по
+	// сравнению с логином: перебирать тут нечего (сессия уже своя), режем только
+	// поток argon2id — 64 МиБ на вызов. Три подряд (опечатался в текущем пароле —
+	// пробуй ещё), дальше по одному в минуту.
+	passwordChangeRatePerSec = 1.0 / 60.0
+	passwordChangeBurst      = 3
+
+	// Смена адреса (фаза 23, слайс D). Запрос — по ПОЛЬЗОВАТЕЛЮ и строгий:
+	// письмо уходит на произвольный адрес из формы, то же соображение, что у
+	// приглашений. Подтверждение — по IP, ведро уровня verify (перебор токенов).
+	emailChangeRatePerSec  = 1.0 / 300.0
+	emailChangeBurst       = 3
+	confirmEmailRatePerSec = 1.0 / 12.0
+	confirmEmailBurst      = 5
+
+	// Второй фактор (фаза 23, слайс F): включение и выключение — по
+	// ПОЛЬЗОВАТЕЛЮ. За выключением стоит argon2id и шестизначный код, за
+	// включением — генерация секрета; ни то ни другое не делают в цикле.
+	twoFactorRatePerSec = 1.0 / 12.0
+	twoFactorBurst      = 5
+
+	// Второй шаг ВХОДА — своё ведро, по АККАУНТУ, и самое строгое из всех.
+	// Причина в том, что здесь перебирают: пространство шестизначного кода —
+	// 10^6, окно проверки ±1 держит валидными три значения сразу, то есть одна
+	// попытка угадывает с вероятностью ~3·10⁻⁶. Ведро по IP такому перебору не
+	// мешает (адреса дёшевы), а пропуск на второй шаг перевыдаётся паролем —
+	// который в этом сценарии у атакующего уже есть.
+	//
+	// Запас 5 (просроченный код, опечатка, резервный код не с той строки),
+	// дальше по одной попытке в минуту: живому человеку хватает, перебор при
+	// таком темпе становится делом лет. Лока после N неудач нет сознательно —
+	// см. комментарий у loginTwoFactor.
+	loginTwoFactorRatePerSec = 1.0 / 60.0
+	loginTwoFactorBurst      = 5
+
+	// Удаление аккаунта (фаза 23, слайс G) — по ПОЛЬЗОВАТЕЛЮ. За ручкой argon2id
+	// и код второго фактора, а нажимают её один раз в жизни: темп как у смены
+	// пароля, три подряд на случай опечатки в подтверждении.
+	deleteAccountRatePerSec = 1.0 / 60.0
+	deleteAccountBurst      = 3
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -206,10 +247,17 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mailSvc := mail.NewService(pool, mail.Repo{}, mailer, log, outboxBatch,
 		mail.Backoff{Base: outboxBackoffBase, Max: outboxBackoffMax})
 
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin)
+	// Ключ шифрования секретов второго фактора выводится HKDF от того же
+	// FORM_TOKEN_SECRET (своей env-переменной нет сознательно — спека §6).
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin).
+		WithTOTPKey(cfg.FormTokenSecret)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
-	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
+	// Именованной переменной, а не выражением в вызове: ведро ключуется id
+	// аккаунта, и без чистки его карта растёт по числу входивших.
+	loginTwoFactorLimiter := ratelimit.NewTokenBucket(loginTwoFactorRatePerSec, loginTwoFactorBurst)
+	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy).
+		WithTwoFactorLogin(loginTwoFactorLimiter)
 
 	// Сброс пароля (слайс B): три ведра — forgot по IP и по email, reset по IP.
 	forgotIPLimiter := ratelimit.NewTokenBucket(forgotIPRatePerSec, forgotIPBurst)
@@ -219,6 +267,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
 	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
 	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
+	authHandler = authHandler.WithAccount(auth.AccountLimits{
+		PasswordChange: ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst),
+		EmailChange:    ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
+		ConfirmEmail:   ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
+		TwoFactor:      ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst),
+		DeleteAccount:  ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst),
+	})
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.
@@ -244,6 +299,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
 	// Приглашение — единственная ручка, шлющая письмо на произвольный адрес:
 	// ведро по пользователю, темп как у повторного подтверждения почты.
+	// Удаление аккаунта спрашивает у пространств, не осиротеет ли команда
+	// (слайс G). Связь односторонняя и подключается здесь, потому что импортом
+	// её не выразить: workspaces уже стоит на RequireAuth из auth.
+	authSvc.WithTeams(workspacesSvc)
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -276,7 +335,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	srv := httpserver.New(cfg.HTTPAddr, log, pool,
-		authHandler.Routes, authHandler.OAuthRoutes, workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
+		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
+		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 
@@ -334,6 +394,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
+		Name:     "email-change-token-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, verificationTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredEmailChangeTokens(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired email change tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
 		Name:     "verification-token-cleanup",
 		Interval: sessionCleanupInterval,
 		Run: func(ctx context.Context) error {
@@ -371,7 +447,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		Run: func(context.Context) error {
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
-				verifyLimiter.GC() + resendLimiter.GC()
+				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

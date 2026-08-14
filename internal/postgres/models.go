@@ -9,6 +9,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type EmailChangeToken struct {
+	TokenHash []byte
+	UserID    uuid.UUID
+	NewEmail  string
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type EmailVerificationToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID
@@ -119,12 +128,22 @@ type Subscription struct {
 	UserID           uuid.UUID
 }
 
+type TotpRecoveryCode struct {
+	CodeHash  []byte
+	UserID    uuid.UUID
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type User struct {
 	ID              uuid.UUID
 	Email           string
 	PasswordHash    pgtype.Text
 	CreatedAt       pgtype.Timestamptz
 	EmailVerifiedAt pgtype.Timestamptz
+	FirstName       pgtype.Text
+	LastName        pgtype.Text
+	DeletedAt       pgtype.Timestamptz
 }
 
 type UserIdentity struct {
@@ -132,6 +151,15 @@ type UserIdentity struct {
 	ProviderUserID string
 	UserID         uuid.UUID
 	CreatedAt      pgtype.Timestamptz
+	ProviderEmail  pgtype.Text
+}
+
+type UserTotp struct {
+	UserID      uuid.UUID
+	Secret      []byte
+	ConfirmedAt pgtype.Timestamptz
+	LastStep    pgtype.Int8
+	CreatedAt   pgtype.Timestamptz
 }
 
 type Workspace struct {

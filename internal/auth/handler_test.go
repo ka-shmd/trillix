@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -27,6 +29,147 @@ type fakeAuthService struct {
 	resendErr      error
 	resendCalled   bool
 	resendUser     User // пользователь, дошедший до ResendVerification
+
+	// Профиль (фаза 23, слайс A).
+	profileErr       error
+	profileUser      uuid.UUID // id, дошедший до сервиса
+	profileFirstName string    // строки как есть, до нормализации сервисом
+	profileLastName  string
+
+	// Смена пароля (фаза 23, слайс C).
+	passwordErr     error
+	passwordCurrent string
+	passwordNew     string
+	passwordUser    uuid.UUID
+
+	// Смена адреса (фаза 23, слайс D).
+	emailChangeErr     error
+	emailChangeNew     string
+	emailChangeCode    string
+	emailChangeUser    uuid.UUID
+	confirmEmailErr    error
+	confirmEmailToken  string
+	confirmEmailCalled bool
+
+	// Способы входа (фаза 23, слайс E).
+	identities    []Identity
+	identitiesErr error
+	unlinkErr     error
+	unlinkedName  string
+	unlinkedUser  uuid.UUID
+	linkErr       error
+	linkedUser    uuid.UUID
+	linkedProfile IdentityProfile
+
+	// Второй фактор (фаза 23, слайс F).
+	twoFactorOn      bool
+	twoFactorErr     error
+	setupSecret      string
+	setupErr         error
+	enableCodes      []string
+	enableErr        error
+	disableErr       error
+	disabledCode     string
+	disabledPassword string
+	completeErr      error
+	completedCode    string
+	completedUser    uuid.UUID
+	completeCalls    int
+
+	// Удаление аккаунта (фаза 23, слайс G).
+	deleteErr      error
+	deletedUser    uuid.UUID
+	deletedPass    string
+	deletedCode    string
+	deleteRequests int
+}
+
+func (f *fakeAuthService) DeleteAccount(_ context.Context, user User, currentPassword, code string) error {
+	f.deleteRequests++
+	f.deletedUser = user.ID
+	f.deletedPass = currentPassword
+	f.deletedCode = code
+	return f.deleteErr
+}
+
+func (f *fakeAuthService) TwoFactorEnabled(_ context.Context, _ uuid.UUID) (bool, error) {
+	return f.twoFactorOn, f.twoFactorErr
+}
+
+func (f *fakeAuthService) SetupTOTP(_ context.Context, _ User) (string, string, error) {
+	if f.setupErr != nil {
+		return "", "", f.setupErr
+	}
+	return f.setupSecret, "otpauth://totp/Trillix:a@b.com?secret=" + f.setupSecret, nil
+}
+
+func (f *fakeAuthService) EnableTOTP(_ context.Context, _ User, _ string) ([]string, error) {
+	if f.enableErr != nil {
+		return nil, f.enableErr
+	}
+	return f.enableCodes, nil
+}
+
+func (f *fakeAuthService) DisableTOTP(_ context.Context, _ User, currentPassword, code string) error {
+	f.disabledPassword = currentPassword
+	f.disabledCode = code
+	return f.disableErr
+}
+
+func (f *fakeAuthService) CompleteTwoFactorLogin(_ context.Context, userID uuid.UUID, code string) (User, string, error) {
+	f.completedUser = userID
+	f.completedCode = code
+	f.completeCalls++
+	if f.completeErr != nil {
+		return User{}, "", f.completeErr
+	}
+	return f.user, "session-token", nil
+}
+
+func (f *fakeAuthService) Identities(_ context.Context, _ uuid.UUID) ([]Identity, error) {
+	return f.identities, f.identitiesErr
+}
+
+func (f *fakeAuthService) UnlinkIdentity(_ context.Context, user User, provider string) error {
+	f.unlinkedUser = user.ID
+	f.unlinkedName = provider
+	return f.unlinkErr
+}
+
+func (f *fakeAuthService) RequestEmailChange(_ context.Context, user User, newEmail, _, code string) error {
+	f.emailChangeUser = user.ID
+	f.emailChangeNew = newEmail
+	f.emailChangeCode = code
+	return f.emailChangeErr
+}
+
+func (f *fakeAuthService) ConfirmEmailChange(_ context.Context, token string) error {
+	f.confirmEmailCalled = true
+	f.confirmEmailToken = token
+	return f.confirmEmailErr
+}
+
+func (f *fakeAuthService) ChangePassword(_ context.Context, user User, currentPassword, newPassword string) (string, error) {
+	f.passwordUser = user.ID
+	f.passwordCurrent = currentPassword
+	f.passwordNew = newPassword
+	if f.passwordErr != nil {
+		return "", f.passwordErr
+	}
+	return "new-session-token", nil
+}
+
+func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, firstName, lastName string) (User, error) {
+	f.profileUser = userID
+	f.profileFirstName = firstName
+	f.profileLastName = lastName
+	if f.profileErr != nil {
+		return User{}, f.profileErr
+	}
+	u := f.user
+	u.FirstName = &firstName
+	u.LastName = &lastName
+	return u, nil
 }
 
 func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string, error) {
@@ -38,7 +181,9 @@ func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string
 
 func (f *fakeAuthService) Login(_ context.Context, _, _ string) (User, string, error) {
 	if f.loginErr != nil {
-		return User{}, "", f.loginErr
+		// Пользователь возвращается ВМЕСТЕ с ошибкой — так делает и настоящий
+		// сервис при ErrTwoFactorRequired: транспорту нужно, кого спрашивать код.
+		return f.user, "", f.loginErr
 	}
 	return f.user, "session-token", nil
 }

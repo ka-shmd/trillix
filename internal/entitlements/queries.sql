@@ -42,7 +42,9 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
-       (SELECT count(*) FROM workspace_members mm WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
+       (SELECT count(*) FROM workspace_members mm
+          JOIN users mu ON mu.id = mm.user_id AND mu.deleted_at IS NULL
+         WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -75,7 +77,9 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
-       (SELECT count(*) FROM workspace_members m WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
+       (SELECT count(*) FROM workspace_members m
+          JOIN users mu ON mu.id = m.user_id AND mu.deleted_at IS NULL
+         WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code

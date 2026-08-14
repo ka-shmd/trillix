@@ -30,6 +30,7 @@ type fakeStore struct {
 	inviteErr       error
 	deletedMembers  int64
 	deleteMemberErr error
+	ownedTeams      []string
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
@@ -90,6 +91,10 @@ func (f *fakeStore) UserIDByEmail(_ context.Context, _ postgres.DBTX, _ string) 
 
 func (f *fakeStore) ListMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Member, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ListOwnedTeamsWithMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]string, error) {
+	return f.ownedTeams, nil
 }
 
 func (f *fakeStore) ListPendingInvites(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]PendingInvite, error) {

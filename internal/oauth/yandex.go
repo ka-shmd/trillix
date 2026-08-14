@@ -107,9 +107,17 @@ func (y *Yandex) fetchProfile(ctx context.Context, token string) (Profile, error
 	// истории прокси.
 	req.Header.Set("Authorization", "OAuth "+token)
 
+	// Имя приезжает только при разрешении login:info у приложения в консоли
+	// Яндекс ID; запросом оно не управляется — параметра scope в AuthURL нет, и
+	// провайдер отдаёт то, на что приложение настроено. Поэтому пустые
+	// first_name/last_name — это «в консоли разрешения нет» либо «человек их не
+	// указал», и различить эти два случая по ответу нельзя. Оба безобидны:
+	// профиль просто останется пустым, и человек впишет имя руками.
 	var body struct {
 		ID           string `json:"id"`
 		DefaultEmail string `json:"default_email"`
+		FirstName    string `json:"first_name"`
+		LastName     string `json:"last_name"`
 	}
 	if err := y.do(req, &body); err != nil {
 		return Profile{}, fmt.Errorf("oauth yandex: fetch profile: %w", err)
@@ -120,7 +128,12 @@ func (y *Yandex) fetchProfile(ctx context.Context, token string) (Profile, error
 	if body.DefaultEmail == "" {
 		return Profile{}, ErrNoEmail
 	}
-	return Profile{ID: body.ID, Email: body.DefaultEmail}, nil
+	return Profile{
+		ID:        body.ID,
+		Email:     body.DefaultEmail,
+		FirstName: body.FirstName,
+		LastName:  body.LastName,
+	}, nil
 }
 
 // do выполняет запрос и разбирает JSON-ответ. Тело читается через LimitReader:

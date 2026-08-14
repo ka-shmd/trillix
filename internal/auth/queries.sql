@@ -3,12 +3,41 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
+
+-- Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
+-- GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
+-- стоит `deleted_at IS NULL` (фаза 23, слайс G). Забытое условие в любом из них
+-- означает дверь в удалённый аккаунт: вход паролем, вход провайдером, живая
+-- сессия и второй шаг входа — четыре разные двери в одну комнату.
+--
+-- Занятость адреса спрашивается ОТДЕЛЬНЫМ запросом (EmailTaken): помеченный
+-- аккаунт продолжает занимать email, и слепота к нему здесь — не забывчивость,
+-- а разные вопросы («кто это» и «свободен ли адрес»).
+--
+-- Сама колонка deleted_at при этом стоит в СПИСКАХ выдачи всех запросов по
+-- users, хотя доменному User не нужна: набор колонок, совпадающий с таблицей,
+-- заставляет sqlc отдавать общий тип postgres.User вместо семи однотипных
+-- структур GetUserByEmailRow, GetSessionUserRow и так далее.
+
+-- name: GetUserByID :one
+-- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
+-- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+FROM users
+WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
 FROM users
-WHERE email = $1;
+WHERE email = $1 AND deleted_at IS NULL;
+
+-- name: EmailTaken :one
+-- Занят ли адрес — вопрос ДРУГОЙ, чем «есть ли такой пользователь»: удалённый
+-- аккаунт продолжает держать свой email (UNIQUE никуда не делся, освободить его
+-- нечем до реальной чистки по 152-ФЗ). Без этого запроса подтверждение смены
+-- адреса на занятый удалённым падало бы на UNIQUE пятисоткой вместо 409.
+SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken;
 
 -- Личное пространство регистрации: personal_user_id — и пометка «личное», и
 -- ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
@@ -34,10 +63,10 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
-WHERE s.token_hash = $1 AND s.expires_at > now();
+WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL;
 
 -- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1;
@@ -49,14 +78,67 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
-WHERE i.provider = $1 AND i.provider_user_id = $2;
+WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL;
 
 -- name: CreateIdentity :exec
-INSERT INTO user_identities (provider, provider_user_id, user_id)
-VALUES ($1, $2, $3);
+INSERT INTO user_identities (provider, provider_user_id, user_id, provider_email)
+VALUES ($1, $2, $3, $4);
+
+-- name: SetIdentityEmail :exec
+-- Адрес аккаунта У ПРОВАЙДЕРА обновляется на каждом входе (фаза 23, слайс E):
+-- иначе карточка «Яндекс · ivan@yandex.ru» показывала бы адрес двухлетней
+-- давности. Спросить его вне потока входа нечем — токен провайдера одноразовый.
+UPDATE user_identities SET provider_email = $3
+WHERE provider = $1 AND provider_user_id = $2;
+
+-- name: ListIdentities :many
+-- Способы входа через провайдеров у аккаунта — экран настроек. Порядок по дате
+-- привязки: он же порядок появления карточек, и он стабилен.
+SELECT provider, provider_user_id, provider_email, created_at
+FROM user_identities
+WHERE user_id = $1
+ORDER BY created_at;
+
+-- name: LockIdentities :many
+-- Привязки аккаунта под блокировкой — гейт отвязки «останется ли способ войти».
+--
+-- Мина: FOR UPDATE здесь несущий, а не украшение. Гейт читает состав и решает
+-- по нему, поэтому без блокировки две одновременные отвязки разных провайдеров
+-- обе видят «привязок две», обе проходят проверку и обе удаляют — аккаунт без
+-- пароля остаётся без единого способа войти, и чинится это только руками в БД.
+-- Под блокировкой второй запрос ждёт первого и перечитывает состав уже без
+-- удалённой строки.
+--
+-- count(*) вместо списка не годится: агрегат с FOR UPDATE Postgres не
+-- принимает, а считать строки в Go — ровно та же цена при одном-двух
+-- провайдерах. ORDER BY — детерминированный порядок захвата.
+SELECT provider FROM user_identities WHERE user_id = $1 ORDER BY provider FOR UPDATE;
+
+-- name: DeleteIdentity :execrows
+-- Отвязка. Ноль строк — привязки не было (повторный клик), и это не авария.
+DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
+
+-- name: UpdateUserProfile :one
+-- Имя и фамилия целиком, а не по одному полю: экран настроек шлёт обе строки
+-- разом, и «обновить только непустое» здесь означало бы, что стереть имя
+-- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
+UPDATE users SET first_name = $2, last_name = $3
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
+
+-- name: FillEmptyProfile :one
+-- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
+-- присваивание: заполненное поле остаётся как есть, иначе каждый вход через
+-- Яндекс затирал бы имя, введённое в кабинете руками. NULL в аргументе означает
+-- «этого поля провайдер не дал» и тоже ничего не трогает.
+UPDATE users
+   SET first_name = COALESCE(first_name, $2),
+       last_name  = COALESCE(last_name,  $3)
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
@@ -108,3 +190,79 @@ UPDATE users SET email_verified_at = now() WHERE id = $1;
 -- name: DeleteExpiredEmailVerificationTokens :execrows
 -- Фоновая чистка истёкших токенов подтверждения (использованные истекают за 24 часа).
 DELETE FROM email_verification_tokens WHERE expires_at <= now();
+
+-- name: CreateEmailChangeToken :exec
+-- Запрос смены адреса (фаза 23, слайс D). В БД — только SHA-256 сырого токена.
+INSERT INTO email_change_tokens (token_hash, user_id, new_email, expires_at)
+VALUES ($1, $2, $3, $4);
+
+-- name: ConsumeEmailChangeToken :one
+-- Атомарное потребление: одноразовость держится условием used_at IS NULL в том
+-- же UPDATE, а не проверкой перед ним (иначе два параллельных перехода по
+-- ссылке оба сочли бы токен свежим). Ноль строк → ErrNoRows: нет, использован
+-- или истёк — снаружи это один и тот же ответ.
+UPDATE email_change_tokens
+   SET used_at = now()
+WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
+RETURNING user_id, new_email;
+
+-- name: UpdateUserEmail :one
+-- Переносит адрес и СРАЗУ помечает его подтверждённым: владение доказано
+-- переходом по ссылке, отправленной именно на него.
+UPDATE users
+   SET email = $2, email_verified_at = now()
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at;
+
+-- name: DeleteExpiredEmailChangeTokens :execrows
+DELETE FROM email_change_tokens WHERE expires_at <= now();
+
+-- name: UpsertTOTPSecret :exec
+-- Начало настройки второго фактора (фаза 23, слайс F). Перезапись поверх
+-- НЕподтверждённой попытки — норма: человек мог начать настройку и бросить, а
+-- новый секрет обязан затирать старый. Подтверждённый фактор так не
+-- перезаписывается: сервис до этого запроса проверяет, что фактор выключен.
+INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE
+SET secret = EXCLUDED.secret, confirmed_at = NULL, last_step = NULL, created_at = now();
+
+-- name: GetTOTP :one
+SELECT secret, confirmed_at, last_step FROM user_totp WHERE user_id = $1;
+
+-- name: ConfirmTOTP :exec
+UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1;
+
+-- name: MarkTOTPStep :execrows
+-- Отметка «этот шаг уже израсходован»: ноль строк — код предъявлен повторно.
+-- Условие атомарно, поэтому гонка двух одинаковых кодов даёт успех одному.
+--
+-- Мина: сравнение обязано быть строгим неравенством, а не «шаг отличается от
+-- последнего». Окно проверки — ±1 шаг, то есть валидны три соседних кода
+-- одновременно; при нестрогом условии last_step уезжает назад, и код, уже
+-- потреблённый на шаге N, снова проходит после входа кодом шага N+1. last_step
+-- IS NULL — фактор только что подтверждён, израсходованных шагов ещё нет.
+UPDATE user_totp SET last_step = $2
+WHERE user_id = $1 AND (last_step IS NULL OR last_step < $2);
+
+-- name: DeleteTOTP :exec
+DELETE FROM user_totp WHERE user_id = $1;
+
+-- name: CreateRecoveryCode :exec
+INSERT INTO totp_recovery_codes (code_hash, user_id) VALUES ($1, $2);
+
+-- name: ConsumeRecoveryCode :execrows
+-- Атомарное потребление резервного кода: помечает использованным ровно при
+-- условии «этот пользователь, не использован». Ноль строк — кода нет или он
+-- уже сгорел (снаружи это один ответ).
+UPDATE totp_recovery_codes SET used_at = now()
+WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL;
+
+-- name: DeleteRecoveryCodes :exec
+DELETE FROM totp_recovery_codes WHERE user_id = $1;
+
+-- name: MarkUserDeleted :execrows
+-- Удаление аккаунта пометкой (фаза 23, слайс G). Условие deleted_at IS NULL —
+-- не осторожность, а идемпотентность: повторный вызов (две вкладки) даёт ноль
+-- строк, а не переставляет дату удаления на новую.
+UPDATE users SET deleted_at = now()
+WHERE id = $1 AND deleted_at IS NULL;

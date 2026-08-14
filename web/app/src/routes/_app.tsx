@@ -1,6 +1,7 @@
 import { createFileRoute, redirect, useNavigate, Outlet } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
+import { displayName } from '../entities/user'
 import { useCreateForm } from '../features/forms/queries'
 import { useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
@@ -50,6 +51,7 @@ function AppLayout() {
     <SidebarProvider>
       <AppSidebar
         userEmail={user.email}
+        userName={displayName(user)}
         onCreateForm={handleCreate}
         creatingForm={create.isPending}
         onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}

@@ -19,6 +19,12 @@ const userB = {
   email: 'b@example.com',
   emailVerified: true,
   createdAt: '2026-07-26T10:00:00.000Z',
+  // Профиль обязателен в схеме с фазы 23: ответ без него не пройдёт userSchema
+  // на границе, и мутация упадёт ещё до onSuccess.
+  firstName: '',
+  lastName: '',
+  hasPassword: true,
+  twoFactorEnabled: false,
 }
 
 beforeEach(() => {

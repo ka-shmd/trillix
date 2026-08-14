@@ -8,8 +8,20 @@ import {
   login,
   logout,
   register,
+  changePassword,
+  confirmEmailChange,
+  deleteAccount,
+  disableTwoFactor,
+  enableTwoFactor,
+  isTwoFactorRequired,
+  loginTwoFactor,
+  setupTwoFactor,
+  getIdentities,
+  unlinkIdentity,
+  requestEmailChange,
   resendVerification,
   resetPassword,
+  updateProfile,
   verifyEmail,
 } from './api'
 import type { User } from '../../entities/user'
@@ -44,6 +56,20 @@ export function useLogin() {
   return useMutation({
     mutationFn: login,
     // Патчим кэш me возвращённым пользователем — забытая синхронизация это баг.
+    // Но только если вход СОСТОЯЛСЯ: при требовании второго фактора сессии нет,
+    // и класть в кэш нечего — иначе гард пустил бы в кабинет без входа.
+    onSuccess: (result) => {
+      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+    },
+  })
+}
+
+// Второй шаг входа: сессия открыта, личность в этой вкладке сменилась — тот же
+// adoptSession, что у обычного входа (TD-40).
+export function useLoginTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: loginTwoFactor,
     onSuccess: (user: User) => adoptSession(qc, user),
   })
 }
@@ -109,6 +135,103 @@ export function useLinkProvider() {
     // сбрасывать кэш надо по той же причине (TD-40). Путь не гипотетический:
     // сессия предыдущего аккаунта могла истечь без logout, и его данные лежат в
     // кэше этой вкладки, пока сюда приходит другая личность.
-    onSuccess: (user: User) => adoptSession(qc, user),
+    //
+    // Требование кода — не вход: сессии нет, класть в кэш нечего (та же
+    // развилка, что у useLogin).
+    onSuccess: (result) => {
+      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+    },
+  })
+}
+
+// Правка профиля. Ответ — весь объект пользователя, поэтому кэш ПАТЧИТСЯ им, а
+// не инвалидируется: инвалидация дала бы лишний GET /auth/me и мигание имени в
+// сайдбаре между ответом и рефетчем.
+export function useUpdateProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: updateProfile,
+    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+  })
+}
+
+// Смена пароля. Кэш профиля не трогаем: в объекте пользователя меняется только
+// hasPassword, и то лишь у аккаунта, который пароль ЗАДАЁТ, — поэтому me
+// инвалидируется, а не патчится (тела у ответа нет).
+export function useChangePassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: changePassword,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Запрос смены адреса. Кэш не трогаем: адрес аккаунта не изменился — письмо
+// только поставлено в очередь, и до перехода по ссылке в профиле всё прежнее.
+export function useRequestEmailChange() {
+  return useMutation({ mutationFn: requestEmailChange })
+}
+
+// Подтверждение нового адреса по ссылке из письма. Инвалидируем me: страницу
+// могли открыть в той же вкладке, где открыт кабинет, и адрес в нём протух.
+export function useConfirmEmailChange() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: confirmEmailChange,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Способы входа — серверный стейт: список меняется привязкой (через переход к
+// провайдеру и обратно) и отвязкой.
+export const identitiesQueryOptions = queryOptions({
+  queryKey: authKeys.identities(),
+  queryFn: getIdentities,
+  retry: false,
+})
+
+export function useUnlinkIdentity() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: unlinkIdentity,
+    // Инвалидируем СПИСОК и профиль: отвязка не меняет hasPassword, но экран
+    // рисует способы входа из обоих источников, и разъехаться им нельзя.
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: authKeys.identities() })
+      await qc.invalidateQueries({ queryKey: authKeys.me() })
+    },
+  })
+}
+
+// Второй фактор в настройках. setup только показывает секрет (фактор ещё
+// выключен), поэтому кэш профиля не трогает; enable и disable его меняют.
+export function useSetupTwoFactor() {
+  return useMutation({ mutationFn: setupTwoFactor })
+}
+
+export function useEnableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: enableTwoFactor,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+export function useDisableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: disableTwoFactor,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+// Удаление аккаунта (слайс G). Кэш сносится ЦЕЛИКОМ, как при выходе: сессии
+// больше нет, и оставленные в памяти формы прошлого аккаунта дождались бы
+// следующего входа в этой вкладке (TD-40).
+export function useDeleteAccount() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: () => qc.clear(),
   })
 }

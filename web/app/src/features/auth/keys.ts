@@ -2,6 +2,7 @@
 // (web/CLAUDE.md), только через эту фабрику.
 export const authKeys = {
   me: () => ['auth', 'me'] as const,
+  identities: () => ['auth', 'identities'] as const,
 }
 
 export const oauthKeys = {

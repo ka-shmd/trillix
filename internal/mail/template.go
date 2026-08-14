@@ -21,6 +21,16 @@ const (
 	// TemplateSubmissionDigest — дайджест новых ответов владельцу. Data:
 	// {"form_title": "<название>", "link": "<url таблицы>", "count": <N>}.
 	TemplateSubmissionDigest Template = "submission_digest"
+	// TemplateEmailChangeConfirm — письмо со ссылкой подтверждения НОВОГО адреса
+	// (фаза 23, слайс D). Уходит на новый адрес. Data: {"link": "<url>"}.
+	TemplateEmailChangeConfirm Template = "email_change_confirm"
+	// TemplateEmailChangeNotice — уведомление на СТАРЫЙ адрес о запросе смены.
+	// Ссылки-токена не несёт. Data: {"new_email": "<адрес>"}.
+	TemplateEmailChangeNotice Template = "email_change_notice"
+	// TemplatePasswordChanged — уведомление о смене пароля (фаза 23, слайс C).
+	// Data: {"link": "<url восстановления>"}. Ссылки-токена в нём нет: письмо не
+	// даёт никаких прав, а только сообщает о случившемся.
+	TemplatePasswordChanged Template = "password_changed"
 )
 
 type mailTemplate struct {
@@ -76,6 +86,42 @@ var templates = map[Template]mailTemplate{
 				"Открыть таблицу ответов:\n\n" +
 				"{{.link}}\n\n" +
 				"Уведомления можно отключить в настройках формы.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateEmailChangeConfirm: {
+		subject: "Подтверждение нового адреса в Trillix",
+		body: template.Must(template.New("email_change_confirm").Parse(
+			"Здравствуйте!\n\n" +
+				"Этот адрес указан как новый для аккаунта в Trillix. Чтобы перенести " +
+				"аккаунт на него, перейдите по ссылке (она действует 24 часа):\n\n" +
+				"{{.link}}\n\n" +
+				"Пока вы не перешли по ссылке, вход остаётся по прежнему адресу.\n\n" +
+				"Если вы ничего не меняли — просто не переходите по ссылке, " +
+				"письмо можно удалить.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateEmailChangeNotice: {
+		subject: "Запрошена смена адреса в Trillix",
+		body: template.Must(template.New("email_change_notice").Parse(
+			"Здравствуйте!\n\n" +
+				"Для вашего аккаунта в Trillix запрошена смена адреса на {{.new_email}}. " +
+				"Пока новый адрес не подтверждён, вход остаётся по этому.\n\n" +
+				"Если это сделали не вы — смените пароль: пока адрес прежний, " +
+				"восстановление аккаунта ходит на него.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplatePasswordChanged: {
+		subject: "Пароль в Trillix изменён",
+		body: template.Must(template.New("password_changed").Parse(
+			"Здравствуйте!\n\n" +
+				"Пароль от вашего аккаунта в Trillix только что изменён, а все " +
+				"остальные сеансы завершены.\n\n" +
+				"Если это сделали вы — ничего делать не нужно.\n\n" +
+				"Если нет — восстановите доступ по ссылке «Забыли пароль?»:\n\n" +
+				"{{.link}}\n\n" +
 				"— Trillix",
 		)),
 	},
