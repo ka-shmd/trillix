@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 )
@@ -45,19 +46,23 @@ func (s *Service) LinkIdentity(ctx context.Context, userID uuid.UUID, p Identity
 //
 // Отвязка отсутствующей привязки — не ошибка: DELETE идемпотентен, а повторный
 // клик по кнопке не авария.
+//
+// Счёт и удаление — ОДНОЙ транзакцией, привязки берутся под блокировку: гейт
+// решает по составу, и без блокировки две одновременные отвязки разных
+// провайдеров проходят обе. Подробности — у LockIdentities в queries.sql.
 func (s *Service) UnlinkIdentity(ctx context.Context, user User, provider string) error {
-	n, err := s.repo.CountIdentities(ctx, s.db, user.ID)
-	if err != nil {
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		providers, err := s.repo.LockIdentities(ctx, tx, user.ID)
+		if err != nil {
+			return err
+		}
+		// Пароля нет и это последняя личность → после отвязки в аккаунт не войти
+		// никак, а данные останутся внутри. Единственный правильный ответ — отказ с
+		// внятным текстом, а не «мы предупреждали».
+		if user.PasswordHash == nil && len(providers) <= 1 {
+			return fmt.Errorf("%w: это единственный способ войти — сначала задайте пароль", domain.ErrConflict)
+		}
+		_, err = s.repo.DeleteIdentity(ctx, tx, user.ID, provider)
 		return err
-	}
-	// Пароля нет и это последняя личность → после отвязки в аккаунт не войти
-	// никак, а данные останутся внутри. Единственный правильный ответ — отказ с
-	// внятным текстом, а не «мы предупреждали».
-	if user.PasswordHash == nil && n <= 1 {
-		return fmt.Errorf("%w: это единственный способ войти — сначала задайте пароль", domain.ErrConflict)
-	}
-	if _, err := s.repo.DeleteIdentity(ctx, s.db, user.ID, provider); err != nil {
-		return err
-	}
-	return nil
+	})
 }

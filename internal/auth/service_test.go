@@ -250,8 +250,14 @@ func (f *fakeStore) ListIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UU
 	return f.identities, nil
 }
 
-func (f *fakeStore) CountIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int64, error) {
-	return int64(len(f.identities)), nil
+// LockIdentities в фейке блокировать нечего — важно, что состав тот же, что у
+// ListIdentities. Настоящую блокировку проверяет интеграционный тест.
+func (f *fakeStore) LockIdentities(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]string, error) {
+	providers := make([]string, len(f.identities))
+	for i, id := range f.identities {
+		providers[i] = id.Provider
+	}
+	return providers, nil
 }
 
 func (f *fakeStore) DeleteIdentity(_ context.Context, _ postgres.DBTX, _ uuid.UUID, provider string) (int64, error) {

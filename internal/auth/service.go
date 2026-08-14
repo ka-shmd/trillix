@@ -60,7 +60,7 @@ type Store interface {
 	CreateIdentity(ctx context.Context, db postgres.DBTX, provider, providerUserID string, userID uuid.UUID, providerEmail string) error
 	SetIdentityEmail(ctx context.Context, db postgres.DBTX, provider, providerUserID, providerEmail string) error
 	ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Identity, error)
-	CountIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
+	LockIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error)
 	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)

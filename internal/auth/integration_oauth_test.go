@@ -5,14 +5,17 @@ package auth_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
@@ -330,6 +333,78 @@ func TestOAuth_IdentityCardShowsProviderEmail(t *testing.T) {
 
 // Отвязать единственный способ войти у аккаунта без пароля нельзя: 409, и
 // привязка остаётся на месте.
+// Две одновременные отвязки РАЗНЫХ провайдеров у аккаунта без пароля: пройти
+// должна ровно одна. Гейт решает по составу привязок, поэтому без блокировки обе
+// транзакции видят «привязок две», обе проходят проверку и обе удаляют — человек
+// остаётся без единого способа войти, и починить это можно только руками в БД.
+//
+// Сегодня сценарий недостижим через HTTP (провайдер реализован один), поэтому
+// тест зовёт сервис напрямую и заводит вторую привязку запросом. Он и есть
+// страховка на день, когда подключат VK ID: правка тогда будет в другом файле, а
+// уронит её этот тест.
+func TestUnlinkIdentity_ConcurrentUnlinksLeaveOneWayIn(t *testing.T) {
+	resetDB(t)
+	svc := newAuthService()
+
+	// Прогонов несколько: гонка выигрывается не всегда, и один прогон на старом
+	// коде мог бы пройти случайно.
+	for range 5 {
+		if _, err := testPool.Exec(context.Background(),
+			`TRUNCATE users, user_identities CASCADE`); err != nil {
+			t.Fatalf("truncate: %v", err)
+		}
+		userID := domain.NewID()
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO users (id, email) VALUES ($1, 'ivan@yandex.ru')`, userID); err != nil {
+			t.Fatalf("insert user: %v", err)
+		}
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO user_identities (provider, provider_user_id, user_id)
+			 VALUES ('yandex', '1', $1), ('vk', '2', $1)`, userID); err != nil {
+			t.Fatalf("insert identities: %v", err)
+		}
+
+		// PasswordHash nil — аккаунт заведён через провайдера, и привязки для него
+		// единственный способ войти.
+		user := auth.User{ID: userID, Email: "ivan@yandex.ru"}
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		errs := make([]error, 2)
+		for i, provider := range []string{"yandex", "vk"} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start // обе отвязки уходят в базу одновременно
+				errs[i] = svc.UnlinkIdentity(context.Background(), user, provider)
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		var left int
+		if err := testPool.QueryRow(context.Background(),
+			`SELECT count(*) FROM user_identities WHERE user_id = $1`, userID).Scan(&left); err != nil {
+			t.Fatalf("count identities: %v", err)
+		}
+		if left != 1 {
+			t.Fatalf("привязок осталось %d, ожидалась 1; ошибки отвязок: %v, %v — аккаунт без пароля потерял вход",
+				left, errs[0], errs[1])
+		}
+		// Отказ ровно один, и он внятный: вторая отвязка обязана упереться в гейт,
+		// а не молча ничего не сделать.
+		refused := 0
+		for _, err := range errs {
+			if errors.Is(err, domain.ErrConflict) {
+				refused++
+			}
+		}
+		if refused != 1 {
+			t.Fatalf("отказов ErrConflict = %d, ожидался 1; ошибки: %v, %v", refused, errs[0], errs[1])
+		}
+	}
+}
+
 func TestOAuth_UnlinkLastIdentityRefused(t *testing.T) {
 	resetDB(t)
 	srv := newOAuthStack(t, oauth.Profile{ID: "1234567", Email: "ivan@yandex.ru"})

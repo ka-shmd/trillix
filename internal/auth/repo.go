@@ -211,13 +211,15 @@ func (Repo) ListIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UU
 	return out, nil
 }
 
-// CountIdentities — сколько привязок у аккаунта (гейт «останется ли способ войти»).
-func (Repo) CountIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).CountIdentities(ctx, userID)
+// LockIdentities — привязки аккаунта под блокировкой до конца транзакции (гейт
+// «останется ли способ войти»). Вызывать только с tx: на пуле блокировка снимется
+// тем же запросом, и гейт снова станет решением по устаревшему снимку.
+func (Repo) LockIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error) {
+	providers, err := postgres.New(db).LockIdentities(ctx, userID)
 	if err != nil {
-		return 0, fmt.Errorf("count identities: %w", err)
+		return nil, fmt.Errorf("lock identities: %w", err)
 	}
-	return n, nil
+	return providers, nil
 }
 
 // DeleteIdentity отвязывает провайдера; возвращает число удалённых строк (ноль —

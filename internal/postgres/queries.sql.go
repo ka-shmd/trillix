@@ -125,17 +125,6 @@ func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCo
 	return result.RowsAffected(), nil
 }
 
-const countIdentities = `-- name: CountIdentities :one
-SELECT count(*) FROM user_identities WHERE user_id = $1
-`
-
-func (q *Queries) CountIdentities(ctx context.Context, userID uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countIdentities, userID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -2305,6 +2294,42 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
 func (q *Queries) LockFormForSubmit(ctx context.Context, dollar_1 string) error {
 	_, err := q.db.Exec(ctx, lockFormForSubmit, dollar_1)
 	return err
+}
+
+const lockIdentities = `-- name: LockIdentities :many
+SELECT provider FROM user_identities WHERE user_id = $1 ORDER BY provider FOR UPDATE
+`
+
+// Привязки аккаунта под блокировкой — гейт отвязки «останется ли способ войти».
+//
+// Мина: FOR UPDATE здесь несущий, а не украшение. Гейт читает состав и решает
+// по нему, поэтому без блокировки две одновременные отвязки разных провайдеров
+// обе видят «привязок две», обе проходят проверку и обе удаляют — аккаунт без
+// пароля остаётся без единого способа войти, и чинится это только руками в БД.
+// Под блокировкой второй запрос ждёт первого и перечитывает состав уже без
+// удалённой строки.
+//
+// count(*) вместо списка не годится: агрегат с FOR UPDATE Postgres не
+// принимает, а считать строки в Go — ровно та же цена при одном-двух
+// провайдерах. ORDER BY — детерминированный порядок захвата.
+func (q *Queries) LockIdentities(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, lockIdentities, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, err
+		}
+		items = append(items, provider)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markEmailVerified = `-- name: MarkEmailVerified :exec
