@@ -18,8 +18,27 @@ export function register(body: Credentials): Promise<User> {
   return apiRequest('/auth/register', { method: 'POST', body, schema: userSchema })
 }
 
-export function login(body: Credentials): Promise<User> {
-  return apiRequest('/auth/login', { method: 'POST', body, schema: userSchema })
+// Ответ входа — либо пользователь, либо «нужен второй фактор» (фаза 23,
+// слайс F): сессия во втором случае НЕ выдана, и объекта пользователя нет.
+// Union на границе, а не необязательные поля: два разных исхода не должны
+// притворяться одним объектом с половиной пустых полей.
+const twoFactorRequiredSchema = z.object({ twoFactorRequired: z.literal(true) })
+const loginResultSchema = z.union([twoFactorRequiredSchema, userSchema])
+
+export type LoginResult = z.infer<typeof loginResultSchema>
+
+export function isTwoFactorRequired(r: LoginResult): r is { twoFactorRequired: true } {
+  return 'twoFactorRequired' in r
+}
+
+export function login(body: Credentials): Promise<LoginResult> {
+  return apiRequest('/auth/login', { method: 'POST', body, schema: loginResultSchema })
+}
+
+// Второй шаг входа. Пропуск лежит в HttpOnly-cookie, которую поставил первый
+// шаг: JS её не видит и не шлёт руками.
+export function loginTwoFactor(body: { code: string }): Promise<User> {
+  return apiRequest('/auth/login-2fa', { method: 'POST', body, schema: userSchema })
 }
 
 export function logout(): Promise<void> {
@@ -90,6 +109,26 @@ export function unlinkIdentity(provider: string): Promise<void> {
 // и ставит подписанное намерение привязки.
 export function identityLinkUrl(provider: string): string {
   return `/api/v1/account/identities/${provider}/start`
+}
+
+// Второй фактор в настройках (фаза 23, слайс F).
+export function setupTwoFactor(): Promise<{ secret: string; otpauthUrl: string }> {
+  return apiRequest('/account/2fa/setup', {
+    method: 'POST',
+    schema: z.object({ secret: z.string(), otpauthUrl: z.string() }),
+  })
+}
+
+export function enableTwoFactor(body: { code: string }): Promise<string[]> {
+  return apiRequest('/account/2fa/enable', {
+    method: 'POST',
+    body,
+    schema: z.object({ recoveryCodes: z.array(z.string()) }),
+  }).then((r) => r.recoveryCodes)
+}
+
+export function disableTwoFactor(body: { currentPassword: string; code: string }): Promise<void> {
+  return apiRequest('/account/2fa/disable', { method: 'POST', body })
 }
 
 // Список включённых провайдеров. Пустой — ключей нет в окружении бэка,

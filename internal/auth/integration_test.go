@@ -40,7 +40,8 @@ func newMailSvc() *mail.Service {
 
 // newAuthService — реальный сервис auth с подключённой почтой (для сброса пароля).
 func newAuthService() *auth.Service {
-	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, newMailSvc(), time.Hour, testAppOrigin)
+	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, newMailSvc(), time.Hour, testAppOrigin).
+		WithTOTPKey([]byte("integration-test-totp-key"))
 }
 
 var testPool *pgxpool.Pool
@@ -61,7 +62,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, outbox CASCADE`)
+		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, user_totp, totp_recovery_codes, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -76,7 +77,7 @@ func newStack(t *testing.T) *httptest.Server {
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
 		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).
-		WithAccount(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{})
+		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.AccountRoutes(mux)

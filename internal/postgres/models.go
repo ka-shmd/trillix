@@ -128,6 +128,13 @@ type Subscription struct {
 	UserID           uuid.UUID
 }
 
+type TotpRecoveryCode struct {
+	CodeHash  []byte
+	UserID    uuid.UUID
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type User struct {
 	ID              uuid.UUID
 	Email           string
@@ -144,6 +151,14 @@ type UserIdentity struct {
 	UserID         uuid.UUID
 	CreatedAt      pgtype.Timestamptz
 	ProviderEmail  pgtype.Text
+}
+
+type UserTotp struct {
+	UserID      uuid.UUID
+	Secret      []byte
+	ConfirmedAt pgtype.Timestamptz
+	LastStep    pgtype.Int8
+	CreatedAt   pgtype.Timestamptz
 }
 
 type Workspace struct {

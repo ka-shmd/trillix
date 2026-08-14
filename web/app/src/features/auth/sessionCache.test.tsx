@@ -24,6 +24,7 @@ const userB = {
   firstName: '',
   lastName: '',
   hasPassword: true,
+  twoFactorEnabled: false,
 }
 
 beforeEach(() => {

@@ -10,6 +10,7 @@ function user(patch: Partial<User> = {}): User {
     firstName: '',
     lastName: '',
     hasPassword: true,
+    twoFactorEnabled: false,
     ...patch,
   }
 }

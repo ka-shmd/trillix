@@ -5,6 +5,13 @@ INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
 RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name;
 
+-- name: GetUserByID :one
+-- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
+-- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+FROM users
+WHERE id = $1;
+
 -- name: GetUserByEmail :one
 SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
 FROM users
@@ -175,3 +182,42 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 
 -- name: DeleteExpiredEmailChangeTokens :execrows
 DELETE FROM email_change_tokens WHERE expires_at <= now();
+
+-- name: UpsertTOTPSecret :exec
+-- Начало настройки второго фактора (фаза 23, слайс F). Перезапись поверх
+-- НЕподтверждённой попытки — норма: человек мог начать настройку и бросить, а
+-- новый секрет обязан затирать старый. Подтверждённый фактор так не
+-- перезаписывается: сервис до этого запроса проверяет, что фактор выключен.
+INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE
+SET secret = EXCLUDED.secret, confirmed_at = NULL, last_step = NULL, created_at = now();
+
+-- name: GetTOTP :one
+SELECT secret, confirmed_at, last_step FROM user_totp WHERE user_id = $1;
+
+-- name: ConfirmTOTP :exec
+UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1;
+
+-- name: MarkTOTPStep :execrows
+-- Отметка «этот шаг уже израсходован». Условие last_step IS DISTINCT FROM $2
+-- делает её атомарной защитой от повтора: два параллельных запроса с одним и
+-- тем же кодом дадут ноль строк второму. IS DISTINCT FROM, а не <>, потому что
+-- last_step может быть NULL (фактор только что подтверждён).
+UPDATE user_totp SET last_step = $2
+WHERE user_id = $1 AND (last_step IS DISTINCT FROM $2);
+
+-- name: DeleteTOTP :exec
+DELETE FROM user_totp WHERE user_id = $1;
+
+-- name: CreateRecoveryCode :exec
+INSERT INTO totp_recovery_codes (code_hash, user_id) VALUES ($1, $2);
+
+-- name: ConsumeRecoveryCode :execrows
+-- Атомарное потребление резервного кода: помечает использованным ровно при
+-- условии «этот пользователь, не использован». Ноль строк — кода нет или он
+-- уже сгорел (снаружи это один ответ).
+UPDATE totp_recovery_codes SET used_at = now()
+WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL;
+
+-- name: DeleteRecoveryCodes :exec
+DELETE FROM totp_recovery_codes WHERE user_id = $1;

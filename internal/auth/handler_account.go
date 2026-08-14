@@ -22,7 +22,8 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// Забытый WithAccount иначе обнаруживается первым же запросом человека —
 	// паникой на nil-лимитере внутри хендлера. Конфигурация проверяется на
 	// старте процесса, а не на первом запросе (internal/CLAUDE.md).
-	if h.passwordChangeLimiter == nil || h.emailChangeLimiter == nil || h.confirmEmailLimiter == nil {
+	if h.passwordChangeLimiter == nil || h.emailChangeLimiter == nil ||
+		h.confirmEmailLimiter == nil || h.twoFactorLimiter == nil {
 		panic("auth: AccountRoutes вызван без WithAccount — вёдра лимита не заданы")
 	}
 
@@ -38,6 +39,11 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// на конкретный аккаунт.
 	mux.Handle("GET /api/v1/account/identities/{provider}/start",
 		h.RequireAuth(http.HandlerFunc(h.startIdentityLink)))
+	// Второй фактор (слайс F). Включение и выключение — свои мутации; второй шаг
+	// ВХОДА живёт в Routes, потому что сессии на нём ещё нет.
+	mux.Handle("POST /api/v1/account/2fa/setup", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.setupTOTP))))
+	mux.Handle("POST /api/v1/account/2fa/enable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.enableTOTP))))
+	mux.Handle("POST /api/v1/account/2fa/disable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.disableTOTP))))
 	// Второй шаг смены адреса — ПУБЛИЧНЫЙ (по ссылке ходят из почтового клиента,
 	// где сессии кабинета может не быть): аутентифицирует сам одноразовый токен,
 	// CSRF не нужен, щит — лимит по IP. Живёт здесь, а не в Routes, потому что
@@ -78,7 +84,14 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(updated))
+	// Кабинет патчит этим ответом кэш профиля, поэтому объект обязан быть
+	// полным: соврать про второй фактор здесь значит выключить его на экране.
+	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), user.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(updated, twoFactor))
 }
 
 type changePasswordRequest struct {

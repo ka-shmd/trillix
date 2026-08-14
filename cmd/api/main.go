@@ -103,6 +103,13 @@ const (
 	confirmEmailRatePerSec = 1.0 / 12.0
 	confirmEmailBurst      = 5
 
+	// Второй фактор (фаза 23, слайс F): включение и выключение — по
+	// ПОЛЬЗОВАТЕЛЮ. За выключением стоит argon2id и шестизначный код, за
+	// включением — генерация секрета; ни то ни другое не делают в цикле.
+	// Второй шаг ВХОДА сюда не относится: он под ведром логина.
+	twoFactorRatePerSec = 1.0 / 12.0
+	twoFactorBurst      = 5
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -221,7 +228,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mailSvc := mail.NewService(pool, mail.Repo{}, mailer, log, outboxBatch,
 		mail.Backoff{Base: outboxBackoffBase, Max: outboxBackoffMax})
 
-	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin)
+	// Ключ шифрования секретов второго фактора выводится HKDF от того же
+	// FORM_TOKEN_SECRET (своей env-переменной нет сознательно — спека §6).
+	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin).
+		WithTOTPKey(cfg.FormTokenSecret)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
 	authHandler := auth.NewHandler(authSvc, loginLimiter, registerLimiter, cfg.CookieSecure, cfg.AppOrigin, cfg.TrustedProxy)
@@ -234,11 +244,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	verifyLimiter := ratelimit.NewTokenBucket(verifyRatePerSec, verifyBurst)
 	resendLimiter := ratelimit.NewTokenBucket(resendRatePerSec, resendBurst)
 	authHandler = authHandler.WithEmailVerification(verifyLimiter, resendLimiter)
-	authHandler = authHandler.WithAccount(
-		ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst),
-		ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
-		ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
-	)
+	authHandler = authHandler.WithAccount(auth.AccountLimits{
+		PasswordChange: ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst),
+		EmailChange:    ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst),
+		ConfirmEmail:   ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst),
+		TwoFactor:      ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst),
+	})
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
 	// эндпоинты отдают 404, кабинет работает как раньше.

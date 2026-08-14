@@ -102,6 +102,87 @@ type fakeStore struct {
 	emailUpdated            bool
 	updatedEmail            string
 	changeTokensPurged      int64
+
+	// Второй фактор (фаза 23, слайс F).
+	totp           *TOTPState
+	totpUpserted   bool
+	totpConfirmed  bool
+	totpStep       int64
+	totpStepFresh  bool
+	totpDeleted    bool
+	recoveryHashes [][]byte
+	recoveryUsable bool
+	recoveryUsed   bool
+	recoveryWiped  bool
+}
+
+func (f *fakeStore) UpsertTOTPSecret(_ context.Context, _ postgres.DBTX, _ uuid.UUID, secret []byte) error {
+	f.totpUpserted = true
+	f.totp = &TOTPState{Secret: secret}
+	return nil
+}
+
+func (f *fakeStore) GetTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (TOTPState, error) {
+	if f.totp == nil {
+		return TOTPState{}, pgx.ErrNoRows
+	}
+	return *f.totp, nil
+}
+
+func (f *fakeStore) ConfirmTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) error {
+	f.totpConfirmed = true
+	f.totpStep = step
+	if f.totp != nil {
+		now := time.Now()
+		f.totp.ConfirmedAt = &now
+	}
+	return nil
+}
+
+// MarkTOTPStep повторяет семантику запроса: тот же шаг второй раз даёт false.
+func (f *fakeStore) MarkTOTPStep(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) (bool, error) {
+	if f.totp != nil && f.totp.LastStep != nil && *f.totp.LastStep == step {
+		return false, nil
+	}
+	f.totpStepFresh = true
+	f.totpStep = step
+	if f.totp != nil {
+		v := step
+		f.totp.LastStep = &v
+	}
+	return true, nil
+}
+
+func (f *fakeStore) DeleteTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.totpDeleted = true
+	f.totp = nil
+	return nil
+}
+
+func (f *fakeStore) CreateRecoveryCode(_ context.Context, _ postgres.DBTX, codeHash []byte, _ uuid.UUID) error {
+	f.recoveryHashes = append(f.recoveryHashes, codeHash)
+	return nil
+}
+
+func (f *fakeStore) ConsumeRecoveryCode(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID) (bool, error) {
+	if !f.recoveryUsable {
+		return false, nil
+	}
+	f.recoveryUsable = false
+	f.recoveryUsed = true
+	return true, nil
+}
+
+func (f *fakeStore) DeleteRecoveryCodes(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.recoveryWiped = true
+	f.recoveryHashes = nil
+	return nil
+}
+
+func (f *fakeStore) GetUserByID(_ context.Context, _ postgres.DBTX, id uuid.UUID) (User, error) {
+	u := f.user
+	u.ID = id
+	return u, nil
 }
 
 func (f *fakeStore) CreateEmailChangeToken(_ context.Context, _ postgres.DBTX, _ []byte, userID uuid.UUID, newEmail string, _ time.Time) error {

@@ -8,7 +8,10 @@ import {
   meQueryOptions,
   providersQueryOptions,
   useChangePassword,
+  useDisableTwoFactor,
+  useEnableTwoFactor,
   useRequestEmailChange,
+  useSetupTwoFactor,
   useUnlinkIdentity,
   useUpdateProfile,
 } from '../../features/auth/queries'
@@ -57,6 +60,7 @@ function AccountPage() {
       <EmailForm key={`email-${user.email}`} user={user} />
       <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
       <IdentitiesSection hasPassword={user.hasPassword} />
+      <TwoFactorSection key={`2fa-${user.twoFactorEnabled}`} user={user} />
     </div>
   )
 }
@@ -457,4 +461,188 @@ function linkOutcomeText(link: 'ok' | 'conflict' | 'expired' | 'failed'): string
     case 'failed':
       return 'Не удалось подключить. Попробуйте ещё раз.'
   }
+}
+
+// TwoFactorSection — второй фактор (слайс F). Три состояния: выключен, идёт
+// настройка (секрет показан, кода ещё не было) и включён. Ремаунт по флагу
+// сбрасывает промежуточное состояние, когда фактор включился или выключился.
+function TwoFactorSection({ user }: { user: User }) {
+  const setup = useSetupTwoFactor()
+  const enable = useEnableTwoFactor()
+  const disable = useDisableTwoFactor()
+  const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
+  const [codes, setCodes] = useState<string[] | null>(null)
+
+  // Резервные коды показываются РОВНО ОДИН РАЗ: в базе лежат хеши, и повторно
+  // достать их нельзя ни нам, ни тому, кто получит дамп.
+  if (codes) {
+    return (
+      <section className="flex flex-col gap-4 border-t pt-8">
+        <div>
+          <h2 className="text-lg font-medium">Резервные коды</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Сохраните их сейчас: второй раз мы их не покажем. Каждый код работает один раз и
+            заменяет код из приложения, если телефон потерян.
+          </p>
+        </div>
+        <ul className="grid gap-1 rounded-lg border p-4 font-mono text-sm sm:grid-cols-2">
+          {codes.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+        <div>
+          <Button variant="outline" onClick={() => setCodes(null)}>
+            Я сохранил коды
+          </Button>
+        </div>
+      </section>
+    )
+  }
+
+  if (user.twoFactorEnabled) {
+    return (
+      <section className="flex flex-col gap-4 border-t pt-8">
+        <div>
+          <h2 className="text-lg font-medium">Двухфакторная аутентификация включена</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            При входе после пароля запрашивается код из приложения.
+          </p>
+        </div>
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            disable.mutate({ currentPassword: password, code: code.trim() })
+          }}
+        >
+          {user.hasPassword && (
+            <div>
+              <Label htmlFor="disable-password" className="mb-2 block">
+                Текущий пароль
+              </Label>
+              <Input
+                id="disable-password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+          )}
+          <div>
+            <Label htmlFor="disable-code" className="mb-2 block">
+              Код из приложения или резервный
+            </Label>
+            {/* Код обязателен и здесь: снять второй фактор, не предъявив второй
+                фактор, значит его не иметь. */}
+            <Input
+              id="disable-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123456"
+            />
+          </div>
+          <div>
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={code.trim() === '' || (user.hasPassword && password === '') || disable.isPending}
+            >
+              {disable.isPending ? 'Выключаем…' : 'Выключить'}
+            </Button>
+          </div>
+          {disable.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {twoFactorErrorText(disable.error)}
+            </p>
+          )}
+        </form>
+      </section>
+    )
+  }
+
+  return (
+    <section className="flex flex-col gap-4 border-t pt-8">
+      <div>
+        <h2 className="text-lg font-medium">Двухфакторная аутентификация</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Дополнительный код при входе — из приложения-аутентификатора на телефоне.
+        </p>
+      </div>
+
+      {!setup.data ? (
+        <div>
+          <Button onClick={() => setup.mutate()} disabled={setup.isPending}>
+            {setup.isPending ? 'Готовим…' : 'Включить'}
+          </Button>
+          {setup.isError && (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {twoFactorErrorText(setup.error)}
+            </p>
+          )}
+        </div>
+      ) : (
+        <form
+          className="flex flex-col gap-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            enable.mutate({ code: code.trim() }, { onSuccess: (issued) => setCodes(issued) })
+          }}
+        >
+          <div className="rounded-lg border p-4">
+            <p className="text-sm">Введите этот ключ в приложении:</p>
+            <p className="mt-2 font-mono text-sm break-all">{setup.data.secret}</p>
+            {/* QR не рисуем (решение владельца): на телефоне эта ссылка
+                открывает приложение сама, на компьютере ключ вводят руками. */}
+            <a
+              href={setup.data.otpauthUrl}
+              className="mt-3 inline-block text-sm text-primary underline-offset-4 hover:underline"
+            >
+              Открыть в приложении
+            </a>
+          </div>
+          <div>
+            <Label htmlFor="enable-code" className="mb-2 block">
+              Код из приложения
+            </Label>
+            <Input
+              id="enable-code"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="123456"
+            />
+          </div>
+          <div>
+            <Button type="submit" disabled={code.trim() === '' || enable.isPending}>
+              {enable.isPending ? 'Проверяем…' : 'Подтвердить и включить'}
+            </Button>
+          </div>
+          {enable.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {twoFactorErrorText(enable.error)}
+            </p>
+          )}
+        </form>
+      )}
+    </section>
+  )
+}
+
+function twoFactorErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return 'Код или пароль не подошли. Проверьте и попробуйте ещё раз.'
+      case 'conflict':
+        return 'Второй фактор уже включён. Обновите страницу.'
+      case 'rate_limited':
+        return 'Слишком много попыток. Подождите и попробуйте снова.'
+    }
+  }
+  return 'Не получилось. Попробуйте ещё раз.'
 }

@@ -75,11 +75,9 @@ func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (Use
 				return User{}, "", e
 			}
 		}
-		token, err := s.createSession(ctx, user.ID)
-		if err != nil {
-			return User{}, "", err
-		}
-		return user, token, nil
+		// Второй фактор применяется и к входу через провайдера: иначе он
+		// обходится в один клик, то есть не существует (слайс F).
+		return s.sessionOrChallenge(ctx, user)
 	case !errors.Is(err, pgx.ErrNoRows):
 		return User{}, "", err
 	}
@@ -122,11 +120,7 @@ var errConcurrentSignup = errors.New("auth: аккаунт с этим email с�
 func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email string) (User, string, error) {
 	user, err := s.repo.GetUserByIdentity(ctx, s.db, p.Provider, p.ProviderUserID)
 	if err == nil {
-		token, err := s.createSession(ctx, user.ID)
-		if err != nil {
-			return User{}, "", err
-		}
-		return user, token, nil
+		return s.sessionOrChallenge(ctx, user)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return User{}, "", err
@@ -186,11 +180,7 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 		return User{}, "", err
 	}
 
-	token, err := s.createSession(ctx, user.ID)
-	if err != nil {
-		return User{}, "", err
-	}
-	return user, token, nil
+	return s.sessionOrChallenge(ctx, user)
 }
 
 // fillProfileFromProvider проставляет имя из профиля провайдера, НЕ трогая уже

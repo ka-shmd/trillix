@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { CredentialsForm } from '../../features/auth/CredentialsForm'
 import { ProviderButtons } from '../../features/auth/ProviderButtons'
 import { useLogin } from '../../features/auth/queries'
+import { isTwoFactorRequired } from '../../features/auth/api'
 import {
   Card,
   CardContent,
@@ -59,7 +60,14 @@ function LoginPage() {
           submitLabel="Войти"
           pending={mutation.isPending}
           serverError={mutation.error}
-          onSubmit={(creds) => mutation.mutate(creds, { onSuccess: () => navigate({ to: '/' }) })}
+          onSubmit={(creds) =>
+            mutation.mutate(creds, {
+              // Пароль верен — но вход мог и не состояться: у аккаунта со
+              // вторым фактором сессии ещё нет, есть пропуск на ввод кода.
+              onSuccess: (result) =>
+                navigate({ to: isTwoFactorRequired(result) ? '/two-factor' : '/' }),
+            })
+          }
         />
         <Link
           to="/forgot-password"

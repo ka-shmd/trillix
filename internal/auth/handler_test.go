@@ -59,6 +59,53 @@ type fakeAuthService struct {
 	linkErr       error
 	linkedUser    uuid.UUID
 	linkedProfile IdentityProfile
+
+	// Второй фактор (фаза 23, слайс F).
+	twoFactorOn      bool
+	twoFactorErr     error
+	setupSecret      string
+	setupErr         error
+	enableCodes      []string
+	enableErr        error
+	disableErr       error
+	disabledCode     string
+	disabledPassword string
+	completeErr      error
+	completedCode    string
+	completedUser    uuid.UUID
+}
+
+func (f *fakeAuthService) TwoFactorEnabled(_ context.Context, _ uuid.UUID) (bool, error) {
+	return f.twoFactorOn, f.twoFactorErr
+}
+
+func (f *fakeAuthService) SetupTOTP(_ context.Context, _ User) (string, string, error) {
+	if f.setupErr != nil {
+		return "", "", f.setupErr
+	}
+	return f.setupSecret, "otpauth://totp/Trillix:a@b.com?secret=" + f.setupSecret, nil
+}
+
+func (f *fakeAuthService) EnableTOTP(_ context.Context, _ User, _ string) ([]string, error) {
+	if f.enableErr != nil {
+		return nil, f.enableErr
+	}
+	return f.enableCodes, nil
+}
+
+func (f *fakeAuthService) DisableTOTP(_ context.Context, _ User, currentPassword, code string) error {
+	f.disabledPassword = currentPassword
+	f.disabledCode = code
+	return f.disableErr
+}
+
+func (f *fakeAuthService) CompleteTwoFactorLogin(_ context.Context, userID uuid.UUID, code string) (User, string, error) {
+	f.completedUser = userID
+	f.completedCode = code
+	if f.completeErr != nil {
+		return User{}, "", f.completeErr
+	}
+	return f.user, "session-token", nil
 }
 
 func (f *fakeAuthService) Identities(_ context.Context, _ uuid.UUID) ([]Identity, error) {
@@ -115,7 +162,9 @@ func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string
 
 func (f *fakeAuthService) Login(_ context.Context, _, _ string) (User, string, error) {
 	if f.loginErr != nil {
-		return User{}, "", f.loginErr
+		// Пользователь возвращается ВМЕСТЕ с ошибкой — так делает и настоящий
+		// сервис при ErrTwoFactorRequired: транспорту нужно, кого спрашивать код.
+		return f.user, "", f.loginErr
 	}
 	return f.user, "session-token", nil
 }

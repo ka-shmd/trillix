@@ -156,7 +156,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, token, err := h.oauthSvc.LoginWithIdentity(r.Context(), IdentityProfile{
+	user, token, err := h.oauthSvc.LoginWithIdentity(r.Context(), IdentityProfile{
 		Provider:       name,
 		ProviderUserID: profile.ID,
 		Email:          profile.Email,
@@ -167,6 +167,11 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		h.startSession(w, token)
 		h.redirectToApp(w, r, "/")
+	case errors.Is(err, ErrTwoFactorRequired):
+		// Провайдер подтвердил личность, но у аккаунта включён второй фактор:
+		// сессии нет, есть подписанный пропуск на один шаг.
+		h.startTwoFactorChallenge(w, user.ID)
+		h.redirectToApp(w, r, "/two-factor")
 	case errors.Is(err, ErrPasswordLinkRequired):
 		// Личность подтверждена провайдером, но доступ к аккаунту ещё не доказан.
 		// Кладём её в подписанную cookie: без подписи фронт мог бы прислать в
@@ -229,7 +234,7 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 
 	h.expireCookie(w, oauthPendingCookie, true)
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, false))
 }
 
 // redirectToApp уводит браузер на экран кабинета. Путь — всегда наш литерал,
@@ -303,12 +308,9 @@ func (h *Handler) pendingMAC(payload string) []byte {
 // linkIntentTTL совпадает с окном самого похода к провайдеру: намерение живёт
 // ровно столько, сколько может длиться редирект туда и обратно.
 
-// signLinkIntent подписывает «привязку начал вот этот аккаунт». Ключ тот же
-// FORM_TOKEN_SECRET, но метка назначения своя — подпись из одного контекста не
-// должна приниматься в другом.
+// signLinkIntent подписывает «привязку начал вот этот аккаунт».
 func (h *Handler) signLinkIntent(userID uuid.UUID) string {
-	payload := fmt.Sprintf("%s:%d", userID, time.Now().Add(oauthFlowTTL).Unix())
-	return payload + ":" + base64.RawURLEncoding.EncodeToString(h.linkMAC(payload))
+	return h.signUserIntent(linkIntentLabel, userID)
 }
 
 // readLinkIntent достаёт из запроса намерение привязки: чей аккаунт его начал.
@@ -319,13 +321,33 @@ func (h *Handler) readLinkIntent(r *http.Request) (uuid.UUID, bool) {
 	if err != nil {
 		return uuid.Nil, false
 	}
-	i := strings.LastIndex(c.Value, ":")
+	return h.readUserIntent(linkIntentLabel, c.Value)
+}
+
+// Метки назначения подписи. Ключ у всех один (FORM_TOKEN_SECRET), и без метки
+// подпись из одного контекста принималась бы в другом: намерение привязки
+// работало бы как пропуск второго фактора.
+const (
+	linkIntentLabel      = "oauth-link-intent:"
+	twoFactorIntentLabel = "two-factor-challenge:"
+)
+
+// signUserIntent подписывает пару «аккаунт + срок»: короткоживущий пропуск на
+// один следующий шаг, который нельзя ни подделать, ни переиспользовать в другом
+// сценарии.
+func (h *Handler) signUserIntent(label string, userID uuid.UUID) string {
+	payload := fmt.Sprintf("%s:%d", userID, time.Now().Add(oauthFlowTTL).Unix())
+	return payload + ":" + base64.RawURLEncoding.EncodeToString(h.intentMAC(label, payload))
+}
+
+func (h *Handler) readUserIntent(label, value string) (uuid.UUID, bool) {
+	i := strings.LastIndex(value, ":")
 	if i < 0 {
 		return uuid.Nil, false
 	}
-	payload, sig := c.Value[:i], c.Value[i+1:]
+	payload, sig := value[:i], value[i+1:]
 	want, err := base64.RawURLEncoding.DecodeString(sig)
-	if err != nil || !hmac.Equal(want, h.linkMAC(payload)) {
+	if err != nil || !hmac.Equal(want, h.intentMAC(label, payload)) {
 		return uuid.Nil, false
 	}
 	rawID, rawExp, found := strings.Cut(payload, ":")
@@ -343,9 +365,9 @@ func (h *Handler) readLinkIntent(r *http.Request) (uuid.UUID, bool) {
 	return userID, true
 }
 
-func (h *Handler) linkMAC(payload string) []byte {
+func (h *Handler) intentMAC(label, payload string) []byte {
 	mac := hmac.New(sha256.New, h.pendingSecret)
-	mac.Write([]byte("oauth-link-intent:" + payload))
+	mac.Write([]byte(label + payload))
 	return mac.Sum(nil)
 }
 

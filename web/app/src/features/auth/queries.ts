@@ -10,6 +10,11 @@ import {
   register,
   changePassword,
   confirmEmailChange,
+  disableTwoFactor,
+  enableTwoFactor,
+  isTwoFactorRequired,
+  loginTwoFactor,
+  setupTwoFactor,
   getIdentities,
   unlinkIdentity,
   requestEmailChange,
@@ -50,6 +55,20 @@ export function useLogin() {
   return useMutation({
     mutationFn: login,
     // Патчим кэш me возвращённым пользователем — забытая синхронизация это баг.
+    // Но только если вход СОСТОЯЛСЯ: при требовании второго фактора сессии нет,
+    // и класть в кэш нечего — иначе гард пустил бы в кабинет без входа.
+    onSuccess: (result) => {
+      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+    },
+  })
+}
+
+// Второй шаг входа: сессия открыта, личность в этой вкладке сменилась — тот же
+// adoptSession, что у обычного входа (TD-40).
+export function useLoginTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: loginTwoFactor,
     onSuccess: (user: User) => adoptSession(qc, user),
   })
 }
@@ -175,5 +194,27 @@ export function useUnlinkIdentity() {
       await qc.invalidateQueries({ queryKey: authKeys.identities() })
       await qc.invalidateQueries({ queryKey: authKeys.me() })
     },
+  })
+}
+
+// Второй фактор в настройках. setup только показывает секрет (фактор ещё
+// выключен), поэтому кэш профиля не трогает; enable и disable его меняют.
+export function useSetupTwoFactor() {
+  return useMutation({ mutationFn: setupTwoFactor })
+}
+
+export function useEnableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: enableTwoFactor,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+  })
+}
+
+export function useDisableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: disableTwoFactor,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
   })
 }

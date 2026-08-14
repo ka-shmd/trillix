@@ -63,6 +63,7 @@ type Store interface {
 	CountIdentities(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
 	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
+	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
 	CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error
@@ -85,6 +86,14 @@ type Store interface {
 	UpdateUserEmail(ctx context.Context, db postgres.DBTX, userID uuid.UUID, email string) (User, error)
 	DeleteExpiredEmailChangeTokens(ctx context.Context, db postgres.DBTX) (int64, error)
 	DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgres.DBTX) (int64, error)
+	UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error
+	GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error)
+	ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error
+	MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error)
+	DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error
+	ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error)
+	DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 }
 
 var _ Store = Repo{}
@@ -113,6 +122,19 @@ type Service struct {
 	// appBaseURL — origin кабинета, из которого строится ссылка сброса в письме
 	// (${appBaseURL}/reset-password?token=…). Совпадает с cfg.AppOrigin.
 	appBaseURL string
+	// totpSecretKey — сырой секрет окружения (FORM_TOKEN_SECRET), из которого
+	// HKDF выводит ключ шифрования секретов второго фактора. Пустой = второй
+	// фактор не сконфигурирован, и его эндпоинты отвечают ошибкой, а не пишут
+	// в базу мусор (фаза 23, слайс F).
+	totpSecretKey []byte
+}
+
+// WithTOTPKey подключает шифрование секретов второго фактора. Отдельный метод,
+// а не седьмой аргумент NewService: ключ параметризует один узел, а не всю
+// сборку сервиса (тот же приём, что у WithPasswordReset у транспорта).
+func (s *Service) WithTOTPKey(key []byte) *Service {
+	s.totpSecretKey = key
+	return s
 }
 
 func NewService(db postgres.DBTX, tx Transactor, repo Store, mailer mailEnqueuer, sessionTTL time.Duration, appBaseURL string) *Service {
@@ -201,11 +223,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (User, stri
 		return User{}, "", domain.ErrInvalidCredentials
 	}
 
-	token, err := s.createSession(ctx, user.ID)
-	if err != nil {
-		return User{}, "", err
-	}
-	return user, token, nil
+	// Пароль верен — но это ещё не вход, если включён второй фактор (слайс F).
+	return s.sessionOrChallenge(ctx, user)
 }
 
 // Logout удаляет сессию по её токену. Отсутствие сессии — не ошибка.

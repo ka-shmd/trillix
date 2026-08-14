@@ -62,6 +62,15 @@ func (Repo) CreateUser(ctx context.Context, db postgres.DBTX, id uuid.UUID, emai
 	return userFromRow(row), nil
 }
 
+// GetUserByID — пользователь по id (второй шаг входа: сессии ещё нет).
+func (Repo) GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error) {
+	row, err := postgres.New(db).GetUserByID(ctx, id)
+	if err != nil {
+		return User{}, fmt.Errorf("get user by id: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
 func (Repo) GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error) {
 	row, err := postgres.New(db).GetUserByEmail(ctx, email)
 	if err != nil {
@@ -425,4 +434,87 @@ func pgText(s *string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: *s, Valid: true}
+}
+
+// TOTPState — состояние второго фактора у аккаунта. Secret — шифротекст;
+// расшифровывает его сервис, репозиторий про ключ не знает.
+type TOTPState struct {
+	Secret      []byte
+	ConfirmedAt *time.Time // nil = настройка начата, но фактор НЕ включён
+	LastStep    *int64     // номер израсходованного шага (защита от повтора кода)
+}
+
+// UpsertTOTPSecret кладёт свежий секрет, сбрасывая подтверждение: перезапуск
+// настройки обязан обнулять и отметку, и израсходованный шаг.
+func (Repo) UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error {
+	if err := postgres.New(db).UpsertTOTPSecret(ctx, postgres.UpsertTOTPSecretParams{UserID: userID, Secret: secret}); err != nil {
+		return fmt.Errorf("upsert totp secret: %w", err)
+	}
+	return nil
+}
+
+func (Repo) GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error) {
+	row, err := postgres.New(db).GetTOTP(ctx, userID)
+	if err != nil {
+		return TOTPState{}, err
+	}
+	st := TOTPState{Secret: row.Secret, ConfirmedAt: ptrTime(row.ConfirmedAt)}
+	if row.LastStep.Valid {
+		v := row.LastStep.Int64
+		st.LastStep = &v
+	}
+	return st, nil
+}
+
+func (Repo) ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error {
+	if err := postgres.New(db).ConfirmTOTP(ctx, postgres.ConfirmTOTPParams{
+		UserID:   userID,
+		LastStep: pgtype.Int8{Int64: step, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("confirm totp: %w", err)
+	}
+	return nil
+}
+
+// MarkTOTPStep помечает шаг израсходованным; false — тот же шаг уже отмечен
+// (повторное предъявление кода).
+func (Repo) MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error) {
+	n, err := postgres.New(db).MarkTOTPStep(ctx, postgres.MarkTOTPStepParams{
+		UserID:   userID,
+		LastStep: pgtype.Int8{Int64: step, Valid: true},
+	})
+	if err != nil {
+		return false, fmt.Errorf("mark totp step: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (Repo) DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteTOTP(ctx, userID); err != nil {
+		return fmt.Errorf("delete totp: %w", err)
+	}
+	return nil
+}
+
+func (Repo) CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error {
+	if err := postgres.New(db).CreateRecoveryCode(ctx, postgres.CreateRecoveryCodeParams{CodeHash: codeHash, UserID: userID}); err != nil {
+		return fmt.Errorf("create recovery code: %w", err)
+	}
+	return nil
+}
+
+// ConsumeRecoveryCode атомарно гасит код; false — кода нет или он уже сгорел.
+func (Repo) ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).ConsumeRecoveryCode(ctx, postgres.ConsumeRecoveryCodeParams{CodeHash: codeHash, UserID: userID})
+	if err != nil {
+		return false, fmt.Errorf("consume recovery code: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (Repo) DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteRecoveryCodes(ctx, userID); err != nil {
+		return fmt.Errorf("delete recovery codes: %w", err)
+	}
+	return nil
 }

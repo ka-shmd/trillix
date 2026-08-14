@@ -12,6 +12,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const confirmTOTP = `-- name: ConfirmTOTP :exec
+UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1
+`
+
+type ConfirmTOTPParams struct {
+	UserID   uuid.UUID
+	LastStep pgtype.Int8
+}
+
+func (q *Queries) ConfirmTOTP(ctx context.Context, arg ConfirmTOTPParams) error {
+	_, err := q.db.Exec(ctx, confirmTOTP, arg.UserID, arg.LastStep)
+	return err
+}
+
 const consumeEmailChangeToken = `-- name: ConsumeEmailChangeToken :one
 UPDATE email_change_tokens
    SET used_at = now()
@@ -88,6 +102,27 @@ func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byt
 	var user_id uuid.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
+}
+
+const consumeRecoveryCode = `-- name: ConsumeRecoveryCode :execrows
+UPDATE totp_recovery_codes SET used_at = now()
+WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL
+`
+
+type ConsumeRecoveryCodeParams struct {
+	CodeHash []byte
+	UserID   uuid.UUID
+}
+
+// Атомарное потребление резервного кода: помечает использованным ровно при
+// условии «этот пользователь, не использован». Ноль строк — кода нет или он
+// уже сгорел (снаружи это один ответ).
+func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCodeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, consumeRecoveryCode, arg.CodeHash, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const countIdentities = `-- name: CountIdentities :one
@@ -436,6 +471,20 @@ func (q *Queries) CreatePersonalWorkspace(ctx context.Context, arg CreatePersona
 	return i, err
 }
 
+const createRecoveryCode = `-- name: CreateRecoveryCode :exec
+INSERT INTO totp_recovery_codes (code_hash, user_id) VALUES ($1, $2)
+`
+
+type CreateRecoveryCodeParams struct {
+	CodeHash []byte
+	UserID   uuid.UUID
+}
+
+func (q *Queries) CreateRecoveryCode(ctx context.Context, arg CreateRecoveryCodeParams) error {
+	_, err := q.db.Exec(ctx, createRecoveryCode, arg.CodeHash, arg.UserID)
+	return err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -670,6 +719,15 @@ func (q *Queries) DeletePendingInvitation(ctx context.Context, arg DeletePending
 	return err
 }
 
+const deleteRecoveryCodes = `-- name: DeleteRecoveryCodes :exec
+DELETE FROM totp_recovery_codes WHERE user_id = $1
+`
+
+func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE token_hash = $1
 `
@@ -709,6 +767,15 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteTOTP = `-- name: DeleteTOTP :exec
+DELETE FROM user_totp WHERE user_id = $1
+`
+
+func (q *Queries) DeleteTOTP(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTOTP, userID)
+	return err
 }
 
 const enqueueCoalescedOutbox = `-- name: EnqueueCoalescedOutbox :exec
@@ -1392,6 +1459,23 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 	return i, err
 }
 
+const getTOTP = `-- name: GetTOTP :one
+SELECT secret, confirmed_at, last_step FROM user_totp WHERE user_id = $1
+`
+
+type GetTOTPRow struct {
+	Secret      []byte
+	ConfirmedAt pgtype.Timestamptz
+	LastStep    pgtype.Int8
+}
+
+func (q *Queries) GetTOTP(ctx context.Context, userID uuid.UUID) (GetTOTPRow, error) {
+	row := q.db.QueryRow(ctx, getTOTP, userID)
+	var i GetTOTPRow
+	err := row.Scan(&i.Secret, &i.ConfirmedAt, &i.LastStep)
+	return i, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
 FROM users
@@ -1400,6 +1484,29 @@ WHERE email = $1
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByEmail, email)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
+	)
+	return i, err
+}
+
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name
+FROM users
+WHERE id = $1
+`
+
+// Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
+// кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
+func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -2150,6 +2257,28 @@ func (q *Queries) MarkOutboxSent(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markTOTPStep = `-- name: MarkTOTPStep :execrows
+UPDATE user_totp SET last_step = $2
+WHERE user_id = $1 AND (last_step IS DISTINCT FROM $2)
+`
+
+type MarkTOTPStepParams struct {
+	UserID   uuid.UUID
+	LastStep pgtype.Int8
+}
+
+// Отметка «этот шаг уже израсходован». Условие last_step IS DISTINCT FROM $2
+// делает её атомарной защитой от повтора: два параллельных запроса с одним и
+// тем же кодом дадут ноль строк второму. IS DISTINCT FROM, а не <>, потому что
+// last_step может быть NULL (фактор только что подтверждён).
+func (q *Queries) MarkTOTPStep(ctx context.Context, arg MarkTOTPStepParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markTOTPStep, arg.UserID, arg.LastStep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markVisitSubmitted = `-- name: MarkVisitSubmitted :execrows
 UPDATE form_visits SET submitted = true
 WHERE id = $1 AND form_id = $2
@@ -2662,5 +2791,25 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.Seq,
 		arg.Meta,
 	)
+	return err
+}
+
+const upsertTOTPSecret = `-- name: UpsertTOTPSecret :exec
+INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE
+SET secret = EXCLUDED.secret, confirmed_at = NULL, last_step = NULL, created_at = now()
+`
+
+type UpsertTOTPSecretParams struct {
+	UserID uuid.UUID
+	Secret []byte
+}
+
+// Начало настройки второго фактора (фаза 23, слайс F). Перезапись поверх
+// НЕподтверждённой попытки — норма: человек мог начать настройку и бросить, а
+// новый секрет обязан затирать старый. Подтверждённый фактор так не
+// перезаписывается: сервис до этого запроса проверяет, что фактор выключен.
+func (q *Queries) UpsertTOTPSecret(ctx context.Context, arg UpsertTOTPSecretParams) error {
+	_, err := q.db.Exec(ctx, upsertTOTPSecret, arg.UserID, arg.Secret)
 	return err
 }
