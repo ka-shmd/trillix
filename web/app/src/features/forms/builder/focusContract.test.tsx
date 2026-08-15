@@ -618,7 +618,7 @@ describe('ось колонок: каретка едет с блоком чер�
     const engine = createFocusEngine()
     render(
       <BuilderStoreContext.Provider value={store}>
-        <SlashEditor formId="f" engine={engine} />
+        <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
       </BuilderStoreContext.Provider>,
     )
     return { store, engine }
@@ -693,7 +693,7 @@ describe('ось колонок: каретка едет с блоком чер�
     const engine = createFocusEngine()
     render(
       <BuilderStoreContext.Provider value={store}>
-        <SlashEditor formId="f" engine={engine} />
+        <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
       </BuilderStoreContext.Provider>,
     )
     engine.focusBlock('b', 'start')

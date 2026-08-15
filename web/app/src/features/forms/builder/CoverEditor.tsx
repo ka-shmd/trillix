@@ -6,6 +6,7 @@ import { CoverBand, LogoMark } from '@fields/pageChrome'
 
 import { ColorPicker } from './ColorPicker'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
+import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -14,24 +15,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 // (общие CoverBand/LogoMark из @fields), плюс жесты автора поверх них. Ни одного
 // правила ВИДА обложки здесь нет — разъехавшийся редактор это WYSIWYG, который врёт.
 // Всё, что добавляет этот файл, — оверлеи с кнопками, загрузка и перетаскивание.
-
-// Палитра обложек: плотные, но не кричащие тона — обложка это фон под заголовком, а
-// не акцент. Свободный цвет остаётся доступен тем же ColorPicker, что у текста;
-// палитра лишь убирает пустой холст при первом клике.
-const COVER_COLORS = [
-  '#e03e3e',
-  '#d9730d',
-  '#dfab01',
-  '#0f7b6c',
-  '#0b6e99',
-  '#6940a5',
-  '#ad1a72',
-  '#64473a',
-  '#787774',
-  '#37352f',
-] as const
-
-const DEFAULT_COVER_COLOR = COVER_COLORS[4]
 
 // Кнопка оверлея: общий вид «плашка поверх картинки» из ImageField, вынесенный сюда,
 // чтобы пять кнопок не повторяли одну и ту же строку классов.
@@ -92,10 +75,11 @@ function ColorButton({ current }: { current: string }) {
 }
 
 // Полоса прогресса поверх обложки на время загрузки — та же плашка, что у картинки
-// блока (ImageField): загрузка выглядит одинаково, где бы её ни начали.
-function ProgressOverlay({ pct }: { pct: number }) {
+// блока (ImageField): загрузка выглядит одинаково, где бы её ни начали. className —
+// под форму того, что накрываем: у логотипа она круглая (см. LogoArea).
+function ProgressOverlay({ pct, className = '' }: { pct: number; className?: string }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+    <div className={`absolute inset-0 flex items-center justify-center bg-background/60 ${className}`}>
       <div className="w-2/3 max-w-40">
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
@@ -302,10 +286,13 @@ export function LogoArea({ formId, over }: { formId: string; over: boolean }) {
         onChange={onFile}
       />
       <LogoMark logo={logo} over={over} />
+      {/* Оверлеи скруглены ПО ЛОГОТИПУ (--rf-logo-radius), а не по контролам
+          (--rf-radius): скругление логотипа задаёт автор, и при круглом знаке
+          квадратное затемнение вылезает углами за его край. */}
       {progress !== null ? (
-        <ProgressOverlay pct={progress} />
+        <ProgressOverlay pct={progress} className="rounded-[var(--rf-logo-radius)]" />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-radius)] bg-black/45 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
+        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-logo-radius)] bg-black/45 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
           <button
             type="button"
             onClick={pick}
@@ -337,7 +324,13 @@ export function LogoArea({ formId, over }: { formId: string; over: boolean }) {
 // ритм полотна разъехался бы с превью и рендерером на высоту этой полосы. Из потока
 // они заодно не могут «схлопнуться» на mousedown и съесть первый клик — тот дефект
 // (TD-22) жил ровно у контрола, который место в потоке занимал.
-export function AddChrome({ formId }: { formId: string }) {
+export function AddChrome({
+  formId,
+  onOpenDesign,
+}: {
+  formId: string
+  onOpenDesign: () => void
+}) {
   const cover = useBuilderStore((s) => s.cover)
   const logo = useBuilderStore((s) => s.logo)
   const setCover = useBuilderStore((s) => s.setCover)
@@ -355,8 +348,8 @@ export function AddChrome({ formId }: { formId: string }) {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
   }
 
-  if (cover && logo) return null
-
+  // Кластер живёт, даже когда заводить нечего: «Оформление» — не «завести», оно
+  // уместно всегда, и раньше кнопки исчезали целиком при обложке с логотипом.
   return (
     <div className="relative h-0">
       <input
@@ -401,6 +394,17 @@ export function AddChrome({ formId }: { formId: string }) {
             <ImagePlus className="size-4" /> Добавить логотип
           </button>
         )}
+        {/* «Оформление» — тот же вход, что кнопка-палитра в шапке: шторка одна, и
+            второго её состояния здесь не заводится. Стоит рядом с обложкой и
+            логотипом потому, что размеры того и другого настраиваются как раз в
+            ней — жест «дотянуться до вида страницы» начинается в одном месте. */}
+        <button
+          type="button"
+          onClick={onOpenDesign}
+          className="flex items-center gap-1.5 hover:text-foreground"
+        >
+          <Palette className="size-4" /> Оформление
+        </button>
         {error && <span className="text-destructive">{error}</span>}
       </div>
     </div>

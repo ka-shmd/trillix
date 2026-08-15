@@ -191,7 +191,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
+      {mode === 'edit' && (
+        <SlashEditor formId={detail.id} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
+      )}
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
           иначе `.rf-input{display:none}` из формы погасил бы поля самого кабинета.
@@ -218,7 +220,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
           подписана на s.design — он при вводе не меняется. Только в режиме полотна:
           поверх превью или настроек шторке нечего показывать. */}
-      {mode === 'edit' && <DesignDrawer open={designOpen} onOpenChange={setDesignOpen} />}
+      {mode === 'edit' && (
+        <DesignDrawer formId={detail.id} open={designOpen} onOpenChange={setDesignOpen} />
+      )}
     </BuilderStoreContext.Provider>
   )
 }
