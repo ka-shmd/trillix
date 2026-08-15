@@ -525,6 +525,14 @@ const BlockRowBody = memo(function BlockRowBody({
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
   const captionCls = isTextRow ? row.className : ''
+  // Якорь кластера у блока без подписи: обёртка ПОЛЯ, если она есть (placeholder-типы),
+  // иначе сама строка. Кластер один и тот же элемент — меняется только предок, от
+  // которого считается его absolute (см. места отрисовки ниже).
+  //
+  // МИНА: это единственный источник выбора места, и оба места спрашивают ИМЕННО ЕГО.
+  // Разведёшь условия по месту (одно про поверхность, другое про подпись) — при первом
+  // же расхождении кластер отрисуется ДВАЖДЫ: строка и обёртка нарисуют по своему.
+  const marksAtField = !hasTextLine && row?.surface === 'placeholder'
 
   // caret — адаптер каретки поверх textarea строки (§2.6) или null (у строки нет
   // textarea). Строится от АКТУАЛЬНОГО элемента: identity textarea могла смениться
@@ -704,6 +712,19 @@ const BlockRowBody = memo(function BlockRowBody({
   // они стоят на уровне текста.
   const rowLineH = row?.lineH ?? 'h-6'
 
+  // Кластер отметок строится ОДИН РАЗ и отдаётся одному из двух мест (см. marksAtField):
+  // меняется только предок, от которого считается его absolute, а не сам элемент.
+  const marksCluster = showMarks ? (
+    <RowMarks
+      block={block}
+      requiredFor={requiredFor}
+      showRequired={showRequired}
+      condVisible={condVisible}
+      condRequired={condRequired}
+      lineH={rowLineH}
+    />
+  ) : null
+
   return (
     <>
       {/* Меню действий блока (Cmd+. §3.3): якорь — нулевой span в левом absolute-поле
@@ -750,18 +771,15 @@ const BlockRowBody = memo(function BlockRowBody({
         }}
       />
 
-      {/* Второе место кластера отметок: у поля БЕЗ подписи текстовой строки нет, и он
-          стоит в правом поле блока. Инлайн-место — в ветке hasTextLine ниже. */}
-      {showMarks && !hasTextLine ? (
-        <RowMarks
-          block={block}
-          requiredFor={requiredFor}
-          showRequired={showRequired}
-          condVisible={condVisible}
-          condRequired={condRequired}
-          lineH={rowLineH}
-        />
-      ) : null}
+      {/* Второе место кластера отметок: у блока БЕЗ подписи текстовой строки нет, и
+          цепляться инлайн не к чему. Тогда кластер absolute, и вопрос лишь в том, ЧТО
+          ему якорь. Строка тянется на всю колонку (700px), а поле упирается в
+          --rf-input-max (350px) — прицепленный к строке кластер висел бы в полуметре
+          пустоты правее поля. Поэтому у поля с плейсхолдером он уезжает в .rf-field-wrap
+          (marks у AnswerField ниже): та коробка ширины САМОГО поля. У остальных
+          поверхностей своей коробки нет, и кластер остаётся при строке.
+          Инлайн-место — в ветке hasTextLine ниже. */}
+      {showMarks && !hasTextLine && !marksAtField ? marksCluster : null}
 
       {/* Единственная подсказка, оставшаяся у строки (решение владельца 2026-07-29):
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
@@ -857,6 +875,9 @@ const BlockRowBody = memo(function BlockRowBody({
             onOpenActions={() => setActionOpen(true)}
             onMove={(dir) => captionGuard(() => moveBlock(block.id, dir))}
             onRowShift={(dir) => onRowShift(block.id, dir)}
+            // Отметки голого поля — в обёртку поля, а не при строке: см. marksAtField.
+            // У поля с подписью отметки стоят на ней, и сюда не едут.
+            marks={marksAtField ? marksCluster : undefined}
           />
         </div>
       ) : (
@@ -1145,6 +1166,7 @@ function AnswerField({
   onOpenActions,
   onRowShift,
   onMove,
+  marks,
 }: {
   block: Block
   // Как у ObjectStop: не первая строка группы меняет подпись пункта Mod+Alt+→.
@@ -1167,6 +1189,9 @@ function AnswerField({
   // вопроса было нечем, а голое поле двигали с его же единственной строки. Теперь
   // это законный жест на любой строке ответа, поэтому и здесь.
   onMove?: (dir: 'up' | 'down') => void
+  // Кластер отметок голого поля (у поля с подписью отметки стоят на ней). Приезжает
+  // готовым элементом и уходит в FieldWrap — обёртка поля и есть его якорь.
+  marks?: ReactNode
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const [focused, setFocused] = useState(false)
@@ -1222,12 +1247,12 @@ function AnswerField({
   const fieldRow = rowFacts(block.type)
   const multiline = fieldRow?.surface === 'placeholder' && !!fieldRow.multiline
 
-  // Обёртка — только якорь глифа; ширину берёт из .rf-field-wrap (index.css),
-  // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (14px)
-  // даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не нужен (был бы
-  // двойным отступом и ломал ритм 13.3).
+  // Обёртка — якорь глифа типа и кластера отметок; ширину берёт из .rf-field-wrap
+  // (index.css), где стоит тот же потолок --rf-input-max, что у поля. Просвет
+  // подпись→поле (14px) даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не
+  // нужен (был бы двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
-    <FieldWrap block={block} wide={wide} glyphTop={multiline}>
+    <FieldWrap block={block} wide={wide} glyphTop={multiline} marks={marks}>
       {control}
     </FieldWrap>
   )

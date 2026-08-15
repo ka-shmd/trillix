@@ -407,6 +407,19 @@ describe('звёздочка обязательности', () => {
     expect(store.getState().blocks.find((b) => b.id === 'bare')?.required).toBe(false)
   })
 
+  // Якорь кластера у голого поля — .rf-field-wrap, коробка ширины САМОГО поля. Прицепи
+  // его к строке — и он встанет у правого края колонки (700px), в полуметре пустоты от
+  // поля, упирающегося в --rf-input-max (350px).
+  it('у голого поля кластер висит на обёртке поля, а не у края строки', () => {
+    setup(REQUIRED)
+    expect(row('bare').getByLabelText(STAR).closest('.rf-field-wrap')).toBeTruthy()
+  })
+
+  it('у вопроса с подписью кластер инлайн, в обёртку поля не уезжает', () => {
+    setup(REQUIRED)
+    expect(row('cap').getByLabelText(STAR).closest('.rf-field-wrap')).toBeNull()
+  })
+
   it('у необязательного вопроса её нет вовсе — ни на подписи, ни у голого поля', () => {
     setup(QUESTION)
     expect(controls('cap')).not.toContain(STAR)
