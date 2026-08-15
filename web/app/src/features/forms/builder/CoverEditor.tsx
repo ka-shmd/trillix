@@ -329,7 +329,9 @@ export function LogoArea({ formId, over }: { formId: string; over: boolean }) {
   )
 }
 
-// AddChrome — кнопки «завести», появляющиеся над заголовком по наведению на полотно.
+// AddChrome — кнопки «завести», появляющиеся над заголовком по наведению на сам
+// заголовок (group/title у обёртки в SlashEditor.tsx), а не на всё полотно: иначе
+// они мигали бы при каждом движении мыши по форме, а не только у заголовка.
 //
 // Стоят ВНЕ ПОТОКА (обёртка нулевой высоты + absolute), а не занимают место: иначе
 // ритм полотна разъехался бы с превью и рендерером на высоту этой полосы. Из потока
@@ -364,7 +366,12 @@ export function AddChrome({ formId }: { formId: string }) {
         className="hidden"
         onChange={onFile}
       />
-      <div className="absolute bottom-1.5 left-0 flex items-center gap-4 whitespace-nowrap text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/canvas:opacity-100">
+      {/* bottom-0 + pb-4 вместо bottom-4: 16px зазора до заголовка становятся ПАДДИНГОМ
+        коробки, а не пустым местом снаружи неё — иначе курсор, идущий от заголовка к
+        кнопкам, на середине пути покидал бы group/title (там ничего нет) и наведение
+        гасло раньше, чем курсор доходил. Видимое положение кнопок то же самое: паддинг
+        снизу отодвигает их контент от нижнего края коробки ровно на те же 16px. */}
+      <div className="absolute bottom-0 left-0 flex items-center gap-4 whitespace-nowrap pb-4 text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
         {!cover && (
           // Обложка заводится ЦВЕТОМ, а не диалогом выбора файла: один клик — и она
           // уже есть, а картинка ставится следующим жестом с той же полосы. Пустой

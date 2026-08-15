@@ -91,6 +91,10 @@ const controls = (id: string) =>
     .map((b) => b.getAttribute('aria-label'))
     .filter((l): l is string => l !== null)
 
+// mark — отметка вопроса по её подписи. Ищется не среди кнопок: значки условий это
+// индикаторы (span), кнопкой из них остаётся только звёздочка.
+const mark = (id: string, label: string | RegExp) => row(id).queryByLabelText(label)
+
 const QUESTION: FormSchema = {
   schemaVersion: SCHEMA_VERSION,
   blocks: [
@@ -98,6 +102,29 @@ const QUESTION: FormSchema = {
     { id: 'inp', groupId: 'g1', type: 'short_text' },
     { id: 'bare', groupId: 'g2', type: 'email' },
     { id: 'para', groupId: 'g3', type: 'text', text: textFromString('Абзац') },
+  ],
+}
+
+// Вопрос за двумя условиями сразу: показ (носитель — голова группы, подпись) и
+// обязательность (носитель — отвечаемый блок). Источник стоит ВЫШЕ обоих носителей,
+// иначе оба правила инертны и значки показывают предупреждение вместо сводки.
+const CONDITIONAL: FormSchema = {
+  schemaVersion: SCHEMA_VERSION,
+  blocks: [
+    { id: 'src', groupId: 'g0', type: 'short_text' },
+    {
+      id: 'cap',
+      groupId: 'g1',
+      type: 'title',
+      text: textFromString('Как вас зовут?'),
+      visibleIf: { blockId: 'src', op: 'answered' },
+    },
+    {
+      id: 'inp',
+      groupId: 'g1',
+      type: 'short_text',
+      requiredIf: { blockId: 'src', op: 'answered' },
+    },
   ],
 }
 
@@ -380,6 +407,19 @@ describe('звёздочка обязательности', () => {
     expect(store.getState().blocks.find((b) => b.id === 'bare')?.required).toBe(false)
   })
 
+  // Якорь кластера у голого поля — .rf-field-wrap, коробка ширины САМОГО поля. Прицепи
+  // его к строке — и он встанет у правого края колонки (700px), в полуметре пустоты от
+  // поля, упирающегося в --rf-input-max (350px).
+  it('у голого поля кластер висит на обёртке поля, а не у края строки', () => {
+    setup(REQUIRED)
+    expect(row('bare').getByLabelText(STAR).closest('.rf-field-wrap')).toBeTruthy()
+  })
+
+  it('у вопроса с подписью кластер инлайн, в обёртку поля не уезжает', () => {
+    setup(REQUIRED)
+    expect(row('cap').getByLabelText(STAR).closest('.rf-field-wrap')).toBeNull()
+  })
+
   it('у необязательного вопроса её нет вовсе — ни на подписи, ни у голого поля', () => {
     setup(QUESTION)
     expect(controls('cap')).not.toContain(STAR)
@@ -389,6 +429,74 @@ describe('звёздочка обязательности', () => {
   it('у одиночного абзаца её нет — ответов он не собирает', () => {
     setup(REQUIRED)
     expect(controls('para')).not.toContain(STAR)
+  })
+
+  it('условная обязательность звёздочки не даёт — её показывает значок', () => {
+    setup(CONDITIONAL)
+    expect(controls('cap')).not.toContain(STAR)
+    expect(mark('cap', /^Обязателен, если/)).toBeTruthy()
+  })
+})
+
+// Значки условий: их два, глифы у них разные (иначе «показывается по условию» и
+// «обязателен по условию» различались бы только тултипом), и клик по каждому открывает
+// диалог СВОЕГО правила — того же, что пункт попапа настроек.
+describe('значки условий', () => {
+  it('оба значка стоят на подписи вопроса — там же, где звёздочка', () => {
+    setup(CONDITIONAL)
+    expect(mark('cap', /^Показывать, если/)).toBeTruthy()
+    expect(mark('cap', /^Обязателен, если/)).toBeTruthy()
+    // Носитель requiredIf — поле, но представляет его подпись (requiredFor), и второй
+    // раз значок на самом поле не появляется.
+    expect(mark('inp', /^Обязателен, если/)).toBeFalsy()
+  })
+
+  it('глифы у них РАЗНЫЕ, а не один значок с двумя тултипами', () => {
+    setup(CONDITIONAL)
+    const shown = mark('cap', /^Показывать, если/)!.querySelector('svg')!.outerHTML
+    const req = mark('cap', /^Обязателен, если/)!.querySelector('svg')!.outerHTML
+    expect(shown).not.toBe(req)
+  })
+
+  it('инертное правило отмечается предупреждением, а не молчит', () => {
+    // Источник УДАЛЁН: правило осталось, но сработать не может.
+    setup({
+      ...CONDITIONAL,
+      blocks: CONDITIONAL.blocks.filter((b) => b.id !== 'src'),
+    })
+    expect(mark('cap', /^Показывать, если/)).toBeFalsy()
+    expect(mark('cap', /^Условие показа не действует/)).toBeTruthy()
+    expect(mark('cap', /^Условие обязательности не действует/)).toBeTruthy()
+  })
+
+  it('клик по значку показа открывает диалог ПОКАЗА', () => {
+    setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Показывать, если/)!)
+    expect(screen.getByRole('dialog').textContent).toContain('Показывать вопрос, если')
+  })
+
+  it('клик по значку обязательности открывает диалог ОБЯЗАТЕЛЬНОСТИ', () => {
+    setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Обязателен, если/)!)
+    // Два значка стоят на одной строке и ведут в РАЗНЫЕ диалоги — иначе перенос обоих
+    // в кластер сделал бы второй значок дорогой к чужому правилу.
+    const dialog = screen.getByRole('dialog').textContent
+    expect(dialog).toContain('Обязателен, если')
+    expect(dialog).not.toContain('Показывать вопрос, если')
+  })
+
+  it('диалог пишет в носителя своего правила, а не в строку со значком', () => {
+    const { store } = setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Обязателен, если/)!)
+    // «Сделать необязательным» — снятие правила из подвала диалога.
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Сделать необязательным'))
+
+    const at = (id: string) => store.getState().blocks.find((b) => b.id === id)
+    expect(at('inp')?.requiredIf).toBeUndefined()
+    // Носитель requiredIf — поле; подпись, на которой стоял значок, не тронута, и
+    // условие показа на ней осталось.
+    expect(at('cap')?.requiredIf).toBeUndefined()
+    expect(at('cap')?.visibleIf).toBeTruthy()
   })
 })
 

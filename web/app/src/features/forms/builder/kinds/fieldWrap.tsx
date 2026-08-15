@@ -27,15 +27,22 @@ export function FieldWrap({
   wide = false,
   // Многострочное поле: глиф встаёт к верхней строке, а не по центру высоты.
   glyphTop = false,
+  marks,
 }: {
   block: Block
   children: ReactNode
   wide?: boolean
   glyphTop?: boolean
+  // Кластер отметок вопроса (звёздочка и значки условий) у поля БЕЗ подписи — ему
+  // нужен якорь, и обёртка единственная коробка, чья ширина РАВНА ширине поля
+  // (см. .rf-field-wrap выше). Прицепленный к строке, кластер вставал бы у правого
+  // края колонки: строка тянется на все 700px, а поле упирается в --rf-input-max.
+  marks?: ReactNode
 }) {
   return (
     <div className={`rf-field-wrap ${wide ? 'rf-field-wrap--wide' : ''}`}>
       {children}
+      {marks}
       <span
         aria-hidden="true"
         className={`pointer-events-none absolute right-2 text-muted-foreground/70 ${
