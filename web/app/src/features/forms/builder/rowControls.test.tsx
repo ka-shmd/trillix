@@ -425,9 +425,9 @@ describe('звёздочка обязательности', () => {
   })
 })
 
-// Значки условий — индикаторы (span, не button): правило правят в попапе. Их два, и
-// глифы у них разные, иначе «показывается по условию» и «обязателен по условию»
-// различались бы только тултипом.
+// Значки условий: их два, глифы у них разные (иначе «показывается по условию» и
+// «обязателен по условию» различались бы только тултипом), и клик по каждому открывает
+// диалог СВОЕГО правила — того же, что пункт попапа настроек.
 describe('значки условий', () => {
   it('оба значка стоят на подписи вопроса — там же, где звёздочка', () => {
     setup(CONDITIONAL)
@@ -452,8 +452,38 @@ describe('значки условий', () => {
       blocks: CONDITIONAL.blocks.filter((b) => b.id !== 'src'),
     })
     expect(mark('cap', /^Показывать, если/)).toBeFalsy()
-    expect(mark('cap', 'Условие показа не действует')).toBeTruthy()
-    expect(mark('cap', 'Условие обязательности не действует')).toBeTruthy()
+    expect(mark('cap', /^Условие показа не действует/)).toBeTruthy()
+    expect(mark('cap', /^Условие обязательности не действует/)).toBeTruthy()
+  })
+
+  it('клик по значку показа открывает диалог ПОКАЗА', () => {
+    setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Показывать, если/)!)
+    expect(screen.getByRole('dialog').textContent).toContain('Показывать вопрос, если')
+  })
+
+  it('клик по значку обязательности открывает диалог ОБЯЗАТЕЛЬНОСТИ', () => {
+    setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Обязателен, если/)!)
+    // Два значка стоят на одной строке и ведут в РАЗНЫЕ диалоги — иначе перенос обоих
+    // в кластер сделал бы второй значок дорогой к чужому правилу.
+    const dialog = screen.getByRole('dialog').textContent
+    expect(dialog).toContain('Обязателен, если')
+    expect(dialog).not.toContain('Показывать вопрос, если')
+  })
+
+  it('диалог пишет в носителя своего правила, а не в строку со значком', () => {
+    const { store } = setup(CONDITIONAL)
+    fireEvent.click(mark('cap', /^Обязателен, если/)!)
+    // «Сделать необязательным» — снятие правила из подвала диалога.
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Сделать необязательным'))
+
+    const at = (id: string) => store.getState().blocks.find((b) => b.id === id)
+    expect(at('inp')?.requiredIf).toBeUndefined()
+    // Носитель requiredIf — поле; подпись, на которой стоял значок, не тронута, и
+    // условие показа на ней осталось.
+    expect(at('cap')?.requiredIf).toBeUndefined()
+    expect(at('cap')?.visibleIf).toBeTruthy()
   })
 })
 

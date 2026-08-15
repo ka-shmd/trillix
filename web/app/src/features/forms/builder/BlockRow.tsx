@@ -48,7 +48,7 @@ import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
 import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
-import { OptionRuleDialog } from './logic/LogicDialog'
+import { BlockRuleDialog, OptionRuleDialog } from './logic/LogicDialog'
 import { ruleSummary } from './logic/model'
 import { rowFacts } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
@@ -915,37 +915,45 @@ function RowMarks({
       }
     >
       {showRequired && <RequiredToggle block={requiredFor!} />}
-      {condVisible && <LogicBadge kind="visible" carrierId={block.id} rule={condVisible} />}
+      {condVisible && <LogicBadge kind="visibleIf" carrier={block} rowId={block.id} />}
       {condRequired && (
-        <LogicBadge kind="required" carrierId={requiredFor!.id} rule={condRequired} />
+        <LogicBadge kind="requiredIf" carrier={requiredFor!} rowId={block.id} />
       )}
     </div>
   )
 }
 
-// LogicBadge — «это свойство вопроса стоит за условием». Индикатор, а не контрол: правят
-// правило в попапе настроек, где для дерева условий есть место. Виден всегда (в отличие
-// от проявляющихся по hover значков) — это состояние документа, и прятать его значило
-// бы прятать причину, по которой вопрос повёл себя не так, как выглядит на полотне.
+// LogicBadge — «это свойство вопроса стоит за условием». Виден всегда (в отличие от
+// проявляющихся по hover значков) — это состояние документа, и прятать его значило бы
+// прятать причину, по которой вопрос повёл себя не так, как выглядит на полотне.
+//
+// Клик открывает диалог ЭТОГО правила — тот же, что пункт попапа настроек: значок и есть
+// то место, где автор про правило вспомнил, и заставлять его после этого искать пункт в
+// меню значит держать вход дальше от глаза, чем указатель.
 //
 // Два вида, и глифы у них РАЗНЫЕ: условие показа и условие обязательности — разные факты
 // о вопросе, и различать их одним значком с двумя тултипами значит требовать наведения
-// там, где хватает взгляда. `carrierId` — носитель ПРАВИЛА (у показа голова группы, у
-// обязательности отвечаемый блок), от него считается «источник стоит ниже».
+// там, где хватает взгляда. `kind` назван полем схемы, а не своим словарём: диалогу
+// нужно ровно оно. `carrier` — носитель ПРАВИЛА (у показа голова группы, у обязательности
+// отвечаемый блок), от него считается «источник стоит ниже»; `rowId` — строка, на которой
+// значок нарисован, ей возвращается каретка после закрытия.
 const BADGE_KINDS = {
-  visible: { Icon: GitBranch, verb: 'Показывать, если', what: 'Условие показа' },
-  required: { Icon: SquareAsterisk, verb: 'Обязателен, если', what: 'Условие обязательности' },
+  visibleIf: { Icon: GitBranch, verb: 'Показывать, если', what: 'Условие показа' },
+  requiredIf: { Icon: SquareAsterisk, verb: 'Обязателен, если', what: 'Условие обязательности' },
 } as const
 
 function LogicBadge({
   kind,
-  carrierId,
-  rule,
+  carrier,
+  rowId,
 }: {
   kind: keyof typeof BADGE_KINDS
-  carrierId: string
-  rule: LogicCondition
+  carrier: Block
+  rowId: string
 }) {
+  const engine = useFocusEngine()
+  const [open, setOpen] = useState(false)
+  const rule = kind === 'visibleIf' ? carrier.visibleIf : carrier.requiredIf
   // Подписка — на ТО, ЧТО ПОКАЗАНО: селекторы отдают строки, поэтому перерисовка
   // случается ровно тогда, когда меняется текст бейджа или его состояние. Массив блоков
   // подписывать нельзя (он меняет идентичность на каждый символ, а бейдж есть у каждого
@@ -954,19 +962,40 @@ function LogicBadge({
   // ставшее инертным от смены типа источника, оставалось помеченным действующим до
   // следующей структурной правки. Найдено ревью ветки фазы.
   const summary = useBuilderStore((s) => ruleSummary(s.blocks, rule))
-  const reason = useBuilderStore((s) => ruleWarnings(s.blocks, carrierId, rule)[0]?.reason ?? '')
+  const reason = useBuilderStore((s) => ruleWarnings(s.blocks, carrier.id, rule)[0]?.reason ?? '')
   const inert = reason !== ''
   const { Icon, verb, what } = BADGE_KINDS[kind]
+  const state = inert ? `${what} не действует: ${reason}` : `${verb} ${summary}`
   return (
-    <span
-      title={inert ? `${what} не действует: ${reason}` : `${verb} ${summary}`}
-      aria-label={inert ? `${what} не действует` : `${verb} ${summary}`}
-      className={`flex size-5 items-center justify-center rounded ${
-        inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
-      }`}
-    >
-      <Icon className="size-4" />
-    </span>
+    <>
+      {/* Только открытым: диалог подписан на весь массив блоков, а значок есть у каждого
+          вопроса за условием — постоянный монтаж подписал бы на документ всё полотно
+          (тот же довод, что у попапа настроек и OptionRuleDialog ниже). */}
+      {open && (
+        <BlockRuleDialog
+          open
+          onOpenChange={(o) => {
+            setOpen(o)
+            // Каретка возвращается на СТРОКУ, а не на сам значок: правило могли снять
+            // прямо в диалоге, и тогда значка, которому Radix вернул бы фокус, уже нет.
+            if (!o) engine.focusBlock(rowId, 'end')
+          }}
+          carrier={carrier}
+          kind={kind}
+        />
+      )}
+      <button
+        type="button"
+        title={state}
+        aria-label={`${state} — изменить`}
+        onClick={() => setOpen(true)}
+        className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
+          inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
+        }`}
+      >
+        <Icon className="size-4" />
+      </button>
+    </>
   )
 }
 
