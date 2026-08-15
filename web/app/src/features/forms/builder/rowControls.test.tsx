@@ -91,6 +91,10 @@ const controls = (id: string) =>
     .map((b) => b.getAttribute('aria-label'))
     .filter((l): l is string => l !== null)
 
+// mark — отметка вопроса по её подписи. Ищется не среди кнопок: значки условий это
+// индикаторы (span), кнопкой из них остаётся только звёздочка.
+const mark = (id: string, label: string | RegExp) => row(id).queryByLabelText(label)
+
 const QUESTION: FormSchema = {
   schemaVersion: SCHEMA_VERSION,
   blocks: [
@@ -98,6 +102,29 @@ const QUESTION: FormSchema = {
     { id: 'inp', groupId: 'g1', type: 'short_text' },
     { id: 'bare', groupId: 'g2', type: 'email' },
     { id: 'para', groupId: 'g3', type: 'text', text: textFromString('Абзац') },
+  ],
+}
+
+// Вопрос за двумя условиями сразу: показ (носитель — голова группы, подпись) и
+// обязательность (носитель — отвечаемый блок). Источник стоит ВЫШЕ обоих носителей,
+// иначе оба правила инертны и значки показывают предупреждение вместо сводки.
+const CONDITIONAL: FormSchema = {
+  schemaVersion: SCHEMA_VERSION,
+  blocks: [
+    { id: 'src', groupId: 'g0', type: 'short_text' },
+    {
+      id: 'cap',
+      groupId: 'g1',
+      type: 'title',
+      text: textFromString('Как вас зовут?'),
+      visibleIf: { blockId: 'src', op: 'answered' },
+    },
+    {
+      id: 'inp',
+      groupId: 'g1',
+      type: 'short_text',
+      requiredIf: { blockId: 'src', op: 'answered' },
+    },
   ],
 }
 
@@ -389,6 +416,44 @@ describe('звёздочка обязательности', () => {
   it('у одиночного абзаца её нет — ответов он не собирает', () => {
     setup(REQUIRED)
     expect(controls('para')).not.toContain(STAR)
+  })
+
+  it('условная обязательность звёздочки не даёт — её показывает значок', () => {
+    setup(CONDITIONAL)
+    expect(controls('cap')).not.toContain(STAR)
+    expect(mark('cap', /^Обязателен, если/)).toBeTruthy()
+  })
+})
+
+// Значки условий — индикаторы (span, не button): правило правят в попапе. Их два, и
+// глифы у них разные, иначе «показывается по условию» и «обязателен по условию»
+// различались бы только тултипом.
+describe('значки условий', () => {
+  it('оба значка стоят на подписи вопроса — там же, где звёздочка', () => {
+    setup(CONDITIONAL)
+    expect(mark('cap', /^Показывать, если/)).toBeTruthy()
+    expect(mark('cap', /^Обязателен, если/)).toBeTruthy()
+    // Носитель requiredIf — поле, но представляет его подпись (requiredFor), и второй
+    // раз значок на самом поле не появляется.
+    expect(mark('inp', /^Обязателен, если/)).toBeFalsy()
+  })
+
+  it('глифы у них РАЗНЫЕ, а не один значок с двумя тултипами', () => {
+    setup(CONDITIONAL)
+    const shown = mark('cap', /^Показывать, если/)!.querySelector('svg')!.outerHTML
+    const req = mark('cap', /^Обязателен, если/)!.querySelector('svg')!.outerHTML
+    expect(shown).not.toBe(req)
+  })
+
+  it('инертное правило отмечается предупреждением, а не молчит', () => {
+    // Источник УДАЛЁН: правило осталось, но сработать не может.
+    setup({
+      ...CONDITIONAL,
+      blocks: CONDITIONAL.blocks.filter((b) => b.id !== 'src'),
+    })
+    expect(mark('cap', /^Показывать, если/)).toBeFalsy()
+    expect(mark('cap', 'Условие показа не действует')).toBeTruthy()
+    expect(mark('cap', 'Условие обязательности не действует')).toBeTruthy()
   })
 })
 

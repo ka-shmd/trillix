@@ -24,13 +24,22 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, Copy, GitBranch, GripVertical, Plus, Trash2 } from 'lucide-react'
+import {
+  Asterisk,
+  Copy,
+  GitBranch,
+  GripVertical,
+  Plus,
+  SquareAsterisk,
+  Trash2,
+} from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
   isCaptionType,
   isSingleChoiceType,
   isContentType,
+  type LogicCondition,
   plainText,
   supportsPlaceholder,
   type Span,
@@ -498,10 +507,20 @@ const BlockRowBody = memo(function BlockRowBody({
     isTextRow && row.placeholderOnFocusOnly ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
   const isConsent = isTextRow && row.mark === 'check'
-  // Звёздочка есть только у обязательного вопроса; обратный вход — тумблер в попапе.
-  // Считается ЗДЕСЬ, а не внутри RequiredToggle: от неё зависит и раскладка текстовой
-  // строки (см. ниже).
-  const showRequired = Boolean(requiredFor && (requiredFor.required || requiredFor.requiredIf))
+  // ОТМЕТКИ ВОПРОСА — звёздочка обязательности и два значка условий. Считаются ЗДЕСЬ, а
+  // не внутри RowMarks: от их наличия зависит раскладка текстовой строки (см. ниже).
+  //
+  // Звёздочка — только у БЕЗУСЛОВНОЙ обязательности: `required` и `requiredIf`
+  // взаимоисключающи по схеме (три состояния, ADR §10), и условное состояние показывает
+  // свой значок, а не приглушённую звёздочку. Три состояния — три разных вида.
+  // Обратный вход в обязательность — тумблер в попапе.
+  const showRequired = requiredFor?.required === true
+  // Носитель `visibleIf` — головной блок группы (прячется вопрос целиком), носитель
+  // `requiredIf` — отвечаемый блок, он же requiredFor. У вопроса с подписью обе роли
+  // сходятся на строке подписи, поэтому кластер у неё один.
+  const condVisible = block.visibleIf
+  const condRequired = requiredFor?.requiredIf
+  const showMarks = showRequired || Boolean(condVisible) || Boolean(condRequired)
   // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
@@ -731,15 +750,18 @@ const BlockRowBody = memo(function BlockRowBody({
         }}
       />
 
-      {/* Второе место звёздочки: у поля БЕЗ подписи текстовой строки нет, и она
+      {/* Второе место кластера отметок: у поля БЕЗ подписи текстовой строки нет, и он
           стоит в правом поле блока. Инлайн-место — в ветке hasTextLine ниже. */}
-      {showRequired && !hasTextLine ? <RequiredToggle block={requiredFor!} lineH={rowLineH} /> : null}
-
-      {/* Бейдж условной логики (фаза 21): вопрос за условием обязан быть виден на
-          полотне как таковой — иначе автор смотрит на форму, где часть вопросов
-          показывается не всем, и ничем это не отличается от обычных. Носитель правила —
-          голова группы, поэтому бейдж рисует ровно та строка, что его несёт. */}
-      {block.visibleIf && <LogicBadge block={block} lineH={rowLineH} />}
+      {showMarks && !hasTextLine ? (
+        <RowMarks
+          block={block}
+          requiredFor={requiredFor}
+          showRequired={showRequired}
+          condVisible={condVisible}
+          condRequired={condRequired}
+          lineH={rowLineH}
+        />
+      ) : null}
 
       {/* Единственная подсказка, оставшаяся у строки (решение владельца 2026-07-29):
           голой строке ответа предлагается дать заголовок. Прочие чипы сняты — карта
@@ -763,7 +785,7 @@ const BlockRowBody = memo(function BlockRowBody({
           onClose={closeSlash}
         >
           <div className="min-w-0">
-            <div className={isConsent || showRequired ? 'flex items-start gap-2' : undefined}>
+            <div className={isConsent || showMarks ? 'flex items-start gap-2' : undefined}>
               {isConsent && (
                 <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
               )}
@@ -789,14 +811,25 @@ const BlockRowBody = memo(function BlockRowBody({
                   textFocus.onBlur(e)
                 }}
                 onKeyDown={onLabelKeyDown}
-                // МИНА: вернёшь w-full под звёздочкой — она уедет к правому краю строки,
-                // а не встанет за текстом (строка растянется на весь flex-ряд). Без него
-                // строка сжимается по содержимому, max-w-full держит длинное слово.
+                // МИНА: вернёшь w-full под кластером отметок — он уедет к правому краю
+                // строки, а не встанет за текстом (строка растянется на весь flex-ряд).
+                // Без него строка сжимается по содержимому, max-w-full держит длинное
+                // слово.
                 className={`block bg-transparent outline-none ${captionCls} ${
-                  showRequired ? 'max-w-full' : 'w-full'
+                  showMarks ? 'max-w-full' : 'w-full'
                 }`}
               />
-              {showRequired && <RequiredToggle block={requiredFor!} lineH={rowLineH} inline />}
+              {showMarks && (
+                <RowMarks
+                  block={block}
+                  requiredFor={requiredFor}
+                  showRequired={showRequired}
+                  condVisible={condVisible}
+                  condRequired={condRequired}
+                  lineH={rowLineH}
+                  inline
+                />
+              )}
             </div>
           </div>
         </SlashMenu>
@@ -849,65 +882,30 @@ const BlockRowBody = memo(function BlockRowBody({
   )
 })
 
-// LogicBadge — «этот вопрос показывается по условию». Индикатор, а не контрол: правят
-// правило в попапе настроек, где для дерева условий есть место. Виден всегда (в отличие
-// от проявляющихся по hover значков) — это состояние документа, и прятать его значило
-// бы прятать причину, по которой вопрос не появился у респондента.
+// RowMarks — кластер отметок вопроса: звёздочка обязательности и значки двух условий,
+// в этом порядке. Инлайн (сразу за текстом подписи) — там же, где отметку увидит
+// респондент; absolute в правом поле — у поля БЕЗ подписи, где текстовой строки нет.
 //
-// Стоит в правом поле под звёздочкой обязательности: то же absolute-поле, никакого
-// места в потоке (иначе схлопывание на mousedown съедало бы клики — TD-22).
-function LogicBadge({ block, lineH }: { block: Block; lineH: string }) {
-  // Подписка — на ТО, ЧТО ПОКАЗАНО: селекторы отдают строки, поэтому перерисовка
-  // случается ровно тогда, когда меняется текст бейджа или его состояние. Массив блоков
-  // подписывать нельзя (он меняет идентичность на каждый символ, а бейдж есть у каждого
-  // вопроса за условием); прежняя попытка подписаться на СОСТАВ документа (строка id)
-  // была быстрой, но неверной: `changeBlockType` сохраняет id, поэтому правило,
-  // ставшее инертным от смены типа источника, оставалось помеченным действующим до
-  // следующей структурной правки. Найдено ревью ветки фазы.
-  const summary = useBuilderStore((s) => ruleSummary(s.blocks, block.visibleIf))
-  const reason = useBuilderStore(
-    (s) => ruleWarnings(s.blocks, block.id, block.visibleIf)[0]?.reason ?? '',
-  )
-  const inert = reason !== ''
-  return (
-    <div className={`absolute left-full top-8 ml-1 flex ${lineH} items-center`}>
-      <span
-        title={inert ? `Условие не действует: ${reason}` : `Показывать, если ${summary}`}
-        aria-label={inert ? 'Условие показа не действует' : `Показывать, если ${summary}`}
-        className={`flex size-5 items-center justify-center rounded ${
-          inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
-        }`}
-      >
-        <GitBranch className="size-4" />
-      </span>
-    </div>
-  )
-}
-
-// RequiredToggle — звёздочка обязательности. Монтируется только у обязательного
-// вопроса (showRequired в BlockRow), поэтому действие у неё одно: снять обязательность.
-//
-// inline — значок внутри flex-ряда подписи, сразу за текстом: там же, где его увидит
-// респондент (rf-required, BlockField.tsx). Без него — absolute в правом поле блока
-// (у поля без подписи текстовой строки нет).
-//
-// lineH — высота первой строки блока (h-6/h-7): значок центрируется по ней, а она
-// разной высоты у вопроса и у согласия.
-function RequiredToggle({
+// Кластер один на все три отметки, потому что их носители сходятся на одной строке:
+// `visibleIf` живёт на голове группы, `requiredIf` и `required` — на отвечаемом блоке,
+// а у вопроса с подписью строка подписи представляет обоих (см. requiredFor).
+function RowMarks({
   block,
+  requiredFor,
+  showRequired,
+  condVisible,
+  condRequired,
   lineH,
   inline = false,
 }: {
   block: Block
+  requiredFor?: Block
+  showRequired: boolean
+  condVisible?: LogicCondition
+  condRequired?: LogicCondition
   lineH: string
   inline?: boolean
 }) {
-  const updateBlock = useBuilderStore((s) => s.updateBlock)
-  // Третье состояние (фаза 21): обязателен ПО УСЛОВИЮ. Звёздочка показывает его
-  // приглушённо — «иногда обязателен» это не то же, что «обязателен», и рисовать их
-  // одинаково значило бы врать про форму. Клик снимает и его: у звёздочки одно
-  // действие, а потеря правила лечится Ctrl+Z.
-  const conditional = Boolean(block.requiredIf)
   return (
     <div
       className={
@@ -916,18 +914,81 @@ function RequiredToggle({
           : `absolute left-full top-1.5 ml-1 flex ${lineH} items-center`
       }
     >
-      <button
-        type="button"
-        aria-label={conditional ? 'Обязателен по условию — снять' : 'Обязательный вопрос — снять'}
-        title={conditional ? 'Обязателен по условию — снять' : 'Обязательный вопрос — снять'}
-        onClick={() => updateBlock(block.id, { required: false, requiredIf: undefined })}
-        className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
-          conditional ? 'text-primary/60' : 'text-primary'
-        }`}
-      >
-        <Asterisk className="size-4" />
-      </button>
+      {showRequired && <RequiredToggle block={requiredFor!} />}
+      {condVisible && <LogicBadge kind="visible" carrierId={block.id} rule={condVisible} />}
+      {condRequired && (
+        <LogicBadge kind="required" carrierId={requiredFor!.id} rule={condRequired} />
+      )}
     </div>
+  )
+}
+
+// LogicBadge — «это свойство вопроса стоит за условием». Индикатор, а не контрол: правят
+// правило в попапе настроек, где для дерева условий есть место. Виден всегда (в отличие
+// от проявляющихся по hover значков) — это состояние документа, и прятать его значило
+// бы прятать причину, по которой вопрос повёл себя не так, как выглядит на полотне.
+//
+// Два вида, и глифы у них РАЗНЫЕ: условие показа и условие обязательности — разные факты
+// о вопросе, и различать их одним значком с двумя тултипами значит требовать наведения
+// там, где хватает взгляда. `carrierId` — носитель ПРАВИЛА (у показа голова группы, у
+// обязательности отвечаемый блок), от него считается «источник стоит ниже».
+const BADGE_KINDS = {
+  visible: { Icon: GitBranch, verb: 'Показывать, если', what: 'Условие показа' },
+  required: { Icon: SquareAsterisk, verb: 'Обязателен, если', what: 'Условие обязательности' },
+} as const
+
+function LogicBadge({
+  kind,
+  carrierId,
+  rule,
+}: {
+  kind: keyof typeof BADGE_KINDS
+  carrierId: string
+  rule: LogicCondition
+}) {
+  // Подписка — на ТО, ЧТО ПОКАЗАНО: селекторы отдают строки, поэтому перерисовка
+  // случается ровно тогда, когда меняется текст бейджа или его состояние. Массив блоков
+  // подписывать нельзя (он меняет идентичность на каждый символ, а бейдж есть у каждого
+  // вопроса за условием); прежняя попытка подписаться на СОСТАВ документа (строка id)
+  // была быстрой, но неверной: `changeBlockType` сохраняет id, поэтому правило,
+  // ставшее инертным от смены типа источника, оставалось помеченным действующим до
+  // следующей структурной правки. Найдено ревью ветки фазы.
+  const summary = useBuilderStore((s) => ruleSummary(s.blocks, rule))
+  const reason = useBuilderStore((s) => ruleWarnings(s.blocks, carrierId, rule)[0]?.reason ?? '')
+  const inert = reason !== ''
+  const { Icon, verb, what } = BADGE_KINDS[kind]
+  return (
+    <span
+      title={inert ? `${what} не действует: ${reason}` : `${verb} ${summary}`}
+      aria-label={inert ? `${what} не действует` : `${verb} ${summary}`}
+      className={`flex size-5 items-center justify-center rounded ${
+        inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
+      }`}
+    >
+      <Icon className="size-4" />
+    </span>
+  )
+}
+
+// RequiredToggle — звёздочка обязательности, единственный КОНТРОЛ кластера (значки
+// условий рядом — индикаторы). Монтируется только у безусловно обязательного вопроса,
+// поэтому действие у неё одно: снять обязательность.
+//
+// Условную обязательность показывает значок LogicBadge, а не эта звёздочка. Поэтому
+// клик гасит только `required`: при `required === true` правила `requiredIf` не бывает —
+// схема запрещает оба флага разом (formSchema, «обязательность задана дважды»).
+function RequiredToggle({ block }: { block: Block }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  return (
+    <button
+      type="button"
+      aria-label="Обязательный вопрос — снять"
+      title="Обязательный вопрос — снять"
+      onClick={() => updateBlock(block.id, { required: false })}
+      className="flex size-5 items-center justify-center rounded text-primary hover:bg-muted"
+    >
+      <Asterisk className="size-4" />
+    </button>
   )
 }
 
