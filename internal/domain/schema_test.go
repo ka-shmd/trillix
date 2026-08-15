@@ -397,6 +397,12 @@ func TestValidateSchema_CoverAndLogo(t *testing.T) {
 		"обложка со сдвигом":      `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":20}}`,
 		"сдвиг у верхней границы": `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":100}}`,
 		"логотип":                 `{"schemaVersion":1,"blocks":[],"logo":{"imageKey":"ws/logo.png"}}`,
+		"логотип с размером": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","width":140,"height":80,"radius":0}}`,
+		"логотип у границ размера": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","width":24,"height":240,"radius":120}}`,
+		"высота обложки":            `{"schemaVersion":1,"blocks":[],"cover":{"color":"#ff8800","height":40}}`,
+		"высота обложки у картинки": `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","height":5}}`,
 		"обложка и логотип вместе": `{"schemaVersion":1,"blocks":[],` +
 			`"cover":{"imageKey":"ws/x.jpg","y":0},"logo":{"imageKey":"ws/logo.png"}}`,
 	}
@@ -422,6 +428,16 @@ func TestValidateSchema_CoverAndLogo(t *testing.T) {
 		"логотип с пустым ключом":  `{"schemaVersion":1,"blocks":[],"logo":{"imageKey":""}}`,
 		"логотип с длинным ключом": `{"schemaVersion":1,"blocks":[],"logo":{"imageKey":"` + longKey + `"}}`,
 		"логотип без ключа":        `{"schemaVersion":1,"blocks":[],"logo":{}}`,
+		"логотип уже минимума": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","width":23}}`,
+		"логотип выше потолка": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","height":241}}`,
+		"скругление логотипа выше потолка": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","radius":121}}`,
+		"отрицательное скругление логотипа": `{"schemaVersion":1,"blocks":[],` +
+			`"logo":{"imageKey":"ws/logo.png","radius":-1}}`,
+		"высота обложки ниже минимума": `{"schemaVersion":1,"blocks":[],"cover":{"color":"#ff8800","height":4}}`,
+		"высота обложки выше потолка":  `{"schemaVersion":1,"blocks":[],"cover":{"color":"#ff8800","height":76}}`,
 	}
 	for name, raw := range invalid {
 		t.Run("невалидна: "+name, func(t *testing.T) {

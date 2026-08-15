@@ -5,10 +5,16 @@ import { BLOCK_TYPES } from './blocks/contract'
 import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/index'
 import {
   BLOCK_CLASS_RE,
+  COVER_HEIGHT_MAX,
+  COVER_HEIGHT_MIN,
   COVER_Y_MAX,
   COVER_Y_MIN,
   CSS_MARKUP_ESCAPE,
   DEFAULT_COVER_Y,
+  LOGO_RADIUS_MAX,
+  LOGO_RADIUS_MIN,
+  LOGO_SIZE_MAX,
+  LOGO_SIZE_MIN,
   MAX_BLOCKS,
   MAX_CUSTOM_CSS_LEN,
   MAX_FORM_TITLE_LEN,
@@ -402,6 +408,9 @@ export const coverSchema = z
     // бессмысленный ключ доживает до первого читателя, который решит, что он
     // что-то значит.
     y: z.number().int().min(COVER_Y_MIN).max(COVER_Y_MAX).optional(),
+    // Высота полосы в процентах высоты окна. Осмысленна и у цвета, и у картинки —
+    // в отличие от y, поэтому пары «только вместе с imageKey» здесь нет.
+    height: z.number().int().min(COVER_HEIGHT_MIN).max(COVER_HEIGHT_MAX).optional(),
   })
   .superRefine((c, ctx) => {
     const hasColor = Boolean(c.color)
@@ -415,11 +424,14 @@ export const coverSchema = z
   })
 export type FormCover = z.infer<typeof coverSchema>
 
-// Логотип — объект с одним полем, а не голая строка: у него ожидаются свои
-// свойства (форма, размер), и растить их из строки означало бы менять форму
-// документа второй раз.
+// Логотип — картинка плюс её геометрия. Размер и скругление необязательны, и
+// отсутствие ключа значит дефолт fields.css (100×100, радиус 50), а не ноль:
+// «не задано» и «задан 0» у радиуса — разные состояния.
 export const logoSchema = z.strictObject({
   imageKey: z.string().min(1).max(MAX_IMAGE_KEY_LEN),
+  width: z.number().int().min(LOGO_SIZE_MIN).max(LOGO_SIZE_MAX).optional(),
+  height: z.number().int().min(LOGO_SIZE_MIN).max(LOGO_SIZE_MAX).optional(),
+  radius: z.number().int().min(LOGO_RADIUS_MIN).max(LOGO_RADIUS_MAX).optional(),
 })
 export type FormLogo = z.infer<typeof logoSchema>
 

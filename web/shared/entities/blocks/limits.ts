@@ -52,6 +52,28 @@ export const MAX_REDIRECT_URL_LEN = 2000
 export const COVER_Y_MIN = 0
 export const COVER_Y_MAX = 100
 export const DEFAULT_COVER_Y = 50
+// Высота обложки — доля высоты ОКНА в процентах (уезжает в CSS как vh). Процент, а
+// не пиксели: автор задаёт «четверть экрана», и на телефоне это должно остаться
+// четвертью. Зеркалят CoverHeightMin/CoverHeightMax. Низ — 5%: тоньше полоса
+// перестаёт читаться как обложка; верх — 75%: выше заголовок формы уезжает за
+// пределы первого экрана, и респондент видит картинку вместо вопроса.
+export const COVER_HEIGHT_MIN = 5
+export const COVER_HEIGHT_MAX = 75
+// Размер логотипа и его скругление в px. Зеркалят LogoSizeMin/LogoSizeMax/
+// LogoRadiusMax. Потолок размера — 240: логотип шире трети колонки (700) перестаёт
+// быть знаком страницы и становится второй обложкой. Потолок радиуса — половина
+// потолка размера: дальше браузер всё равно зажимает скругление сам.
+export const LOGO_SIZE_MIN = 24
+export const LOGO_SIZE_MAX = 240
+export const LOGO_RADIUS_MIN = 0
+export const LOGO_RADIUS_MAX = 120
+// Дефолты хрома страницы: отсутствие ключа значит именно это число. Зеркалят
+// :root в fields.css (--rf-logo-w/--rf-logo-h/--rf-logo-radius/--rf-cover-h) — там
+// рисуется, здесь показывается плейсхолдером в панели «Оформление».
+export const DEFAULT_LOGO_WIDTH = 100
+export const DEFAULT_LOGO_HEIGHT = 100
+export const DEFAULT_LOGO_RADIUS = 50
+export const DEFAULT_COVER_HEIGHT = 25
 // Условная логика (фаза 21). Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen/
 // MaxJumpRules. Первые два обязательны: без них стоимость вычисления чужого документа
 // умножается на MAX_BLOCKS — тот же класс, что у MAX_SPANS в тексте блока.

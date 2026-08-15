@@ -26,6 +26,26 @@ const (
 	DefaultCoverY = 50
 )
 
+// Геометрия хрома: высота обложки в процентах высоты ОКНА и размер логотипа в px.
+// Зеркалят COVER_HEIGHT_*/LOGO_* в web/shared/entities/blocks/limits.ts.
+//
+// Дефолтов здесь нет намеренно: отсутствие ключа рисует fields.css своими
+// значениями (--rf-cover-h, --rf-logo-w/-h/-radius), и Go про них ничего не знает —
+// в отличие от CoverY, который подставляет сервер при печати object-position.
+const (
+	// Низ 5% — тоньше полоса перестаёт читаться как обложка; верх 75% — выше
+	// заголовок формы уезжает за пределы первого экрана.
+	CoverHeightMin = 5
+	CoverHeightMax = 75
+	// Потолок размера — 240px: логотип шире трети колонки перестаёт быть знаком
+	// страницы. Потолок радиуса — половина потолка размера, дальше браузер зажимает
+	// скругление сам.
+	LogoSizeMin   = 24
+	LogoSizeMax   = 240
+	LogoRadiusMin = 0
+	LogoRadiusMax = 120
+)
+
 // FormCover — обложка страницы формы: ЛИБО сплошной цвет, ЛИБО картинка, никогда
 // оба и никогда ни одного. Пустая обложка невыразима намеренно: «обложки нет»
 // выражается отсутствием всего объекта, и второго способа сказать то же самое быть
@@ -41,13 +61,19 @@ type FormCover struct {
 	// принятый бессмысленный ключ доживает до первого читателя, который решит,
 	// что он что-то значит.
 	Y *int `json:"y,omitempty"`
+	// Height — высота полосы в процентах высоты окна. Осмысленна и у цвета, и у
+	// картинки — в отличие от Y, поэтому пары «только вместе с ImageKey» здесь нет.
+	Height *int `json:"height,omitempty"`
 }
 
-// FormLogo — логотип страницы формы. Отдельный тип с одним полем, а не голая
-// строка в FormSchema: у логотипа ожидаются свои свойства (форма, размер), и
-// растить их из строки означало бы менять форму документа второй раз.
+// FormLogo — логотип страницы формы: картинка плюс её геометрия. Размер и
+// скругление — указатели по той же причине, что FontSize у оформления: «не задано»
+// (рисуй дефолтом fields.css) и «задан 0» обязаны быть разными состояниями.
 type FormLogo struct {
 	ImageKey string `json:"imageKey"`
+	Width    *int   `json:"width,omitempty"`
+	Height   *int   `json:"height,omitempty"`
+	Radius   *int   `json:"radius,omitempty"`
 }
 
 // CoverY возвращает точку фокуса обложки с подставленным дефолтом. Единая точка
@@ -83,6 +109,9 @@ func validateCover(c *FormCover) error {
 			return fmt.Errorf("cover: y вне диапазона %d–%d", CoverYMin, CoverYMax)
 		}
 	}
+	if c.Height != nil && (*c.Height < CoverHeightMin || *c.Height > CoverHeightMax) {
+		return fmt.Errorf("cover: height вне диапазона %d–%d", CoverHeightMin, CoverHeightMax)
+	}
 	return nil
 }
 
@@ -97,6 +126,20 @@ func validateLogo(l *FormLogo) error {
 	}
 	if n := utf8.RuneCountInString(l.ImageKey); n > MaxImageKeyLen {
 		return fmt.Errorf("logo: imageKey длиннее %d символов", MaxImageKeyLen)
+	}
+	for _, f := range []struct {
+		name string
+		v    *int
+		lo   int
+		hi   int
+	}{
+		{"width", l.Width, LogoSizeMin, LogoSizeMax},
+		{"height", l.Height, LogoSizeMin, LogoSizeMax},
+		{"radius", l.Radius, LogoRadiusMin, LogoRadiusMax},
+	} {
+		if f.v != nil && (*f.v < f.lo || *f.v > f.hi) {
+			return fmt.Errorf("logo: %s вне диапазона %d–%d", f.name, f.lo, f.hi)
+		}
 	}
 	return nil
 }

@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   coverY,
+  COVER_HEIGHT_MAX,
+  COVER_HEIGHT_MIN,
   COVER_Y_MAX,
   COVER_Y_MIN,
   DEFAULT_COVER_Y,
   formSchemaSchema,
+  LOGO_RADIUS_MAX,
+  LOGO_RADIUS_MIN,
+  LOGO_SIZE_MAX,
+  LOGO_SIZE_MIN,
   isValidPhone,
   MAX_BLOCKS,
   MAX_FORM_TITLE_LEN,
@@ -639,6 +645,33 @@ describe('обложка и логотип', () => {
       cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MAX },
     },
     логотип: { schemaVersion: SCHEMA_VERSION, blocks: [], logo: { imageKey: 'ws/logo.png' } },
+    'логотип с размером': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', width: 140, height: 80, radius: LOGO_RADIUS_MIN },
+    },
+    'логотип у границ размера': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: {
+        imageKey: 'ws/logo.png',
+        width: LOGO_SIZE_MIN,
+        height: LOGO_SIZE_MAX,
+        radius: LOGO_RADIUS_MAX,
+      },
+    },
+    // Высота полосы осмысленна у обоих наполнений — в отличие от сдвига, который
+    // при цвете отвергается.
+    'высота обложки у цвета': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ff8800', height: 40 },
+    },
+    'высота обложки у картинки': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', height: COVER_HEIGHT_MIN },
+    },
     'обложка и логотип вместе': {
       schemaVersion: SCHEMA_VERSION,
       blocks: [],
@@ -713,6 +746,41 @@ describe('обложка и логотип', () => {
       logo: { imageKey: longKey },
     },
     'логотип без ключа': { schemaVersion: SCHEMA_VERSION, blocks: [], logo: {} },
+    'логотип уже минимума': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', width: LOGO_SIZE_MIN - 1 },
+    },
+    'логотип выше потолка': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', height: LOGO_SIZE_MAX + 1 },
+    },
+    'скругление логотипа выше потолка': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', radius: LOGO_RADIUS_MAX + 1 },
+    },
+    'отрицательное скругление логотипа': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', radius: LOGO_RADIUS_MIN - 1 },
+    },
+    'дробный размер логотипа': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      logo: { imageKey: 'ws/logo.png', width: 100.5 },
+    },
+    'высота обложки ниже минимума': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ff8800', height: COVER_HEIGHT_MIN - 1 },
+    },
+    'высота обложки выше потолка': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { color: '#ff8800', height: COVER_HEIGHT_MAX + 1 },
+    },
   }
 
   for (const [name, doc] of Object.entries(invalid)) {
