@@ -927,7 +927,7 @@ export function SlashEditor({
   )
 
   return (
-    // Метрики холста = общий .rf-page (fields.css): десктоп 96/80/96, мобильный
+    // Метрики холста = общий .rf-page (fields.css): десктоп 144/80/96, мобильный
     // 40/20/64 — тот же брейкпоинт (sm=640), чтобы редактор не разъезжался с
     // превью/рендерером на узком экране.
     <FocusEngineProvider value={engine}>
@@ -936,24 +936,20 @@ export function SlashEditor({
       <ActiveRowApiProvider value={activeRow.api}>
         <ActiveRowValueProvider value={activeRow.active}>
           {/* Обложка — во всю ширину полотна, поэтому ВНЕ коробки max-w-[860px]
-        (та же граница, что в рендерере: обложка сестра .rf-page). group/canvas —
-        якорь наведения для кнопок «Добавить обложку/логотип» ниже. */}
+        (та же граница, что в рендерере: обложка сестра .rf-page). */}
           {/* КОНТЕЙНЕР ТЕМЫ (фаза 22) — здесь, а не глубже: обложка стоит ВНЕ
         коробки колонки, но красится тем же холстом, и переменные обязаны накрывать
         обоих. На :root тему ставить нельзя — она перекрасила бы кабинет вокруг. */}
-          <div
-            className={`group/canvas rf-theme ${designClasses(design)}`}
-            style={designToVars(design)}
-          >
+          <div className={`rf-theme ${designClasses(design)}`} style={designToVars(design)}>
             <CoverArea formId={formId} />
             {/* relative — якорь координат оверлеев драга (updateFrame меряет относительно него).
-          Верхний отступ с обложкой поджимается: 96px пустоты над заголовком там уже
+          Верхний отступ с обложкой поджимается: 144px пустоты над заголовком там уже
           лишние, воздух дала сама обложка. Числа зеркалят .rf-page.rf-covered
           (fields.css) — правишь там, правь и здесь. */}
             <div
               ref={canvasRef}
               className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 sm:px-20 sm:pb-24 ${
-                cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-24'
+                cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-36'
               }`}
             >
             {/* Оверлеи ниже — absolute ДО списка в DOM (строки positioned и рисуются
@@ -1009,11 +1005,16 @@ export function SlashEditor({
                 }}
               />
             )}
-            {/* Логотип и кнопки «завести» — уже ВНУТРИ колонки: логотип
-          выравнивается по её левому краю, как в рендерере. */}
+            {/* Логотип — уже ВНУТРИ колонки: выравнивается по её левому краю, как в
+          рендерере. */}
             <LogoArea formId={formId} over={Boolean(cover)} />
-            <AddChrome formId={formId} />
-            {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
+            {/* group/title — якорь наведения кнопок «завести» (AddChrome): показываются
+          только при наведении на заголовок, не на всё полотно. AddChrome стоит внутри
+          этой группы, а не снаружи, — иначе наведение на сами кнопки гасило бы их. */}
+            <div className="group/title">
+              <AddChrome formId={formId} />
+              {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
+            </div>
 
             {blocks.length === 0 ? (
               <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
@@ -1061,8 +1062,9 @@ export function SlashEditor({
                 ЭЛЕМЕНТ — это его ВЕРХНИЙ отступ, «место передо мной», а не gap
                 контейнера (2026-08-13, см. .rf-form в fields.css): mt-7 (28px) у ряда
                 и у вопроса в колонке = .rf-form, 14px внутри вопроса даёт строка
-                (BlockRow). У контейнера остаётся только mt-12 (48px) заголовок
-                формы→первый блок = gap у .rf-page.
+                (BlockRow). У контейнера остаётся только mt-16 (64px) заголовок
+                формы→первый блок = gap .rf-page (48px) + margin-bottom .rf-title
+                (16px, добавка сверх ритма — fields.css).
                 py-1.5 строк в вертикаль НЕ входит (там -mb-1.5 и укороченный на
                 столько же mt, см. BlockRow), поэтому просвет здесь — чистый контент и
                 совпадает с превью замером (критерий 13.3 — ноль расхождений). */}
@@ -1073,7 +1075,7 @@ export function SlashEditor({
                 превью и рендерером один в один: .rf-row → .rf-cell → группы.
                 DOM-порядок = порядок документа, sortable-вселенная не тронута —
                 обёртки не заводят вложенных SortableContext, только лэйаут. */}
-                  <ol className="mt-12 flex flex-col">
+                  <ol className="mt-16 flex flex-col">
                     {rows.map((row, rowIndex) => {
                       const rowId = row[0]![0]!.id
                       // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
@@ -1137,7 +1139,7 @@ export function SlashEditor({
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
                         // mt-7 — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
-                        // ряда его нет, начало полотна задаёт mt-12 от заголовка формы.
+                        // ряда его нет, начало полотна задаёт mt-16 от заголовка формы.
                         // gap-7 здесь — зазор между КОЛОНКАМИ (на мобильном ряд
                         // разваливается в стек, и тот же зазор становится вертикальным),
                         // как .rf-row.
@@ -1956,7 +1958,7 @@ function EmptyStarter({
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
       {...rowFocus}
-      className="mt-12 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
+      className="mt-16 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
