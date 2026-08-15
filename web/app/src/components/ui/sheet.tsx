@@ -38,6 +38,14 @@ function SheetOverlay({
   )
 }
 
+// Анимация выезда — у сторон, но НЕ у стороны `full` (наша добавка, см. ниже): она
+// уехала из базовых классов в каждую ветку именно поэтому. `full` обязана обходиться
+// БЕЗ `animate-out`, а не с нулевой длительностью: Radix снимает содержимое по
+// событию `animationend`, и анимация с именем, но без времени — лишняя ставка на то,
+// что браузер это событие всё-таки пришлёт.
+const SLIDE_ANIMATION =
+  'data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500'
+
 function SheetContent({
   className,
   children,
@@ -50,7 +58,12 @@ function SheetContent({
   showOverlay = true,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
-  side?: 'top' | 'right' | 'bottom' | 'left'
+  // 'full' — наша добавка к вендоренному компоненту: слой во весь вьюпорт, который не
+  // выезжает, а появляется (полноэкранный просмотр формы, PreviewOverlay). Значением
+  // варианта, а не перебивкой классов снаружи: ветки здесь взаимно исключающие, а
+  // перебивка `slide-in-from-bottom` чужим классом решалась бы порядком правил в
+  // собранном CSS — то есть молча и не в нашу пользу.
+  side?: 'top' | 'right' | 'bottom' | 'left' | 'full'
   showCloseButton?: boolean
   showOverlay?: boolean
 }) {
@@ -60,15 +73,16 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          'fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500',
+          'fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-in-out',
           side === 'right' &&
-            'inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm',
+            `inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm ${SLIDE_ANIMATION}`,
           side === 'left' &&
-            'inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
+            `inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm ${SLIDE_ANIMATION}`,
           side === 'top' &&
-            'inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
+            `inset-x-0 top-0 h-auto border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top ${SLIDE_ANIMATION}`,
           side === 'bottom' &&
-            'inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
+            `inset-x-0 bottom-0 h-auto border-t data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom ${SLIDE_ANIMATION}`,
+          side === 'full' && 'inset-0 h-dvh w-full border-0',
           className,
         )}
         {...props}

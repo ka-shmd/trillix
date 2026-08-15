@@ -55,9 +55,11 @@ const FRAME_RESET = `html,body{height:100%}body{margin:0}
 
 export function PreviewFrame({
   store,
+  onEscape,
   children,
 }: {
   store: StoreApi<BuilderStore>
+  onEscape?: () => void
   children: ReactNode
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null)
@@ -65,6 +67,12 @@ export function PreviewFrame({
   // Пересчёт рендера ждёт готовности корня: эффект создания идёт первым, но эффект
   // отрисовки обязан повториться после него, а не только на смене children.
   const [ready, setReady] = useState(false)
+  // Колбэк Esc держится в ref: слушатель ставится один раз вместе с документом
+  // фрейма, а колбэк пересоздаётся каждым рендером родителя.
+  const escapeRef = useRef(onEscape)
+  useEffect(() => {
+    escapeRef.current = onEscape
+  })
 
   useEffect(() => {
     const frame = frameRef.current
@@ -81,6 +89,14 @@ export function PreviewFrame({
     mount.id = 'preview-root'
     doc.body.appendChild(mount)
 
+    // Esc внутри фрейма — событие СВОЕГО документа: до кабинета оно не всплывает, и
+    // без этого слушателя закрытие работало бы только пока автор ни разу не кликнул
+    // в форму.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') escapeRef.current?.()
+    }
+    doc.addEventListener('keydown', onKeyDown)
+
     const root = createRoot(mount)
     rootRef.current = root
     setReady(true)
@@ -88,11 +104,21 @@ export function PreviewFrame({
     return () => {
       rootRef.current = null
       setReady(false)
+      doc.removeEventListener('keydown', onKeyDown)
       stopMirror()
+      reset.remove()
       // Размонтирование откладывается на микрозадачу: корень фрейма может сноситься
       // во время рендера родителя (переключение режима), а синхронный unmount из
       // чужого рендера React ругает предупреждением и пропускает очистку.
-      queueMicrotask(() => root.unmount())
+      //
+      // МИНА: узел `#preview-root` обязан уехать вместе с корнем. Эффект прогоняется
+      // ДВАЖДЫ (StrictMode в dev), и оставленный узел не просто мусор — `FRAME_RESET`
+      // тянет ему `min-height:100%` по id, то есть каждый осиротевший даёт экран
+      // пустоты над формой.
+      queueMicrotask(() => {
+        root.unmount()
+        mount.remove()
+      })
     }
   }, [])
 
@@ -104,13 +130,9 @@ export function PreviewFrame({
   }, [ready, store, children])
 
   return (
-    // Высота задаётся числом от вьюпорта минус шапка (h-14 в routes/_app.tsx):
-    // фрейм не умеет расти по содержимому, а цепочка процентов от <main> до сюда
-    // проходит через чужие коробки и рвётся на первой же правке оболочки.
-    <iframe
-      ref={frameRef}
-      title="Просмотр формы"
-      className="block h-[calc(100dvh-3.5rem)] w-full border-0"
-    />
+    // Фрейм занимает контейнер целиком, а высоту контейнеру задаёт вьюпорт (`h-dvh`
+    // у `PreviewOverlay`): фрейм не умеет расти по содержимому, и высота обязана
+    // прийти сверху числом.
+    <iframe ref={frameRef} title="Просмотр формы" className="block h-full w-full border-0" />
   )
 }
