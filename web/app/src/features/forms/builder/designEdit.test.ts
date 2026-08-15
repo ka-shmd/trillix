@@ -1,7 +1,7 @@
 import { designSchema } from '@entities/formSchema'
 import { describe, expect, it } from 'vitest'
 
-import { patch, patchTop, PALETTE_FIELDS } from './designEdit'
+import { coverFill, patch, patchCoverHeight, patchLogo, patchTop, PALETTE_FIELDS } from './designEdit'
 
 describe('patch', () => {
   it('ставит значение в пустой документ', () => {
@@ -89,5 +89,53 @@ describe('patchTop — бейдж', () => {
     expect(patchTop({ theme: 'dark', branding: false }, 'branding', undefined)).toEqual({
       theme: 'dark',
     })
+  })
+})
+
+// ХРОМ СТРАНИЦЫ — правка размеров логотипа и обложки. Отдельно от patch: объект
+// хрома держит саму картинку и до undefined не схлопывается.
+describe('patchLogo / patchCoverHeight', () => {
+  it('ставит и меняет значение, не трогая картинку', () => {
+    expect(patchLogo({ imageKey: 'ws/l.png' }, 'width', 140)).toEqual({
+      imageKey: 'ws/l.png',
+      width: 140,
+    })
+    expect(patchLogo({ imageKey: 'ws/l.png', radius: 50 }, 'radius', 0)).toEqual({
+      imageKey: 'ws/l.png',
+      radius: 0,
+    })
+  })
+
+  it('снятое значение УДАЛЯЕТ ключ, а не пишет undefined', () => {
+    const next = patchLogo({ imageKey: 'ws/l.png', width: 140 }, 'width', undefined)
+    expect(next).toEqual({ imageKey: 'ws/l.png' })
+    expect('width' in next).toBe(false)
+  })
+
+  it('высота обложки живёт при любом наполнении', () => {
+    expect(patchCoverHeight({ color: '#ff8800' }, 40)).toEqual({ color: '#ff8800', height: 40 })
+    const cleared = patchCoverHeight({ imageKey: 'ws/x.jpg', y: 20, height: 40 }, undefined)
+    expect(cleared).toEqual({ imageKey: 'ws/x.jpg', y: 20 })
+    expect('height' in cleared).toBe(false)
+  })
+})
+
+describe('coverFill', () => {
+  // Высота — свойство ПОЛОСЫ, а не того, чем она залита: смена наполнения её не
+  // трогает. Сдвиг, наоборот, привязан к конкретной картинке и не переносится —
+  // у цвета он схемой запрещён вовсе, а у новой картинки другая композиция.
+  it('меняет наполнение, сохраняя высоту и теряя сдвиг', () => {
+    expect(coverFill({ imageKey: 'ws/x.jpg', y: 20, height: 40 }, { color: '#ff8800' })).toEqual({
+      color: '#ff8800',
+      height: 40,
+    })
+    expect(coverFill({ color: '#ff8800', height: 40 }, { imageKey: 'ws/new.jpg' })).toEqual({
+      imageKey: 'ws/new.jpg',
+      height: 40,
+    })
+  })
+
+  it('заводит обложку с нуля', () => {
+    expect(coverFill(undefined, { color: '#ff8800' })).toEqual({ color: '#ff8800' })
   })
 })

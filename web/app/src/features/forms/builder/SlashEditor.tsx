@@ -96,11 +96,15 @@ type SheetState = { open: boolean; ctx: ShortcutContext | null; filters: Shortcu
 export function SlashEditor({
   formId,
   engine,
+  onOpenDesign,
 }: {
   formId: string
   // Фокус-движок создаётся в BuilderScreen (переживает смену режима и нужен undo/redo,
   // §2.4) и раздаётся полотну через контекст.
   engine: FocusEngine
+  // Открыть шторку оформления. Пропом, а не через стор: состояние шторки — UI
+  // экрана, а не документа, и живёт оно в BuilderScreen рядом с кнопкой в шапке.
+  onOpenDesign: () => void
 }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   // Обложка нужна полотну только затем, чтобы поджать верхний отступ: сама она
@@ -1020,7 +1024,7 @@ export function SlashEditor({
           только при наведении на заголовок, не на всё полотно. AddChrome стоит внутри
           этой группы, а не снаружи, — иначе наведение на сами кнопки гасило бы их. */}
             <div className="group/title">
-              <AddChrome formId={formId} />
+              <AddChrome formId={formId} onOpenDesign={onOpenDesign} />
               {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
             </div>
 

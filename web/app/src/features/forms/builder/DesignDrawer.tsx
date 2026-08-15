@@ -31,7 +31,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -49,9 +48,11 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { useFeatureAllowed } from '../../plan/useFeature'
 
 import { ColorPicker } from './ColorPicker'
+import { CoverRow, LogoRow } from './DesignChrome'
 import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
 import { currentTheme, hasCustomFields, resetToTheme, withTheme } from './designTheme'
 import { lowContrast } from './designWarnings'
+import { NumberRow } from './NumberRow'
 import { useBuilderStore } from './storeContext'
 
 // ПАНЕЛЬ «ОФОРМЛЕНИЕ» — ВЫЕЗЖАЮЩАЯ ШТОРКА (фаза 22; вид согласован с владельцем
@@ -82,9 +83,13 @@ import { useBuilderStore } from './storeContext'
 // вернули обратно, обязана стать байт в байт прежней — иначе документ отличается от
 // исходного при одинаковом виде, и это расхождение живёт вечно.
 export function DesignDrawer({
+  formId,
   open,
   onOpenChange,
 }: {
+  // formId нужен строкам хрома: загрузка картинки логотипа и обложки идёт в медиа
+  // формы, а не воркспейса (тот же поток, что у картинки блока).
+  formId: string
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -312,6 +317,12 @@ export function DesignDrawer({
                 onChange={(v) => set('layout', 'align', dflt(v, 'left'))}
               />
             </Field>
+            {/* Логотип и обложка — в «Лэйауте» (решение владельца 2026-08-16): их
+                размеры это геометрия страницы, и подбираются они рядом с шириной
+                колонки и кеглем. Метка Pro у секции их НЕ касается — сам хром
+                бесплатен и гейта не получил; платно всё остальное в секции. */}
+            <LogoRow formId={formId} />
+            <CoverRow formId={formId} />
           </Group>
 
           <Separator />
@@ -595,72 +606,6 @@ function Choice({
         ))}
       </SelectContent>
     </Select>
-  )
-}
-
-// NumberRow — число с диапазоном. Пустое поле означает «по умолчанию», а не ноль:
-// стереть значение автор вправе, и это не то же самое, что поставить 0 (у скругления
-// ноль — осмысленный выбор, прямые углы).
-//
-// ЧЕРНОВИК ОБЯЗАТЕЛЕН, И ЭТО НЕ ПЕРЕСТРАХОВКА. Первая редакция просто не пускала в
-// стор значение вне диапазона — и поле стало непригодным для клавиатуры: при
-// минимуме 14 набор «1» откатывался к прежнему значению, до «14» дойти было нельзя
-// в принципе, Backspace из «16» тоже возвращал «16». Причина в том, что input
-// контролируемый: раз состояние не изменилось, React восстанавливает DOM к
-// отрендеренному. Поэтому набранный текст живёт здесь, а в стор уходит только
-// готовое число — тот же приём, что у поля hex в ColorPicker.
-function NumberRow({
-  id,
-  value,
-  fallback,
-  min,
-  max,
-  onChange,
-}: {
-  id: string
-  value: number | undefined
-  fallback: number
-  min: number
-  max: number
-  onChange: (value: number | undefined) => void
-}) {
-  const [draft, setDraft] = useState<string | null>(null)
-  // Значение из стора сильнее черновика, когда меняется мимо поля (undo, загрузка
-  // формы): сверка в рендере, а не эффектом — тот дал бы лишний каскадный рендер
-  // (react-hooks/set-state-in-effect), приём взят у FormSettings.
-  const [synced, setSynced] = useState(value)
-  if (synced !== value) {
-    setSynced(value)
-    setDraft(null)
-  }
-
-  return (
-    <Input
-      id={id}
-      type="number"
-      inputMode="numeric"
-      min={min}
-      max={max}
-      value={draft ?? (value === undefined ? '' : String(value))}
-      placeholder={String(fallback)}
-      className="h-8"
-      onChange={(e) => {
-        const raw = e.currentTarget.value
-        setDraft(raw)
-        if (raw === '') {
-          onChange(undefined)
-          return
-        }
-        const n = Number(raw)
-        // Вне диапазона в стор не уходит: контракт его отвергает (422), и автосейв
-        // краснел бы прямо во время набора. В поле при этом остаётся набранное.
-        if (!Number.isInteger(n) || n < min || n > max) return
-        onChange(n)
-      }}
-      // По уходу фокуса черновик снимается: недобранное «1» не должно остаться
-      // висеть в поле, показывая не то, что в документе.
-      onBlur={() => setDraft(null)}
-    />
   )
 }
 

@@ -48,7 +48,7 @@ function mount(n: number) {
   const engine = createFocusEngine()
   const { container } = render(
     <BuilderStoreContext.Provider value={store}>
-      <SlashEditor formId="f" engine={engine} />
+      <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
     </BuilderStoreContext.Provider>,
   )
   return { store, container }

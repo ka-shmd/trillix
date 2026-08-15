@@ -33,7 +33,7 @@ function setup(blocks: FormSchema['blocks']) {
     <QueryClientProvider client={qc}>
       <BuilderStoreContext.Provider value={store}>
         <FocusEngineProvider value={engine}>
-          <SlashEditor formId="f" engine={engine} />
+          <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
         </FocusEngineProvider>
       </BuilderStoreContext.Provider>
     </QueryClientProvider>,
