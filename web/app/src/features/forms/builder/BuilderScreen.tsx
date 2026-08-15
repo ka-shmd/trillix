@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
-import { ChevronRight, Eye, House, Palette, Pencil, Redo2, Settings, Undo2 } from 'lucide-react'
+import { ChevronRight, Eye, House, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { displayFormName, type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
@@ -11,8 +11,7 @@ import { workspacesQueryOptions } from '../../workspaces/queries'
 import { useHeaderSlot } from '../../../shared/headerSlot'
 import { DesignDrawer } from './DesignDrawer'
 import { FormSettings } from './FormSettings'
-import { PreviewFrame } from './PreviewFrame'
-import { PreviewPane } from './PreviewPane'
+import { PreviewOverlay } from './PreviewOverlay'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SlashEditor } from './SlashEditor'
@@ -24,11 +23,14 @@ import { useGlobalChord } from './useGlobalChord'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
-// Что показано вместо полотна. Полотно (edit) — документ из блоков; превью — как
-// увидит респондент; настройки — то, чего на форме не видно (экран после отправки).
-// Режим локальный: F5 возвращает в редактор, ссылки на превью/настройки нет — по
-// тому же принципу, что и превью с самого начала (решение владельца).
-type Mode = 'edit' | 'preview' | 'settings'
+// Что показано вместо полотна. Полотно (edit) — документ из блоков; настройки — то,
+// чего на форме не видно (экран после отправки). Режим локальный: F5 возвращает в
+// редактор, ссылки на настройки нет (решение владельца).
+//
+// Просмотра среди режимов НЕТ: он не занимает место полотна, а наезжает на окно
+// целиком отдельным слоем (`PreviewOverlay`) — и потому живёт собственным флагом,
+// поверх любого режима.
+type Mode = 'edit' | 'settings'
 
 // BuilderScreen — редактор в стиле Tally: чистое документное полотно (SlashEditor),
 // а все элементы управления (статус сохранения, просмотр, публикация) порталятся в
@@ -55,6 +57,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   const headerSlot = useHeaderSlot()
   const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
   const [mode, setMode] = useState<Mode>('edit')
+  const [previewOpen, setPreviewOpen] = useState(false)
   // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
   // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
   // бы полотно и превратил подбор темы в угадывание.
@@ -136,21 +139,16 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                   Ответы
                 </Link>
               </Button>
+              {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
+                  и кнопки, которой можно было бы нажать второй раз, под ним нет.
+                  Выход подписан словами на самом слое. */}
               <Button
                 variant="ghost"
                 size="sm"
                 className="gap-1.5"
-                onClick={() => setMode((m) => (m === 'preview' ? 'edit' : 'preview'))}
+                onClick={() => setPreviewOpen(true)}
               >
-                {mode === 'preview' ? (
-                  <>
-                    <Pencil className="size-4" /> Редактор
-                  </>
-                ) : (
-                  <>
-                    <Eye className="size-4" /> Просмотр
-                  </>
-                )}
+                <Eye className="size-4" /> Просмотр
               </Button>
               {/* Оформление — ТУМБЛЕР шторки, а не вход в режим (в отличие от
                   настроек ниже): она выезжает сбоку, ОТОДВИГАЯ оболочку, а не
@@ -194,17 +192,20 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {status === 'conflict' && <ConflictBanner />}
 
       {mode === 'edit' && <SlashEditor formId={detail.id} engine={engine} />}
-      {/* Превью — в СВОЁМ документе (TD-60): свой CSS автора обязан быть здесь виден
-          и обязан не покидать фрейм, иначе `.rf-input{display:none}` из формы погасил
-          бы поля самого кабинета. Стор передаётся пропом — контекст через границу
-          корней React не проходит (PreviewFrame.tsx). */}
-      {mode === 'preview' && (
-        <section aria-label="Просмотр формы">
-          <PreviewFrame store={store}>
-            <PreviewPane title={detail.title} canRemoveBadge={canRemoveBadge} />
-          </PreviewFrame>
-        </section>
-      )}
+      {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
+          (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
+          иначе `.rf-input{display:none}` из формы погасил бы поля самого кабинета.
+          Стор передаётся пропом — контекст через границу корней React не проходит
+          (PreviewFrame.tsx). Закрытым слой ничего не монтирует (Radix не рисует
+          содержимое), поэтому держать его здесь всегда дёшево — и только так Radix
+          успевает проиграть закрытие. */}
+      <PreviewOverlay
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        store={store}
+        title={detail.title}
+        canRemoveBadge={canRemoveBadge}
+      />
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
           иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
       {mode === 'settings' && (

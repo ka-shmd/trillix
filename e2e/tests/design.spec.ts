@@ -124,7 +124,7 @@ test('оформление: тёмная форма с первого кадра
   await expect(preview.locator('.rf-input')).toBeHidden()
   // А снаружи фрейма то же правило не действует: на полотне поле носит тот же класс
   // и обязано быть видно.
-  await page.getByRole('button', { name: 'Редактор' }).click()
+  await page.getByRole('button', { name: 'Назад к редактированию' }).click()
   await expect(page.locator('.rf-input').first()).toBeVisible()
 
   // 4. Снимаем свой CSS — остальное оформление бесплатно (обе темы, цвета, шрифт и
