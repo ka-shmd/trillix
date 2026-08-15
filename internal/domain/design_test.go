@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -324,14 +325,38 @@ func TestDesignThemeColor(t *testing.T) {
 }
 
 func TestDesignFontFiles(t *testing.T) {
-	if got := DesignFontFiles(nil); got != nil {
-		t.Fatalf("нет оформления → нечего качать, получено %v", got)
+	// Незаданный шрифт — это дефолт, а не «нечего качать»: таких форм большинство, и
+	// именно им preload нужнее всего.
+	want := designFontFiles[DesignFontDefault]
+	if got := DesignFontFiles(nil); !slices.Equal(got, want) {
+		t.Fatalf("форма без оформления обязана качать дефолтное семейство %v, получено %v", want, got)
+	}
+	if got := DesignFontFiles(&FormDesign{}); !slices.Equal(got, want) {
+		t.Fatalf("шрифт не выбран → дефолтное семейство %v, получено %v", want, got)
 	}
 	if got := DesignFontFiles(&FormDesign{Font: "system"}); got != nil {
 		t.Fatalf("системный стек весит 0 байт и файлов не имеет, получено %v", got)
 	}
 	if got := DesignFontFiles(&FormDesign{Font: "inter"}); len(got) != 2 || got[0] != "inter-cyrillic" {
 		t.Fatalf("ожидались оба подмножества Inter, кириллица первой; получено %v", got)
+	}
+}
+
+// Дефолт — платная настройка ровно тогда, когда он ЗАПИСАН: пока ключа нет, автор
+// ничего не выбирал. Проверяется на шрифте, потому что там дефолт сменился (2026-08-15)
+// и старое исключение для "system" стало бы дырой в гейте.
+func TestDesignPaidFeatures_Font(t *testing.T) {
+	has := func(d *FormDesign) bool {
+		return slices.Contains(DesignPaidFeatures(d), "шрифт")
+	}
+	if has(&FormDesign{}) {
+		t.Error("шрифт не выбран — платить не за что")
+	}
+	if !has(&FormDesign{Font: "system"}) {
+		t.Error("системный выбран явно — это такой же выбор, как любой другой")
+	}
+	if !has(&FormDesign{Font: DesignFontDefault}) {
+		t.Error("записанный дефолт — тоже выбор: панель его не пишет, но схема принимает")
 	}
 }
 

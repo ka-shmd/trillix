@@ -42,14 +42,18 @@ const (
 
 var (
 	// Имена переменных берутся из таблицы SPECS: каждая строка начинается с ['--rf-…'.
-	reTSVarName  = regexp.MustCompile(`\['(--rf-[a-z-]+)'`)
-	reTSConstArr = regexp.MustCompile(`export const (DESIGN_[A-Z_]+) = \[(.*?)\] as const`)
+	reTSVarName = regexp.MustCompile(`\['(--rf-[a-z-]+)'`)
+	// (?s) — список может быть и многострочным: prettier ломает строку на printWidth 100,
+	// и седьмое семейство в DESIGN_FONTS её перешагнуло. Без флага тест краснел бы не на
+	// расхождении, а на переносе, и чинили бы его форматированием.
+	reTSConstArr = regexp.MustCompile(`(?s)export const (DESIGN_[A-Z_]+) = \[(.*?)\] as const`)
 	reTSQuoted   = regexp.MustCompile(`'([a-zA-Z_]+)'`)
 	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS|MIN_COLUMN|MAX_COLUMN) = (\d+)`)
 	reTSClass    = regexp.MustCompile(`push\('(rf-[a-z-]+)'\)`)
 	reGoClass    = regexp.MustCompile(`append\(out, "(rf-[a-z-]+)"\)`)
 	reLineCmt    = regexp.MustCompile(`(?m)//.*$`)
 	reCSSCanvas  = regexp.MustCompile(`--rf-canvas:\s*([^;]+);`)
+	reCSSFont    = regexp.MustCompile(`--rf-font-family:\s*([^;]+);`)
 )
 
 func readSharedTS(t *testing.T, path string) string {
@@ -256,6 +260,37 @@ func TestDesignDarkCanvasParity(t *testing.T) {
 	}
 	if got := strings.TrimSpace(m[1]); got != designDarkCanvas {
 		t.Fatalf("холст тёмной темы разошёлся:\n  Go:  %q\n  CSS: %q", designDarkCanvas, got)
+	}
+}
+
+// Дефолтное семейство — второе значение, продублированное в Go (DesignFontDefault):
+// по нему сервер ставит <link rel=preload>, а рисует форму :root fields.css. Разойдутся —
+// preload приедет за файлом, который никому не нужен, а настоящий шрифт формы браузер
+// начнёт качать только дойдя до @font-face: форма мигнёт системным начертанием ровно на
+// тех формах, где автор ничего не настраивал, то есть на большинстве.
+//
+// Сравнивается СТЕК целиком, а не имя семейства: стек в CSS и стек в designFontStack —
+// это одна строка в двух местах, и разъехаться она может любым концом.
+func TestDesignDefaultFontParity(t *testing.T) {
+	raw, err := os.ReadFile(fieldsCSSRel)
+	if err != nil {
+		t.Fatalf("fields.css недоступен (%s): %v", fieldsCSSRel, err)
+	}
+	body := string(raw)
+	i := strings.Index(body, ":root {")
+	if i < 0 {
+		t.Fatal(":root не найден — разбор fields.css сломался")
+	}
+	m := reCSSFont.FindStringSubmatch(body[i:])
+	if m == nil {
+		t.Fatal("--rf-font-family не найден в :root — разбор fields.css сломался")
+	}
+	// В CSS объявление может быть переносным (значение с новой строки) — схлопываем
+	// пробелы, иначе тест краснел бы от переформатирования.
+	got := strings.Join(strings.Fields(m[1]), " ")
+	want := designFontStack[DesignFontDefault]
+	if got != want {
+		t.Fatalf("дефолтный шрифт разошёлся:\n  Go  (%s): %q\n  CSS (:root): %q", DesignFontDefault, want, got)
 	}
 }
 

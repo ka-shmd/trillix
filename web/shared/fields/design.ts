@@ -17,12 +17,18 @@ import type { FormDesign } from '@entities/formSchema'
 // плотность — один множитель на все три интервала, а не три числа.
 const DENSITY_SCALE: Record<string, string> = { compact: '0.75', normal: '1', roomy: '1.25' }
 
-// Стеки шрифтов. Системный нулевого веса и потому дефолт; у остальных тот же
-// системный хвост на случай, если самохостный файл не догрузился.
+// Стеки шрифтов. Системный весит ноль байт; у остальных тот же системный хвост на
+// случай, если самохостный файл не догрузился, — и хвост подбирается ПО РИСУНКУ, а не
+// копируется: у антиквы он засечный, иначе форма на секунду загрузки становится
+// гротескной, то есть другой формой.
 const FONT_STACK: Record<string, string> = {
   system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   inter: 'Inter, system-ui, -apple-system, sans-serif',
   golos: "'Golos Text', system-ui, -apple-system, sans-serif",
+  manrope: 'Manrope, system-ui, -apple-system, sans-serif',
+  onest: 'Onest, system-ui, -apple-system, sans-serif',
+  montserrat: 'Montserrat, system-ui, -apple-system, sans-serif',
+  lora: "Lora, Georgia, 'Times New Roman', serif",
 }
 
 // Состав переменных — контракт с Go-близнецом, поэтому он читается СПИСКОМ, а не

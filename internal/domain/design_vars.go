@@ -25,13 +25,28 @@ import (
 // плотность — один множитель на все три интервала, а не три числа.
 var designDensityScale = map[string]string{"compact": "0.75", "normal": "1", "roomy": "1.25"}
 
-// Стеки шрифтов. Системный — нулевого веса и потому дефолт; остальные подключаются
-// самохостом (@font-face приезжает слайсом 4), здесь только имя семейства с тем же
-// системным хвостом на случай, если файл не догрузился.
+// DesignFontDefault — семейство незаданного шрифта: им набрана форма, пока автор не
+// выбрал другое. Не «system»: системный стек даёт три разных формы на трёх ОС, и форма
+// без настроек выглядела бы не выбранной, а случайной (решение владельца 2026-08-15).
+//
+// Зеркало --rf-font-family в :root fields.css — там значение РИСУЕТСЯ, здесь по нему
+// ставится <link rel=preload>. Разъедутся — форма поедет системным шрифтом до тех пор,
+// пока браузер не дойдёт до @font-face, то есть мигнёт. Сторожит паритет-тест.
+const DesignFontDefault = "inter"
+
+// Стеки шрифтов. Системный весит ноль байт и файлов не имеет; остальные подключаются
+// самохостом (@font-face в fields.css), здесь только имя семейства с тем же системным
+// хвостом на случай, если файл не догрузился.
+// Хвост подбирается ПО РИСУНКУ, а не копируется: у антиквы он засечный, иначе форма
+// на секунду загрузки становится гротескной, то есть другой формой.
 var designFontStack = map[string]string{
-	"system": "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-	"inter":  "Inter, system-ui, -apple-system, sans-serif",
-	"golos":  "'Golos Text', system-ui, -apple-system, sans-serif",
+	"system":     "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+	"inter":      "Inter, system-ui, -apple-system, sans-serif",
+	"golos":      "'Golos Text', system-ui, -apple-system, sans-serif",
+	"manrope":    "Manrope, system-ui, -apple-system, sans-serif",
+	"onest":      "Onest, system-ui, -apple-system, sans-serif",
+	"montserrat": "Montserrat, system-ui, -apple-system, sans-serif",
+	"lora":       "Lora, Georgia, 'Times New Roman', serif",
 }
 
 // designVarSpec описывает одну переменную: как её зовут и как достать значение.
@@ -184,23 +199,30 @@ func DesignThemeColor(d *FormDesign) string {
 // пунктуация, поэтому её скачает даже форма, в которой нет ни одной латинской буквы.
 // Сторож соответствия каталогу — design_fonts_test.go.
 var designFontFiles = map[string][]string{
-	"inter": {"inter-cyrillic", "inter-latin"},
-	"golos": {"golos-cyrillic", "golos-latin"},
+	"inter":      {"inter-cyrillic", "inter-latin"},
+	"golos":      {"golos-cyrillic", "golos-latin"},
+	"manrope":    {"manrope-cyrillic", "manrope-latin"},
+	"onest":      {"onest-cyrillic", "onest-latin"},
+	"montserrat": {"montserrat-cyrillic", "montserrat-latin"},
+	"lora":       {"lora-cyrillic", "lora-latin"},
 }
 
 // DesignFontFiles — базовые имена woff2 выбранного семейства для <link rel=preload>
-// на публичной странице. Системный стек и незаданный шрифт дают пустой срез: качать
-// нечего.
+// на публичной странице. Системный стек даёт пустой срез: качать нечего.
+//
+// НЕЗАДАННЫЙ шрифт — это не «нечего качать», а дефолт (DesignFontDefault), и качать его
+// надо тем более: таких форм большинство. Отсюда же форма без оформления вовсе (d == nil).
 //
 // Зачем preload вообще: шрифт объявлен в CSS, а браузер тянет файл, только когда
 // увидит текст, которому тот назначен, — то есть уже после того, как загрузился
 // бандл и вторым запросом приехала схема. Знать шрифт формы до этого может ровно
 // один участник — сервер, у которого снапшот уже в руках.
 func DesignFontFiles(d *FormDesign) []string {
-	if d == nil {
-		return nil
+	font := DesignFontDefault
+	if d != nil && d.Font != "" {
+		font = d.Font
 	}
-	return designFontFiles[d.Font]
+	return designFontFiles[font]
 }
 
 // DesignFontBases — базовые имена ВСЕХ файлов шрифтов каталога, по алфавиту. Нужны

@@ -110,8 +110,9 @@ describe('«@» на полотне', () => {
     typeRich('@')
     expect(menuText()).toContain('Имя')
     // «@» остаётся литералом в тексте, как «/» у слеш-меню: меню — надстройка над
-    // набором, а не режим ввода.
-    expect(textOf(store, 'cap2')).toEqual([{ t: '@' }])
+    // набором, а не режим ввода. Марка `b` — досев пустой строки подписи (RichLine,
+    // applyDefaultMarks): жирность заголовков живёт в документе.
+    expect(textOf(store, 'cap2')).toEqual([{ t: '@', m: ['b'] }])
   })
 
   it('Enter ставит чип: имя вопроса в тексте, id источника в ref', () => {
@@ -185,7 +186,7 @@ describe('«@» на полотне', () => {
       fireEvent.keyDown(line(), { code: 'Escape' })
     })
     expect(menuText()).toBeNull()
-    expect(textOf(store, 'cap2')).toEqual([{ t: '@им' }])
+    expect(textOf(store, 'cap2')).toEqual([{ t: '@им', m: ['b'] }])
   })
 
   // Ссылаться можно только назад (§4 спеки), и список это обещание держит: в ПЕРВОЙ

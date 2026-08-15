@@ -10,7 +10,8 @@ export const heading: EditorKind = {
   row: {
     surface: 'text',
     name: 'Заголовок раздела',
-    className: 'rf-heading placeholder:font-semibold',
+    className: 'rf-heading',
     lineH: 'h-7',
+    bold: true,
   },
 }

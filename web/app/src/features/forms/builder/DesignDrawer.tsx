@@ -11,6 +11,7 @@ import {
   DESIGN_BUTTON_WIDTHS,
   DESIGN_DENSITIES,
   DESIGN_FONTS,
+  DESIGN_FONT_DEFAULT,
   DESIGN_OUTLINES,
   MAX_FONT_SIZE,
   MAX_COLUMN,
@@ -265,10 +266,10 @@ export function DesignDrawer({
             <Field label="Шрифт" id="design-font">
               <Choice
                 id="design-font"
-                value={design?.font ?? 'system'}
+                value={design?.font ?? DESIGN_FONT_DEFAULT}
                 options={DESIGN_FONTS}
                 titles={FONT_TITLES}
-                onChange={(v) => setDesign(patchTop(design, 'font', dflt(v, 'system')))}
+                onChange={(v) => setDesign(patchTop(design, 'font', dflt(v, DESIGN_FONT_DEFAULT)))}
               />
             </Field>
             {/* Ширина — числом, а не выбором из трёх: три варианта покрывают три
@@ -743,6 +744,10 @@ const FONT_TITLES: Record<string, string> = {
   system: 'Системный',
   inter: 'Inter',
   golos: 'Golos Text',
+  manrope: 'Manrope',
+  onest: 'Onest',
+  montserrat: 'Montserrat',
+  lora: 'Lora',
 }
 const OUTLINE_TITLES: Record<string, string> = {
   shadow: 'Тень',

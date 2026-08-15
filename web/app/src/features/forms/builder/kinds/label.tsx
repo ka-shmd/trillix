@@ -10,7 +10,8 @@ export const label: EditorKind = {
   row: {
     surface: 'text',
     name: 'Подпись поля',
-    className: 'rf-label rf-label--sm placeholder:font-medium',
+    className: 'rf-label rf-label--sm',
     lineH: 'h-6',
+    bold: true,
   },
 }

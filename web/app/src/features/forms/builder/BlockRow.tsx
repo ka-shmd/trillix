@@ -50,7 +50,7 @@ import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { BlockRuleDialog, OptionRuleDialog } from './logic/LogicDialog'
 import { ruleSummary } from './logic/model'
-import { rowFacts } from './kinds/index'
+import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { DRAG_ACTIVATION_DISTANCE, DRAGGED_FADE, DRAGGED_LOOK, noLayoutAnimation } from './dnd'
 import { useBuilderStore } from './storeContext'
@@ -60,7 +60,7 @@ import { useCaptionGuard } from './captionGuard'
 import { textCaret } from './caret'
 import { RichLine } from './RichLine'
 import { richCaret } from './richCaret'
-import { cutRange } from './richText'
+import { BOLD_MARKS, cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
 import { BlockActionMenu } from './BlockActionMenu'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -249,8 +249,10 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       //
       // ИНТЕРВАЛ ПЕРЕД СТРОКОЙ — её собственный ВЕРХНИЙ отступ (14px внутри вопроса,
       // см. .rf-group в fields.css), а не gap контейнера: интервал принадлежит блоку и
-      // может быть задан ему отдельно. mt-2 = 8px, потому что 6px из четырнадцати уже
-      // отдал padding предыдущей строки, — то же вычитание, что у -mb-1.5 снизу.
+      // может быть задан ему отдельно. Из четырнадцати вычитается 6px — их уже отдал
+      // padding предыдущей строки, то же вычитание, что у -mb-1.5 снизу; сами 14px
+      // множатся на --rf-density (плотность автора, фаза 22), вычет 6px — нет: он
+      // компенсирует padding, а padding за плотностью не едет.
       // Первая строка вопроса интервала не несёт (его несёт сам вопрос), и её -mt-1.5
       // оставляет li обнимать чистый контент — на это опирается рейл группы.
       // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
@@ -261,7 +263,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
-      className={`group relative rounded-md py-1.5 -mb-1.5 ${firstInGroup ? '-mt-1.5' : 'mt-2'} ${
+      className={`group relative rounded-md py-1.5 -mb-1.5 ${
+        firstInGroup ? '-mt-1.5' : 'mt-[calc(0.875rem*var(--rf-density)_-_0.375rem)]'
+      } ${
         isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''
       }`}
     >
@@ -525,6 +529,9 @@ const BlockRowBody = memo(function BlockRowBody({
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
   const captionCls = isTextRow ? row.className : ''
+  // Чем набирается ПУСТАЯ строка этого типа. Факт объявлен у типа (kinds/<type>.tsx),
+  // ветки по типу здесь нет намеренно — см. шапку BlockRow.
+  const captionMarks = textIsBold(block.type) ? BOLD_MARKS : undefined
   // Якорь кластера у блока без подписи: обёртка ПОЛЯ, если она есть (placeholder-типы),
   // иначе сама строка. Кластер один и тот же элемент — меняется только предок, от
   // которого считается его absolute (см. места отрисовки ниже).
@@ -819,6 +826,7 @@ const BlockRowBody = memo(function BlockRowBody({
                 // тексте согласия. Источники ищутся ОТ ЭТОГО блока, поэтому строка и
                 // передаёт свой id.
                 mentionsFor={block.id}
+                defaultMarks={captionMarks}
                 onChange={onLabelChange}
                 onFocus={() => {
                   setLabelFocused(true)
@@ -1249,7 +1257,7 @@ function AnswerField({
 
   // Обёртка — якорь глифа типа и кластера отметок; ширину берёт из .rf-field-wrap
   // (index.css), где стоит тот же потолок --rf-input-max, что у поля. Просвет
-  // подпись→поле (14px) даёт групповой контейнер (gap-3.5 у GroupRow) — свой mt тут не
+  // подпись→поле (14px) даёт групповой контейнер (зазор внутреннего ряда в GroupRow) — свой mt тут не
   // нужен (был бы двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
     <FieldWrap block={block} wide={wide} glyphTop={multiline} marks={marks}>

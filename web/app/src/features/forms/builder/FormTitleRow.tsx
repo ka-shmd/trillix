@@ -21,6 +21,8 @@ import { useRowFocus } from './activeRow'
 import { useRegisterFocusTarget } from './focusEngine'
 import { RichLine } from './RichLine'
 import { richCaret } from './richCaret'
+import { textIsBold } from './kinds/index'
+import { BOLD_MARKS } from './richText'
 import { chords } from './shortcuts'
 import type { UpdateKind } from './store'
 import { useBuilderStore } from './storeContext'
@@ -85,6 +87,10 @@ export function FormTitleRow({ block, onEnter }: { block: Block; onEnter: () => 
         // Плейсхолдер тут атрибутом не задаётся: у contenteditable его нет, надпись
         // рисует правило [data-rich-line]:empty::before в richLine.css.
         className="block w-full bg-transparent outline-none rf-title"
+        // Заголовок формы набирается жирным. Спрашиваем реестр тем же вопросом, что и
+        // строки BlockRow (у form_title своей строки в реестре нет, и ответ на этот
+        // вопрос там особый — см. textIsBold).
+        defaultMarks={textIsBold(block.type) ? BOLD_MARKS : undefined}
         onChange={onChange}
         onKeyDown={onKeyDown}
         onFocus={rowFocus.onFocus}

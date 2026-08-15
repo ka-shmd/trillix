@@ -9,6 +9,8 @@ import {
 } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { textIsBold } from './kinds/index'
+import { applyDefaultMarks, BOLD_MARKS } from './richText'
 import { chords } from './shortcuts'
 import { typeIcon } from './blockTypeIcons'
 import { Button } from '@/components/ui/button'
@@ -167,7 +169,10 @@ function sampleBlock(type: BlockType): Block {
     id: 'sample',
     groupId: 'sample',
     type,
-    text: textFromString(text),
+    // Жирность заголовков и подписей живёт в ТЕКСТЕ (марка `b`), поэтому образец обязан
+    // её нести: без марки картинка обещала бы обычный вес, а вставленный блок оказался
+    // бы жирным — то есть образец врал бы ровно про то, ради чего его и смотрят.
+    text: applyDefaultMarks(textFromString(text), textIsBold(type) ? BOLD_MARKS : []),
   }
   if (isChoiceType(type)) {
     return {

@@ -338,9 +338,13 @@ func TestPublicHTML_DarkTheme_ShellIsThemedFromFirstFrame(t *testing.T) {
 	}
 }
 
-// Форма, у которой оформление не трогали, обязана отдаваться БАЙТ В БАЙТ как до
-// фазы: плейсхолдер исчезает вместе со своим пробелом, ни класса, ни стиля, ни
-// theme-color, ни preload. Это первый пункт DoD фазы, а не мелочь.
+// Форма, у которой оформление не трогали, обязана отдаваться без следов оболочки:
+// плейсхолдер исчезает вместе со своим пробелом, ни класса, ни стиля, ни theme-color.
+//
+// ИСКЛЮЧЕНИЕ — preload дефолтного семейства: с 2026-08-15 форма без настроек набрана
+// не системным стеком, а Inter (DesignFontDefault), и качать его надо тем более —
+// таких форм большинство. Всё остальное в этом списке по-прежнему признак того, что
+// автор что-то настраивал.
 func TestPublicHTML_NoDesign_ShellUnchanged(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{
 		Title:     "Форма",
@@ -353,9 +357,14 @@ func TestPublicHTML_NoDesign_ShellUnchanged(t *testing.T) {
 	if !strings.Contains(body, "<html lang=\"ru\">\n") {
 		t.Fatalf("тег <html> изменился у формы без оформления:\n%s", body)
 	}
-	for _, unwanted := range []string{"rf-theme", "--rf-", "theme-color", "woff2\">"} {
+	for _, unwanted := range []string{"rf-theme", "--rf-", "theme-color", "golos-"} {
 		if strings.Contains(body, unwanted) {
 			t.Fatalf("у формы без оформления в HTML появилось %q:\n%s", unwanted, body)
+		}
+	}
+	for _, want := range []string{"inter-cyrillic", "inter-latin"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("нет preload дефолтного семейства (%s):\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, shellMarker) {
