@@ -14,8 +14,9 @@ export const text: EditorKind = {
   row: {
     surface: 'text',
     name: null,
-    className: 'rf-text placeholder:font-normal',
+    className: 'rf-text',
     lineH: 'h-6',
+    bold: false,
     placeholderOnFocusOnly: true,
   },
 }

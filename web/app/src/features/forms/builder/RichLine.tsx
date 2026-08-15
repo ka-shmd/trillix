@@ -27,6 +27,7 @@ import { MAX_SPANS, type Mark, type Span, plainText, sameRichText } from '@entit
 import { chords, markChord } from './shortcuts'
 import {
   activeStyle,
+  applyDefaultMarks,
   cutRange,
   insertMention,
   setBg,
@@ -90,6 +91,10 @@ export interface RichLineProps {
   onFocus: () => void
   onBlur: (e: FocusEvent<HTMLElement>) => void
   elRef: (el: HTMLDivElement | null) => void
+  // Марки, которыми набирается текст в ПУСТОЙ строке: у заголовков и подписей это `b`
+  // (жирность там лежит в документе, а не в весе поверхности — см. .rf-b в fields.css).
+  // Пусто/не передано — строка набирается без оформления, как абзац.
+  defaultMarks?: readonly Mark[]
   // id блока, которому принадлежит строка. Есть — в строке работает подстановка ответа
   // по «@» (docs/design/mentions.md); нет — не работает вовсе. Заголовку формы её не
   // передают намеренно: он стоит первой строкой документа, вопросов выше него не бывает,
@@ -102,6 +107,7 @@ export interface RichLineProps {
 // означал бы ре-рендер этой строки на каждую правку ЛЮБОГО блока полотна — ровно тот
 // механизм, которым фаза 21 дважды роняла перф (STATUS, «подписка на s.blocks»).
 const NO_BLOCKS: never[] = []
+const NO_MARKS: readonly Mark[] = []
 
 export function RichLine({
   value,
@@ -113,6 +119,7 @@ export function RichLine({
   onFocus,
   onBlur,
   elRef,
+  defaultMarks = NO_MARKS,
   mentionsFor,
 }: RichLineProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -274,9 +281,28 @@ export function RichLine({
     const el = ref.current
     if (!el) return
     const spans = spansFromDom(el)
+    // ПУСТАЯ СТРОКА ОБЯЗАНА БЫТЬ ПУСТЫМ УЗЛОМ. Подсказку рисует правило
+    // `[data-rich-line]:empty::before` (richLine.css), а `:empty` — это «ни одного
+    // ребёнка», не «нет текста». Стирая последний символ, браузер оставляет за собой
+    // остаток: служебный <br> либо опустевший <span> той разметки, что была на тексте, —
+    // и подсказка не возвращается, хотя строка пуста. Ресинк ниже её не чинит: модель
+    // пуста, текст пуст, расхождения нет, и он выходит первой же строкой.
+    //
+    // Заодно это делает досев предсказуемым: следующий символ набирается заново, с
+    // марками своего типа, а не тем, что случайно уцелело от прошлого текста.
+    if (!spans.length && el.firstChild) {
+      el.replaceChildren()
+      if (el.ownerDocument.activeElement === el) setCaret(el, 0)
+    }
+    // last — что говорит ПОВЕРХНОСТЬ, поэтому досев марок сюда не идёт: расхождение с
+    // моделью и есть то, чем ресинк ниже перепечатывает первый символ уже жирным (и
+    // возвращает каретку — она в координатах плоского текста, а досев их не двигает).
     last.current = spans
     const { value: text, caret } = richCaret(el).text()
-    onChange(spans, caret)
+    // Досев — только когда строка БЫЛА пуста: дальше оформление ведёт браузер, продолжая
+    // соседний кусок. Условие здесь, а не в помощнике: «пусто» — это про модель до
+    // правки, и знает о ней только строка.
+    onChange(value.length === 0 ? applyDefaultMarks(spans, defaultMarks) : spans, caret)
     syncMention(text, caret)
   }
 
@@ -448,6 +474,10 @@ export function RichLine({
       }}
       data-rich-line=""
       data-ph={placeholder}
+      // Метка «эта строка набирается жирным» — для вида ПОДСКАЗКИ (richLine.css). Из тех
+      // же defaultMarks, что и досев: подсказка обязана показывать текст таким, каким он
+      // родится, иначе она обещает обычный вес, а автор получает жирный.
+      data-bold={defaultMarks.includes('b') ? '' : undefined}
       contentEditable
       suppressContentEditableWarning
       role="textbox"

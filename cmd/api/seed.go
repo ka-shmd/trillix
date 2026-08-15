@@ -159,31 +159,38 @@ func runSeedUser(args []string, cfg config.Config, log *slog.Logger) error {
 	return nil
 }
 
+// caption — текст ПОДПИСИ вопроса: жирный маркой `b`, а не весом поверхности
+// (миграция 0025). Через TextFromString подписи демо-формы вышли бы обычным текстом —
+// то есть не так, как выглядит форма, собранная руками в редакторе.
+func caption(s string) []domain.Span {
+	return []domain.Span{{T: s, M: []domain.Mark{domain.MarkBold}}}
+}
+
 // v1/v2 схемы демо-формы экспорта. v2 переименовывает опцию (o_fr), убирает вопрос
 // b_phone и добавляет b_city — так CSV показывает объединение колонок (телефон живёт
 // колонкой для ответов v1), подписи опций из версии ответа и пустые ячейки.
 func exportSchemaV1() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: domain.TextFromString("Ваше имя")},
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: caption("Ваше имя")},
 		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
-		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: domain.TextFromString("Как вы о нас узнали?")},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: caption("Как вы о нас узнали?")},
 		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "t_phone", GroupID: "g_phone", Type: domain.BlockTitle, Text: domain.TextFromString("Телефон")},
+		{ID: "t_phone", GroupID: "g_phone", Type: domain.BlockTitle, Text: caption("Телефон")},
 		{ID: "b_phone", GroupID: "g_phone", Type: domain.BlockShortText},
 	}}
 }
 
 func exportSchemaV2() domain.FormSchema {
 	return domain.FormSchema{SchemaVersion: domain.SchemaVersion, Blocks: []domain.Block{
-		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: domain.TextFromString("Ваше имя")},
+		{ID: "t_name", GroupID: "g_name", Type: domain.BlockTitle, Text: caption("Ваше имя")},
 		{ID: "b_name", GroupID: "g_name", Type: domain.BlockShortText, Required: true},
-		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: domain.TextFromString("Как вы о нас узнали?")},
+		{ID: "t_src", GroupID: "g_src", Type: domain.BlockTitle, Text: caption("Как вы о нас узнали?")},
 		{ID: "b_src", GroupID: "g_src", Type: domain.BlockSingleChoice, Settings: domain.BlockSettings{
 			Options: []domain.Option{{ID: "o_fr", Label: "Друзья (реф.)"}, {ID: "o_se", Label: "Поиск"}, {ID: "o_ad", Label: "Реклама"}},
 		}},
-		{ID: "t_city", GroupID: "g_city", Type: domain.BlockTitle, Text: domain.TextFromString("Город")},
+		{ID: "t_city", GroupID: "g_city", Type: domain.BlockTitle, Text: caption("Город")},
 		{ID: "b_city", GroupID: "g_city", Type: domain.BlockShortText},
 	}}
 }

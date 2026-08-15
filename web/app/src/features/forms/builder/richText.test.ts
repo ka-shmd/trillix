@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { plainText, type Span } from '@entities/formSchema'
 import {
   activeStyle,
+  applyDefaultMarks,
   caretOffset,
   cutRange,
   hasMarkThroughout,
@@ -78,6 +79,26 @@ describe('переключатель марки', () => {
     const all = toggleMark(partial, 0, 4, 'b')
     expect(hasMarkThroughout(all, 0, 4, 'b')).toBe(true)
     expect(all).toEqual([{ t: 'абвг', m: ['b'] }])
+  })
+})
+
+// Досев марок пустой строки (2026-08-15): жирность заголовков и подписей лежит в
+// документе маркой `b`, поэтому первый символ в пустом заголовке обязан родиться с ней.
+describe('марки пустой строки', () => {
+  it('кусок без марок получает досеянную', () => {
+    expect(applyDefaultMarks([{ t: 'Имя' }], ['b'])).toEqual([{ t: 'Имя', m: ['b'] }])
+  })
+
+  it('чужие марки сохраняются, своя не дублируется', () => {
+    expect(applyDefaultMarks([{ t: 'а', m: ['i'] }, { t: 'б', m: ['b'] }], ['b'])).toEqual([
+      { t: 'а', m: ['i', 'b'] },
+      { t: 'б', m: ['b'] },
+    ])
+  })
+
+  it('пустой набор не трогает текст вовсе — строка абзаца остаётся как есть', () => {
+    const spans: Span[] = [{ t: 'Абзац' }]
+    expect(applyDefaultMarks(spans, [])).toBe(spans)
   })
 })
 

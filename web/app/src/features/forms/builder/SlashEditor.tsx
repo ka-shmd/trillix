@@ -949,9 +949,14 @@ export function SlashEditor({
           Числа зеркалят .rf-page.rf-covered (fields.css) — правишь там, правь и здесь.
           Утилитой с var() эти два числа НЕ объединять: pt-[var(--rf-cover-gap)] схлопывал
           отступ в ноль (2026-08-15), полотно оставалось без воздуха над заголовком. */}
+            {/* Семейство и выравнивание — ЗДЕСЬ, на аналоге .rf-page, а не глубже: у
+          превью и рендерера оба свойства объявлены один раз на холсте и наследуются
+          вниз (поля и подписи берут font-family: inherit). Полотно холста-класса не
+          носит — метрики оно держит своим Tailwind, — поэтому обе строки нужны ему
+          отдельно, иначе смена шрифта и выравнивания видна автору только в превью. */}
             <div
               ref={canvasRef}
-              className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 sm:px-20 sm:pb-24 ${
+              className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 [font-family:var(--rf-font-family)] [text-align:var(--rf-align)] sm:px-20 sm:pb-24 ${
                 cover ? 'pt-15 sm:pt-17' : 'pt-10 sm:pt-36'
               }`}
             >
@@ -1063,11 +1068,15 @@ export function SlashEditor({
                 <SortableContext items={groupIdList} strategy={canvasSorting}>
                   {/* Ритм полотна = ритм превью/рендерера (этап 13.3). ИНТЕРВАЛ НЕСЁТ САМ
                 ЭЛЕМЕНТ — это его ВЕРХНИЙ отступ, «место передо мной», а не gap
-                контейнера (2026-08-13, см. .rf-form в fields.css): mt-7 (28px) у ряда
+                контейнера (2026-08-13, см. .rf-form в fields.css): 28px у ряда
                 и у вопроса в колонке = .rf-form, 14px внутри вопроса даёт строка
-                (BlockRow). У контейнера остаётся только mt-16 (64px) заголовок
+                (BlockRow). У контейнера остаётся только 64px заголовок
                 формы→первый блок = gap .rf-page (48px) + margin-bottom .rf-title
                 (16px, добавка сверх ритма — fields.css).
+                КАЖДОЕ ЧИСЛО РИТМА УМНОЖЕНО НА --rf-density — тем же множителем, что в
+                fields.css: плотность у автора одна на все три поверхности, и литерал
+                здесь означал бы полотно, которое за настройкой не едет. Добавка 16px
+                от .rf-title множителю не подчиняется — она не интервал ритма.
                 py-1.5 строк в вертикаль НЕ входит (там -mb-1.5 и укороченный на
                 столько же mt, см. BlockRow), поэтому просвет здесь — чистый контент и
                 совпадает с превью замером (критерий 13.3 — ноль расхождений). */}
@@ -1078,7 +1087,7 @@ export function SlashEditor({
                 превью и рендерером один в один: .rf-row → .rf-cell → группы.
                 DOM-порядок = порядок документа, sortable-вселенная не тронута —
                 обёртки не заводят вложенных SortableContext, только лэйаут. */}
-                  <ol className="mt-16 flex flex-col">
+                  <ol className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex flex-col">
                     {rows.map((row, rowIndex) => {
                       const rowId = row[0]![0]!.id
                       // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
@@ -1141,15 +1150,15 @@ export function SlashEditor({
                         // Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
                         // fields.css: иначе полколонки остались бы и на телефоне, где у
                         // респондента ряд разваливается.
-                        // mt-7 — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
-                        // ряда его нет, начало полотна задаёт mt-16 от заголовка формы.
-                        // gap-7 здесь — зазор между КОЛОНКАМИ (на мобильном ряд
+                        // mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
+                        // ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
+                        // gap здесь — зазор между КОЛОНКАМИ (на мобильном ряд
                         // разваливается в стек, и тот же зазор становится вертикальным),
-                        // как .rf-row.
+                        // как .rf-row. Оба множатся на --rf-density, как и там.
                         <div
                           key={rowId}
-                          className={`relative flex flex-col gap-7 sm:flex-row ${
-                            rowIndex === 0 ? '' : 'mt-7'
+                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row ${
+                            rowIndex === 0 ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
                           }`}
                         >
                           {zones && canAdd && (
@@ -1764,11 +1773,13 @@ const GroupRow = memo(function GroupRow({
       // значит «тащу над этим», а не «хочу это править». Гасится на ГРУППЕ, а не на
       // строке: строка не знает, что тащат её же вопрос. Перетаскиваемой строке
       // наведение возвращает pointer-events-auto (BlockRow) — ей нужен курсор grabbing.
-      // mt-7 — интервал ПЕРЕД вопросом (28px, .rf-form/.rf-cell у превью): он разводит
+      // mt — интервал ПЕРЕД вопросом (28px × --rf-density, .rf-form/.rf-cell у превью): он разводит
       // стопку в колонке ряда, а у вопроса, открывающего колонку, его нет — там
       // расстояние держит сам ряд. ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста,
       // и паддинг увёл бы рейл группы вместе с линией вставки.
-      className={`group/grp relative w-full rounded-md ${headOfCell ? '' : 'mt-7'} ${
+      className={`group/grp relative w-full rounded-md ${
+        headOfCell ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
+      } ${
         isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''
       }`}
     >
@@ -1809,7 +1820,7 @@ const GroupRow = memo(function GroupRow({
         <div className="flex flex-col">
           {/* Второй уровень рядов (фаза 15, §6.4/§6.7): пара «подпись | поле» встаёт
               бок о бок. Раскладчик тот же, что у превью и рендерера (packGroupRows),
-              и вид тот же: зазор 14px (gap-3.5 = .rf-group) и выравнивание по центру
+              и вид тот же: зазор 14px × --rf-density (= .rf-group) и выравнивание по центру
               (items-center = align-items у .rf-group > .rf-row). Ряд из одного
               остаётся прямой строкой колонки — лишняя обёртка сместила бы кластеры. */}
           {packGroupRows(group.blocks).map((innerRow, ri) => {
@@ -1871,7 +1882,11 @@ const GroupRow = memo(function GroupRow({
             return (
               <div
                 key={innerRow[0]![0]!.id}
-                className={pair ? 'flex items-center gap-3.5' : 'contents'}
+                className={
+                  pair
+                    ? 'flex items-center gap-[calc(0.875rem*var(--rf-density))]'
+                    : 'contents'
+                }
               >
                 {innerRow.map((cell) => (
                   // min-w-0 обязателен, как у .rf-cell: без него длинная подпись не
@@ -1898,11 +1913,12 @@ function SubmitButtonEditor() {
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
 
   return (
-    // 48px форма→кнопка отправки = gap .rf-page у превью/рендерера (этап 13.3).
+    // 48px × --rf-density форма→кнопка отправки = gap .rf-page у превью/рендерера
+    // (этап 13.3; множитель плотности — фаза 22).
     // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
     // задаётся justify-content ряда, и без общей коробки настройка работала бы на
     // двух поверхностях из трёх. Ряд из одного элемента ничего не портит.
-    <div className="mt-12 rf-nav">
+    <div className="mt-[calc(3rem*var(--rf-density))] rf-nav">
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
@@ -1961,7 +1977,9 @@ function EmptyStarter({
       onKeyDown={onKeyDown}
       onClick={() => onStart()}
       {...rowFocus}
-      className="mt-16 cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
+      // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
+      // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
+      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <p>
         Нажмите <Kbd>Enter</Kbd>, чтобы начать

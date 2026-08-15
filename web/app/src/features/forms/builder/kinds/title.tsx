@@ -12,7 +12,8 @@ export const title: EditorKind = {
   row: {
     surface: 'text',
     name: 'Заголовок вопроса',
-    className: 'rf-label placeholder:font-semibold',
+    className: 'rf-label',
     lineH: 'h-7',
+    bold: true,
   },
 }

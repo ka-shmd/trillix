@@ -15,8 +15,9 @@ export const consent: EditorKind = {
   row: {
     surface: 'text',
     name: 'Текст согласия',
-    className: 'rf-consent placeholder:font-normal',
+    className: 'rf-consent',
     lineH: 'h-6',
+    bold: false,
     mark: 'check',
   },
 }
