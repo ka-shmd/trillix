@@ -366,12 +366,19 @@ export function AddChrome({ formId }: { formId: string }) {
         className="hidden"
         onChange={onFile}
       />
-      {/* bottom-0 + pb-4 вместо bottom-4: 16px зазора до заголовка становятся ПАДДИНГОМ
+      {/* bottom-0 + pb вместо bottom-N: зазор до заголовка становится ПАДДИНГОМ
         коробки, а не пустым местом снаружи неё — иначе курсор, идущий от заголовка к
         кнопкам, на середине пути покидал бы group/title (там ничего нет) и наведение
-        гасло раньше, чем курсор доходил. Видимое положение кнопок то же самое: паддинг
-        снизу отодвигает их контент от нижнего края коробки ровно на те же 16px. */}
-      <div className="absolute bottom-0 left-0 flex items-center gap-4 whitespace-nowrap pb-4 text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
+        гасло раньше, чем курсор доходил.
+
+        pb-3/sm:pb-4 — не наугад: коробка растёт вверх от заголовка внутри промежутка
+        «обложка → заголовок» (SlashEditor, pt-15/sm:pt-17 = 60/68px), а этот отступ
+        держит строку кнопок (20px, text-sm) БЛИЗКО к заголовку — 12/16px. Остаток
+        промежутка, 28/32px, достаётся обложке сверху: воздуха там заметно больше,
+        чем до заголовка, — так и задумано. Меняешь верхний отступ в SlashEditor/
+        fields.css — держи pb здесь заметно меньше половины, иначе перекос обратно
+        уедет к обложке. */}
+      <div className="absolute bottom-0 left-0 flex items-center gap-4 whitespace-nowrap pb-3 sm:pb-4 text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
         {!cover && (
           // Обложка заводится ЦВЕТОМ, а не диалогом выбора файла: один клик — и она
           // уже есть, а картинка ставится следующим жестом с той же полосы. Пустой

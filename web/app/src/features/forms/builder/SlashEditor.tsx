@@ -944,12 +944,15 @@ export function SlashEditor({
             <CoverArea formId={formId} />
             {/* relative — якорь координат оверлеев драга (updateFrame меряет относительно него).
           Верхний отступ с обложкой поджимается: 144px пустоты над заголовком там уже
-          лишние, воздух дала сама обложка. Числа зеркалят .rf-page.rf-covered
-          (fields.css) — правишь там, правь и здесь. */}
+          лишние, воздух дала сама обложка. Остаётся 68px (60 мобильный) — внутри этого
+          зазора висит кластер кнопок «завести» (AddChrome), absolute и без своей высоты.
+          Числа зеркалят .rf-page.rf-covered (fields.css) — правишь там, правь и здесь.
+          Утилитой с var() эти два числа НЕ объединять: pt-[var(--rf-cover-gap)] схлопывал
+          отступ в ноль (2026-08-15), полотно оставалось без воздуха над заголовком. */}
             <div
               ref={canvasRef}
               className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 sm:px-20 sm:pb-24 ${
-                cover ? 'pt-5 sm:pt-8' : 'pt-10 sm:pt-36'
+                cover ? 'pt-15 sm:pt-17' : 'pt-10 sm:pt-36'
               }`}
             >
             {/* Оверлеи ниже — absolute ДО списка в DOM (строки positioned и рисуются
