@@ -116,6 +116,9 @@ export function LogicBlockEditor({ block }: { block: Block }) {
               logicId={block.id}
               value={null}
               onChange={(next) => setActions([next])}
+              // Меню есть и здесь: второе действие добавляется, пока первое ещё не
+              // выбрано. Удалять и дублировать нечего — этих пунктов нет.
+              menu={{ onAdd: () => setActions([defaultAction(blocks, block.id)]) }}
             />
           )}
         </div>
@@ -189,7 +192,9 @@ function ActionRow({
   // null — незаполненная строка: вид действия ещё не выбран.
   value: LogicAction | null
   onChange: (next: LogicAction) => void
-  menu?: { onAdd?: () => void; onRemove: () => void; onDuplicate?: () => void }
+  // Пункты по отдельности необязательны: у незаполненной строки нечего удалять и
+  // дублировать, у полного списка нечего добавлять.
+  menu?: { onAdd?: () => void; onRemove?: () => void; onDuplicate?: () => void }
 }) {
   // Вид, выбранный, но ещё не записанный в документ: так бывает, когда действию нужна
   // цель, а ниже блока её пока нет. Держать такое состояние в документе нельзя (пустая
@@ -258,8 +263,10 @@ function ActionRow({
         <RowMenu
           label="Действия со строкой"
           items={[
-            ...(menu.onAdd ? [{ icon: Plus, label: 'Добавить действие', onSelect: menu.onAdd }] : []),
-            { icon: Trash2, label: 'Удалить', onSelect: menu.onRemove },
+            ...(menu.onAdd
+              ? [{ icon: Plus, label: 'Добавить действие', onSelect: menu.onAdd }]
+              : []),
+            ...(menu.onRemove ? [{ icon: Trash2, label: 'Удалить', onSelect: menu.onRemove }] : []),
             ...(menu.onDuplicate
               ? [{ icon: Copy, label: 'Дублировать', onSelect: menu.onDuplicate }]
               : []),

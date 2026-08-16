@@ -189,16 +189,22 @@ export function ConditionEditor({
           sources={sources}
           value={null}
           onChange={(next) => onChange(asGroup([next], and))}
+          // Меню есть и здесь: второе условие добавляется, пока первое ещё не выбрано.
+          menu={
+            sources[0] ? { onAdd: () => onChange(asGroup([defaultLeaf(sources[0]!)], and)) } : undefined
+          }
         />
       )}
     </div>
   )
 }
 
+// Пункты по отдельности необязательны: у незаполненной строки нечего удалять,
+// дублировать и оборачивать — у неё есть только «добавить».
 type RowMenu = {
   onAdd?: () => void
-  onRemove: () => void
-  onDuplicate: () => void
+  onRemove?: () => void
+  onDuplicate?: () => void
   onWrap?: () => void
 }
 
@@ -326,8 +332,10 @@ function RowActions({ menu }: { menu: RowMenu }) {
       label="Действия с условием"
       items={[
         ...(menu.onAdd ? [{ icon: Plus, label: 'Добавить условие', onSelect: menu.onAdd }] : []),
-        { icon: Trash2, label: 'Удалить', onSelect: menu.onRemove },
-        { icon: Copy, label: 'Дублировать', onSelect: menu.onDuplicate },
+        ...(menu.onRemove ? [{ icon: Trash2, label: 'Удалить', onSelect: menu.onRemove }] : []),
+        ...(menu.onDuplicate
+          ? [{ icon: Copy, label: 'Дублировать', onSelect: menu.onDuplicate }]
+          : []),
         ...(menu.onWrap
           ? [{ icon: Repeat, label: 'Обернуть в группу', onSelect: menu.onWrap }]
           : []),

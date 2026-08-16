@@ -45,9 +45,9 @@ describe('ярус «Тогда»', () => {
     expect(screen.getByText('Выберите действие')).toBeTruthy()
   })
 
-  it('у незаполненной строки меню нет — удалять и дублировать нечего', () => {
+  it('меню есть и у незаполненной строки — второе действие добавляется оттуда', () => {
     setup({ when: { blockId: 'src', op: 'answered' } })
-    expect(rowMenus()).toHaveLength(0)
+    expect(rowMenus()).toHaveLength(1)
   })
 
   it('кнопки «+ Действие» под списком больше нет', () => {

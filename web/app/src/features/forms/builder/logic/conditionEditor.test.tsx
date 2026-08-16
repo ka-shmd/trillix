@@ -57,11 +57,12 @@ describe('пустое условие', () => {
     expect(screen.queryByText('Группа')).toBeNull()
   })
 
-  it('у незаполненной строки нет ни сравнения, ни значения, ни меню', () => {
+  it('у незаполненной строки нет ни сравнения, ни значения — но меню есть', () => {
     setup({ all: [] })
     expect(screen.queryByLabelText('Сравнение')).toBeNull()
     expect(screen.queryByLabelText('Значение')).toBeNull()
-    expect(actions()).toHaveLength(0)
+    // Второе условие добавляется, пока первое ещё не выбрано.
+    expect(actions()).toHaveLength(1)
   })
 })
 
