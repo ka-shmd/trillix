@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { textFromString, type Block } from '@entities/formSchema'
 import {
   DEFAULT_BLOCK_HEIGHT,
+  DEFAULT_WIDGET_WIDTH,
   frameUrl,
   iframeSnippet,
   prefillFields,
@@ -84,6 +85,72 @@ describe('scriptSnippet: настройки вида и предпросмотр
     expect(scriptSnippet({ ...base, preview: true })).toContain('data-preview="1"')
     expect(iframeSnippet(base)).not.toContain('preview=1')
     expect(iframeSnippet({ ...base, preview: true })).toContain('preview=1')
+  })
+})
+
+describe('scriptSnippet: настройки виджета', () => {
+  const widget: SnippetOptions = { ...base, mode: 'widget' }
+
+  // Панель ВСЕГДА присылает значения — умолчания в том числе, — поэтому проверяется
+  // именно «прислали дефолт», а не «не прислали ничего»: сниппет на чужой странице не
+  // должен нести строку, которая ничего не меняет.
+  it('угол, ширина и подложка пишутся только при отходе от умолчания', () => {
+    const plain = scriptSnippet({
+      ...widget,
+      position: 'bottom-right',
+      width: DEFAULT_WIDGET_WIDTH,
+      overlay: true,
+    })
+    expect(plain).not.toContain('data-position')
+    expect(plain).not.toContain('data-width')
+    expect(plain).not.toContain('data-overlay')
+    const tuned = scriptSnippet({
+      ...widget,
+      position: 'top-left',
+      width: 420,
+      overlay: false,
+    })
+    expect(tuned).toContain('data-position="top-left"')
+    expect(tuned).toContain('data-width="420"')
+    expect(tuned).toContain('data-overlay="none"')
+  })
+
+  // Триггер и его число едут парой: «через паузу» без числа означало бы «через
+  // сколько-то», а умолчание живёт в загрузчике и здесь не дублируется.
+  it('автооткрытие — триггером и значением, клик не пишется вовсе', () => {
+    expect(scriptSnippet({ ...widget, open: 'click', openValue: 5 })).not.toContain('data-open')
+    const delayed = scriptSnippet({ ...widget, open: 'delay', openValue: 8 })
+    expect(delayed).toContain('data-open="delay"')
+    expect(delayed).toContain('data-open-value="8"')
+    expect(scriptSnippet({ ...widget, open: 'exit' })).toContain('data-open="exit"')
+  })
+
+  it('эмодзи экранируется, помахивание — отдельным флагом', () => {
+    const code = scriptSnippet({ ...widget, emoji: '👋', emojiWave: true })
+    expect(code).toContain('data-emoji="👋"')
+    expect(code).toContain('data-emoji-wave="1"')
+    // Эмодзи вводит автор, и оно уезжает в атрибут на чужой странице — кавычка в нём
+    // оборвала бы сниппет так же, как в надписи кнопки.
+    expect(scriptSnippet({ ...widget, emoji: '" onload="x' })).toContain(
+      'data-emoji="&quot; onload=&quot;x"',
+    )
+    expect(scriptSnippet({ ...widget, emojiWave: true })).not.toContain('data-emoji-wave')
+  })
+
+  it('уборка после отправки — флагом', () => {
+    expect(scriptSnippet({ ...widget, hideOnSubmit: true })).toContain('data-hide-on-submit="1"')
+    expect(scriptSnippet(widget)).not.toContain('data-hide-on-submit')
+  })
+
+  // Живая высота — свойство блока в потоке: у виджета её ведёт модалка, у страницы
+  // вьюпорт, и атрибут там значил бы «настройка есть, но ни на что не влияет».
+  it('живая высота выключается только у блока', () => {
+    expect(scriptSnippet({ ...base, dynamicHeight: false })).toContain('data-dynamic-height="0"')
+    expect(scriptSnippet({ ...base, dynamicHeight: true })).not.toContain('data-dynamic-height')
+    expect(scriptSnippet({ ...widget, dynamicHeight: false })).not.toContain('data-dynamic-height')
+    expect(scriptSnippet({ ...base, mode: 'page', dynamicHeight: false })).not.toContain(
+      'data-dynamic-height',
+    )
   })
 })
 

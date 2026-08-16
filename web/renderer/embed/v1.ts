@@ -15,6 +15,9 @@
 import {
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
+  DEFAULT_OPEN_DELAY,
+  DEFAULT_OPEN_SCROLL,
+  DEFAULT_WIDTH,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -37,6 +40,8 @@ interface Mounted {
   handlers: { [K in EventName]?: ((payload: { submissionId?: string }) => void)[] }
   /** Виджет: оболочка модалки, у блока и страницы её нет. */
   overlay?: HTMLDivElement
+  /** Виджет: кнопка на странице — её убирает `data-hide-on-submit`. */
+  button?: HTMLButtonElement
 }
 
 const mounted: Mounted[] = []
@@ -77,7 +82,10 @@ function createFrame(opts: MountOptions): HTMLIFrameElement {
     frame.style.height = '100dvh'
   } else {
     frame.style.height = (opts.height ?? DEFAULT_HEIGHT) + 'px'
-    frame.scrolling = 'no'
+    // Скролл внутри фрейма запрещаем только там, где высоту ведёт содержимое. С
+    // выключенным `data-dynamic-height` фрейм остаётся заданного роста, и прокрутка
+    // формы обязана остаться — иначе длинная форма просто обрезается.
+    if (opts.dynamicHeight !== false) frame.scrolling = 'no'
   }
   return frame
 }
@@ -137,7 +145,10 @@ function buildWidget(opts: MountOptions): Mounted {
   const overlay = document.createElement('div')
   overlay.style.position = 'fixed'
   overlay.style.inset = '0'
-  overlay.style.background = 'rgba(15, 23, 42, 0.55)'
+  // Подложку можно снять (`data-overlay="none"`): на сайте, где форма открывается
+  // поверх собственного контента, затемнение читается как «страница заблокирована».
+  // Узел остаётся в любом случае — он же ловит клик мимо окна и держит центровку.
+  overlay.style.background = opts.overlay === false ? 'transparent' : 'rgba(15, 23, 42, 0.55)'
   overlay.style.display = 'none'
   overlay.style.alignItems = 'center'
   overlay.style.justifyContent = 'center'
@@ -152,7 +163,7 @@ function buildWidget(opts: MountOptions): Mounted {
   dialog.style.background = '#ffffff'
   dialog.style.borderRadius = '12px'
   dialog.style.width = '100%'
-  dialog.style.maxWidth = '640px'
+  dialog.style.maxWidth = (opts.width ?? DEFAULT_WIDTH) + 'px'
   dialog.style.maxHeight = '90dvh'
   dialog.style.overflowY = 'auto'
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
@@ -190,7 +201,7 @@ function buildWidget(opts: MountOptions): Mounted {
   const applyWidth = () => {
     const full = opts.mode === 'page' || narrow.matches
     overlay.style.padding = full ? '0' : '24px'
-    dialog.style.maxWidth = full ? 'none' : '640px'
+    dialog.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
     dialog.style.borderRadius = full ? '0' : '12px'
     dialog.style.maxHeight = full ? '100dvh' : '90dvh'
     dialog.style.minHeight = full ? '100dvh' : '0'
@@ -203,7 +214,7 @@ function buildWidget(opts: MountOptions): Mounted {
     if (event.target === overlay) closeWidget()
   })
 
-  const entry: Mounted = { frame, opts, handlers: {}, overlay }
+  const entry: Mounted = { frame, opts, handlers: {}, overlay, button: widgetButtons[opts.form] }
   // Ловушка фокуса. Полноценно замкнуть Tab внутри модалки нельзя: когда фокус ушёл
   // в форму, события клавиатуры живут в ДРУГОМ документе и нам не видны. Зато виден
   // focusin в своём: как только фокус выпал наружу (Tab с последнего поля формы),
@@ -246,17 +257,37 @@ function open(opts: MountOptions, from: HTMLElement | null = null): EmbedHandle 
 // от «одна кнопка, всё работает».
 const buttonsInCorner: Record<string, number> = {}
 
+// Кнопка каждой формы — чтобы модалка, созданная позже, знала, что убирать после
+// отправки (`data-hide-on-submit`). Ключ — форма: две вставки одной формы на странице
+// это одна кнопка в глазах посетителя.
+const widgetButtons: Record<string, HTMLButtonElement> = {}
+
+/** Пауза перед уборкой виджета после отправки: экран благодарности надо успеть прочитать. */
+const HIDE_AFTER_SUBMIT_MS = 2500
+
 function createButton(opts: MountOptions) {
-  const corner = opts.position === 'bottom-left' ? 'bottom-left' : 'bottom-right'
+  const corner = opts.position ?? 'bottom-right'
   const taken = buttonsInCorner[corner] ?? 0
   buttonsInCorner[corner] = taken + 1
+  const top = corner === 'top-right' || corner === 'top-left'
 
   const button = document.createElement('button')
   button.type = 'button'
-  button.textContent = opts.label ?? DEFAULT_LABEL
+  // Эмодзи — отдельным узлом, а не в текст кнопки: махать надо им одним, и текст
+  // владельца рядом с ним остаётся текстом (в кнопку он попадает через textContent).
+  const emoji = opts.emoji ? document.createElement('span') : null
+  if (emoji) {
+    emoji.textContent = opts.emoji!
+    emoji.style.marginRight = '8px'
+    emoji.style.display = 'inline-block'
+    button.appendChild(emoji)
+  }
+  button.appendChild(document.createTextNode(opts.label ?? DEFAULT_LABEL))
   button.style.position = 'fixed'
-  button.style.bottom = 24 + taken * 60 + 'px'
-  if (opts.position === 'bottom-left') button.style.left = '24px'
+  // Смещение считается от своего края: у верхних углов кнопки растут вниз, у нижних —
+  // вверх, и в обоих случаях вторая не ложится на первую.
+  button.style[top ? 'top' : 'bottom'] = 24 + taken * 60 + 'px'
+  if (corner === 'bottom-left' || corner === 'top-left') button.style.left = '24px'
   else button.style.right = '24px'
   button.style.padding = '12px 20px'
   button.style.border = '0'
@@ -270,6 +301,77 @@ function createButton(opts: MountOptions) {
   button.style.zIndex = '2147482000'
   button.addEventListener('click', () => open(opts, button))
   document.body.appendChild(button)
+  widgetButtons[opts.form] = button
+
+  // Помахать эмодзи: анимация через WAAPI, а не через @keyframes, — вставить правило
+  // в чужой документ нам нечем (стили ставим только свойствами, иначе строгая CSP
+  // отбрасывает атрибут style), а `animate` политика не трогает.
+  if (emoji && opts.emojiWave) {
+    emoji.animate(
+      [
+        { transform: 'rotate(0deg)' },
+        { transform: 'rotate(16deg)' },
+        { transform: 'rotate(-8deg)' },
+        { transform: 'rotate(14deg)' },
+        { transform: 'rotate(0deg)' },
+      ],
+      { duration: 1200, iterations: Infinity, easing: 'ease-in-out' },
+    )
+  }
+  return button
+}
+
+// АВТООТКРЫТИЕ — РОВНО ОДИН РАЗ ЗА ЗАГРУЗКУ СТРАНИЦЫ. Форма, всплывающая снова после
+// того, как её закрыли, читается не как второй шанс, а как повод уйти с сайта; поэтому
+// сработавший триггер снимает свои подписки и больше не наблюдает ни за чем.
+//
+// Кнопка при этом остаётся: закрывший форму человек должен иметь способ вернуться.
+function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
+  const trigger = opts.open ?? 'click'
+  if (trigger === 'click') return
+
+  let done = false
+  const fire = () => {
+    if (done) return
+    done = true
+    cleanup()
+    open(opts, button)
+  }
+
+  let timer = 0
+  const onScroll = () => {
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight
+    // Страница короче экрана прокручивается нулём: считать долю не от чего, и ждать
+    // прокрутки бессмысленно — показываем сразу.
+    const passed =
+      scrollable <= 0
+        ? 100
+        : (window.scrollY / scrollable) * 100
+    if (passed >= (opts.openValue || DEFAULT_OPEN_SCROLL)) fire()
+  }
+  // Уход со страницы: курсор вышел через ВЕРХНЮЮ границу окна — к вкладкам и адресной
+  // строке. На тач-устройствах события нет вовсе, и это не поломка: там уходят жестом,
+  // которого браузер нам не показывает.
+  const onExit = (event: MouseEvent) => {
+    if (event.clientY <= 0) fire()
+  }
+
+  const cleanup = () => {
+    if (timer) clearTimeout(timer)
+    window.removeEventListener('scroll', onScroll)
+    document.removeEventListener('mouseout', onExit)
+  }
+
+  if (trigger === 'delay') {
+    timer = window.setTimeout(fire, (opts.openValue || DEFAULT_OPEN_DELAY) * 1000)
+    return
+  }
+  if (trigger === 'scroll') {
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return
+  }
+  document.addEventListener('mouseout', onExit)
 }
 
 // listen — все подписки на документ разом. Вызывается РОВНО ОДИН РАЗ за страницу,
@@ -319,8 +421,11 @@ const onFrameMessage = (event: MessageEvent) => {
       return
     case 'resize':
       // У полноэкранного режима высота — вьюпорт хоста, и следовать за содержимым
-      // ей нельзя: форма из двух вопросов схлопнула бы фрейм до своей высоты.
-      if (entry.opts.mode !== 'page') entry.frame.style.height = msg.height + 'px'
+      // ей нельзя: форма из двух вопросов схлопнула бы фрейм до своей высоты. С
+      // выключенным `data-dynamic-height` владелец сайта попросил о том же для блока.
+      if (entry.opts.mode !== 'page' && entry.opts.dynamicHeight !== false) {
+        entry.frame.style.height = msg.height + 'px'
+      }
       return
     case 'page': {
       // Смена шага меняет высоту рывком, и чужая страница уезжает: человек оказывается
@@ -334,6 +439,15 @@ const onFrameMessage = (event: MessageEvent) => {
     }
     case 'submit':
       emit(entry, 'submit', { submissionId: msg.submissionId })
+      // «Убрать после отправки»: закрываем окно и уносим кнопку со страницы. Экран
+      // благодарности при этом человек увидеть успевает — сообщение приходит после
+      // его отрисовки, а закрытие ждёт своей паузы.
+      if (entry.opts.hideOnSubmit && entry.overlay) {
+        setTimeout(() => {
+          if (openWidgetEntry === entry) closeWidget()
+          entry.button?.remove()
+        }, HIDE_AFTER_SUBMIT_MS)
+      }
       return
     case 'redirect':
       // Переход после отправки: внутри фрейма он увёл бы человека в сайт внутри сайта,
@@ -359,7 +473,7 @@ function attach(script: Element): void {
   const opts = optionsFromAttrs(script)
   if (!opts) return
   if (opts.mode === 'widget') {
-    createButton(opts)
+    armTrigger(opts, createButton(opts))
     return
   }
   if (!script.parentNode) return

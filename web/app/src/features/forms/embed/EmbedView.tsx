@@ -5,6 +5,8 @@ import { Code2, Eye, X } from 'lucide-react'
 import { type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
+  DEFAULT_OPEN_DELAY,
+  DEFAULT_WIDGET_WIDTH,
   iframeSnippet,
   scriptSnippet,
   type EmbedMode,
@@ -42,6 +44,14 @@ export function EmbedView({
     hideTitle: false,
     alignLeft: false,
     height: DEFAULT_BLOCK_HEIGHT,
+    dynamicHeight: true,
+    width: DEFAULT_WIDGET_WIDTH,
+    overlay: true,
+    open: 'click',
+    openValue: DEFAULT_OPEN_DELAY,
+    emoji: '',
+    emojiWave: false,
+    hideOnSubmit: false,
     plain: false,
   })
   const [showCode, setShowCode] = useState(false)
@@ -61,6 +71,14 @@ export function EmbedView({
     hideTitle: settings.hideTitle,
     alignLeft: settings.alignLeft,
     height: settings.height,
+    dynamicHeight: settings.dynamicHeight,
+    width: settings.width,
+    overlay: settings.overlay,
+    open: settings.open,
+    openValue: settings.openValue,
+    emoji: settings.emoji,
+    emojiWave: settings.emojiWave,
+    hideOnSubmit: settings.hideOnSubmit,
   }
   const usePlain = settings.plain && mode !== 'widget'
   const snippet = usePlain ? iframeSnippet(opts) : scriptSnippet(opts)
@@ -68,8 +86,6 @@ export function EmbedView({
   // исполняемого кода от показанного (MockSite).
   const previewOpts: SnippetOptions = { ...opts, preview: true }
   const previewSnippet = usePlain ? iframeSnippet(previewOpts) : scriptSnippet(previewOpts)
-
-  const multipage = form.draftSchema.blocks.some((b) => b.type === 'page_break')
 
   return (
     // ЭКРАН ПОВЕРХ КАБИНЕТА, а не область внутри него, — тем же слоем и по тому же
@@ -129,12 +145,11 @@ export function EmbedView({
                 )}
               </Button>
               <SettingsPanel
-                slug={form.slug}
+                form={form}
                 mode={mode}
                 onModeChange={onModeChange}
                 settings={settings}
                 onChange={change}
-                multipage={multipage}
               />
             </aside>
 

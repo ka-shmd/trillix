@@ -28,7 +28,24 @@ export const MODE_HINTS: Record<EmbedMode, string> = {
   page: 'Форма занимает весь экран — удобно длинной анкете',
 }
 
-export type WidgetPosition = 'bottom-right' | 'bottom-left'
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+
+export const WIDGET_POSITIONS: Record<WidgetPosition, string> = {
+  'bottom-right': 'Справа внизу',
+  'bottom-left': 'Слева внизу',
+  'top-right': 'Справа вверху',
+  'top-left': 'Слева вверху',
+}
+
+/** Что открывает виджет. Зеркалит `OpenTrigger` загрузчика (`embed/api.ts`). */
+export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
+
+export const OPEN_TRIGGERS: Record<OpenTrigger, string> = {
+  click: 'По клику на кнопку',
+  delay: 'Через паузу после загрузки',
+  scroll: 'Когда прокрутят страницу',
+  exit: 'Когда уводят курсор со страницы',
+}
 
 export interface SnippetOptions {
   /** База публичной части — та же, что у ссылки на форму (publicUrl.ts). */
@@ -41,8 +58,24 @@ export interface SnippetOptions {
   transparent?: boolean
   /** Высота простого iframe: у него авторесайза нет, размер задаётся сразу. */
   height?: number
+  /** Высота блока следует за содержимым; выключено — фрейм фиксирован и скроллится сам. */
+  dynamicHeight?: boolean
   /** Заголовок формы не показывать: над блоком на чужой странице обычно есть свой. */
   hideTitle?: boolean
+  /** Ширина модалки виджета. */
+  width?: number
+  /** Тёмная подложка под модалкой виджета. */
+  overlay?: boolean
+  /** Что открывает виджет. */
+  open?: OpenTrigger
+  /** Секунды у `delay`, проценты прокрутки у `scroll`. */
+  openValue?: number
+  /** Эмодзи перед надписью на кнопке виджета. */
+  emoji?: string
+  /** Кнопка машет эмодзи. */
+  emojiWave?: boolean
+  /** Убрать виджет со страницы после отправки ответа. */
+  hideOnSubmit?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
   alignLeft?: boolean
   /**
@@ -66,6 +99,13 @@ export const PLAIN_IFRAME_HEIGHT = 720
  */
 export const DEFAULT_BLOCK_HEIGHT = 520
 
+/** Ширина модалки виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
+export const DEFAULT_WIDGET_WIDTH = 640
+
+/** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
+export const DEFAULT_OPEN_DELAY = 5
+export const DEFAULT_OPEN_SCROLL = 50
+
 const loaderUrl = (baseUrl: string) => `${baseUrl}/embed/v1.js`
 
 // Значение уезжает в HTML-атрибут на чужой странице. Кавычка в надписи кнопки
@@ -85,7 +125,22 @@ export function scriptSnippet(opts: SnippetOptions): string {
   if (opts.mode === 'widget') {
     attrs.push(`data-trillix-widget="${escapeAttr(opts.slug)}"`)
     if (opts.label) attrs.push(`data-label="${escapeAttr(opts.label)}"`)
-    if (opts.position === 'bottom-left') attrs.push('data-position="bottom-left"')
+    if (opts.position && opts.position !== 'bottom-right') {
+      attrs.push(`data-position="${opts.position}"`)
+    }
+    if (opts.width && opts.width !== DEFAULT_WIDGET_WIDTH) attrs.push(`data-width="${opts.width}"`)
+    if (opts.overlay === false) attrs.push('data-overlay="none"')
+    // Триггер и его значение пишутся вместе: «через паузу» без числа читалось бы как
+    // «через сколько-то», а умолчание живёт в загрузчике и здесь не дублируется.
+    if (opts.open && opts.open !== 'click') {
+      attrs.push(`data-open="${opts.open}"`)
+      if (opts.openValue) attrs.push(`data-open-value="${opts.openValue}"`)
+    }
+    if (opts.emoji) {
+      attrs.push(`data-emoji="${escapeAttr(opts.emoji)}"`)
+      if (opts.emojiWave) attrs.push('data-emoji-wave="1"')
+    }
+    if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   } else {
     attrs.push(`data-trillix-form="${escapeAttr(opts.slug)}"`)
     if (opts.mode === 'page') attrs.push('data-mode="page"')
@@ -94,6 +149,9 @@ export function scriptSnippet(opts: SnippetOptions): string {
     // у страницы — вьюпорт. Пишем, лишь когда автор отошёл от умолчания загрузчика.
     if (opts.mode === 'block' && opts.height && opts.height !== DEFAULT_BLOCK_HEIGHT) {
       attrs.push(`data-height="${opts.height}"`)
+    }
+    if (opts.mode === 'block' && opts.dynamicHeight === false) {
+      attrs.push('data-dynamic-height="0"')
     }
   }
   if (opts.hideTitle) attrs.push('data-hide-title="1"')

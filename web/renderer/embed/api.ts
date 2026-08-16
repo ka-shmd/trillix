@@ -9,7 +9,21 @@
 export type EmbedMode = 'block' | 'widget' | 'page'
 
 /** Угол, в котором стоит кнопка виджета. */
-export type WidgetPosition = 'bottom-right' | 'bottom-left'
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+
+/**
+ * Что открывает виджет: клик по кнопке или одно из наблюдений за посетителем.
+ *
+ * Автооткрытие срабатывает ОДИН РАЗ за загрузку страницы (см. `v1.ts`): всплывающая
+ * снова и снова форма — это не второй шанс, а причина уйти с сайта.
+ */
+export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
+
+const TRIGGERS: readonly string[] = ['click', 'delay', 'scroll', 'exit']
+
+/** Секунды до автооткрытия по задержке и доля прокрутки (%) для скролла. */
+export const DEFAULT_OPEN_DELAY = 5
+export const DEFAULT_OPEN_SCROLL = 50
 
 export interface MountOptions {
   /** Короткий адрес формы, тот же, что в публичной ссылке. */
@@ -24,8 +38,28 @@ export interface MountOptions {
   /** Надпись на кнопке виджета. */
   label?: string
   position?: WidgetPosition
+  /**
+   * Высота блока следует за содержимым (умолчание). Выключено — фрейм остаётся ростом
+   * `height`, а форма скроллится внутри него: так вставку ставят в сетку фиксированной
+   * высоты, где растущий блок ломал бы раскладку чужой страницы.
+   */
+  dynamicHeight?: boolean
   /** Не показывать заголовок формы: на чужой странице над блоком обычно есть свой. */
   hideTitle?: boolean
+  /** Ширина модалки виджета в пикселях. */
+  width?: number
+  /** Тёмная подложка под модалкой виджета (умолчание). */
+  overlay?: boolean
+  /** Что открывает виджет; `click` — умолчание. */
+  open?: OpenTrigger
+  /** Секунды у `delay`, проценты прокрутки у `scroll`. У остальных не значит ничего. */
+  openValue?: number
+  /** Эмодзи на кнопке виджета — перед надписью. */
+  emoji?: string
+  /** Кнопка машет эмодзи после появления. */
+  emojiWave?: boolean
+  /** Убрать виджет со страницы после отправки ответа. */
+  hideOnSubmit?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
   alignLeft?: boolean
   /**
@@ -50,6 +84,9 @@ export const DEFAULT_LABEL = 'Открыть форму'
 
 /** Высота фрейма до первого `resize`. Форма из пары вопросов примерно столько и занимает. */
 export const DEFAULT_HEIGHT = 520
+
+/** Ширина модалки виджета: колонка формы плюс поля. */
+export const DEFAULT_WIDTH = 640
 
 // Метки источника — закрытый список, тот же, что у рендерера и сервера. Произвольные
 // параметры чужой страницы в аналитику не уезжают.
@@ -121,21 +158,44 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   const widget = el.getAttribute('data-trillix-widget')
   const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
-  const height = Number(el.getAttribute('data-height'))
   const label = el.getAttribute('data-label')
+  const emoji = el.getAttribute('data-emoji')
+  const trigger = el.getAttribute('data-open')
   return {
     form,
     mode: widget ? 'widget' : el.getAttribute('data-mode') === 'page' ? 'page' : 'block',
     transparent: el.getAttribute('data-bg') === 'transparent',
     // Мусор в атрибуте (пусто, «500px», «много») — не повод схлопнуть блок в ноль.
-    height: Number.isFinite(height) && height > 0 ? height : DEFAULT_HEIGHT,
+    height: size(el.getAttribute('data-height'), DEFAULT_HEIGHT),
+    // Умолчания ВКЛЮЧЕНЫ, поэтому читается только явное выключение: сниппеты, уже
+    // стоящие на чужих сайтах, этих атрибутов не несут и обязаны вести себя как раньше.
+    dynamicHeight: el.getAttribute('data-dynamic-height') !== '0',
     redirect: el.getAttribute('data-redirect') === 'frame' ? 'frame' : 'top',
     hideTitle: el.getAttribute('data-hide-title') === '1',
     alignLeft: el.getAttribute('data-align') === 'left',
     preview: el.getAttribute('data-preview') === '1',
     label: label !== null && label !== '' ? label : DEFAULT_LABEL,
-    position: el.getAttribute('data-position') === 'bottom-left' ? 'bottom-left' : 'bottom-right',
+    position: readPosition(el.getAttribute('data-position')),
+    width: size(el.getAttribute('data-width'), DEFAULT_WIDTH),
+    overlay: el.getAttribute('data-overlay') !== 'none',
+    open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
+    openValue: size(el.getAttribute('data-open-value'), 0),
+    emoji: emoji ?? '',
+    emojiWave: el.getAttribute('data-emoji-wave') === '1',
+    hideOnSubmit: el.getAttribute('data-hide-on-submit') === '1',
   }
+}
+
+/** Число из атрибута; мусор и не-положительное дают умолчание. */
+function size(raw: string | null, fallback: number): number {
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+// Неизвестный угол — правый нижний: сниппет с опечаткой обязан показать кнопку, а не
+// потерять её за краем экрана.
+function readPosition(raw: string | null): WidgetPosition {
+  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' ? raw : 'bottom-right'
 }
 
 /**

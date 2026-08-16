@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
+  DEFAULT_WIDTH,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -92,7 +93,48 @@ describe('optionsFromAttrs', () => {
       hideTitle: false,
       alignLeft: false,
       preview: false,
+      dynamicHeight: true,
+      width: DEFAULT_WIDTH,
+      overlay: true,
+      open: 'click',
+      openValue: 0,
+      emoji: '',
+      emojiWave: false,
+      hideOnSubmit: false,
     })
+  })
+
+  // УМОЛЧАНИЯ ВКЛЮЧЕНЫ, И ЭТО НЕ ВКУС: сниппеты, вставленные на чужие сайты до
+  // появления этих атрибутов, их не несут — прочитай мы отсутствие как «выключено»,
+  // у живых вставок разом пропали бы авторесайз и затемнение под модалкой.
+  it('живая высота и подложка выключаются только явным значением', () => {
+    const on = optionsFromAttrs(attrs({ 'data-trillix-form': 'a' }))
+    expect(on?.dynamicHeight).toBe(true)
+    expect(on?.overlay).toBe(true)
+    const off = optionsFromAttrs(
+      attrs({ 'data-trillix-form': 'a', 'data-dynamic-height': '0', 'data-overlay': 'none' }),
+    )
+    expect(off?.dynamicHeight).toBe(false)
+    expect(off?.overlay).toBe(false)
+  })
+
+  it('четыре угла кнопки, неизвестный — правый нижний', () => {
+    const corner = (value: string) =>
+      optionsFromAttrs(attrs({ 'data-trillix-widget': 'a', 'data-position': value }))?.position
+    expect(corner('top-left')).toBe('top-left')
+    expect(corner('top-right')).toBe('top-right')
+    expect(corner('bottom-left')).toBe('bottom-left')
+    expect(corner('справа')).toBe('bottom-right')
+  })
+
+  it('триггер открытия: известный — как написан, чужой — клик', () => {
+    const trigger = (value: string) =>
+      optionsFromAttrs(attrs({ 'data-trillix-widget': 'a', 'data-open': value }))?.open
+    expect(trigger('delay')).toBe('delay')
+    expect(trigger('scroll')).toBe('scroll')
+    expect(trigger('exit')).toBe('exit')
+    expect(trigger('hover')).toBe('click')
+    expect(optionsFromAttrs(attrs({ 'data-trillix-widget': 'a' }))?.open).toBe('click')
   })
 
   // Виджет узнаётся по своему атрибуту: он единственный ничего не вставляет в поток,

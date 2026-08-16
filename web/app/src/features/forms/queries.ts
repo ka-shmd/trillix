@@ -17,6 +17,7 @@ import {
   updateFormName,
   updateNotifyOnSubmission,
 } from './api'
+import { saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
   type FormDetail,
@@ -134,6 +135,45 @@ export function useUpdateNotifyOnSubmission() {
 
 // Дубликация создаёт новую форму — инвалидируем список, чтобы копия появилась
 // сверху (остаёмся на дашборде, в редактор не уходим).
+/**
+ * Бейдж «Сделано в Trillix» — с экрана вставки (решение владельца 2026-08-16).
+ *
+ * Правит ЧЕРНОВИК формы тем же PATCH'ем схемы, что автосейв билдера: бейдж — свойство
+ * оформления, а не вставки, и настройка одна на все вставки и на прямую ссылку. На
+ * живой форме сработает после публикации (схема снапшотится) — экран говорит об этом
+ * строкой рядом.
+ *
+ * Гейт тарифа (`form_branding`) здесь не проверяется: он на ОТДАЧЕ публичной формы
+ * (BILLING.md), а намерение автора сохраняется на любом тарифе и срабатывает сразу
+ * после перехода на платный. Панель предупреждает словами, как это делала шторка.
+ */
+export function useUpdateBranding() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ form, show }: { form: FormDetail; show: boolean }) => {
+      const design = { ...(form.draftSchema.design ?? {}) }
+      // «Показывать» — ОТСУТСТВИЕ ключа: второго представления у этого состояния нет,
+      // того же требует валидатор (`design.branding` принимает только false).
+      if (show) delete design.branding
+      else design.branding = false
+      const draftSchema = {
+        ...form.draftSchema,
+        design: Object.keys(design).length > 0 ? design : undefined,
+      }
+      return saveDraftSchema(form.id, draftSchema, form.updatedAt).then((saved) => ({
+        saved,
+        draftSchema,
+      }))
+    },
+    onSuccess: ({ saved, draftSchema }) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(saved.slug), (old) =>
+        old ? { ...old, draftSchema, updatedAt: saved.updatedAt } : old,
+      )
+    },
+  })
+}
+
 export function useDuplicateForm() {
   const qc = useQueryClient()
   return useMutation({
