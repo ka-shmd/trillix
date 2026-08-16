@@ -1,0 +1,19 @@
+import { GitBranch } from 'lucide-react'
+
+import { type EditorKind } from './contract'
+import { LogicField } from './logicField'
+
+// Блок условной логики: «когда <условие> → тогда <действия>». Ветвление формы стало
+// строкой полотна, которую видно при чтении сверху вниз, — прежде правило было
+// невидимым свойством вопроса и открывалось попапом. Спека — docs/design/logic-blocks.md.
+//
+// Объектная остановка, как разрыв страницы и картинка: своего текста у блока нет,
+// набирать внутри строки нечего — каретка встаёт на строку саму, кольцом.
+export const logic: EditorKind = {
+  // Только «Лэйаут»: ответа не собирает, бандлом с подписью не вставляется.
+  menu: { question: false, field: false, layout: true },
+  label: 'Условие',
+  description: 'Показать, спрятать или сделать обязательным — в зависимости от ответа.',
+  icon: <GitBranch className="size-4" />,
+  row: { surface: 'object', lineH: 'h-6', Control: LogicField, hint: 'object' },
+}

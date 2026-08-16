@@ -27,10 +27,8 @@ import { CSS } from '@dnd-kit/utilities'
 import {
   Asterisk,
   Copy,
-  GitBranch,
   GripVertical,
   Plus,
-  SquareAsterisk,
   Trash2,
 } from 'lucide-react'
 import {
@@ -39,17 +37,13 @@ import {
   isCaptionType,
   isSingleChoiceType,
   isContentType,
-  type LogicCondition,
   plainText,
   supportsPlaceholder,
   type Span,
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
-import { ruleWarnings } from '@fields/logic'
 import { filterMenuItems, type MenuItem } from './blockTypes'
-import { BlockRuleDialog, OptionRuleDialog } from './logic/LogicDialog'
-import { ruleSummary } from './logic/model'
 import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import { DRAG_ACTIVATION_DISTANCE, DRAGGED_FADE, DRAGGED_LOOK, noLayoutAnimation } from './dnd'
@@ -519,12 +513,7 @@ const BlockRowBody = memo(function BlockRowBody({
   // свой значок, а не приглушённую звёздочку. Три состояния — три разных вида.
   // Обратный вход в обязательность — тумблер в попапе.
   const showRequired = requiredFor?.required === true
-  // Носитель `visibleIf` — головной блок группы (прячется вопрос целиком), носитель
-  // `requiredIf` — отвечаемый блок, он же requiredFor. У вопроса с подписью обе роли
-  // сходятся на строке подписи, поэтому кластер у неё один.
-  const condVisible = block.visibleIf
-  const condRequired = requiredFor?.requiredIf
-  const showMarks = showRequired || Boolean(condVisible) || Boolean(condRequired)
+  const showMarks = showRequired
   // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
@@ -723,11 +712,8 @@ const BlockRowBody = memo(function BlockRowBody({
   // меняется только предок, от которого считается его absolute, а не сам элемент.
   const marksCluster = showMarks ? (
     <RowMarks
-      block={block}
       requiredFor={requiredFor}
       showRequired={showRequired}
-      condVisible={condVisible}
-      condRequired={condRequired}
       lineH={rowLineH}
     />
   ) : null
@@ -847,11 +833,8 @@ const BlockRowBody = memo(function BlockRowBody({
               />
               {showMarks && (
                 <RowMarks
-                  block={block}
                   requiredFor={requiredFor}
                   showRequired={showRequired}
-                  condVisible={condVisible}
-                  condRequired={condRequired}
                   lineH={rowLineH}
                   inline
                 />
@@ -911,27 +894,21 @@ const BlockRowBody = memo(function BlockRowBody({
   )
 })
 
-// RowMarks — кластер отметок вопроса: звёздочка обязательности и значки двух условий,
-// в этом порядке. Инлайн (сразу за текстом подписи) — там же, где отметку увидит
-// респондент; absolute в правом поле — у поля БЕЗ подписи, где текстовой строки нет.
+// RowMarks — отметка обязательности вопроса. Инлайн (сразу за текстом подписи) — там
+// же, где её увидит респондент; absolute в правом поле — у поля БЕЗ подписи, где
+// текстовой строки нет.
 //
-// Кластер один на все три отметки, потому что их носители сходятся на одной строке:
-// `visibleIf` живёт на голове группы, `requiredIf` и `required` — на отвечаемом блоке,
-// а у вопроса с подписью строка подписи представляет обоих (см. requiredFor).
+// Значков условий здесь больше НЕТ: правило перестало быть невидимым свойством вопроса
+// и стоит на полотне своей строкой — блоком `logic` (ADR §10). Помечать вопрос второй
+// раз значило бы завести второе место, где живёт одно состояние.
 function RowMarks({
-  block,
   requiredFor,
   showRequired,
-  condVisible,
-  condRequired,
   lineH,
   inline = false,
 }: {
-  block: Block
   requiredFor?: Block
   showRequired: boolean
-  condVisible?: LogicCondition
-  condRequired?: LogicCondition
   lineH: string
   inline?: boolean
 }) {
@@ -944,97 +921,15 @@ function RowMarks({
       }
     >
       {showRequired && <RequiredToggle block={requiredFor!} />}
-      {condVisible && <LogicBadge kind="visibleIf" carrier={block} rowId={block.id} />}
-      {condRequired && (
-        <LogicBadge kind="requiredIf" carrier={requiredFor!} rowId={block.id} />
-      )}
     </div>
   )
 }
 
-// LogicBadge — «это свойство вопроса стоит за условием». Виден всегда (в отличие от
-// проявляющихся по hover значков) — это состояние документа, и прятать его значило бы
-// прятать причину, по которой вопрос повёл себя не так, как выглядит на полотне.
+// RequiredToggle — звёздочка обязательности. Монтируется только у обязательного
+// вопроса, поэтому действие у неё одно: снять обязательность.
 //
-// Клик открывает диалог ЭТОГО правила — тот же, что пункт попапа настроек: значок и есть
-// то место, где автор про правило вспомнил, и заставлять его после этого искать пункт в
-// меню значит держать вход дальше от глаза, чем указатель.
-//
-// Два вида, и глифы у них РАЗНЫЕ: условие показа и условие обязательности — разные факты
-// о вопросе, и различать их одним значком с двумя тултипами значит требовать наведения
-// там, где хватает взгляда. `kind` назван полем схемы, а не своим словарём: диалогу
-// нужно ровно оно. `carrier` — носитель ПРАВИЛА (у показа голова группы, у обязательности
-// отвечаемый блок), от него считается «источник стоит ниже»; `rowId` — строка, на которой
-// значок нарисован, ей возвращается каретка после закрытия.
-const BADGE_KINDS = {
-  visibleIf: { Icon: GitBranch, verb: 'Показывать, если', what: 'Условие показа' },
-  requiredIf: { Icon: SquareAsterisk, verb: 'Обязателен, если', what: 'Условие обязательности' },
-} as const
-
-function LogicBadge({
-  kind,
-  carrier,
-  rowId,
-}: {
-  kind: keyof typeof BADGE_KINDS
-  carrier: Block
-  rowId: string
-}) {
-  const engine = useFocusEngine()
-  const [open, setOpen] = useState(false)
-  const rule = kind === 'visibleIf' ? carrier.visibleIf : carrier.requiredIf
-  // Подписка — на ТО, ЧТО ПОКАЗАНО: селекторы отдают строки, поэтому перерисовка
-  // случается ровно тогда, когда меняется текст бейджа или его состояние. Массив блоков
-  // подписывать нельзя (он меняет идентичность на каждый символ, а бейдж есть у каждого
-  // вопроса за условием); прежняя попытка подписаться на СОСТАВ документа (строка id)
-  // была быстрой, но неверной: `changeBlockType` сохраняет id, поэтому правило,
-  // ставшее инертным от смены типа источника, оставалось помеченным действующим до
-  // следующей структурной правки. Найдено ревью ветки фазы.
-  const summary = useBuilderStore((s) => ruleSummary(s.blocks, rule))
-  const reason = useBuilderStore((s) => ruleWarnings(s.blocks, carrier.id, rule)[0]?.reason ?? '')
-  const inert = reason !== ''
-  const { Icon, verb, what } = BADGE_KINDS[kind]
-  const state = inert ? `${what} не действует: ${reason}` : `${verb} ${summary}`
-  return (
-    <>
-      {/* Только открытым: диалог подписан на весь массив блоков, а значок есть у каждого
-          вопроса за условием — постоянный монтаж подписал бы на документ всё полотно
-          (тот же довод, что у попапа настроек и OptionRuleDialog ниже). */}
-      {open && (
-        <BlockRuleDialog
-          open
-          onOpenChange={(o) => {
-            setOpen(o)
-            // Каретка возвращается на СТРОКУ, а не на сам значок: правило могли снять
-            // прямо в диалоге, и тогда значка, которому Radix вернул бы фокус, уже нет.
-            if (!o) engine.focusBlock(rowId, 'end')
-          }}
-          carrier={carrier}
-          kind={kind}
-        />
-      )}
-      <button
-        type="button"
-        title={state}
-        aria-label={`${state} — изменить`}
-        onClick={() => setOpen(true)}
-        className={`flex size-5 items-center justify-center rounded hover:bg-muted ${
-          inert ? 'text-amber-600 dark:text-amber-500' : 'text-muted-foreground'
-        }`}
-      >
-        <Icon className="size-4" />
-      </button>
-    </>
-  )
-}
-
-// RequiredToggle — звёздочка обязательности, единственный КОНТРОЛ кластера (значки
-// условий рядом — индикаторы). Монтируется только у безусловно обязательного вопроса,
-// поэтому действие у неё одно: снять обязательность.
-//
-// Условную обязательность показывает значок LogicBadge, а не эта звёздочка. Поэтому
-// клик гасит только `required`: при `required === true` правила `requiredIf` не бывает —
-// схема запрещает оба флага разом (formSchema, «обязательность задана дважды»).
+// Обязательность ПО УСЛОВИЮ звёздочки не получает и не снимает: её задаёт действие в
+// блоке `logic` на полотне, и снимать её надо там же, где задавали (ADR §10).
 function RequiredToggle({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   return (
@@ -1723,10 +1618,6 @@ function GhostOption({
   )
 }
 
-// Стабильная пустота для закрытого попапа варианта: новый литерал на каждый рендер сам
-// был бы сменой значения и перерисовывал бы карточку.
-const NO_BLOCKS: Block[] = []
-
 // OptionActionMenu — попап варианта (фаза 16, решение владельца 7). Состав из двух
 // пунктов и никаких настроек типа: у варианта их нет, а «в колонку» — свойство строки
 // (раскладку списка задаёт она), не карточки. Отдельный маленький компонент, а не
@@ -1736,18 +1627,12 @@ function OptionActionMenu({
   open,
   onOpenChange,
   anchor,
-  ruleSummaryText,
-  onEditRule,
   onDuplicate,
   onDelete,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   anchor: ReactNode
-  // Текст правила показа варианта («всегда» или короткая фраза условия): пункт без
-  // намёка на содержание заставлял бы открывать диалог, чтобы просто узнать состояние.
-  ruleSummaryText: string
-  onEditRule: () => void
   onDuplicate: () => void
   onDelete: () => void
 }) {
@@ -1765,17 +1650,6 @@ function OptionActionMenu({
         <Command>
           <CommandList>
             <CommandGroup>
-              {/* Каскадные списки (фаза 21): вариант прячется по ответу на вопрос выше.
-                  Пункт стоит первым — это настройка, а ниже идут действия. */}
-              <CommandItem
-                onSelect={() => {
-                  onEditRule()
-                  onOpenChange(false)
-                }}
-              >
-                <GitBranch className="size-4" />
-                Показывать: {ruleSummaryText}
-              </CommandItem>
               <CommandItem
                 onSelect={() => {
                   onDuplicate()
@@ -1833,13 +1707,6 @@ function OptionCard({
 }) {
   const updateOption = useBuilderStore((s) => s.updateOption)
   const [menuOpen, setMenuOpen] = useState(false)
-  // Диалог правила варианта — рядом с попапом, как у блока: у условия дерево, а попап
-  // варианта ещё уже блочного.
-  const [ruleOpen, setRuleOpen] = useState(false)
-  // Как у попапа блока: массив блоков меняет идентичность на каждое нажатие клавиши, а
-  // карточек вариантов на полотне десятки. Подписываемся, только когда попап или диалог
-  // открыт, — иначе набор текста перерисовывал бы все карточки мимо memo.
-  const blocks = useBuilderStore((s) => (menuOpen ? s.blocks : NO_BLOCKS))
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
   // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
   // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
@@ -1889,28 +1756,7 @@ function OptionCard({
             (решение владельца 7): с решением 6 карточка варианта остаётся
             единственным местом, где списком управляют, и оставить её без попапа
             значило бы спрятать управление совсем. */}
-        {/* МОНТИРУЕТСЯ ТОЛЬКО ОТКРЫТЫМ. Диалог подписан на весь массив блоков (ему
-            нужны источники), а карточек вариантов на полотне десятки: закрытый, но
-            смонтированный, он перерисовывался на каждое нажатие клавиши и обходил
-            сужение подписки строкой ниже. Найдено ревью ветки фазы — тот же класс, что
-            уже ловил замер у попапа настроек. */}
-        {ruleOpen && (
-          <OptionRuleDialog
-            open
-            onOpenChange={(o) => {
-              setRuleOpen(o)
-              if (!o) inputEl.current?.focus()
-            }}
-            block={block}
-            optionId={option.id}
-          />
-        )}
         <OptionActionMenu
-          ruleSummaryText={ruleSummary(blocks, option.visibleIf)}
-          onEditRule={() => {
-            movedCaretRef.current = true
-            setRuleOpen(true)
-          }}
           open={menuOpen}
           // Закрытие без действия (Esc, клик мимо) возвращает каретку на свою
           // карточку. Без этого она падала в body — Radix ставит фокус на поповер при

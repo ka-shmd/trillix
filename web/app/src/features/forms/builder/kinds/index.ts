@@ -10,6 +10,7 @@ import { formTitle } from './formTitle'
 import { heading } from './heading'
 import { image } from './image'
 import { label } from './label'
+import { logic } from './logic'
 import { longText } from './longText'
 import { multiChoice } from './multiChoice'
 import { numberField } from './number'
@@ -42,6 +43,7 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   text,
   image,
   page_break: pageBreak,
+  logic,
   form_title: formTitle,
 }
 

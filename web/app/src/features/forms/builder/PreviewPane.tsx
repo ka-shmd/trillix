@@ -73,13 +73,7 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
   // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
   const rows = packRows(groupBlocks(pages[page] ?? []))
   // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
-  const hasRules = blocks.some(
-    (b) =>
-      b.visibleIf ||
-      b.requiredIf ||
-      b.jumpIf?.length ||
-      b.settings?.options?.some((o) => o.visibleIf),
-  )
+  const hasRules = blocks.some((b) => b.type === 'logic')
   const onChange = (blockId: string, value: Answer) =>
     setAnswers((prev) => ({ ...prev, [blockId]: value }))
 
@@ -111,7 +105,7 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             добавьте блоки. Найдено ревью ветки фазы. */}
           {plan.pages.every((p) => p.length === 0) && hasRules ? (
             <p className="rf-empty">
-              Все вопросы скрыты условиями — ответьте выше или снимите условие в настройках блока.
+              Все вопросы скрыты условиями — ответьте выше или поправьте блок условия.
             </p>
           ) : plan.pages.every((p) => p.length === 0) ? (
             <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
@@ -182,7 +176,9 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
                 Назад
               </button>
             )}
-            {page < lastPage ? (
+            {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+                автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
+            {plan.blocked && page === lastPage ? null : page < lastPage ? (
               <button type="button" className="rf-submit rf-next" onClick={() => setPage(page + 1)}>
                 Далее
               </button>

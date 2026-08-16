@@ -17,6 +17,10 @@ import (
 
 // ---------- помощники сборки документа ----------
 
+// showRule/requireRule/optionRule — блок logic с одним действием, СТОЯЩИЙ ПЕРЕД целью:
+// источники условия оказываются выше него, цель — ниже. Помощники, а не литералы по
+// месту: почти каждый случай ниже про семантику условия, а не про форму блока.
+
 func lblk(id, group string, t BlockType) Block {
 	return Block{ID: id, GroupID: group, Type: t}
 }
@@ -24,6 +28,22 @@ func lblk(id, group string, t BlockType) Block {
 func lchoice(id, group string, t BlockType, opts ...Option) Block {
 	b := lblk(id, group, t)
 	b.Settings.Options = opts
+	return b
+}
+
+func showRule(target string, when *Condition) Block {
+	return llogic("L-show-"+target, "gL-show-"+target, when, act(ActShow, target))
+}
+
+func requireRule(target string, when *Condition) Block {
+	return llogic("L-req-"+target, "gL-req-"+target, when, act(ActRequire, target))
+}
+
+// optionRule — «показать варианты»: перечисленные варианты видны только по условию,
+// остальные умолчания не меняют.
+func optionRule(target string, when *Condition, options ...string) Block {
+	b := lblk("L-opt-"+target+"-"+options[0], "gL-opt-"+target+"-"+options[0], BlockLogic)
+	b.Logic = &Logic{When: when, Then: []LogicAction{{Kind: ActShow, Targets: options}}}
 	return b
 }
 
@@ -81,12 +101,17 @@ func pageIDs(p Plan) [][]string {
 // ---------- видимость вопроса ----------
 
 func TestPlanForm_Visibility(t *testing.T) {
-	// Документ: вопрос-источник (single_choice) и зависимый вопрос из подписи и поля.
+	// Документ: вопрос-источник (single_choice), блок правила и зависимый вопрос из
+	// подписи и поля. Правило ПОКАЗЫВАЕТ вопрос: без условия он виден (правило инертно),
+	// с несработавшим — скрыт.
 	doc := func(rule *Condition) []Block {
 		src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
-		head := lblk("cap", "g2", BlockTitle)
-		head.VisibleIf = rule
-		return []Block{src, head, lblk("dep", "g2", BlockShortText)}
+		return []Block{
+			src,
+			showRule("cap", rule),
+			lblk("cap", "g2", BlockTitle),
+			lblk("dep", "g2", BlockShortText),
+		}
 	}
 
 	cases := []struct {
@@ -146,9 +171,10 @@ func TestPlanForm_RuleReadFromGroupHead(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"})
 	head := lblk("cap", "g2", BlockTitle)
 	field := lblk("dep", "g2", BlockShortText)
-	field.VisibleIf = leaf("src", OpIs, "yes") // не сработает: не голова
+	// Цель — НЕ голова группы: действие инертно.
+	rule := showRule("dep", leaf("src", OpIs, "yes"))
 
-	plan := PlanForm([]Block{src, head, field}, answers(map[string]any{"src": "no"}))
+	plan := PlanForm([]Block{src, rule, head, field}, answers(map[string]any{"src": "no"}))
 	if !plan.Visible["dep"] || !plan.Visible["cap"] {
 		t.Fatalf("правило на не-голове обязано быть инертным, видимы: %v", visibleIDs(plan))
 	}
@@ -160,11 +186,16 @@ func TestPlanForm_HiddenSourceCountsAsEmpty(t *testing.T) {
 	a := lchoice("a", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
 	bHead := lblk("b", "g2", BlockSingleChoice)
 	bHead.Settings.Options = []Option{{ID: "dog"}}
-	bHead.VisibleIf = leaf("a", OpIs, "yes")
 	c := lblk("c", "g3", BlockShortText)
-	c.VisibleIf = leaf("b", OpIs, "dog")
 
-	plan := PlanForm([]Block{a, bHead, c}, answers(map[string]any{"a": "no", "b": "dog"}))
+	blocks := []Block{
+		a,
+		showRule("b", leaf("a", OpIs, "yes")),
+		bHead,
+		showRule("c", leaf("b", OpIs, "dog")),
+		c,
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"a": "no", "b": "dog"}))
 	if plan.Visible["b"] || plan.Visible["c"] {
 		t.Fatalf("скрытый источник обязан считаться пустым, видимы: %v", visibleIDs(plan))
 	}
@@ -177,21 +208,27 @@ func TestPlanForm_Required(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		build    func(b *Block)
+		flag     bool
+		rule     *Condition
 		answers  map[string]any
 		required bool
 	}{
-		{"required без условия", func(b *Block) { b.Required = true }, map[string]any{}, true},
-		{"requiredIf сработал", func(b *Block) { b.RequiredIf = leaf("src", OpIs, "call") }, map[string]any{"src": "call"}, true},
-		{"requiredIf не сработал", func(b *Block) { b.RequiredIf = leaf("src", OpIs, "call") }, map[string]any{"src": "mail"}, false},
-		{"requiredIf инертен — не обязателен", func(b *Block) { b.RequiredIf = leaf("нет-такого", OpIs, "x") }, map[string]any{}, false},
+		{"required без условия", true, nil, map[string]any{}, true},
+		{"условие обязательности сработало", false, leaf("src", OpIs, "call"), map[string]any{"src": "call"}, true},
+		{"условие обязательности не сработало", false, leaf("src", OpIs, "call"), map[string]any{"src": "mail"}, false},
+		{"условие обязательности инертно — не обязателен", false, leaf("нет-такого", OpIs, "x"), map[string]any{}, false},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dep := lblk("dep", "g2", BlockPhone)
-			tc.build(&dep)
-			plan := PlanForm([]Block{src, dep}, answers(tc.answers))
+			dep.Required = tc.flag
+			blocks := []Block{src}
+			if tc.rule != nil {
+				blocks = append(blocks, requireRule("dep", tc.rule))
+			}
+			blocks = append(blocks, dep)
+			plan := PlanForm(blocks, answers(tc.answers))
 			if got := plan.Required["dep"]; got != tc.required {
 				t.Fatalf("обязательность: got %v, want %v", got, tc.required)
 			}
@@ -201,8 +238,8 @@ func TestPlanForm_Required(t *testing.T) {
 	t.Run("скрытый вопрос не обязателен никогда", func(t *testing.T) {
 		dep := lblk("dep", "g2", BlockPhone)
 		dep.Required = true
-		dep.VisibleIf = leaf("src", OpIs, "call")
-		plan := PlanForm([]Block{src, dep}, answers(map[string]any{"src": "mail"}))
+		blocks := []Block{src, showRule("dep", leaf("src", OpIs, "call")), dep}
+		plan := PlanForm(blocks, answers(map[string]any{"src": "mail"}))
 		if plan.Required["dep"] {
 			t.Fatal("скрытый вопрос попал в обязательные")
 		}
@@ -214,11 +251,14 @@ func TestPlanForm_Required(t *testing.T) {
 func TestPlanForm_Options(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "dog"}, Option{ID: "cat"})
 	list := lchoice("list", "g2", BlockMultiChoice,
-		Option{ID: "leash", VisibleIf: leaf("src", OpIs, "dog")},
-		Option{ID: "tray", VisibleIf: leaf("src", OpIs, "cat")},
-		Option{ID: "food"},
+		Option{ID: "leash"}, Option{ID: "tray"}, Option{ID: "food"},
 	)
-	blocks := []Block{src, list}
+	blocks := []Block{
+		src,
+		optionRule("list", leaf("src", OpIs, "dog"), "leash"),
+		optionRule("list", leaf("src", OpIs, "cat"), "tray"),
+		list,
+	}
 
 	t.Run("видны только варианты со сработавшим условием", func(t *testing.T) {
 		plan := PlanForm(blocks, answers(map[string]any{"src": "dog"}))
@@ -239,8 +279,8 @@ func TestPlanForm_Options(t *testing.T) {
 
 	t.Run("выбранный скрытый вариант не считается выбором", func(t *testing.T) {
 		dep := lblk("dep", "g3", BlockShortText)
-		dep.VisibleIf = leaf("list", OpIncludes, "tray")
-		plan := PlanForm(append(slices.Clone(blocks), dep), answers(map[string]any{
+		rule := showRule("dep", leaf("list", OpIncludes, "tray"))
+		plan := PlanForm(append(slices.Clone(blocks), rule, dep), answers(map[string]any{
 			"src":  "dog",
 			"list": []string{"tray", "food"},
 		}))
@@ -251,8 +291,8 @@ func TestPlanForm_Options(t *testing.T) {
 
 	t.Run("includes по видимому варианту работает", func(t *testing.T) {
 		dep := lblk("dep", "g3", BlockShortText)
-		dep.VisibleIf = leaf("list", OpIncludes, "leash")
-		plan := PlanForm(append(slices.Clone(blocks), dep), answers(map[string]any{
+		rule := showRule("dep", leaf("list", OpIncludes, "leash"))
+		plan := PlanForm(append(slices.Clone(blocks), rule, dep), answers(map[string]any{
 			"src":  "dog",
 			"list": []string{"leash"},
 		}))
@@ -287,8 +327,10 @@ func TestPlanForm_Numbers(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dep := lblk("dep", "g4", BlockShortText)
-			dep.VisibleIf = tc.rule
-			blocks := []Block{scale, num, lblk("txt", "g3", BlockShortText), dep}
+			blocks := []Block{
+				scale, num, lblk("txt", "g3", BlockShortText),
+				showRule("dep", tc.rule), dep,
+			}
 			plan := PlanForm(blocks, answers(tc.answers))
 			if got := plan.Visible["dep"]; got != tc.visible {
 				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
@@ -299,23 +341,25 @@ func TestPlanForm_Numbers(t *testing.T) {
 
 // ---------- страницы и переходы ----------
 
-// pagedDoc — три страницы: [src] | [q2] | [q3]; разрывы br1 и br2.
-func pagedDoc(jump []JumpRule) []Block {
+// pagedDoc — три страницы: [src] | [q2] | [q3]; разрывы br1 и br2. Переходы приезжают
+// блоками logic на ПЕРВОЙ странице: правило принадлежит странице, с которой уходят.
+func pagedDoc(jumps ...LogicAction) []Block {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
-	br1 := lblk("br1", "gb1", BlockPageBreak)
-	br1.JumpIf = jump
-	return []Block{
-		src,
-		br1,
+	out := []Block{src}
+	if len(jumps) > 0 {
+		out = append(out, llogic("L", "gL", leaf("src", OpIs, "no"), jumps...))
+	}
+	return append(out,
+		lblk("br1", "gb1", BlockPageBreak),
 		lblk("q2", "g2", BlockShortText),
 		lblk("br2", "gb2", BlockPageBreak),
 		lblk("q3", "g3", BlockShortText),
-	}
+	)
 }
 
 func TestPlanForm_Pages(t *testing.T) {
 	t.Run("без переходов страницы идут подряд", func(t *testing.T) {
-		plan := PlanForm(pagedDoc(nil), answers(map[string]any{}))
+		plan := PlanForm(pagedDoc(), answers(map[string]any{}))
 		want := [][]string{{"src"}, {"q2"}, {"q3"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
 			t.Fatalf("страницы: got %v, want %v", got, want)
@@ -323,7 +367,7 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("переход вперёд пропускает страницу", func(t *testing.T) {
-		jump := []JumpRule{{When: leaf("src", OpIs, "no"), To: "br2"}}
+		jump := LogicAction{Kind: ActJump, To: "br2"}
 		plan := PlanForm(pagedDoc(jump), answers(map[string]any{"src": "no"}))
 		want := [][]string{{"src"}, {"q3"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
@@ -335,7 +379,7 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("условие перехода не сработало — идём подряд", func(t *testing.T) {
-		jump := []JumpRule{{When: leaf("src", OpIs, "no"), To: "br2"}}
+		jump := LogicAction{Kind: ActJump, To: "br2"}
 		plan := PlanForm(pagedDoc(jump), answers(map[string]any{"src": "yes"}))
 		if got := len(plan.Pages); got != 3 {
 			t.Fatalf("страниц: got %d, want 3", got)
@@ -343,7 +387,7 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("end обрывает форму на текущей странице", func(t *testing.T) {
-		jump := []JumpRule{{When: leaf("src", OpIs, "no"), End: true}}
+		jump := LogicAction{Kind: ActJump, End: true}
 		plan := PlanForm(pagedDoc(jump), answers(map[string]any{"src": "no"}))
 		want := [][]string{{"src"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
@@ -353,8 +397,11 @@ func TestPlanForm_Pages(t *testing.T) {
 
 	t.Run("переход назад инертен", func(t *testing.T) {
 		// Правило на ВТОРОМ разрыве ведёт на первый — назад. Обход обязан пойти подряд.
-		blocks := pagedDoc(nil)
-		blocks[3].JumpIf = []JumpRule{{When: leaf("src", OpIs, "no"), To: "br1"}}
+		// Правило стоит на ВТОРОЙ странице и ведёт на первую — назад.
+		blocks := pagedDoc()
+		blocks = append(blocks[:3], append([]Block{
+			llogic("L", "gL", leaf("src", OpIs, "no"), LogicAction{Kind: ActJump, To: "br1"}),
+		}, blocks[3:]...)...)
 		plan := PlanForm(blocks, answers(map[string]any{"src": "no"}))
 		want := [][]string{{"src"}, {"q2"}, {"q3"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
@@ -363,7 +410,7 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("переход в никуда инертен", func(t *testing.T) {
-		jump := []JumpRule{{When: leaf("src", OpIs, "no"), To: "нет-такого"}}
+		jump := LogicAction{Kind: ActJump, To: "нет-такого"}
 		plan := PlanForm(pagedDoc(jump), answers(map[string]any{"src": "no"}))
 		if got := len(plan.Pages); got != 3 {
 			t.Fatalf("страниц: got %d, want 3", got)
@@ -371,11 +418,11 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("выигрывает первое сработавшее правило", func(t *testing.T) {
-		jump := []JumpRule{
-			{When: leaf("src", OpIs, "no"), To: "br2"},
-			{When: leaf("src", OpAnswered, ""), End: true},
+		jump := []LogicAction{
+			{Kind: ActJump, To: "br2"},
+			{Kind: ActJump, End: true},
 		}
-		plan := PlanForm(pagedDoc(jump), answers(map[string]any{"src": "no"}))
+		plan := PlanForm(pagedDoc(jump...), answers(map[string]any{"src": "no"}))
 		want := [][]string{{"src"}, {"q3"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
 			t.Fatalf("страницы: got %v, want %v", got, want)
@@ -383,8 +430,10 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("страница, где скрыто всё, не показывается", func(t *testing.T) {
-		blocks := pagedDoc(nil)
-		blocks[2].VisibleIf = leaf("src", OpIs, "yes")
+		blocks := pagedDoc()
+		blocks = append(blocks[:2], append([]Block{
+			showRule("q2", leaf("src", OpIs, "yes")),
+		}, blocks[2:]...)...)
 		plan := PlanForm(blocks, answers(map[string]any{"src": "no"}))
 		want := [][]string{{"src"}, {"q3"}}
 		if got := pageIDs(plan); !reflect.DeepEqual(got, want) {
@@ -400,10 +449,9 @@ func TestPlanForm_Pages(t *testing.T) {
 	})
 
 	t.Run("условие смотрит на вопрос той же страницы", func(t *testing.T) {
-		blocks := pagedDoc(nil)
+		blocks := pagedDoc()
 		dep := lblk("dep", "g4", BlockShortText)
-		dep.VisibleIf = leaf("src", OpIs, "yes")
-		blocks = append([]Block{blocks[0], dep}, blocks[1:]...)
+		blocks = append([]Block{blocks[0], showRule("dep", leaf("src", OpIs, "yes")), dep}, blocks[1:]...)
 		plan := PlanForm(blocks, answers(map[string]any{"src": "yes"}))
 		if !plan.Visible["dep"] {
 			t.Fatal("условие внутри страницы не сработало")
@@ -416,16 +464,15 @@ func TestPlanForm_Pages(t *testing.T) {
 func TestStripHiddenAnswers(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
 	dep := lblk("dep", "g2", BlockShortText)
-	dep.VisibleIf = leaf("src", OpIs, "yes")
-	list := lchoice("list", "g3", BlockMultiChoice,
-		Option{ID: "a", VisibleIf: leaf("src", OpIs, "yes")},
-		Option{ID: "b"},
-	)
-	single := lchoice("single", "g4", BlockDropdown,
-		Option{ID: "x", VisibleIf: leaf("src", OpIs, "yes")},
-		Option{ID: "y"},
-	)
-	blocks := []Block{src, dep, list, single}
+	list := lchoice("list", "g3", BlockMultiChoice, Option{ID: "a"}, Option{ID: "b"})
+	single := lchoice("single", "g4", BlockDropdown, Option{ID: "x"}, Option{ID: "y"})
+	yes := leaf("src", OpIs, "yes")
+	blocks := []Block{
+		src,
+		showRule("dep", yes), dep,
+		optionRule("list", yes, "a"), list,
+		optionRule("single", yes, "x"), single,
+	}
 
 	t.Run("ответ на скрытый вопрос отброшен", func(t *testing.T) {
 		out := StripHiddenAnswers(blocks, answers(map[string]any{"src": "no", "dep": "Барсик"}))
@@ -495,8 +542,10 @@ func TestNormalizeAnswers(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
 	dep := lblk("dep", "g2", BlockShortText)
 	dep.Required = true
-	dep.VisibleIf = leaf("src", OpIs, "yes")
-	schema := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, dep}}
+	schema := FormSchema{
+		SchemaVersion: SchemaVersion,
+		Blocks:        []Block{src, showRule("dep", leaf("src", OpIs, "yes")), dep},
+	}
 
 	t.Run("скрытый обязательный вопрос не мешает отправке", func(t *testing.T) {
 		clean, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no"}))
@@ -534,10 +583,12 @@ func TestNormalizeAnswers(t *testing.T) {
 		}
 	})
 
-	t.Run("requiredIf: обязателен только при сработавшем условии", func(t *testing.T) {
+	t.Run("обязателен только при сработавшем условии", func(t *testing.T) {
 		phone := lblk("phone", "g2", BlockPhone)
-		phone.RequiredIf = leaf("src", OpIs, "yes")
-		s := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, phone}}
+		s := FormSchema{
+			SchemaVersion: SchemaVersion,
+			Blocks:        []Block{src, requireRule("phone", leaf("src", OpIs, "yes")), phone},
+		}
 
 		if _, err := NormalizeAnswers(s, answers(map[string]any{"src": "no"})); err != nil {
 			t.Fatalf("условие не сработало — ответ обязан приниматься: %v", err)
@@ -564,54 +615,490 @@ func TestNormalizeAnswers(t *testing.T) {
 	})
 }
 
+// ---------- правила из блока logic ----------
+//
+// ЭТОТ ЖЕ состав случаев — в web/app/src/entities/logic.test.ts, describe'ы
+// «planForm: блок logic — …». Названия совпадают, чтобы расхождение было видно диффом.
+
+func llogic(id, group string, when *Condition, actions ...LogicAction) Block {
+	b := lblk(id, group, BlockLogic)
+	b.Logic = &Logic{When: when, Then: actions}
+	return b
+}
+
+func act(kind LogicActionKind, targets ...string) LogicAction {
+	return LogicAction{Kind: kind, Targets: targets}
+}
+
+func TestPlanForm_LogicBlockVisibility(t *testing.T) {
+	// [src] [L] [cap dep] — цель стоит НИЖЕ блока, источник ВЫШЕ него.
+	doc := func(l Block) []Block {
+		src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+		return []Block{src, l, lblk("cap", "g2", BlockTitle), lblk("dep", "g2", BlockShortText)}
+	}
+
+	cases := []struct {
+		name    string
+		logic   Block
+		answers map[string]any
+		visible bool
+	}{
+		{
+			"show: сработало — показан",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+			map[string]any{"src": "yes"},
+			true,
+		},
+		{
+			"show: не сработало — скрыт (умолчание перевёрнуто)",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+			map[string]any{"src": "no"},
+			false,
+		},
+		{
+			"hide: сработало — скрыт",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+			map[string]any{"src": "yes"},
+			false,
+		},
+		{
+			"hide: не сработало — виден",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"блок без условия инертен",
+			llogic("L", "gL", nil, act(ActShow, "cap")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"блок без действий ничего не делает",
+			llogic("L", "gL", leaf("src", OpIs, "yes")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"действие на удалённую цель инертно",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "призрак")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"источник НИЖЕ блока — правило инертно",
+			llogic("L", "gL", leaf("dep", OpAnswered, ""), act(ActShow, "cap")),
+			map[string]any{},
+			true,
+		},
+		{
+			"ссылка на несуществующий источник инертна",
+			llogic("L", "gL", leaf("нет-такого", OpIs, "x"), act(ActShow, "cap")),
+			map[string]any{},
+			true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := PlanForm(doc(tc.logic), answers(tc.answers))
+			// Действие адресует ГОЛОВУ группы и прячет вопрос целиком.
+			if plan.Visible["dep"] != tc.visible || plan.Visible["cap"] != tc.visible {
+				t.Fatalf("видимость вопроса: ожидалось %v, получено cap=%v dep=%v",
+					tc.visible, plan.Visible["cap"], plan.Visible["dep"])
+			}
+		})
+	}
+}
+
+// Блок волен стоять ГДЕ УГОДНО, в том числе ниже того, что прячет: обходу важно лишь
+// то, что источник решён к моменту, когда решается цель (ADR §10, 2026-08-16).
+func TestPlanForm_LogicBlockBelowTarget(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+	}
+	if PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("блок ниже цели обязан действовать: источник стоит выше цели")
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "yes"})).Visible["dep"] {
+		t.Fatal("условие сработало — вопрос обязан быть виден")
+	}
+}
+
+// А вот источник НИЖЕ цели — инертен: к моменту, когда решается цель, он не решён.
+func TestPlanForm_LogicBlockSourceBelowTarget(t *testing.T) {
+	blocks := []Block{
+		lblk("cap", "g1", BlockTitle),
+		lblk("dep", "g1", BlockShortText),
+		lchoice("src", "g2", BlockSingleChoice, Option{ID: "yes", Label: "Да"}),
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("источник ниже цели — правило обязано быть инертным")
+	}
+}
+
+func TestPlanForm_LogicBlockNonHeadTarget(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "dep")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("действие на НЕ головной блок группы обязано быть инертным")
+	}
+}
+
+func TestPlanForm_LogicBlockHideBeatsShow(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L1", "gL1", leaf("src", OpAnswered, ""), act(ActShow, "cap")),
+		llogic("L2", "gL2", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	if PlanForm(blocks, answers(map[string]any{"src": "yes"})).Visible["dep"] {
+		t.Fatal("скрыть обязано побеждать показать")
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("сработало только показать — вопрос обязан быть виден")
+	}
+}
+
+func TestPlanForm_LogicBlockOrderIndependent(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	a := llogic("L1", "gL1", leaf("src", OpIs, "yes"), act(ActShow, "cap"))
+	b := llogic("L2", "gL2", leaf("src", OpIs, "no"), act(ActShow, "cap"))
+	tail := []Block{lblk("cap", "g2", BlockTitle), lblk("dep", "g2", BlockShortText)}
+
+	for _, given := range []map[string]any{{"src": "yes"}, {"src": "no"}, {}} {
+		first := PlanForm(append([]Block{src, a, b}, tail...), answers(given)).Visible["dep"]
+		second := PlanForm(append([]Block{src, b, a}, tail...), answers(given)).Visible["dep"]
+		if first != second {
+			t.Fatalf("порядок блоков logic изменил результат при ответах %v: %v против %v", given, first, second)
+		}
+	}
+}
+
+func TestPlanForm_LogicBlockShowsOr(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L1", "gL1", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+		llogic("L2", "gL2", leaf("src", OpIs, "no"), act(ActShow, "cap")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	for _, tc := range []struct {
+		given   map[string]any
+		visible bool
+	}{
+		{map[string]any{"src": "yes"}, true},
+		{map[string]any{"src": "no"}, true},
+		{map[string]any{}, false},
+	} {
+		if got := PlanForm(blocks, answers(tc.given)).Visible["dep"]; got != tc.visible {
+			t.Fatalf("несколько «показать» складываются по ИЛИ: при %v ожидалось %v", tc.given, tc.visible)
+		}
+	}
+}
+
+func TestPlanForm_LogicBlockMultipleActions(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap"), act(ActRequire, "dep")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "yes"}))
+	if !plan.Visible["dep"] || !plan.Required["dep"] {
+		t.Fatalf("одно условие обязано раздать оба действия: visible=%v required=%v",
+			plan.Visible["dep"], plan.Required["dep"])
+	}
+}
+
+func TestPlanForm_LogicBlockNotVisible(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpAnswered, "")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "yes"}))
+	if plan.Visible["L"] {
+		t.Fatal("блок logic не показывается респонденту")
+	}
+	if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src", "cap", "dep"}}) {
+		t.Fatalf("блок logic попал на страницу: %v", got)
+	}
+}
+
+func TestPlanForm_LogicBlockRequired(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "call", Label: "Звонок"}, Option{ID: "mail", Label: "Почта"})
+
+	t.Run("действие сработало — обязателен", func(t *testing.T) {
+		blocks := []Block{src, llogic("L", "gL", leaf("src", OpIs, "call"), act(ActRequire, "dep")), lblk("dep", "g2", BlockPhone)}
+		if !PlanForm(blocks, answers(map[string]any{"src": "call"})).Required["dep"] {
+			t.Fatal("сработавшее действие обязано делать вопрос обязательным")
+		}
+		if PlanForm(blocks, answers(map[string]any{"src": "mail"})).Required["dep"] {
+			t.Fatal("несработавшее действие обязательности не создаёт")
+		}
+	})
+
+	t.Run("флаг required и действие складываются по ИЛИ", func(t *testing.T) {
+		dep := lblk("dep", "g2", BlockPhone)
+		dep.Required = true
+		blocks := []Block{src, llogic("L", "gL", leaf("src", OpIs, "call"), act(ActRequire, "dep")), dep}
+		if !PlanForm(blocks, answers(map[string]any{"src": "mail"})).Required["dep"] {
+			t.Fatal("флаг required действует независимо от условия")
+		}
+	})
+
+	t.Run("скрытый вопрос не обязателен никогда", func(t *testing.T) {
+		blocks := []Block{
+			src,
+			llogic("L", "gL", leaf("src", OpIs, "call"), act(ActHide, "dep"), act(ActRequire, "dep")),
+			lblk("dep", "g2", BlockPhone),
+		}
+		if PlanForm(blocks, answers(map[string]any{"src": "call"})).Required["dep"] {
+			t.Fatal("видимость старше обязательности")
+		}
+	})
+}
+
+func TestPlanForm_LogicBlockOptions(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "dog", Label: "Собака"}, Option{ID: "cat", Label: "Кот"})
+	list := lchoice("list", "g2", BlockMultiChoice,
+		Option{ID: "leash", Label: "Поводок"}, Option{ID: "tray", Label: "Лоток"}, Option{ID: "food", Label: "Корм"})
+	rule := func(kind LogicActionKind, ids ...string) Block {
+		b := lblk("L", "gL", BlockLogic)
+		b.Logic = &Logic{When: leaf("src", OpIs, "dog"), Then: []LogicAction{{Kind: kind, Targets: ids}}}
+		return b
+	}
+
+	t.Run("«скрыть варианты» прячет названные", func(t *testing.T) {
+		plan := PlanForm([]Block{src, rule(ActHide, "tray"), list}, answers(map[string]any{"src": "dog"}))
+		if plan.OptionVisible("list", "tray") {
+			t.Fatal("названный вариант обязан быть скрыт")
+		}
+		if !plan.OptionVisible("list", "leash") || !plan.OptionVisible("list", "food") {
+			t.Fatal("не названные варианты обязаны остаться видимыми")
+		}
+	})
+
+	t.Run("«показать варианты» переворачивает умолчание названных", func(t *testing.T) {
+		blocks := []Block{src, rule(ActShow, "leash"), list}
+		if PlanForm(blocks, answers(map[string]any{"src": "cat"})).OptionVisible("list", "leash") {
+			t.Fatal("условие не сработало — названный вариант обязан быть скрыт")
+		}
+		if !PlanForm(blocks, answers(map[string]any{"src": "dog"})).OptionVisible("list", "leash") {
+			t.Fatal("условие сработало — названный вариант обязан быть виден")
+		}
+		if !PlanForm(blocks, answers(map[string]any{"src": "cat"})).OptionVisible("list", "food") {
+			t.Fatal("не названный вариант умолчания не менял")
+		}
+	})
+
+	t.Run("скрытый вариант не считается выбором", func(t *testing.T) {
+		dep := lblk("dep", "g3", BlockShortText)
+		blocks := []Block{
+			src, rule(ActHide, "tray"), list,
+			showRule("dep", leaf("list", OpIncludes, "tray")), dep,
+		}
+		plan := PlanForm(blocks, answers(map[string]any{"src": "dog", "list": []string{"tray", "food"}}))
+		if plan.Visible["dep"] {
+			t.Fatal("выбранный скрытый вариант не считается выбором")
+		}
+	})
+}
+
+func TestPlanForm_LogicBlockJumpAndSubmit(t *testing.T) {
+	// Три страницы: [src, L] | [q2] | [q3].
+	paged := func(actions ...LogicAction) []Block {
+		src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+		return []Block{
+			src,
+			llogic("L", "gL", leaf("src", OpIs, "no"), actions...),
+			lblk("br1", "gb1", BlockPageBreak),
+			lblk("q2", "g2", BlockShortText),
+			lblk("br2", "gb2", BlockPageBreak),
+			lblk("q3", "g3", BlockShortText),
+		}
+	}
+	no := answers(map[string]any{"src": "no"})
+	yes := answers(map[string]any{"src": "yes"})
+
+	t.Run("переход со СВОЕЙ страницы пропускает следующую", func(t *testing.T) {
+		got := pageIDs(PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}), no))
+		if !reflect.DeepEqual(got, [][]string{{"src"}, {"q3"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("условие не сработало — идём подряд", func(t *testing.T) {
+		if got := PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}), yes); len(got.Pages) != 3 {
+			t.Fatalf("страниц: %d", len(got.Pages))
+		}
+	})
+
+	t.Run("end обрывает форму на текущей странице", func(t *testing.T) {
+		got := pageIDs(PlanForm(paged(LogicAction{Kind: ActJump, End: true}), no))
+		if !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("переход назад инертен", func(t *testing.T) {
+		if got := PlanForm(paged(LogicAction{Kind: ActJump, To: "br1"}), no); len(got.Pages) != 3 {
+			t.Fatalf("страниц: %d", len(got.Pages))
+		}
+	})
+
+	t.Run("«скрыть кнопку» обрывает обход и помечает план", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActBlockSubmit}), no)
+		if !plan.Blocked {
+			t.Fatal("план обязан быть помечен заблокированным")
+		}
+		if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("«скрыть кнопку» не сработало — план не заблокирован", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActBlockSubmit}), yes)
+		if plan.Blocked || len(plan.Pages) != 3 {
+			t.Fatalf("blocked=%v страниц=%d", plan.Blocked, len(plan.Pages))
+		}
+	})
+
+	t.Run("«скрыть кнопку» старше перехода с той же страницы", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}, LogicAction{Kind: ActBlockSubmit}), no)
+		if !plan.Blocked {
+			t.Fatal("кнопка обязана перевесить переход")
+		}
+		if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("форма без блоков logic не заблокирована", func(t *testing.T) {
+		if PlanForm([]Block{lblk("q", "g1", BlockShortText)}, nil).Blocked {
+			t.Fatal("форма без логики не блокируется")
+		}
+	})
+}
+
+// Спрятанная разметкой кнопка не защищает от curl: приём обязан отвергнуть отправку
+// сам (инвариант безопасности 3).
+func TestNormalizeAnswers_BlockedFormRejected(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	schema := FormSchema{Blocks: []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "no"), LogicAction{Kind: ActBlockSubmit}),
+	}}
+
+	if _, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no"})); err == nil {
+		t.Fatal("отправка заблокированной формы обязана быть отвергнута")
+	} else if !errors.Is(err, ErrValidation) {
+		t.Fatalf("ошибка обязана быть ErrValidation, получено: %v", err)
+	}
+
+	// Та же форма при другом ответе принимается: блокировка — это ветка, а не режим.
+	if _, err := NormalizeAnswers(schema, answers(map[string]any{"src": "yes"})); err != nil {
+		t.Fatalf("незаблокированная ветка обязана приниматься: %v", err)
+	}
+}
+
 // ---------- форма правил в схеме ----------
 
 func TestValidateSchema_LogicValid(t *testing.T) {
 	cases := map[string]string{
-		"visibleIf листом": `{"schemaVersion":1,"blocks":[
+		"условие листом": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
-			{"id":"b","groupId":"g2","type":"short_text","visibleIf":{"blockId":"a","op":"is","value":"o1"},"settings":{}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"o1"},"then":[{"kind":"show","targets":["b"]}]}},
+			{"id":"b","groupId":"g2","type":"short_text","settings":{}}
 		]}`,
-		"visibleIf вложенными группами": `{"schemaVersion":1,"blocks":[
+		"условие вложенными группами": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"any":[
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"any":[
 				{"all":[{"blockId":"a","op":"answered"},{"blockId":"a","op":"is","value":"x"}]},
 				{"blockId":"a","op":"is","value":"y"}
-			]}}
+			]}}}
 		]}`,
 		"значение не выбрано — законный черновик": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":""}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":""}}}
 		]}`,
 		"ссылка вперёд — инертна, но валидна": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"answered"}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered"}}},
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}}
 		]}`,
 		"ссылка на удалённый блок — инертна, но валидна": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"blockId":"призрак","op":"answered"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"призрак","op":"answered"}}}
 		]}`,
-		"requiredIf у отвечаемого": `{"schemaVersion":1,"blocks":[
+		"обязательность по условию": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"b","groupId":"g2","type":"phone","settings":{},"requiredIf":{"blockId":"a","op":"answered"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered"},"then":[{"kind":"require","targets":["b"]}]}},
+			{"id":"b","groupId":"g2","type":"phone","settings":{}}
 		]}`,
-		"visibleIf у варианта": `{"schemaVersion":1,"blocks":[
+		"скрытие варианта": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"b","groupId":"g2","type":"multi_choice","settings":{"options":[
-				{"id":"o1","label":"Поводок","visibleIf":{"blockId":"a","op":"is","value":"dog"}}
-			]}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"dog"},"then":[{"kind":"hide","targets":["o1"]}]}},
+			{"id":"b","groupId":"g2","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Поводок"}]}}
 		]}`,
-		"переходы у разрыва": `{"schemaVersion":1,"blocks":[
+		"переходы блоком": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"br","groupId":"g2","type":"page_break","jumpIf":[
-				{"when":{"blockId":"a","op":"empty"},"to":"br2"},
-				{"when":{"blockId":"a","op":"answered"},"end":true}
-			]},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"empty"},"then":[
+				{"kind":"jump","to":"br2"},
+				{"kind":"jump","end":true}
+			]}},
+			{"id":"br","groupId":"g2","type":"page_break"},
 			{"id":"c","groupId":"g3","type":"short_text","settings":{}}
 		]}`,
 		"глубина ровно в лимит": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":
-				{"all":[{"any":[{"all":[{"blockId":"a","op":"answered"}]}]}]}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":
+				{"all":[{"any":[{"all":[{"blockId":"a","op":"answered"}]}]}]}}}
+		]}`,
+		"блок logic: условие и все виды действий": `{"schemaVersion":1,"blocks":[
+			{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
+			{"id":"L","groupId":"g2","type":"logic","logic":{
+				"when":{"blockId":"a","op":"is","value":"o1"},
+				"then":[
+					{"kind":"show","targets":["b"]},
+					{"kind":"hide","targets":["c"]},
+					{"kind":"require","targets":["b"]},
+					{"kind":"show","targets":["o2"]},
+					{"kind":"hide","targets":["o2","o3"]},
+					{"kind":"jump","to":"br"},
+					{"kind":"jump","end":true},
+					{"kind":"block_submit"}
+				]}},
+			{"id":"b","groupId":"g3","type":"short_text","settings":{}},
+			{"id":"c","groupId":"g4","type":"multi_choice","settings":{}}
+		]}`,
+		"блок logic без условия и без действий — законный черновик": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{}}
+		]}`,
+		"блок logic вовсе без поля logic": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic"}
+		]}`,
+		"действие на удалённую цель — инертно, но валидно": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","targets":["призрак"]}]}}
+		]}`,
+		"цель СТОИТ ВЫШЕ блока — инертно, но валидно": `{"schemaVersion":1,"blocks":[
+			{"id":"b","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"L","groupId":"g2","type":"logic","logic":{"then":[{"kind":"show","targets":["b"]}]}}
 		]}`,
 	}
 
@@ -627,42 +1114,44 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 func TestValidateSchema_LogicInvalid(t *testing.T) {
 	deep := `{"all":[{"all":[{"all":[{"all":[{"blockId":"a","op":"answered"}]}]}]}]}`
 	long := strings.Repeat("я", MaxLogicValueLen+1)
+	manyActions := strings.TrimSuffix(
+		strings.Repeat(`{"kind":"show","targets":["b"]},`, MaxLogicActions+1), ",")
 
 	cases := map[string]string{
 		"пустое условие": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{}}}
 		]}`,
 		"пустая группа": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"all":[]}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[]}}}
 		]}`,
 		"all и any одновременно": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{
-				"all":[{"blockId":"a","op":"answered"}],"any":[{"blockId":"a","op":"empty"}]}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{
+				"all":[{"blockId":"a","op":"answered"}],"any":[{"blockId":"a","op":"empty"}]}}}
 		]}`,
 		"группа с полями листа": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{
-				"all":[{"blockId":"a","op":"answered"}],"blockId":"a","op":"is","value":"x"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{
+				"all":[{"blockId":"a","op":"answered"}],"blockId":"a","op":"is","value":"x"}}}
 		]}`,
 		"неизвестный оператор": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"matches","value":"x"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"matches","value":"x"}}}
 		]}`,
 		"оператора нет вовсе": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a"}}}
 		]}`,
 		"пустой blockId": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"","op":"answered","value":"x"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"","op":"answered","value":"x"}}}
 		]}`,
 		"значение у answered": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"answered","value":"x"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered","value":"x"}}}
 		]}`,
 		"значение длиннее лимита": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":"` + long + `"}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"` + long + `"}}}
 		]}`,
 		"вложенность глубже лимита": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":` + deep + `}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":` + deep + `}}
 		]}`,
 		"лишний ключ в условии": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"blockId":"a","op":"is","value":"x","not":true}}
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"x","not":true}}}
 		]}`,
 		"requiredIf у неотвечаемого": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"heading","text":[{"t":"Раздел"}],"requiredIf":{"blockId":"a","op":"answered"}}
@@ -684,6 +1173,42 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 		]}`,
 		"переход с двумя целями": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"answered"},"to":"br2","end":true}]}
+		]}`,
+		"logic у чужого типа": `{"schemaVersion":1,"blocks":[
+			{"id":"b","groupId":"g1","type":"short_text","settings":{},"logic":{"then":[{"kind":"show","targets":["c"]}]}}
+		]}`,
+		"неизвестное действие": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"calculate","target":"b"}]}}
+		]}`,
+		"действие без цели": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show"}]}}
+		]}`,
+		"пустая цель": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":""}]}}
+		]}`,
+		"варианты без списка": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide_options","target":"c"}]}}
+		]}`,
+		"пустой список вариантов": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide","targets":[]}]}}
+		]}`,
+		"варианты у действия, которое их не адресует": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":"c","options":["o1"]}]}}
+		]}`,
+		"переход в блоке logic без цели": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"jump"}]}}
+		]}`,
+		"переход в блоке logic с двумя целями": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"jump","to":"br","end":true}]}}
+		]}`,
+		"цель перехода у действия, которое не переход": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"block_submit","to":"br"}]}}
+		]}`,
+		"лишний ключ в блоке logic": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"otherwise":[]}}
+		]}`,
+		"действий больше лимита": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[` + manyActions + `]}}
 		]}`,
 	}
 
@@ -708,8 +1233,8 @@ func TestValidateSchema_LogicNodeLimit(t *testing.T) {
 		leaves = append(leaves, `{"blockId":"a","op":"answered"}`)
 	}
 	doc := func(n int) string {
-		return `{"schemaVersion":1,"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{},"visibleIf":{"all":[` +
-			strings.Join(leaves[:n], ",") + `]}}]}`
+		return `{"schemaVersion":1,"blocks":[{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[` +
+			strings.Join(leaves[:n], ",") + `]}}}]}`
 	}
 
 	// Группа плюс n листьев: ровно в лимит — валидно, на один больше — нет.
@@ -725,10 +1250,17 @@ func TestValidateSchema_LogicCanonical(t *testing.T) {
 	// Правила переживают канонизацию: то, что сохранил автор, читатель получает
 	// байт в байт (иначе автосейв гонял бы бесконечный дифф).
 	raw := `{"schemaVersion":1,"blocks":[
-		{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","visibleIf":{"blockId":"z","op":"answered"}}]}},
-		{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":{"all":[{"blockId":"a","op":"is","value":"o1"}]},"requiredIf":{"blockId":"a","op":"answered"}},
-		{"id":"br","groupId":"g3","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"empty"},"end":true}]},
-		{"id":"c","groupId":"g4","type":"short_text","settings":{}}
+		{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
+		{"id":"L","groupId":"gL","type":"logic","logic":{
+			"when":{"all":[{"blockId":"a","op":"is","value":"o1"}]},
+			"then":[
+				{"kind":"show","targets":["b"]},
+				{"kind":"require","targets":["b"]},
+				{"kind":"hide","targets":["o9"]},
+				{"kind":"jump","end":true}
+			]}},
+		{"id":"b","groupId":"g2","type":"short_text","settings":{}},
+		{"id":"c","groupId":"g4","type":"multi_choice","settings":{"options":[{"id":"o9","label":"Девять"}]}}
 	]}`
 	canon, err := CanonicalV4(json.RawMessage(raw))
 	if err != nil {
@@ -741,7 +1273,7 @@ func TestValidateSchema_LogicCanonical(t *testing.T) {
 	if string(canon) != string(again) {
 		t.Fatalf("канон не идемпотентен:\n%s\n%s", canon, again)
 	}
-	for _, want := range []string{`"visibleIf"`, `"requiredIf"`, `"jumpIf"`, `"end":true`} {
+	for _, want := range []string{`"logic"`, `"when"`, `"then"`, `"targets":["o9"]`, `"end":true`} {
 		if !strings.Contains(string(canon), want) {
 			t.Fatalf("канон потерял %s: %s", want, canon)
 		}
@@ -754,8 +1286,10 @@ func TestSummary_DenominatorCountsShownOnly(t *testing.T) {
 	// Форма: «Есть питомец?» и «Какой?» за условием «Да».
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
 	dep := lblk("dep", "g2", BlockShortText)
-	dep.VisibleIf = leaf("src", OpIs, "yes")
-	schema := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{src, dep}}
+	schema := FormSchema{
+		SchemaVersion: SchemaVersion,
+		Blocks:        []Block{src, showRule("dep", leaf("src", OpIs, "yes")), dep},
+	}
 	versions := []VersionedSchema{{Version: 1, Schema: schema}}
 
 	b := NewSummaryBuilder(versions)
@@ -806,7 +1340,7 @@ func TestSummary_NoRules_SameAsBefore(t *testing.T) {
 
 func TestSummary_HiddenByJump_NotAsked(t *testing.T) {
 	// Пропущенная переходом страница в знаменатель не идёт — она не показывалась.
-	blocks := pagedDoc([]JumpRule{{When: leaf("src", OpIs, "no"), To: "br2"}})
+	blocks := pagedDoc(LogicAction{Kind: ActJump, To: "br2"})
 	versions := []VersionedSchema{{Version: 1, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: blocks}}}
 
 	b := NewSummaryBuilder(versions)

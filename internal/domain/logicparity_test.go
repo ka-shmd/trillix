@@ -23,13 +23,14 @@ import (
 
 var (
 	reLogicOperators = regexp.MustCompile(`(?s)LOGIC_OPERATORS = \[(.*?)\] as const`)
-	reLogicLimit     = regexp.MustCompile(`export const (MAX_LOGIC_\w+|MAX_JUMP_RULES) = (\d+)`)
+	reLogicActions   = regexp.MustCompile(`(?s)LOGIC_ACTIONS = \[(.*?)\] as const`)
+	reLogicLimit     = regexp.MustCompile(`export const (MAX_LOGIC_\w+) = (\d+)`)
 )
 
 func TestLogicOperatorsParity(t *testing.T) {
-	m := reLogicOperators.FindStringSubmatch(readTSFile(t, "logic.ts"))
+	m := reLogicOperators.FindStringSubmatch(readTSFile(t, "conditions.ts"))
 	if m == nil {
-		t.Fatal("не удалось прочитать LOGIC_OPERATORS из blocks/logic.ts")
+		t.Fatal("не удалось прочитать LOGIC_OPERATORS из blocks/conditions.ts")
 	}
 
 	var ts []LogicOp
@@ -53,12 +54,40 @@ func TestLogicOperatorsParity(t *testing.T) {
 	}
 }
 
+// Действия сверяются тем же способом и по той же причине, что операторы: действие,
+// добавленное на одной стороне, не падает — оно молча не срабатывает. Билдер даст автору
+// выбрать «скрыть кнопку», а сервер такого действия не знает и отправку пропустит.
+func TestLogicActionsParity(t *testing.T) {
+	m := reLogicActions.FindStringSubmatch(readTSFile(t, "logic.ts"))
+	if m == nil {
+		t.Fatal("не удалось прочитать LOGIC_ACTIONS из blocks/logic.ts")
+	}
+
+	var ts []LogicActionKind
+	seen := map[LogicActionKind]bool{}
+	for _, q := range reQuoted.FindAllStringSubmatch(m[1], -1) {
+		a := LogicActionKind(q[1])
+		if seen[a] {
+			t.Fatalf("действие %s разобрано дважды — разбор LOGIC_ACTIONS сломался", a)
+		}
+		seen[a] = true
+		ts = append(ts, a)
+	}
+	if len(ts) == 0 {
+		t.Fatal("LOGIC_ACTIONS пуст — разбор blocks/logic.ts сломался")
+	}
+	if !slices.Equal(ts, logicActions) {
+		t.Fatalf("состав действий разошёлся:\n  TS: %v\n  Go: %v", ts, logicActions)
+	}
+}
+
 func TestLogicLimitsParity(t *testing.T) {
 	want := map[string]int{
 		"MAX_LOGIC_DEPTH":     MaxLogicDepth,
 		"MAX_LOGIC_NODES":     MaxLogicNodes,
 		"MAX_LOGIC_VALUE_LEN": MaxLogicValueLen,
-		"MAX_JUMP_RULES":      MaxJumpRules,
+		"MAX_LOGIC_ACTIONS":   MaxLogicActions,
+		"MAX_LOGIC_TARGETS":   MaxLogicTargets,
 	}
 
 	found := map[string]int{}

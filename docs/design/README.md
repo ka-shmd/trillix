@@ -23,7 +23,8 @@
 | [`s3-media.md`](s3-media.md) | объектное хранилище и блок «картинка» | живёт на проде | [`S3.md`](../S3.md) |
 | [`multipage.md`](multipage.md) | фаза 19, многостраничные формы | `v0.19.0` | [`EDITOR.md`](../EDITOR.md) §1/§6, [`ANALYTICS.md`](../ANALYTICS.md) |
 | [`embed.md`](embed.md) | фаза 20 `DEV-PLAN`, встраивание в чужие сайты | **не закрыта** — спека живая | [`EMBED.md`](../EMBED.md) |
-| [`logic.md`](logic.md) | фаза 21, условная логика в формах | `v0.21.0` | [`EDITOR.md`](../EDITOR.md) §15, [`SCHEMA.md`](../SCHEMA.md) |
+| [`logic.md`](logic.md) | фаза 21, условная логика в формах (**модель носителей отменена 2026-08-16**) | `v0.21.0` | [`logic-blocks.md`](logic-blocks.md), [`EDITOR.md`](../EDITOR.md) §15 |
+| [`logic-blocks.md`](logic-blocks.md) | переезд условной логики в блок полотна | — | [`EDITOR.md`](../EDITOR.md) §15, [`SCHEMA.md`](../SCHEMA.md) |
 | [`theme.md`](theme.md) | фаза 22, оформление формы: тема, цвета, шрифт, лэйаут, свой CSS | `v0.22.0` | [`EDITOR.md`](../EDITOR.md) §16, [`BILLING.md`](../BILLING.md), [`fields/README.md`](../../web/shared/fields/README.md) |
 | [`mentions.md`](mentions.md) | задача вне плана, подстановка ответов в тексте формы (`@`) | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §17 (пишется) |
 | [`account-settings.md`](account-settings.md) | фаза 23 `DEV-PLAN`, настройки аккаунта: профиль, пароль, email, второй фактор, способы входа, удаление | **не закрыта** — спека живая | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md), [`WORKSPACES.md`](../WORKSPACES.md) |

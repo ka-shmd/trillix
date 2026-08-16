@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Copy, GitBranch, Replace, Trash2 } from 'lucide-react'
+import { Copy, Replace, Trash2 } from 'lucide-react'
 import {
   BLOCK_CLASS_RE,
   MAX_BLOCK_CLASS_LEN,
@@ -9,15 +9,6 @@ import {
   type Block,
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
-import { JumpDialog } from './logic/JumpDialog'
-import { BlockRuleDialog } from './logic/LogicDialog'
-import {
-  jumpSummary,
-  requiredMode,
-  requiredPatch,
-  ruleCarrier,
-  ruleSummary,
-} from './logic/model'
 import { Switch } from '@/components/ui/switch'
 import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
@@ -102,31 +93,23 @@ function ClassSetting({ block }: { block: Block }) {
   )
 }
 
-// RequiredSetting — обязательность ТУМБЛЕРОМ: да / нет. Условная обязательность —
-// не третье его положение, а свой пункт в общем списке ниже: у неё жанр правила
-// (дерево условий в диалоге), а не значения из списка, как у «Показывать: …».
-//
-// Модель при этом ТРЁХСОСТОЯНИЯ (фаза 21, ADR §10): required и requiredIf схема
-// запрещает вместе, поэтому пишем не голый флаг, а requiredPatch — он всегда чистит
-// второе поле. Тумблер отвечает на вопрос «обязателен ли вообще» (включён и при
-// условной обязательности), а чем именно — говорит пункт ниже.
+// RequiredSetting — обязательность ТУМБЛЕРОМ: да / нет. Обязательность ПО УСЛОВИЮ —
+// не третье его положение и вообще не свойство блока: её задаёт действие «сделать
+// обязательным» в блоке `logic` на полотне (ADR §10). Флаг и действие складываются по
+// ИЛИ, и о бессмысленной паре («обязателен всегда» плюс условие) предупреждает сам
+// блок логики — валидатор здесь бессилен, проверка кросс-блочная.
 function RequiredSetting({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
-  const mode = requiredMode(block)
   return (
     <SettingRow label="Обязательный">
       <Switch
-        checked={mode !== 'no'}
+        checked={block.required === true}
         aria-label="Обязательность вопроса"
-        onCheckedChange={(on) => updateBlock(block.id, requiredPatch(on ? 'always' : 'no'))}
+        onCheckedChange={(on) => updateBlock(block.id, { required: on })}
       />
     </SettingRow>
   )
 }
-
-// Стабильная пустота для закрытого попапа: новый литерал на каждый рендер сам был бы
-// сменой значения и перерисовывал бы строку.
-const NO_BLOCKS: Block[] = []
 
 export function BlockActionMenu({
   open,
@@ -159,16 +142,6 @@ export function BlockActionMenu({
   // Какой вид показан: действия или выбор нового типа. Сбрасывается на «действия»
   // при закрытии, чтобы следующее открытие начиналось с корня.
   const [view, setView] = useState<'actions' | 'types'>('actions')
-  // Диалог логики (фаза 21) — рядом с попапом, а не внутри: у правила дерево с
-  // группами, попап шириной в одну строку настройки для него мал.
-  // Какое правило правим — или null, если диалог закрыт. Одно состояние на оба: диалог
-  // у них общий, отличаются только тексты.
-  const [logicField, setLogicField] = useState<'visibleIf' | 'requiredIf' | null>(null)
-  // Переходы (слайс 5) — свой диалог: у них не одно правило, а список со своим порядком
-  // приоритета и целью у каждого.
-  const [jumpsOpen, setJumpsOpen] = useState(false)
-  // Носитель правила — голова группы: прячется вопрос целиком, а не одна его строка.
-  // У заголовка формы правил не бывает — он скелет документа, не вопрос.
   //
   // ПОДПИСКА НА blocks — ТОЛЬКО КОГДА ПОПАП ОТКРЫТ, и это не микрооптимизация. Попап
   // отрисован у КАЖДОЙ строки полотна, а массив блоков меняет идентичность на каждое
@@ -177,15 +150,6 @@ export function BlockActionMenu({
   // Тот же класс, что записан в STATUS про useSortable: дорогое живёт там, где его
   // видит только открытый попап. Закрытый селектор отдаёт стабильную пустоту и не
   // перерисовывает ничего.
-  const blocks = useBuilderStore((s) =>
-    open || logicField !== null || jumpsOpen ? s.blocks : NO_BLOCKS,
-  )
-  const carrier = ruleCarrier(blocks, block.id)
-  const logicAllowed =
-    carrier !== null && carrier.type !== 'form_title' && block.type !== 'page_break'
-  // Переходы задаются только у разрыва страницы: правило «куда уходим» принадлежит
-  // границе, а не элементу (схема это и проверяет).
-  const jumpsAllowed = block.type === 'page_break'
   const isGroup = isCaptionType(block.type)
   // Имя — свойство любого отвечаемого блока, а не типа (ADR §10), поэтому строка общая
   // и стоит выше типового раздела. У подписи, контента и заголовка формы её нет: имя
@@ -202,19 +166,6 @@ export function BlockActionMenu({
 
   return (
     <>
-      {/* Носитель у правил РАЗНЫЙ: видимость прячет вопрос целиком (голова группы),
-          обязательность — свойство поля (сам отвечаемый блок). */}
-      {logicField !== null && (
-        <BlockRuleDialog
-          open
-          onOpenChange={(o) => !o && setLogicField(null)}
-          carrier={logicField === 'visibleIf' ? carrier! : requiredFor!}
-          kind={logicField}
-        />
-      )}
-      {/* Тоже только открытым: JumpDialog подписан на blocks, а строка-разрыв есть у
-          каждой страницы формы. */}
-      {jumpsAllowed && jumpsOpen && <JumpDialog open onOpenChange={setJumpsOpen} block={block} />}
       <Popover
         open={open}
         onOpenChange={(o) => {
@@ -247,47 +198,6 @@ export function BlockActionMenu({
               <Command>
                 <CommandList>
                   <CommandGroup>
-                    {logicAllowed && (
-                      <CommandItem
-                        onSelect={() => {
-                          setLogicField('visibleIf')
-                          onOpenChange(false)
-                        }}
-                      >
-                        <GitBranch className="size-4" />
-                        Показывать: {ruleSummary(blocks, carrier.visibleIf)}
-                      </CommandItem>
-                    )}
-                    {/* Условная обязательность (фаза 21) — СВОИМ пунктом, а не третьим
-                        положением тумблера выше: у правила диалог с деревом условий, и
-                        жанр у него тот же, что у «Показывать: …». Пункт открывает диалог,
-                        а не пишет что-то сам: правило без единого условия невалидно, и
-                        «обязателен по пустому условию» ничего не значит — до первого
-                        условия режим остаётся прежним (LogicDialog зовёт requiredPatch). */}
-                    {requiredFor && (
-                      <CommandItem
-                        onSelect={() => {
-                          setLogicField('requiredIf')
-                          onOpenChange(false)
-                        }}
-                      >
-                        <GitBranch className="size-4" />
-                        {requiredFor.requiredIf
-                          ? `Обязателен, если: ${ruleSummary(blocks, requiredFor.requiredIf)}`
-                          : 'Обязателен по условию…'}
-                      </CommandItem>
-                    )}
-                    {jumpsAllowed && (
-                      <CommandItem
-                        onSelect={() => {
-                          setJumpsOpen(true)
-                          onOpenChange(false)
-                        }}
-                      >
-                        <GitBranch className="size-4" />
-                        Переходы: {jumpSummary(blocks, block)}
-                      </CommandItem>
-                    )}
                     <CommandItem onSelect={() => setView('types')}>
                       <Replace className="size-4" />
                       Сменить тип

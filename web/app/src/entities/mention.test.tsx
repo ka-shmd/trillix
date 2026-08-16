@@ -102,16 +102,24 @@ describe('mentionResolver — когда ссылка разрешима', () =>
 
   it('источник, скрытый условием, считается пустым', () => {
     const gate = answerBlock('gate')
-    const hidden = answerBlock('hidden', {
-      visibleIf: { all: [{ blockId: 'gate', op: 'is', value: 'да' }] },
-    })
+    const hidden = answerBlock('hidden')
+    // Правило показывает `hidden` только при «да»: блок стоит между источником и целью.
+    const rule: Block = {
+      id: 'L',
+      groupId: 'gL',
+      type: 'logic',
+      logic: {
+        when: { all: [{ blockId: 'gate', op: 'is', value: 'да' }] },
+        then: [{ kind: 'show', targets: ['hidden'] }],
+      },
+    }
     const consumer: Block = {
       id: 'cap2',
       groupId: 'g3',
       type: 'title',
       text: [{ t: 'Имя', ref: 'hidden' }],
     }
-    const docBlocks = [gate, hidden, consumer]
+    const docBlocks = [gate, rule, hidden, consumer]
     const answers = { gate: 'нет', hidden: 'Кирилл' }
     const plan = planForm(docBlocks, answers)
     expect(plan.visible.has('hidden')).toBe(false)

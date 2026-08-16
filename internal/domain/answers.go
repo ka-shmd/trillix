@@ -60,6 +60,13 @@ func NormalizeAnswers(schema FormSchema, answers map[string]json.RawMessage) (ma
 	// считать его надо от того, что будет сохранено: так «обязательные среди видимых»
 	// и содержимое базы описывают одну и ту же форму.
 	plan := PlanForm(schema.Blocks, clean)
+	// Действие «скрыть кнопку» — не украшение: ветка-тупик обязана быть тупиком и для
+	// того, кто шлёт запрос мимо формы. Ошибка формы целиком, а не под block_id: она
+	// не про поле, и вешать её на произвольный вопрос значило бы подсветить в
+	// интерфейсе не то место (инвариант безопасности 3).
+	if plan.Blocked {
+		return nil, fmt.Errorf("%w: форма не принимает ответ — условие скрывает кнопку отправки", ErrValidation)
+	}
 	if err := validateAnswers(schema, clean, plan); err != nil {
 		return nil, err
 	}

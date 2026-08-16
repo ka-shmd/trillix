@@ -450,7 +450,8 @@ func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
 // и обязательный «Какой?» за условием «выбрано Да».
 const logicSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
-	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{},"visibleIf":{"all":[{"blockId":"pet","op":"is","value":"yes"}]}}
+	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"yes"}]},"then":[{"kind":"show","targets":["kind"]}]}},
+	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{}}
 ]}`
 
 // Сервер не верит клиенту: ответ на скрытый вопрос принимается (респондент не виноват,
@@ -525,7 +526,8 @@ func TestSubmit_VisibleRequired_422(t *testing.T) {
 // нормализацию, и «обязателен» здесь означает 422 респонденту.
 const requiredIfSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"how","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"call","label":"Звонок"},{"id":"mail","label":"Почта"}]}},
-	{"id":"phone","groupId":"g2","type":"phone","settings":{},"requiredIf":{"all":[{"blockId":"how","op":"is","value":"call"}]}}
+	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"how","op":"is","value":"call"}]},"then":[{"kind":"require","targets":["phone"]}]}},
+	{"id":"phone","groupId":"g2","type":"phone","settings":{}}
 ]}`
 
 func TestSubmit_RequiredIf(t *testing.T) {
@@ -555,9 +557,11 @@ func TestSubmit_RequiredIf(t *testing.T) {
 // прислать вручную. Проверяем сквозь HTTP: это про то, что попадёт в базу и в выгрузку.
 const optionRuleSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"dog","label":"Собака"},{"id":"cat","label":"Кот"}]}},
+	{"id":"L1","groupId":"gL1","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"dog"}]},"then":[{"kind":"show","targets":["leash"]}]}},
+	{"id":"L2","groupId":"gL2","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"cat"}]},"then":[{"kind":"show","targets":["tray"]}]}},
 	{"id":"stuff","groupId":"g2","type":"multi_choice","settings":{"options":[
-		{"id":"leash","label":"Поводок","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"dog"}]}},
-		{"id":"tray","label":"Лоток","visibleIf":{"all":[{"blockId":"pet","op":"is","value":"cat"}]}},
+		{"id":"leash","label":"Поводок"},
+		{"id":"tray","label":"Лоток"},
 		{"id":"food","label":"Корм"}
 	]}}
 ]}`
@@ -597,7 +601,8 @@ func TestSubmit_HiddenOption_StrippedFromAnswer(t *testing.T) {
 // Сервер считает обход сам: тело запроса ему в этом не указ.
 const jumpSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
-	{"id":"br1","groupId":"g2","type":"page_break","jumpIf":[{"when":{"all":[{"blockId":"pet","op":"is","value":"no"}]},"to":"br2"}]},
+	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"no"}]},"then":[{"kind":"jump","to":"br2"}]}},
+	{"id":"br1","groupId":"g2","type":"page_break"},
 	{"id":"kind","groupId":"g3","type":"short_text","required":true,"settings":{}},
 	{"id":"br2","groupId":"g4","type":"page_break"},
 	{"id":"phone","groupId":"g5","type":"phone","settings":{}}

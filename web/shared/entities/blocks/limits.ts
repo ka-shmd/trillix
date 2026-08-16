@@ -74,13 +74,20 @@ export const DEFAULT_LOGO_WIDTH = 100
 export const DEFAULT_LOGO_HEIGHT = 100
 export const DEFAULT_LOGO_RADIUS = 50
 export const DEFAULT_COVER_HEIGHT = 25
-// Условная логика (фаза 21). Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen/
-// MaxJumpRules. Первые два обязательны: без них стоимость вычисления чужого документа
-// умножается на MAX_BLOCKS — тот же класс, что у MAX_SPANS в тексте блока.
+// Условная логика. Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen. Первые два
+// обязательны: без них стоимость вычисления чужого документа умножается на MAX_BLOCKS —
+// тот же класс, что у MAX_SPANS в тексте блока.
 export const MAX_LOGIC_DEPTH = 4
 export const MAX_LOGIC_NODES = 40
 export const MAX_LOGIC_VALUE_LEN = 200
-export const MAX_JUMP_RULES = 10
+// Действий в одном блоке `logic`. Зеркалит MaxLogicActions. Потолок тот же, что у
+// переходов: список действий читается глазами в строке полотна, и десяток — предел, за
+// которым автору проще поставить второй блок.
+export const MAX_LOGIC_ACTIONS = 10
+// Целей у одного действия. Зеркалит MaxLogicTargets. Сотня — потолок вариантов одного
+// списка (MAX_OPTIONS): скрыть все варианты разом это законный жест, а больше сотни
+// целей у одного действия — уже не правило, а второй документ внутри блока.
+export const MAX_LOGIC_TARGETS = 100
 // Границы диапазона шкалы. Верх — 10: шкала это ряд кнопок, а не поле ввода, и на
 // телефоне больше десяти в строку не помещается (нужно число — есть тип number).
 // Низ — 0: NPS считается от нуля. Диапазон новой шкалы — 1–5.

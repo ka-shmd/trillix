@@ -1,40 +1,40 @@
 import {
   type Block,
+  type LogicActionKind,
   type LogicCondition,
   type LogicOperator,
   isAnswerableType,
   isChoiceType,
-  opNeedsValue,
   plainText,
   scaleRange,
 } from '@entities/formSchema'
 import { pageNumbers } from '@fields/groups'
-import { operatorsFor } from '@fields/logic'
+import { operatorsFor, ruleWarnings } from '@fields/logic'
 
 import { derivedQuestionName } from '../questionName'
 
-// Правила РЕДАКТОРА условной логики (фаза 21): кто носитель правила, из чего автор
-// выбирает источник, как правило называется одной строкой. Семантику (что правило
-// значит и когда оно инертно) знает вычислитель @fields/logic — здесь её нет и не
-// должно быть: вторая копия разъехалась бы с первой.
+// Правила РЕДАКТОРА условной логики: из чего автор выбирает источник, что можно взять
+// целью действия, как правило читается одной строкой. Семантику (что правило значит и
+// когда оно инертно) знает вычислитель @fields/logic — здесь её нет и не должно быть:
+// вторая копия разъехалась бы с первой.
 
-// Носитель `visibleIf` — ГОЛОВНОЙ блок группы: прячется вопрос целиком (подпись, поле,
-// контент), как и бит ряда, живущий там же. Попап адресован полю, поэтому носителя
-// приходится искать — сам блок им может и не быть.
-export function ruleCarrier(blocks: readonly Block[], blockId: string): Block | null {
-  const block = blocks.find((b) => b.id === blockId)
-  if (!block) return null
-  return blocks.find((b) => b.groupId === block.groupId) ?? null
-}
-
-// Из чего автор выбирает источник: отвечаемые вопросы ВЫШЕ носителя. Ниже стоящие не
-// предлагаем вовсе — правило по ним инертно, и показать такой выбор значило бы
-// пообещать работу, которой не будет (о правилах, ставших инертными от перестановки,
-// предупреждает ruleWarnings).
+// Отвечаемые вопросы ВЫШЕ носителя. Носитель здесь настоящий — строка, в которую
+// подставляют ответ (`@`, RichLine): там ссылка вперёд действительно бессмысленна.
 export function sourcesFor(blocks: readonly Block[], carrierId: string): Block[] {
   const at = blocks.findIndex((b) => b.id === carrierId)
   if (at < 0) return []
   return blocks.slice(0, at).filter((b) => isAnswerableType(b.type))
+}
+
+// Из чего выбирает источник БЛОК УСЛОВИЯ: любой отвечаемый вопрос формы.
+//
+// Позиционного фильтра здесь нет с 2026-08-16 (ADR §10). Он был бы неверен: инертность
+// меряется у ЦЕЛИ, а не у блока, и «выше блока» ничего не гарантирует — блок волен
+// стоять хоть последней строкой. Единственное настоящее условие — «источник выше цели»,
+// но целей у правила бывает несколько и в разных местах, поэтому список не сужается, а
+// негодную пару называет предупреждение (logicBlockWarnings).
+export function logicSources(blocks: readonly Block[]): Block[] {
+  return blocks.filter((b) => isAnswerableType(b.type))
 }
 
 // Как вопрос зовётся в интерфейсе логики — тем же именем, что в данных (колонка CSV,
@@ -89,28 +89,6 @@ export function asRootGroup(cond: LogicCondition): Group {
   return 'all' in cond || 'any' in cond ? cond : { all: [cond] }
 }
 
-// Обязательность — ТРИ состояния, а не два флага (ADR §10): нет / всегда / по условию.
-// Схема запрещает required и requiredIf вместе, поэтому патч всегда чистит второе поле:
-// иначе автосейв ловил бы 422 на первом же переключении.
-export type RequiredMode = 'no' | 'always' | 'conditional'
-
-export function requiredMode(block: Block): RequiredMode {
-  if (block.requiredIf) return 'conditional'
-  return block.required ? 'always' : 'no'
-}
-
-// Патч перехода в режим. У 'conditional' условие приходит извне: его выбирает автор в
-// диалоге, а до первого условия режим не включается вовсе — правило без условий
-// невалидно, и «обязателен по пустому условию» ничего не значит.
-export function requiredPatch(
-  mode: RequiredMode,
-  cond?: LogicCondition,
-): { required?: boolean; requiredIf?: LogicCondition } {
-  if (mode === 'always') return { required: true, requiredIf: undefined }
-  if (mode === 'no') return { required: false, requiredIf: undefined }
-  return { required: false, requiredIf: cond }
-}
-
 export const OPERATOR_LABELS: Record<LogicOperator, string> = {
   answered: 'отвечен',
   empty: 'не отвечен',
@@ -122,45 +100,50 @@ export const OPERATOR_LABELS: Record<LogicOperator, string> = {
   lt: 'меньше',
 }
 
-// Правило одной строкой — для строки попапа и подсказки бейджа на полотне. Показывает
-// ПЕРВОЕ условие и число остальных: полный текст не поместится ни там, ни там, а
-// «показывать, если» без единого намёка на содержание бесполезно.
-export function ruleSummary(blocks: readonly Block[], cond: LogicCondition | undefined): string {
-  if (cond === undefined) return 'всегда'
-  const leaves: { blockId: string; op: LogicOperator; value?: string }[] = []
-  const walk = (c: LogicCondition): void => {
-    if ('all' in c) c.all.forEach(walk)
-    else if ('any' in c) c.any.forEach(walk)
-    else leaves.push(c)
-  }
-  walk(cond)
+// Значение поля `to`, означающее «страниц дальше нет». В схеме это отдельный флаг `end`,
+// а не строка: id блока генерирует клиент, и 'end' — сам по себе законный id. В UI
+// удобнее одно поле выбора, поэтому здесь строка-маркер, а на запись она разворачивается
+// в правильную форму (см. JumpTarget в LogicBlockEditor).
+export const JUMP_END = '\u0000end'
 
-  const first = leaves[0]
-  if (!first) return 'всегда'
-  const src = blocks.find((b) => b.id === first.blockId)
-  const name = src ? sourceLabel(blocks, src) : 'удалённый вопрос'
-  const op = OPERATOR_LABELS[first.op]
-  const value = opNeedsValue(first.op) ? valueTitle(src, first.value ?? '') : ''
-  const head = [name, op, value].filter(Boolean).join(' ')
-  return leaves.length > 1 ? `${head} и ещё ${leaves.length - 1}` : head
+// ЦЕЛИ ДЕЙСТВИЙ БЛОКА `logic` — ЛЮБОЙ подходящий блок формы, а не только стоящий ниже
+// (решение владельца 2026-08-16, образец — Tally). Сужает список только вид действия:
+// прятать можно вопрос, обязательным делать — отвечаемый, варианты бывают у списка.
+//
+// Позиция блока цели не касается: обходу важно, чтобы источник был решён к моменту,
+// когда решается ЦЕЛЬ, а где при этом стоит блок — не важно. Негодную пару «источник
+// ниже цели» называет предупреждение, а не отсутствие пункта в списке.
+
+// Как называется цель в списке. У отвечаемого — то же имя, что в данных; у подписи и
+// контента имени в данных нет, поэтому берётся их собственный текст.
+export function targetLabel(blocks: readonly Block[], block: Block): string {
+  if (isAnswerableType(block.type)) return sourceLabel(blocks, block)
+  return captionOf(block) || derivedQuestionName([...blocks], block)
 }
 
-// ПЕРЕХОДЫ МЕЖДУ СТРАНИЦАМИ (фаза 21, слайс 5).
-//
-// Цель перехода — разрыв, ОТКРЫВАЮЩИЙ страницу; нумерация берётся из pageNumbers, того
-// же разбиения, которым форма режется респонденту (собственный счёт разрывов разошёлся
-// бы с показом на первом же инертном разрыве).
-//
-// Предлагаются только цели ВПЕРЁД: переход назад инертен по построению обхода
-// (@fields/logic), и показать его в списке значило бы пообещать работу, которой не будет.
-export function jumpTargets(
-  blocks: readonly Block[],
-  breakId: string,
-): { value: string; label: string }[] {
+// Страница, на которой стоит блок, — по ТОМУ ЖЕ разбиению, которым форма режется
+// респонденту (pageNumbers). Собственный счёт разрывов разошёлся бы с показом на первом
+// же инертном разрыве.
+function pageOf(blocks: readonly Block[], blockId: string): number {
   const opens = pageNumbers([...blocks])
-  const from = opens.get(breakId)
+  let page = 1
+  for (const b of blocks) {
+    if (b.id === blockId) return page
+    page = opens.get(b.id) ?? page
+  }
+  return page
+}
+
+// Цели перехода для блока `logic`: страницы ПОСЛЕ той, на которой он стоит, плюс
+// «к отправке». Переход назад инертен по построению обхода, и показывать его в списке
+// значило бы пообещать работу, которой не будет.
+export function jumpTargetsFrom(
+  blocks: readonly Block[],
+  logicId: string,
+): { value: string; label: string }[] {
+  const from = pageOf(blocks, logicId)
+  const opens = pageNumbers([...blocks])
   const out: { value: string; label: string }[] = []
-  if (from === undefined) return out // инертный разрыв: страницы не открывает, вести некуда
   for (const b of blocks) {
     const page = opens.get(b.id)
     if (b.type !== 'page_break' || page === undefined || page <= from) continue
@@ -170,28 +153,145 @@ export function jumpTargets(
   return out
 }
 
-// Значение поля `to`, означающее «страниц дальше нет». В схеме это отдельный флаг `end`,
-// а не строка: id блока генерирует клиент, и 'end' — сам по себе законный id. В UI
-// удобнее одно поле выбора, поэтому здесь строка-маркер, а на запись она разворачивается
-// в правильную форму (см. JumpDialog).
-export const JUMP_END = '\u0000end'
+// ДЕРЕВО ЦЕЛЕЙ: страница → вопрос → его варианты. Вариант в нём такой же узел, что и
+// вопрос (образец — Tally), поэтому отдельного действия «скрыть варианты» нет: одно
+// «скрыть» прячет и вопрос целиком, и отдельные его варианты, а кто чем оказался,
+// разбирает вычислитель по документу.
+export type TargetNode = { id: string; label: string; options: { id: string; label: string }[] }
 
-// Как переход читается одной строкой — для пункта попапа: цель плюс первое условие.
-export function jumpSummary(blocks: readonly Block[], block: Block): string {
-  const rules = block.jumpIf ?? []
-  const first = rules[0]
-  if (!first) return 'нет'
+// Что можно взять целью у этого вида действия. Показ адресует ВОПРОС (голову группы) и
+// варианты; обязательность — только отвечаемый блок, вариант обязательным не бывает.
+export function targetTree(
+  blocks: readonly Block[],
+  kind: 'show' | 'hide' | 'require',
+): { page: number; items: TargetNode[] }[] {
   const opens = pageNumbers([...blocks])
-  const target = first.end === true ? 'к отправке' : `на страницу ${opens.get(first.to ?? '') ?? '?'}`
-  const head = `${target}, если ${ruleSummary(blocks, first.when)}`
-  return rules.length > 1 ? `${head} +${rules.length - 1}` : head
+  const out: { page: number; items: TargetNode[] }[] = []
+  let page = 1
+  for (const [i, b] of blocks.entries()) {
+    page = opens.get(b.id) ?? page
+    const node = targetNode(blocks, b, i, kind)
+    if (node === null) continue
+    const last = out[out.length - 1]
+    if (last && last.page === page) last.items.push(node)
+    else out.push({ page, items: [node] })
+  }
+  return out
 }
 
-// Значение глазами автора: у списка это подпись варианта, а не его id.
-function valueTitle(source: Block | undefined, value: string): string {
-  if (!source || value === '') return value
-  const option = valueChoices(source).find((c) => c.value === value)
-  return option ? option.label : value
+function targetNode(
+  blocks: readonly Block[],
+  b: Block,
+  i: number,
+  kind: 'show' | 'hide' | 'require',
+): TargetNode | null {
+  if (kind === 'require') {
+    if (!isAnswerableType(b.type)) return null
+    return { id: b.id, label: targetLabel(blocks, b), options: [] }
+  }
+  // Голова группы: прячется вопрос целиком. Заголовок формы и разрыв страницы прятать
+  // нельзя — первый скелет документа, а исчезающий разрыв означал бы, что число страниц
+  // зависит от ответов ДВУМЯ разными способами (условный путь задают переходы).
+  const isHead = b.groupId !== blocks[i - 1]?.groupId
+  if (!isHead || b.type === 'logic' || b.type === 'form_title' || b.type === 'page_break') {
+    return null
+  }
+  // Варианты живут на отвечаемом блоке группы, а не на её голове.
+  const field = blocks.find((x) => x.groupId === b.groupId && isChoiceType(x.type))
+  return {
+    id: b.id,
+    label: targetLabel(blocks, b),
+    options: (field?.settings?.options ?? []).map((o) => ({
+      id: o.id,
+      label: o.label.trim() || 'Без названия',
+    })),
+  }
+}
+
+// Совпадение по ОБОИМ уровням дерева: подошёл вопрос — показываем его со всеми
+// вариантами; подошёл только вариант — показываем вопрос и подошедшие варианты, иначе
+// автор не поймёт, к чему они относятся.
+//
+// Фильтр СВОЙ, а не cmdk: свёрнутый узел не отрисован, и его дети для чужого фильтра не
+// существуют — поиск молча не находил бы половину документа.
+export function filterTargetTree(
+  tree: { page: number; items: TargetNode[] }[],
+  query: string,
+): { page: number; items: TargetNode[] }[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return tree
+  const hit = (s: string): boolean => s.toLowerCase().includes(q)
+  const out: { page: number; items: TargetNode[] }[] = []
+  for (const { page, items } of tree) {
+    const kept = items
+      .map((n) => (hit(n.label) ? n : { ...n, options: n.options.filter((o) => hit(o.label)) }))
+      .filter((n) => hit(n.label) || n.options.length > 0)
+    if (kept.length > 0) out.push({ page, items: kept })
+  }
+  return out
+}
+
+// Почему правило блока не действует — ПРЕДУПРЕЖДЕНИЯ, а не отказ схемы: всё это
+// кросс-блочное, и валидатор ловил бы 422 в автосейве от первого же драга. Причины
+// условия даёт вычислитель (ruleWarnings — одна копия на всех, иначе разъедется);
+// причины действий живут здесь, потому что «цель ниже блока» знает только редактор.
+export function logicBlockWarnings(blocks: readonly Block[], block: Block): string[] {
+  const when = block.logic?.when
+  const actions = block.logic?.then ?? []
+  const out: string[] = []
+  const heads = new Set(
+    blocks.filter((b, i) => b.groupId !== blocks[i - 1]?.groupId).map((b) => b.id),
+  )
+
+  // Условие проверяется ОТ КАЖДОЙ ЦЕЛИ: инертность меряется у неё, и правило, годное для
+  // одной цели, может не годиться для другой — если цели стоят в разных местах
+  // документа. У перехода и «скрыть кнопку» цель — страница, значит мерить от блока.
+  const carriers = new Set<string>()
+  for (const a of actions) {
+    if (a.kind === 'jump' || a.kind === 'block_submit') carriers.add(block.id)
+    else for (const id of a.targets) carriers.add(id)
+  }
+  if (actions.length === 0) carriers.add(block.id)
+  for (const carrier of carriers) {
+    for (const w of ruleWarnings(blocks, carrier, when)) out.push(w.reason)
+  }
+
+  for (const a of actions) {
+    if (a.kind === 'block_submit') continue
+    if (a.kind === 'jump') {
+      const want = a.end === true ? JUMP_END : a.to
+      if (jumpTargetsFrom(blocks, block.id).some((t) => t.value === want)) continue
+      out.push('переход некуда вести — страницы ниже нет')
+      continue
+    }
+    const optionIds = new Set(blocks.flatMap((b) => (b.settings?.options ?? []).map((o) => o.id)))
+    for (const id of a.targets) {
+      const target = blocks.find((b) => b.id === id)
+      if (!target) {
+        // Вариант — законная цель показа, но не обязательности.
+        if (!optionIds.has(id)) out.push('цель удалена — действие не работает')
+        else if (a.kind === 'require') out.push('вариант нельзя сделать обязательным')
+        continue
+      }
+      if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
+        out.push(`«${targetLabel(blocks, target)}» не первая строка вопроса — действие не работает`)
+        continue
+      }
+      if (a.kind === 'require' && target.required === true) {
+        out.push(`«${targetLabel(blocks, target)}» обязателен всегда — условие ничего не меняет`)
+      }
+    }
+  }
+  // Дубли не показываем: две цели с одной бедой — одна строка, а не две.
+  return [...new Set(out)]
+}
+
+export const ACTION_LABELS: Record<LogicActionKind, string> = {
+  show: 'Показать',
+  hide: 'Скрыть',
+  require: 'Сделать обязательным',
+  jump: 'Перейти на страницу',
+  block_submit: 'Скрыть кнопку отправки',
 }
 
 // Подпись вопроса для источника, у которого имя не задано, выводит derivedQuestionName;
