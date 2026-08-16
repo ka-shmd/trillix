@@ -114,50 +114,6 @@ export const JUMP_END = '\u0000end'
 // когда решается ЦЕЛЬ, а где при этом стоит блок — не важно. Негодную пару «источник
 // ниже цели» называет предупреждение, а не отсутствие пункта в списке.
 
-// Голова группы — то, что адресуют «показать»/«скрыть»: прячется вопрос целиком.
-// Группа смежна по инварианту схемы, поэтому голова — первый блок своего groupId.
-function groupHeads(blocks: readonly Block[]): Block[] {
-  return blocks.filter((b, i) => b.type !== 'logic' && b.groupId !== blocks[i - 1]?.groupId)
-}
-
-export function showTargets(blocks: readonly Block[]): Block[] {
-  // Заголовок формы и разрыв страницы прятать нельзя. Заголовок — скелет документа, а
-  // не вопрос; исчезающий разрыв означал бы, что число страниц зависит от ответов ДВУМЯ
-  // разными способами — условный путь задают переходы.
-  return groupHeads(blocks).filter((b) => b.type !== 'form_title' && b.type !== 'page_break')
-}
-
-// Обязательным можно сделать только отвечаемый блок — у подписи и контента ответа нет.
-export function requireTargets(blocks: readonly Block[]): Block[] {
-  return blocks.filter((b) => isAnswerableType(b.type))
-}
-
-// Варианты бывают только у choice-вопроса.
-export function optionTargets(blocks: readonly Block[]): Block[] {
-  return blocks.filter((b) => isChoiceType(b.type))
-}
-
-// Цели, разложенные по страницам, — так их показывает пикер: список стал документом
-// целиком, и без разбиения в нём не найтись. Номера берутся ТЕМ ЖЕ разбиением, которым
-// форма режется респонденту (pageNumbers), иначе автор увидит страницы, которых нет.
-export function targetsByPage(
-  blocks: readonly Block[],
-  targets: readonly Block[],
-): { page: number; items: Block[] }[] {
-  const opens = pageNumbers([...blocks])
-  const wanted = new Set(targets.map((b) => b.id))
-  const out: { page: number; items: Block[] }[] = []
-  let page = 1
-  for (const b of blocks) {
-    page = opens.get(b.id) ?? page
-    if (!wanted.has(b.id)) continue
-    const last = out[out.length - 1]
-    if (last && last.page === page) last.items.push(b)
-    else out.push({ page, items: [b] })
-  }
-  return out
-}
-
 // Как называется цель в списке. У отвечаемого — то же имя, что в данных; у подписи и
 // контента имени в данных нет, поэтому берётся их собственный текст.
 export function targetLabel(blocks: readonly Block[], block: Block): string {
@@ -197,6 +153,61 @@ export function jumpTargetsFrom(
   return out
 }
 
+// ДЕРЕВО ЦЕЛЕЙ: страница → вопрос → его варианты. Вариант в нём такой же узел, что и
+// вопрос (образец — Tally), поэтому отдельного действия «скрыть варианты» нет: одно
+// «скрыть» прячет и вопрос целиком, и отдельные его варианты, а кто чем оказался,
+// разбирает вычислитель по документу.
+export type TargetNode = { id: string; label: string; options: { id: string; label: string }[] }
+
+// Что можно взять целью у этого вида действия. Показ адресует ВОПРОС (голову группы) и
+// варианты; обязательность — только отвечаемый блок, вариант обязательным не бывает.
+export function targetTree(
+  blocks: readonly Block[],
+  kind: 'show' | 'hide' | 'require',
+): { page: number; items: TargetNode[] }[] {
+  const opens = pageNumbers([...blocks])
+  const out: { page: number; items: TargetNode[] }[] = []
+  let page = 1
+  for (const [i, b] of blocks.entries()) {
+    page = opens.get(b.id) ?? page
+    const node = targetNode(blocks, b, i, kind)
+    if (node === null) continue
+    const last = out[out.length - 1]
+    if (last && last.page === page) last.items.push(node)
+    else out.push({ page, items: [node] })
+  }
+  return out
+}
+
+function targetNode(
+  blocks: readonly Block[],
+  b: Block,
+  i: number,
+  kind: 'show' | 'hide' | 'require',
+): TargetNode | null {
+  if (kind === 'require') {
+    if (!isAnswerableType(b.type)) return null
+    return { id: b.id, label: targetLabel(blocks, b), options: [] }
+  }
+  // Голова группы: прячется вопрос целиком. Заголовок формы и разрыв страницы прятать
+  // нельзя — первый скелет документа, а исчезающий разрыв означал бы, что число страниц
+  // зависит от ответов ДВУМЯ разными способами (условный путь задают переходы).
+  const isHead = b.groupId !== blocks[i - 1]?.groupId
+  if (!isHead || b.type === 'logic' || b.type === 'form_title' || b.type === 'page_break') {
+    return null
+  }
+  // Варианты живут на отвечаемом блоке группы, а не на её голове.
+  const field = blocks.find((x) => x.groupId === b.groupId && isChoiceType(x.type))
+  return {
+    id: b.id,
+    label: targetLabel(blocks, b),
+    options: (field?.settings?.options ?? []).map((o) => ({
+      id: o.id,
+      label: o.label.trim() || 'Без названия',
+    })),
+  }
+}
+
 // Почему правило блока не действует — ПРЕДУПРЕЖДЕНИЯ, а не отказ схемы: всё это
 // кросс-блочное, и валидатор ловил бы 422 в автосейве от первого же драга. Причины
 // условия даёт вычислитель (ruleWarnings — одна копия на всех, иначе разъедется);
@@ -214,7 +225,8 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
   // документа. У перехода и «скрыть кнопку» цель — страница, значит мерить от блока.
   const carriers = new Set<string>()
   for (const a of actions) {
-    carriers.add(a.kind === 'jump' || a.kind === 'block_submit' ? block.id : a.target)
+    if (a.kind === 'jump' || a.kind === 'block_submit') carriers.add(block.id)
+    else for (const id of a.targets) carriers.add(id)
   }
   if (actions.length === 0) carriers.add(block.id)
   for (const carrier of carriers) {
@@ -229,21 +241,22 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
       out.push('переход некуда вести — страницы ниже нет')
       continue
     }
-    const target = blocks.find((b) => b.id === a.target)
-    if (!target) {
-      out.push('цель удалена — действие не работает')
-      continue
-    }
-    if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
-      out.push(`«${targetLabel(blocks, target)}» не первая строка вопроса — действие не работает`)
-      continue
-    }
-    if (a.kind === 'require' && target.required === true) {
-      out.push(`«${targetLabel(blocks, target)}» обязателен всегда — условие ничего не меняет`)
-      continue
-    }
-    if ((a.kind === 'show_options' || a.kind === 'hide_options') && a.options.length === 0) {
-      out.push('не выбрано ни одного варианта')
+    const optionIds = new Set(blocks.flatMap((b) => (b.settings?.options ?? []).map((o) => o.id)))
+    for (const id of a.targets) {
+      const target = blocks.find((b) => b.id === id)
+      if (!target) {
+        // Вариант — законная цель показа, но не обязательности.
+        if (!optionIds.has(id)) out.push('цель удалена — действие не работает')
+        else if (a.kind === 'require') out.push('вариант нельзя сделать обязательным')
+        continue
+      }
+      if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
+        out.push(`«${targetLabel(blocks, target)}» не первая строка вопроса — действие не работает`)
+        continue
+      }
+      if (a.kind === 'require' && target.required === true) {
+        out.push(`«${targetLabel(blocks, target)}» обязателен всегда — условие ничего не меняет`)
+      }
     }
   }
   // Дубли не показываем: две цели с одной бедой — одна строка, а не две.
@@ -254,8 +267,6 @@ export const ACTION_LABELS: Record<LogicActionKind, string> = {
   show: 'Показать',
   hide: 'Скрыть',
   require: 'Сделать обязательным',
-  show_options: 'Показать варианты',
-  hide_options: 'Скрыть варианты',
   jump: 'Перейти на страницу',
   block_submit: 'Скрыть кнопку отправки',
 }

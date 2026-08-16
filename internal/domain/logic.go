@@ -50,6 +50,7 @@ const (
 	MaxLogicNodes    = 40  // узлов (групп и листьев) в одном правиле
 	MaxLogicValueLen = 200 // длина значения сравнения, в рунах (как placeholder)
 	MaxLogicActions  = 10  // действий в одном блоке logic
+	MaxLogicTargets  = 100 // целей у одного действия (потолок вариантов одного списка)
 )
 
 // LogicOp — оператор сравнения в листе условия. Зеркалит LOGIC_OPERATORS в logic.ts.
@@ -135,35 +136,20 @@ const (
 	ActHide LogicActionKind = "hide"
 	// Обязательность отвечаемого блока; складывается с флагом Required по ИЛИ.
 	ActRequire LogicActionKind = "require"
-	// Видимость отдельных вариантов внутри choice-вопроса (каскадные списки).
-	ActShowOptions LogicActionKind = "show_options"
-	ActHideOptions LogicActionKind = "hide_options"
 	// Переход со страницы, на которой стоит блок.
 	ActJump LogicActionKind = "jump"
 	// «Кнопки нет»: обход завершается на этой странице, отправить форму нельзя.
 	ActBlockSubmit LogicActionKind = "block_submit"
 )
 
-var logicActions = []LogicActionKind{
-	ActShow, ActHide, ActRequire, ActShowOptions, ActHideOptions, ActJump, ActBlockSubmit,
-}
+var logicActions = []LogicActionKind{ActShow, ActHide, ActRequire, ActJump, ActBlockSubmit}
 
 func (k LogicActionKind) valid() bool { return slices.Contains(logicActions, k) }
 
-// needsTarget — действие адресует блок. У перехода цель своя (To/End), у блокировки
-// отправки цели нет вовсе: она про страницу, на которой блок стоит.
-func (k LogicActionKind) needsTarget() bool {
-	switch k {
-	case ActShow, ActHide, ActRequire, ActShowOptions, ActHideOptions:
-		return true
-	default:
-		return false
-	}
-}
-
-// needsOptions — действие адресует варианты ВНУТРИ блока-цели.
-func (k LogicActionKind) needsOptions() bool {
-	return k == ActShowOptions || k == ActHideOptions
+// needsTargets — действие адресует список целей. У перехода цель своя (To/End), у
+// блокировки отправки цели нет вовсе: она про страницу, на которой блок стоит.
+func (k LogicActionKind) needsTargets() bool {
+	return k == ActShow || k == ActHide || k == ActRequire
 }
 
 // LogicAction — одно действие. Одна структура на все формы, а не интерфейс с семью
@@ -171,13 +157,11 @@ func (k LogicActionKind) needsOptions() bool {
 // DisallowUnknownFields, и JSON разбирается stdlib'ом без своего UnmarshalJSON.
 type LogicAction struct {
 	Kind LogicActionKind `json:"kind"`
-	// Target — id блока-цели. Голова группы у show/hide (прячется вопрос целиком),
-	// отвечаемый блок у require, choice-блок у *_options. Ссылка на groupId
-	// невозможна: он ВЫВОДИТСЯ (regroup) и сущностью схемы не является.
-	Target string `json:"target,omitempty"`
-	// Options — id вариантов внутри Target. Списком, а не действием на вариант: автор
-	// прячет «все, кроме подходящих» одним движением.
-	Options []string `json:"options,omitempty"`
+	// Targets — id целей, вперемешку блоки и ВАРИАНТЫ выбора: в дереве целей вариант
+	// такой же узел, что и вопрос, поэтому отдельного действия для вариантов нет.
+	// Голова группы у show/hide (прячется вопрос целиком), отвечаемый блок у require.
+	// Ссылка на groupId невозможна: он ВЫВОДИТСЯ (regroup) и сущностью схемы не является.
+	Targets []string `json:"targets,omitempty"`
 	// To/End — цель перехода, ровно одна из двух (довод — у JumpRule выше).
 	To  string `json:"to,omitempty"`
 	End bool   `json:"end,omitempty"`
@@ -210,27 +194,20 @@ func validateBlockLogic(l *Logic) error {
 		if !a.Kind.valid() {
 			return fmt.Errorf("%s: неизвестное действие %q", at, a.Kind)
 		}
-		if a.Kind.needsTarget() {
-			if err := validateID(a.Target); err != nil {
-				return fmt.Errorf("%s: target: %s", at, err)
+		if a.Kind.needsTargets() {
+			if len(a.Targets) == 0 {
+				return fmt.Errorf("%s: не выбрано ни одной цели", at)
 			}
-		} else if a.Target != "" {
-			return fmt.Errorf("%s: действие %q не адресует блок", at, a.Kind)
-		}
-		if a.Kind.needsOptions() {
-			if len(a.Options) == 0 {
-				return fmt.Errorf("%s: не выбрано ни одного варианта", at)
+			if len(a.Targets) > MaxLogicTargets {
+				return fmt.Errorf("%s: больше %d целей", at, MaxLogicTargets)
 			}
-			if len(a.Options) > MaxOptions {
-				return fmt.Errorf("%s: больше %d вариантов", at, MaxOptions)
-			}
-			for _, id := range a.Options {
+			for _, id := range a.Targets {
 				if err := validateID(id); err != nil {
-					return fmt.Errorf("%s: options: %s", at, err)
+					return fmt.Errorf("%s: targets: %s", at, err)
 				}
 			}
-		} else if len(a.Options) > 0 {
-			return fmt.Errorf("%s: действие %q не адресует варианты", at, a.Kind)
+		} else if len(a.Targets) > 0 {
+			return fmt.Errorf("%s: действие %q не адресует цели", at, a.Kind)
 		}
 		if a.Kind == ActJump {
 			if (a.To != "") == a.End {
@@ -378,6 +355,18 @@ type compiled struct {
 }
 
 func compileLogic(blocks []Block) compiled {
+	// Кто есть кто в документе: цель действия — id блока ЛИБО id варианта, и разобрать
+	// это может только документ. Блок старше варианта при совпадении id.
+	ev := make(map[string]struct{}, len(blocks))
+	optionOwner := map[string]string{}
+	for i := range blocks {
+		ev[blocks[i].ID] = struct{}{}
+		for _, o := range blocks[i].Settings.Options {
+			if _, taken := optionOwner[o.ID]; !taken {
+				optionOwner[o.ID] = blocks[i].ID
+			}
+		}
+	}
 	c := compiled{
 		shows:       map[string][]logicRule{},
 		hides:       map[string][]logicRule{},
@@ -406,16 +395,32 @@ func compileLogic(blocks []Block) compiled {
 		r := logicRule{when: b.Logic.When, at: i}
 		for _, a := range b.Logic.Then {
 			switch a.Kind {
-			case ActShow:
-				c.shows[a.Target] = append(c.shows[a.Target], r)
-			case ActHide:
-				c.hides[a.Target] = append(c.hides[a.Target], r)
+			case ActShow, ActHide:
+				m := c.shows
+				om := c.optionShows
+				if a.Kind == ActHide {
+					m, om = c.hides, c.optionHides
+				}
+				for _, id := range a.Targets {
+					// Цель — блок или ВАРИАНТ; кто именно, знает документ. Блок
+					// проверяется первым: id уникальны, но совпадение id блока и
+					// варианта схема не запрещает, и трактовать его надо однозначно.
+					if _, isBlock := ev[id]; isBlock {
+						m[id] = append(m[id], r)
+						continue
+					}
+					if owner, isOption := optionOwner[id]; isOption {
+						pushOptions(om, owner, []string{id}, r)
+					}
+					// Ни блок, ни вариант — ссылка в никуда, действие инертно.
+				}
 			case ActRequire:
-				c.requires[a.Target] = append(c.requires[a.Target], r)
-			case ActShowOptions:
-				pushOptions(c.optionShows, a.Target, a.Options, r)
-			case ActHideOptions:
-				pushOptions(c.optionHides, a.Target, a.Options, r)
+				for _, id := range a.Targets {
+					// Вариант обязательным не бывает: ссылка на него инертна.
+					if _, isBlock := ev[id]; isBlock {
+						c.requires[id] = append(c.requires[id], r)
+					}
+				}
 			case ActJump:
 				c.jumps = append(c.jumps, jumpEntry{owner: b.ID, rule: r, to: a.To, end: a.End})
 			case ActBlockSubmit:

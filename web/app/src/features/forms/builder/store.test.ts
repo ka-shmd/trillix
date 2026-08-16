@@ -464,14 +464,14 @@ describe('createBuilderStore', () => {
     const id = store.getState().addBlockAfter(ruleId, 'short_text')
     const when = { all: [{ blockId: src, op: 'answered' as const }] }
     store.getState().updateBlock(ruleId, {
-      logic: { when, then: [{ kind: 'show', target: id }] },
+      logic: { when, then: [{ kind: 'show', targets: [id] }] },
     })
 
     store.getState().changeBlockType(id, 'email')
 
     const rule = store.getState().blocks.find((x) => x.id === ruleId)!
     expect(rule.logic?.when).toEqual(when)
-    expect(rule.logic?.then).toEqual([{ kind: 'show', target: id }])
+    expect(rule.logic?.then).toEqual([{ kind: 'show', targets: [id] }])
   })
 
   // Новый тип ответов не собирает — имени нечего называть, и схема его у такого типа

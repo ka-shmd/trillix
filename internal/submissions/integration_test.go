@@ -450,7 +450,7 @@ func TestSubmit_WithinQuota_CountsUsageWithoutMarking(t *testing.T) {
 // и обязательный «Какой?» за условием «выбрано Да».
 const logicSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"yes","label":"Да"},{"id":"no","label":"Нет"}]}},
-	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"yes"}]},"then":[{"kind":"show","target":"kind"}]}},
+	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"yes"}]},"then":[{"kind":"show","targets":["kind"]}]}},
 	{"id":"kind","groupId":"g2","type":"short_text","required":true,"settings":{}}
 ]}`
 
@@ -526,7 +526,7 @@ func TestSubmit_VisibleRequired_422(t *testing.T) {
 // нормализацию, и «обязателен» здесь означает 422 респонденту.
 const requiredIfSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"how","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"call","label":"Звонок"},{"id":"mail","label":"Почта"}]}},
-	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"how","op":"is","value":"call"}]},"then":[{"kind":"require","target":"phone"}]}},
+	{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"all":[{"blockId":"how","op":"is","value":"call"}]},"then":[{"kind":"require","targets":["phone"]}]}},
 	{"id":"phone","groupId":"g2","type":"phone","settings":{}}
 ]}`
 
@@ -557,8 +557,8 @@ func TestSubmit_RequiredIf(t *testing.T) {
 // прислать вручную. Проверяем сквозь HTTP: это про то, что попадёт в базу и в выгрузку.
 const optionRuleSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"pet","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"dog","label":"Собака"},{"id":"cat","label":"Кот"}]}},
-	{"id":"L1","groupId":"gL1","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"dog"}]},"then":[{"kind":"show_options","target":"stuff","options":["leash"]}]}},
-	{"id":"L2","groupId":"gL2","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"cat"}]},"then":[{"kind":"show_options","target":"stuff","options":["tray"]}]}},
+	{"id":"L1","groupId":"gL1","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"dog"}]},"then":[{"kind":"show","targets":["leash"]}]}},
+	{"id":"L2","groupId":"gL2","type":"logic","logic":{"when":{"all":[{"blockId":"pet","op":"is","value":"cat"}]},"then":[{"kind":"show","targets":["tray"]}]}},
 	{"id":"stuff","groupId":"g2","type":"multi_choice","settings":{"options":[
 		{"id":"leash","label":"Поводок"},
 		{"id":"tray","label":"Лоток"},

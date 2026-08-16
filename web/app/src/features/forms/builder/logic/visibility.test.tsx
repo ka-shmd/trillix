@@ -66,7 +66,7 @@ const NO = 1
 describe('превью показывает вопрос по условию', () => {
   const doc = (): Block[] => [
     ...choice('pet', 'Есть питомец?'),
-    logicBlock('L', answered('pet', 'yes'), [{ kind: 'show', target: 't_kind' }]),
+    logicBlock('L', answered('pet', 'yes'), [{ kind: 'show', targets: ['t_kind'] }]),
     ...question('kind', 'Какой?'),
   ]
 
@@ -86,7 +86,7 @@ describe('превью показывает вопрос по условию', (
   it('инертное правило показывает вопрос, а не прячет', () => {
     // Источника нет в документе: правило не действует, значит его как бы нет.
     const blocks: Block[] = [
-      logicBlock('L', answered('призрак', 'yes'), [{ kind: 'show', target: 't_kind' }]),
+      logicBlock('L', answered('призрак', 'yes'), [{ kind: 'show', targets: ['t_kind'] }]),
       ...question('kind', 'Какой?'),
     ]
     renderPreview(blocks)
@@ -108,9 +108,9 @@ describe('превью показывает вопрос по условию', (
     // Источника в документе нет — но правило есть, и текст про условия, а не «добавьте
     // блоки»: пустой план бывает и без логики.
     renderPreview([
-      logicBlock('L', answered('pet', 'yes'), [{ kind: 'show', target: 't_kind' }]),
+      logicBlock('L', answered('pet', 'yes'), [{ kind: 'show', targets: ['t_kind'] }]),
       ...question('kind', 'Какой?'),
-      logicBlock('L2', answered('kind', 'x'), [{ kind: 'hide', target: 't_kind' }]),
+      logicBlock('L2', answered('kind', 'x'), [{ kind: 'hide', targets: ['t_kind'] }]),
     ])
     expect(screen.queryByText('Какой?')).toBeTruthy()
   })
@@ -121,7 +121,7 @@ describe('превью: варианты, страницы и кнопка', () 
     const blocks: Block[] = [
       ...choice('pet', 'Кто у вас?'),
       logicBlock('L', answered('pet', 'yes'), [
-        { kind: 'show_options', target: 'stuff', options: ['leash'] },
+        { kind: 'show', targets: ['leash'] },
       ]),
       {
         id: 't_stuff',
@@ -188,7 +188,7 @@ describe('находки ревью', () => {
       blocks: [
         ...choice('pet', 'Есть питомец?'),
         logicBlock('L', { blockId: 'pet', op: 'includes', value: 'yes' }, [
-          { kind: 'show', target: 't_kind' },
+          { kind: 'show', targets: ['t_kind'] },
         ]),
         ...question('kind', 'Какой?'),
       ],

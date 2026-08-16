@@ -77,10 +77,11 @@ test('ветвление: скрытый вопрос, скрытый вариа
             type: 'logic',
             logic: {
               when: ifYes,
+              // Цели вперемешку: вопрос, поле и ВАРИАНТ выбора — в дереве целей это
+              // узлы одного уровня, отдельного действия для вариантов нет.
               then: [
-                { kind: 'show', target: 't_kind' },
-                { kind: 'require', target: 'kind' },
-                { kind: 'show_options', target: 'stuff', options: ['leash'] },
+                { kind: 'show', targets: ['t_kind', 'leash'] },
+                { kind: 'require', targets: ['kind'] },
               ],
             },
           },

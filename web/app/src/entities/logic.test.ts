@@ -36,14 +36,14 @@ const showRule = (target: string, when?: LogicCondition): Block => ({
   id: `L-show-${target}`,
   groupId: `gL-show-${target}`,
   type: 'logic',
-  logic: { when, then: [{ kind: 'show', target }] },
+  logic: { when, then: [{ kind: 'show', targets: [target] }] },
 })
 
 const requireRule = (target: string, when?: LogicCondition): Block => ({
   id: `L-req-${target}`,
   groupId: `gL-req-${target}`,
   type: 'logic',
-  logic: { when, then: [{ kind: 'require', target }] },
+  logic: { when, then: [{ kind: 'require', targets: [target] }] },
 })
 
 // «Показать варианты»: перечисленные видны только по условию, остальные умолчания не
@@ -52,7 +52,7 @@ const optionRule = (target: string, when: LogicCondition, ...options: string[]):
   id: `L-opt-${target}-${options[0]}`,
   groupId: `gL-opt-${target}-${options[0]}`,
   type: 'logic',
-  logic: { when, then: [{ kind: 'show_options', target, options }] },
+  logic: { when, then: [{ kind: 'show', targets: options }] },
 })
 
 const leaf = (blockId: string, op: LogicOperator, value = ''): LogicCondition => ({
@@ -352,31 +352,31 @@ describe('planForm: блок logic — показ и скрытие', () => {
   const cases: [string, Block['logic'], Answers, boolean][] = [
     [
       'show: сработало — показан',
-      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] },
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] },
       { src: 'yes' },
       true,
     ],
     [
       'show: не сработало — скрыт (умолчание перевёрнуто)',
-      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] },
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] },
       { src: 'no' },
       false,
     ],
     [
       'hide: сработало — скрыт',
-      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] },
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', targets: ['cap'] }] },
       { src: 'yes' },
       false,
     ],
     [
       'hide: не сработало — виден',
-      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] },
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', targets: ['cap'] }] },
       { src: 'no' },
       true,
     ],
     [
       'блок без условия инертен',
-      { then: [{ kind: 'show', target: 'cap' }] },
+      { then: [{ kind: 'show', targets: ['cap'] }] },
       { src: 'no' },
       true,
     ],
@@ -388,19 +388,19 @@ describe('planForm: блок logic — показ и скрытие', () => {
     ],
     [
       'действие на удалённую цель инертно',
-      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'призрак' }] },
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['призрак'] }] },
       { src: 'no' },
       true,
     ],
     [
       'источник НИЖЕ цели — правило инертно',
-      { when: leaf('dep', 'answered'), then: [{ kind: 'show', target: 'cap' }] },
+      { when: leaf('dep', 'answered'), then: [{ kind: 'show', targets: ['cap'] }] },
       {},
       true,
     ],
     [
       'ссылка на несуществующий источник инертна',
-      { when: leaf('нет-такого', 'is', 'x'), then: [{ kind: 'show', target: 'cap' }] },
+      { when: leaf('нет-такого', 'is', 'x'), then: [{ kind: 'show', targets: ['cap'] }] },
       {},
       true,
     ],
@@ -420,7 +420,7 @@ describe('planForm: блок logic — показ и скрытие', () => {
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
-      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
+      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(false)
     expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(true)
@@ -431,7 +431,7 @@ describe('planForm: блок logic — показ и скрытие', () => {
       blk('cap', 'g1', 'title'),
       blk('dep', 'g1', 'short_text'),
       choice('src', 'g2', 'single_choice', [{ id: 'yes' }]),
-      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
+      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
   })
@@ -439,7 +439,7 @@ describe('planForm: блок logic — показ и скрытие', () => {
   it('действие на НЕ головной блок группы инертно', () => {
     const l: Block['logic'] = {
       when: leaf('src', 'is', 'yes'),
-      then: [{ kind: 'show', target: 'dep' }],
+      then: [{ kind: 'show', targets: ['dep'] }],
     }
     expect(planForm(doc(l), { src: 'no' }).visible.has('dep')).toBe(true)
   })
@@ -447,8 +447,8 @@ describe('planForm: блок logic — показ и скрытие', () => {
   it('скрыть побеждает показать', () => {
     const blocks: Block[] = [
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
-      logic('L1', 'gL1', { when: leaf('src', 'answered'), then: [{ kind: 'show', target: 'cap' }] }),
-      logic('L2', 'gL2', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] }),
+      logic('L1', 'gL1', { when: leaf('src', 'answered'), then: [{ kind: 'show', targets: ['cap'] }] }),
+      logic('L2', 'gL2', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', targets: ['cap'] }] }),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
     ]
@@ -460,11 +460,11 @@ describe('planForm: блок logic — показ и скрытие', () => {
     const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
     const a = logic('L1', 'gL1', {
       when: leaf('src', 'is', 'yes'),
-      then: [{ kind: 'show', target: 'cap' }],
+      then: [{ kind: 'show', targets: ['cap'] }],
     })
     const b = logic('L2', 'gL2', {
       when: leaf('src', 'is', 'no'),
-      then: [{ kind: 'show', target: 'cap' }],
+      then: [{ kind: 'show', targets: ['cap'] }],
     })
     const tail = [blk('cap', 'g2', 'title'), blk('dep', 'g2', 'short_text')]
     for (const answers of [{ src: 'yes' }, { src: 'no' }, {}]) {
@@ -478,8 +478,8 @@ describe('planForm: блок logic — показ и скрытие', () => {
     const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
     const blocks: Block[] = [
       src,
-      logic('L1', 'gL1', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
-      logic('L2', 'gL2', { when: leaf('src', 'is', 'no'), then: [{ kind: 'show', target: 'cap' }] }),
+      logic('L1', 'gL1', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
+      logic('L2', 'gL2', { when: leaf('src', 'is', 'no'), then: [{ kind: 'show', targets: ['cap'] }] }),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
     ]
@@ -494,8 +494,8 @@ describe('planForm: блок logic — показ и скрытие', () => {
       logic('L', 'gL', {
         when: leaf('src', 'is', 'yes'),
         then: [
-          { kind: 'show', target: 'cap' },
-          { kind: 'require', target: 'dep' },
+          { kind: 'show', targets: ['cap'] },
+          { kind: 'require', targets: ['dep'] },
         ],
       }),
       blk('cap', 'g2', 'title'),
@@ -523,14 +523,14 @@ describe('planForm: блок logic — обязательность', () => {
   })
 
   it('действие сработало — обязателен', () => {
-    const blocks = [src, rule([{ kind: 'require', target: 'dep' }]), blk('dep', 'g2', 'phone')]
+    const blocks = [src, rule([{ kind: 'require', targets: ['dep'] }]), blk('dep', 'g2', 'phone')]
     expect(planForm(blocks, { src: 'call' }).required.has('dep')).toBe(true)
     expect(planForm(blocks, { src: 'mail' }).required.has('dep')).toBe(false)
   })
 
   it('флаг required и действие складываются по ИЛИ', () => {
     const dep: Block = { ...blk('dep', 'g2', 'phone'), required: true }
-    const blocks = [src, rule([{ kind: 'require', target: 'dep' }]), dep]
+    const blocks = [src, rule([{ kind: 'require', targets: ['dep'] }]), dep]
     expect(planForm(blocks, { src: 'mail' }).required.has('dep')).toBe(true)
   })
 
@@ -538,8 +538,8 @@ describe('planForm: блок logic — обязательность', () => {
     const blocks: Block[] = [
       src,
       rule([
-        { kind: 'hide', target: 'dep' },
-        { kind: 'require', target: 'dep' },
+        { kind: 'hide', targets: ['dep'] },
+        { kind: 'require', targets: ['dep'] },
       ]),
       blk('dep', 'g2', 'phone'),
     ]
@@ -558,7 +558,7 @@ describe('planForm: блок logic — варианты', () => {
   })
 
   it('«скрыть варианты» прячет названные', () => {
-    const blocks = [src, rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]), list]
+    const blocks = [src, rule([{ kind: 'hide', targets: ['tray'] }]), list]
     const plan = planForm(blocks, { src: 'dog' })
     expect(optionVisible(plan, 'list', 'tray')).toBe(false)
     expect(optionVisible(plan, 'list', 'leash')).toBe(true)
@@ -566,7 +566,7 @@ describe('planForm: блок logic — варианты', () => {
   })
 
   it('«показать варианты» переворачивает умолчание названных', () => {
-    const blocks = [src, rule([{ kind: 'show_options', target: 'list', options: ['leash'] }]), list]
+    const blocks = [src, rule([{ kind: 'show', targets: ['leash'] }]), list]
     expect(optionVisible(planForm(blocks, { src: 'cat' }), 'list', 'leash')).toBe(false)
     expect(optionVisible(planForm(blocks, { src: 'dog' }), 'list', 'leash')).toBe(true)
     // Не названный вариант умолчания не менял.
@@ -577,7 +577,7 @@ describe('planForm: блок logic — варианты', () => {
     const dep = blk('dep', 'g3', 'short_text')
     const blocks = [
       src,
-      rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]),
+      rule([{ kind: 'hide', targets: ['tray'] }]),
       list,
       showRule('dep', leaf('list', 'includes', 'tray')),
       dep,
@@ -718,7 +718,7 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { blockId: 'a', op: 'is', value: 'o1' }, then: [{ kind: 'show', target: 'b' }] },
+          logic: { when: { blockId: 'a', op: 'is', value: 'o1' }, then: [{ kind: 'show', targets: ['b'] }] },
         },
         { id: 'b', groupId: 'g2', type: 'short_text' },
       ]),
@@ -768,7 +768,7 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { blockId: 'a', op: 'answered' }, then: [{ kind: 'require', target: 'b' }] },
+          logic: { when: { blockId: 'a', op: 'answered' }, then: [{ kind: 'require', targets: ['b'] }] },
         },
         { id: 'b', groupId: 'g2', type: 'phone' },
       ]),
@@ -783,7 +783,7 @@ describe('схема: форма правил', () => {
           type: 'logic',
           logic: {
             when: { blockId: 'a', op: 'is', value: 'dog' },
-            then: [{ kind: 'hide_options', target: 'b', options: ['o1'] }],
+            then: [{ kind: 'hide', targets: ['o1'] }],
           },
         },
         {
@@ -837,11 +837,11 @@ describe('схема: форма правил', () => {
           logic: {
             when: { blockId: 'a', op: 'is', value: 'o1' },
             then: [
-              { kind: 'show', target: 'b' },
-              { kind: 'hide', target: 'c' },
-              { kind: 'require', target: 'b' },
-              { kind: 'show_options', target: 'c', options: ['o2'] },
-              { kind: 'hide_options', target: 'c', options: ['o2', 'o3'] },
+              { kind: 'show', targets: ['b'] },
+              { kind: 'hide', targets: ['c'] },
+              { kind: 'require', targets: ['b'] },
+              { kind: 'show', targets: ['o2'] },
+              { kind: 'hide', targets: ['o2', 'o3'] },
               { kind: 'jump', to: 'br' },
               { kind: 'jump', end: true },
               { kind: 'block_submit' },
@@ -860,14 +860,14 @@ describe('схема: форма правил', () => {
     [
       'действие на удалённую цель — инертно, но валидно',
       doc([
-        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', target: 'призрак' }] } },
+        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', targets: ['призрак'] }] } },
       ]),
     ],
     [
       'цель СТОИТ ВЫШЕ блока — инертно, но валидно',
       doc([
         { id: 'b', groupId: 'g1', type: 'short_text' },
-        { id: 'L', groupId: 'g2', type: 'logic', logic: { then: [{ kind: 'show', target: 'b' }] } },
+        { id: 'L', groupId: 'g2', type: 'logic', logic: { then: [{ kind: 'show', targets: ['b'] }] } },
       ]),
     ],
   ]
@@ -968,7 +968,7 @@ describe('схема: форма правил', () => {
           id: 'b',
           groupId: 'g1',
           type: 'short_text',
-          logic: { then: [{ kind: 'show', target: 'c' }] },
+          logic: { then: [{ kind: 'show', targets: ['c'] }] },
         },
       ]),
     ],
@@ -997,7 +997,7 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'g1',
           type: 'logic',
-          logic: { then: [{ kind: 'hide_options', target: 'c', options: [] }] },
+          logic: { then: [{ kind: 'hide', targets: [] }] },
         },
       ]),
     ],
@@ -1045,7 +1045,7 @@ describe('схема: форма правил', () => {
           groupId: 'g1',
           type: 'logic',
           logic: {
-            then: Array.from({ length: MAX_LOGIC_ACTIONS + 1 }, () => ({ kind: 'show', target: 'b' })),
+            then: Array.from({ length: MAX_LOGIC_ACTIONS + 1 }, () => ({ kind: 'show', targets: ['b'] })),
           },
         },
       ]),

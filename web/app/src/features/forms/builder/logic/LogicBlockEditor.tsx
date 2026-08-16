@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -37,13 +37,9 @@ import {
   asRootGroup,
   jumpTargetsFrom,
   logicBlockWarnings,
-  optionTargets,
-  requireTargets,
-  showTargets,
   logicSources,
-  targetLabel,
-  targetsByPage,
-  valueChoices,
+  targetTree,
+  type TargetNode,
 } from './model'
 
 // Строка блока условной логики на полотне: «Когда <условие> → Тогда <действия>».
@@ -163,8 +159,8 @@ function Note({ children }: { children: React.ReactNode }) {
 // Первое действие, которое имеет смысл предложить: «показать» ближайшую цель ниже. Без
 // целей — «скрыть кнопку»: оно единственное, которому цель не нужна вовсе.
 function defaultAction(blocks: readonly Block[]): LogicAction {
-  const target = showTargets(blocks)[0]
-  return target ? { kind: 'show', target: target.id } : { kind: 'block_submit' }
+  const first = targetTree(blocks, 'show')[0]?.items[0]
+  return first ? { kind: 'show', targets: [first.id] } : { kind: 'block_submit' }
 }
 
 const insertAfter = (list: LogicAction[], i: number, node: LogicAction): LogicAction[] => [
@@ -173,21 +169,20 @@ const insertAfter = (list: LogicAction[], i: number, node: LogicAction): LogicAc
   ...list.slice(i + 1),
 ]
 
-// Действие по виду и цели — или null, если цель нужна, а взять её неоткуда. Null значит
-// «в документ ещё нечего писать»: пустая цель невалидна по схеме, и автосейв поймал бы
-// на ней 422.
+// Действие по виду и уже выбранным целям — или null, если цели нужны, а взять их
+// неоткуда. Null значит «в документ ещё нечего писать»: пустой список целей невалиден по
+// схеме, и автосейв поймал бы на нём 422.
 function buildAction(
   kind: LogicActionKind,
-  targets: readonly Block[],
-  keep?: string,
+  tree: { items: TargetNode[] }[],
+  keep: readonly string[],
 ): LogicAction | null {
   if (kind === 'block_submit') return { kind }
   if (kind === 'jump') return { kind, end: true }
-  const target = targets.some((b) => b.id === keep) ? keep : targets[0]?.id
-  if (target === undefined) return null
-  return kind === 'show_options' || kind === 'hide_options'
-    ? { kind, target, options: [] }
-    : { kind, target }
+  const known = new Set(tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.options.map((o) => o.id)])))
+  const kept = keep.filter((id) => known.has(id))
+  const targets = kept.length > 0 ? kept : [tree[0]?.items[0]?.id].filter((id): id is string => Boolean(id))
+  return targets.length > 0 ? { kind, targets } : null
 }
 
 function ActionRow({
@@ -206,19 +201,23 @@ function ActionRow({
   // дублировать, у полного списка нечего добавлять.
   menu?: { onAdd?: () => void; onRemove?: () => void; onDuplicate?: () => void }
 }) {
-  // Вид, выбранный, но ещё не записанный в документ: так бывает, когда действию нужна
-  // цель, а ниже блока её пока нет. Держать такое состояние в документе нельзя (пустая
-  // цель невалидна), а терять выбор автора — грубо: строка показывает вид и ждёт цель.
+  // Вид, выбранный, но ещё не записанный в документ: так бывает, когда действию нужны
+  // цели, а в форме их пока нет. Держать такое состояние в документе нельзя (пустой
+  // список целей невалиден), а терять выбор автора — грубо: строка показывает вид и
+  // ждёт цель.
   const [draftKind, setDraftKind] = useState<LogicActionKind | null>(null)
   const kind = value?.kind ?? draftKind
-  const targets = kind ? targetsForKind(blocks, kind) : []
-  const target = value && 'target' in value ? value.target : undefined
+  const picks = value && 'targets' in value ? value.targets : []
+  const tree =
+    kind === 'show' || kind === 'hide' || kind === 'require' ? targetTree(blocks, kind) : []
 
-  // Смена вида роняет цель, если она новому виду не подходит: обязательным бывает
-  // только отвечаемый блок, варианты — только у списка. Несовместимая пара сделала бы
-  // действие инертным молча.
+  // Смена вида роняет цели, которые новому виду не подходят: обязательным бывает только
+  // отвечаемый блок, вариант — нет. Несовместимая пара сделала бы действие инертным
+  // молча.
   const pickKind = (next: LogicActionKind): void => {
-    const built = buildAction(next, targetsForKind(blocks, next), target)
+    const nextTree =
+      next === 'show' || next === 'hide' || next === 'require' ? targetTree(blocks, next) : []
+    const built = buildAction(next, nextTree, picks)
     if (built === null) {
       setDraftKind(next)
       return
@@ -227,14 +226,14 @@ function ActionRow({
     onChange(built)
   }
 
-  const pickTarget = (id: string): void => {
-    if (!kind) return
+  const toggleTarget = (id: string): void => {
+    if (kind !== 'show' && kind !== 'hide' && kind !== 'require') return
+    const next = picks.includes(id) ? picks.filter((x) => x !== id) : [...picks, id]
+    // Последняя снятая галка не пишется пустым списком — схема его отвергает; действие
+    // остаётся с прежними целями до следующего выбора.
+    if (next.length === 0) return
     setDraftKind(null)
-    onChange(
-      kind === 'show_options' || kind === 'hide_options'
-        ? { kind, target: id, options: [] }
-        : { kind: kind as 'show' | 'hide' | 'require', target: id },
-    )
+    onChange({ kind, targets: next })
   }
 
   return (
@@ -254,8 +253,8 @@ function ActionRow({
 
       {kind === 'jump' && value?.kind === 'jump' ? (
         <JumpTarget blocks={blocks} logicId={logicId} value={value} onChange={onChange} />
-      ) : kind === undefined || kind === null || kind === 'block_submit' ? null : (
-        <TargetPicker blocks={blocks} targets={targets} value={target} onPick={pickTarget} />
+      ) : kind === null || kind === 'block_submit' ? null : (
+        <TargetPicker tree={tree} picks={picks} onToggle={toggleTarget} />
       )}
 
       {menu && (
@@ -273,26 +272,8 @@ function ActionRow({
         />
       )}
 
-      {(value?.kind === 'show_options' || value?.kind === 'hide_options') && (
-        <OptionPicker blocks={blocks} value={value} onChange={onChange} />
-      )}
     </div>
   )
-}
-
-function targetsForKind(blocks: readonly Block[], kind: LogicActionKind): Block[] {
-  switch (kind) {
-    case 'show':
-    case 'hide':
-      return showTargets(blocks)
-    case 'require':
-      return requireTargets(blocks)
-    case 'show_options':
-    case 'hide_options':
-      return optionTargets(blocks)
-    default:
-      return []
-  }
 }
 
 // Цель перехода — одно поле выбора, хотя в схеме это две формы (id разрыва или флаг
@@ -329,67 +310,42 @@ function JumpTarget({
   )
 }
 
-// Какие варианты цели затронуты. Тумблерами, а не вторым выпадающим списком: выбор
-// здесь множественный, и список вариантов короткий по построению — он весь виден
-// сразу, без раскрытия.
-function OptionPicker({
-  blocks,
-  value,
-  onChange,
-}: {
-  blocks: readonly Block[]
-  value: { kind: 'show_options' | 'hide_options'; target: string; options: string[] }
-  onChange: (next: LogicAction) => void
-}) {
-  const target = blocks.find((b) => b.id === value.target)
-  const choices = target ? valueChoices(target) : []
-  if (choices.length === 0) return null
-  const toggle = (id: string): void => {
-    const next = value.options.includes(id)
-      ? value.options.filter((o) => o !== id)
-      : [...value.options, id]
-    onChange({ ...value, options: next })
-  }
-  return (
-    <div className="flex w-full flex-wrap gap-1 pl-1">
-      {choices.map((c) => {
-        const on = value.options.includes(c.value)
-        return (
-          <Button
-            key={c.value}
-            type="button"
-            variant={on ? 'secondary' : 'ghost'}
-            size="sm"
-            className="h-6 px-2 text-xs"
-            aria-pressed={on}
-            onClick={() => toggle(c.value)}
-          >
-            {c.label}
-          </Button>
-        )
-      })}
-    </div>
-  )
-}
-
-// Пикер цели — СПИСОК ПО СТРАНИЦАМ С ПОИСКОМ, а не выпадающий список (образец — Tally).
-// С тех пор как цель перестала сужаться позицией (ADR §10, 2026-08-16), в списке лежит
-// весь документ: у формы на полсотни блоков плоский select стал бы стеной без ориентиров.
-// Страницы дают ту же карту, что видит респондент, поиск — вход по названию вопроса.
+// Пикер целей — ДЕРЕВО С ГАЛКАМИ: страница → вопрос → его варианты (образец — Tally).
+//
+// Дерево, а не плоский список, потому что вариант выбора — такая же цель, что и вопрос:
+// отдельного действия «скрыть варианты» нет, и в одном пикере лежат оба уровня.
+// Множественный выбор — потому что «скрыть эту ветку» это обычно несколько блоков сразу,
+// и пять действий вместо одного сделали бы блок нечитаемым.
+//
+// Варианты показываются РАЗВЁРНУТЫМИ, без сворачивания: у Tally там шеврон, но список
+// вариантов короткий по построению, а поиск и так ищет по обоим уровням.
 function TargetPicker({
-  blocks,
-  targets,
-  value,
-  onPick,
+  tree,
+  picks,
+  onToggle,
 }: {
-  blocks: readonly Block[]
-  targets: readonly Block[]
-  value?: string
-  onPick: (id: string) => void
+  tree: { page: number; items: TargetNode[] }[]
+  picks: readonly string[]
+  onToggle: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
-  const current = targets.find((b) => b.id === value)
-  const pages = targetsByPage(blocks, targets)
+  const names = new Map<string, string>()
+  for (const { items } of tree) {
+    for (const n of items) {
+      names.set(n.id, n.label)
+      for (const o of n.options) names.set(o.id, o.label)
+    }
+  }
+  const chosen = picks.filter((id) => names.has(id))
+  const summary =
+    chosen.length === 0
+      ? names.size === 0
+        ? 'выбирать нечего'
+        : 'Выберите блоки'
+      : chosen.length === 1
+        ? names.get(chosen[0]!)!
+        : `Выбрано: ${chosen.length}`
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -399,12 +355,10 @@ function TargetPicker({
           size="sm"
           role="combobox"
           aria-expanded={open}
-          aria-label="Цель действия"
+          aria-label="Цели действия"
           className="h-7 min-w-36 flex-1 justify-between font-normal"
         >
-          <span className="truncate">
-            {current ? targetLabel(blocks, current) : targets.length === 0 ? 'выбирать нечего' : 'Выберите блок'}
-          </span>
+          <span className="truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -413,27 +367,66 @@ function TargetPicker({
           <CommandInput placeholder="Поиск" />
           <CommandList>
             <CommandEmpty>Ничего не найдено</CommandEmpty>
-            {pages.map(({ page, items }) => (
+            {tree.map(({ page, items }) => (
               <CommandGroup key={page} heading={`Страница ${page}`}>
-                {items.map((b) => (
-                  <CommandItem
-                    key={b.id}
-                    // Значение — то, по чему ищет cmdk. Имя плюс id: два вопроса могут
-                    // называться одинаково, и без id они схлопнулись бы в один пункт.
-                    value={`${targetLabel(blocks, b)} ${b.id}`}
-                    onSelect={() => {
-                      onPick(b.id)
-                      setOpen(false)
-                    }}
-                  >
-                    {targetLabel(blocks, b)}
-                  </CommandItem>
-                ))}
+                {items.flatMap((node) => [
+                  <PickRow
+                    key={node.id}
+                    id={node.id}
+                    label={node.label}
+                    on={picks.includes(node.id)}
+                    onToggle={onToggle}
+                  />,
+                  ...node.options.map((o) => (
+                    <PickRow
+                      key={o.id}
+                      id={o.id}
+                      label={o.label}
+                      nested
+                      on={picks.includes(o.id)}
+                      onToggle={onToggle}
+                    />
+                  )),
+                ])}
               </CommandGroup>
             ))}
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
+  )
+}
+
+function PickRow({
+  id,
+  label,
+  on,
+  nested = false,
+  onToggle,
+}: {
+  id: string
+  label: string
+  on: boolean
+  nested?: boolean
+  onToggle: (id: string) => void
+}) {
+  return (
+    <CommandItem
+      // Значение — то, по чему ищет cmdk. Имя плюс id: две цели могут называться
+      // одинаково, и без id они схлопнулись бы в один пункт.
+      value={`${label} ${id}`}
+      onSelect={() => onToggle(id)}
+      className={nested ? 'pl-7' : undefined}
+    >
+      <span
+        className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
+          on ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
+        }`}
+        aria-hidden="true"
+      >
+        {on && <Check className="size-3" />}
+      </span>
+      <span className="truncate">{label}</span>
+    </CommandItem>
   )
 }

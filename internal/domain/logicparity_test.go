@@ -87,6 +87,7 @@ func TestLogicLimitsParity(t *testing.T) {
 		"MAX_LOGIC_NODES":     MaxLogicNodes,
 		"MAX_LOGIC_VALUE_LEN": MaxLogicValueLen,
 		"MAX_LOGIC_ACTIONS":   MaxLogicActions,
+		"MAX_LOGIC_TARGETS":   MaxLogicTargets,
 	}
 
 	found := map[string]int{}

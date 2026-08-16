@@ -85,6 +85,15 @@ type Compiled = {
 }
 
 function compileLogic(blocks: readonly Block[]): Compiled {
+  // Кто есть кто в документе: цель действия — id блока ЛИБО id варианта, и разобрать это
+  // может только документ. Блок старше варианта при совпадении id.
+  const isBlock = new Set(blocks.map((b) => b.id))
+  const optionOwner = new Map<string, string>()
+  for (const b of blocks) {
+    for (const o of b.settings?.options ?? []) {
+      if (!optionOwner.has(o.id)) optionOwner.set(o.id, b.id)
+    }
+  }
   const c: Compiled = {
     shows: new Map(),
     hides: new Map(),
@@ -125,19 +134,25 @@ function compileLogic(blocks: readonly Block[]): Compiled {
     for (const a of b.logic?.then ?? []) {
       switch (a.kind) {
         case 'show':
-          push(c.shows, a.target, rule)
+        case 'hide': {
+          const m = a.kind === 'show' ? c.shows : c.hides
+          const om = a.kind === 'show' ? c.optionShows : c.optionHides
+          for (const id of a.targets) {
+            if (isBlock.has(id)) {
+              push(m, id, rule)
+              continue
+            }
+            const owner = optionOwner.get(id)
+            if (owner !== undefined) pushOptions(om, owner, [id], rule)
+            // Ни блок, ни вариант — ссылка в никуда, действие инертно.
+          }
           break
-        case 'hide':
-          push(c.hides, a.target, rule)
-          break
+        }
         case 'require':
-          push(c.requires, a.target, rule)
-          break
-        case 'show_options':
-          pushOptions(c.optionShows, a.target, a.options, rule)
-          break
-        case 'hide_options':
-          pushOptions(c.optionHides, a.target, a.options, rule)
+          // Вариант обязательным не бывает: ссылка на него инертна.
+          for (const id of a.targets) {
+            if (isBlock.has(id)) push(c.requires, id, rule)
+          }
           break
         case 'jump':
           c.jumps.push({ owner: b.id, rule, to: a.to, end: a.end })

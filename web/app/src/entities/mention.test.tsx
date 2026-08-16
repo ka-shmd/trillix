@@ -110,7 +110,7 @@ describe('mentionResolver — когда ссылка разрешима', () =>
       type: 'logic',
       logic: {
         when: { all: [{ blockId: 'gate', op: 'is', value: 'да' }] },
-        then: [{ kind: 'show', target: 'hidden' }],
+        then: [{ kind: 'show', targets: ['hidden'] }],
       },
     }
     const consumer: Block = {

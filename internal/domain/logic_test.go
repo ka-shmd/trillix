@@ -43,10 +43,7 @@ func requireRule(target string, when *Condition) Block {
 // остальные умолчания не меняют.
 func optionRule(target string, when *Condition, options ...string) Block {
 	b := lblk("L-opt-"+target+"-"+options[0], "gL-opt-"+target+"-"+options[0], BlockLogic)
-	b.Logic = &Logic{
-		When: when,
-		Then: []LogicAction{{Kind: ActShowOptions, Target: target, Options: options}},
-	}
+	b.Logic = &Logic{When: when, Then: []LogicAction{{Kind: ActShow, Targets: options}}}
 	return b
 }
 
@@ -629,8 +626,8 @@ func llogic(id, group string, when *Condition, actions ...LogicAction) Block {
 	return b
 }
 
-func act(kind LogicActionKind, target string) LogicAction {
-	return LogicAction{Kind: kind, Target: target}
+func act(kind LogicActionKind, targets ...string) LogicAction {
+	return LogicAction{Kind: kind, Targets: targets}
 }
 
 func TestPlanForm_LogicBlockVisibility(t *testing.T) {
@@ -885,15 +882,12 @@ func TestPlanForm_LogicBlockOptions(t *testing.T) {
 		Option{ID: "leash", Label: "Поводок"}, Option{ID: "tray", Label: "Лоток"}, Option{ID: "food", Label: "Корм"})
 	rule := func(kind LogicActionKind, ids ...string) Block {
 		b := lblk("L", "gL", BlockLogic)
-		b.Logic = &Logic{
-			When: leaf("src", OpIs, "dog"),
-			Then: []LogicAction{{Kind: kind, Target: "list", Options: ids}},
-		}
+		b.Logic = &Logic{When: leaf("src", OpIs, "dog"), Then: []LogicAction{{Kind: kind, Targets: ids}}}
 		return b
 	}
 
 	t.Run("«скрыть варианты» прячет названные", func(t *testing.T) {
-		plan := PlanForm([]Block{src, rule(ActHideOptions, "tray"), list}, answers(map[string]any{"src": "dog"}))
+		plan := PlanForm([]Block{src, rule(ActHide, "tray"), list}, answers(map[string]any{"src": "dog"}))
 		if plan.OptionVisible("list", "tray") {
 			t.Fatal("названный вариант обязан быть скрыт")
 		}
@@ -903,7 +897,7 @@ func TestPlanForm_LogicBlockOptions(t *testing.T) {
 	})
 
 	t.Run("«показать варианты» переворачивает умолчание названных", func(t *testing.T) {
-		blocks := []Block{src, rule(ActShowOptions, "leash"), list}
+		blocks := []Block{src, rule(ActShow, "leash"), list}
 		if PlanForm(blocks, answers(map[string]any{"src": "cat"})).OptionVisible("list", "leash") {
 			t.Fatal("условие не сработало — названный вариант обязан быть скрыт")
 		}
@@ -918,7 +912,7 @@ func TestPlanForm_LogicBlockOptions(t *testing.T) {
 	t.Run("скрытый вариант не считается выбором", func(t *testing.T) {
 		dep := lblk("dep", "g3", BlockShortText)
 		blocks := []Block{
-			src, rule(ActHideOptions, "tray"), list,
+			src, rule(ActHide, "tray"), list,
 			showRule("dep", leaf("list", OpIncludes, "tray")), dep,
 		}
 		plan := PlanForm(blocks, answers(map[string]any{"src": "dog", "list": []string{"tray", "food"}}))
@@ -1031,7 +1025,7 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 	cases := map[string]string{
 		"условие листом": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
-			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"o1"},"then":[{"kind":"show","target":"b"}]}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"o1"},"then":[{"kind":"show","targets":["b"]}]}},
 			{"id":"b","groupId":"g2","type":"short_text","settings":{}}
 		]}`,
 		"условие вложенными группами": `{"schemaVersion":1,"blocks":[
@@ -1054,12 +1048,12 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 		]}`,
 		"обязательность по условию": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered"},"then":[{"kind":"require","target":"b"}]}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered"},"then":[{"kind":"require","targets":["b"]}]}},
 			{"id":"b","groupId":"g2","type":"phone","settings":{}}
 		]}`,
 		"скрытие варианта": `{"schemaVersion":1,"blocks":[
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"dog"},"then":[{"kind":"hide_options","target":"b","options":["o1"]}]}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"dog"},"then":[{"kind":"hide","targets":["o1"]}]}},
 			{"id":"b","groupId":"g2","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Поводок"}]}}
 		]}`,
 		"переходы блоком": `{"schemaVersion":1,"blocks":[
@@ -1081,11 +1075,11 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 			{"id":"L","groupId":"g2","type":"logic","logic":{
 				"when":{"blockId":"a","op":"is","value":"o1"},
 				"then":[
-					{"kind":"show","target":"b"},
-					{"kind":"hide","target":"c"},
-					{"kind":"require","target":"b"},
-					{"kind":"show_options","target":"c","options":["o2"]},
-					{"kind":"hide_options","target":"c","options":["o2","o3"]},
+					{"kind":"show","targets":["b"]},
+					{"kind":"hide","targets":["c"]},
+					{"kind":"require","targets":["b"]},
+					{"kind":"show","targets":["o2"]},
+					{"kind":"hide","targets":["o2","o3"]},
 					{"kind":"jump","to":"br"},
 					{"kind":"jump","end":true},
 					{"kind":"block_submit"}
@@ -1100,11 +1094,11 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 			{"id":"L","groupId":"g1","type":"logic"}
 		]}`,
 		"действие на удалённую цель — инертно, но валидно": `{"schemaVersion":1,"blocks":[
-			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":"призрак"}]}}
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","targets":["призрак"]}]}}
 		]}`,
 		"цель СТОИТ ВЫШЕ блока — инертно, но валидно": `{"schemaVersion":1,"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{}},
-			{"id":"L","groupId":"g2","type":"logic","logic":{"then":[{"kind":"show","target":"b"}]}}
+			{"id":"L","groupId":"g2","type":"logic","logic":{"then":[{"kind":"show","targets":["b"]}]}}
 		]}`,
 	}
 
@@ -1121,7 +1115,7 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 	deep := `{"all":[{"all":[{"all":[{"all":[{"blockId":"a","op":"answered"}]}]}]}]}`
 	long := strings.Repeat("я", MaxLogicValueLen+1)
 	manyActions := strings.TrimSuffix(
-		strings.Repeat(`{"kind":"show","target":"b"},`, MaxLogicActions+1), ",")
+		strings.Repeat(`{"kind":"show","targets":["b"]},`, MaxLogicActions+1), ",")
 
 	cases := map[string]string{
 		"пустое условие": `{"schemaVersion":1,"blocks":[
@@ -1181,7 +1175,7 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"answered"},"to":"br2","end":true}]}
 		]}`,
 		"logic у чужого типа": `{"schemaVersion":1,"blocks":[
-			{"id":"b","groupId":"g1","type":"short_text","settings":{},"logic":{"then":[{"kind":"show","target":"c"}]}}
+			{"id":"b","groupId":"g1","type":"short_text","settings":{},"logic":{"then":[{"kind":"show","targets":["c"]}]}}
 		]}`,
 		"неизвестное действие": `{"schemaVersion":1,"blocks":[
 			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"calculate","target":"b"}]}}
@@ -1196,7 +1190,7 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide_options","target":"c"}]}}
 		]}`,
 		"пустой список вариантов": `{"schemaVersion":1,"blocks":[
-			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide_options","target":"c","options":[]}]}}
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide","targets":[]}]}}
 		]}`,
 		"варианты у действия, которое их не адресует": `{"schemaVersion":1,"blocks":[
 			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":"c","options":["o1"]}]}}
@@ -1260,9 +1254,9 @@ func TestValidateSchema_LogicCanonical(t *testing.T) {
 		{"id":"L","groupId":"gL","type":"logic","logic":{
 			"when":{"all":[{"blockId":"a","op":"is","value":"o1"}]},
 			"then":[
-				{"kind":"show","target":"b"},
-				{"kind":"require","target":"b"},
-				{"kind":"hide_options","target":"c","options":["o9"]},
+				{"kind":"show","targets":["b"]},
+				{"kind":"require","targets":["b"]},
+				{"kind":"hide","targets":["o9"]},
 				{"kind":"jump","end":true}
 			]}},
 		{"id":"b","groupId":"g2","type":"short_text","settings":{}},
@@ -1279,7 +1273,7 @@ func TestValidateSchema_LogicCanonical(t *testing.T) {
 	if string(canon) != string(again) {
 		t.Fatalf("канон не идемпотентен:\n%s\n%s", canon, again)
 	}
-	for _, want := range []string{`"logic"`, `"when"`, `"then"`, `"hide_options"`, `"end":true`} {
+	for _, want := range []string{`"logic"`, `"when"`, `"then"`, `"targets":["o9"]`, `"end":true`} {
 		if !strings.Contains(string(canon), want) {
 			t.Fatalf("канон потерял %s: %s", want, canon)
 		}

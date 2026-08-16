@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import { ruleSchema } from './conditions'
 import { type BlockKindContract } from './contract'
-import { MAX_ID_LEN, MAX_LOGIC_ACTIONS, MAX_OPTIONS } from './limits'
+import { MAX_ID_LEN, MAX_LOGIC_ACTIONS, MAX_LOGIC_TARGETS } from './limits'
 
 // Блок условной логики — «Когда <условие> → тогда <действия>». Правило перестало быть
 // невидимым свойством вопроса и стало строкой полотна, которую видно при чтении формы
@@ -28,9 +28,6 @@ export const LOGIC_ACTIONS = [
   'hide',
   // обязательность отвечаемого блока; складывается с флагом required по ИЛИ
   'require',
-  // видимость отдельных вариантов внутри choice-вопроса (каскадные списки)
-  'show_options',
-  'hide_options',
   // переход со страницы, на которой стоит блок
   'jump',
   // «кнопки нет»: обход завершается на этой странице, отправить форму нельзя
@@ -46,22 +43,20 @@ export const logicActionKindSchema = z.enum(LOGIC_ACTIONS)
 // строка в пределах длины id.
 const blockRefSchema = z.string().min(1).max(MAX_ID_LEN)
 
-// Цель действия — id блока, а не группы: `groupId` ВЫВОДИТСЯ (regroup) и сущностью схемы
-// не является, ссылаться на выводимое значение нельзя. Адресуется голова группы, и
-// вопрос прячется целиком — это единственное, что осталось от прежнего носителя
-// `visibleIf`, и осталось по прежнему доводу.
+// Цели — СПИСОК id, и в нём вперемешку блоки и ВАРИАНТЫ выбора (решение владельца
+// 2026-08-16, образец — Tally: в дереве целей вариант такой же узел, что и вопрос).
+// Отдельного действия «скрыть варианты» поэтому нет: одно «скрыть» прячет и вопрос, и
+// отдельные его варианты, а кто чем оказался, разбирает вычислитель по документу.
+//
+// Список, а не одна цель: автор прячет ветку целиком одним движением, и пять действий
+// вместо одного сделали бы блок нечитаемым.
+//
+// Ссылаться можно на id блока или варианта, но НЕ на `groupId`: тот ВЫВОДИТСЯ (regroup) и
+// сущностью схемы не является. Блок-цель у показа — голова группы: прячется вопрос
+// целиком, и это единственное, что осталось от прежнего носителя `visibleIf`.
 const targetActionSchema = z.strictObject({
   kind: z.enum(['show', 'hide', 'require']),
-  target: blockRefSchema,
-})
-
-// Варианты называются списком, а не по одному действию на вариант: автор прячет «все
-// варианты, кроме подходящих» одним движением, и десять действий вместо одного сделали
-// бы каскадный список нечитаемым на полотне.
-const optionsActionSchema = z.strictObject({
-  kind: z.enum(['show_options', 'hide_options']),
-  target: blockRefSchema,
-  options: z.array(blockRefSchema).min(1).max(MAX_OPTIONS),
+  targets: z.array(blockRefSchema).min(1).max(MAX_LOGIC_TARGETS),
 })
 
 // Цель перехода — ЛИБО id разрыва (страница, которую он открывает), ЛИБО end («страниц
@@ -83,14 +78,12 @@ const jumpActionSchema = z
 const blockSubmitActionSchema = z.strictObject({ kind: z.literal('block_submit') })
 
 export type LogicAction =
-  | { kind: 'show' | 'hide' | 'require'; target: string }
-  | { kind: 'show_options' | 'hide_options'; target: string; options: string[] }
+  | { kind: 'show' | 'hide' | 'require'; targets: string[] }
   | { kind: 'jump'; to?: string; end?: boolean }
   | { kind: 'block_submit' }
 
 export const logicActionSchema: z.ZodType<LogicAction> = z.union([
   targetActionSchema,
-  optionsActionSchema,
   jumpActionSchema,
   blockSubmitActionSchema,
 ])

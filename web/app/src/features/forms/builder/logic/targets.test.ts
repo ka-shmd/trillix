@@ -2,15 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import { type Block } from '@entities/formSchema'
 
-import {
-  JUMP_END,
-  jumpTargetsFrom,
-  logicBlockWarnings,
-  optionTargets,
-  requireTargets,
-  showTargets,
-  targetsByPage,
-} from './model'
+import { JUMP_END, jumpTargetsFrom, logicBlockWarnings, targetTree } from './model'
+
+// Плоский список id дерева целей — удобнее сравнивать, чем вложенную структуру.
+const ids = (tree: ReturnType<typeof targetTree>): string[] =>
+  tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.options.map((o) => o.id)]))
 
 // Редакторская сторона: что автору предлагают выбрать и о чём предупреждают. Цели с
 // 2026-08-16 НЕ сужаются позицией (ADR §10) — блок волен стоять где угодно, а негодную
@@ -39,22 +35,24 @@ const doc = (l: Block['logic'] = {}): Block[] => [
   },
 ]
 
-describe('цели действий — весь документ, а не только то, что ниже', () => {
-  it('«показать» адресует головы групп, включая стоящие ВЫШЕ блока', () => {
-    expect(showTargets(doc()).map((b) => b.id)).toEqual(['q1cap', 'q2cap', 'list'])
+describe('дерево целей: страница → вопрос → варианты', () => {
+  it('«показать» адресует вопросы, включая стоящие ВЫШЕ блока, и их варианты', () => {
+    expect(ids(targetTree(doc(), 'show'))).toEqual(['q1cap', 'q2cap', 'list', 'o1', 'o2'])
   })
 
-  it('«обязателен» адресует все отвечаемые', () => {
-    expect(requireTargets(doc()).map((b) => b.id)).toEqual(['q1', 'q2', 'list'])
+  it('«обязателен» адресует отвечаемые, но НЕ варианты', () => {
+    expect(ids(targetTree(doc(), 'require'))).toEqual(['q1', 'q2', 'list'])
   })
 
-  it('«варианты» адресуют choice-вопросы', () => {
-    expect(optionTargets(doc()).map((b) => b.id)).toEqual(['list'])
+  it('варианты висят на своём вопросе, а не отдельным узлом', () => {
+    const tree = targetTree(doc(), 'show')
+    const node = tree.flatMap((p) => p.items).find((n) => n.id === 'list')!
+    expect(node.options.map((o) => o.id)).toEqual(['o1', 'o2'])
   })
 
   it('сам блок logic целью не бывает', () => {
     const two = [...doc(), logic('L2', {})]
-    expect(showTargets(two).map((b) => b.id)).not.toContain('L2')
+    expect(ids(targetTree(two, 'show'))).not.toContain('L2')
   })
 
   it('разрыв страницы и заголовок формы целью показа не бывают', () => {
@@ -64,7 +62,7 @@ describe('цели действий — весь документ, а не то�
       blk('br', 'gb', 'page_break'),
       blk('q2cap', 'g2', 'title'),
     ]
-    expect(showTargets(paged).map((b) => b.id)).toEqual(['q1cap', 'q2cap'])
+    expect(ids(targetTree(paged, 'show'))).toEqual(['q1cap', 'q2cap'])
   })
 
   it('цели раскладываются по страницам — так их показывает пикер', () => {
@@ -73,9 +71,9 @@ describe('цели действий — весь документ, а не то�
       blk('br', 'gb', 'page_break'),
       blk('q2cap', 'g2', 'title'),
     ]
-    expect(targetsByPage(paged, showTargets(paged))).toEqual([
-      { page: 1, items: [paged[0]] },
-      { page: 2, items: [paged[2]] },
+    expect(targetTree(paged, 'show').map((p) => [p.page, p.items.map((n) => n.id)])).toEqual([
+      [1, ['q1cap']],
+      [2, ['q2cap']],
     ])
   })
 })
@@ -113,7 +111,7 @@ describe('предупреждения блока', () => {
 
   it('правильное правило предупреждений не даёт', () => {
     expect(
-      warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', target: 'q2cap' }] }),
+      warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', targets: ['q2cap'] }] }),
     ).toEqual([])
   })
 
@@ -124,7 +122,7 @@ describe('предупреждения блока', () => {
 
   it('источник ниже ЦЕЛИ — правило по этой цели не действует', () => {
     // Источник q2 стоит ниже цели q1cap: к моменту, когда решается цель, он не решён.
-    const out = warn({ when: { blockId: 'q2', op: 'answered' }, then: [{ kind: 'show', target: 'q1cap' }] })
+    const out = warn({ when: { blockId: 'q2', op: 'answered' }, then: [{ kind: 'show', targets: ['q1cap'] }] })
     expect(out.join(' ')).toContain('ниже')
   })
 
@@ -132,7 +130,7 @@ describe('предупреждения блока', () => {
     // Блок стоит ПОСЛЕДНИМ и прячет вопрос в середине; источник при этом выше цели.
     const l: Block['logic'] = {
       when: { blockId: 'q1', op: 'answered' },
-      then: [{ kind: 'show', target: 'q2cap' }],
+      then: [{ kind: 'show', targets: ['q2cap'] }],
     }
     const blocks: Block[] = [
       blk('q1cap', 'g1', 'title'),
@@ -145,25 +143,25 @@ describe('предупреждения блока', () => {
   })
 
   it('цель удалена', () => {
-    const out = warn({ then: [{ kind: 'show', target: 'призрак' }] })
+    const out = warn({ then: [{ kind: 'show', targets: ['призрак'] }] })
     expect(out.join(' ')).toContain('удалена')
   })
 
   it('цель показа — не голова группы', () => {
-    const out = warn({ then: [{ kind: 'show', target: 'q2' }] })
+    const out = warn({ then: [{ kind: 'show', targets: ['q2'] }] })
     expect(out.join(' ')).toContain('не первая строка')
   })
 
   it('обязателен всегда — условие ничего не меняет', () => {
     const blocks = doc().map((b) => (b.id === 'q2' ? { ...b, required: true } : b))
-    const l: Block['logic'] = { then: [{ kind: 'require', target: 'q2' }] }
+    const l: Block['logic'] = { then: [{ kind: 'require', targets: ['q2'] }] }
     blocks[2] = logic('L', l)
     expect(logicBlockWarnings(blocks, blocks[2]!).join(' ')).toContain('обязателен всегда')
   })
 
-  it('варианты не выбраны', () => {
-    const out = warn({ then: [{ kind: 'hide_options', target: 'list', options: [] }] })
-    expect(out.join(' ')).toContain('ни одного варианта')
+  it('вариант обязательным не бывает', () => {
+    const out = warn({ then: [{ kind: 'require', targets: ['o1'] }] })
+    expect(out.join(' ')).toContain('обязательным')
   })
 
   it('переходу некуда вести', () => {
@@ -174,8 +172,8 @@ describe('предупреждения блока', () => {
   it('одна беда у двух действий — одна строка', () => {
     const out = warn({
       then: [
-        { kind: 'show', target: 'призрак' },
-        { kind: 'hide', target: 'призрак2' },
+        { kind: 'show', targets: ['призрак'] },
+        { kind: 'hide', targets: ['призрак2'] },
       ],
     })
     expect(out.filter((w) => w.includes('удалена'))).toHaveLength(1)
