@@ -186,6 +186,16 @@ describe('iframeSnippet', () => {
   it('высота задаётся сразу: подстраиваться простому iframe нечем', () => {
     expect(iframeSnippet({ ...base, height: 500 })).toContain('height="500"')
   })
+
+  // «Страница» замещает содержимое чужой страницы, а не встаёт в поток высоким
+  // блоком: без фиксированного слоя этот режим отличался бы от блока только высотой.
+  it('страница — фиксированный слой во весь вьюпорт, без ширины и высоты в атрибутах', () => {
+    const code = iframeSnippet({ ...base, mode: 'page', height: 500 })
+    expect(code).toContain('position:fixed')
+    expect(code).toContain('inset:0')
+    expect(code).not.toContain('height="500"')
+    expect(iframeSnippet(base)).not.toContain('position:fixed')
+  })
 })
 
 describe('prefillFields', () => {

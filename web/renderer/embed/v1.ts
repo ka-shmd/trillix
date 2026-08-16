@@ -104,6 +104,39 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
   })
 }
 
+/**
+ * mountFullPage — режим «страница»: форма ЗАМЕЩАЕТ СОБОЙ содержимое чужой страницы.
+ *
+ * Фрейм ложится фиксированным слоем во весь вьюпорт, а не встаёт в поток на месте
+ * скрипта: в потоке «страница» отличалась от блока только высотой в 100dvh — то есть
+ * ничем, кроме размера, и обещание режима не выполнялось. Здесь же под формой не
+ * видно ни шапки сайта, ни его подвала, и прокрутка хозяина заперта: за фреймом
+ * прокручивать нечего, а незапертая страница «уезжала» бы колесом поверх формы.
+ *
+ * Закрытия у режима нет намеренно: это не оверлей, а страница. Владелец сайта ставит
+ * такой сниппет на отдельный адрес, где кроме формы ничего и не должно быть.
+ */
+function mountFullPage(opts: MountOptions): EmbedHandle | null {
+  if (ORIGIN === '') return null
+  const frame = createFrame(opts)
+  frame.style.position = 'fixed'
+  frame.style.inset = '0'
+  frame.style.width = '100%'
+  frame.style.zIndex = '2147483000'
+  document.body.appendChild(frame)
+  pageMounted = true
+  lockScroll()
+  const entry: Mounted = { frame, opts, handlers: {} }
+  mounted.push(entry)
+  return handleOf(entry, () => {
+    frame.remove()
+    pageMounted = false
+    unlockScroll()
+    const i = mounted.indexOf(entry)
+    if (i >= 0) mounted.splice(i, 1)
+  })
+}
+
 // --- Виджет: кнопка и модалка -----------------------------------------------
 //
 // Открытый виджет ровно один: две формы поверх друг друга — не сценарий, а способ
@@ -120,6 +153,9 @@ let savedPadding = ''
 // Флаг обязателен: запирает открытие, отпирает закрытие, а полноэкранность считается
 // по вьюпорту и между этими моментами может измениться (поворот телефона).
 let scrollLocked = false
+// На странице стоит вставка режима 'page': её замок скролла живёт, пока живёт сама
+// вставка, и закрытие виджета его снимать не вправе.
+let pageMounted = false
 
 function lockScroll() {
   if (scrollLocked) return
@@ -134,7 +170,7 @@ function lockScroll() {
 }
 
 function unlockScroll() {
-  if (!scrollLocked) return
+  if (!scrollLocked || pageMounted) return
   document.body.style.overflow = savedOverflow
   document.body.style.paddingRight = savedPadding
   scrollLocked = false
@@ -569,6 +605,12 @@ function attach(script: Element): void {
   if (!opts) return
   if (opts.mode === 'widget') {
     armTrigger(opts, createButton(opts))
+    return
+  }
+  // «Страница» ничего не вставляет в поток: она накрывает чужую страницу целиком, и
+  // место самого скрипта для неё значения не имеет.
+  if (opts.mode === 'page') {
+    mountFullPage(opts)
     return
   }
   if (!script.parentNode) return

@@ -213,8 +213,16 @@ export function frameUrl(opts: SnippetOptions): string {
  */
 export function iframeSnippet(opts: SnippetOptions): string {
   const src = frameUrl(opts)
-  const height = opts.mode === 'page' ? '100%' : String(opts.height ?? PLAIN_IFRAME_HEIGHT)
-  return `<iframe src="${escapeAttr(src)}" title="Форма" width="100%" height="${height}" style="border:0"></iframe>`
+  // «Страница» и без загрузчика обязана замещать содержимое, а не быть высоким блоком
+  // в потоке: фиксированный слой во весь вьюпорт — единственное, чем это выражается в
+  // одном теге. Остальным режимам хватает ширины и высоты.
+  const style =
+    opts.mode === 'page'
+      ? 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483000'
+      : 'border:0'
+  const size =
+    opts.mode === 'page' ? '' : ` width="100%" height="${opts.height ?? PLAIN_IFRAME_HEIGHT}"`
+  return `<iframe src="${escapeAttr(src)}" title="Форма"${size} style="${style}"></iframe>`
 }
 
 /** Одно предзаполняемое поле: id блока и подпись, которой вопрос назван в форме. */
