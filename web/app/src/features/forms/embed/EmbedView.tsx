@@ -6,6 +6,7 @@ import { type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
+  DEFAULT_WIDGET_EMOJI,
   DEFAULT_WIDGET_WIDTH,
   iframeSnippet,
   scriptSnippet,
@@ -46,10 +47,12 @@ export function EmbedView({
     height: DEFAULT_BLOCK_HEIGHT,
     dynamicHeight: true,
     width: DEFAULT_WIDGET_WIDTH,
-    overlay: true,
+    // Затемнения по умолчанию НЕТ: панель в углу — продолжение кнопки, а не перехват
+    // страницы, и потемневший сайт вокруг неё противоречит самому жесту.
+    overlay: false,
     open: 'click',
     openValue: DEFAULT_OPEN_DELAY,
-    emoji: '',
+    emoji: DEFAULT_WIDGET_EMOJI,
     emojiWave: false,
     hideOnSubmit: false,
     plain: false,
