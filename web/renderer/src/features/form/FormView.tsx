@@ -97,9 +97,10 @@ export function FormView({
   const redirectSelf = embed?.redirectSelf ?? false
   // Предпросмотр вставки: форма живая, но следов не оставляет — ни визита, ни ответа.
   const preview = embed?.preview ?? false
-  // Настройки вида вставки: заголовок формы и выравнивание содержимого.
+  // Настройка вида вставки: заголовок формы. Выравнивание содержимого — атрибут на
+  // документе (main.tsx) и правила в index.css: оно про раскладку холста, а не про
+  // блоки, и в разметке ему делать нечего.
   const hideTitle = embed?.hideTitle ?? false
-  const alignLeft = embed?.alignLeft ?? false
   // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
@@ -186,19 +187,7 @@ export function FormView({
     root.classList.remove(...stale)
     for (const name of DESIGN_VAR_NAMES) root.style.removeProperty(name)
 
-    // ВЫРАВНИВАНИЕ ВСТАВКИ ПЕРЕБИВАЕТ ОФОРМЛЕНИЕ И ДЕЛАЕТ ЭТО ЗДЕСЬ, а не отдельным
-    // правилом в CSS: переменные оформления живут инлайном на <html>, и правило из
-    // таблицы стилей проиграло бы им при любой специфичности. Три токена, а не один:
-    // текст выравнивает text-align, карточки вариантов — align-items, кнопку —
-    // justify-content ряда (fields.css §холст).
-    const vars = alignLeft
-      ? {
-          ...designToVars(form.schema.design),
-          '--rf-align': 'left',
-          '--rf-align-items': 'flex-start',
-          '--rf-submit-justify': 'flex-start',
-        }
-      : designToVars(form.schema.design)
+    const vars = designToVars(form.schema.design)
     for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value)
     // Классов может быть несколько (тема + контур + вид кнопки), а classList.add со
     // строкой «a b» бросает InvalidCharacterError — поэтому список, а не строка.
@@ -208,7 +197,7 @@ export function FormView({
       for (const name of Object.keys(vars)) root.style.removeProperty(name)
       root.classList.remove(...cls)
     }
-  }, [form.schema.design, alignLeft])
+  }, [form.schema.design])
 
   useEffect(() => {
     saveAnswers(slug, form.version, answers)
