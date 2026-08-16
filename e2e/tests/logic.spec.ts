@@ -54,7 +54,7 @@ test('ветвление: скрытый вопрос, скрытый вариа
     data: {
       updatedAt: form.updatedAt,
       draftSchema: {
-        schemaVersion: 4,
+        schemaVersion: 1,
         blocks: [
           // Страница 1: источник, вопрос за условием и список со скрытым вариантом.
           { id: 't_pet', groupId: 'g_pet', type: 'title', text: [{ t: PET }] },
@@ -69,8 +69,22 @@ test('ветвление: скрытый вопрос, скрытый вариа
               ],
             },
           },
-          { id: 't_kind', groupId: 'g_kind', type: 'title', text: [{ t: KIND }], visibleIf: ifYes },
-          { id: 'kind', groupId: 'g_kind', type: 'short_text', settings: {}, requiredIf: ifYes },
+          // Правило стоит МЕЖДУ источником и целями: источник выше него, цели ниже.
+          {
+            id: 'L1',
+            groupId: 'g_L1',
+            type: 'logic',
+            logic: {
+              when: ifYes,
+              then: [
+                { kind: 'show', target: 't_kind' },
+                { kind: 'require', target: 'kind' },
+                { kind: 'show_options', target: 'stuff', options: ['leash'] },
+              ],
+            },
+          },
+          { id: 't_kind', groupId: 'g_kind', type: 'title', text: [{ t: KIND }] },
+          { id: 'kind', groupId: 'g_kind', type: 'short_text', settings: {} },
           { id: 't_stuff', groupId: 'g_stuff', type: 'title', text: [{ t: STUFF }] },
           {
             id: 'stuff',
@@ -78,18 +92,23 @@ test('ветвление: скрытый вопрос, скрытый вариа
             type: 'multi_choice',
             settings: {
               options: [
-                { id: 'leash', label: 'Поводок', visibleIf: ifYes },
+                { id: 'leash', label: 'Поводок' },
                 { id: 'nothing', label: 'Ничего' },
               ],
             },
           },
-          // Разрыв с переходом: «нет питомца» — спрашивать больше нечего.
+          // Переход: «нет питомца» — спрашивать больше нечего. Правило принадлежит
+          // странице, с которой уходят, поэтому стоит ДО разрыва.
           {
-            id: 'brk',
-            groupId: 'g_brk',
-            type: 'page_break',
-            jumpIf: [{ when: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] }, end: true }],
+            id: 'L2',
+            groupId: 'g_L2',
+            type: 'logic',
+            logic: {
+              when: { all: [{ blockId: 'pet', op: 'is', value: 'no' }] },
+              then: [{ kind: 'jump', end: true }],
+            },
           },
+          { id: 'brk', groupId: 'g_brk', type: 'page_break' },
           // Страница 2: её видит только ветка «да».
           { id: 't_phone', groupId: 'g_phone', type: 'title', text: [{ t: PHONE }] },
           { id: 'phone', groupId: 'g_phone', type: 'phone', settings: {} },
