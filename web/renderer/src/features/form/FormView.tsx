@@ -614,7 +614,11 @@ export function FormView({
               Назад
             </button>
           )}
-          {page < lastPage ? (
+          {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
+              отправить нельзя. Кнопки нет вовсе, а не disabled — отключённая кнопка
+              обещает, что вот-вот станет доступной. Сервер это же состояние проверяет
+              сам (NormalizeAnswers): спрятанная разметкой кнопка не защищает от curl. */}
+          {plan.blocked && page === lastPage ? null : page < lastPage ? (
             <button className="rf-submit rf-next" type="button" onClick={onNext} disabled={locked}>
               Далее
             </button>

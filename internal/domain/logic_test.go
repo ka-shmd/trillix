@@ -930,6 +930,27 @@ func TestPlanForm_LogicBlockJumpAndSubmit(t *testing.T) {
 	})
 }
 
+// Спрятанная разметкой кнопка не защищает от curl: приём обязан отвергнуть отправку
+// сам (инвариант безопасности 3).
+func TestNormalizeAnswers_BlockedFormRejected(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	schema := FormSchema{Blocks: []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "no"), LogicAction{Kind: ActBlockSubmit}),
+	}}
+
+	if _, err := NormalizeAnswers(schema, answers(map[string]any{"src": "no"})); err == nil {
+		t.Fatal("отправка заблокированной формы обязана быть отвергнута")
+	} else if !errors.Is(err, ErrValidation) {
+		t.Fatalf("ошибка обязана быть ErrValidation, получено: %v", err)
+	}
+
+	// Та же форма при другом ответе принимается: блокировка — это ветка, а не режим.
+	if _, err := NormalizeAnswers(schema, answers(map[string]any{"src": "yes"})); err != nil {
+		t.Fatalf("незаблокированная ветка обязана приниматься: %v", err)
+	}
+}
+
 // ---------- форма правил в схеме ----------
 
 func TestValidateSchema_LogicValid(t *testing.T) {

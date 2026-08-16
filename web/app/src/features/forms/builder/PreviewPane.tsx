@@ -182,7 +182,9 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
                 Назад
               </button>
             )}
-            {page < lastPage ? (
+            {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+                автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
+            {plan.blocked && page === lastPage ? null : page < lastPage ? (
               <button type="button" className="rf-submit rf-next" onClick={() => setPage(page + 1)}>
                 Далее
               </button>
