@@ -231,6 +231,15 @@ function buildWidget(opts: MountOptions): Mounted {
   dialog.style.overflowY = 'auto'
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
 
+  // КРЕСТИК ЖИВЁТ НА ОБЁРТКЕ, А НЕ ВНУТРИ ПАНЕЛИ, и это не про вёрстку: панель — это
+  // скролл-контейнер длинной формы, и лежащий внутри неё крестик уезжал вверх вместе с
+  // содержимым. Человек, прокрутивший форму до середины, оставался без способа её
+  // закрыть — кроме Esc, о котором он не знает. Обёртка не скроллится, поэтому кнопка
+  // стоит на месте.
+  //
+  // ФОН НЕПРОЗРАЧНЫЙ ПО ТОЙ ЖЕ ПРИЧИНЕ: крестик приходится на верх формы, где у многих
+  // форм стоит обложка — на тёмной картинке полупрозрачная плашка и тёмный глиф просто
+  // исчезали. Белый круг с тенью читается и на картинке, и на белом холсте.
   const close = document.createElement('button')
   close.type = 'button'
   close.setAttribute('aria-label', 'Закрыть форму')
@@ -242,17 +251,19 @@ function buildWidget(opts: MountOptions): Mounted {
   close.style.height = '28px'
   close.style.border = '0'
   close.style.borderRadius = '999px'
-  close.style.background = 'rgba(15, 23, 42, 0.06)'
+  close.style.background = '#ffffff'
   close.style.color = '#0f172a'
   close.style.fontSize = '18px'
   close.style.lineHeight = '1'
   close.style.cursor = 'pointer'
-  close.style.zIndex = '1'
+  close.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.35)'
+  close.style.zIndex = '2'
   close.addEventListener('click', closeWidget)
 
-  // ОБЁРТКА нужна ровно ради эмодзи: он висит на углу панели, ВЫСТУПАЯ за её край, а
-  // у самой панели `overflow-y: auto` (длинная форма скроллится внутри) — там его бы
-  // срезало. Обёртка ничего не прячет и задаёт ширину, панель занимает её целиком.
+  // ОБЁРТКА держит всё, что обязано не скроллиться и не обрезаться панелью: эмодзи на
+  // её углу (он выступает за край, а у панели `overflow-y: auto`) и крестик (он стоит
+  // на месте, пока форма прокручивается). Обёртка ничего не прячет и задаёт ширину,
+  // панель занимает её целиком.
   const panel = document.createElement('div')
   panel.style.position = 'relative'
   panel.style.width = '100%'
@@ -281,10 +292,10 @@ function buildWidget(opts: MountOptions): Mounted {
   }
 
   const frame = createFrame(opts)
-  dialog.appendChild(close)
   dialog.appendChild(frame)
   if (badge) panel.appendChild(badge)
   panel.appendChild(dialog)
+  panel.appendChild(close)
   overlay.appendChild(panel)
   document.body.appendChild(overlay)
 
