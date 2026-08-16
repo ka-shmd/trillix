@@ -252,30 +252,28 @@ export function SettingsPanel({
             disabled={plain}
             onChange={(v) => onChange({ dynamicHeight: v })}
             text="Живая высота"
-            hint={
-              plain
-                ? 'Без скрипта высота не подстраивается.'
-                : 'Блок растёт вместе с формой.'
-            }
+            hint={plain ? 'Без скрипта высота не подстраивается.' : 'Блок растёт вместе с формой.'}
           />
         )}
         {!page && (
-          <>
-            <Toggle
-              id="embed-hide-title"
-              checked={settings.hideTitle}
-              onChange={(v) => onChange({ hideTitle: v })}
-              text="Скрыть заголовок формы"
-              hint="На странице обычно уже есть свой заголовок над формой."
-            />
-            <Toggle
-              id="embed-align"
-              checked={settings.alignLeft}
-              onChange={(v) => onChange({ alignLeft: v })}
-              text="Выровнять содержимое влево"
-              hint="Не зависит от выравнивания в оформлении формы."
-            />
-          </>
+          <Toggle
+            id="embed-hide-title"
+            checked={settings.hideTitle}
+            onChange={(v) => onChange({ hideTitle: v })}
+            text="Скрыть заголовок формы"
+            hint="На странице обычно уже есть свой заголовок над формой."
+          />
+        )}
+        {/* Прижатие влево — только у блока: у виджета и страницы поля холста
+            отделяют форму от края панели и края экрана, и снимать их там незачем. */}
+        {mode === 'block' && (
+          <Toggle
+            id="embed-align"
+            checked={settings.alignLeft}
+            onChange={(v) => onChange({ alignLeft: v })}
+            text="Выровнять содержимое влево"
+            hint="Форма начнётся от левого края блока, без полей по бокам."
+          />
         )}
         {widget ? (
           <>
@@ -344,8 +342,8 @@ function BadgeToggle({ form }: { form: FormDetail }) {
       />
       {!show && !canRemove && (
         <p className="mt-2 text-xs text-muted-foreground">
-          На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и сработает сразу
-          после перехода на платный.
+          На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и сработает сразу после
+          перехода на платный.
         </p>
       )}
       {form.publishedVersion !== null && (
@@ -355,8 +353,8 @@ function BadgeToggle({ form }: { form: FormDetail }) {
       )}
       {update.isError && (
         <p className="mt-2 text-xs text-destructive" role="alert">
-          Не удалось сохранить. Если форма открыта в редакторе в другой вкладке — обновите
-          страницу и попробуйте ещё раз.
+          Не удалось сохранить. Если форма открыта в редакторе в другой вкладке — обновите страницу
+          и попробуйте ещё раз.
         </p>
       )}
     </div>

@@ -68,6 +68,27 @@ describe('scriptSnippet: настройки вида и предпросмотр
     expect(code).toContain('data-align="left"')
   })
 
+  // У страницы форма и есть вся страница: спрятать её заголовок значит оставить
+  // документ вовсе без него, поэтому атрибут туда не пишется.
+  it('скрытый заголовок — не у страницы', () => {
+    expect(scriptSnippet({ ...base, mode: 'page', hideTitle: true })).not.toContain(
+      'data-hide-title',
+    )
+    expect(frameUrl({ ...base, mode: 'page', hideTitle: true })).not.toContain('hideTitle')
+    expect(scriptSnippet({ ...base, mode: 'widget', hideTitle: true })).toContain('data-hide-title')
+  })
+
+  // Прижатие влево есть только у блока: у виджета и страницы поля холста отделяют
+  // форму от края панели и края экрана. Настройка, включённая у блока, не должна
+  // уезжать в сниппет при переключении вида — поэтому проверка в генераторе, а не
+  // только в панели.
+  it('выравнивание влево — только у блока', () => {
+    expect(scriptSnippet({ ...base, mode: 'widget', alignLeft: true })).not.toContain('data-align')
+    expect(scriptSnippet({ ...base, mode: 'page', alignLeft: true })).not.toContain('data-align')
+    expect(frameUrl({ ...base, mode: 'page', alignLeft: true })).not.toContain('align=left')
+    expect(frameUrl({ ...base, alignLeft: true })).toContain('align=left')
+  })
+
   // Умолчание в сниппет не пишется: атрибут без него значит ровно то же самое, а
   // лишняя строка в коде на чужой странице — это вопрос «а это зачем?».
   it('высота блока пишется, только когда автор её менял', () => {

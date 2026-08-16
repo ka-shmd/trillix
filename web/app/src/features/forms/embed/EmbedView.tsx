@@ -43,8 +43,11 @@ export function EmbedView({
     label: 'Оставить заявку',
     position: 'bottom-right',
     transparent: false,
-    hideTitle: false,
-    alignLeft: false,
+    // Оба включены по умолчанию (решение владельца 2026-08-16): над вставкой на чужой
+    // странице почти всегда есть свой заголовок, а блок читается как часть страницы,
+    // когда начинается от её левого края, а не по центру своей колонки.
+    hideTitle: true,
+    alignLeft: true,
     height: DEFAULT_BLOCK_HEIGHT,
     dynamicHeight: true,
     width: DEFAULT_WIDGET_WIDTH,
@@ -60,8 +63,7 @@ export function EmbedView({
   })
   const [showCode, setShowCode] = useState(false)
 
-  const change = (patch: Partial<EmbedSettings>) =>
-    setSettings((prev) => ({ ...prev, ...patch }))
+  const change = (patch: Partial<EmbedSettings>) => setSettings((prev) => ({ ...prev, ...patch }))
 
   // База — та же, что у публичной ссылки: сниппет и ссылка обязаны вести в одно место.
   const baseUrl = publicFormUrl(form.slug).replace(`/r/${form.slug}`, '')
@@ -114,8 +116,8 @@ export function EmbedView({
                   вставки. Говорим до того, как автор пойдёт искать причину в коде. */}
               {form.publishedVersion === null ? (
                 <p className="text-xs text-muted-foreground">
-                  Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем
-                  сайте. Код ниже можно скопировать уже сейчас.
+                  Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем сайте.
+                  Код ниже можно скопировать уже сейчас.
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground">

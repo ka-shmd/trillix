@@ -181,8 +181,17 @@ export function scriptSnippet(opts: SnippetOptions): string {
       attrs.push('data-dynamic-height="0"')
     }
   }
-  if (opts.hideTitle) attrs.push('data-hide-title="1"')
-  if (opts.alignLeft) attrs.push('data-align="left"')
+  // ДВЕ НАСТРОЙКИ ВИДА ПИШУТСЯ НЕ ВО ВСЕХ РЕЖИМАХ, и оба ограничения — здесь, а не
+  // только в панели: иначе включённая у блока настройка молча уезжала бы в сниппет
+  // после переключения вида, где её контрола нет и увидеть её негде.
+  //
+  // Скрытый заголовок — не у страницы: там форма и есть вся страница, и прятать её
+  // заголовок значит оставить документ вовсе без него.
+  if (opts.hideTitle && opts.mode !== 'page') attrs.push('data-hide-title="1"')
+  // Прижатие влево — только у блока: у виджета и страницы поля холста единственное,
+  // что отделяет форму от края панели и края экрана (то же правило продублировано
+  // селектором в рендерере — оно про вид, а не про кабинет).
+  if (opts.alignLeft && opts.mode === 'block') attrs.push('data-align="left"')
   if (opts.preview) attrs.push('data-preview="1"')
   return `<script src="${loaderUrl(opts.baseUrl)}" ${attrs.join(' ')} async></script>`
 }
@@ -198,8 +207,8 @@ export function frameUrl(opts: SnippetOptions): string {
   // У виджета своего адреса нет: модалка показывает ту же форму, что и блок.
   const params = new URLSearchParams({ embed: opts.mode === 'widget' ? 'block' : opts.mode })
   if (opts.transparent) params.set('bg', 'transparent')
-  if (opts.hideTitle) params.set('hideTitle', '1')
-  if (opts.alignLeft) params.set('align', 'left')
+  if (opts.hideTitle && opts.mode !== 'page') params.set('hideTitle', '1')
+  if (opts.alignLeft && opts.mode === 'block') params.set('align', 'left')
   if (opts.preview) params.set('preview', '1')
   return `${opts.baseUrl}/r/${encodeURIComponent(opts.slug)}?${params.toString()}`
 }
