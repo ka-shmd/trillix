@@ -7,5 +7,5 @@ export const email: EditorKind = {
   label: 'Email',
   description: 'Адрес электронной почты с проверкой формата.',
   icon: <Mail className="size-4" />,
-  row: { surface: 'placeholder', lineH: 'h-6' },
+  row: { surface: 'placeholder', lineH: 'h-[var(--rf-control-h)]' },
 }

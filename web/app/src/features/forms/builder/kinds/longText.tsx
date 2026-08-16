@@ -7,5 +7,5 @@ export const longText: EditorKind = {
   label: 'Длинный ответ',
   description: 'Многострочный развёрнутый ответ.',
   icon: <AlignLeft className="size-4" />,
-  row: { surface: 'placeholder', lineH: 'h-6', multiline: true },
+  row: { surface: 'placeholder', multiline: true, lineH: 'h-[var(--rf-control-h)]' },
 }

@@ -10,6 +10,11 @@ import { carriesText, isAnswerableType, isCaptionType } from '@entities/formSche
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
+import {
+  ActiveRowApiProvider,
+  ActiveRowValueProvider,
+  useActiveRowState,
+} from './activeRow'
 import { BlockRow } from './BlockRow'
 
 // Кто чем управляет на полотне (§4 EDITOR + §4.1 спеки фазы 15): кластер значков
@@ -19,6 +24,11 @@ import { BlockRow } from './BlockRow'
 // подписи (как в превью и рендерере) и у поля с подписью не дублируется.
 
 afterEach(cleanup)
+
+// Активная строка объявляется через focusin, и в happy-dom нативный el.focus() его не
+// поднимает: React слушает focusin в корне, а happy-dom шлёт только non-bubbling focus.
+// Поэтому активность в тестах ставится событием, а не движком фокуса.
+const activate = (el: Element) => fireEvent.focusIn(el)
 
 // Полотно теста: настоящие BlockRow с тем же requiredFor, который им считает
 // GroupRow, — иначе тест проверял бы не то правило, что живёт в билдере.
@@ -51,31 +61,44 @@ function setup(schema: FormSchema, groupHandle: GroupHandle | null = null) {
     onArrow: vi.fn(),
     onRowShift: vi.fn(),
   }
-  render(
-    <BuilderStoreContext.Provider value={store}>
-      <FocusEngineProvider value={engine}>
-        <DndContext>
-          <SortableContext items={blocks.map((b) => b.id)}>
-            {blocks.map((b, i) => (
-              <BlockRow
-                key={b.id}
-                block={b}
-                formId="f"
-                groupHandle={isCaptionType(b.type) ? groupHandle : null}
-                requiredFor={requiredFor(b, i)}
-                // Как в GroupRow: голая строка ответа подсказывает, чего ей не
-                // хватает (§4.4 спеки фазы 15); consent исключён — его текст и есть
-                // строка вопроса.
-                needsCaption={isAnswerableType(b.type) && !carriesText(b.type) && !hasCaption(b)}
-                openMenuOnMount={false}
-                {...handlers}
-              />
-            ))}
-          </SortableContext>
-        </DndContext>
-      </FocusEngineProvider>
-    </BuilderStoreContext.Provider>,
-  )
+  // Провайдеры активной строки — как в полотне: без них строка не может объявить
+  // себя активной, а от активности вопроса зависит призрак в конце списка вариантов.
+  // Отдельный компонент, потому что useActiveRowState — хук.
+  function Harness() {
+    const activeRow = useActiveRowState()
+    return (
+      <BuilderStoreContext.Provider value={store}>
+        <FocusEngineProvider value={engine}>
+          <ActiveRowApiProvider value={activeRow.api}>
+            <ActiveRowValueProvider value={activeRow.active}>
+              <DndContext>
+                <SortableContext items={blocks.map((b) => b.id)}>
+                  {blocks.map((b, i) => (
+                    <BlockRow
+                      key={b.id}
+                      block={b}
+                      formId="f"
+                      groupHandle={isCaptionType(b.type) ? groupHandle : null}
+                      requiredFor={requiredFor(b, i)}
+                      // Как в GroupRow: голая строка ответа подсказывает, чего ей не
+                      // хватает (§4.4 спеки фазы 15); consent исключён — его текст и
+                      // есть строка вопроса.
+                      needsCaption={
+                        isAnswerableType(b.type) && !carriesText(b.type) && !hasCaption(b)
+                      }
+                      openMenuOnMount={false}
+                      {...handlers}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+            </ActiveRowValueProvider>
+          </ActiveRowApiProvider>
+        </FocusEngineProvider>
+      </BuilderStoreContext.Provider>
+    )
+  }
+  render(<Harness />)
   return { store, engine, handlers }
 }
 
@@ -382,7 +405,7 @@ describe('звёздочка обязательности', () => {
 
   // Якорь кластера у голого поля — .rf-field-wrap, коробка ширины САМОГО поля. Прицепи
   // его к строке — и он встанет у правого края колонки (700px), в полуметре пустоты от
-  // поля, упирающегося в --rf-input-max (350px).
+  // поля, упирающегося в --rf-input-max (320px).
   it('у голого поля кластер висит на обёртке поля, а не у края строки', () => {
     setup(REQUIRED)
     expect(row('bare').getByLabelText(STAR).closest('.rf-field-wrap')).toBeTruthy()
@@ -537,6 +560,19 @@ describe('призрак в конце списка вариантов', () => {
     ],
   }
 
+  const FILLED_CHOICE: FormSchema = {
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [
+      { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
+      {
+        id: 'ch',
+        groupId: 'g1',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Соцсети' }] },
+      },
+    ],
+  }
+
   it('у пустого блока есть строка для набора, но вариантов в схеме нет', () => {
     const { store } = setup(EMPTY_CHOICE)
     expect(row('ch').getByLabelText('Добавить ответ')).toBeTruthy()
@@ -554,6 +590,24 @@ describe('призрак в конце списка вариантов', () => {
     const opts = store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options
     expect(opts).toHaveLength(1)
     expect(opts?.[0]?.label).toBe('С')
+  })
+
+  it('клик по строке призрака рождает пустой вариант', () => {
+    const { store } = setup(EMPTY_CHOICE)
+
+    // Кликают по строке, а не по 20-пиксельному глифу: жест принимает вся строка,
+    // поэтому и проверяется клик по её содержимому.
+    fireEvent.click(row('ch').getByLabelText('Добавить ответ'))
+
+    const opts = store.getState().blocks.find((b) => b.id === 'ch')?.settings?.options
+    expect(opts).toHaveLength(1)
+    expect(opts?.[0]?.label).toBe('')
+  })
+
+  it('глиф будущего варианта у призрака ВИДЕН', () => {
+    setup(EMPTY_CHOICE)
+    // У «одного из списка» глиф — бейдж со следующей буквой; список пуст, значит «A».
+    expect(row('ch').getByText('A')).toBeTruthy()
   })
 
   it('Backspace в призраке пустого блока уносит блок наверх', () => {
@@ -579,25 +633,51 @@ describe('призрак в конце списка вариантов', () => {
   })
 
   it('при готовых вариантах призрак стоит последним и блок не трогает', () => {
-    const { store, handlers } = setup({
-      schemaVersion: SCHEMA_VERSION,
-      blocks: [
-        { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
-        {
-          id: 'ch',
-          groupId: 'g1',
-          type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Соцсети' }] },
-        },
-      ],
-    })
+    const { store, handlers } = setup(FILLED_CHOICE)
     // Мусорка ровно одна — у настоящего варианта, у призрака её нет.
     expect(controls('ch').filter((l) => l === 'Удалить вариант')).toHaveLength(1)
 
+    activate(row('ch').getByLabelText('Вариант 1'))
     fireEvent.keyDown(row('ch').getByLabelText('Добавить ответ'), { key: 'Enter', code: 'Enter' })
 
     expect(handlers.onAddBelow).toHaveBeenCalledWith('ch')
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['cap', 'ch'])
+  })
+
+  // Призрак — приглашение автору, который сейчас в этом вопросе, а не постоянная
+  // деталь формы: у неактивного вопроса список кончается последним вариантом.
+  describe('видимость призрака', () => {
+    it('вопрос не активен — призрака нет', () => {
+      setup(FILLED_CHOICE)
+      expect(row('ch').queryByLabelText('Добавить ответ')).toBeNull()
+    })
+
+    it('каретка в самом списке — призрак есть', () => {
+      setup(FILLED_CHOICE)
+      activate(row('ch').getByLabelText('Вариант 1'))
+      expect(row('ch').queryByLabelText('Добавить ответ')).toBeTruthy()
+    })
+
+    it('каретка на ЗАГОЛОВКЕ вопроса — призрак тоже есть', () => {
+      // Активность считается по ГРУППЕ, а не по блоку: автор работает над вопросом
+      // целиком, и список не имеет права схлопнуться у него под рукой.
+      setup(FILLED_CHOICE)
+      activate(row('cap').getByLabelText('Заголовок вопроса'))
+      expect(row('ch').queryByLabelText('Добавить ответ')).toBeTruthy()
+    })
+
+    it('каретка ушла из вопроса — призрак исчез', () => {
+      setup(FILLED_CHOICE)
+      const opt = row('ch').getByLabelText('Вариант 1')
+      activate(opt)
+      fireEvent.focusOut(opt)
+      expect(row('ch').queryByLabelText('Добавить ответ')).toBeNull()
+    })
+
+    it('у пустого списка призрак стоит всегда — иначе блок исчез бы с полотна', () => {
+      setup(EMPTY_CHOICE)
+      expect(row('ch').queryByLabelText('Добавить ответ')).toBeTruthy()
+    })
   })
 })
 
