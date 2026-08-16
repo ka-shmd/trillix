@@ -113,25 +113,38 @@ let opener: HTMLElement | null = null
 let savedOverflow = ''
 let savedPadding = ''
 
+// СКРОЛЛ ЗАПИРАЕТСЯ ТОЛЬКО У ПОЛНОЭКРАННОГО ВИДЖЕТА. Панель в углу оставляет чужую
+// страницу живой — это её смысл; запертый скролл там означал бы «сайт заблокирован
+// формой, которую человек не открывал», особенно при автооткрытии.
+//
+// Флаг обязателен: запирает открытие, отпирает закрытие, а полноэкранность считается
+// по вьюпорту и между этими моментами может измениться (поворот телефона).
+let scrollLocked = false
+
 function lockScroll() {
-  // Полоса прокрутки исчезает вместе со скроллом, и страница под модалкой прыгает
+  if (scrollLocked) return
+  // Полоса прокрутки исчезает вместе со скроллом, и страница под формой прыгает
   // вправо на её ширину. Компенсируем ровно этой шириной.
   const gap = window.innerWidth - document.documentElement.clientWidth
   savedOverflow = document.body.style.overflow
   savedPadding = document.body.style.paddingRight
   document.body.style.overflow = 'hidden'
   if (gap > 0) document.body.style.paddingRight = gap + 'px'
+  scrollLocked = true
 }
 
 function unlockScroll() {
+  if (!scrollLocked) return
   document.body.style.overflow = savedOverflow
   document.body.style.paddingRight = savedPadding
+  scrollLocked = false
 }
 
 function closeWidget() {
   const entry = openWidgetEntry
   if (!entry?.overlay) return
   entry.overlay.style.display = 'none'
+  if (entry.button) entry.button.style.display = ''
   openWidgetEntry = null
   unlockScroll()
   // Фокус возвращается туда, откуда виджет открыли: иначе человек, закрывший форму
@@ -141,30 +154,44 @@ function closeWidget() {
   emit(entry, 'close')
 }
 
+// ВИДЖЕТ — ПАНЕЛЬ В УГЛУ, А НЕ МОДАЛКА ПО ЦЕНТРУ (правка владельца 2026-08-16 по
+// образцу Tally). Разница не косметическая: панель встаёт там же, где стояла кнопка,
+// и потому читается как её продолжение, а не как перехват страницы. Отсюда три
+// следствия, каждое из которых раньше было наоборот:
+//
+//   • страница остаётся живой — скролл не запирается, а без затемнения по ней ещё и
+//     можно кликать (подложка тогда пропускает события);
+//   • фокус не запирается: уйти Tab'ом обратно на сайт — законный ход, а не побег из
+//     модалки. Esc и кнопка закрытия остаются;
+//   • затемнение (`data-overlay`) становится настройкой вида, а не признаком модальности.
+//
+// Полноэкранным виджет остаётся там, где панель в углу бессмысленна: узкий экран (на
+// телефоне угол — это весь экран) и режим 'page', открытый программно.
 function buildWidget(opts: MountOptions): Mounted {
+  const corner = opts.position ?? 'bottom-right'
+  const dim = opts.overlay !== false
+
   const overlay = document.createElement('div')
   overlay.style.position = 'fixed'
   overlay.style.inset = '0'
-  // Подложку можно снять (`data-overlay="none"`): на сайте, где форма открывается
-  // поверх собственного контента, затемнение читается как «страница заблокирована».
-  // Узел остаётся в любом случае — он же ловит клик мимо окна и держит центровку.
-  overlay.style.background = opts.overlay === false ? 'transparent' : 'rgba(15, 23, 42, 0.55)'
+  overlay.style.background = dim ? 'rgba(15, 23, 42, 0.55)' : 'transparent'
   overlay.style.display = 'none'
-  overlay.style.alignItems = 'center'
-  overlay.style.justifyContent = 'center'
   overlay.style.padding = '24px'
   overlay.style.zIndex = '2147483000'
+  // Без затемнения подложка обязана пропускать клики насквозь: она невидима и
+  // растянута на весь вьюпорт, то есть иначе тихо блокировала бы весь чужой сайт.
+  // Панели события возвращаются своим `pointerEvents`.
+  overlay.style.pointerEvents = dim ? 'auto' : 'none'
+  overlay.style.display = 'none'
 
   const dialog = document.createElement('div')
   dialog.setAttribute('role', 'dialog')
-  dialog.setAttribute('aria-modal', 'true')
   dialog.setAttribute('aria-label', 'Форма')
   dialog.style.position = 'relative'
+  dialog.style.pointerEvents = 'auto'
   dialog.style.background = '#ffffff'
   dialog.style.borderRadius = '12px'
   dialog.style.width = '100%'
-  dialog.style.maxWidth = (opts.width ?? DEFAULT_WIDTH) + 'px'
-  dialog.style.maxHeight = '90dvh'
   dialog.style.overflowY = 'auto'
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
 
@@ -175,55 +202,84 @@ function buildWidget(opts: MountOptions): Mounted {
   close.style.position = 'absolute'
   close.style.top = '8px'
   close.style.right = '8px'
-  close.style.width = '32px'
-  close.style.height = '32px'
+  close.style.width = '28px'
+  close.style.height = '28px'
   close.style.border = '0'
-  close.style.borderRadius = '8px'
+  close.style.borderRadius = '999px'
   close.style.background = 'rgba(15, 23, 42, 0.06)'
   close.style.color = '#0f172a'
-  close.style.fontSize = '20px'
+  close.style.fontSize = '18px'
   close.style.lineHeight = '1'
   close.style.cursor = 'pointer'
   close.style.zIndex = '1'
   close.addEventListener('click', closeWidget)
 
+  // ОБЁРТКА нужна ровно ради эмодзи: он висит на углу панели, ВЫСТУПАЯ за её край, а
+  // у самой панели `overflow-y: auto` (длинная форма скроллится внутри) — там его бы
+  // срезало. Обёртка ничего не прячет и задаёт ширину, панель занимает её целиком.
+  const panel = document.createElement('div')
+  panel.style.position = 'relative'
+  panel.style.width = '100%'
+  panel.style.pointerEvents = 'auto'
+
+  const badge = opts.emoji ? document.createElement('div') : null
+  if (badge) {
+    badge.textContent = opts.emoji!
+    badge.style.position = 'absolute'
+    badge.style.top = '-16px'
+    badge.style.left = '-10px'
+    badge.style.fontSize = '30px'
+    badge.style.lineHeight = '1'
+    badge.style.pointerEvents = 'none'
+  }
+
   const frame = createFrame(opts)
   dialog.appendChild(close)
   dialog.appendChild(frame)
-  overlay.appendChild(dialog)
+  if (badge) panel.appendChild(badge)
+  panel.appendChild(dialog)
+  overlay.appendChild(panel)
   document.body.appendChild(overlay)
 
-  // На весь экран модалка идёт в двух случаях: узкий экран (отступы и скругления на
-  // телефоне съедают форму, ради которой человек и нажал кнопку) и режим 'page',
-  // открытый программно, — это и есть второй подрежим страницы, оверлей поверх
-  // приложения (design/embed.md §2.5).
   const narrow = window.matchMedia('(max-width: 640px)')
-  const applyWidth = () => {
+  const place = () => {
     const full = opts.mode === 'page' || narrow.matches
-    overlay.style.padding = full ? '0' : '24px'
-    dialog.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
-    dialog.style.borderRadius = full ? '0' : '12px'
-    dialog.style.maxHeight = full ? '100dvh' : '90dvh'
-    dialog.style.minHeight = full ? '100dvh' : '0'
-  }
-  applyWidth()
-  narrow.addEventListener('change', applyWidth)
+    const top = corner === 'top-right' || corner === 'top-left'
+    const left = corner === 'bottom-left' || corner === 'top-left'
 
-  // Клик по подложке — но только по ней самой: клик внутри диалога всплывает сюда же.
+    overlay.style.padding = full ? '0' : '24px'
+    // Раскладка одна на все четыре угла: flex-контейнер во весь вьюпорт и два
+    // выравнивания. Позиционировать панель координатами было бы то же самое, но в
+    // четырёх ветках вместо двух строк.
+    overlay.style.alignItems = full ? 'center' : top ? 'flex-start' : 'flex-end'
+    overlay.style.justifyContent = full ? 'center' : left ? 'flex-start' : 'flex-end'
+
+    panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
+    panel.style.height = full ? '100%' : 'auto'
+    dialog.style.borderRadius = full ? '0' : '12px'
+    dialog.style.maxHeight = full ? '100dvh' : 'calc(100dvh - 48px)'
+    dialog.style.minHeight = full ? '100dvh' : '0'
+
+    // На весь экран эмодзи не показываем: он висит на углу панели, а у формы во весь
+    // вьюпорт этого угла нет — вышла бы наклейка посреди страницы.
+    if (badge) badge.style.display = full ? 'none' : 'block'
+  }
+  place()
+  narrow.addEventListener('change', place)
+
+  // Клик по подложке — но только по ней самой: клик внутри панели всплывает сюда же.
+  // Без затемнения событий здесь нет вовсе (`pointer-events: none`), и это верно: там
+  // клик мимо панели принадлежит чужому сайту, а не нам.
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) closeWidget()
   })
 
-  const entry: Mounted = { frame, opts, handlers: {}, overlay, button: widgetButtons[opts.form] }
-  // Ловушка фокуса. Полноценно замкнуть Tab внутри модалки нельзя: когда фокус ушёл
-  // в форму, события клавиатуры живут в ДРУГОМ документе и нам не видны. Зато виден
-  // focusin в своём: как только фокус выпал наружу (Tab с последнего поля формы),
-  // возвращаем его на кнопку закрытия.
-  document.addEventListener('focusin', (event) => {
-    if (openWidgetEntry !== entry) return
-    if (!overlay.contains(event.target as Node)) close.focus()
-  })
-  return entry
+  return { frame, opts, handlers: {}, overlay, button: widgetButtons[opts.form] }
+}
+
+/** Виджет занимает весь вьюпорт: на телефоне угла нет, а 'page' — это оверлей-страница. */
+function fullScreen(opts: MountOptions): boolean {
+  return opts.mode === 'page' || window.matchMedia('(max-width: 640px)').matches
 }
 
 /** open — показать форму виджетом. Фрейм создаётся при первом показе, не заранее. */
@@ -246,8 +302,14 @@ function open(opts: MountOptions, from: HTMLElement | null = null): EmbedHandle 
   opener = from
   openWidgetEntry = entry
   entry.overlay!.style.display = 'flex'
-  lockScroll()
-  ;(entry.overlay!.querySelector('button') as HTMLButtonElement | null)?.focus()
+  // Кнопка прячется на время показа: панель встаёт в её угол, и кнопка либо торчала
+  // бы из-под панели, либо тускло просвечивала сквозь затемнение.
+  if (entry.button) entry.button.style.display = 'none'
+  if (fullScreen(entry.opts)) lockScroll()
+  // ФОКУС ЗАБИРАЕТСЯ ТОЛЬКО У ОТКРЫТИЯ ПО ЖЕСТУ. Автооткрытие (пауза, прокрутка, уход
+  // курсора) приходит само, и увести каретку из чужой формы или поиска на странице оно
+  // права не имеет — панель просто появляется в углу.
+  if (from) (entry.overlay!.querySelector('button') as HTMLButtonElement | null)?.focus()
   return handleOf(entry, closeWidget)
 }
 

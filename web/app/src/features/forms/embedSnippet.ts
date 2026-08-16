@@ -62,7 +62,7 @@ export interface SnippetOptions {
   dynamicHeight?: boolean
   /** Заголовок формы не показывать: над блоком на чужой странице обычно есть свой. */
   hideTitle?: boolean
-  /** Ширина модалки виджета. */
+  /** Ширина панели виджета. */
   width?: number
   /** Тёмная подложка под модалкой виджета. */
   overlay?: boolean
@@ -99,8 +99,8 @@ export const PLAIN_IFRAME_HEIGHT = 720
  */
 export const DEFAULT_BLOCK_HEIGHT = 520
 
-/** Ширина модалки виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
-export const DEFAULT_WIDGET_WIDTH = 640
+/** Ширина панели виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
+export const DEFAULT_WIDGET_WIDTH = 400
 
 /** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
 export const DEFAULT_OPEN_DELAY = 5

@@ -69,7 +69,7 @@ export function SettingsPanel({
 }) {
   const widget = mode === 'widget'
   const page = mode === 'page'
-  // Виджета без скрипта не существует: показать модалку по кнопке голому iframe нечем.
+  // Виджета без скрипта не существует: показать панель по кнопке голому iframe нечем.
   const plain = settings.plain && !widget
   // У формы есть разрывы страниц — единственная подсказка выбора не про вкус.
   const multipage = form.draftSchema.blocks.some((b) => b.type === 'page_break')
@@ -195,18 +195,18 @@ export function SettingsPanel({
           </div>
 
           <div>
-            <Label htmlFor="embed-width">Ширина окна, px</Label>
+            <Label htmlFor="embed-width">Ширина панели, px</Label>
             <Input
               id="embed-width"
               type="number"
               min={280}
-              max={1200}
+              max={720}
               value={settings.width}
               onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
               className="mt-1"
             />
             <p className="mt-1.5 text-xs text-muted-foreground">
-              На узком экране окно всё равно раскрывается во весь вьюпорт.
+              На телефоне панель всё равно раскрывается во весь экран.
             </p>
           </div>
         </>
@@ -274,7 +274,7 @@ export function SettingsPanel({
               checked={settings.overlay}
               onChange={(v) => onChange({ overlay: v })}
               text="Затемнять страницу"
-              hint="Без затемнения окно выглядит частью сайта, а не поверх него."
+              hint="С затемнением клик мимо панели закрывает её; без него сайт остаётся кликабельным."
             />
             <Toggle
               id="embed-hide-on-submit"
