@@ -74,7 +74,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // досюда» должно читаться всегда, а не когда полотну вздумается. Второй: блок —
     // одиночка (`canShareRow: false`), группы у него нет вовсе, и вешать его вид на
     // чужую механику значило бы завести ей исключение.
-    <div className="border-border flex flex-col gap-2 border-l py-1 pl-3 text-sm">
+    <div className="border-border flex flex-col gap-2 border-l-2 py-1 pl-3 text-sm">
       <Tier
         label="Когда"
         trailing={
@@ -152,6 +152,18 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     </div>
   )
 }
+
+// Ширина контрола строки: фиксированная, а не «во всю оставшуюся» (решение владельца
+// 2026-08-16). Растянутый на пол-полотна выпадающий список читается как поле ввода, а
+// длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
+// `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
+//
+// Обрезка объявлена ВАРИАНТОМ `*:data-[slot=select-value]:truncate`, а не классом на
+// самом триггере: текст рисует вложенный SelectValue, и `truncate` снаружи до него не
+// достаёт (web/CLAUDE.md — про конфликтующие утилиты и про то, что проверяется это
+// только computed-стилем).
+const CONTROL =
+  'h-7 w-44 max-w-full overflow-hidden *:data-[slot=select-value]:truncate'
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -266,7 +278,7 @@ function ActionRow({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Select value={kind ?? ''} onValueChange={(k) => pickKind(k as LogicActionKind)}>
-        <SelectTrigger size="sm" className="h-7 min-w-44" aria-label="Действие">
+        <SelectTrigger size="sm" className={CONTROL} aria-label="Действие">
           <SelectValue placeholder="Выберите действие" />
         </SelectTrigger>
         <SelectContent>
@@ -402,7 +414,7 @@ function TargetPicker({
           aria-expanded={open}
           aria-label="Цели действия"
           disabled={disabled}
-          className="h-7 min-w-36 flex-1 justify-between font-normal"
+          className={`${CONTROL} justify-between font-normal`}
         >
           <span className="truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />

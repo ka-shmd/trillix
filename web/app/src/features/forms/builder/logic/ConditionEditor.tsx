@@ -47,6 +47,20 @@ import { RowMenu as RowMenuButton } from './rowMenu'
 // настройка. И выглядит она текстом с шевроном, а не полем ввода, — это подпись
 // отношения между строками, а не значение, которое автор задаёт.
 
+// Ширина контрола строки: фиксированная, а не «во всю оставшуюся» (решение владельца
+// 2026-08-16). Растянутый на пол-полотна выпадающий список читается как поле ввода, а
+// длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
+// `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
+//
+// Обрезка объявлена ВАРИАНТОМ `*:data-[slot=select-value]:truncate`, а не классом на
+// самом триггере: текст рисует вложенный SelectValue, и `truncate` снаружи до него не
+// достаёт (web/CLAUDE.md — про конфликтующие утилиты и про то, что проверяется это
+// только computed-стилем).
+const TRUNCATE = 'overflow-hidden *:data-[slot=select-value]:truncate'
+const SOURCE = `h-7 w-44 max-w-full ${TRUNCATE}`
+const OPERATOR = `h-7 w-32 max-w-full ${TRUNCATE}`
+const VALUE = `h-7 w-36 max-w-full ${TRUNCATE}`
+
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
 const isAnd = (g: Group): boolean => 'all' in g
 const asGroup = (children: LogicCondition[], and: boolean): Group =>
@@ -265,7 +279,7 @@ function LeafRow({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Select value={source ? source.id : ''} onValueChange={pickSource}>
-        <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Вопрос-источник">
+        <SelectTrigger size="sm" className={SOURCE} aria-label="Вопрос-источник">
           <SelectValue placeholder={value === null ? 'Вопрос…' : 'Удалённый вопрос'} />
         </SelectTrigger>
         <SelectContent>
@@ -291,7 +305,7 @@ function LeafRow({
           })
         }
       >
-        <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
+        <SelectTrigger size="sm" className={OPERATOR} aria-label="Сравнение">
           <SelectValue placeholder="Сравнение" />
         </SelectTrigger>
         <SelectContent>
@@ -306,7 +320,7 @@ function LeafRow({
       {needsValue &&
         (value !== null && choices.length > 0 ? (
           <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
-            <SelectTrigger size="sm" className="h-7 min-w-28 flex-1" aria-label="Значение">
+            <SelectTrigger size="sm" className={VALUE} aria-label="Значение">
               <SelectValue placeholder="Значение…" />
             </SelectTrigger>
             <SelectContent>
@@ -319,7 +333,7 @@ function LeafRow({
           </Select>
         ) : (
           <Input
-            className="h-7 min-w-28 flex-1 text-sm"
+            className="h-7 w-36 max-w-full text-sm"
             disabled={value === null}
             value={value?.value ?? ''}
             placeholder="Значение…"
