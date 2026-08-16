@@ -7,7 +7,6 @@ import {
   MAX_OPTIONS,
   MAX_PLACEHOLDER_LEN,
 } from './limits'
-import { ruleSchema } from './conditions'
 
 // Настройки блока — ОДИН объект на все типы, а не объединение по типу.
 //
@@ -42,10 +41,6 @@ export const optionSchema = z.strictObject({
   // а не невалиден. У опций dropdown инертен всегда (список живёт в нативном
   // select) — и потому не запрещён.
   column: columnSchema.optional(),
-  // Условие показа ВАРИАНТА (фаза 21, каскадные списки): то же дерево, что у вопроса.
-  // Носитель — сам вариант, а позиция для правила «ссылка смотрит назад» — позиция его
-  // блока: вариант живёт там же, где список.
-  visibleIf: ruleSchema.optional(),
 })
 export type Option = z.infer<typeof optionSchema>
 

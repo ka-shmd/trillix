@@ -231,10 +231,6 @@ type Option struct {
 	// dropdown инертен (список живёт в нативном select) — и потому не запрещён, как
 	// и любой другой флаг, которому некуда примениться.
 	Column int `json:"column,omitempty"`
-	// VisibleIf — условие показа ВАРИАНТА (фаза 21, каскадные списки): то же дерево,
-	// что у вопроса, носитель — сам вариант. Позиция носителя для «ссылка смотрит
-	// назад» — позиция его блока: вариант живёт там же, где список. См. logic.go.
-	VisibleIf *Condition `json:"visibleIf,omitempty"`
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
@@ -274,9 +270,9 @@ type BlockSettings struct {
 // которой вопрос называется в данных. Пусто — имя выводится как раньше
 // (questionLabel). Верхний уровень, а не Settings: свойство любого отвечаемого
 // блока, а не типа.
-// Правила условной логики (фаза 21) — верхний уровень блока, а не Settings: это
-// свойство любого блока, а не типа (тот же довод, что у Name). Формат, семантика и
-// причина, по которой ссылки не валидируются, — logic.go.
+// Logic — содержимое блока logic, верхний уровень блока, а не Settings (тот же довод,
+// что у Name). Формат, семантика и причина, по которой ссылки не валидируются, —
+// logic.go.
 type Block struct {
 	ID       string        `json:"id"`
 	GroupID  string        `json:"groupId"`
@@ -285,17 +281,6 @@ type Block struct {
 	Name     string        `json:"name,omitempty"`
 	Required bool          `json:"required,omitempty"`
 	Settings BlockSettings `json:"settings"`
-	// VisibleIf — условие показа ВОПРОСА ЦЕЛИКОМ; читается с ГОЛОВНОГО блока группы
-	// (подпись, поле и контент прячутся вместе), как бит ряда. На любом другом блоке
-	// группы инертно — по той же причине, по которой не валидируется бит: голова
-	// меняется драгом и удалением подписи.
-	VisibleIf *Condition `json:"visibleIf,omitempty"`
-	// RequiredIf — условная обязательность отвечаемого блока. Взаимоисключающа с
-	// Required: обязательность это три состояния (нет / всегда / по условию).
-	RequiredIf *Condition `json:"requiredIf,omitempty"`
-	// JumpIf — переходы со страницы, которую закрывает ЭТОТ разрыв; только у
-	// page_break. Порядок = приоритет.
-	JumpIf []JumpRule `json:"jumpIf,omitempty"`
 	// Logic — содержимое блока logic: условие и список действий. Только у BlockLogic.
 	// Верхний уровень, а не Settings, по тому же доводу, что и правила выше, — и потому
 	// что Settings это общий мешок ключей, в котором дерево условий чужеродно.
@@ -657,9 +642,6 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		// раскладчик. Открыта ли секция — не проверяется, как и у блока: флаг инертен.
 		if o.Column != 0 && (o.Column < 0 || o.Column > MaxColumns) {
 			return schemaErr("%s: опция #%d: колонка %d вне диапазона 1..%d", at, j, o.Column, MaxColumns)
-		}
-		if err := validateCondition(o.VisibleIf, fmt.Sprintf("опция #%d: visibleIf", j)); err != nil {
-			return schemaErr("%s: %s", at, err)
 		}
 	}
 	return nil

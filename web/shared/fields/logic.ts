@@ -19,9 +19,8 @@ import { splitPagesWithClosers } from './groups'
 // Go-тест. Спеки — docs/design/logic.md и logic-blocks.md, решения — ADR §10.
 //
 // ПРАВИЛО ЖИВЁТ В БЛОКЕ `logic`, и позиция блока значима: источники условия выше него,
-// цели действий ниже. Старые поля-носители читаются наряду с блоками, пока идёт переезд
-// (compileLogic сводит обе стороны к одному набору карт, и сам обход про разницу не
-// знает).
+// цели действий ниже. Правило раскладывается по адресатам ДО обхода (compileLogic),
+// поэтому сам обход про блоки логики не знает — он читает те же карты, что и раньше.
 //
 // Один исходник на три поверхности фронта: рендерер, превью билдера и — там, где
 // понадобится — полотно. Разъедься они, и автор увидел бы в превью не ту форму, что
@@ -115,17 +114,6 @@ function compileLogic(blocks: readonly Block[]): Compiled {
   }
 
   blocks.forEach((b, i) => {
-    // Старые поля-носители. Они лежат НА цели, поэтому guard −1: «цель ниже носителя»
-    // к ним неприменимо. Уедут вместе с полями.
-    if (b.visibleIf) push(c.shows, b.id, { when: b.visibleIf, at: i, guard: -1 })
-    if (b.requiredIf) push(c.requires, b.id, { when: b.requiredIf, at: i, guard: -1 })
-    for (const o of b.settings?.options ?? []) {
-      if (o.visibleIf) pushOptions(c.optionShows, b.id, [o.id], { when: o.visibleIf, at: i, guard: -1 })
-    }
-    for (const j of b.jumpIf ?? []) {
-      c.jumps.push({ owner: b.id, rule: { when: j.when, at: i, guard: -1 }, to: j.to, end: j.end })
-    }
-
     if (b.type !== 'logic') return
     // У блока одно условие на все свои действия, и позиция блока служит обеим границам
     // сразу: источники выше неё, цели ниже.

@@ -23,10 +23,7 @@ import (
 // страницу, скрыть кнопку отправки). ПОЗИЦИЯ БЛОКА ЗНАЧИМА: источники условия обязаны
 // стоять выше него, цели действий — ниже. Отсюда прежний инвариант «все источники решены
 // к моменту, когда решается цель» получается следствием, а не проверкой.
-//
-// Старые поля-носители (`visibleIf` у блока и у варианта, `requiredIf`, `jumpIf`)
-// читаются НАРЯДУ с блоками, пока идёт переезд: compileLogic сводит обе стороны к одному
-// набору карт, и сам обход про разницу не знает. Уедут вместе со сносом старых входов.
+
 //
 // ГЛАВНОЕ ПРАВИЛО СЕМАНТИКИ: **инертное правило равно отсутствующему**. Условие,
 // которое невозможно разрешить (источника нет, источник лежит НИЖЕ носителя, оператор
@@ -48,7 +45,6 @@ const (
 	MaxLogicDepth    = 4   // глубина вложенности групп И/ИЛИ
 	MaxLogicNodes    = 40  // узлов (групп и листьев) в одном правиле
 	MaxLogicValueLen = 200 // длина значения сравнения, в рунах (как placeholder)
-	MaxJumpRules     = 10  // переходов у одного разрыва страницы
 	MaxLogicActions  = 10  // действий в одном блоке logic
 )
 
@@ -122,19 +118,6 @@ type Condition struct {
 	// молчащее «условие никогда не срабатывает». Пусто у answered/empty; пусто у
 	// остальных — недособранный черновик (автор ещё не выбрал), правило инертно.
 	Value string `json:"value,omitempty"`
-}
-
-// JumpRule — один переход со страницы: условие и цель. Порядок массива = приоритет,
-// побеждает первое сработавшее правило.
-//
-// Цель — ЛИБО id другого разрыва (страница, которую он открывает), ЛИБО End («страниц
-// дальше нет, здесь кнопка Отправить»). Две формы, а не зарезервированное значение
-// внутри To: id блока генерирует клиент, и строка "end" — законный id, то есть
-// зарезервировать её значило бы поймать однажды форму, у которой блок так и назван.
-type JumpRule struct {
-	When *Condition `json:"when"`
-	To   string     `json:"to,omitempty"`
-	End  bool       `json:"end,omitempty"`
 }
 
 // LogicActionKind — что правило ДЕЛАЕТ, когда условие сработало. Зеркалит LOGIC_ACTIONS
@@ -328,61 +311,12 @@ func validateCondNode(c Condition, what string, depth int, nodes *int) error {
 // validateLogic — правила логики одного блока. Всё внутриблочное, поэтому проверяется
 // строго: промежуточных состояний драга и undo у этих условий не бывает.
 func validateLogic(b Block) error {
-	if err := validateCondition(b.VisibleIf, "visibleIf"); err != nil {
-		return err
-	}
-	// Разрыв страницы не скрывается по условию: исчезающая граница означала бы, что
-	// число страниц зависит от ответов ДВУМЯ разными способами. Условный путь — это
-	// переходы.
-	if b.VisibleIf != nil && b.Type == BlockPageBreak {
-		return fmt.Errorf("разрыв страницы не скрывается по условию — путь задают переходы")
-	}
-	if err := validateCondition(b.RequiredIf, "requiredIf"); err != nil {
-		return err
-	}
-	if b.RequiredIf != nil {
-		if !b.Type.isAnswerable() {
-			return fmt.Errorf("тип %q не собирает ответ и не бывает обязательным", b.Type)
-		}
-		// Обязательность — три состояния (нет / всегда / по условию), а не два
-		// пересекающихся флага: сосуществование пришлось бы объяснять в интерфейсе, а
-		// любой порядок разрешения конфликта был бы произвольным (ADR §10).
-		if b.Required {
-			return fmt.Errorf("обязательность задана дважды: required и requiredIf")
-		}
-	}
 	// Условие и действия несёт только блок logic. Проверка внутриблочная: тип блока и
 	// его содержимое лежат рядом, промежуточных состояний драга у этой пары нет.
 	if b.Logic != nil && b.Type != BlockLogic {
 		return fmt.Errorf("тип %q не несёт условной логики", b.Type)
 	}
-	if err := validateBlockLogic(b.Logic); err != nil {
-		return err
-	}
-	if len(b.JumpIf) > 0 && b.Type != BlockPageBreak {
-		return fmt.Errorf("переходы задаются только у разрыва страницы")
-	}
-	if len(b.JumpIf) > MaxJumpRules {
-		return fmt.Errorf("больше %d переходов", MaxJumpRules)
-	}
-	for i, r := range b.JumpIf {
-		at := fmt.Sprintf("переход #%d", i)
-		if r.When == nil {
-			return fmt.Errorf("%s: нет условия", at)
-		}
-		if err := validateCondition(r.When, at); err != nil {
-			return err
-		}
-		if (r.To != "") == r.End {
-			return fmt.Errorf("%s: нужна ровно одна цель — to или end", at)
-		}
-		if r.To != "" {
-			if err := validateID(r.To); err != nil {
-				return fmt.Errorf("%s: to: %s", at, err)
-			}
-		}
-	}
-	return nil
+	return validateBlockLogic(b.Logic)
 }
 
 // Plan — что видит респондент при данных ответах. Строится PlanForm.
@@ -463,28 +397,6 @@ func compileLogic(blocks []Block) compiled {
 
 	for i := range blocks {
 		b := blocks[i]
-		// Старые поля-носители. Они лежат НА цели, поэтому guard −1: «цель ниже
-		// носителя» к ним неприменимо. Уедут вместе с полями.
-		if b.VisibleIf != nil {
-			c.shows[b.ID] = append(c.shows[b.ID], logicRule{when: b.VisibleIf, at: i, guard: -1})
-		}
-		if b.RequiredIf != nil {
-			c.requires[b.ID] = append(c.requires[b.ID], logicRule{when: b.RequiredIf, at: i, guard: -1})
-		}
-		for _, o := range b.Settings.Options {
-			if o.VisibleIf != nil {
-				pushOptions(c.optionShows, b.ID, []string{o.ID}, logicRule{when: o.VisibleIf, at: i, guard: -1})
-			}
-		}
-		for _, j := range b.JumpIf {
-			c.jumps = append(c.jumps, jumpEntry{
-				owner: b.ID,
-				rule:  logicRule{when: j.When, at: i, guard: -1},
-				to:    j.To,
-				end:   j.End,
-			})
-		}
-
 		if b.Type != BlockLogic || b.Logic == nil {
 			continue
 		}

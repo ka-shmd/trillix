@@ -26,7 +26,6 @@ import {
   MAX_TEXT_LEN,
   MAX_THANK_YOU_TEXT_LEN,
 } from './blocks/limits'
-import { jumpIfSchema, ruleSchema } from './blocks/conditions'
 import { blockLogicSchema } from './blocks/logic'
 import { OWNED_SETTINGS, idSchema, settingsSchema } from './blocks/settings'
 
@@ -72,12 +71,9 @@ export {
 export {
   LOGIC_OPERATORS,
   conditionSchema,
-  jumpIfSchema,
-  jumpRuleSchema,
   logicOperatorSchema,
   opNeedsValue,
   ruleSchema,
-  type JumpRule,
   type LogicCondition,
   type LogicOperator,
 } from './blocks/conditions'
@@ -283,16 +279,6 @@ export const blockSchema = z
     name: z.string().max(MAX_QUESTION_NAME_LEN).optional(),
     required: z.boolean().optional(),
     settings: settingsSchema.optional(),
-    // Условная логика (фаза 21) — верхний уровень блока, а не settings: свойство любого
-    // блока, а не типа (тот же довод, что у name). Форма правил — blocks/logic.ts,
-    // семантика и причина, по которой ссылки не валидируются, — @fields/logic.ts.
-    //
-    // visibleIf читается с ГОЛОВНОГО блока группы (вопрос прячется целиком); на любом
-    // другом блоке группы он инертен — голова меняется драгом, и валидировать носителя
-    // значило бы ловить 422 в промежуточных состояниях, как у бита ряда.
-    visibleIf: ruleSchema.optional(),
-    requiredIf: ruleSchema.optional(),
-    jumpIf: jumpIfSchema.optional(),
     // Содержимое блока `logic`: условие и список действий (blocks/logic.ts). Верхний
     // уровень, а не settings, по тому же доводу, что и правила выше, — и потому что
     // settings это общий мешок ключей, в котором дерево условий было бы чужеродным.
@@ -319,40 +305,6 @@ export const blockSchema = z
         code: 'custom',
         message: `тип ${b.type} не собирает ответ и не имеет имени`,
         path: ['name'],
-      })
-    }
-    // Условная логика (зеркалит validateLogic в Go). Проверяется только внутриблочное:
-    // у этих правил нет промежуточных состояний драга, на которых они ловили бы 422.
-    if (b.visibleIf && b.type === 'page_break') {
-      // Исчезающая граница означала бы, что число страниц зависит от ответов двумя
-      // разными способами. Условный путь — это переходы.
-      ctx.addIssue({
-        code: 'custom',
-        message: 'разрыв страницы не скрывается по условию — путь задают переходы',
-        path: ['visibleIf'],
-      })
-    }
-    if (b.requiredIf && !isAnswerableType(b.type)) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `тип ${b.type} не собирает ответ и не бывает обязательным`,
-        path: ['requiredIf'],
-      })
-    }
-    // Обязательность — три состояния (нет / всегда / по условию), а не два
-    // пересекающихся флага (ADR §10).
-    if (b.requiredIf && b.required) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'обязательность задана дважды: required и requiredIf',
-        path: ['requiredIf'],
-      })
-    }
-    if (b.jumpIf?.length && b.type !== 'page_break') {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'переходы задаются только у разрыва страницы',
-        path: ['jumpIf'],
       })
     }
     // Условие и действия несёт только блок `logic`. Проверка внутриблочная: тип блока и

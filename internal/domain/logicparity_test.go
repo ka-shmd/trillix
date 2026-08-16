@@ -24,7 +24,7 @@ import (
 var (
 	reLogicOperators = regexp.MustCompile(`(?s)LOGIC_OPERATORS = \[(.*?)\] as const`)
 	reLogicActions   = regexp.MustCompile(`(?s)LOGIC_ACTIONS = \[(.*?)\] as const`)
-	reLogicLimit     = regexp.MustCompile(`export const (MAX_LOGIC_\w+|MAX_JUMP_RULES) = (\d+)`)
+	reLogicLimit     = regexp.MustCompile(`export const (MAX_LOGIC_\w+) = (\d+)`)
 )
 
 func TestLogicOperatorsParity(t *testing.T) {
@@ -86,7 +86,6 @@ func TestLogicLimitsParity(t *testing.T) {
 		"MAX_LOGIC_DEPTH":     MaxLogicDepth,
 		"MAX_LOGIC_NODES":     MaxLogicNodes,
 		"MAX_LOGIC_VALUE_LEN": MaxLogicValueLen,
-		"MAX_JUMP_RULES":      MaxJumpRules,
 		"MAX_LOGIC_ACTIONS":   MaxLogicActions,
 	}
 

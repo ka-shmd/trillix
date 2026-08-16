@@ -74,13 +74,12 @@ export const DEFAULT_LOGO_WIDTH = 100
 export const DEFAULT_LOGO_HEIGHT = 100
 export const DEFAULT_LOGO_RADIUS = 50
 export const DEFAULT_COVER_HEIGHT = 25
-// Условная логика (фаза 21). Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen/
-// MaxJumpRules. Первые два обязательны: без них стоимость вычисления чужого документа
-// умножается на MAX_BLOCKS — тот же класс, что у MAX_SPANS в тексте блока.
+// Условная логика. Зеркалят MaxLogicDepth/MaxLogicNodes/MaxLogicValueLen. Первые два
+// обязательны: без них стоимость вычисления чужого документа умножается на MAX_BLOCKS —
+// тот же класс, что у MAX_SPANS в тексте блока.
 export const MAX_LOGIC_DEPTH = 4
 export const MAX_LOGIC_NODES = 40
 export const MAX_LOGIC_VALUE_LEN = 200
-export const MAX_JUMP_RULES = 10
 // Действий в одном блоке `logic`. Зеркалит MaxLogicActions. Потолок тот же, что у
 // переходов: список действий читается глазами в строке полотна, и десяток — предел, за
 // которым автору проще поставить второй блок.

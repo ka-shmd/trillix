@@ -7,7 +7,6 @@ import {
   type FormDesign,
   type FormLogo,
   type FormSchema,
-  type LogicCondition,
   type Option,
   SCHEMA_VERSION,
   isChoiceType,
@@ -56,9 +55,9 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 
 // Редактируемые поля блока. id/groupId/type через updateBlock не меняются: id
 // стабилен (ответы), groupId выводится regroup, смена типа — отдельная операция.
-// Условная логика (фаза 21) правится тем же updateBlock: visibleIf — свойство блока,
-// как name и required. Носителя (голову группы) выбирает вызывающий — стор про
-// семантику правил не знает, ему хватает того, что это поле документа.
+// Условная логика правится тем же updateBlock: `logic` — поле блока, как name и
+// required. Стор про семантику правил не знает, ему хватает того, что это поле
+// документа.
 export type BlockPatch = Partial<
   Pick<
     Block,
@@ -66,9 +65,6 @@ export type BlockPatch = Partial<
     | 'name'
     | 'required'
     | 'settings'
-    | 'visibleIf'
-    | 'requiredIf'
-    | 'jumpIf'
     | 'logic'
     | 'class'
   >
@@ -249,10 +245,6 @@ export type BuilderActions = {
   // это второе действие рядом с «удалить».
   duplicateOption: (blockId: string, optionId: string) => string | null
   updateOption: (blockId: string, optionId: string, label: string) => void
-  // setOptionRule — условие показа ВАРИАНТА (фаза 21, каскадные списки). undefined
-  // снимает правило. Отдельная операция, а не поле в updateOption: тот коалесит набор
-  // подписи в один шаг истории, а правило — дискретная правка со своим шагом.
-  setOptionRule: (blockId: string, optionId: string, rule: LogicCondition | undefined) => void
   // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
   // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
   reorderOptions: (blockId: string, activeOptionId: string, overOptionId: string) => void
@@ -1356,12 +1348,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             // запрещает).
             name: isAnswerableType(type) ? src.name : undefined,
             required: isAnswerableType(type) ? src.required : false,
-            // Правила переживают смену типа (фаза 21) по тому же доводу, что имя:
-            // «показывать, если» относится к ВОПРОСУ, а не к тому, чем на него
-            // отвечают. Обязательность по условию едет вместе с обычной — и роняется
-            // там же, где она: у неотвечаемого типа её схема запрещает.
-            visibleIf: src.visibleIf,
-            requiredIf: isAnswerableType(type) ? src.requiredIf : undefined,
           }
           // Ширина и колонки вариантов переезжают, пока новый тип их несёт (смена
           // short_text→email не должна молча разваливать ряд); вне whitelist они
@@ -1949,13 +1935,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         commit(`uo:${blockId}:${optionId}`, (s) =>
           mutateOptions(s.blocks, blockId, (opts) =>
             opts.map((o) => (o.id === optionId ? { ...o, label } : o)),
-          ),
-        ),
-
-      setOptionRule: (blockId, optionId, rule) =>
-        commit(null, (s) =>
-          mutateOptions(s.blocks, blockId, (opts) =>
-            opts.map((o) => (o.id === optionId ? { ...o, visibleIf: rule } : o)),
           ),
         ),
 

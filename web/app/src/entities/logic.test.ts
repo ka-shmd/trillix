@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   type Block,
+  type LogicAction,
   type LogicCondition,
   type LogicOperator,
   MAX_LOGIC_ACTIONS,
@@ -20,12 +21,38 @@ const choice = (
   id: string,
   groupId: string,
   type: Block['type'],
-  options: { id: string; label?: string; visibleIf?: LogicCondition }[],
+  options: { id: string; label?: string }[],
 ): Block => ({
   id,
   groupId,
   type,
   settings: { options: options.map((o) => ({ label: '', ...o })) },
+})
+
+// showRule/requireRule/optionRule — блок logic с одним действием, СТОЯЩИЙ ПЕРЕД целью:
+// источники условия оказываются выше него, цель — ниже. Помощники, а не литералы по
+// месту: почти каждый случай ниже про семантику условия, а не про форму блока.
+const showRule = (target: string, when?: LogicCondition): Block => ({
+  id: `L-show-${target}`,
+  groupId: `gL-show-${target}`,
+  type: 'logic',
+  logic: { when, then: [{ kind: 'show', target }] },
+})
+
+const requireRule = (target: string, when?: LogicCondition): Block => ({
+  id: `L-req-${target}`,
+  groupId: `gL-req-${target}`,
+  type: 'logic',
+  logic: { when, then: [{ kind: 'require', target }] },
+})
+
+// «Показать варианты»: перечисленные видны только по условию, остальные умолчания не
+// меняют.
+const optionRule = (target: string, when: LogicCondition, ...options: string[]): Block => ({
+  id: `L-opt-${target}-${options[0]}`,
+  groupId: `gL-opt-${target}-${options[0]}`,
+  type: 'logic',
+  logic: { when, then: [{ kind: 'show_options', target, options }] },
 })
 
 const leaf = (blockId: string, op: LogicOperator, value = ''): LogicCondition => ({
@@ -40,7 +67,8 @@ const pageIds = (plan: ReturnType<typeof planForm>): string[][] =>
 describe('planForm: видимость вопроса', () => {
   const doc = (rule?: LogicCondition): Block[] => [
     choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
-    { ...blk('cap', 'g2', 'title'), visibleIf: rule },
+    showRule('cap', rule),
+    blk('cap', 'g2', 'title'),
     blk('dep', 'g2', 'short_text'),
     blk('later', 'g3', 'short_text'),
   ]
@@ -110,8 +138,9 @@ describe('planForm: видимость вопроса', () => {
   it('правило на не головном блоке группы инертно', () => {
     const blocks: Block[] = [
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }]),
+      showRule('dep', leaf('src', 'is', 'yes')),
       blk('cap', 'g2', 'title'),
-      { ...blk('dep', 'g2', 'short_text'), visibleIf: leaf('src', 'is', 'yes') },
+      blk('dep', 'g2', 'short_text'),
     ]
     const plan = planForm(blocks, { src: 'no' })
     expect(plan.visible.has('dep')).toBe(true)
@@ -123,11 +152,10 @@ describe('planForm: видимость вопроса', () => {
     // присланных ответах на Б что-то есть.
     const blocks: Block[] = [
       choice('a', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
-      {
-        ...choice('b', 'g2', 'single_choice', [{ id: 'dog' }]),
-        visibleIf: leaf('a', 'is', 'yes'),
-      },
-      { ...blk('c', 'g3', 'short_text'), visibleIf: leaf('b', 'is', 'dog') },
+      showRule('b', leaf('a', 'is', 'yes')),
+      choice('b', 'g2', 'single_choice', [{ id: 'dog' }]),
+      showRule('c', leaf('b', 'is', 'dog')),
+      blk('c', 'g3', 'short_text'),
     ]
     const plan = planForm(blocks, { a: 'no', b: 'dog' })
     expect(plan.visible.has('b')).toBe(false)
@@ -138,38 +166,38 @@ describe('planForm: видимость вопроса', () => {
 describe('planForm: обязательность', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'call' }, { id: 'mail' }])
 
-  const cases: [string, Partial<Block>, Answers, boolean][] = [
-    ['required без условия', { required: true }, {}, true],
-    ['requiredIf сработал', { requiredIf: leaf('src', 'is', 'call') }, { src: 'call' }, true],
-    ['requiredIf не сработал', { requiredIf: leaf('src', 'is', 'call') }, { src: 'mail' }, false],
-    ['requiredIf инертен — не обязателен', { requiredIf: leaf('нет-такого', 'is', 'x') }, {}, false],
+  const cases: [string, boolean, LogicCondition | null, Answers, boolean][] = [
+    ['required без условия', true, null, {}, true],
+    ['условие обязательности сработало', false, leaf('src', 'is', 'call'), { src: 'call' }, true],
+    ['условие обязательности не сработало', false, leaf('src', 'is', 'call'), { src: 'mail' }, false],
+    ['условие обязательности инертно — не обязателен', false, leaf('нет-такого', 'is', 'x'), {}, false],
   ]
 
-  it.each(cases)('%s', (_name, patch, answers, required) => {
-    const dep: Block = { ...blk('dep', 'g2', 'phone'), ...patch }
-    expect(planForm([src, dep], answers).required.has('dep')).toBe(required)
+  it.each(cases)('%s', (_name, flag, rule, answers, required) => {
+    const dep: Block = { ...blk('dep', 'g2', 'phone'), required: flag }
+    const blocks = rule === null ? [src, dep] : [src, requireRule('dep', rule), dep]
+    expect(planForm(blocks, answers).required.has('dep')).toBe(required)
   })
 
   it('скрытый вопрос не обязателен никогда', () => {
-    const dep: Block = {
-      ...blk('dep', 'g2', 'phone'),
-      required: true,
-      visibleIf: leaf('src', 'is', 'call'),
-    }
-    expect(planForm([src, dep], { src: 'mail' }).required.has('dep')).toBe(false)
+    const dep: Block = { ...blk('dep', 'g2', 'phone'), required: true }
+    const blocks = [src, showRule('dep', leaf('src', 'is', 'call')), dep]
+    expect(planForm(blocks, { src: 'mail' }).required.has('dep')).toBe(false)
   })
 })
 
 describe('planForm: варианты', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'dog' }, { id: 'cat' }])
-  const list = choice('list', 'g2', 'multi_choice', [
-    { id: 'leash', visibleIf: leaf('src', 'is', 'dog') },
-    { id: 'tray', visibleIf: leaf('src', 'is', 'cat') },
-    { id: 'food' },
-  ])
+  const list = choice('list', 'g2', 'multi_choice', [{ id: 'leash' }, { id: 'tray' }, { id: 'food' }])
+  const ruled: Block[] = [
+    src,
+    optionRule('list', leaf('src', 'is', 'dog'), 'leash'),
+    optionRule('list', leaf('src', 'is', 'cat'), 'tray'),
+    list,
+  ]
 
   it('видны только варианты со сработавшим условием', () => {
-    const plan = planForm([src, list], { src: 'dog' })
+    const plan = planForm(ruled, { src: 'dog' })
     expect(optionVisible(plan, 'list', 'leash')).toBe(true)
     expect(optionVisible(plan, 'list', 'tray')).toBe(false)
     expect(optionVisible(plan, 'list', 'food')).toBe(true)
@@ -182,14 +210,16 @@ describe('planForm: варианты', () => {
   })
 
   it('выбранный скрытый вариант не считается выбором', () => {
-    const dep: Block = { ...blk('dep', 'g3', 'short_text'), visibleIf: leaf('list', 'includes', 'tray') }
-    const plan = planForm([src, list, dep], { src: 'dog', list: ['tray', 'food'] })
+    const dep = blk('dep', 'g3', 'short_text')
+    const blocks = [...ruled, showRule('dep', leaf('list', 'includes', 'tray')), dep]
+    const plan = planForm(blocks, { src: 'dog', list: ['tray', 'food'] })
     expect(plan.visible.has('dep')).toBe(false)
   })
 
   it('includes по видимому варианту работает', () => {
-    const dep: Block = { ...blk('dep', 'g3', 'short_text'), visibleIf: leaf('list', 'includes', 'leash') }
-    const plan = planForm([src, list, dep], { src: 'dog', list: ['leash'] })
+    const dep = blk('dep', 'g3', 'short_text')
+    const blocks = [...ruled, showRule('dep', leaf('list', 'includes', 'leash')), dep]
+    const plan = planForm(blocks, { src: 'dog', list: ['leash'] })
     expect(plan.visible.has('dep')).toBe(true)
   })
 })
@@ -212,16 +242,29 @@ describe('planForm: числа', () => {
   ]
 
   it.each(cases)('%s', (_name, rule, answers, visible) => {
-    const dep: Block = { ...blk('dep', 'g4', 'short_text'), visibleIf: rule }
-    expect(planForm([scale, num, txt, dep], answers).visible.has('dep')).toBe(visible)
+    const dep = blk('dep', 'g4', 'short_text')
+    const blocks = [scale, num, txt, showRule('dep', rule), dep]
+    expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
   })
 })
 
 describe('planForm: страницы и переходы', () => {
   // Три страницы: [src] | [q2] | [q3]; разрывы br1 и br2.
-  const paged = (jumpIf?: Block['jumpIf']): Block[] => [
+  // Переходы приезжают блоком logic на ПЕРВОЙ странице: правило принадлежит странице,
+  // с которой уходят.
+  const paged = (...jumps: LogicAction[]): Block[] => [
     choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
-    { ...blk('br1', 'gb1', 'page_break'), jumpIf },
+    ...(jumps.length > 0
+      ? [
+          {
+            id: 'L',
+            groupId: 'gL',
+            type: 'logic' as const,
+            logic: { when: leaf('src', 'is', 'no'), then: jumps },
+          },
+        ]
+      : []),
+    blk('br1', 'gb1', 'page_break'),
     blk('q2', 'g2', 'short_text'),
     blk('br2', 'gb2', 'page_break'),
     blk('q3', 'g3', 'short_text'),
@@ -232,46 +275,48 @@ describe('planForm: страницы и переходы', () => {
   })
 
   it('переход вперёд пропускает страницу', () => {
-    const plan = planForm(paged([{ when: leaf('src', 'is', 'no'), to: 'br2' }]), { src: 'no' })
+    const plan = planForm(paged({ kind: 'jump', to: 'br2' }), { src: 'no' })
     expect(pageIds(plan)).toEqual([['src'], ['q3']])
     expect(plan.visible.has('q2')).toBe(false)
   })
 
   it('условие перехода не сработало — идём подряд', () => {
-    const plan = planForm(paged([{ when: leaf('src', 'is', 'no'), to: 'br2' }]), { src: 'yes' })
+    const plan = planForm(paged({ kind: 'jump', to: 'br2' }), { src: 'yes' })
     expect(plan.pages).toHaveLength(3)
   })
 
   it('end обрывает форму на текущей странице', () => {
-    const plan = planForm(paged([{ when: leaf('src', 'is', 'no'), end: true }]), { src: 'no' })
+    const plan = planForm(paged({ kind: 'jump', end: true }), { src: 'no' })
     expect(pageIds(plan)).toEqual([['src']])
   })
 
   it('переход назад инертен', () => {
+    // Правило стоит на ВТОРОЙ странице и ведёт на первую — назад.
     const blocks = paged()
-    blocks[3] = { ...blocks[3]!, jumpIf: [{ when: leaf('src', 'is', 'no'), to: 'br1' }] }
+    blocks.splice(2, 0, {
+      id: 'L',
+      groupId: 'gL',
+      type: 'logic',
+      logic: { when: leaf('src', 'is', 'no'), then: [{ kind: 'jump', to: 'br1' }] },
+    })
     expect(pageIds(planForm(blocks, { src: 'no' }))).toEqual([['src'], ['q2'], ['q3']])
   })
 
   it('переход в никуда инертен', () => {
-    const plan = planForm(paged([{ when: leaf('src', 'is', 'no'), to: 'нет-такого' }]), { src: 'no' })
+    const plan = planForm(paged({ kind: 'jump', to: 'нет-такого' }), { src: 'no' })
     expect(plan.pages).toHaveLength(3)
   })
 
   it('выигрывает первое сработавшее правило', () => {
-    const plan = planForm(
-      paged([
-        { when: leaf('src', 'is', 'no'), to: 'br2' },
-        { when: leaf('src', 'answered'), end: true },
-      ]),
-      { src: 'no' },
-    )
+    const plan = planForm(paged({ kind: 'jump', to: 'br2' }, { kind: 'jump', end: true }), {
+      src: 'no',
+    })
     expect(pageIds(plan)).toEqual([['src'], ['q3']])
   })
 
   it('страница, где скрыто всё, не показывается', () => {
     const blocks = paged()
-    blocks[2] = { ...blocks[2]!, visibleIf: leaf('src', 'is', 'yes') }
+    blocks.splice(2, 0, showRule('q2', leaf('src', 'is', 'yes')))
     expect(pageIds(planForm(blocks, { src: 'no' }))).toEqual([['src'], ['q3']])
   })
 
@@ -281,8 +326,7 @@ describe('planForm: страницы и переходы', () => {
 
   it('условие смотрит на вопрос той же страницы', () => {
     const blocks = paged()
-    const dep: Block = { ...blk('dep', 'g4', 'short_text'), visibleIf: leaf('src', 'is', 'yes') }
-    blocks.splice(1, 0, dep)
+    blocks.splice(1, 0, showRule('dep', leaf('src', 'is', 'yes')), blk('dep', 'g4', 'short_text'))
     expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(true)
   })
 })
@@ -517,8 +561,14 @@ describe('planForm: блок logic — варианты', () => {
   })
 
   it('скрытый вариант не считается выбором', () => {
-    const dep: Block = { ...blk('dep', 'g3', 'short_text'), visibleIf: leaf('list', 'includes', 'tray') }
-    const blocks = [src, rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]), list, dep]
+    const dep = blk('dep', 'g3', 'short_text')
+    const blocks = [
+      src,
+      rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]),
+      list,
+      showRule('dep', leaf('list', 'includes', 'tray')),
+      dep,
+    ]
     const plan = planForm(blocks, { src: 'dog', list: ['tray', 'food'] })
     expect(plan.visible.has('dep')).toBe(false)
   })
@@ -584,16 +634,19 @@ describe('planForm: блок logic — переход и кнопка', () => {
 
 describe('stripHiddenAnswers', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
-  const dep: Block = { ...blk('dep', 'g2', 'short_text'), visibleIf: leaf('src', 'is', 'yes') }
-  const list = choice('list', 'g3', 'multi_choice', [
-    { id: 'a', visibleIf: leaf('src', 'is', 'yes') },
-    { id: 'b' },
-  ])
-  const single = choice('single', 'g4', 'dropdown', [
-    { id: 'x', visibleIf: leaf('src', 'is', 'yes') },
-    { id: 'y' },
-  ])
-  const blocks = [src, dep, list, single]
+  const dep = blk('dep', 'g2', 'short_text')
+  const list = choice('list', 'g3', 'multi_choice', [{ id: 'a' }, { id: 'b' }])
+  const single = choice('single', 'g4', 'dropdown', [{ id: 'x' }, { id: 'y' }])
+  const yes = leaf('src', 'is', 'yes')
+  const blocks = [
+    src,
+    showRule('dep', yes),
+    dep,
+    optionRule('list', yes, 'a'),
+    list,
+    optionRule('single', yes, 'x'),
+    single,
+  ]
 
   it('ответ на скрытый вопрос отброшен', () => {
     const out = stripHiddenAnswers(blocks, { src: 'no', dep: 'Барсик' })
@@ -645,25 +698,33 @@ const doc = (blocks: unknown[]): unknown => ({ schemaVersion: 1, blocks })
 describe('схема: форма правил', () => {
   const valid: [string, unknown][] = [
     [
-      'visibleIf листом',
+      'условие листом',
       doc([
         { id: 'a', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
-        { id: 'b', groupId: 'g2', type: 'short_text', visibleIf: { blockId: 'a', op: 'is', value: 'o1' } },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'o1' }, then: [{ kind: 'show', target: 'b' }] },
+        },
+        { id: 'b', groupId: 'g2', type: 'short_text' },
       ]),
     ],
     [
-      'visibleIf вложенными группами',
+      'условие вложенными группами',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
         {
-          id: 'b',
-          groupId: 'g2',
-          type: 'short_text',
-          visibleIf: {
-            any: [
-              { all: [{ blockId: 'a', op: 'answered' }, { blockId: 'a', op: 'is', value: 'x' }] },
-              { blockId: 'a', op: 'is', value: 'y' },
-            ],
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: {
+            when: {
+              any: [
+                { all: [{ blockId: 'a', op: 'answered' }, { blockId: 'a', op: 'is', value: 'x' }] },
+                { blockId: 'a', op: 'is', value: 'y' },
+              ],
+            },
           },
         },
       ]),
@@ -672,54 +733,71 @@ describe('схема: форма правил', () => {
       'значение не выбрано — законный черновик',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
-        { id: 'b', groupId: 'g2', type: 'short_text', visibleIf: { blockId: 'a', op: 'is', value: '' } },
+        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'is', value: '' } } },
       ]),
     ],
     [
       'ссылка вперёд — инертна, но валидна',
       doc([
-        { id: 'b', groupId: 'g2', type: 'short_text', visibleIf: { blockId: 'a', op: 'answered' } },
+        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'answered' } } },
         { id: 'a', groupId: 'g1', type: 'short_text' },
       ]),
     ],
     [
       'ссылка на удалённый блок — инертна, но валидна',
-      doc([{ id: 'b', groupId: 'g2', type: 'short_text', visibleIf: { blockId: 'призрак', op: 'answered' } }]),
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'призрак', op: 'answered' } } }]),
     ],
     [
-      'requiredIf у отвечаемого',
+      'обязательность по условию',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
-        { id: 'b', groupId: 'g2', type: 'phone', requiredIf: { blockId: 'a', op: 'answered' } },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'answered' }, then: [{ kind: 'require', target: 'b' }] },
+        },
+        { id: 'b', groupId: 'g2', type: 'phone' },
       ]),
     ],
     [
-      'visibleIf у варианта',
+      'скрытие варианта',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: {
+            when: { blockId: 'a', op: 'is', value: 'dog' },
+            then: [{ kind: 'hide_options', target: 'b', options: ['o1'] }],
+          },
+        },
         {
           id: 'b',
           groupId: 'g2',
           type: 'multi_choice',
-          settings: {
-            options: [{ id: 'o1', label: 'Поводок', visibleIf: { blockId: 'a', op: 'is', value: 'dog' } }],
-          },
+          settings: { options: [{ id: 'o1', label: 'Поводок' }] },
         },
       ]),
     ],
     [
-      'переходы у разрыва',
+      'переходы блоком',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
         {
-          id: 'br',
-          groupId: 'g2',
-          type: 'page_break',
-          jumpIf: [
-            { when: { blockId: 'a', op: 'empty' }, to: 'br2' },
-            { when: { blockId: 'a', op: 'answered' }, end: true },
-          ],
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: {
+            when: { blockId: 'a', op: 'empty' },
+            then: [
+              { kind: 'jump', to: 'br2' },
+              { kind: 'jump', end: true },
+            ],
+          },
         },
+        { id: 'br', groupId: 'g2', type: 'page_break' },
         { id: 'c', groupId: 'g3', type: 'short_text' },
       ]),
     ],
@@ -728,10 +806,10 @@ describe('схема: форма правил', () => {
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
         {
-          id: 'b',
-          groupId: 'g2',
-          type: 'short_text',
-          visibleIf: { all: [{ any: [{ all: [{ blockId: 'a', op: 'answered' }] }] }] },
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { all: [{ any: [{ all: [{ blockId: 'a', op: 'answered' }] }] }] } },
         },
       ]),
     ],
@@ -787,16 +865,16 @@ describe('схема: форма правил', () => {
 
   const deep = { all: [{ all: [{ all: [{ all: [{ blockId: 'a', op: 'answered' }] }] }] }] }
   const invalid: [string, unknown][] = [
-    ['пустое условие', doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: {} }])],
-    ['пустая группа', doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { all: [] } }])],
+    ['пустое условие', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: {} } }])],
+    ['пустая группа', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { all: [] } } }])],
     [
       'all и any одновременно',
       doc([
         {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          visibleIf: { all: [{ blockId: 'a', op: 'answered' }], any: [{ blockId: 'a', op: 'empty' }] },
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { all: [{ blockId: 'a', op: 'answered' }], any: [{ blockId: 'a', op: 'empty' }] } },
         },
       ]),
     ],
@@ -804,101 +882,69 @@ describe('схема: форма правил', () => {
       'группа с полями листа',
       doc([
         {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          visibleIf: { all: [{ blockId: 'a', op: 'answered' }], blockId: 'a', op: 'is', value: 'x' },
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { all: [{ blockId: 'a', op: 'answered' }], blockId: 'a', op: 'is', value: 'x' } },
         },
       ]),
     ],
     [
       'неизвестный оператор',
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a', op: 'matches', value: 'x' } }]),
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'matches', value: 'x' } } }]),
     ],
-    ['оператора нет вовсе', doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a' } }])],
+    ['оператора нет вовсе', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a' } } }])],
     [
       'пустой blockId',
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: '', op: 'answered' } }]),
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: '', op: 'answered' } } }]),
     ],
     [
       'значение у answered',
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a', op: 'answered', value: 'x' } }]),
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'answered', value: 'x' } } }]),
     ],
     [
       'значение длиннее лимита',
       doc([
         {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          visibleIf: { blockId: 'a', op: 'is', value: 'я'.repeat(201) },
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'я'.repeat(201) } },
         },
       ]),
     ],
-    ['вложенность глубже лимита', doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: deep }])],
+    ['вложенность глубже лимита', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: deep } }])],
     [
       'лишний ключ в условии',
       doc([
         {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          visibleIf: { blockId: 'a', op: 'is', value: 'x', not: true },
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'x', not: true } },
         },
       ]),
     ],
     [
-      'requiredIf у неотвечаемого',
+      'старое поле visibleIf в документе',
+      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a', op: 'answered' } }]),
+    ],
+    [
+      'старое поле requiredIf в документе',
+      doc([{ id: 'b', groupId: 'g1', type: 'short_text', requiredIf: { blockId: 'a', op: 'answered' } }]),
+    ],
+    [
+      'старое поле jumpIf в документе',
+      doc([{ id: 'br', groupId: 'g1', type: 'page_break', jumpIf: [{ end: true }] }]),
+    ],
+    [
+      'старое поле visibleIf у варианта',
       doc([
         {
           id: 'b',
           groupId: 'g1',
-          type: 'heading',
-          text: [{ t: 'Раздел' }],
-          requiredIf: { blockId: 'a', op: 'answered' },
-        },
-      ]),
-    ],
-    [
-      'required и requiredIf вместе',
-      doc([
-        {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          required: true,
-          requiredIf: { blockId: 'a', op: 'answered' },
-        },
-      ]),
-    ],
-    [
-      'visibleIf у разрыва страницы',
-      doc([{ id: 'br', groupId: 'g1', type: 'page_break', visibleIf: { blockId: 'a', op: 'answered' } }]),
-    ],
-    [
-      'переходы не у разрыва',
-      doc([
-        {
-          id: 'b',
-          groupId: 'g1',
-          type: 'short_text',
-          jumpIf: [{ when: { blockId: 'a', op: 'answered' }, end: true }],
-        },
-      ]),
-    ],
-    ['переход без условия', doc([{ id: 'br', groupId: 'g1', type: 'page_break', jumpIf: [{ end: true }] }])],
-    [
-      'переход без цели',
-      doc([{ id: 'br', groupId: 'g1', type: 'page_break', jumpIf: [{ when: { blockId: 'a', op: 'answered' } }] }]),
-    ],
-    [
-      'переход с двумя целями',
-      doc([
-        {
-          id: 'br',
-          groupId: 'g1',
-          type: 'page_break',
-          jumpIf: [{ when: { blockId: 'a', op: 'answered' }, to: 'br2', end: true }],
+          type: 'multi_choice',
+          settings: { options: [{ id: 'o1', label: 'Раз', visibleIf: { blockId: 'a', op: 'answered' } }] },
         },
       ]),
     ],
@@ -1000,7 +1046,7 @@ describe('схема: форма правил', () => {
   it('лимит числа узлов считает правило целиком', () => {
     const leaves = Array.from({ length: MAX_LOGIC_NODES }, () => ({ blockId: 'a', op: 'answered' }))
     const rule = (n: number): unknown =>
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { all: leaves.slice(0, n) } }])
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { all: leaves.slice(0, n) } } }])
     expect(formSchemaSchema.safeParse(rule(MAX_LOGIC_NODES - 1)).success).toBe(true)
     expect(formSchemaSchema.safeParse(rule(MAX_LOGIC_NODES)).success).toBe(false)
   })

@@ -1,11 +1,5 @@
 import { z } from 'zod'
-import {
-  MAX_ID_LEN,
-  MAX_JUMP_RULES,
-  MAX_LOGIC_DEPTH,
-  MAX_LOGIC_NODES,
-  MAX_LOGIC_VALUE_LEN,
-} from './limits'
+import { MAX_ID_LEN, MAX_LOGIC_DEPTH, MAX_LOGIC_NODES, MAX_LOGIC_VALUE_LEN } from './limits'
 
 // Контракт условной логики — ФОРМА условий (дерево «все/любое/сравнение») и операторы.
 // Что с этим деревом делают — в blocks/logic.ts, тип блока `logic`; вычислитель живёт
@@ -108,7 +102,7 @@ const measure = (c: LogicCondition, depth: number): { depth: number; nodes: numb
   return { depth: maxDepth, nodes }
 }
 
-// Правило — дерево под лимитами. Именно оно ставится в visibleIf/requiredIf/when.
+// Правило — дерево под лимитами. Именно оно ставится в `logic.when` блока условия.
 export const ruleSchema = conditionSchema.superRefine((c, ctx) => {
   const { depth, nodes } = measure(c, 1)
   if (depth > MAX_LOGIC_DEPTH) {
@@ -119,21 +113,3 @@ export const ruleSchema = conditionSchema.superRefine((c, ctx) => {
   }
 })
 
-// Переход со страницы: условие и цель. Цель — ЛИБО id другого разрыва (страница, которую
-// он открывает), ЛИБО end («страниц дальше нет, здесь кнопка Отправить»). Две формы, а
-// не зарезервированное значение внутри to: id генерирует клиент, и строка 'end' — сама
-// по себе законный id.
-export const jumpRuleSchema = z
-  .strictObject({
-    when: ruleSchema,
-    to: z.string().max(MAX_ID_LEN).optional(),
-    end: z.boolean().optional(),
-  })
-  .superRefine((r, ctx) => {
-    if (Boolean(r.to) === (r.end === true)) {
-      ctx.addIssue({ code: 'custom', message: 'нужна ровно одна цель — to или end' })
-    }
-  })
-export type JumpRule = z.infer<typeof jumpRuleSchema>
-
-export const jumpIfSchema = z.array(jumpRuleSchema).max(MAX_JUMP_RULES)
