@@ -1,4 +1,4 @@
-import { EllipsisVertical } from 'lucide-react'
+import { Copy, EllipsisVertical, Plus, Repeat, Trash2 } from 'lucide-react'
 
 import {
   type Block,
@@ -15,7 +15,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
@@ -38,11 +37,16 @@ import { type Group, OPERATOR_LABELS, defaultLeaf, sourceLabel, valueChoices } f
 // валидна и выглядит ровно как одно условие.
 //
 // ВСЁ УПРАВЛЕНИЕ ЖИВЁТ В МЕНЮ СТРОКИ (решение владельца 2026-08-16). Кнопок «+ Условие»
-// и «+ Группа» под деревом больше нет, крестика в конце строки — тоже: добавление,
-// вложение и удаление уехали в один значок после контрола значения. Причина не в
-// экономии места: строка условия — самостоятельная единица, и держать её операции в
+// и «+ Группа» под деревом больше нет, крестика в конце строки — тоже: четыре операции
+// уехали в один значок после контрола значения — добавить, удалить, дублировать,
+// обернуть в группу (состав и порядок взяты у Tally, образца вида полотна). Причина не
+// в экономии места: строка условия — самостоятельная единица, и держать её операции в
 // двух разных местах (хвост строки и подвал дерева) значит заставлять глаз прыгать
 // между ними на каждое действие.
+//
+// ГРУППА — ТАКОЙ ЖЕ РЕБЁНОК своего родителя, что и лист, поэтому меню у неё то же самое
+// и стоит в её шапке. Отдельной механики «удалить группу» нет и не нужно: пункты
+// работают над узлом, а какой это узел — лист или группа — их не касается.
 //
 // Связка «все/любое» показывается, ТОЛЬКО когда условий больше одного: у единственного
 // условия связывать нечего, а выбор, который ничего не меняет, читается как забытая
@@ -63,6 +67,7 @@ export function ConditionEditor({
   sources,
   value,
   depth = 1,
+  menu,
   onChange,
   onRemove,
 }: {
@@ -72,6 +77,10 @@ export function ConditionEditor({
   sources: readonly Block[]
   value: Group
   depth?: number
+  // Меню операций НАД САМОЙ группой: она такой же ребёнок своего родителя, что и лист,
+  // и операции у неё те же — добавить рядом, удалить, дублировать, обернуть. Нет меню —
+  // это корень: удалять и дублировать его некому.
+  menu?: RowMenu
   onChange: (next: Group) => void
   onRemove?: () => void
 }) {
@@ -83,8 +92,7 @@ export function ConditionEditor({
     if (next === null) {
       // Группа без условий невалидна по схеме, и это не формальность: правило,
       // которое ничего не проверяет, неотличимо от отсутствующего. Пустую группу
-      // редактор просто убирает целиком — так же уходит и последнее условие внутри
-      // вложенной группы, поэтому отдельного «удалить группу» ей не нужно.
+      // редактор просто убирает целиком — вместе с последним условием внутри неё.
       if (rest.length === 0) {
         onRemove?.()
         return
@@ -104,47 +112,49 @@ export function ConditionEditor({
     onChange(asGroup([...children.slice(0, i + 1), node, ...children.slice(i + 1)], and))
   }
 
-  const rowMenu = (i: number) => ({
+  const rowMenu = (i: number, child: LogicCondition): RowMenu => ({
     // Новое условие берёт первый доступный источник: выбирать «ничего» в списке
     // источников нельзя, а пустой blockId схема отвергает.
-    onAddLeaf: sources[0] ? () => insertAfter(i, defaultLeaf(sources[0]!)) : undefined,
-    // Глубже лимита схемы пункт не показываем: 422 в автосейве от нажатия
-    // собственной кнопки — худший способ узнать про лимит.
-    onAddGroup:
-      sources[0] && depth < MAX_LOGIC_DEPTH
-        ? () => insertAfter(i, { all: [defaultLeaf(sources[0]!)] })
-        : undefined,
+    onAdd: sources[0] ? () => insertAfter(i, defaultLeaf(sources[0]!)) : undefined,
     onRemove: () => replaceChild(i, null),
-    // Внутри вложенной группы строка умеет снести её целиком: иначе группу из трёх
-    // условий пришлось бы разбирать по одному.
-    onRemoveGroup: depth > 1 ? onRemove : undefined,
+    onDuplicate: () => insertAfter(i, child),
+    // ОБЕРНУТЬ, а не «добавить группу ниже»: условие остаётся на месте и получает
+    // вокруг себя группу, в которую дальше можно доложить соседей. Глубже лимита схемы
+    // пункт не показываем — 422 в автосейве от нажатия собственной кнопки худший способ
+    // узнать про лимит.
+    onWrap: depth < MAX_LOGIC_DEPTH ? () => replaceChild(i, { all: [child] }) : undefined,
   })
 
   return (
     <div
       className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}
     >
-      {children.length > 1 && (
-        <Select
-          value={and ? 'all' : 'any'}
-          onValueChange={(v) => onChange(asGroup(children, v === 'all'))}
-        >
-          {/* Вид ТЕКСТА, а не поля: рамка, фон, тень и высота гасятся теми же
+      {(children.length > 1 || menu) && (
+        <div className="flex items-center gap-1">
+          {children.length > 1 && (
+            <Select
+              value={and ? 'all' : 'any'}
+              onValueChange={(v) => onChange(asGroup(children, v === 'all'))}
+            >
+              {/* Вид ТЕКСТА, а не поля: рамка, фон, тень и высота гасятся теми же
               вариантами, которыми они объявлены (data-[size=sm], dark:) — иначе
               tailwind-merge их не сольёт и победит тот класс, что позже в собранном
               CSS, а не в строке (web/CLAUDE.md). */}
-          <SelectTrigger
-            size="sm"
-            className="h-auto w-auto gap-1 border-0 bg-transparent p-0 text-xs tracking-wide text-muted-foreground uppercase shadow-none data-[size=sm]:h-auto hover:text-foreground focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
-            aria-label="Как объединять условия"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Все условия</SelectItem>
-            <SelectItem value="any">Любое из условий</SelectItem>
-          </SelectContent>
-        </Select>
+              <SelectTrigger
+                size="sm"
+                className="h-auto w-auto gap-1 border-0 bg-transparent p-0 text-xs tracking-wide text-muted-foreground uppercase shadow-none data-[size=sm]:h-auto hover:text-foreground focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
+                aria-label="Как объединять условия"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Все условия</SelectItem>
+                <SelectItem value="any">Любое из условий</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+          {menu && <RowActions menu={menu} />}
+        </div>
       )}
 
       {children.map((child, i) => {
@@ -157,6 +167,7 @@ export function ConditionEditor({
               sources={sources}
               value={child}
               depth={depth + 1}
+              menu={rowMenu(i, child)}
               onChange={(next) => replaceChild(i, next)}
               onRemove={() => replaceChild(i, null)}
             />
@@ -169,7 +180,7 @@ export function ConditionEditor({
             sources={sources}
             value={child}
             onChange={(next) => replaceChild(i, next)}
-            menu={rowMenu(i)}
+            menu={rowMenu(i, child)}
           />
         )
       })}
@@ -191,10 +202,10 @@ export function ConditionEditor({
 }
 
 type RowMenu = {
-  onAddLeaf?: () => void
-  onAddGroup?: () => void
+  onAdd?: () => void
   onRemove: () => void
-  onRemoveGroup?: () => void
+  onDuplicate: () => void
+  onWrap?: () => void
 }
 
 // Лист: «вопрос — сравнение — значение» и меню операций. Значение показывается только у
@@ -312,9 +323,9 @@ function LeafRow({
   )
 }
 
-// Меню операций строки — ПОСЛЕ значения, там, где раньше стоял крестик. Один значок на
-// всё: добавить условие рядом, вложить группу, удалить строку (и, внутри вложенной
-// группы, снести её целиком).
+// Меню операций строки — ПОСЛЕ значения, там, где раньше стоял крестик. Состав и
+// порядок пунктов взяты у Tally (образец вида полотна, `fields/README.md`): добавить,
+// удалить, дублировать, обернуть в группу.
 function RowActions({ menu }: { menu: RowMenu }) {
   return (
     <DropdownMenu>
@@ -329,20 +340,25 @@ function RowActions({ menu }: { menu: RowMenu }) {
           <EllipsisVertical className="size-4" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        {menu.onAddLeaf && (
-          <DropdownMenuItem onSelect={menu.onAddLeaf}>Условие ниже</DropdownMenuItem>
+      <DropdownMenuContent align="start" className="w-52">
+        {menu.onAdd && (
+          <DropdownMenuItem onSelect={menu.onAdd}>
+            <Plus className="size-4" />
+            Добавить условие
+          </DropdownMenuItem>
         )}
-        {menu.onAddGroup && (
-          <DropdownMenuItem onSelect={menu.onAddGroup}>Группа условий ниже</DropdownMenuItem>
-        )}
-        {(menu.onAddLeaf || menu.onAddGroup) && <DropdownMenuSeparator />}
-        <DropdownMenuItem variant="destructive" onSelect={menu.onRemove}>
-          Удалить условие
+        <DropdownMenuItem onSelect={menu.onRemove}>
+          <Trash2 className="size-4" />
+          Удалить
         </DropdownMenuItem>
-        {menu.onRemoveGroup && (
-          <DropdownMenuItem variant="destructive" onSelect={menu.onRemoveGroup}>
-            Удалить группу
+        <DropdownMenuItem onSelect={menu.onDuplicate}>
+          <Copy className="size-4" />
+          Дублировать
+        </DropdownMenuItem>
+        {menu.onWrap && (
+          <DropdownMenuItem onSelect={menu.onWrap}>
+            <Repeat className="size-4" />
+            Обернуть в группу
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
