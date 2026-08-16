@@ -321,9 +321,17 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
 
     for (const [start, end] of groupRuns(page.blocks)) {
       const head = page.blocks[start]!
-      const show = visited && shows(head.id, pos.get(head.id) ?? 0)
+      // ДВА УРОВНЯ ВИДИМОСТИ (2026-08-16, ADR §10). Правило на ГОЛОВЕ группы прячет
+      // вопрос целиком — подпись, поле и контент между ними; правило на любом другом
+      // блоке группы прячет ЕГО ОДНОГО.
+      //
+      // Уровни перемножаются, а не спорят: спрятанный вопрос не показывает своих строк,
+      // что бы про них ни говорили их собственные правила.
+      const groupShow = visited && shows(head.id, pos.get(head.id) ?? 0)
 
       for (const b of page.blocks.slice(start, end)) {
+        const show =
+          groupShow && (b.id === head.id || shows(b.id, pos.get(b.id) ?? 0))
         // Блок логики не показывается никому и ни на одной поверхности: страница, где
         // кроме него ничего нет, — не страница (её переходы при этом считаются).
         if (show && b.type !== 'logic') {

@@ -11,6 +11,7 @@ import {
 import { pageNumbers } from '@fields/groups'
 import { operatorsFor, ruleWarnings } from '@fields/logic'
 
+import { editorKind } from '../kinds'
 import { derivedQuestionName } from '../questionName'
 
 // Правила РЕДАКТОРА условной логики: из чего автор выбирает источник, что можно взять
@@ -153,11 +154,13 @@ export function jumpTargetsFrom(
   return out
 }
 
-// ДЕРЕВО ЦЕЛЕЙ: страница → вопрос → его варианты. Вариант в нём такой же узел, что и
-// вопрос (образец — Tally), поэтому отдельного действия «скрыть варианты» нет: одно
-// «скрыть» прячет и вопрос целиком, и отдельные его варианты, а кто чем оказался,
-// разбирает вычислитель по документу.
-export type TargetNode = { id: string; label: string; options: { id: string; label: string }[] }
+// ДЕРЕВО ЦЕЛЕЙ: страница → вопрос → его СТРОКИ и варианты (образец — Tally). Отдельного
+// действия «скрыть варианты» нет: одно «скрыть» прячет и вопрос целиком, и отдельную его
+// строку, и отдельный вариант, а кто чем оказался, разбирает вычислитель по документу.
+//
+// Два уровня видимости, поэтому и два уровня дерева: голова группы значит ВЕСЬ вопрос,
+// её дети — каждый сам себя (ADR §10, 2026-08-16).
+export type TargetNode = { id: string; label: string; children: { id: string; label: string }[] }
 
 // Что можно взять целью у этого вида действия. Показ адресует ВОПРОС (голову группы) и
 // варианты; обязательность — только отвечаемый блок, вариант обязательным не бывает.
@@ -187,7 +190,7 @@ function targetNode(
 ): TargetNode | null {
   if (kind === 'require') {
     if (!isAnswerableType(b.type)) return null
-    return { id: b.id, label: targetLabel(blocks, b), options: [] }
+    return { id: b.id, label: targetLabel(blocks, b), children: [] }
   }
   // Голова группы: прячется вопрос целиком. Заголовок формы и разрыв страницы прятать
   // нельзя — первый скелет документа, а исчезающий разрыв означал бы, что число страниц
@@ -196,16 +199,28 @@ function targetNode(
   if (!isHead || b.type === 'logic' || b.type === 'form_title' || b.type === 'page_break') {
     return null
   }
-  // Варианты живут на отвечаемом блоке группы, а не на её голове.
-  const field = blocks.find((x) => x.groupId === b.groupId && isChoiceType(x.type))
+  // Дети узла — ОСТАЛЬНЫЕ строки вопроса и варианты его списка. Голова в детях не
+  // повторяется: она и есть сам узел, и выбрать её значит выбрать вопрос целиком.
+  const rows = blocks.filter((x) => x.groupId === b.groupId && x.id !== b.id)
+  const options = blocks
+    .filter((x) => x.groupId === b.groupId && isChoiceType(x.type))
+    .flatMap((x) => x.settings?.options ?? [])
   return {
     id: b.id,
     label: targetLabel(blocks, b),
-    options: (field?.settings?.options ?? []).map((o) => ({
-      id: o.id,
-      label: o.label.trim() || 'Без названия',
-    })),
+    children: [
+      ...rows.map((x) => ({ id: x.id, label: rowLabel(x) })),
+      ...options.map((o) => ({ id: o.id, label: o.label.trim() || 'Без названия' })),
+    ],
   }
+}
+
+// Как называется СТРОКА внутри вопроса. Свой текст, если он есть; иначе имя типа из
+// реестра редактора («Короткий ответ», «Картинка») — то же слово, которым строка зовётся
+// в меню вставки. Имя ВОПРОСА здесь не годится: у поля оно то же, что у его подписи, и
+// в дереве получились бы два одинаковых пункта.
+function rowLabel(b: Block): string {
+  return captionOf(b) || editorKind(b.type).label
 }
 
 // Совпадение по ОБОИМ уровням дерева: подошёл вопрос — показываем его со всеми
@@ -224,8 +239,8 @@ export function filterTargetTree(
   const out: { page: number; items: TargetNode[] }[] = []
   for (const { page, items } of tree) {
     const kept = items
-      .map((n) => (hit(n.label) ? n : { ...n, options: n.options.filter((o) => hit(o.label)) }))
-      .filter((n) => hit(n.label) || n.options.length > 0)
+      .map((n) => (hit(n.label) ? n : { ...n, children: n.children.filter((c) => hit(c.label)) }))
+      .filter((n) => hit(n.label) || n.children.length > 0)
     if (kept.length > 0) out.push({ page, items: kept })
   }
   return out
@@ -239,10 +254,6 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
   const when = block.logic?.when
   const actions = block.logic?.then ?? []
   const out: string[] = []
-  const heads = new Set(
-    blocks.filter((b, i) => b.groupId !== blocks[i - 1]?.groupId).map((b) => b.id),
-  )
-
   // Условие проверяется ОТ КАЖДОЙ ЦЕЛИ: инертность меряется у неё, и правило, годное для
   // одной цели, может не годиться для другой — если цели стоят в разных местах
   // документа. У перехода и «скрыть кнопку» цель — страница, значит мерить от блока.
@@ -271,10 +282,6 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
         // Вариант — законная цель показа, но не обязательности.
         if (!optionIds.has(id)) out.push('цель удалена — действие не работает')
         else if (a.kind === 'require') out.push('вариант нельзя сделать обязательным')
-        continue
-      }
-      if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
-        out.push(`«${targetLabel(blocks, target)}» не первая строка вопроса — действие не работает`)
         continue
       }
       if (a.kind === 'require' && target.required === true) {

@@ -687,9 +687,16 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 
 		for _, run := range groupRuns(pages[i].blocks) {
 			head := pages[i].blocks[run[0]]
-			show := visited && ev.shows(head.ID, ev.pos[head.ID])
+			// ДВА УРОВНЯ ВИДИМОСТИ (2026-08-16, ADR §10). Правило на ГОЛОВЕ группы
+			// прячет вопрос целиком — подпись, поле и контент между ними; правило на
+			// любом другом блоке группы прячет ЕГО ОДНОГО.
+			//
+			// Уровни перемножаются, а не спорят: спрятанный вопрос не показывает своих
+			// строк, что бы про них ни говорили их собственные правила.
+			groupShow := visited && ev.shows(head.ID, ev.pos[head.ID])
 
 			for _, b := range pages[i].blocks[run[0]:run[1]] {
+				show := groupShow && (b.ID == head.ID || ev.shows(b.ID, ev.pos[b.ID]))
 				// Блок логики не показывается никому и ни на одной поверхности:
 				// страница, где кроме него ничего нет, — не страница (её переходы
 				// при этом считаются).

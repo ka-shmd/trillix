@@ -218,7 +218,7 @@ function buildAction(
 ): LogicAction | null {
   if (kind === 'block_submit') return { kind }
   if (kind === 'jump') return { kind, end: true }
-  const known = new Set(tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.options.map((o) => o.id)])))
+  const known = new Set(tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.children.map((c) => c.id)])))
   const kept = keep.filter((id) => known.has(id))
   const targets = kept.length > 0 ? kept : [tree[0]?.items[0]?.id].filter((id): id is string => Boolean(id))
   return targets.length > 0 ? { kind, targets } : null
@@ -387,7 +387,7 @@ function TargetPicker({
   for (const { items } of tree) {
     for (const n of items) {
       names.set(n.id, n.label)
-      for (const o of n.options) names.set(o.id, o.label)
+      for (const c of n.children) names.set(c.id, c.label)
     }
   }
   const chosen = picks.filter((id) => names.has(id))
@@ -444,20 +444,20 @@ function TargetPicker({
                           return (
                             <div key={node.id}>
                               <TreeRow
-                                chevron={node.options.length > 0 ? nodeOpen : undefined}
+                                chevron={node.children.length > 0 ? nodeOpen : undefined}
                                 onChevron={() => setOpenNodes(toggled(openNodes, node.id))}
                                 label={node.label}
                                 checked={picks.includes(node.id)}
                                 onSelect={() => onToggle(node.id)}
                               />
-                              {nodeOpen && node.options.length > 0 && (
+                              {nodeOpen && node.children.length > 0 && (
                                 <Rail>
-                                  {node.options.map((o) => (
+                                  {node.children.map((c) => (
                                     <TreeRow
-                                      key={o.id}
-                                      label={o.label}
-                                      checked={picks.includes(o.id)}
-                                      onSelect={() => onToggle(o.id)}
+                                      key={c.id}
+                                      label={c.label}
+                                      checked={picks.includes(c.id)}
+                                      onSelect={() => onToggle(c.id)}
                                     />
                                   ))}
                                 </Rail>

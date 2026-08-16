@@ -166,17 +166,54 @@ func TestPlanForm_Visibility(t *testing.T) {
 	}
 }
 
-func TestPlanForm_RuleReadFromGroupHead(t *testing.T) {
-	// Правило на НЕ головном блоке группы инертно: носитель — голова (как у бита ряда).
+// Два уровня видимости: голова прячет вопрос ЦЕЛИКОМ, любая другая строка группы —
+// ТОЛЬКО СЕБЯ (2026-08-16).
+func TestPlanForm_GroupHeadHidesWholeQuestion(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"})
-	head := lblk("cap", "g2", BlockTitle)
-	field := lblk("dep", "g2", BlockShortText)
-	// Цель — НЕ голова группы: действие инертно.
-	rule := showRule("dep", leaf("src", OpIs, "yes"))
+	blocks := []Block{
+		src,
+		showRule("cap", leaf("src", OpIs, "yes")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "no"}))
+	if plan.Visible["cap"] || plan.Visible["dep"] {
+		t.Fatalf("голова прячет вопрос целиком, видимы: %v", visibleIDs(plan))
+	}
+}
 
-	plan := PlanForm([]Block{src, rule, head, field}, answers(map[string]any{"src": "no"}))
-	if !plan.Visible["dep"] || !plan.Visible["cap"] {
-		t.Fatalf("правило на не-голове обязано быть инертным, видимы: %v", visibleIDs(plan))
+func TestPlanForm_InnerBlockHidesItselfOnly(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"})
+	blocks := []Block{
+		src,
+		showRule("dep", leaf("src", OpIs, "yes")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "no"}))
+	if plan.Visible["dep"] {
+		t.Fatal("строка со своим правилом обязана скрыться")
+	}
+	if !plan.Visible["cap"] {
+		t.Fatalf("подпись того же вопроса обязана остаться, видимы: %v", visibleIDs(plan))
+	}
+}
+
+// Уровни перемножаются: спрятанный вопрос не показывает своих строк, что бы про них ни
+// говорили их собственные правила.
+func TestPlanForm_HiddenQuestionHidesInnerRows(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes"}, Option{ID: "no"})
+	blocks := []Block{
+		src,
+		showRule("cap", leaf("src", OpIs, "yes")),
+		llogic("L2", "gL2", leaf("src", OpAnswered, ""), act(ActShow, "dep")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	// Собственное правило строки сработало, правило вопроса — нет.
+	plan := PlanForm(blocks, answers(map[string]any{"src": "no"}))
+	if plan.Visible["dep"] {
+		t.Fatal("спрятанный вопрос не показывает своих строк")
 	}
 }
 
@@ -739,19 +776,6 @@ func TestPlanForm_LogicBlockSourceBelowTarget(t *testing.T) {
 	}
 	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
 		t.Fatal("источник ниже цели — правило обязано быть инертным")
-	}
-}
-
-func TestPlanForm_LogicBlockNonHeadTarget(t *testing.T) {
-	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
-	blocks := []Block{
-		src,
-		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "dep")),
-		lblk("cap", "g2", BlockTitle),
-		lblk("dep", "g2", BlockShortText),
-	}
-	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
-		t.Fatal("действие на НЕ головной блок группы обязано быть инертным")
 	}
 }
 
