@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/select'
 
 import { useBuilderStore } from '../storeContext'
-import { ConditionEditor } from './ConditionEditor'
+import { ConditionEditor, JoinSelect } from './ConditionEditor'
 import { RowMenu } from './rowMenu'
 import {
   ACTION_LABELS,
@@ -69,7 +69,14 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 
   return (
     <div className="flex flex-col gap-2 py-1 text-sm">
-      <Tier label="Когда">
+      <Tier
+        label="Когда"
+        trailing={
+          when !== undefined ? (
+            <JoinSelect value={asRootGroup(when)} onChange={(next) => setWhen(next)} />
+          ) : null
+        }
+      >
         {sources.length === 0 ? (
           <Note>выше блока нет ни одного вопроса — условие не о чем спросить</Note>
         ) : (
@@ -130,7 +137,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
       </Tier>
 
       {warnings.length > 0 && (
-        <ul className="text-muted-foreground pl-16 text-xs">
+        <ul className="text-muted-foreground text-xs">
           {warnings.map((w) => (
             <li key={w}>⚠ {w}</li>
           ))}
@@ -140,13 +147,28 @@ export function LogicBlockEditor({ block }: { block: Block }) {
   )
 }
 
-function Tier({ label, children }: { label: string; children: React.ReactNode }) {
+// Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
+// 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
+// контрола, и на узком полотне они переносятся.
+//
+// `trailing` — то, что стоит в одной строке с подписью: у «Когда» это связка
+// «все/любое». Она принадлежит ярусу, а не первой строке условий: связывает она их все.
+function Tier({
+  label,
+  trailing,
+  children,
+}: {
+  label: string
+  trailing?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
-    <div className="flex items-baseline gap-2">
-      <span className="text-muted-foreground w-14 shrink-0 text-xs tracking-wide uppercase">
-        {label}
-      </span>
-      <div className="min-w-0 flex-1">{children}</div>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-muted-foreground text-xs tracking-wide uppercase">{label}</span>
+        {trailing}
+      </div>
+      <div className="min-w-0">{children}</div>
     </div>
   )
 }
@@ -250,10 +272,13 @@ function ActionRow({
         </SelectContent>
       </Select>
 
+      {/* Второй контрол стоит ВСЕГДА, даже когда действие ещё не выбрано: строка не
+          должна перестраиваться под курсором, пока автор её заполняет. Исключение одно —
+          «скрыть кнопку»: цели у неё нет не «пока», а вовсе. */}
       {kind === 'jump' && value?.kind === 'jump' ? (
         <JumpTarget blocks={blocks} logicId={logicId} value={value} onChange={onChange} />
-      ) : kind === null || kind === 'block_submit' ? null : (
-        <TargetPicker tree={tree} picks={picks} onToggle={toggleTarget} />
+      ) : kind === 'block_submit' ? null : (
+        <TargetPicker tree={tree} picks={picks} onToggle={toggleTarget} disabled={kind === null} />
       )}
 
       {menu && (
@@ -328,10 +353,12 @@ function TargetPicker({
   tree,
   picks,
   onToggle,
+  disabled = false,
 }: {
   tree: { page: number; items: TargetNode[] }[]
   picks: readonly string[]
   onToggle: (id: string) => void
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -348,8 +375,8 @@ function TargetPicker({
   const chosen = picks.filter((id) => names.has(id))
   const summary =
     chosen.length === 0
-      ? names.size === 0
-        ? 'выбирать нечего'
+      ? disabled || names.size === 0
+        ? 'Блоки'
         : 'Выберите блоки'
       : chosen.length === 1
         ? names.get(chosen[0]!)!
@@ -368,6 +395,7 @@ function TargetPicker({
           role="combobox"
           aria-expanded={open}
           aria-label="Цели действия"
+          disabled={disabled}
           className="h-7 min-w-36 flex-1 justify-between font-normal"
         >
           <span className="truncate">{summary}</span>

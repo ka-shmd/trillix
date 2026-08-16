@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 
 import { type Block, type LogicCondition } from '@entities/formSchema'
 
-import { ConditionEditor } from './ConditionEditor'
+import { ConditionEditor, JoinSelect } from './ConditionEditor'
 import { type Group } from './model'
 
 // Что именно проверяется здесь, а не в браузере: Radix ни Select, ни DropdownMenu в
@@ -31,19 +31,33 @@ const join = () => screen.queryByLabelText('Как объединять усло
 const actions = () => screen.queryAllByLabelText('Действия с условием')
 
 describe('связка «все/любое»', () => {
+  const joinOf = (value: Group) => {
+    render(<JoinSelect value={value} onChange={vi.fn()} />)
+    return join()
+  }
+
   it('у одного условия не показывается — связывать нечего', () => {
-    setup({ all: [leaf('a')] })
-    expect(join()).toBeNull()
+    expect(joinOf({ all: [leaf('a')] })).toBeNull()
   })
 
   it('у двух условий показывается', () => {
-    setup({ all: [leaf('a'), leaf('b')] })
-    expect(join()).toBeTruthy()
+    expect(joinOf({ all: [leaf('a'), leaf('b')] })).toBeTruthy()
   })
 
   it('у пустого условия не показывается', () => {
-    setup({ all: [] })
+    expect(joinOf({ all: [] })).toBeNull()
+  })
+
+  // Связку КОРНЯ рисует ярус «Когда» — она стоит в одной строке с его подписью, а не
+  // над первым условием.
+  it('корень своей связки не рисует — её ставит ярус', () => {
+    setup({ all: [leaf('a'), leaf('b')] })
     expect(join()).toBeNull()
+  })
+
+  it('вложенная группа связку рисует сама — своей подписи у неё нет', () => {
+    setup({ all: [leaf('a'), { any: [leaf('a'), leaf('b')] }] })
+    expect(screen.queryAllByLabelText('Как объединять условия')).toHaveLength(1)
   })
 })
 
@@ -57,10 +71,14 @@ describe('пустое условие', () => {
     expect(screen.queryByText('Группа')).toBeNull()
   })
 
-  it('у незаполненной строки нет ни сравнения, ни значения — но меню есть', () => {
+  // Три контрола стоят ВСЕГДА (решение владельца 2026-08-16): строка не должна
+  // перестраиваться под курсором, пока автор её заполняет.
+  it('у незаполненной строки все три контрола на месте, но выключены', () => {
     setup({ all: [] })
-    expect(screen.queryByLabelText('Сравнение')).toBeNull()
-    expect(screen.queryByLabelText('Значение')).toBeNull()
+    // jest-dom не подключён (его нет в замороженном списке), поэтому смотрим атрибут:
+    // Radix ставит disabled на кнопку-триггер, Input — на нативный input.
+    expect(screen.getByLabelText('Сравнение').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByLabelText('Значение').hasAttribute('disabled')).toBe(true)
     // Второе условие добавляется, пока первое ещё не выбрано.
     expect(actions()).toHaveLength(1)
   })
@@ -92,14 +110,11 @@ describe('меню строки', () => {
     setup({ all: [leaf('a'), { any: [leaf('a'), leaf('b')] }] })
     // Одно у листа снаружи, одно у самой группы, два у её строк.
     expect(actions()).toHaveLength(4)
-    // Связок две: внешняя (два ребёнка) и внутренняя (тоже два).
-    expect(screen.queryAllByLabelText('Как объединять условия')).toHaveLength(2)
   })
 
   it('у группы из ОДНОГО условия связки нет, а меню есть', () => {
     setup({ all: [leaf('a'), { any: [leaf('b')] }] })
-    // Связка только у корня: внутри группы связывать нечего.
-    expect(screen.queryAllByLabelText('Как объединять условия')).toHaveLength(1)
+    expect(screen.queryAllByLabelText('Как объединять условия')).toHaveLength(0)
     // Меню: лист снаружи, сама группа, её единственная строка.
     expect(actions()).toHaveLength(3)
   })

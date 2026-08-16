@@ -56,6 +56,38 @@ type Leaf = { blockId: string; op: LogicOperator; value?: string }
 
 const isLeaf = (c: LogicCondition): c is Leaf => !('all' in c) && !('any' in c)
 
+// Связка «все/любое» — ТЕКСТ с шевроном, а не поле ввода: это подпись отношения между
+// строками, а не значение, которое автор задаёт. Показывается, только когда условий
+// больше одного: у единственного связывать нечего.
+//
+// МИНА: рамка, фон, тень и высота гасятся ТЕМИ ЖЕ вариантами, которыми объявлены в
+// SelectTrigger (`data-[size=sm]`, `dark:`). Напишешь голый `h-auto` — tailwind-merge их
+// не сольёт, и победит тот класс, что позже в собранном CSS, а не в строке `className`
+// (web/CLAUDE.md); проверяется только computed-стилем.
+export function JoinSelect({ value, onChange }: { value: Group; onChange: (next: Group) => void }) {
+  const children = childrenOf(value)
+  if (children.length <= 1) return null
+  const and = isAnd(value)
+  return (
+    <Select
+      value={and ? 'all' : 'any'}
+      onValueChange={(v) => onChange(asGroup(children, v === 'all'))}
+    >
+      <SelectTrigger
+        size="sm"
+        className="h-auto w-auto gap-1 border-0 bg-transparent p-0 text-xs tracking-wide text-muted-foreground uppercase shadow-none data-[size=sm]:h-auto hover:text-foreground focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
+        aria-label="Как объединять условия"
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">Все условия</SelectItem>
+        <SelectItem value="any">Любое из условий</SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 export function ConditionEditor({
   blocks,
   sources,
@@ -80,6 +112,9 @@ export function ConditionEditor({
 }) {
   const children = childrenOf(value)
   const and = isAnd(value)
+  // Связку корня рисует ЯРУС «Когда» (она стоит в одной строке с его подписью), поэтому
+  // здесь она только у вложенных групп — у них своей подписи нет.
+  const showJoin = depth > 1 && children.length > 1
 
   const replaceChild = (i: number, next: LogicCondition | null): void => {
     const rest = children.filter((_, j) => j !== i)
@@ -123,30 +158,9 @@ export function ConditionEditor({
     <div
       className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}
     >
-      {(children.length > 1 || menu) && (
+      {(showJoin || menu) && (
         <div className="flex items-center gap-1">
-          {children.length > 1 && (
-            <Select
-              value={and ? 'all' : 'any'}
-              onValueChange={(v) => onChange(asGroup(children, v === 'all'))}
-            >
-              {/* Вид ТЕКСТА, а не поля: рамка, фон, тень и высота гасятся теми же
-              вариантами, которыми они объявлены (data-[size=sm], dark:) — иначе
-              tailwind-merge их не сольёт и победит тот класс, что позже в собранном
-              CSS, а не в строке (web/CLAUDE.md). */}
-              <SelectTrigger
-                size="sm"
-                className="h-auto w-auto gap-1 border-0 bg-transparent p-0 text-xs tracking-wide text-muted-foreground uppercase shadow-none data-[size=sm]:h-auto hover:text-foreground focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
-                aria-label="Как объединять условия"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Все условия</SelectItem>
-                <SelectItem value="any">Любое из условий</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
+          {showJoin && <JoinSelect value={value} onChange={onChange} />}
           {menu && <RowActions menu={menu} />}
         </div>
       )}
@@ -191,7 +205,9 @@ export function ConditionEditor({
           onChange={(next) => onChange(asGroup([next], and))}
           // Меню есть и здесь: второе условие добавляется, пока первое ещё не выбрано.
           menu={
-            sources[0] ? { onAdd: () => onChange(asGroup([defaultLeaf(sources[0]!)], and)) } : undefined
+            sources[0]
+              ? { onAdd: () => onChange(asGroup([defaultLeaf(sources[0]!)], and)) }
+              : undefined
           }
         />
       )}
@@ -208,9 +224,13 @@ type RowMenu = {
   onWrap?: () => void
 }
 
-// Лист: «вопрос — сравнение — значение» и меню операций. Значение показывается только у
-// операторов, которые сравнивают (у «отвечен» его нет вовсе); у незаполненной строки
-// (value === null) нет ни оператора, ни значения — сравнивать ещё нечего.
+// Лист: «вопрос — сравнение — значение» и меню операций.
+//
+// ТРИ КОНТРОЛА СТОЯТ ВСЕГДА, даже когда вопрос ещё не выбран (решение владельца
+// 2026-08-16): строка не должна перестраиваться под курсором, пока автор её заполняет.
+// Пустые контролы выключены — выбирать в них нечего, пока нет источника. Исключение
+// одно: у «отвечен»/«не отвечен» значения нет вовсе, и третий контрол у них не
+// выключается, а исчезает — это не «ещё не выбрано», а «не бывает».
 function LeafRow({
   blocks,
   sources,
@@ -227,7 +247,7 @@ function LeafRow({
   const source = value ? blocks.find((b) => b.id === value.blockId) : undefined
   const ops = source ? operatorsFor(source.type) : []
   const choices = source ? valueChoices(source) : []
-  const needsValue = value !== null && opNeedsValue(value.op)
+  const needsValue = value === null || opNeedsValue(value.op)
 
   // Смена источника роняет оператор и значение, если они ему не подходят: id варианта
   // от прошлого списка в новом не значит ничего, а несовместимый оператор сделал бы
@@ -257,35 +277,34 @@ function LeafRow({
         </SelectContent>
       </Select>
 
-      {value !== null && (
-        <Select
-          value={value.op}
-          onValueChange={(op) =>
-            onChange({
-              blockId: value.blockId,
-              op: op as LogicOperator,
-              // «отвечен»/«не отвечен» значения не несут — схема непустое value у них
-              // отвергает, поэтому роняем его здесь, а не ловим 422 автосейвом.
-              ...(opNeedsValue(op as LogicOperator) && value.value ? { value: value.value } : {}),
-            })
-          }
-        >
-          <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {ops.map((op) => (
-              <SelectItem key={op} value={op}>
-                {OPERATOR_LABELS[op]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+      <Select
+        disabled={value === null}
+        value={value?.op ?? ''}
+        onValueChange={(op) =>
+          value !== null &&
+          onChange({
+            blockId: value.blockId,
+            op: op as LogicOperator,
+            // «отвечен»/«не отвечен» значения не несут — схема непустое value у них
+            // отвергает, поэтому роняем его здесь, а не ловим 422 автосейвом.
+            ...(opNeedsValue(op as LogicOperator) && value.value ? { value: value.value } : {}),
+          })
+        }
+      >
+        <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
+          <SelectValue placeholder="Сравнение" />
+        </SelectTrigger>
+        <SelectContent>
+          {ops.map((op) => (
+            <SelectItem key={op} value={op}>
+              {OPERATOR_LABELS[op]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
 
       {needsValue &&
-        value !== null &&
-        (choices.length > 0 ? (
+        (value !== null && choices.length > 0 ? (
           <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
             <SelectTrigger size="sm" className="h-7 min-w-28 flex-1" aria-label="Значение">
               <SelectValue placeholder="Значение…" />
@@ -301,7 +320,8 @@ function LeafRow({
         ) : (
           <Input
             className="h-7 min-w-28 flex-1 text-sm"
-            value={value.value ?? ''}
+            disabled={value === null}
+            value={value?.value ?? ''}
             placeholder="Значение…"
             aria-label="Значение"
             // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
@@ -309,6 +329,7 @@ function LeafRow({
             // автор не видит нигде. То же правило, по которому ограничено имя вопроса.
             maxLength={MAX_LOGIC_VALUE_LEN}
             onChange={(e) =>
+              value !== null &&
               onChange(
                 e.target.value === ''
                   ? { blockId: value.blockId, op: value.op }

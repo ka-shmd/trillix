@@ -80,4 +80,12 @@ describe('ярус «Тогда»', () => {
     setup({ when: { blockId: 'src', op: 'answered' }, then: [{ kind: 'block_submit' }] })
     expect(screen.queryByLabelText('Цели действия')).toBeNull()
   })
+
+  // Второй контрол стоит ВСЕГДА (решение владельца 2026-08-16): строка не должна
+  // перестраиваться под курсором, пока автор её заполняет.
+  it('у незаполненной строки пикер целей на месте, но выключен', () => {
+    setup({ when: { blockId: 'src', op: 'answered' } })
+    const picker = screen.getByLabelText('Цели действия')
+    expect(picker.hasAttribute('disabled')).toBe(true)
+  })
 })
