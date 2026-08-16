@@ -8,23 +8,41 @@ import {
   type HostMessage,
 } from './embed'
 
+const plain = { hideTitle: false, alignLeft: false, preview: false }
+
 describe('readEmbed', () => {
   it('читает режим и прозрачность', () => {
     expect(readEmbed('?embed=block')).toEqual({
       mode: 'block',
       transparent: false,
       redirectSelf: false,
+      ...plain,
     })
     expect(readEmbed('?embed=widget&bg=transparent')).toEqual({
       mode: 'widget',
       transparent: true,
       redirectSelf: false,
+      ...plain,
     })
     expect(readEmbed('?embed=page')).toEqual({
       mode: 'page',
       transparent: false,
       redirectSelf: false,
+      ...plain,
     })
+  })
+
+  // Три настройки вставки читаются по точному значению: параметр приходит с чужой
+  // страницы, и «почти похоже» не повод менять вид формы или перестать считать визит.
+  it('вид и предпросмотр — по точному значению параметра', () => {
+    const on = readEmbed('?embed=block&hideTitle=1&align=left&preview=1')
+    expect(on?.hideTitle).toBe(true)
+    expect(on?.alignLeft).toBe(true)
+    expect(on?.preview).toBe(true)
+    const off = readEmbed('?embed=block&hideTitle=true&align=start&preview=yes')
+    expect(off?.hideTitle).toBe(false)
+    expect(off?.alignLeft).toBe(false)
+    expect(off?.preview).toBe(false)
   })
 
   it('без параметра — обычная страница', () => {

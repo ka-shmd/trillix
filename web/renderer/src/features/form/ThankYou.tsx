@@ -18,12 +18,15 @@ export function ThankYou({
   redirectUrl,
   bridge,
   badge,
+  preview = false,
 }: {
   text: string
   redirectUrl: string
   bridge: HostBridge | null
   /** Бейдж площадки: решение сервера, то же, что на самой форме. */
   badge: boolean
+  /** Предпросмотр вставки: экран настоящий, но ответа не было — говорим об этом. */
+  preview?: boolean
 }) {
   const { message, target, delayMs } = planThankYou(text, redirectUrl)
   // Ссылка-запасной путь показывается, когда переход уже запущен: если он не
@@ -62,6 +65,7 @@ export function ThankYou({
           {stalled ? <a href={target}>Перейти на сайт</a> : 'Сейчас перенаправим…'}
         </p>
       )}
+      {preview && <p className="status-detail">Это предпросмотр — ответ не отправлен.</p>}
       {badge && <Badge />}
     </main>
   )

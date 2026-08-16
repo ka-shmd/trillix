@@ -28,6 +28,6 @@ const bridge: HostBridge | null =
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App bridge={bridge} redirectSelf={embed?.redirectSelf ?? false} />
+    <App bridge={bridge} embed={embed} />
   </StrictMode>,
 )

@@ -57,6 +57,21 @@ describe('frameSrc', () => {
     expect(src).toContain('utm_source=vk')
   })
 
+  it('настройки вида и предпросмотр доезжают до фрейма', () => {
+    const src = frameSrc(
+      'https://f.trillix.ru',
+      { ...base, hideTitle: true, alignLeft: true, preview: true },
+      '',
+    )
+    expect(src).toContain('hideTitle=1')
+    expect(src).toContain('align=left')
+    expect(src).toContain('preview=1')
+    // Выключенные настройки в адресе не появляются вовсе: параметр читается
+    // рендерером как «сказано явно», и «hideTitle=0» стоил бы лишней ветки.
+    expect(frameSrc('https://f.trillix.ru', base, '')).not.toContain('hideTitle')
+    expect(frameSrc('https://f.trillix.ru', base, '')).not.toContain('preview')
+  })
+
   it('slug экранируется', () => {
     expect(frameSrc('https://f.trillix.ru', { ...base, form: 'a b/c' }, '')).toContain(
       '/r/a%20b%2Fc?',
@@ -74,6 +89,9 @@ describe('optionsFromAttrs', () => {
       redirect: 'top',
       label: DEFAULT_LABEL,
       position: 'bottom-right',
+      hideTitle: false,
+      alignLeft: false,
+      preview: false,
     })
   })
 
@@ -121,6 +139,30 @@ describe('optionsFromAttrs', () => {
     expect(
       optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-redirect': 'top' }))?.redirect,
     ).toBe('top')
+  })
+
+  // Настройки вида вставки: обе выключены, пока не сказано ровно «1» и «left», —
+  // мусор в атрибуте не должен молча менять вид формы на чужой странице.
+  it('заголовок и выравнивание — только по явному значению', () => {
+    const opts = optionsFromAttrs(
+      attrs({ 'data-trillix-form': 'a', 'data-hide-title': '1', 'data-align': 'left' }),
+    )
+    expect(opts?.hideTitle).toBe(true)
+    expect(opts?.alignLeft).toBe(true)
+    const junk = optionsFromAttrs(
+      attrs({ 'data-trillix-form': 'a', 'data-hide-title': 'да', 'data-align': 'центр' }),
+    )
+    expect(junk?.hideTitle).toBe(false)
+    expect(junk?.alignLeft).toBe(false)
+  })
+
+  // Предпросмотр — флаг кабинета, а не сниппета: в коде, который получает владелец
+  // сайта, его нет, поэтому обычная вставка обязана читаться как «не предпросмотр».
+  it('предпросмотр — только по data-preview="1"', () => {
+    expect(
+      optionsFromAttrs(attrs({ 'data-trillix-form': 'a', 'data-preview': '1' }))?.preview,
+    ).toBe(true)
+    expect(optionsFromAttrs(attrs({ 'data-trillix-form': 'a' }))?.preview).toBe(false)
   })
 
   // Мусор в атрибуте не должен схлопывать блок в ноль на чужой странице.

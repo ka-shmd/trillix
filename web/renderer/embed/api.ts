@@ -24,6 +24,18 @@ export interface MountOptions {
   /** Надпись на кнопке виджета. */
   label?: string
   position?: WidgetPosition
+  /** Не показывать заголовок формы: на чужой странице над блоком обычно есть свой. */
+  hideTitle?: boolean
+  /** Прижать содержимое влево независимо от оформления формы. */
+  alignLeft?: boolean
+  /**
+   * Предпросмотр вставки: форма работает, но визит не считается и ответ не уходит.
+   *
+   * Ради экрана «Встроить» в кабинете, где вставка показывается ЭТИМ ЖЕ загрузчиком
+   * (ADR §10). В сниппете, который получает владелец сайта, флага нет — кабинет
+   * добавляет его только тому экземпляру, что живёт в макете.
+   */
+  preview?: boolean
   /**
    * Значения полей, известные приложению-хозяину: `{ '<id блока>': 'ivan@site.ru' }`.
    *
@@ -73,6 +85,9 @@ export function frameSrc(origin: string, opts: MountOptions, hostSearch: string)
   // сообщение `redirect`, вправе лишь промолчать. Поэтому выбор владельца сайта едет
   // во фрейм параметром, а не остаётся знанием одного загрузчика.
   if (opts.redirect === 'frame') params.set('redirect', 'frame')
+  if (opts.hideTitle) params.set('hideTitle', '1')
+  if (opts.alignLeft) params.set('align', 'left')
+  if (opts.preview) params.set('preview', '1')
   const host = new URLSearchParams(hostSearch)
   for (const key of UTM_KEYS) {
     const value = host.get(key)
@@ -115,6 +130,9 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
     // Мусор в атрибуте (пусто, «500px», «много») — не повод схлопнуть блок в ноль.
     height: Number.isFinite(height) && height > 0 ? height : DEFAULT_HEIGHT,
     redirect: el.getAttribute('data-redirect') === 'frame' ? 'frame' : 'top',
+    hideTitle: el.getAttribute('data-hide-title') === '1',
+    alignLeft: el.getAttribute('data-align') === 'left',
+    preview: el.getAttribute('data-preview') === '1',
     label: label !== null && label !== '' ? label : DEFAULT_LABEL,
     position: el.getAttribute('data-position') === 'bottom-left' ? 'bottom-left' : 'bottom-right',
   }
