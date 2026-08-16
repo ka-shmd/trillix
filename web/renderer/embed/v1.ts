@@ -231,6 +231,9 @@ function buildWidget(opts: MountOptions): Mounted {
     badge.style.fontSize = '30px'
     badge.style.lineHeight = '1'
     badge.style.pointerEvents = 'none'
+    // НАД панелью, а не под ней: в потоке эмодзи идёт раньше, и без z-index панель
+    // закрашивала бы его выступающую часть собой — эмодзи выглядел бы обрезанным.
+    badge.style.zIndex = '1'
   }
 
   const frame = createFrame(opts)
@@ -257,7 +260,11 @@ function buildWidget(opts: MountOptions): Mounted {
     panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
     panel.style.height = full ? '100%' : 'auto'
     dialog.style.borderRadius = full ? '0' : '12px'
-    dialog.style.maxHeight = full ? '100dvh' : 'calc(100dvh - 48px)'
+    // ПАНЕЛЬ НИЖЕ ВЬЮПОРТА, а не во всю его высоту (правка владельца 2026-08-16):
+    // окно, растянутое от края до края, читается как модалка — ровно то, чем виджет
+    // перестал быть. Потолок 560 против «вьюпорт минус отступы» — это треть высоты и
+    // больше на любом ноутбуке; длинная форма скроллится внутри панели.
+    dialog.style.maxHeight = full ? '100dvh' : 'min(560px, calc(100dvh - 48px))'
     dialog.style.minHeight = full ? '100dvh' : '0'
 
     // На весь экран эмодзи не показываем: он висит на углу панели, а у формы во весь
