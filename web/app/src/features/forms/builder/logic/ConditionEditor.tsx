@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
+import { GlyphName } from '../GlyphName'
 import { type Group, OPERATOR_LABELS, defaultLeaf, sourceLabel, valueChoices } from './model'
 import { RowMenu as RowMenuButton } from './rowMenu'
 
@@ -66,7 +67,11 @@ import { RowMenu as RowMenuButton } from './rowMenu'
 // (web/CLAUDE.md). Проверяется только computed-стилем.
 const TRUNCATE =
   '*:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
-const SOURCE = `h-7 w-56 max-w-full ${TRUNCATE}`
+// Источник — единственный контрол строки, чьё значение НЕ голый текст: рядом с именем
+// вопроса стоит глиф его типа (GlyphName). Поэтому и обрезка у него своя: флекс слота
+// значения не перебивается (на нём держится просвет глиф→имя), многоточие ставит сам
+// GlyphName, а слоту остаётся разрешение сжиматься.
+const SOURCE = 'h-7 w-56 max-w-full *:data-[slot=select-value]:min-w-0'
 const OPERATOR = `h-7 w-36 max-w-full ${TRUNCATE}`
 const VALUE = `h-7 w-44 max-w-full ${TRUNCATE}`
 
@@ -294,7 +299,9 @@ function LeafRow({
         <SelectContent>
           {sources.map((b) => (
             <SelectItem key={b.id} value={b.id}>
-              {sourceLabel(blocks, b)}
+              {/* Источник — всегда отвечаемый блок (logicSources), то есть инпут своего
+                  вопроса: глиф его типа и есть глиф вопроса. */}
+              <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
             </SelectItem>
           ))}
         </SelectContent>

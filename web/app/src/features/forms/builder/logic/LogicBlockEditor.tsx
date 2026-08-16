@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import {
   type Block,
+  type BlockType,
   type LogicAction,
   type LogicActionKind,
   LOGIC_ACTIONS,
@@ -26,6 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
+import { GlyphName } from '../GlyphName'
 import { useBuilderStore } from '../storeContext'
 import { ConditionEditor, JoinSelect } from './ConditionEditor'
 import { RowMenu } from './rowMenu'
@@ -447,6 +449,7 @@ function TargetPicker({
                                 chevron={node.children.length > 0 ? nodeOpen : undefined}
                                 onChevron={() => setOpenNodes(toggled(openNodes, node.id))}
                                 label={node.label}
+                                glyphType={node.glyphType}
                                 checked={picks.includes(node.id)}
                                 onSelect={() => onToggle(node.id)}
                               />
@@ -456,6 +459,7 @@ function TargetPicker({
                                     <TreeRow
                                       key={c.id}
                                       label={c.label}
+                                      glyphType={c.glyphType}
                                       checked={picks.includes(c.id)}
                                       onSelect={() => onToggle(c.id)}
                                     />
@@ -492,10 +496,15 @@ function Rail({ children }: { children: React.ReactNode }) {
 // Строка дерева. Три роли в одной: заголовок страницы (muted, без галки), вопрос и
 // вариант. Шеврон — СВОЯ кнопка: клик по нему раскрывает узел, клик по строке отмечает
 // цель, и путать эти два жеста нельзя.
+//
+// Глиф есть у всего, что БЛОК ИЛИ ЕГО ЧАСТЬ (вопрос, его строки, варианты списка), и нет
+// у заголовка страницы: страница целью не бывает и типа не имеет. Чей глиф достаётся
+// пункту, решает модель (`glyphType` у TargetNode) — здесь только его место в строке.
 function TreeRow({
   chevron,
   onChevron,
   label,
+  glyphType,
   checked,
   onSelect,
   muted = false,
@@ -503,6 +512,7 @@ function TreeRow({
   chevron?: boolean
   onChevron?: () => void
   label: string
+  glyphType?: BlockType
   checked?: boolean
   onSelect?: () => void
   muted?: boolean
@@ -539,7 +549,11 @@ function TreeRow({
           {checked && <Check className="size-3" />}
         </span>
       )}
-      <span className={`truncate ${muted ? 'text-muted-foreground text-xs' : ''}`}>{label}</span>
+      {glyphType === undefined ? (
+        <span className={`truncate ${muted ? 'text-muted-foreground text-xs' : ''}`}>{label}</span>
+      ) : (
+        <GlyphName type={glyphType}>{label}</GlyphName>
+      )}
     </>
   )
 

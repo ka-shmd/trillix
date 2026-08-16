@@ -84,6 +84,34 @@ describe('пустое условие', () => {
   })
 })
 
+// Список источников из happy-dom не виден (Radix его не раскрывает), но ВЫБРАННЫЙ пункт
+// виден: Radix телепортирует его содержимое в слот значения триггера. Значит и глиф в
+// контроле проверяется отсюда — а он там же и ломается, если у слота отнять флекс.
+describe('глиф вопроса-источника', () => {
+  const glyphOf = (type: Block['type']): string | null => {
+    const blocks = [{ id: 'a', groupId: 'g_a', type }]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [leaf('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    const svg = screen.getByLabelText('Вопрос-источник').querySelector('[data-slot=select-value] svg')
+    return svg?.getAttribute('class') ?? null
+  }
+
+  it('в контроле стоит глиф типа вопроса, а не только имя', () => {
+    expect(glyphOf('date')).toContain('lucide-calendar')
+    expect(screen.getByText('Дата 1')).toBeTruthy()
+  })
+
+  it('глиф идёт от ТИПА — у другого вопроса он другой', () => {
+    expect(glyphOf('short_text')).toContain('lucide-case-sensitive')
+  })
+})
+
 describe('меню строки', () => {
   it('стоит у каждого заполненного условия', () => {
     setup({ all: [leaf('a'), leaf('b')] })

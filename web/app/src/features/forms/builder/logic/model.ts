@@ -1,5 +1,6 @@
 import {
   type Block,
+  type BlockType,
   type LogicActionKind,
   type LogicCondition,
   type LogicOperator,
@@ -160,7 +161,20 @@ export function jumpTargetsFrom(
 //
 // Два уровня видимости, поэтому и два уровня дерева: голова группы значит ВЕСЬ вопрос,
 // её дети — каждый сам себя (ADR §10, 2026-08-16).
-export type TargetNode = { id: string; label: string; children: { id: string; label: string }[] }
+//
+// `glyphType` — ЧЕЙ глиф рисовать у пункта (GlyphName). Тип, а не готовая иконка: модель
+// не рисует, она называет.
+//
+// ГЛИФ ЕСТЬ ТОЛЬКО У БЛОКА (решение владельца 2026-08-16), потому что глиф — свойство
+// ТИПА, а тип есть только у блока. Отсюда `undefined` в двух местах: у группы (вопрос из
+// нескольких блоков — не блок, его называет имя) и у варианта списка (вариант вообще не
+// блок). Одинокий блок в дереве узлом и остаётся, глиф у него свой.
+export type TargetNode = {
+  id: string
+  label: string
+  glyphType?: BlockType
+  children: { id: string; label: string; glyphType?: BlockType }[]
+}
 
 // Что можно взять целью у этого вида действия. Показ адресует ВОПРОС (голову группы) и
 // варианты; обязательность — только отвечаемый блок, вариант обязательным не бывает.
@@ -190,7 +204,7 @@ function targetNode(
 ): TargetNode | null {
   if (kind === 'require') {
     if (!isAnswerableType(b.type)) return null
-    return { id: b.id, label: targetLabel(blocks, b), children: [] }
+    return { id: b.id, label: targetLabel(blocks, b), glyphType: b.type, children: [] }
   }
   // Голова группы: прячется вопрос целиком. Заголовок формы и разрыв страницы прятать
   // нельзя — первый скелет документа, а исчезающий разрыв означал бы, что число страниц
@@ -208,8 +222,13 @@ function targetNode(
   return {
     id: b.id,
     label: targetLabel(blocks, b),
+    // Узел с блоками внутри — ГРУППА, и глифа у неё нет: тип есть у блока, а не у
+    // вопроса. Одинокий блок (голое поле, заголовок раздела, картинка) — сам себе узел,
+    // и глиф у него собственный.
+    glyphType: rows.length === 0 ? b.type : undefined,
     children: [
-      ...rows.map((x) => ({ id: x.id, label: rowLabel(x) })),
+      ...rows.map((x) => ({ id: x.id, label: rowLabel(x), glyphType: x.type })),
+      // Вариант глифа не получает: он не блок, типа у него нет.
       ...options.map((o) => ({ id: o.id, label: o.label.trim() || 'Без названия' })),
     ],
   }
