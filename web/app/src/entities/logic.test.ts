@@ -393,7 +393,7 @@ describe('planForm: блок logic — показ и скрытие', () => {
       true,
     ],
     [
-      'источник НИЖЕ блока — правило инертно',
+      'источник НИЖЕ цели — правило инертно',
       { when: leaf('dep', 'answered'), then: [{ kind: 'show', target: 'cap' }] },
       {},
       true,
@@ -413,11 +413,24 @@ describe('planForm: блок logic — показ и скрытие', () => {
     expect(plan.visible.has('cap')).toBe(visible)
   })
 
-  it('цель стоит ВЫШЕ блока — действие инертно', () => {
+  // Блок волен стоять ГДЕ УГОДНО, в том числе ниже того, что прячет: обходу важно лишь
+  // то, что источник решён к моменту, когда решается цель (ADR §10, 2026-08-16).
+  it('блок стоит НИЖЕ цели — действие работает', () => {
     const blocks: Block[] = [
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
+      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
+    ]
+    expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(false)
+    expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(true)
+  })
+
+  it('источник стоит НИЖЕ цели — правило инертно', () => {
+    const blocks: Block[] = [
+      blk('cap', 'g1', 'title'),
+      blk('dep', 'g1', 'short_text'),
+      choice('src', 'g2', 'single_choice', [{ id: 'yes' }]),
       logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)

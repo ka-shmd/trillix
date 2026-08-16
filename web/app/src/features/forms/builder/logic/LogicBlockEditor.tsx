@@ -1,4 +1,4 @@
-import { Copy, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -11,6 +11,15 @@ import {
 } from '@entities/formSchema'
 
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -31,8 +40,9 @@ import {
   optionTargets,
   requireTargets,
   showTargets,
-  sourcesFor,
+  logicSources,
   targetLabel,
+  targetsByPage,
   valueChoices,
 } from './model'
 
@@ -52,7 +62,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 
   const when = block.logic?.when
   const actions = block.logic?.then ?? []
-  const sources = sourcesFor(blocks, block.id)
+  const sources = logicSources(blocks)
   const warnings = logicBlockWarnings(blocks, block)
 
   const setWhen = (next: LogicCondition | undefined): void => {
@@ -96,7 +106,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
                 // собственной кнопки — худший способ узнать про лимит.
                 onAdd:
                   actions.length < MAX_LOGIC_ACTIONS
-                    ? () => setActions(insertAfter(actions, i, defaultAction(blocks, block.id)))
+                    ? () => setActions(insertAfter(actions, i, defaultAction(blocks)))
                     : undefined,
                 onRemove: () => setActions(actions.filter((_, j) => j !== i)),
                 onDuplicate:
@@ -118,7 +128,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
               onChange={(next) => setActions([next])}
               // Меню есть и здесь: второе действие добавляется, пока первое ещё не
               // выбрано. Удалять и дублировать нечего — этих пунктов нет.
-              menu={{ onAdd: () => setActions([defaultAction(blocks, block.id)]) }}
+              menu={{ onAdd: () => setActions([defaultAction(blocks)]) }}
             />
           )}
         </div>
@@ -152,8 +162,8 @@ function Note({ children }: { children: React.ReactNode }) {
 
 // Первое действие, которое имеет смысл предложить: «показать» ближайшую цель ниже. Без
 // целей — «скрыть кнопку»: оно единственное, которому цель не нужна вовсе.
-function defaultAction(blocks: readonly Block[], logicId: string): LogicAction {
-  const target = showTargets(blocks, logicId)[0]
+function defaultAction(blocks: readonly Block[]): LogicAction {
+  const target = showTargets(blocks)[0]
   return target ? { kind: 'show', target: target.id } : { kind: 'block_submit' }
 }
 
@@ -201,14 +211,14 @@ function ActionRow({
   // цель невалидна), а терять выбор автора — грубо: строка показывает вид и ждёт цель.
   const [draftKind, setDraftKind] = useState<LogicActionKind | null>(null)
   const kind = value?.kind ?? draftKind
-  const targets = kind ? targetsForKind(blocks, logicId, kind) : []
+  const targets = kind ? targetsForKind(blocks, kind) : []
   const target = value && 'target' in value ? value.target : undefined
 
   // Смена вида роняет цель, если она новому виду не подходит: обязательным бывает
   // только отвечаемый блок, варианты — только у списка. Несовместимая пара сделала бы
   // действие инертным молча.
   const pickKind = (next: LogicActionKind): void => {
-    const built = buildAction(next, targetsForKind(blocks, logicId, next), target)
+    const built = buildAction(next, targetsForKind(blocks, next), target)
     if (built === null) {
       setDraftKind(next)
       return
@@ -245,18 +255,7 @@ function ActionRow({
       {kind === 'jump' && value?.kind === 'jump' ? (
         <JumpTarget blocks={blocks} logicId={logicId} value={value} onChange={onChange} />
       ) : kind === undefined || kind === null || kind === 'block_submit' ? null : (
-        <Select value={targets.some((b) => b.id === target) ? target : ''} onValueChange={pickTarget}>
-          <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Цель действия">
-            <SelectValue placeholder={targets.length === 0 ? 'ниже нечего выбрать' : 'Цель…'} />
-          </SelectTrigger>
-          <SelectContent>
-            {targets.map((b) => (
-              <SelectItem key={b.id} value={b.id}>
-                {targetLabel(blocks, b)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <TargetPicker blocks={blocks} targets={targets} value={target} onPick={pickTarget} />
       )}
 
       {menu && (
@@ -281,20 +280,16 @@ function ActionRow({
   )
 }
 
-function targetsForKind(
-  blocks: readonly Block[],
-  logicId: string,
-  kind: LogicActionKind,
-): Block[] {
+function targetsForKind(blocks: readonly Block[], kind: LogicActionKind): Block[] {
   switch (kind) {
     case 'show':
     case 'hide':
-      return showTargets(blocks, logicId)
+      return showTargets(blocks)
     case 'require':
-      return requireTargets(blocks, logicId)
+      return requireTargets(blocks)
     case 'show_options':
     case 'hide_options':
-      return optionTargets(blocks, logicId)
+      return optionTargets(blocks)
     default:
       return []
   }
@@ -374,5 +369,71 @@ function OptionPicker({
         )
       })}
     </div>
+  )
+}
+
+// Пикер цели — СПИСОК ПО СТРАНИЦАМ С ПОИСКОМ, а не выпадающий список (образец — Tally).
+// С тех пор как цель перестала сужаться позицией (ADR §10, 2026-08-16), в списке лежит
+// весь документ: у формы на полсотни блоков плоский select стал бы стеной без ориентиров.
+// Страницы дают ту же карту, что видит респондент, поиск — вход по названию вопроса.
+function TargetPicker({
+  blocks,
+  targets,
+  value,
+  onPick,
+}: {
+  blocks: readonly Block[]
+  targets: readonly Block[]
+  value?: string
+  onPick: (id: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const current = targets.find((b) => b.id === value)
+  const pages = targetsByPage(blocks, targets)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="Цель действия"
+          className="h-7 min-w-36 flex-1 justify-between font-normal"
+        >
+          <span className="truncate">
+            {current ? targetLabel(blocks, current) : targets.length === 0 ? 'выбирать нечего' : 'Выберите блок'}
+          </span>
+          <ChevronDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Поиск" />
+          <CommandList>
+            <CommandEmpty>Ничего не найдено</CommandEmpty>
+            {pages.map(({ page, items }) => (
+              <CommandGroup key={page} heading={`Страница ${page}`}>
+                {items.map((b) => (
+                  <CommandItem
+                    key={b.id}
+                    // Значение — то, по чему ищет cmdk. Имя плюс id: два вопроса могут
+                    // называться одинаково, и без id они схлопнулись бы в один пункт.
+                    value={`${targetLabel(blocks, b)} ${b.id}`}
+                    onSelect={() => {
+                      onPick(b.id)
+                      setOpen(false)
+                    }}
+                  >
+                    {targetLabel(blocks, b)}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }

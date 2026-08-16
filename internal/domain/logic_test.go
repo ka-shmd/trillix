@@ -714,7 +714,9 @@ func TestPlanForm_LogicBlockVisibility(t *testing.T) {
 	}
 }
 
-func TestPlanForm_LogicBlockTargetAbove(t *testing.T) {
+// Блок волен стоять ГДЕ УГОДНО, в том числе ниже того, что прячет: обходу важно лишь
+// то, что источник решён к моменту, когда решается цель (ADR §10, 2026-08-16).
+func TestPlanForm_LogicBlockBelowTarget(t *testing.T) {
 	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
 	blocks := []Block{
 		src,
@@ -722,8 +724,24 @@ func TestPlanForm_LogicBlockTargetAbove(t *testing.T) {
 		lblk("dep", "g2", BlockShortText),
 		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
 	}
+	if PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("блок ниже цели обязан действовать: источник стоит выше цели")
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "yes"})).Visible["dep"] {
+		t.Fatal("условие сработало — вопрос обязан быть виден")
+	}
+}
+
+// А вот источник НИЖЕ цели — инертен: к моменту, когда решается цель, он не решён.
+func TestPlanForm_LogicBlockSourceBelowTarget(t *testing.T) {
+	blocks := []Block{
+		lblk("cap", "g1", BlockTitle),
+		lblk("dep", "g1", BlockShortText),
+		lchoice("src", "g2", BlockSingleChoice, Option{ID: "yes", Label: "Да"}),
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+	}
 	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
-		t.Fatal("цель стоит ВЫШЕ блока — действие обязано быть инертным")
+		t.Fatal("источник ниже цели — правило обязано быть инертным")
 	}
 }
 

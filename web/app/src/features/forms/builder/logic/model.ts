@@ -18,14 +18,23 @@ import { derivedQuestionName } from '../questionName'
 // когда оно инертно) знает вычислитель @fields/logic — здесь её нет и не должно быть:
 // вторая копия разъехалась бы с первой.
 
-// Из чего автор выбирает источник: отвечаемые вопросы ВЫШЕ блока. Ниже стоящие не
-// предлагаем вовсе — правило по ним инертно, и показать такой выбор значило бы
-// пообещать работу, которой не будет (о правилах, ставших инертными от перестановки,
-// предупреждает ruleWarnings).
+// Отвечаемые вопросы ВЫШЕ носителя. Носитель здесь настоящий — строка, в которую
+// подставляют ответ (`@`, RichLine): там ссылка вперёд действительно бессмысленна.
 export function sourcesFor(blocks: readonly Block[], carrierId: string): Block[] {
   const at = blocks.findIndex((b) => b.id === carrierId)
   if (at < 0) return []
   return blocks.slice(0, at).filter((b) => isAnswerableType(b.type))
+}
+
+// Из чего выбирает источник БЛОК УСЛОВИЯ: любой отвечаемый вопрос формы.
+//
+// Позиционного фильтра здесь нет с 2026-08-16 (ADR §10). Он был бы неверен: инертность
+// меряется у ЦЕЛИ, а не у блока, и «выше блока» ничего не гарантирует — блок волен
+// стоять хоть последней строкой. Единственное настоящее условие — «источник выше цели»,
+// но целей у правила бывает несколько и в разных местах, поэтому список не сужается, а
+// негодную пару называет предупреждение (logicBlockWarnings).
+export function logicSources(blocks: readonly Block[]): Block[] {
+  return blocks.filter((b) => isAnswerableType(b.type))
 }
 
 // Как вопрос зовётся в интерфейсе логики — тем же именем, что в данных (колонка CSV,
@@ -97,9 +106,13 @@ export const OPERATOR_LABELS: Record<LogicOperator, string> = {
 // в правильную форму (см. JumpTarget в LogicBlockEditor).
 export const JUMP_END = '\u0000end'
 
-// ЦЕЛИ ДЕЙСТВИЙ БЛОКА `logic`. Зеркальны источникам: источник обязан стоять ВЫШЕ блока,
-// цель — НИЖЕ него (ADR §10). Ниже стоящее и предлагаем; о правилах, обездвиженных
-// перестановкой, предупреждает logicBlockWarnings.
+// ЦЕЛИ ДЕЙСТВИЙ БЛОКА `logic` — ЛЮБОЙ подходящий блок формы, а не только стоящий ниже
+// (решение владельца 2026-08-16, образец — Tally). Сужает список только вид действия:
+// прятать можно вопрос, обязательным делать — отвечаемый, варианты бывают у списка.
+//
+// Позиция блока цели не касается: обходу важно, чтобы источник был решён к моменту,
+// когда решается ЦЕЛЬ, а где при этом стоит блок — не важно. Негодную пару «источник
+// ниже цели» называет предупреждение, а не отсутствие пункта в списке.
 
 // Голова группы — то, что адресуют «показать»/«скрыть»: прячется вопрос целиком.
 // Группа смежна по инварианту схемы, поэтому голова — первый блок своего groupId.
@@ -107,25 +120,42 @@ function groupHeads(blocks: readonly Block[]): Block[] {
   return blocks.filter((b, i) => b.type !== 'logic' && b.groupId !== blocks[i - 1]?.groupId)
 }
 
-function below(blocks: readonly Block[], logicId: string): Block[] {
-  const at = blocks.findIndex((b) => b.id === logicId)
-  return at < 0 ? [] : blocks.slice(at + 1)
-}
-
-export function showTargets(blocks: readonly Block[], logicId: string): Block[] {
-  const tail = below(blocks, logicId)
-  const heads = new Set(groupHeads(blocks).map((b) => b.id))
-  return tail.filter((b) => heads.has(b.id))
+export function showTargets(blocks: readonly Block[]): Block[] {
+  // Заголовок формы и разрыв страницы прятать нельзя. Заголовок — скелет документа, а
+  // не вопрос; исчезающий разрыв означал бы, что число страниц зависит от ответов ДВУМЯ
+  // разными способами — условный путь задают переходы.
+  return groupHeads(blocks).filter((b) => b.type !== 'form_title' && b.type !== 'page_break')
 }
 
 // Обязательным можно сделать только отвечаемый блок — у подписи и контента ответа нет.
-export function requireTargets(blocks: readonly Block[], logicId: string): Block[] {
-  return below(blocks, logicId).filter((b) => isAnswerableType(b.type))
+export function requireTargets(blocks: readonly Block[]): Block[] {
+  return blocks.filter((b) => isAnswerableType(b.type))
 }
 
 // Варианты бывают только у choice-вопроса.
-export function optionTargets(blocks: readonly Block[], logicId: string): Block[] {
-  return below(blocks, logicId).filter((b) => isChoiceType(b.type))
+export function optionTargets(blocks: readonly Block[]): Block[] {
+  return blocks.filter((b) => isChoiceType(b.type))
+}
+
+// Цели, разложенные по страницам, — так их показывает пикер: список стал документом
+// целиком, и без разбиения в нём не найтись. Номера берутся ТЕМ ЖЕ разбиением, которым
+// форма режется респонденту (pageNumbers), иначе автор увидит страницы, которых нет.
+export function targetsByPage(
+  blocks: readonly Block[],
+  targets: readonly Block[],
+): { page: number; items: Block[] }[] {
+  const opens = pageNumbers([...blocks])
+  const wanted = new Set(targets.map((b) => b.id))
+  const out: { page: number; items: Block[] }[] = []
+  let page = 1
+  for (const b of blocks) {
+    page = opens.get(b.id) ?? page
+    if (!wanted.has(b.id)) continue
+    const last = out[out.length - 1]
+    if (last && last.page === page) last.items.push(b)
+    else out.push({ page, items: [b] })
+  }
+  return out
 }
 
 // Как называется цель в списке. У отвечаемого — то же имя, что в данных; у подписи и
@@ -172,13 +202,26 @@ export function jumpTargetsFrom(
 // условия даёт вычислитель (ruleWarnings — одна копия на всех, иначе разъедется);
 // причины действий живут здесь, потому что «цель ниже блока» знает только редактор.
 export function logicBlockWarnings(blocks: readonly Block[], block: Block): string[] {
-  const out = ruleWarnings(blocks, block.id, block.logic?.when).map((w) => w.reason)
-  const at = blocks.findIndex((b) => b.id === block.id)
+  const when = block.logic?.when
+  const actions = block.logic?.then ?? []
+  const out: string[] = []
   const heads = new Set(
     blocks.filter((b, i) => b.groupId !== blocks[i - 1]?.groupId).map((b) => b.id),
   )
 
-  for (const a of block.logic?.then ?? []) {
+  // Условие проверяется ОТ КАЖДОЙ ЦЕЛИ: инертность меряется у неё, и правило, годное для
+  // одной цели, может не годиться для другой — если цели стоят в разных местах
+  // документа. У перехода и «скрыть кнопку» цель — страница, значит мерить от блока.
+  const carriers = new Set<string>()
+  for (const a of actions) {
+    carriers.add(a.kind === 'jump' || a.kind === 'block_submit' ? block.id : a.target)
+  }
+  if (actions.length === 0) carriers.add(block.id)
+  for (const carrier of carriers) {
+    for (const w of ruleWarnings(blocks, carrier, when)) out.push(w.reason)
+  }
+
+  for (const a of actions) {
     if (a.kind === 'block_submit') continue
     if (a.kind === 'jump') {
       const want = a.end === true ? JUMP_END : a.to
@@ -189,10 +232,6 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
     const target = blocks.find((b) => b.id === a.target)
     if (!target) {
       out.push('цель удалена — действие не работает')
-      continue
-    }
-    if (blocks.indexOf(target) <= at) {
-      out.push(`«${targetLabel(blocks, target)}» стоит выше блока — действие не работает`)
       continue
     }
     if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
@@ -207,7 +246,7 @@ export function logicBlockWarnings(blocks: readonly Block[], block: Block): stri
       out.push('не выбрано ни одного варианта')
     }
   }
-  // Дубли не показываем: два действия с одной бедой — одна строка, а не две.
+  // Дубли не показываем: две цели с одной бедой — одна строка, а не две.
   return [...new Set(out)]
 }
 

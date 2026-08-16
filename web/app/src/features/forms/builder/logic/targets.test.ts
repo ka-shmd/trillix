@@ -2,12 +2,20 @@ import { describe, expect, it } from 'vitest'
 
 import { type Block } from '@entities/formSchema'
 
-import { JUMP_END, jumpTargetsFrom, logicBlockWarnings, optionTargets, requireTargets, showTargets } from './model'
+import {
+  JUMP_END,
+  jumpTargetsFrom,
+  logicBlockWarnings,
+  optionTargets,
+  requireTargets,
+  showTargets,
+  targetsByPage,
+} from './model'
 
-// Редакторская сторона позиционного правила (ADR §10): источники предлагаются ВЫШЕ
-// блока, цели — НИЖЕ. Семантику (что правило значит) знает вычислитель и проверяет
-// entities/logic.test.ts; здесь — только «что автору вообще предлагают выбрать» и
-// «о чём его предупреждают».
+// Редакторская сторона: что автору предлагают выбрать и о чём предупреждают. Цели с
+// 2026-08-16 НЕ сужаются позицией (ADR §10) — блок волен стоять где угодно, а негодную
+// пару «источник ниже цели» называет предупреждение. Семантику (что правило значит)
+// знает вычислитель и проверяет entities/logic.test.ts.
 
 const blk = (id: string, groupId: string, type: Block['type']): Block => ({ id, groupId, type })
 
@@ -31,29 +39,44 @@ const doc = (l: Block['logic'] = {}): Block[] => [
   },
 ]
 
-describe('цели действий предлагаются только НИЖЕ блока', () => {
-  it('«показать» адресует головы групп ниже', () => {
-    expect(showTargets(doc(), 'L').map((b) => b.id)).toEqual(['q2cap', 'list'])
+describe('цели действий — весь документ, а не только то, что ниже', () => {
+  it('«показать» адресует головы групп, включая стоящие ВЫШЕ блока', () => {
+    expect(showTargets(doc()).map((b) => b.id)).toEqual(['q1cap', 'q2cap', 'list'])
   })
 
-  it('«обязателен» адресует отвечаемые ниже', () => {
-    expect(requireTargets(doc(), 'L').map((b) => b.id)).toEqual(['q2', 'list'])
+  it('«обязателен» адресует все отвечаемые', () => {
+    expect(requireTargets(doc()).map((b) => b.id)).toEqual(['q1', 'q2', 'list'])
   })
 
-  it('«варианты» адресуют choice-вопросы ниже', () => {
-    expect(optionTargets(doc(), 'L').map((b) => b.id)).toEqual(['list'])
-  })
-
-  it('вопрос выше блока в целях не предлагается', () => {
-    for (const targets of [showTargets(doc(), 'L'), requireTargets(doc(), 'L')]) {
-      expect(targets.map((b) => b.id)).not.toContain('q1')
-      expect(targets.map((b) => b.id)).not.toContain('q1cap')
-    }
+  it('«варианты» адресуют choice-вопросы', () => {
+    expect(optionTargets(doc()).map((b) => b.id)).toEqual(['list'])
   })
 
   it('сам блок logic целью не бывает', () => {
     const two = [...doc(), logic('L2', {})]
-    expect(showTargets(two, 'L').map((b) => b.id)).not.toContain('L2')
+    expect(showTargets(two).map((b) => b.id)).not.toContain('L2')
+  })
+
+  it('разрыв страницы и заголовок формы целью показа не бывают', () => {
+    const paged: Block[] = [
+      { id: 'ft', groupId: 'gft', type: 'form_title' },
+      blk('q1cap', 'g1', 'title'),
+      blk('br', 'gb', 'page_break'),
+      blk('q2cap', 'g2', 'title'),
+    ]
+    expect(showTargets(paged).map((b) => b.id)).toEqual(['q1cap', 'q2cap'])
+  })
+
+  it('цели раскладываются по страницам — так их показывает пикер', () => {
+    const paged: Block[] = [
+      blk('q1cap', 'g1', 'title'),
+      blk('br', 'gb', 'page_break'),
+      blk('q2cap', 'g2', 'title'),
+    ]
+    expect(targetsByPage(paged, showTargets(paged))).toEqual([
+      { page: 1, items: [paged[0]] },
+      { page: 2, items: [paged[2]] },
+    ])
   })
 })
 
@@ -94,14 +117,31 @@ describe('предупреждения блока', () => {
     ).toEqual([])
   })
 
-  it('источник ниже блока', () => {
-    const out = warn({ when: { blockId: 'q2', op: 'answered' }, then: [] })
+  it('без действий условие меряется от самого блока', () => {
+    const out = warn({ when: { blockId: 'list', op: 'answered' }, then: [] })
     expect(out.join(' ')).toContain('ниже')
   })
 
-  it('цель выше блока', () => {
-    const out = warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', target: 'q1cap' }] })
-    expect(out.join(' ')).toContain('выше блока')
+  it('источник ниже ЦЕЛИ — правило по этой цели не действует', () => {
+    // Источник q2 стоит ниже цели q1cap: к моменту, когда решается цель, он не решён.
+    const out = warn({ when: { blockId: 'q2', op: 'answered' }, then: [{ kind: 'show', target: 'q1cap' }] })
+    expect(out.join(' ')).toContain('ниже')
+  })
+
+  it('цель ВЫШЕ блока предупреждения не даёт — позиция блока не важна', () => {
+    // Блок стоит ПОСЛЕДНИМ и прячет вопрос в середине; источник при этом выше цели.
+    const l: Block['logic'] = {
+      when: { blockId: 'q1', op: 'answered' },
+      then: [{ kind: 'show', target: 'q2cap' }],
+    }
+    const blocks: Block[] = [
+      blk('q1cap', 'g1', 'title'),
+      blk('q1', 'g1', 'short_text'),
+      blk('q2cap', 'g2', 'title'),
+      blk('q2', 'g2', 'phone'),
+      logic('L', l),
+    ]
+    expect(logicBlockWarnings(blocks, blocks[4]!)).toEqual([])
   })
 
   it('цель удалена', () => {
