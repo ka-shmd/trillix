@@ -89,10 +89,20 @@ export function EmbedView({
           <header className="flex items-center justify-between border-b px-5 py-3">
             <div>
               <h1 className="text-base font-medium">Встроить на сайт</h1>
-              <p className="text-xs text-muted-foreground">
-                Форма в макете настоящая: заполняется и проверяет поля, но ответ из предпросмотра не
-                отправляется.
-              </p>
+              {/* Неопубликованная форма во фрейме отдаёт 404 (инвариант 5: черновик
+                  неотличим от несуществующей), и в макете это выглядит как поломка
+                  вставки. Говорим до того, как автор пойдёт искать причину в коде. */}
+              {form.publishedVersion === null ? (
+                <p className="text-xs text-muted-foreground">
+                  Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем
+                  сайте. Код ниже можно скопировать уже сейчас.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Форма в макете настоящая: заполняется и проверяет поля, но ответ из предпросмотра
+                  не отправляется.
+                </p>
+              )}
             </div>
             <Button asChild variant="ghost" size="sm" className="gap-1.5">
               <Link to="/forms/$slug/share" params={{ slug: form.slug }} search={(prev) => prev}>
