@@ -1,4 +1,4 @@
-import { Plus, X } from 'lucide-react'
+import { EllipsisVertical } from 'lucide-react'
 
 import {
   type Block,
@@ -11,6 +11,13 @@ import {
 import { operatorsFor } from '@fields/logic'
 
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -22,18 +29,34 @@ import {
 
 import { type Group, OPERATOR_LABELS, defaultLeaf, sourceLabel, valueChoices } from './model'
 
-// Редактор дерева условий (фаза 21). Рекурсивный: группа рисует своих детей тем же
-// компонентом, поэтому вложенность «(А и Б) или В» не стоит ни одной особой ветки.
+// Редактор дерева условий. Рекурсивный: группа рисует своих детей тем же компонентом,
+// поэтому вложенность «(А и Б) или В» не стоит ни одной особой ветки.
 //
 // Инвариант формы, который держит редактор: КОРЕНЬ ВСЕГДА ГРУППА. Схема принимает и
 // одинокий лист, но два способа выразить одно правило означали бы две ветки в каждой
 // операции редактора («а если корень лист — сперва заверни»). Группа из одного условия
 // валидна и выглядит ровно как одно условие.
+//
+// ВСЁ УПРАВЛЕНИЕ ЖИВЁТ В МЕНЮ СТРОКИ (решение владельца 2026-08-16). Кнопок «+ Условие»
+// и «+ Группа» под деревом больше нет, крестика в конце строки — тоже: добавление,
+// вложение и удаление уехали в один значок после контрола значения. Причина не в
+// экономии места: строка условия — самостоятельная единица, и держать её операции в
+// двух разных местах (хвост строки и подвал дерева) значит заставлять глаз прыгать
+// между ними на каждое действие.
+//
+// Связка «все/любое» показывается, ТОЛЬКО когда условий больше одного: у единственного
+// условия связывать нечего, а выбор, который ничего не меняет, читается как забытая
+// настройка. И выглядит она текстом с шевроном, а не полем ввода, — это подпись
+// отношения между строками, а не значение, которое автор задаёт.
 
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
 const isAnd = (g: Group): boolean => 'all' in g
 const asGroup = (children: LogicCondition[], and: boolean): Group =>
   and ? { all: children } : { any: children }
+
+type Leaf = { blockId: string; op: LogicOperator; value?: string }
+
+const isLeaf = (c: LogicCondition): c is Leaf => !('all' in c) && !('any' in c)
 
 export function ConditionEditor({
   blocks,
@@ -44,8 +67,8 @@ export function ConditionEditor({
   onRemove,
 }: {
   blocks: readonly Block[]
-  // Источники — отвечаемые вопросы выше носителя (sourcesFor). Считаются один раз
-  // наверху и раздаются вниз: список одинаков для всего дерева.
+  // Источники — отвечаемые вопросы выше блока (sourcesFor). Считаются один раз наверху
+  // и раздаются вниз: список одинаков для всего дерева.
   sources: readonly Block[]
   value: Group
   depth?: number
@@ -60,7 +83,8 @@ export function ConditionEditor({
     if (next === null) {
       // Группа без условий невалидна по схеме, и это не формальность: правило,
       // которое ничего не проверяет, неотличимо от отсутствующего. Пустую группу
-      // редактор просто убирает целиком.
+      // редактор просто убирает целиком — так же уходит и последнее условие внутри
+      // вложенной группы, поэтому отдельного «удалить группу» ей не нужно.
       if (rest.length === 0) {
         onRemove?.()
         return
@@ -76,28 +100,44 @@ export function ConditionEditor({
     )
   }
 
-  const addLeaf = (): void => {
-    const source = sources[0]
-    if (!source) return
-    onChange(asGroup([...children, defaultLeaf(source)], and))
+  const insertAfter = (i: number, node: LogicCondition): void => {
+    onChange(asGroup([...children.slice(0, i + 1), node, ...children.slice(i + 1)], and))
   }
 
-  const addGroup = (): void => {
-    const source = sources[0]
-    if (!source) return
-    onChange(asGroup([...children, { all: [defaultLeaf(source)] }], and))
-  }
+  const rowMenu = (i: number) => ({
+    // Новое условие берёт первый доступный источник: выбирать «ничего» в списке
+    // источников нельзя, а пустой blockId схема отвергает.
+    onAddLeaf: sources[0] ? () => insertAfter(i, defaultLeaf(sources[0]!)) : undefined,
+    // Глубже лимита схемы пункт не показываем: 422 в автосейве от нажатия
+    // собственной кнопки — худший способ узнать про лимит.
+    onAddGroup:
+      sources[0] && depth < MAX_LOGIC_DEPTH
+        ? () => insertAfter(i, { all: [defaultLeaf(sources[0]!)] })
+        : undefined,
+    onRemove: () => replaceChild(i, null),
+    // Внутри вложенной группы строка умеет снести её целиком: иначе группу из трёх
+    // условий пришлось бы разбирать по одному.
+    onRemoveGroup: depth > 1 ? onRemove : undefined,
+  })
 
   return (
     <div
       className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}
     >
-      <div className="flex items-center gap-2">
+      {children.length > 1 && (
         <Select
           value={and ? 'all' : 'any'}
           onValueChange={(v) => onChange(asGroup(children, v === 'all'))}
         >
-          <SelectTrigger size="sm" className="h-7 w-40" aria-label="Как объединять условия">
+          {/* Вид ТЕКСТА, а не поля: рамка, фон, тень и высота гасятся теми же
+              вариантами, которыми они объявлены (data-[size=sm], dark:) — иначе
+              tailwind-merge их не сольёт и победит тот класс, что позже в собранном
+              CSS, а не в строке (web/CLAUDE.md). */}
+          <SelectTrigger
+            size="sm"
+            className="h-auto w-auto gap-1 border-0 bg-transparent p-0 text-xs tracking-wide text-muted-foreground uppercase shadow-none data-[size=sm]:h-auto hover:text-foreground focus-visible:ring-0 dark:bg-transparent dark:hover:bg-transparent"
+            aria-label="Как объединять условия"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -105,23 +145,11 @@ export function ConditionEditor({
             <SelectItem value="any">Любое из условий</SelectItem>
           </SelectContent>
         </Select>
-        {onRemove && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-7"
-            aria-label="Удалить группу условий"
-            onClick={onRemove}
-          >
-            <X className="size-4" />
-          </Button>
-        )}
-      </div>
+      )}
 
       {children.map((child, i) => {
         const key = `${i}`
-        if ('all' in child || 'any' in child) {
+        if (!isLeaf(child)) {
           return (
             <ConditionEditor
               key={key}
@@ -141,48 +169,54 @@ export function ConditionEditor({
             sources={sources}
             value={child}
             onChange={(next) => replaceChild(i, next)}
-            onRemove={() => replaceChild(i, null)}
+            menu={rowMenu(i)}
           />
         )
       })}
 
-      <div className="flex gap-2">
-        <Button type="button" variant="ghost" size="sm" className="h-7" onClick={addLeaf}>
-          <Plus className="size-3.5" />
-          Условие
-        </Button>
-        {/* Глубже лимита схемы кнопку не показываем: 422 в автосейве от нажатия
-            собственной кнопки — худший способ узнать про лимит. */}
-        {depth < MAX_LOGIC_DEPTH && (
-          <Button type="button" variant="ghost" size="sm" className="h-7" onClick={addGroup}>
-            <Plus className="size-3.5" />
-            Группа
-          </Button>
-        )}
-      </div>
+      {/* Пустое дерево рисуется ОДНОЙ незаполненной строкой, а не кнопкой «добавить»:
+          иначе, сняв кнопки, автор остался бы без входа в правило вовсе. Строка
+          попадает в документ в тот момент, когда выбран источник, — до него хранить
+          нечего (пустой blockId схема отвергает). */}
+      {children.length === 0 && (
+        <LeafRow
+          blocks={blocks}
+          sources={sources}
+          value={null}
+          onChange={(next) => onChange(asGroup([next], and))}
+        />
+      )}
     </div>
   )
 }
 
-// Лист: «вопрос — сравнение — значение». Значение показывается только у операторов,
-// которые сравнивают (у «отвечен» его нет вовсе).
+type RowMenu = {
+  onAddLeaf?: () => void
+  onAddGroup?: () => void
+  onRemove: () => void
+  onRemoveGroup?: () => void
+}
+
+// Лист: «вопрос — сравнение — значение» и меню операций. Значение показывается только у
+// операторов, которые сравнивают (у «отвечен» его нет вовсе); у незаполненной строки
+// (value === null) нет ни оператора, ни значения — сравнивать ещё нечего.
 function LeafRow({
   blocks,
   sources,
   value,
   onChange,
-  onRemove,
+  menu,
 }: {
   blocks: readonly Block[]
   sources: readonly Block[]
-  value: { blockId: string; op: LogicOperator; value?: string }
+  value: Leaf | null
   onChange: (next: LogicCondition) => void
-  onRemove: () => void
+  menu?: RowMenu
 }) {
-  const source = blocks.find((b) => b.id === value.blockId)
+  const source = value ? blocks.find((b) => b.id === value.blockId) : undefined
   const ops = source ? operatorsFor(source.type) : []
   const choices = source ? valueChoices(source) : []
-  const needsValue = opNeedsValue(value.op)
+  const needsValue = value !== null && opNeedsValue(value.op)
 
   // Смена источника роняет оператор и значение, если они ему не подходят: id варианта
   // от прошлого списка в новом не значит ничего, а несовместимый оператор сделал бы
@@ -191,7 +225,7 @@ function LeafRow({
     const next = blocks.find((b) => b.id === id)
     if (!next) return
     onChange(
-      operatorsFor(next.type).includes(value.op)
+      value && operatorsFor(next.type).includes(value.op)
         ? { ...defaultLeaf(next), op: value.op }
         : defaultLeaf(next),
     )
@@ -199,9 +233,9 @@ function LeafRow({
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <Select value={source ? value.blockId : ''} onValueChange={pickSource}>
+      <Select value={source ? source.id : ''} onValueChange={pickSource}>
         <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Вопрос-источник">
-          <SelectValue placeholder="Удалённый вопрос" />
+          <SelectValue placeholder={value === null ? 'Вопрос…' : 'Удалённый вопрос'} />
         </SelectTrigger>
         <SelectContent>
           {sources.map((b) => (
@@ -212,31 +246,34 @@ function LeafRow({
         </SelectContent>
       </Select>
 
-      <Select
-        value={value.op}
-        onValueChange={(op) =>
-          onChange({
-            blockId: value.blockId,
-            op: op as LogicOperator,
-            // «отвечен»/«не отвечен» значения не несут — схема непустое value у них
-            // отвергает, поэтому роняем его здесь, а не ловим 422 автосейвом.
-            ...(opNeedsValue(op as LogicOperator) && value.value ? { value: value.value } : {}),
-          })
-        }
-      >
-        <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {ops.map((op) => (
-            <SelectItem key={op} value={op}>
-              {OPERATOR_LABELS[op]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {value !== null && (
+        <Select
+          value={value.op}
+          onValueChange={(op) =>
+            onChange({
+              blockId: value.blockId,
+              op: op as LogicOperator,
+              // «отвечен»/«не отвечен» значения не несут — схема непустое value у них
+              // отвергает, поэтому роняем его здесь, а не ловим 422 автосейвом.
+              ...(opNeedsValue(op as LogicOperator) && value.value ? { value: value.value } : {}),
+            })
+          }
+        >
+          <SelectTrigger size="sm" className="h-7 w-32" aria-label="Сравнение">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {ops.map((op) => (
+              <SelectItem key={op} value={op}>
+                {OPERATOR_LABELS[op]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {needsValue &&
+        value !== null &&
         (choices.length > 0 ? (
           <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
             <SelectTrigger size="sm" className="h-7 min-w-28 flex-1" aria-label="Значение">
@@ -270,16 +307,45 @@ function LeafRow({
           />
         ))}
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Удалить условие"
-        onClick={onRemove}
-      >
-        <X className="size-4" />
-      </Button>
+      {menu && <RowActions menu={menu} />}
     </div>
+  )
+}
+
+// Меню операций строки — ПОСЛЕ значения, там, где раньше стоял крестик. Один значок на
+// всё: добавить условие рядом, вложить группу, удалить строку (и, внутри вложенной
+// группы, снести её целиком).
+function RowActions({ menu }: { menu: RowMenu }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          aria-label="Действия с условием"
+        >
+          <EllipsisVertical className="size-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
+        {menu.onAddLeaf && (
+          <DropdownMenuItem onSelect={menu.onAddLeaf}>Условие ниже</DropdownMenuItem>
+        )}
+        {menu.onAddGroup && (
+          <DropdownMenuItem onSelect={menu.onAddGroup}>Группа условий ниже</DropdownMenuItem>
+        )}
+        {(menu.onAddLeaf || menu.onAddGroup) && <DropdownMenuSeparator />}
+        <DropdownMenuItem variant="destructive" onSelect={menu.onRemove}>
+          Удалить условие
+        </DropdownMenuItem>
+        {menu.onRemoveGroup && (
+          <DropdownMenuItem variant="destructive" onSelect={menu.onRemoveGroup}>
+            Удалить группу
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
