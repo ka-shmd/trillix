@@ -8,18 +8,25 @@ import (
 	"unicode/utf8"
 )
 
-// Условная логика формы (фаза 21) — дерево условий и вычислитель плана.
-// Спека: docs/design/logic.md, решения — ADR §10 ARCHITECTURE.md.
+// Условная логика формы — дерево условий и вычислитель плана.
+// Спеки: docs/design/logic.md (фаза 21) и logic-blocks.md (переезд на полотно),
+// решения — ADR §10 ARCHITECTURE.md.
 //
-// Зеркало фронта — web/shared/entities/blocks/logic.ts (форма узла и лимиты) и
-// web/shared/fields/logic.ts (вычислитель). Общего кода между Go и TS в проекте нет
-// по построению, поэтому паритет держат одинаковые таблицы кейсов с обеих сторон и
-// logicparity_test.go (состав операторов). Правка любой стороны — тем же PR.
+// Зеркало фронта — web/shared/entities/blocks/conditions.ts (форма узла и лимиты),
+// blocks/logic.ts (действия) и web/shared/fields/logic.ts (вычислитель). Общего кода
+// между Go и TS в проекте нет по построению, поэтому паритет держат одинаковые таблицы
+// кейсов с обеих сторон и logicparity_test.go (состав операторов и действий). Правка
+// любой стороны — тем же PR.
 //
-// ЧЕТЫРЕ ПРАВИЛА, ОДНО ДЕРЕВО. `visibleIf` у головного блока группы (виден ли вопрос
-// целиком), `requiredIf` у отвечаемого блока (обязателен ли), `visibleIf` у варианта
-// выбора, `jumpIf` у разрыва страницы (куда уходим с этой страницы). Формат условия
-// один на все четыре: у автора одна модель, у нас один вычислитель и один набор тестов.
+// ПРАВИЛО ЖИВЁТ В БЛОКЕ `logic`: одно условие и список действий со ссылкой на цель
+// (показать, скрыть, сделать обязательным, показать/скрыть варианты, перейти на
+// страницу, скрыть кнопку отправки). ПОЗИЦИЯ БЛОКА ЗНАЧИМА: источники условия обязаны
+// стоять выше него, цели действий — ниже. Отсюда прежний инвариант «все источники решены
+// к моменту, когда решается цель» получается следствием, а не проверкой.
+//
+// Старые поля-носители (`visibleIf` у блока и у варианта, `requiredIf`, `jumpIf`)
+// читаются НАРЯДУ с блоками, пока идёт переезд: compileLogic сводит обе стороны к одному
+// набору карт, и сам обход про разницу не знает. Уедут вместе со сносом старых входов.
 //
 // ГЛАВНОЕ ПРАВИЛО СЕМАНТИКИ: **инертное правило равно отсутствующему**. Условие,
 // которое невозможно разрешить (источника нет, источник лежит НИЖЕ носителя, оператор
@@ -389,11 +396,124 @@ type Plan struct {
 	Pages [][]Block
 	// Visible — id блоков, которые респондент видит (включая неотвечаемые).
 	Visible map[string]bool
-	// Required — id отвечаемых блоков, обязательных ФАКТИЧЕСКИ (required или
-	// сработавший requiredIf). Только среди видимых.
+	// Required — id отвечаемых блоков, обязательных ФАКТИЧЕСКИ (флаг Required или
+	// сработавшее действие). Только среди видимых.
 	Required map[string]bool
 	// Options — id блока → id варианта → показан.
 	Options map[string]map[string]bool
+	// Blocked — обход упёрся в действие «скрыть кнопку»: на последней показанной
+	// странице кнопки нет, и форму отправить нельзя. Не то же самое, что «страниц
+	// больше нет»: приём такой отправки обязан её отвергнуть.
+	Blocked bool
+}
+
+// logicRule — одно ПРАВИЛО, откуда бы оно ни пришло: из блока logic или из старого
+// поля-носителя. Обе стороны сводятся сюда до обхода, поэтому сам обход про блоки
+// логики не знает.
+type logicRule struct {
+	when *Condition
+	// at — позиция НОСИТЕЛЯ: источники условия обязаны стоять выше неё.
+	at int
+	// guard — позиция, НИЖЕ которой обязана стоять цель. −1 у правил из старых полей:
+	// они лежат на самой цели, и требовать «цель ниже носителя» значило бы обездвижить
+	// их все.
+	guard int
+}
+
+type jumpEntry struct {
+	owner string
+	rule  logicRule
+	to    string
+	end   bool
+}
+
+// compiled — правила документа, разложенные по адресатам. Карты те же, которыми обход
+// пользовался и раньше; изменилось только то, откуда они заполняются.
+type compiled struct {
+	shows        map[string][]logicRule
+	hides        map[string][]logicRule
+	requires     map[string][]logicRule
+	optionShows  map[string]map[string][]logicRule
+	optionHides  map[string]map[string][]logicRule
+	jumps        []jumpEntry
+	submitBlocks []struct {
+		owner string
+		rule  logicRule
+	}
+}
+
+func compileLogic(blocks []Block) compiled {
+	c := compiled{
+		shows:       map[string][]logicRule{},
+		hides:       map[string][]logicRule{},
+		requires:    map[string][]logicRule{},
+		optionShows: map[string]map[string][]logicRule{},
+		optionHides: map[string]map[string][]logicRule{},
+	}
+	pushOptions := func(m map[string]map[string][]logicRule, blockID string, ids []string, r logicRule) {
+		byOption, ok := m[blockID]
+		if !ok {
+			byOption = map[string][]logicRule{}
+			m[blockID] = byOption
+		}
+		for _, id := range ids {
+			byOption[id] = append(byOption[id], r)
+		}
+	}
+
+	for i := range blocks {
+		b := blocks[i]
+		// Старые поля-носители. Они лежат НА цели, поэтому guard −1: «цель ниже
+		// носителя» к ним неприменимо. Уедут вместе с полями.
+		if b.VisibleIf != nil {
+			c.shows[b.ID] = append(c.shows[b.ID], logicRule{when: b.VisibleIf, at: i, guard: -1})
+		}
+		if b.RequiredIf != nil {
+			c.requires[b.ID] = append(c.requires[b.ID], logicRule{when: b.RequiredIf, at: i, guard: -1})
+		}
+		for _, o := range b.Settings.Options {
+			if o.VisibleIf != nil {
+				pushOptions(c.optionShows, b.ID, []string{o.ID}, logicRule{when: o.VisibleIf, at: i, guard: -1})
+			}
+		}
+		for _, j := range b.JumpIf {
+			c.jumps = append(c.jumps, jumpEntry{
+				owner: b.ID,
+				rule:  logicRule{when: j.When, at: i, guard: -1},
+				to:    j.To,
+				end:   j.End,
+			})
+		}
+
+		if b.Type != BlockLogic || b.Logic == nil {
+			continue
+		}
+		// У блока одно условие на все свои действия, и позиция блока служит обеим
+		// границам сразу: источники выше неё, цели ниже.
+		r := logicRule{when: b.Logic.When, at: i, guard: i}
+		for _, a := range b.Logic.Then {
+			switch a.Kind {
+			case ActShow:
+				c.shows[a.Target] = append(c.shows[a.Target], r)
+			case ActHide:
+				c.hides[a.Target] = append(c.hides[a.Target], r)
+			case ActRequire:
+				c.requires[a.Target] = append(c.requires[a.Target], r)
+			case ActShowOptions:
+				pushOptions(c.optionShows, a.Target, a.Options, r)
+			case ActHideOptions:
+				pushOptions(c.optionHides, a.Target, a.Options, r)
+			case ActJump:
+				c.jumps = append(c.jumps, jumpEntry{owner: b.ID, rule: r, to: a.To, end: a.End})
+			case ActBlockSubmit:
+				c.submitBlocks = append(c.submitBlocks, struct {
+					owner string
+					rule  logicRule
+				}{owner: b.ID, rule: r})
+			}
+		}
+	}
+	return c
 }
 
 // OptionVisible — показан ли вариант. Отдельный метод, потому что «карты нет» и «вариант
@@ -478,17 +598,37 @@ type evaluator struct {
 	pos     map[string]int
 	byID    map[string]Block
 	decided map[string]answerValue
+	c       compiled
 }
 
-// eval считает условие. Второе значение — «правило действует»: false означает
-// инертность, и звать её обязан КАЖДЫЙ потребитель по-своему (видимость показывает,
-// обязательность не возникает, переход не срабатывает — то есть всюду «как если бы
-// правила не было»).
-func (ev *evaluator) eval(c *Condition, carrier int) (result, ok bool) {
-	if c == nil {
-		return true, true
+// fires — сработало ли ОДНО правило. Инертное (нет условия, источник ниже носителя,
+// оператор не подходит типу, значение не выбрано) не срабатывает никогда.
+func (ev *evaluator) fires(r logicRule) bool {
+	if r.when == nil {
+		return false
 	}
-	return ev.node(*c, carrier)
+	res, ok := ev.node(*r.when, r.at)
+	return ok && res
+}
+
+// collect — правила, адресованные ЦЕЛИ на позиции target: сколько из них действуют и
+// сработало ли хоть одно. Действующим не считается правило, чья цель стоит выше
+// носителя, — блок читает то, что над ним, и влияет на то, что под ним.
+func (ev *evaluator) collect(rules []logicRule, target int) (active, fired bool) {
+	for _, r := range rules {
+		if r.guard >= target || r.when == nil {
+			continue
+		}
+		res, ok := ev.node(*r.when, r.at)
+		if !ok {
+			continue
+		}
+		active = true
+		if res {
+			fired = true
+		}
+	}
+	return active, fired
 }
 
 func (ev *evaluator) node(c Condition, carrier int) (result, ok bool) {
@@ -598,6 +738,7 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 		pos:     make(map[string]int, len(blocks)),
 		byID:    make(map[string]Block, len(blocks)),
 		decided: make(map[string]answerValue, len(blocks)),
+		c:       compileLogic(blocks),
 	}
 	for i := range blocks {
 		ev.pos[blocks[i].ID] = i
@@ -627,10 +768,13 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 
 		for _, run := range groupRuns(pages[i].blocks) {
 			head := pages[i].blocks[run[0]]
-			show := visited && ev.shows(head.VisibleIf, ev.pos[head.ID])
+			show := visited && ev.shows(head.ID, ev.pos[head.ID])
 
 			for _, b := range pages[i].blocks[run[0]:run[1]] {
-				if show {
+				// Блок логики не показывается никому и ни на одной поверхности:
+				// страница, где кроме него ничего нет, — не страница (её переходы
+				// при этом считаются).
+				if show && b.Type != BlockLogic {
 					plan.Visible[b.ID] = true
 					shown = append(shown, b)
 				}
@@ -644,12 +788,13 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 					ev.decided[b.ID] = answerValue{}
 					continue
 				}
-				opts := ev.visibleOptions(b)
+				at := ev.pos[b.ID]
+				opts := ev.visibleOptions(b, at)
 				if opts != nil {
 					plan.Options[b.ID] = opts
 				}
 				ev.decided[b.ID] = decodeAnswer(b, answers[b.ID], opts)
-				if ev.requires(b) {
+				if _, fired := ev.collect(ev.c.requires[b.ID], at); b.Required || fired {
 					plan.Required[b.ID] = true
 				}
 			}
@@ -664,10 +809,22 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 		if len(shown) > 0 {
 			plan.Pages = append(plan.Pages, shown)
 		}
-		next = i + 1
-		if closer := pages[i].closer; closer != nil {
-			next = ev.nextPage(*closer, i, len(pages), opens)
+
+		here := make(map[string]bool, len(pages[i].blocks)+1)
+		for _, b := range pages[i].blocks {
+			here[b.ID] = true
 		}
+		if closer := pages[i].closer; closer != nil {
+			here[closer.ID] = true
+		}
+		// «Скрыть кнопку» обрывает обход ЗДЕСЬ: страница показана, кнопки нет, идти
+		// некуда. Проверяется до переходов — уйти со страницы, которую нельзя
+		// закрыть, нельзя.
+		if ev.submitBlocked(here) {
+			plan.Blocked = true
+			continue // next не двигается, значит остальные страницы не посещаются
+		}
+		next = ev.nextPage(here, i, len(pages), opens)
 	}
 	// Страница на выходе всегда хотя бы одна — как у splitPages: пустой документ и
 	// форма, где скрыто вообще всё, дают один пустой шаг с кнопкой отправки, а не
@@ -678,56 +835,55 @@ func PlanForm(blocks []Block, answers map[string]json.RawMessage) Plan {
 	return plan
 }
 
-// shows — действует ли правило видимости. Инертное правило равно отсутствующему,
-// поэтому инертность значит «показать».
-func (ev *evaluator) shows(c *Condition, carrier int) bool {
-	res, ok := ev.eval(c, carrier)
-	return !ok || res
+// shows — видна ли цель. Две корзины, и формула не зависит от порядка блоков logic
+// между собой: «показать» переворачивает умолчание цели в «скрыт», «скрыть» прячет
+// видимое по условию (ADR §10). Ни одного действующего правила — виден, как и было.
+func (ev *evaluator) shows(id string, target int) bool {
+	hasShow, showFired := ev.collect(ev.c.shows[id], target)
+	_, hideFired := ev.collect(ev.c.hides[id], target)
+	return (!hasShow || showFired) && !hideFired
 }
 
-// requires — обязателен ли блок фактически. У инертного requiredIf обязательности не
-// возникает — то же «как если бы правила не было» (без правила required у такого блока
-// заведомо false: сосуществование запрещено схемой).
-func (ev *evaluator) requires(b Block) bool {
-	if b.RequiredIf == nil {
-		return b.Required
-	}
-	res, ok := ev.eval(b.RequiredIf, ev.pos[b.ID])
-	return ok && res
-}
-
-// visibleOptions — видимость вариантов блока; nil, если правил нет ни у одного (значит
-// видны все, и карту заводить незачем).
-func (ev *evaluator) visibleOptions(b Block) map[string]bool {
-	ruled := false
-	for _, o := range b.Settings.Options {
-		if o.VisibleIf != nil {
-			ruled = true
-			break
-		}
-	}
-	if !ruled {
+// visibleOptions — видимость вариантов блока; nil, если блока не касается ни одно
+// правило (значит видны все, и карту заводить незачем). Формула у варианта та же, что
+// у блока.
+func (ev *evaluator) visibleOptions(b Block, at int) map[string]bool {
+	shows, hasShows := ev.c.optionShows[b.ID]
+	hides, hasHides := ev.c.optionHides[b.ID]
+	if !hasShows && !hasHides {
 		return nil
 	}
 	out := make(map[string]bool, len(b.Settings.Options))
 	for _, o := range b.Settings.Options {
-		out[o.ID] = ev.shows(o.VisibleIf, ev.pos[b.ID])
+		hasShow, showFired := ev.collect(shows[o.ID], at)
+		_, hideFired := ev.collect(hides[o.ID], at)
+		out[o.ID] = (!hasShow || showFired) && !hideFired
 	}
 	return out
 }
 
-// nextPage — куда уходим со страницы i. Первое сработавшее правило разрыва; переход
-// назад, в никуда и с несработавшим условием пропускается (инертен).
-func (ev *evaluator) nextPage(closer Block, i, total int, opens map[string]int) int {
-	for _, r := range closer.JumpIf {
-		res, ok := ev.eval(r.When, ev.pos[closer.ID])
-		if !ok || !res {
+// submitBlocked — есть ли на этой странице сработавшее «скрыть кнопку».
+func (ev *evaluator) submitBlocked(here map[string]bool) bool {
+	for _, s := range ev.c.submitBlocks {
+		if here[s.owner] && ev.fires(s.rule) {
+			return true
+		}
+	}
+	return false
+}
+
+// nextPage — куда уходим со страницы i. Первое сработавшее правило В ПОРЯДКЕ ДОКУМЕНТА
+// (переходы собраны обходом блоков, поэтому порядок среза уже верен); переход назад, в
+// никуда и с несработавшим условием пропускается (инертен).
+func (ev *evaluator) nextPage(here map[string]bool, i, total int, opens map[string]int) int {
+	for _, j := range ev.c.jumps {
+		if !here[j.owner] || !ev.fires(j.rule) {
 			continue
 		}
-		if r.End {
+		if j.end {
 			return total // страниц дальше нет: здесь кнопка «Отправить»
 		}
-		target, exists := opens[r.To]
+		target, exists := opens[j.to]
 		if !exists || target <= i {
 			continue // цель раньше носителя или её нет — правило не действует
 		}

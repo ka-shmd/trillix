@@ -564,6 +564,372 @@ func TestNormalizeAnswers(t *testing.T) {
 	})
 }
 
+// ---------- правила из блока logic ----------
+//
+// ЭТОТ ЖЕ состав случаев — в web/app/src/entities/logic.test.ts, describe'ы
+// «planForm: блок logic — …». Названия совпадают, чтобы расхождение было видно диффом.
+
+func llogic(id, group string, when *Condition, actions ...LogicAction) Block {
+	b := lblk(id, group, BlockLogic)
+	b.Logic = &Logic{When: when, Then: actions}
+	return b
+}
+
+func act(kind LogicActionKind, target string) LogicAction {
+	return LogicAction{Kind: kind, Target: target}
+}
+
+func TestPlanForm_LogicBlockVisibility(t *testing.T) {
+	// [src] [L] [cap dep] — цель стоит НИЖЕ блока, источник ВЫШЕ него.
+	doc := func(l Block) []Block {
+		src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+		return []Block{src, l, lblk("cap", "g2", BlockTitle), lblk("dep", "g2", BlockShortText)}
+	}
+
+	cases := []struct {
+		name    string
+		logic   Block
+		answers map[string]any
+		visible bool
+	}{
+		{
+			"show: сработало — показан",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+			map[string]any{"src": "yes"},
+			true,
+		},
+		{
+			"show: не сработало — скрыт (умолчание перевёрнуто)",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+			map[string]any{"src": "no"},
+			false,
+		},
+		{
+			"hide: сработало — скрыт",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+			map[string]any{"src": "yes"},
+			false,
+		},
+		{
+			"hide: не сработало — виден",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"блок без условия инертен",
+			llogic("L", "gL", nil, act(ActShow, "cap")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"блок без действий ничего не делает",
+			llogic("L", "gL", leaf("src", OpIs, "yes")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"действие на удалённую цель инертно",
+			llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "призрак")),
+			map[string]any{"src": "no"},
+			true,
+		},
+		{
+			"источник НИЖЕ блока — правило инертно",
+			llogic("L", "gL", leaf("dep", OpAnswered, ""), act(ActShow, "cap")),
+			map[string]any{},
+			true,
+		},
+		{
+			"ссылка на несуществующий источник инертна",
+			llogic("L", "gL", leaf("нет-такого", OpIs, "x"), act(ActShow, "cap")),
+			map[string]any{},
+			true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := PlanForm(doc(tc.logic), answers(tc.answers))
+			// Действие адресует ГОЛОВУ группы и прячет вопрос целиком.
+			if plan.Visible["dep"] != tc.visible || plan.Visible["cap"] != tc.visible {
+				t.Fatalf("видимость вопроса: ожидалось %v, получено cap=%v dep=%v",
+					tc.visible, plan.Visible["cap"], plan.Visible["dep"])
+			}
+		})
+	}
+}
+
+func TestPlanForm_LogicBlockTargetAbove(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("цель стоит ВЫШЕ блока — действие обязано быть инертным")
+	}
+}
+
+func TestPlanForm_LogicBlockNonHeadTarget(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "dep")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("действие на НЕ головной блок группы обязано быть инертным")
+	}
+}
+
+func TestPlanForm_LogicBlockHideBeatsShow(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L1", "gL1", leaf("src", OpAnswered, ""), act(ActShow, "cap")),
+		llogic("L2", "gL2", leaf("src", OpIs, "yes"), act(ActHide, "cap")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	if PlanForm(blocks, answers(map[string]any{"src": "yes"})).Visible["dep"] {
+		t.Fatal("скрыть обязано побеждать показать")
+	}
+	if !PlanForm(blocks, answers(map[string]any{"src": "no"})).Visible["dep"] {
+		t.Fatal("сработало только показать — вопрос обязан быть виден")
+	}
+}
+
+func TestPlanForm_LogicBlockOrderIndependent(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	a := llogic("L1", "gL1", leaf("src", OpIs, "yes"), act(ActShow, "cap"))
+	b := llogic("L2", "gL2", leaf("src", OpIs, "no"), act(ActShow, "cap"))
+	tail := []Block{lblk("cap", "g2", BlockTitle), lblk("dep", "g2", BlockShortText)}
+
+	for _, given := range []map[string]any{{"src": "yes"}, {"src": "no"}, {}} {
+		first := PlanForm(append([]Block{src, a, b}, tail...), answers(given)).Visible["dep"]
+		second := PlanForm(append([]Block{src, b, a}, tail...), answers(given)).Visible["dep"]
+		if first != second {
+			t.Fatalf("порядок блоков logic изменил результат при ответах %v: %v против %v", given, first, second)
+		}
+	}
+}
+
+func TestPlanForm_LogicBlockShowsOr(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L1", "gL1", leaf("src", OpIs, "yes"), act(ActShow, "cap")),
+		llogic("L2", "gL2", leaf("src", OpIs, "no"), act(ActShow, "cap")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	for _, tc := range []struct {
+		given   map[string]any
+		visible bool
+	}{
+		{map[string]any{"src": "yes"}, true},
+		{map[string]any{"src": "no"}, true},
+		{map[string]any{}, false},
+	} {
+		if got := PlanForm(blocks, answers(tc.given)).Visible["dep"]; got != tc.visible {
+			t.Fatalf("несколько «показать» складываются по ИЛИ: при %v ожидалось %v", tc.given, tc.visible)
+		}
+	}
+}
+
+func TestPlanForm_LogicBlockMultipleActions(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpIs, "yes"), act(ActShow, "cap"), act(ActRequire, "dep")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "yes"}))
+	if !plan.Visible["dep"] || !plan.Required["dep"] {
+		t.Fatalf("одно условие обязано раздать оба действия: visible=%v required=%v",
+			plan.Visible["dep"], plan.Required["dep"])
+	}
+}
+
+func TestPlanForm_LogicBlockNotVisible(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"})
+	blocks := []Block{
+		src,
+		llogic("L", "gL", leaf("src", OpAnswered, "")),
+		lblk("cap", "g2", BlockTitle),
+		lblk("dep", "g2", BlockShortText),
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"src": "yes"}))
+	if plan.Visible["L"] {
+		t.Fatal("блок logic не показывается респонденту")
+	}
+	if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src", "cap", "dep"}}) {
+		t.Fatalf("блок logic попал на страницу: %v", got)
+	}
+}
+
+func TestPlanForm_LogicBlockRequired(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "call", Label: "Звонок"}, Option{ID: "mail", Label: "Почта"})
+
+	t.Run("действие сработало — обязателен", func(t *testing.T) {
+		blocks := []Block{src, llogic("L", "gL", leaf("src", OpIs, "call"), act(ActRequire, "dep")), lblk("dep", "g2", BlockPhone)}
+		if !PlanForm(blocks, answers(map[string]any{"src": "call"})).Required["dep"] {
+			t.Fatal("сработавшее действие обязано делать вопрос обязательным")
+		}
+		if PlanForm(blocks, answers(map[string]any{"src": "mail"})).Required["dep"] {
+			t.Fatal("несработавшее действие обязательности не создаёт")
+		}
+	})
+
+	t.Run("флаг required и действие складываются по ИЛИ", func(t *testing.T) {
+		dep := lblk("dep", "g2", BlockPhone)
+		dep.Required = true
+		blocks := []Block{src, llogic("L", "gL", leaf("src", OpIs, "call"), act(ActRequire, "dep")), dep}
+		if !PlanForm(blocks, answers(map[string]any{"src": "mail"})).Required["dep"] {
+			t.Fatal("флаг required действует независимо от условия")
+		}
+	})
+
+	t.Run("скрытый вопрос не обязателен никогда", func(t *testing.T) {
+		blocks := []Block{
+			src,
+			llogic("L", "gL", leaf("src", OpIs, "call"), act(ActHide, "dep"), act(ActRequire, "dep")),
+			lblk("dep", "g2", BlockPhone),
+		}
+		if PlanForm(blocks, answers(map[string]any{"src": "call"})).Required["dep"] {
+			t.Fatal("видимость старше обязательности")
+		}
+	})
+}
+
+func TestPlanForm_LogicBlockOptions(t *testing.T) {
+	src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "dog", Label: "Собака"}, Option{ID: "cat", Label: "Кот"})
+	list := lchoice("list", "g2", BlockMultiChoice,
+		Option{ID: "leash", Label: "Поводок"}, Option{ID: "tray", Label: "Лоток"}, Option{ID: "food", Label: "Корм"})
+	rule := func(kind LogicActionKind, ids ...string) Block {
+		b := lblk("L", "gL", BlockLogic)
+		b.Logic = &Logic{
+			When: leaf("src", OpIs, "dog"),
+			Then: []LogicAction{{Kind: kind, Target: "list", Options: ids}},
+		}
+		return b
+	}
+
+	t.Run("«скрыть варианты» прячет названные", func(t *testing.T) {
+		plan := PlanForm([]Block{src, rule(ActHideOptions, "tray"), list}, answers(map[string]any{"src": "dog"}))
+		if plan.OptionVisible("list", "tray") {
+			t.Fatal("названный вариант обязан быть скрыт")
+		}
+		if !plan.OptionVisible("list", "leash") || !plan.OptionVisible("list", "food") {
+			t.Fatal("не названные варианты обязаны остаться видимыми")
+		}
+	})
+
+	t.Run("«показать варианты» переворачивает умолчание названных", func(t *testing.T) {
+		blocks := []Block{src, rule(ActShowOptions, "leash"), list}
+		if PlanForm(blocks, answers(map[string]any{"src": "cat"})).OptionVisible("list", "leash") {
+			t.Fatal("условие не сработало — названный вариант обязан быть скрыт")
+		}
+		if !PlanForm(blocks, answers(map[string]any{"src": "dog"})).OptionVisible("list", "leash") {
+			t.Fatal("условие сработало — названный вариант обязан быть виден")
+		}
+		if !PlanForm(blocks, answers(map[string]any{"src": "cat"})).OptionVisible("list", "food") {
+			t.Fatal("не названный вариант умолчания не менял")
+		}
+	})
+
+	t.Run("скрытый вариант не считается выбором", func(t *testing.T) {
+		dep := lblk("dep", "g3", BlockShortText)
+		dep.VisibleIf = leaf("list", OpIncludes, "tray")
+		blocks := []Block{src, rule(ActHideOptions, "tray"), list, dep}
+		plan := PlanForm(blocks, answers(map[string]any{"src": "dog", "list": []string{"tray", "food"}}))
+		if plan.Visible["dep"] {
+			t.Fatal("выбранный скрытый вариант не считается выбором")
+		}
+	})
+}
+
+func TestPlanForm_LogicBlockJumpAndSubmit(t *testing.T) {
+	// Три страницы: [src, L] | [q2] | [q3].
+	paged := func(actions ...LogicAction) []Block {
+		src := lchoice("src", "g1", BlockSingleChoice, Option{ID: "yes", Label: "Да"}, Option{ID: "no", Label: "Нет"})
+		return []Block{
+			src,
+			llogic("L", "gL", leaf("src", OpIs, "no"), actions...),
+			lblk("br1", "gb1", BlockPageBreak),
+			lblk("q2", "g2", BlockShortText),
+			lblk("br2", "gb2", BlockPageBreak),
+			lblk("q3", "g3", BlockShortText),
+		}
+	}
+	no := answers(map[string]any{"src": "no"})
+	yes := answers(map[string]any{"src": "yes"})
+
+	t.Run("переход со СВОЕЙ страницы пропускает следующую", func(t *testing.T) {
+		got := pageIDs(PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}), no))
+		if !reflect.DeepEqual(got, [][]string{{"src"}, {"q3"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("условие не сработало — идём подряд", func(t *testing.T) {
+		if got := PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}), yes); len(got.Pages) != 3 {
+			t.Fatalf("страниц: %d", len(got.Pages))
+		}
+	})
+
+	t.Run("end обрывает форму на текущей странице", func(t *testing.T) {
+		got := pageIDs(PlanForm(paged(LogicAction{Kind: ActJump, End: true}), no))
+		if !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("переход назад инертен", func(t *testing.T) {
+		if got := PlanForm(paged(LogicAction{Kind: ActJump, To: "br1"}), no); len(got.Pages) != 3 {
+			t.Fatalf("страниц: %d", len(got.Pages))
+		}
+	})
+
+	t.Run("«скрыть кнопку» обрывает обход и помечает план", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActBlockSubmit}), no)
+		if !plan.Blocked {
+			t.Fatal("план обязан быть помечен заблокированным")
+		}
+		if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("«скрыть кнопку» не сработало — план не заблокирован", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActBlockSubmit}), yes)
+		if plan.Blocked || len(plan.Pages) != 3 {
+			t.Fatalf("blocked=%v страниц=%d", plan.Blocked, len(plan.Pages))
+		}
+	})
+
+	t.Run("«скрыть кнопку» старше перехода с той же страницы", func(t *testing.T) {
+		plan := PlanForm(paged(LogicAction{Kind: ActJump, To: "br2"}, LogicAction{Kind: ActBlockSubmit}), no)
+		if !plan.Blocked {
+			t.Fatal("кнопка обязана перевесить переход")
+		}
+		if got := pageIDs(plan); !reflect.DeepEqual(got, [][]string{{"src"}}) {
+			t.Fatalf("страницы: %v", got)
+		}
+	})
+
+	t.Run("форма без блоков logic не заблокирована", func(t *testing.T) {
+		if PlanForm([]Block{lblk("q", "g1", BlockShortText)}, nil).Blocked {
+			t.Fatal("форма без логики не блокируется")
+		}
+	})
+}
+
 // ---------- форма правил в схеме ----------
 
 func TestValidateSchema_LogicValid(t *testing.T) {

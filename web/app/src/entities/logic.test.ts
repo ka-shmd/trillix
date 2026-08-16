@@ -287,6 +287,301 @@ describe('planForm: страницы и переходы', () => {
   })
 })
 
+// ---------- правила из блока `logic` (зеркало TestPlanForm_LogicBlock*) ----------
+
+describe('planForm: блок logic — показ и скрытие', () => {
+  const logic = (id: string, groupId: string, l: Block['logic']): Block => ({
+    id,
+    groupId,
+    type: 'logic',
+    logic: l,
+  })
+
+  // [src] [L] [cap dep] — цель стоит НИЖЕ блока, источник ВЫШЕ него.
+  const doc = (l: Block['logic']): Block[] => [
+    choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+    logic('L', 'gL', l),
+    blk('cap', 'g2', 'title'),
+    blk('dep', 'g2', 'short_text'),
+  ]
+
+  const cases: [string, Block['logic'], Answers, boolean][] = [
+    [
+      'show: сработало — показан',
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] },
+      { src: 'yes' },
+      true,
+    ],
+    [
+      'show: не сработало — скрыт (умолчание перевёрнуто)',
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] },
+      { src: 'no' },
+      false,
+    ],
+    [
+      'hide: сработало — скрыт',
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] },
+      { src: 'yes' },
+      false,
+    ],
+    [
+      'hide: не сработало — виден',
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] },
+      { src: 'no' },
+      true,
+    ],
+    [
+      'блок без условия инертен',
+      { then: [{ kind: 'show', target: 'cap' }] },
+      { src: 'no' },
+      true,
+    ],
+    [
+      'блок без действий ничего не делает',
+      { when: leaf('src', 'is', 'yes') },
+      { src: 'no' },
+      true,
+    ],
+    [
+      'действие на удалённую цель инертно',
+      { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'призрак' }] },
+      { src: 'no' },
+      true,
+    ],
+    [
+      'источник НИЖЕ блока — правило инертно',
+      { when: leaf('dep', 'answered'), then: [{ kind: 'show', target: 'cap' }] },
+      {},
+      true,
+    ],
+    [
+      'ссылка на несуществующий источник инертна',
+      { when: leaf('нет-такого', 'is', 'x'), then: [{ kind: 'show', target: 'cap' }] },
+      {},
+      true,
+    ],
+  ]
+
+  it.each(cases)('%s', (_name, l, answers, visible) => {
+    const plan = planForm(doc(l), answers)
+    // Действие адресует ГОЛОВУ группы и прячет вопрос целиком.
+    expect(plan.visible.has('dep')).toBe(visible)
+    expect(plan.visible.has('cap')).toBe(visible)
+  })
+
+  it('цель стоит ВЫШЕ блока — действие инертно', () => {
+    const blocks: Block[] = [
+      choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+      blk('cap', 'g2', 'title'),
+      blk('dep', 'g2', 'short_text'),
+      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
+    ]
+    expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
+  })
+
+  it('действие на НЕ головной блок группы инертно', () => {
+    const l: Block['logic'] = {
+      when: leaf('src', 'is', 'yes'),
+      then: [{ kind: 'show', target: 'dep' }],
+    }
+    expect(planForm(doc(l), { src: 'no' }).visible.has('dep')).toBe(true)
+  })
+
+  it('скрыть побеждает показать', () => {
+    const blocks: Block[] = [
+      choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+      logic('L1', 'gL1', { when: leaf('src', 'answered'), then: [{ kind: 'show', target: 'cap' }] }),
+      logic('L2', 'gL2', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', target: 'cap' }] }),
+      blk('cap', 'g2', 'title'),
+      blk('dep', 'g2', 'short_text'),
+    ]
+    expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(false)
+    expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
+  })
+
+  it('порядок блоков logic между собой на результат не влияет', () => {
+    const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
+    const a = logic('L1', 'gL1', {
+      when: leaf('src', 'is', 'yes'),
+      then: [{ kind: 'show', target: 'cap' }],
+    })
+    const b = logic('L2', 'gL2', {
+      when: leaf('src', 'is', 'no'),
+      then: [{ kind: 'show', target: 'cap' }],
+    })
+    const tail = [blk('cap', 'g2', 'title'), blk('dep', 'g2', 'short_text')]
+    for (const answers of [{ src: 'yes' }, { src: 'no' }, {}]) {
+      expect(planForm([src, a, b, ...tail], answers).visible.has('dep')).toBe(
+        planForm([src, b, a, ...tail], answers).visible.has('dep'),
+      )
+    }
+  })
+
+  it('несколько «показать» на одну цель складываются по ИЛИ', () => {
+    const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
+    const blocks: Block[] = [
+      src,
+      logic('L1', 'gL1', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', target: 'cap' }] }),
+      logic('L2', 'gL2', { when: leaf('src', 'is', 'no'), then: [{ kind: 'show', target: 'cap' }] }),
+      blk('cap', 'g2', 'title'),
+      blk('dep', 'g2', 'short_text'),
+    ]
+    expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(true)
+    expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
+    expect(planForm(blocks, {}).visible.has('dep')).toBe(false)
+  })
+
+  it('одно условие раздаёт несколько действий', () => {
+    const blocks: Block[] = [
+      choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+      logic('L', 'gL', {
+        when: leaf('src', 'is', 'yes'),
+        then: [
+          { kind: 'show', target: 'cap' },
+          { kind: 'require', target: 'dep' },
+        ],
+      }),
+      blk('cap', 'g2', 'title'),
+      blk('dep', 'g2', 'short_text'),
+    ]
+    const plan = planForm(blocks, { src: 'yes' })
+    expect(plan.visible.has('dep')).toBe(true)
+    expect(plan.required.has('dep')).toBe(true)
+  })
+
+  it('блок logic не попадает ни в видимые, ни на страницу', () => {
+    const plan = planForm(doc({ when: leaf('src', 'is', 'yes') }), { src: 'yes' })
+    expect(plan.visible.has('L')).toBe(false)
+    expect(pageIds(plan)).toEqual([['src', 'cap', 'dep']])
+  })
+})
+
+describe('planForm: блок logic — обязательность', () => {
+  const src = choice('src', 'g1', 'single_choice', [{ id: 'call' }, { id: 'mail' }])
+  const rule = (then: NonNullable<Block['logic']>['then']): Block => ({
+    id: 'L',
+    groupId: 'gL',
+    type: 'logic',
+    logic: { when: leaf('src', 'is', 'call'), then },
+  })
+
+  it('действие сработало — обязателен', () => {
+    const blocks = [src, rule([{ kind: 'require', target: 'dep' }]), blk('dep', 'g2', 'phone')]
+    expect(planForm(blocks, { src: 'call' }).required.has('dep')).toBe(true)
+    expect(planForm(blocks, { src: 'mail' }).required.has('dep')).toBe(false)
+  })
+
+  it('флаг required и действие складываются по ИЛИ', () => {
+    const dep: Block = { ...blk('dep', 'g2', 'phone'), required: true }
+    const blocks = [src, rule([{ kind: 'require', target: 'dep' }]), dep]
+    expect(planForm(blocks, { src: 'mail' }).required.has('dep')).toBe(true)
+  })
+
+  it('скрытый вопрос не обязателен никогда', () => {
+    const blocks: Block[] = [
+      src,
+      rule([
+        { kind: 'hide', target: 'dep' },
+        { kind: 'require', target: 'dep' },
+      ]),
+      blk('dep', 'g2', 'phone'),
+    ]
+    expect(planForm(blocks, { src: 'call' }).required.has('dep')).toBe(false)
+  })
+})
+
+describe('planForm: блок logic — варианты', () => {
+  const src = choice('src', 'g1', 'single_choice', [{ id: 'dog' }, { id: 'cat' }])
+  const list = choice('list', 'g2', 'multi_choice', [{ id: 'leash' }, { id: 'tray' }, { id: 'food' }])
+  const rule = (then: NonNullable<Block['logic']>['then']): Block => ({
+    id: 'L',
+    groupId: 'gL',
+    type: 'logic',
+    logic: { when: leaf('src', 'is', 'dog'), then },
+  })
+
+  it('«скрыть варианты» прячет названные', () => {
+    const blocks = [src, rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]), list]
+    const plan = planForm(blocks, { src: 'dog' })
+    expect(optionVisible(plan, 'list', 'tray')).toBe(false)
+    expect(optionVisible(plan, 'list', 'leash')).toBe(true)
+    expect(optionVisible(plan, 'list', 'food')).toBe(true)
+  })
+
+  it('«показать варианты» переворачивает умолчание названных', () => {
+    const blocks = [src, rule([{ kind: 'show_options', target: 'list', options: ['leash'] }]), list]
+    expect(optionVisible(planForm(blocks, { src: 'cat' }), 'list', 'leash')).toBe(false)
+    expect(optionVisible(planForm(blocks, { src: 'dog' }), 'list', 'leash')).toBe(true)
+    // Не названный вариант умолчания не менял.
+    expect(optionVisible(planForm(blocks, { src: 'cat' }), 'list', 'food')).toBe(true)
+  })
+
+  it('скрытый вариант не считается выбором', () => {
+    const dep: Block = { ...blk('dep', 'g3', 'short_text'), visibleIf: leaf('list', 'includes', 'tray') }
+    const blocks = [src, rule([{ kind: 'hide_options', target: 'list', options: ['tray'] }]), list, dep]
+    const plan = planForm(blocks, { src: 'dog', list: ['tray', 'food'] })
+    expect(plan.visible.has('dep')).toBe(false)
+  })
+})
+
+describe('planForm: блок logic — переход и кнопка', () => {
+  // Три страницы: [src, L] | [q2] | [q3].
+  const paged = (then: NonNullable<Block['logic']>['then'], when = leaf('src', 'is', 'no')): Block[] => [
+    choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+    { id: 'L', groupId: 'gL', type: 'logic', logic: { when, then } },
+    blk('br1', 'gb1', 'page_break'),
+    blk('q2', 'g2', 'short_text'),
+    blk('br2', 'gb2', 'page_break'),
+    blk('q3', 'g3', 'short_text'),
+  ]
+
+  it('переход со СВОЕЙ страницы пропускает следующую', () => {
+    const plan = planForm(paged([{ kind: 'jump', to: 'br2' }]), { src: 'no' })
+    expect(pageIds(plan)).toEqual([['src'], ['q3']])
+  })
+
+  it('условие не сработало — идём подряд', () => {
+    expect(planForm(paged([{ kind: 'jump', to: 'br2' }]), { src: 'yes' }).pages).toHaveLength(3)
+  })
+
+  it('end обрывает форму на текущей странице', () => {
+    expect(pageIds(planForm(paged([{ kind: 'jump', end: true }]), { src: 'no' }))).toEqual([['src']])
+  })
+
+  it('переход назад инертен', () => {
+    const blocks = paged([{ kind: 'jump', to: 'br1' }])
+    expect(planForm(blocks, { src: 'no' }).pages).toHaveLength(3)
+  })
+
+  it('«скрыть кнопку» обрывает обход и помечает план', () => {
+    const plan = planForm(paged([{ kind: 'block_submit' }]), { src: 'no' })
+    expect(plan.blocked).toBe(true)
+    expect(pageIds(plan)).toEqual([['src']])
+  })
+
+  it('«скрыть кнопку» не сработало — план не заблокирован', () => {
+    const plan = planForm(paged([{ kind: 'block_submit' }]), { src: 'yes' })
+    expect(plan.blocked).toBe(false)
+    expect(plan.pages).toHaveLength(3)
+  })
+
+  it('«скрыть кнопку» старше перехода с той же страницы', () => {
+    const plan = planForm(
+      paged([
+        { kind: 'jump', to: 'br2' },
+        { kind: 'block_submit' },
+      ]),
+      { src: 'no' },
+    )
+    expect(plan.blocked).toBe(true)
+    expect(pageIds(plan)).toEqual([['src']])
+  })
+
+  it('форма без блоков logic не заблокирована', () => {
+    expect(planForm([blk('q', 'g1', 'short_text')], {}).blocked).toBe(false)
+  })
+})
+
 describe('stripHiddenAnswers', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
   const dep: Block = { ...blk('dep', 'g2', 'short_text'), visibleIf: leaf('src', 'is', 'yes') }

@@ -13,10 +13,15 @@ import {
 import { type Answer } from './answer'
 import { splitPagesWithClosers } from './groups'
 
-// Вычислитель условной логики (фаза 21) — что видит респондент при данных ответах.
+// Вычислитель условной логики — что видит респондент при данных ответах.
 // Зеркало internal/domain/logic.go (PlanForm/StripHiddenAnswers): таблица кейсов
-// одинакового состава живёт с обеих сторон, паритет операторов сторожит Go-тест.
-// Спека — docs/design/logic.md, решения — ADR §10.
+// одинакового состава живёт с обеих сторон, паритет операторов и действий сторожит
+// Go-тест. Спеки — docs/design/logic.md и logic-blocks.md, решения — ADR §10.
+//
+// ПРАВИЛО ЖИВЁТ В БЛОКЕ `logic`, и позиция блока значима: источники условия выше него,
+// цели действий ниже. Старые поля-носители читаются наряду с блоками, пока идёт переезд
+// (compileLogic сводит обе стороны к одному набору карт, и сам обход про разницу не
+// знает).
 //
 // Один исходник на три поверхности фронта: рендерер, превью билдера и — там, где
 // понадобится — полотно. Разъедься они, и автор увидел бы в превью не ту форму, что
@@ -39,12 +44,119 @@ export type FormPlan = {
   // хотя бы одна (как у splitPages): пустой документ — это один пустой шаг с кнопкой.
   pages: Block[][]
   visible: Set<string>
-  // Обязательные ФАКТИЧЕСКИ (required или сработавший requiredIf), только среди видимых.
+  // Обязательные ФАКТИЧЕСКИ (флаг required или сработавшее действие), только среди
+  // видимых.
   required: Set<string>
-  // Видимость вариантов — только у блоков, где правило есть хотя бы у одного варианта.
+  // Видимость вариантов — только у блоков, которых касается хоть одно правило.
   // Отсутствие блока в карте читается как «видны все»: иначе каждый список платил бы
   // множеством на ровном месте.
   options: Map<string, Set<string>>
+  // Обход упёрся в действие «скрыть кнопку»: на последней показанной странице кнопки
+  // нет, и форму отправить нельзя. Не то же самое, что «страниц больше нет».
+  blocked: boolean
+}
+
+// Одно ПРАВИЛО, откуда бы оно ни пришло — из блока `logic` или из старого поля-носителя.
+// Обе стороны сводятся сюда до обхода, поэтому сам обход про блоки логики не знает.
+type Rule = {
+  when: LogicCondition | undefined
+  // Позиция НОСИТЕЛЯ: источники условия обязаны стоять выше неё.
+  at: number
+  // Позиция, НИЖЕ которой обязана стоять цель. −1 у правил из старых полей: они лежат
+  // на самой цели, и требовать «цель ниже носителя» значило бы обездвижить их все.
+  guard: number
+}
+
+type JumpEntry = { owner: string; rule: Rule; to?: string; end?: boolean }
+
+// Правила документа, разложенные по адресатам. Карты — те же, которыми обход пользовался
+// и раньше; изменилось только то, откуда они заполняются.
+type Compiled = {
+  shows: Map<string, Rule[]>
+  hides: Map<string, Rule[]>
+  requires: Map<string, Rule[]>
+  optionShows: Map<string, Map<string, Rule[]>>
+  optionHides: Map<string, Map<string, Rule[]>>
+  jumps: JumpEntry[]
+  submitBlocks: { owner: string; rule: Rule }[]
+}
+
+function compileLogic(blocks: readonly Block[]): Compiled {
+  const c: Compiled = {
+    shows: new Map(),
+    hides: new Map(),
+    requires: new Map(),
+    optionShows: new Map(),
+    optionHides: new Map(),
+    jumps: [],
+    submitBlocks: [],
+  }
+  const push = (m: Map<string, Rule[]>, key: string, r: Rule): void => {
+    const list = m.get(key)
+    if (list) list.push(r)
+    else m.set(key, [r])
+  }
+  const pushOptions = (
+    m: Map<string, Map<string, Rule[]>>,
+    blockId: string,
+    optionIds: readonly string[],
+    r: Rule,
+  ): void => {
+    let byOption = m.get(blockId)
+    if (!byOption) {
+      byOption = new Map()
+      m.set(blockId, byOption)
+    }
+    for (const id of optionIds) {
+      const list = byOption.get(id)
+      if (list) list.push(r)
+      else byOption.set(id, [r])
+    }
+  }
+
+  blocks.forEach((b, i) => {
+    // Старые поля-носители. Они лежат НА цели, поэтому guard −1: «цель ниже носителя»
+    // к ним неприменимо. Уедут вместе с полями.
+    if (b.visibleIf) push(c.shows, b.id, { when: b.visibleIf, at: i, guard: -1 })
+    if (b.requiredIf) push(c.requires, b.id, { when: b.requiredIf, at: i, guard: -1 })
+    for (const o of b.settings?.options ?? []) {
+      if (o.visibleIf) pushOptions(c.optionShows, b.id, [o.id], { when: o.visibleIf, at: i, guard: -1 })
+    }
+    for (const j of b.jumpIf ?? []) {
+      c.jumps.push({ owner: b.id, rule: { when: j.when, at: i, guard: -1 }, to: j.to, end: j.end })
+    }
+
+    if (b.type !== 'logic') return
+    // У блока одно условие на все свои действия, и позиция блока служит обеим границам
+    // сразу: источники выше неё, цели ниже.
+    const rule: Rule = { when: b.logic?.when, at: i, guard: i }
+    for (const a of b.logic?.then ?? []) {
+      switch (a.kind) {
+        case 'show':
+          push(c.shows, a.target, rule)
+          break
+        case 'hide':
+          push(c.hides, a.target, rule)
+          break
+        case 'require':
+          push(c.requires, a.target, rule)
+          break
+        case 'show_options':
+          pushOptions(c.optionShows, a.target, a.options, rule)
+          break
+        case 'hide_options':
+          pushOptions(c.optionHides, a.target, a.options, rule)
+          break
+        case 'jump':
+          c.jumps.push({ owner: b.id, rule, to: a.to, end: a.end })
+          break
+        case 'block_submit':
+          c.submitBlocks.push({ owner: b.id, rule })
+          break
+      }
+    }
+  })
+  return c
 }
 
 // Показан ли вариант. Отдельная функция, потому что «карты нет» и «вариант скрыт» —
@@ -97,7 +209,14 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
   })
 
   const decided = new Map<string, Decided>()
-  const plan: FormPlan = { pages: [], visible: new Set(), required: new Set(), options: new Map() }
+  const plan: FormPlan = {
+    pages: [],
+    visible: new Set(),
+    required: new Set(),
+    options: new Map(),
+    blocked: false,
+  }
+  const compiled = compileLogic(blocks)
 
   // Условие. Второе значение — «правило действует»: false = инертно, и каждый
   // потребитель трактует инертность по-своему («как если бы правила не было»).
@@ -154,13 +273,38 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
     }
   }
 
-  const rule = (c: LogicCondition | undefined, carrier: number): [boolean, boolean] =>
-    c === undefined ? [true, true] : evalNode(c, carrier)
+  // Сработало ли ОДНО правило. Инертное (нет условия, источник ниже носителя, оператор
+  // не подходит типу, значение не выбрано) не срабатывает никогда.
+  const fires = (r: Rule): boolean => {
+    if (r.when === undefined) return false
+    const [res, ok] = evalNode(r.when, r.at)
+    return ok && res
+  }
 
-  // Инертное правило видимости = отсутствующее, значит «показать».
-  const shows = (c: LogicCondition | undefined, carrier: number): boolean => {
-    const [res, ok] = rule(c, carrier)
-    return !ok || res
+  // Правила, адресованные ЦЕЛИ на позиции target: сколько из них действуют и сработало
+  // ли хоть одно. Действующим не считается правило, чья цель стоит выше носителя, —
+  // блок читает то, что над ним, и влияет на то, что под ним.
+  const collect = (rules: Rule[] | undefined, target: number): [boolean, boolean] => {
+    let active = false
+    let fired = false
+    for (const r of rules ?? []) {
+      if (r.guard >= target) continue
+      if (r.when === undefined) continue
+      const [res, ok] = evalNode(r.when, r.at)
+      if (!ok) continue
+      active = true
+      if (res) fired = true
+    }
+    return [active, fired]
+  }
+
+  // Видна ли цель. Две корзины, и формула не зависит от порядка блоков `logic` между
+  // собой: «показать» переворачивает умолчание цели в «скрыт», «скрыть» прячет видимое
+  // по условию (ADR §10). Ни одного действующего правила — виден, как и было.
+  const shows = (id: string, target: number): boolean => {
+    const [hasShow, showFired] = collect(compiled.shows.get(id), target)
+    const [, hideFired] = collect(compiled.hides.get(id), target)
+    return (!hasShow || showFired) && !hideFired
   }
 
   let next = 0
@@ -170,10 +314,12 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
 
     for (const [start, end] of groupRuns(page.blocks)) {
       const head = page.blocks[start]!
-      const show = visited && shows(head.visibleIf, pos.get(head.id) ?? 0)
+      const show = visited && shows(head.id, pos.get(head.id) ?? 0)
 
       for (const b of page.blocks.slice(start, end)) {
-        if (show) {
+        // Блок логики не показывается никому и ни на одной поверхности: страница, где
+        // кроме него ничего нет, — не страница (её переходы при этом считаются).
+        if (show && b.type !== 'logic') {
           plan.visible.add(b.id)
           shown.push(b)
         }
@@ -184,10 +330,13 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
           decided.set(b.id, EMPTY)
           continue
         }
-        const opts = visibleOptions(b, shows, pos.get(b.id) ?? 0)
+        const at = pos.get(b.id) ?? 0
+        const opts = visibleOptions(b, compiled, collect, at)
         if (opts !== null) plan.options.set(b.id, opts)
         decided.set(b.id, decodeAnswer(b, answers[b.id], opts))
-        if (requires(b, rule, pos.get(b.id) ?? 0)) plan.required.add(b.id)
+        if (b.required === true || collect(compiled.requires.get(b.id), at)[1]) {
+          plan.required.add(b.id)
+        }
       }
     }
 
@@ -196,9 +345,29 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
     // считаются), но респонденту не показывается: пустой шаг с одной кнопкой «Далее» —
     // это не страница.
     if (shown.length > 0) plan.pages.push(shown)
+
+    const here = new Set(page.blocks.map((b) => b.id))
+    if (page.closer) here.add(page.closer.id)
+    // «Скрыть кнопку» обрывает обход ЗДЕСЬ: страница показана, кнопки нет, идти
+    // некуда. Проверяется до переходов — уйти со страницы, которую нельзя закрыть,
+    // нельзя.
+    if (compiled.submitBlocks.some((s) => here.has(s.owner) && fires(s.rule))) {
+      plan.blocked = true
+      return
+    }
     next = i + 1
-    if (page.closer) {
-      next = nextPage(page.closer, i, pages.length, opens, rule, pos.get(page.closer.id) ?? 0)
+    for (const j of compiled.jumps) {
+      if (!here.has(j.owner) || !fires(j.rule)) continue
+      if (j.end === true) {
+        next = pages.length // страниц дальше нет: здесь кнопка «Отправить»
+        break
+      }
+      const target = j.to === undefined ? undefined : opens.get(j.to)
+      // Переход назад и в никуда инертен: обход монотонен по построению, и цикла
+      // «страница 2 → страница 1 → страница 2» не существует.
+      if (target === undefined || target <= i) continue
+      next = target
+      break
     }
   })
 
@@ -309,50 +478,26 @@ function sameAnswer(src: Block, answer: string, want: string): boolean {
   return answer === want
 }
 
-function requires(
-  b: Block,
-  rule: (c: LogicCondition | undefined, carrier: number) => [boolean, boolean],
-  carrier: number,
-): boolean {
-  if (!b.requiredIf) return b.required === true
-  const [res, ok] = rule(b.requiredIf, carrier)
-  return ok && res
-}
-
-// Видимость вариантов; null, если правил нет ни у одного (значит видны все).
+// Видимость вариантов; null, если блока не касается ни одно правило (значит видны все).
+// Формула у варианта та же, что у блока (§3.2 спеки): две корзины, порядок не влияет.
 function visibleOptions(
   b: Block,
-  shows: (c: LogicCondition | undefined, carrier: number) => boolean,
-  carrier: number,
+  compiled: Compiled,
+  collect: (rules: Rule[] | undefined, target: number) => [boolean, boolean],
+  at: number,
 ): Set<string> | null {
   const options = b.settings?.options
-  if (!options?.some((o) => o.visibleIf)) return null
+  if (!options) return null
+  const shows = compiled.optionShows.get(b.id)
+  const hides = compiled.optionHides.get(b.id)
+  if (!shows && !hides) return null
   const out = new Set<string>()
   for (const o of options) {
-    if (shows(o.visibleIf, carrier)) out.add(o.id)
+    const [hasShow, showFired] = collect(shows?.get(o.id), at)
+    const [, hideFired] = collect(hides?.get(o.id), at)
+    if ((!hasShow || showFired) && !hideFired) out.add(o.id)
   }
   return out
-}
-
-// Куда уходим со страницы i: первое сработавшее правило разрыва. Переход назад, в никуда
-// и с несработавшим условием пропускается — он инертен.
-function nextPage(
-  closer: Block,
-  i: number,
-  total: number,
-  opens: Map<string, number>,
-  rule: (c: LogicCondition | undefined, carrier: number) => [boolean, boolean],
-  carrier: number,
-): number {
-  for (const r of closer.jumpIf ?? []) {
-    const [res, ok] = rule(r.when, carrier)
-    if (!ok || !res) continue
-    if (r.end === true) return total // страниц дальше нет: здесь кнопка «Отправить»
-    const target = r.to === undefined ? undefined : opens.get(r.to)
-    if (target === undefined || target <= i) continue
-    return target
-  }
-  return i + 1
 }
 
 // Разбор ответа со вычисткой скрытых вариантов: выбранный скрытый вариант — это НЕ
