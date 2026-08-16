@@ -18,12 +18,15 @@ export function ThankYou({
   redirectUrl,
   bridge,
   badge,
+  preview = false,
 }: {
   text: string
   redirectUrl: string
   bridge: HostBridge | null
   /** Бейдж площадки: решение сервера, то же, что на самой форме. */
   badge: boolean
+  /** Предпросмотр вставки: экран настоящий, но ответа не было — говорим об этом. */
+  preview?: boolean
 }) {
   const { message, target, delayMs } = planThankYou(text, redirectUrl)
   // Ссылка-запасной путь показывается, когда переход уже запущен: если он не
@@ -60,6 +63,14 @@ export function ThankYou({
       {target && (
         <p className="status-detail">
           {stalled ? <a href={target}>Перейти на сайт</a> : 'Сейчас перенаправим…'}
+        </p>
+      )}
+      {/* Формулировка «так выглядит» намеренная: текст благодарности автора стоит
+          строкой выше и обычно сообщает, что ответ отправлен, — приписка «ответ не
+          отправлен» рядом с ним читалась бы как спор двух строк на одном экране. */}
+      {preview && (
+        <p className="status-detail">
+          Предпросмотр: так выглядит экран после отправки — сам ответ никуда не ушёл.
         </p>
       )}
       {badge && <Badge />}

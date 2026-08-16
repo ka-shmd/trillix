@@ -26,6 +26,7 @@ import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
+import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug.embed'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
@@ -117,6 +118,11 @@ const AppSettingsAccountRoute = AppSettingsAccountRouteImport.update({
   path: '/settings/account',
   getParentRoute: () => AppRoute,
 } as any)
+const AppFormsSlugEmbedRoute = AppFormsSlugEmbedRouteImport.update({
+  id: '/forms/$slug/embed',
+  path: '/forms/$slug/embed',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsSlugEditRoute = AppFormsSlugEditRouteImport.update({
   id: '/forms/$slug/edit',
   path: '/forms/$slug/edit',
@@ -169,6 +175,7 @@ export interface FileRoutesByFullPath {
   '/workspaces/': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
+  '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
@@ -192,6 +199,7 @@ export interface FileRoutesByTo {
   '/workspaces': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
+  '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
@@ -218,6 +226,7 @@ export interface FileRoutesById {
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
+  '/_app/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/_app/forms/$slug/_manage/funnel': typeof AppFormsSlugManageFunnelRoute
   '/_app/forms/$slug/_manage/responses': typeof AppFormsSlugManageResponsesRoute
   '/_app/forms/$slug/_manage/share': typeof AppFormsSlugManageShareRoute
@@ -243,6 +252,7 @@ export interface FileRouteTypes {
     | '/workspaces/'
     | '/forms/$slug'
     | '/forms/$slug/edit'
+    | '/forms/$slug/embed'
     | '/forms/$slug/funnel'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
@@ -266,6 +276,7 @@ export interface FileRouteTypes {
     | '/workspaces'
     | '/forms/$slug'
     | '/forms/$slug/edit'
+    | '/forms/$slug/embed'
     | '/forms/$slug/funnel'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
@@ -291,6 +302,7 @@ export interface FileRouteTypes {
     | '/_app/workspaces/'
     | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
+    | '/_app/forms/$slug/embed'
     | '/_app/forms/$slug/_manage/funnel'
     | '/_app/forms/$slug/_manage/responses'
     | '/_app/forms/$slug/_manage/share'
@@ -426,6 +438,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsAccountRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/forms/$slug/embed': {
+      id: '/_app/forms/$slug/embed'
+      path: '/forms/$slug/embed'
+      fullPath: '/forms/$slug/embed'
+      preLoaderRoute: typeof AppFormsSlugEmbedRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/$slug/edit': {
       id: '/_app/forms/$slug/edit'
       path: '/forms/$slug/edit'
@@ -497,6 +516,7 @@ interface AppRouteChildren {
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
+  AppFormsSlugEmbedRoute: typeof AppFormsSlugEmbedRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -508,6 +528,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
+  AppFormsSlugEmbedRoute: AppFormsSlugEmbedRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

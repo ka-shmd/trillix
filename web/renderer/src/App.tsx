@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 
 import { Badge } from '@fields/Badge'
-import { type HostBridge } from './features/form/embed'
+import { type EmbedOptions, type HostBridge } from './features/form/embed'
 import { FormView } from './features/form/FormView'
 import { slugFromPath } from './features/form/slug'
 import { usePublicForm } from './features/form/usePublicForm'
@@ -10,11 +10,11 @@ import { usePublicForm } from './features/form/usePublicForm'
 // bridge не null, когда страница открыта во фрейме на чужом сайте (фаза 20).
 export function App({
   bridge,
-  redirectSelf,
+  embed,
 }: {
   bridge: HostBridge | null
-  /** Переход после отправки исполняет сам фрейм (`data-redirect="frame"` у сниппета). */
-  redirectSelf: boolean
+  /** Параметры вставки; null — форма открыта прямой ссылкой, а не во фрейме. */
+  embed: EmbedOptions | null
 }) {
   useHostHeight(bridge)
   const slug = slugFromPath(window.location.pathname)
@@ -24,9 +24,7 @@ export function App({
     case 'loading':
       return <StatusScreen title="Загрузка формы…" />
     case 'ok':
-      return (
-        <FormView slug={slug} form={state.form} bridge={bridge} redirectSelf={redirectSelf} />
-      )
+      return <FormView slug={slug} form={state.form} bridge={bridge} embed={embed} />
     case 'closed':
       // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
       // название и текст владельца, а не безликое «недоступна» (шаг 4).

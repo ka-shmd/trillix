@@ -41,7 +41,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
@@ -109,7 +108,6 @@ export function DesignDrawer({
   // и она на бэке. Панель, отключающая контролы, отняла бы у автора возможность
   // посмотреть, за что он платит, — то есть сам повод заплатить.
   const canCustomize = useFeatureAllowed('form_design_custom')
-  const canRemoveBadge = useFeatureAllowed('form_branding')
   const canUseCSS = useFeatureAllowed('form_custom_css')
 
   // Тема, которую автор выбрал, но которая СОТРЁТ его настройки: держим её здесь,
@@ -172,11 +170,6 @@ export function DesignDrawer({
     setCssDraft(null)
     setDesign(patchTop(design, 'css', value.trim() === '' ? undefined : value), 'design:css')
   }
-
-  // «Показывать» = отсутствие ключа, «не показывать» = false. Второго
-  // представления у первого состояния нет — этого же требует валидатор.
-  const patchBranding = (show: boolean) =>
-    setDesign(patchTop(design, 'branding', show ? undefined : false))
 
   // dflt — выбор значения по умолчанию снимает ключ, а не пишет его.
   const dflt = (value: string, fallback: string) => (value === fallback ? undefined : value)
@@ -443,33 +436,9 @@ export function DesignDrawer({
             )}
           </Group>
 
-          <Separator />
-
-          {/* БЕЙДЖ — переключатель, а не дропдаун: состояний два, и «показывать» это
-              отсутствие ключа в схеме. Гейт у него ДРУГОЙ природы, чем у остального
-              оформления: публикацию он не держит (снять намерение можно на любом
-              тарифе), а срабатывает при отдаче формы — поэтому на бесплатном тарифе
-              выключенный переключатель честно предупреждает, что бейдж всё равно
-              останется. */}
-          <Group title="Бейдж" locked={!canRemoveBadge}>
-            <Wide>
-              <label className="flex items-center justify-between gap-3 text-sm">
-                <span>Показывать «Сделано в Trillix»</span>
-                <Switch
-                  checked={design?.branding !== false}
-                  onCheckedChange={(on) => patchBranding(on)}
-                />
-              </label>
-            </Wide>
-            {design?.branding === false && !canRemoveBadge && (
-              <Wide>
-                <Warning>
-                  На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и
-                  сработает сразу после перехода на платный.
-                </Warning>
-              </Wide>
-            )}
-          </Group>
+          {/* БЕЙДЖ ПЕРЕЕХАЛ на экран «Встроить» (решение владельца 2026-08-16): автор
+              думает про него, когда решает, как форма выглядит на сайте, а не когда
+              подбирает цвета. Настройка та же — `design.branding` в схеме. */}
         </div>
       </SheetContent>
 

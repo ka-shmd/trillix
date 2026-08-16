@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
 
 // Сборка кода для вставки формы на чужой сайт (фаза 20). Чистые функции: экран
@@ -8,8 +10,42 @@ import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
 // Настройки вставки нигде не сохраняются (решение владельца 2026-08-05): они живут
 // в самом сниппете, на чужой странице, и правятся там же.
 
-export type EmbedMode = 'block' | 'widget' | 'page'
-export type WidgetPosition = 'bottom-right' | 'bottom-left'
+// Вид вставки живёт в адресе экрана «Встроить», поэтому у него есть схема разбора:
+// параметр правят руками, и опечатка обязана дать умолчание, а не уронить экран.
+export const embedModeSchema = z.enum(['block', 'widget', 'page'])
+export type EmbedMode = z.infer<typeof embedModeSchema>
+export const DEFAULT_EMBED_MODE: EmbedMode = 'block'
+
+/** Как вид вставки называется и что обещает — один текст на все три экрана. */
+export const MODE_TITLES: Record<EmbedMode, string> = {
+  block: 'Блок',
+  widget: 'Виджет',
+  page: 'Страница',
+}
+export const MODE_HINTS: Record<EmbedMode, string> = {
+  block: 'Форма стоит в потоке страницы и растёт по мере заполнения',
+  widget: 'Кнопка в углу экрана открывает форму поверх сайта',
+  page: 'Форма занимает весь экран — удобно длинной анкете',
+}
+
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+
+export const WIDGET_POSITIONS: Record<WidgetPosition, string> = {
+  'bottom-right': 'Справа внизу',
+  'bottom-left': 'Слева внизу',
+  'top-right': 'Справа вверху',
+  'top-left': 'Слева вверху',
+}
+
+/** Что открывает виджет. Зеркалит `OpenTrigger` загрузчика (`embed/api.ts`). */
+export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
+
+export const OPEN_TRIGGERS: Record<OpenTrigger, string> = {
+  click: 'По клику на кнопку',
+  delay: 'Через паузу после загрузки',
+  scroll: 'Когда прокрутят страницу',
+  exit: 'Когда уводят курсор со страницы',
+}
 
 export interface SnippetOptions {
   /** База публичной части — та же, что у ссылки на форму (publicUrl.ts). */
@@ -22,10 +58,56 @@ export interface SnippetOptions {
   transparent?: boolean
   /** Высота простого iframe: у него авторесайза нет, размер задаётся сразу. */
   height?: number
+  /** Высота блока следует за содержимым; выключено — фрейм фиксирован и скроллится сам. */
+  dynamicHeight?: boolean
+  /** Заголовок формы не показывать: над блоком на чужой странице обычно есть свой. */
+  hideTitle?: boolean
+  /** Ширина панели виджета. */
+  width?: number
+  /** Тёмная подложка под модалкой виджета. */
+  overlay?: boolean
+  /** Что открывает виджет. */
+  open?: OpenTrigger
+  /** Секунды у `delay`, проценты прокрутки у `scroll`. */
+  openValue?: number
+  /** Убрать виджет со страницы после отправки ответа. */
+  hideOnSubmit?: boolean
+  /** Прижать содержимое влево независимо от оформления формы. */
+  alignLeft?: boolean
+  /**
+   * Предпросмотр: та же вставка, но форма не считает визит и не отправляет ответ.
+   *
+   * Флаг ставит ТОЛЬКО макет на экране «Встроить»; в коде, который видит и копирует
+   * автор, его нет. Разница между показанным и исполненным кодом ровно в этом одном
+   * атрибуте — и она существует затем, чтобы предпросмотр не оставлял следов
+   * (ARCHITECTURE §10).
+   */
+  preview?: boolean
 }
 
 /** Высота простого `<iframe>` без загрузчика: подстраиваться ему нечем. */
 export const PLAIN_IFRAME_HEIGHT = 720
+
+/**
+ * Высота блока до первого сообщения о размере — зеркалит `DEFAULT_HEIGHT` загрузчика
+ * (`web/renderer/embed/api.ts`). Значение по умолчанию в сниппет не пишется: атрибут
+ * без него означает ровно то же самое.
+ */
+export const DEFAULT_BLOCK_HEIGHT = 520
+
+/** Ширина панели виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
+export const DEFAULT_WIDGET_WIDTH = 376
+
+/**
+ * ПАНЕЛЬ КАБИНЕТА НАЧИНАЕТ БЕЗ ЗАТЕМНЕНИЯ, а загрузчик без атрибута его показывает, и
+ * это не расхождение: умолчание загрузчика — часть бессрочного контракта `v1.js`, где
+ * вставки без атрибута уже работают на чужих сайтах. Поэтому кабинет пишет
+ * `data-overlay="none"` явным атрибутом, а не переворачивает умолчание.
+ */
+
+/** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
+export const DEFAULT_OPEN_DELAY = 5
+export const DEFAULT_OPEN_SCROLL = 50
 
 const loaderUrl = (baseUrl: string) => `${baseUrl}/embed/v1.js`
 
@@ -46,13 +128,61 @@ export function scriptSnippet(opts: SnippetOptions): string {
   if (opts.mode === 'widget') {
     attrs.push(`data-trillix-widget="${escapeAttr(opts.slug)}"`)
     if (opts.label) attrs.push(`data-label="${escapeAttr(opts.label)}"`)
-    if (opts.position === 'bottom-left') attrs.push('data-position="bottom-left"')
+    if (opts.position && opts.position !== 'bottom-right') {
+      attrs.push(`data-position="${opts.position}"`)
+    }
+    if (opts.width && opts.width !== DEFAULT_WIDGET_WIDTH) attrs.push(`data-width="${opts.width}"`)
+    if (opts.overlay === false) attrs.push('data-overlay="none"')
+    // Триггер и его значение пишутся вместе: «через паузу» без числа читалось бы как
+    // «через сколько-то», а умолчание живёт в загрузчике и здесь не дублируется.
+    if (opts.open && opts.open !== 'click') {
+      attrs.push(`data-open="${opts.open}"`)
+      if (opts.openValue) attrs.push(`data-open-value="${opts.openValue}"`)
+    }
+    if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   } else {
     attrs.push(`data-trillix-form="${escapeAttr(opts.slug)}"`)
     if (opts.mode === 'page') attrs.push('data-mode="page"')
     if (opts.transparent) attrs.push('data-bg="transparent"')
+    // Высота нужна только там, где фрейм стоит в потоке: у виджета её ведёт модалка,
+    // у страницы — вьюпорт. Пишем, лишь когда автор отошёл от умолчания загрузчика.
+    if (opts.mode === 'block' && opts.height && opts.height !== DEFAULT_BLOCK_HEIGHT) {
+      attrs.push(`data-height="${opts.height}"`)
+    }
+    if (opts.mode === 'block' && opts.dynamicHeight === false) {
+      attrs.push('data-dynamic-height="0"')
+    }
   }
+  // ДВЕ НАСТРОЙКИ ВИДА ПИШУТСЯ НЕ ВО ВСЕХ РЕЖИМАХ, и оба ограничения — здесь, а не
+  // только в панели: иначе включённая у блока настройка молча уезжала бы в сниппет
+  // после переключения вида, где её контрола нет и увидеть её негде.
+  //
+  // Скрытый заголовок — не у страницы: там форма и есть вся страница, и прятать её
+  // заголовок значит оставить документ вовсе без него.
+  if (opts.hideTitle && opts.mode !== 'page') attrs.push('data-hide-title="1"')
+  // Прижатие влево — только у блока: у виджета и страницы поля холста единственное,
+  // что отделяет форму от края панели и края экрана (то же правило продублировано
+  // селектором в рендерере — оно про вид, а не про кабинет).
+  if (opts.alignLeft && opts.mode === 'block') attrs.push('data-align="left"')
+  if (opts.preview) attrs.push('data-preview="1"')
   return `<script src="${loaderUrl(opts.baseUrl)}" ${attrs.join(' ')} async></script>`
+}
+
+/**
+ * frameUrl — адрес формы во фрейме: то же, что строит загрузчик (`frameSrc`).
+ *
+ * Отдаётся автору и как «ссылка для вставки» (Notion, Ghost, Canva умеют вставлять
+ * фрейм по адресу), и как `src` голого `<iframe>` — это один и тот же адрес, поэтому
+ * и собирается в одном месте.
+ */
+export function frameUrl(opts: SnippetOptions): string {
+  // У виджета своего адреса нет: модалка показывает ту же форму, что и блок.
+  const params = new URLSearchParams({ embed: opts.mode === 'widget' ? 'block' : opts.mode })
+  if (opts.transparent) params.set('bg', 'transparent')
+  if (opts.hideTitle && opts.mode !== 'page') params.set('hideTitle', '1')
+  if (opts.alignLeft && opts.mode === 'block') params.set('align', 'left')
+  if (opts.preview) params.set('preview', '1')
+  return `${opts.baseUrl}/r/${encodeURIComponent(opts.slug)}?${params.toString()}`
 }
 
 /**
@@ -63,11 +193,17 @@ export function scriptSnippet(opts: SnippetOptions): string {
  * известна и показывается рядом: высота фиксированная, виджета не существует.
  */
 export function iframeSnippet(opts: SnippetOptions): string {
-  const params = new URLSearchParams({ embed: opts.mode === 'widget' ? 'block' : opts.mode })
-  if (opts.transparent) params.set('bg', 'transparent')
-  const src = `${opts.baseUrl}/r/${encodeURIComponent(opts.slug)}?${params.toString()}`
-  const height = opts.mode === 'page' ? '100%' : String(opts.height ?? PLAIN_IFRAME_HEIGHT)
-  return `<iframe src="${escapeAttr(src)}" title="Форма" width="100%" height="${height}" style="border:0"></iframe>`
+  const src = frameUrl(opts)
+  // «Страница» и без загрузчика обязана замещать содержимое, а не быть высоким блоком
+  // в потоке: фиксированный слой во весь вьюпорт — единственное, чем это выражается в
+  // одном теге. Остальным режимам хватает ширины и высоты.
+  const style =
+    opts.mode === 'page'
+      ? 'position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483000'
+      : 'border:0'
+  const size =
+    opts.mode === 'page' ? '' : ` width="100%" height="${opts.height ?? PLAIN_IFRAME_HEIGHT}"`
+  return `<iframe src="${escapeAttr(src)}" title="Форма"${size} style="${style}"></iframe>`
 }
 
 /** Одно предзаполняемое поле: id блока и подпись, которой вопрос назван в форме. */

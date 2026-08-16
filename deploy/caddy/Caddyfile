@@ -10,8 +10,9 @@
 # Статика фронтов раздаётся напрямую (/srv/static/{app,renderer} из volume);
 # в Go проксируется только динамика.
 
-# Заголовки безопасности (шаг 8), общие для обоих сайтов; различие только во
-# фрейминге — аргументы: {args[0]} = матчер путей, {args[1]} = frame-ancestors.
+# Заголовки безопасности (шаг 8), общие для обоих сайтов; различия — аргументами:
+# {args[0]} = матчер путей, {args[1]} = frame-ancestors, {args[2]} = script-src,
+# {args[3]} = frame-src.
 # CSP: скрипты только со своего origin (собранные бандлы без inline-скриптов —
 # сильная защита от XSS); 'unsafe-inline' у стилей неизбежен (Radix/dnd-kit пишут
 # инлайн-style), но низкориск; всё прочее — 'self'. data: у img/font — иконки/шрифты.
@@ -30,6 +31,15 @@
 # пустой заголовок. Поэтому он не параметр сниппета, а отдельная директива там,
 # где нужен; где не нужен — его просто нет.
 #
+# ПОЧЕМУ script-src И frame-src ТОЖЕ СТАЛИ АРГУМЕНТАМИ (экран «Встроить»,
+# ADR §10). Предпросмотр вставки в кабинете показывает форму НАСТОЯЩИМ сниппетом:
+# в макете чужой страницы исполняется тот же `/embed/v1.js` с домена рендерера, а он
+# создаёт фрейм на `/r/{slug}` — то есть кабинету нужны оба исключения. Оба заданы
+# С ПУТЁМ, и это не аккуратность: с домена рендерера раздаётся `/media/*` с
+# пользовательскими загрузками, и `script-src https://f.example` без пути сделал бы
+# любой загруженный автором `.js` легальным скриптом на домене, где живёт cookie
+# сессии. У рендерера оба остаются `'self'`.
+#
 # HSTS (TD-13): срок берётся из env {$HSTS_MAX_AGE}, а не хардкодится — иначе
 # prod-local на *.localhost запирал бы браузер на https для всего localhost и мешал
 # другим локальным проектам. prod-local → HSTS_MAX_AGE=0 (max-age=0 = «забыть HSTS»,
@@ -40,7 +50,7 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Strict-Transport-Security "max-age={$HSTS_MAX_AGE}; includeSubDomains"
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors {args[1]}"
+		Content-Security-Policy "default-src 'self'; script-src {args[2]}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src {args[3]}; frame-ancestors {args[1]}"
 		-Server
 	}
 }
@@ -101,7 +111,11 @@
 	# Кабинет не встраивается никуда и никогда: сюда ходит cookie сессии, и фрейм
 	# на чужой странице — это клик-джекинг по живому аккаунту. Ослабление фазы 20
 	# сюда не распространяется, на что есть регресс в e2e.
-	import secheaders * "'none'"
+	#
+	# Зато САМ кабинет фреймит рендерер — на экране «Встроить» (предпросмотр вставки):
+	# отсюда загрузчик в script-src и страница формы в frame-src, оба с путём. Это
+	# разрешение НАРУЖУ, а не внутрь: незафреймливаемость кабинета им не затрагивается.
+	import secheaders * "'none'" "'self' https://{$RENDERER_DOMAIN}/embed/" "'self' https://{$RENDERER_DOMAIN}/r/"
 	header * X-Frame-Options DENY
 
 	# Приватный API кабинета — тот же origin, поэтому CORS не нужен, cookie
@@ -155,8 +169,8 @@
 	# браузерах, которые смотрят на него первым.
 	@embeddable path /r/*
 	@chrome not path /r/*
-	import secheaders @embeddable "*"
-	import secheaders @chrome "'self'"
+	import secheaders @embeddable "*" "'self'" "'self'"
+	import secheaders @chrome "'self'" "'self'" "'self'"
 	header @chrome X-Frame-Options SAMEORIGIN
 
 	# HTML-документ формы с OG-мета — из Go (краулеры читают <head> без JS).

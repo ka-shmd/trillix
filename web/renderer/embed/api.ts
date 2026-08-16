@@ -9,7 +9,21 @@
 export type EmbedMode = 'block' | 'widget' | 'page'
 
 /** Угол, в котором стоит кнопка виджета. */
-export type WidgetPosition = 'bottom-right' | 'bottom-left'
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+
+/**
+ * Что открывает виджет: клик по кнопке или одно из наблюдений за посетителем.
+ *
+ * Автооткрытие срабатывает ОДИН РАЗ за загрузку страницы (см. `v1.ts`): всплывающая
+ * снова и снова форма — это не второй шанс, а причина уйти с сайта.
+ */
+export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
+
+const TRIGGERS: readonly string[] = ['click', 'delay', 'scroll', 'exit']
+
+/** Секунды до автооткрытия по задержке и доля прокрутки (%) для скролла. */
+export const DEFAULT_OPEN_DELAY = 5
+export const DEFAULT_OPEN_SCROLL = 50
 
 export interface MountOptions {
   /** Короткий адрес формы, тот же, что в публичной ссылке. */
@@ -25,6 +39,34 @@ export interface MountOptions {
   label?: string
   position?: WidgetPosition
   /**
+   * Высота блока следует за содержимым (умолчание). Выключено — фрейм остаётся ростом
+   * `height`, а форма скроллится внутри него: так вставку ставят в сетку фиксированной
+   * высоты, где растущий блок ломал бы раскладку чужой страницы.
+   */
+  dynamicHeight?: boolean
+  /** Не показывать заголовок формы: на чужой странице над блоком обычно есть свой. */
+  hideTitle?: boolean
+  /** Ширина панели виджета в пикселях. */
+  width?: number
+  /** Тёмная подложка под панелью виджета (умолчание). */
+  overlay?: boolean
+  /** Что открывает виджет; `click` — умолчание. */
+  open?: OpenTrigger
+  /** Секунды у `delay`, проценты прокрутки у `scroll`. У остальных не значит ничего. */
+  openValue?: number
+  /** Убрать виджет со страницы после отправки ответа. */
+  hideOnSubmit?: boolean
+  /** Прижать содержимое влево независимо от оформления формы. */
+  alignLeft?: boolean
+  /**
+   * Предпросмотр вставки: форма работает, но визит не считается и ответ не уходит.
+   *
+   * Ради экрана «Встроить» в кабинете, где вставка показывается ЭТИМ ЖЕ загрузчиком
+   * (ADR §10). В сниппете, который получает владелец сайта, флага нет — кабинет
+   * добавляет его только тому экземпляру, что живёт в макете.
+   */
+  preview?: boolean
+  /**
    * Значения полей, известные приложению-хозяину: `{ '<id блока>': 'ivan@site.ru' }`.
    *
    * Полей НЕ создаёт: заполняет только те вопросы, которые автор формы добавил сам.
@@ -38,6 +80,13 @@ export const DEFAULT_LABEL = 'Открыть форму'
 
 /** Высота фрейма до первого `resize`. Форма из пары вопросов примерно столько и занимает. */
 export const DEFAULT_HEIGHT = 520
+
+/**
+ * Ширина панели виджета. Не «модалка по центру», а колонка в углу страницы — отсюда и
+ * число: 376 это ширина, при которой поля формы читаются, а чужой сайт остаётся виден
+ * (замер Tally).
+ */
+export const DEFAULT_WIDTH = 376
 
 // Метки источника — закрытый список, тот же, что у рендерера и сервера. Произвольные
 // параметры чужой страницы в аналитику не уезжают.
@@ -73,6 +122,9 @@ export function frameSrc(origin: string, opts: MountOptions, hostSearch: string)
   // сообщение `redirect`, вправе лишь промолчать. Поэтому выбор владельца сайта едет
   // во фрейм параметром, а не остаётся знанием одного загрузчика.
   if (opts.redirect === 'frame') params.set('redirect', 'frame')
+  if (opts.hideTitle) params.set('hideTitle', '1')
+  if (opts.alignLeft) params.set('align', 'left')
+  if (opts.preview) params.set('preview', '1')
   const host = new URLSearchParams(hostSearch)
   for (const key of UTM_KEYS) {
     const value = host.get(key)
@@ -106,18 +158,41 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   const widget = el.getAttribute('data-trillix-widget')
   const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
-  const height = Number(el.getAttribute('data-height'))
   const label = el.getAttribute('data-label')
+  const trigger = el.getAttribute('data-open')
   return {
     form,
     mode: widget ? 'widget' : el.getAttribute('data-mode') === 'page' ? 'page' : 'block',
     transparent: el.getAttribute('data-bg') === 'transparent',
     // Мусор в атрибуте (пусто, «500px», «много») — не повод схлопнуть блок в ноль.
-    height: Number.isFinite(height) && height > 0 ? height : DEFAULT_HEIGHT,
+    height: size(el.getAttribute('data-height'), DEFAULT_HEIGHT),
+    // Умолчания ВКЛЮЧЕНЫ, поэтому читается только явное выключение: сниппеты, уже
+    // стоящие на чужих сайтах, этих атрибутов не несут и обязаны вести себя как раньше.
+    dynamicHeight: el.getAttribute('data-dynamic-height') !== '0',
     redirect: el.getAttribute('data-redirect') === 'frame' ? 'frame' : 'top',
+    hideTitle: el.getAttribute('data-hide-title') === '1',
+    alignLeft: el.getAttribute('data-align') === 'left',
+    preview: el.getAttribute('data-preview') === '1',
     label: label !== null && label !== '' ? label : DEFAULT_LABEL,
-    position: el.getAttribute('data-position') === 'bottom-left' ? 'bottom-left' : 'bottom-right',
+    position: readPosition(el.getAttribute('data-position')),
+    width: size(el.getAttribute('data-width'), DEFAULT_WIDTH),
+    overlay: el.getAttribute('data-overlay') !== 'none',
+    open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
+    openValue: size(el.getAttribute('data-open-value'), 0),
+    hideOnSubmit: el.getAttribute('data-hide-on-submit') === '1',
   }
+}
+
+/** Число из атрибута; мусор и не-положительное дают умолчание. */
+function size(raw: string | null, fallback: number): number {
+  const value = Number(raw)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+// Неизвестный угол — правый нижний: сниппет с опечаткой обязан показать кнопку, а не
+// потерять её за краем экрана.
+function readPosition(raw: string | null): WidgetPosition {
+  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' ? raw : 'bottom-right'
 }
 
 /**

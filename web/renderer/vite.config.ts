@@ -1,5 +1,6 @@
+import { stat } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { defineConfig } from 'vite'
+import { build, defineConfig, type Plugin } from 'vite'
 
 // @entities → общий каталог доменных Zod-схем web/shared/entities, единый с
 // кабинетом (см. web/shared/entities/formSchema.ts). Лежит вне корня проекта,
@@ -13,6 +14,58 @@ const fields = fileURLToPath(new URL('../shared/fields', import.meta.url))
 const preactPkg = fileURLToPath(new URL('./node_modules/preact', import.meta.url))
 const zodPkg = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 
+// ЗАГРУЗЧИК ВСТРОЕННОЙ ФОРМЫ В DEV. `/embed/v1.js` собирается вторым проходом
+// (vite.embed.config.ts) и в dev не существует вовсе: dev-сервер отдаёт `src/`, а не
+// `dist/`. До экрана «Встроить» это никого не задевало — вставку смотрели на
+// prod-local, — но предпросмотр в кабинете грузит ЭТОТ ЖЕ файл, и без него экран в dev
+// показывал бы пустой прямоугольник.
+//
+// Собираем тем же конфигом, что и прод (формат IIFE, `document.currentScript`), в
+// память. Пересборка — по времени правки исходников загрузчика: без кеша каждое
+// переключение настройки в панели платило бы полной сборкой.
+const embedConfig = fileURLToPath(new URL('./vite.embed.config.ts', import.meta.url))
+const embedSources = ['./embed/v1.ts', './embed/api.ts'].map((p) =>
+  fileURLToPath(new URL(p, import.meta.url)),
+)
+
+function embedLoaderDev(): Plugin {
+  let cache: { stamp: number; code: string } | null = null
+
+  const latestChange = async () => {
+    const times = await Promise.all(embedSources.map(async (f) => (await stat(f)).mtimeMs))
+    return Math.max(...times)
+  }
+
+  return {
+    name: 'trillix:embed-loader-dev',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use('/embed/v1.js', (_req, res) => {
+        void (async () => {
+          const stamp = await latestChange()
+          if (cache?.stamp !== stamp) {
+            const result = await build({
+              configFile: embedConfig,
+              logLevel: 'silent',
+              build: { write: false },
+            })
+            const bundles = Array.isArray(result) ? result : [result]
+            const chunk = 'output' in bundles[0]! ? bundles[0]!.output[0] : null
+            if (chunk === null || chunk.type !== 'chunk') {
+              res.statusCode = 500
+              res.end('// сборку загрузчика получить не удалось')
+              return
+            }
+            cache = { stamp, code: chunk.code }
+          }
+          res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+          res.end(cache.code)
+        })()
+      })
+    },
+  }
+}
+
 // Публичный рендерер на :5174.
 // https://vite.dev/config/
 export default defineConfig({
@@ -24,6 +77,7 @@ export default defineConfig({
   // где ошибка выглядит как «@fields не видят React», не стоит. Источник импорта
   // рантайма остаётся дефолтным ('react/jsx-runtime') — его и уводит алиас ниже.
   oxc: { jsx: { runtime: 'automatic' } },
+  plugins: [embedLoaderDev()],
   resolve: {
     // Рендерер работает на Preact: React-API остаётся в исходниках, но рантайм —
     // preact/compat (ARCHITECTURE §«Бандл», ADR). Алиас живёт ТОЛЬКО здесь: те же

@@ -15,6 +15,9 @@
 import {
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
+  DEFAULT_OPEN_DELAY,
+  DEFAULT_OPEN_SCROLL,
+  DEFAULT_WIDTH,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -37,6 +40,8 @@ interface Mounted {
   handlers: { [K in EventName]?: ((payload: { submissionId?: string }) => void)[] }
   /** Виджет: оболочка модалки, у блока и страницы её нет. */
   overlay?: HTMLDivElement
+  /** Виджет: кнопка на странице — её убирает `data-hide-on-submit`. */
+  button?: HTMLButtonElement
 }
 
 const mounted: Mounted[] = []
@@ -77,7 +82,10 @@ function createFrame(opts: MountOptions): HTMLIFrameElement {
     frame.style.height = '100dvh'
   } else {
     frame.style.height = (opts.height ?? DEFAULT_HEIGHT) + 'px'
-    frame.scrolling = 'no'
+    // Скролл внутри фрейма запрещаем только там, где высоту ведёт содержимое. С
+    // выключенным `data-dynamic-height` фрейм остаётся заданного роста, и прокрутка
+    // формы обязана остаться — иначе длинная форма просто обрезается.
+    if (opts.dynamicHeight !== false) frame.scrolling = 'no'
   }
   return frame
 }
@@ -96,6 +104,39 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
   })
 }
 
+/**
+ * mountFullPage — режим «страница»: форма ЗАМЕЩАЕТ СОБОЙ содержимое чужой страницы.
+ *
+ * Фрейм ложится фиксированным слоем во весь вьюпорт, а не встаёт в поток на месте
+ * скрипта: в потоке «страница» отличалась от блока только высотой в 100dvh — то есть
+ * ничем, кроме размера, и обещание режима не выполнялось. Здесь же под формой не
+ * видно ни шапки сайта, ни его подвала, и прокрутка хозяина заперта: за фреймом
+ * прокручивать нечего, а незапертая страница «уезжала» бы колесом поверх формы.
+ *
+ * Закрытия у режима нет намеренно: это не оверлей, а страница. Владелец сайта ставит
+ * такой сниппет на отдельный адрес, где кроме формы ничего и не должно быть.
+ */
+function mountFullPage(opts: MountOptions): EmbedHandle | null {
+  if (ORIGIN === '') return null
+  const frame = createFrame(opts)
+  frame.style.position = 'fixed'
+  frame.style.inset = '0'
+  frame.style.width = '100%'
+  frame.style.zIndex = '2147483000'
+  document.body.appendChild(frame)
+  pageMounted = true
+  lockScroll()
+  const entry: Mounted = { frame, opts, handlers: {} }
+  mounted.push(entry)
+  return handleOf(entry, () => {
+    frame.remove()
+    pageMounted = false
+    unlockScroll()
+    const i = mounted.indexOf(entry)
+    if (i >= 0) mounted.splice(i, 1)
+  })
+}
+
 // --- Виджет: кнопка и модалка -----------------------------------------------
 //
 // Открытый виджет ровно один: две формы поверх друг друга — не сценарий, а способ
@@ -105,25 +146,41 @@ let opener: HTMLElement | null = null
 let savedOverflow = ''
 let savedPadding = ''
 
+// СКРОЛЛ ЗАПИРАЕТСЯ ТОЛЬКО У ПОЛНОЭКРАННОГО ВИДЖЕТА. Панель в углу оставляет чужую
+// страницу живой — это её смысл; запертый скролл там означал бы «сайт заблокирован
+// формой, которую человек не открывал», особенно при автооткрытии.
+//
+// Флаг обязателен: запирает открытие, отпирает закрытие, а полноэкранность считается
+// по вьюпорту и между этими моментами может измениться (поворот телефона).
+let scrollLocked = false
+// На странице стоит вставка режима 'page': её замок скролла живёт, пока живёт сама
+// вставка, и закрытие виджета его снимать не вправе.
+let pageMounted = false
+
 function lockScroll() {
-  // Полоса прокрутки исчезает вместе со скроллом, и страница под модалкой прыгает
+  if (scrollLocked) return
+  // Полоса прокрутки исчезает вместе со скроллом, и страница под формой прыгает
   // вправо на её ширину. Компенсируем ровно этой шириной.
   const gap = window.innerWidth - document.documentElement.clientWidth
   savedOverflow = document.body.style.overflow
   savedPadding = document.body.style.paddingRight
   document.body.style.overflow = 'hidden'
   if (gap > 0) document.body.style.paddingRight = gap + 'px'
+  scrollLocked = true
 }
 
 function unlockScroll() {
+  if (!scrollLocked || pageMounted) return
   document.body.style.overflow = savedOverflow
   document.body.style.paddingRight = savedPadding
+  scrollLocked = false
 }
 
 function closeWidget() {
   const entry = openWidgetEntry
   if (!entry?.overlay) return
   entry.overlay.style.display = 'none'
+  if (entry.button) entry.button.style.display = ''
   openWidgetEntry = null
   unlockScroll()
   // Фокус возвращается туда, откуда виджет открыли: иначе человек, закрывший форму
@@ -133,86 +190,143 @@ function closeWidget() {
   emit(entry, 'close')
 }
 
+// ВИДЖЕТ — ПАНЕЛЬ В УГЛУ, А НЕ МОДАЛКА ПО ЦЕНТРУ (правка владельца 2026-08-16 по
+// образцу Tally). Разница не косметическая: панель встаёт там же, где стояла кнопка,
+// и потому читается как её продолжение, а не как перехват страницы. Отсюда три
+// следствия, каждое из которых раньше было наоборот:
+//
+//   • страница остаётся живой — скролл не запирается, а без затемнения по ней ещё и
+//     можно кликать (подложка тогда пропускает события);
+//   • фокус не запирается: уйти Tab'ом обратно на сайт — законный ход, а не побег из
+//     модалки. Esc и кнопка закрытия остаются;
+//   • затемнение (`data-overlay`) становится настройкой вида, а не признаком модальности.
+//
+// Полноэкранным виджет остаётся там, где панель в углу бессмысленна: узкий экран (на
+// телефоне угол — это весь экран) и режим 'page', открытый программно.
 function buildWidget(opts: MountOptions): Mounted {
+  const corner = opts.position ?? 'bottom-right'
+  const dim = opts.overlay !== false
+
   const overlay = document.createElement('div')
   overlay.style.position = 'fixed'
   overlay.style.inset = '0'
-  overlay.style.background = 'rgba(15, 23, 42, 0.55)'
+  overlay.style.background = dim ? 'rgba(15, 23, 42, 0.55)' : 'transparent'
   overlay.style.display = 'none'
-  overlay.style.alignItems = 'center'
-  overlay.style.justifyContent = 'center'
   overlay.style.padding = '24px'
   overlay.style.zIndex = '2147483000'
+  // Без затемнения подложка обязана пропускать клики насквозь: она невидима и
+  // растянута на весь вьюпорт, то есть иначе тихо блокировала бы весь чужой сайт.
+  // Панели события возвращаются своим `pointerEvents`.
+  overlay.style.pointerEvents = dim ? 'auto' : 'none'
+  overlay.style.display = 'none'
 
   const dialog = document.createElement('div')
   dialog.setAttribute('role', 'dialog')
-  dialog.setAttribute('aria-modal', 'true')
   dialog.setAttribute('aria-label', 'Форма')
   dialog.style.position = 'relative'
+  dialog.style.pointerEvents = 'auto'
   dialog.style.background = '#ffffff'
   dialog.style.borderRadius = '12px'
   dialog.style.width = '100%'
-  dialog.style.maxWidth = '640px'
-  dialog.style.maxHeight = '90dvh'
   dialog.style.overflowY = 'auto'
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
+  // Полоса прокрутки панели — тонкая и приглушённая: системная широкая полоса в окне
+  // шириной 376 съедает край формы и выглядит как часть чужого сайта, а не наша.
+  // Свойствами, а не псевдоэлементом `::-webkit-scrollbar`: вставить правило в чужой
+  // документ нам нечем (стили назначаются только через CSSOM), а эта пара
+  // поддерживается и в Firefox, и в свежем Chrome. Где не поддерживается — остаётся
+  // системная полоса, то есть сегодняшний вид.
+  dialog.style.setProperty('scrollbar-width', 'thin')
+  dialog.style.setProperty('scrollbar-color', 'rgba(15, 23, 42, 0.25) transparent')
 
+  // КРЕСТИК ЖИВЁТ НА ОБЁРТКЕ, А НЕ ВНУТРИ ПАНЕЛИ, и это не про вёрстку: панель — это
+  // скролл-контейнер длинной формы, и лежащий внутри неё крестик уезжал вверх вместе с
+  // содержимым. Человек, прокрутивший форму до середины, оставался без способа её
+  // закрыть — кроме Esc, о котором он не знает. Обёртка не скроллится, поэтому кнопка
+  // стоит на месте — и только на ней он может выступать за край панели, не попадая под
+  // её `overflow-y: auto`.
+  //
+  // ФОН НЕПРОЗРАЧНЫЙ: кнопка наполовину висит над чужой страницей, наполовину над
+  // формой (часто над обложкой), и полупрозрачная плашка с тёмным глифом на тёмном
+  // фоне просто исчезала. Белый круг с тенью читается на любом из трёх.
   const close = document.createElement('button')
   close.type = 'button'
   close.setAttribute('aria-label', 'Закрыть форму')
   close.textContent = '×'
   close.style.position = 'absolute'
-  close.style.top = '8px'
-  close.style.right = '8px'
-  close.style.width = '32px'
-  close.style.height = '32px'
+  close.style.width = '28px'
+  close.style.height = '28px'
   close.style.border = '0'
-  close.style.borderRadius = '8px'
-  close.style.background = 'rgba(15, 23, 42, 0.06)'
+  close.style.borderRadius = '999px'
+  close.style.background = '#ffffff'
   close.style.color = '#0f172a'
-  close.style.fontSize = '20px'
+  close.style.fontSize = '18px'
   close.style.lineHeight = '1'
   close.style.cursor = 'pointer'
-  close.style.zIndex = '1'
+  close.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.35)'
+  close.style.zIndex = '2'
   close.addEventListener('click', closeWidget)
 
+  // ОБЁРТКА нужна ради крестика: он висит на углу панели, ВЫСТУПАЯ за её край, а у
+  // самой панели `overflow-y: auto` — там его бы срезало. Заодно обёртка не
+  // скроллится, поэтому кнопка стоит на месте, пока длинная форма прокручивается.
+  // Ничего не прячет и задаёт ширину, панель занимает её целиком.
+  const panel = document.createElement('div')
+  panel.style.position = 'relative'
+  panel.style.width = '100%'
+  panel.style.pointerEvents = 'auto'
+
   const frame = createFrame(opts)
-  dialog.appendChild(close)
   dialog.appendChild(frame)
-  overlay.appendChild(dialog)
+  panel.appendChild(dialog)
+  panel.appendChild(close)
+  overlay.appendChild(panel)
   document.body.appendChild(overlay)
 
-  // На весь экран модалка идёт в двух случаях: узкий экран (отступы и скругления на
-  // телефоне съедают форму, ради которой человек и нажал кнопку) и режим 'page',
-  // открытый программно, — это и есть второй подрежим страницы, оверлей поверх
-  // приложения (design/embed.md §2.5).
   const narrow = window.matchMedia('(max-width: 640px)')
-  const applyWidth = () => {
+  const place = () => {
     const full = opts.mode === 'page' || narrow.matches
-    overlay.style.padding = full ? '0' : '24px'
-    dialog.style.maxWidth = full ? 'none' : '640px'
-    dialog.style.borderRadius = full ? '0' : '12px'
-    dialog.style.maxHeight = full ? '100dvh' : '90dvh'
-    dialog.style.minHeight = full ? '100dvh' : '0'
-  }
-  applyWidth()
-  narrow.addEventListener('change', applyWidth)
+    const top = corner === 'top-right' || corner === 'top-left'
+    const left = corner === 'bottom-left' || corner === 'top-left'
 
-  // Клик по подложке — но только по ней самой: клик внутри диалога всплывает сюда же.
+    overlay.style.padding = full ? '0' : '24px'
+    // Раскладка одна на все четыре угла: flex-контейнер во весь вьюпорт и два
+    // выравнивания. Позиционировать панель координатами было бы то же самое, но в
+    // четырёх ветках вместо двух строк.
+    overlay.style.alignItems = full ? 'center' : top ? 'flex-start' : 'flex-end'
+    overlay.style.justifyContent = full ? 'center' : left ? 'flex-start' : 'flex-end'
+
+    panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
+    panel.style.height = full ? '100%' : 'auto'
+    dialog.style.borderRadius = full ? '0' : '12px'
+    // ПАНЕЛЬ НИЖЕ ВЬЮПОРТА, а не во всю его высоту (правка владельца 2026-08-16):
+    // окно, растянутое от края до края, читается как модалка — ровно то, чем виджет
+    // перестал быть. 680 — второй подход после 560: та высота оказалась мала под
+    // форму из нескольких вопросов. Длинная форма скроллится внутри панели.
+    dialog.style.maxHeight = full ? '100dvh' : 'min(680px, calc(100dvh - 48px))'
+    dialog.style.minHeight = full ? '100dvh' : '0'
+
+    // На весь экран крестик встаёт внутрь угла: снаружи у формы во весь вьюпорт места
+    // нет — кнопка ушла бы за край экрана.
+    close.style.top = full ? '12px' : '-14px'
+    close.style.left = full ? '12px' : '-14px'
+  }
+  place()
+  narrow.addEventListener('change', place)
+
+  // Клик по подложке — но только по ней самой: клик внутри панели всплывает сюда же.
+  // Без затемнения событий здесь нет вовсе (`pointer-events: none`), и это верно: там
+  // клик мимо панели принадлежит чужому сайту, а не нам.
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay) closeWidget()
   })
 
-  const entry: Mounted = { frame, opts, handlers: {}, overlay }
-  // Ловушка фокуса. Полноценно замкнуть Tab внутри модалки нельзя: когда фокус ушёл
-  // в форму, события клавиатуры живут в ДРУГОМ документе и нам не видны. Зато виден
-  // focusin в своём: как только фокус выпал наружу (Tab с последнего поля формы),
-  // возвращаем его на кнопку закрытия.
-  document.addEventListener('focusin', (event) => {
-    if (openWidgetEntry !== entry) return
-    if (!overlay.contains(event.target as Node)) close.focus()
-  })
-  return entry
+  return { frame, opts, handlers: {}, overlay, button: widgetButtons[opts.form] }
+}
+
+/** Виджет занимает весь вьюпорт: на телефоне угла нет, а 'page' — это оверлей-страница. */
+function fullScreen(opts: MountOptions): boolean {
+  return opts.mode === 'page' || window.matchMedia('(max-width: 640px)').matches
 }
 
 /** open — показать форму виджетом. Фрейм создаётся при первом показе, не заранее. */
@@ -235,8 +349,14 @@ function open(opts: MountOptions, from: HTMLElement | null = null): EmbedHandle 
   opener = from
   openWidgetEntry = entry
   entry.overlay!.style.display = 'flex'
-  lockScroll()
-  ;(entry.overlay!.querySelector('button') as HTMLButtonElement | null)?.focus()
+  // Кнопка прячется на время показа: панель встаёт в её угол, и кнопка либо торчала
+  // бы из-под панели, либо тускло просвечивала сквозь затемнение.
+  if (entry.button) entry.button.style.display = 'none'
+  if (fullScreen(entry.opts)) lockScroll()
+  // ФОКУС ЗАБИРАЕТСЯ ТОЛЬКО У ОТКРЫТИЯ ПО ЖЕСТУ. Автооткрытие (пауза, прокрутка, уход
+  // курсора) приходит само, и увести каретку из чужой формы или поиска на странице оно
+  // права не имеет — панель просто появляется в углу.
+  if (from) (entry.overlay!.querySelector('button') as HTMLButtonElement | null)?.focus()
   return handleOf(entry, closeWidget)
 }
 
@@ -246,17 +366,30 @@ function open(opts: MountOptions, from: HTMLElement | null = null): EmbedHandle 
 // от «одна кнопка, всё работает».
 const buttonsInCorner: Record<string, number> = {}
 
+// Кнопка каждой формы — чтобы модалка, созданная позже, знала, что убирать после
+// отправки (`data-hide-on-submit`). Ключ — форма: две вставки одной формы на странице
+// это одна кнопка в глазах посетителя.
+const widgetButtons: Record<string, HTMLButtonElement> = {}
+
+/** Пауза перед уборкой виджета после отправки: экран благодарности надо успеть прочитать. */
+const HIDE_AFTER_SUBMIT_MS = 2500
+
 function createButton(opts: MountOptions) {
-  const corner = opts.position === 'bottom-left' ? 'bottom-left' : 'bottom-right'
+  const corner = opts.position ?? 'bottom-right'
   const taken = buttonsInCorner[corner] ?? 0
   buttonsInCorner[corner] = taken + 1
+  const top = corner === 'top-right' || corner === 'top-left'
 
   const button = document.createElement('button')
   button.type = 'button'
+  // ЭМОДЗИ НА КНОПКЕ НЕТ (правка владельца 2026-08-16): он живёт на углу открытой
+  // панели. Кнопка — это надпись, и только она.
   button.textContent = opts.label ?? DEFAULT_LABEL
   button.style.position = 'fixed'
-  button.style.bottom = 24 + taken * 60 + 'px'
-  if (opts.position === 'bottom-left') button.style.left = '24px'
+  // Смещение считается от своего края: у верхних углов кнопки растут вниз, у нижних —
+  // вверх, и в обоих случаях вторая не ложится на первую.
+  button.style[top ? 'top' : 'bottom'] = 24 + taken * 60 + 'px'
+  if (corner === 'bottom-left' || corner === 'top-left') button.style.left = '24px'
   else button.style.right = '24px'
   button.style.padding = '12px 20px'
   button.style.border = '0'
@@ -270,6 +403,61 @@ function createButton(opts: MountOptions) {
   button.style.zIndex = '2147482000'
   button.addEventListener('click', () => open(opts, button))
   document.body.appendChild(button)
+  widgetButtons[opts.form] = button
+  return button
+}
+
+// АВТООТКРЫТИЕ — РОВНО ОДИН РАЗ ЗА ЗАГРУЗКУ СТРАНИЦЫ. Форма, всплывающая снова после
+// того, как её закрыли, читается не как второй шанс, а как повод уйти с сайта; поэтому
+// сработавший триггер снимает свои подписки и больше не наблюдает ни за чем.
+//
+// Кнопка при этом остаётся: закрывший форму человек должен иметь способ вернуться.
+function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
+  const trigger = opts.open ?? 'click'
+  if (trigger === 'click') return
+
+  let done = false
+  const fire = () => {
+    if (done) return
+    done = true
+    cleanup()
+    open(opts, button)
+  }
+
+  let timer = 0
+  const onScroll = () => {
+    const scrollable = document.documentElement.scrollHeight - window.innerHeight
+    // Страница короче экрана прокручивается нулём: считать долю не от чего, и ждать
+    // прокрутки бессмысленно — показываем сразу.
+    const passed =
+      scrollable <= 0
+        ? 100
+        : (window.scrollY / scrollable) * 100
+    if (passed >= (opts.openValue || DEFAULT_OPEN_SCROLL)) fire()
+  }
+  // Уход со страницы: курсор вышел через ВЕРХНЮЮ границу окна — к вкладкам и адресной
+  // строке. На тач-устройствах события нет вовсе, и это не поломка: там уходят жестом,
+  // которого браузер нам не показывает.
+  const onExit = (event: MouseEvent) => {
+    if (event.clientY <= 0) fire()
+  }
+
+  const cleanup = () => {
+    if (timer) clearTimeout(timer)
+    window.removeEventListener('scroll', onScroll)
+    document.removeEventListener('mouseout', onExit)
+  }
+
+  if (trigger === 'delay') {
+    timer = window.setTimeout(fire, (opts.openValue || DEFAULT_OPEN_DELAY) * 1000)
+    return
+  }
+  if (trigger === 'scroll') {
+    window.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return
+  }
+  document.addEventListener('mouseout', onExit)
 }
 
 // listen — все подписки на документ разом. Вызывается РОВНО ОДИН РАЗ за страницу,
@@ -319,8 +507,11 @@ const onFrameMessage = (event: MessageEvent) => {
       return
     case 'resize':
       // У полноэкранного режима высота — вьюпорт хоста, и следовать за содержимым
-      // ей нельзя: форма из двух вопросов схлопнула бы фрейм до своей высоты.
-      if (entry.opts.mode !== 'page') entry.frame.style.height = msg.height + 'px'
+      // ей нельзя: форма из двух вопросов схлопнула бы фрейм до своей высоты. С
+      // выключенным `data-dynamic-height` владелец сайта попросил о том же для блока.
+      if (entry.opts.mode !== 'page' && entry.opts.dynamicHeight !== false) {
+        entry.frame.style.height = msg.height + 'px'
+      }
       return
     case 'page': {
       // Смена шага меняет высоту рывком, и чужая страница уезжает: человек оказывается
@@ -334,6 +525,15 @@ const onFrameMessage = (event: MessageEvent) => {
     }
     case 'submit':
       emit(entry, 'submit', { submissionId: msg.submissionId })
+      // «Убрать после отправки»: закрываем окно и уносим кнопку со страницы. Экран
+      // благодарности при этом человек увидеть успевает — сообщение приходит после
+      // его отрисовки, а закрытие ждёт своей паузы.
+      if (entry.opts.hideOnSubmit && entry.overlay) {
+        setTimeout(() => {
+          if (openWidgetEntry === entry) closeWidget()
+          entry.button?.remove()
+        }, HIDE_AFTER_SUBMIT_MS)
+      }
       return
     case 'redirect':
       // Переход после отправки: внутри фрейма он увёл бы человека в сайт внутри сайта,
@@ -359,7 +559,13 @@ function attach(script: Element): void {
   const opts = optionsFromAttrs(script)
   if (!opts) return
   if (opts.mode === 'widget') {
-    createButton(opts)
+    armTrigger(opts, createButton(opts))
+    return
+  }
+  // «Страница» ничего не вставляет в поток: она накрывает чужую страницу целиком, и
+  // место самого скрипта для неё значения не имеет.
+  if (opts.mode === 'page') {
+    mountFullPage(opts)
     return
   }
   if (!script.parentNode) return

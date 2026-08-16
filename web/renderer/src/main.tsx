@@ -13,6 +13,7 @@ const embed = readEmbed(window.location.search)
 if (embed) {
   document.documentElement.dataset.embed = embed.mode
   if (embed.transparent) document.documentElement.dataset.embedBg = 'transparent'
+  if (embed.alignLeft) document.documentElement.dataset.embedAlign = 'left'
 }
 
 // Мост заводится, только если мы действительно во фрейме. Вид — по параметру
@@ -28,6 +29,6 @@ const bridge: HostBridge | null =
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App bridge={bridge} redirectSelf={embed?.redirectSelf ?? false} />
+    <App bridge={bridge} embed={embed} />
   </StrictMode>,
 )

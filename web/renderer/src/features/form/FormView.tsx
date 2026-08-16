@@ -19,7 +19,7 @@ import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
 import { Badge } from '@fields/Badge'
-import { applyPrefill, type HostBridge, readPrefill } from './embed'
+import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
   answersReducer,
   clearAnswers,
@@ -85,13 +85,22 @@ export function FormView({
   slug,
   form,
   bridge,
-  redirectSelf,
+  embed,
 }: {
   slug: string
   form: PublicForm
   bridge: HostBridge | null
-  redirectSelf: boolean
+  /** Параметры вставки; null — форма открыта прямой ссылкой. */
+  embed: EmbedOptions | null
 }) {
+  // Переход после отправки исполняет сам фрейм (`data-redirect="frame"` у сниппета).
+  const redirectSelf = embed?.redirectSelf ?? false
+  // Предпросмотр вставки: форма живая, но следов не оставляет — ни визита, ни ответа.
+  const preview = embed?.preview ?? false
+  // Настройка вида вставки: заголовок формы. Выравнивание содержимого — атрибут на
+  // документе (main.tsx) и правила в index.css: оно про раскладку холста, а не про
+  // блоки, и в разметке ему делать нечего.
+  const hideTitle = embed?.hideTitle ?? false
   // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
@@ -275,9 +284,17 @@ export function FormView({
   // mount→unmount→mount) эффект выполнился бы дважды и дал два визита на одно
   // открытие. Флаг started намеренно НЕ сбрасывается в cleanup — «этот визит уже
   // посчитан» переживает повторное монтирование.
+  //
+  // В предпросмотре трекера нет вовсе: биконы шлёт только он, поэтому «не считать
+  // визит» выражается его отсутствием, а не проверкой флага в трёх местах отправки.
+  // Условие ленивой инициализации остаётся ровно `=== null` (флаг живёт в правой
+  // части): линт узнаёт этот паттерн по форме и на «`=== null` И что-то ещё» ругается
+  // доступом к ref во время рендера.
   const visit = useRef<VisitTracker | null>(null)
   if (visit.current === null) {
-    visit.current = createVisitTracker(slug, form.token, form.version, window.location.search)
+    visit.current = preview
+      ? null
+      : createVisitTracker(slug, form.token, form.version, window.location.search)
   }
   const started = useRef(false)
   // Самая дальняя точка визита: индекс последнего блока, которого коснулись.
@@ -405,6 +422,14 @@ export function FormView({
       return // сеть не трогаем, пока форма невалидна
     }
 
+    // ПРЕДПРОСМОТР ОСТАНАВЛИВАЕТСЯ РОВНО ЗДЕСЬ — после валидации, до сети. Всё, что
+    // делает форма, автор увидит (обязательные поля, переход к странице с ошибкой,
+    // экран благодарности), а в таблице ответов не появится ничего: ответа не было.
+    if (preview) {
+      setPhase('done')
+      return
+    }
+
     if (submissionId.current === '') submissionId.current = uuidv7()
     setPhase('submitting')
 
@@ -468,9 +493,12 @@ export function FormView({
         {authorStyle}
         <ThankYou
           text={form.schema.thankYouText ?? ''}
-          redirectUrl={form.schema.redirectUrl ?? ''}
+          // В предпросмотре перехода нет: он увёл бы автора с экрана «Встроить» —
+          // либо сам фрейм, либо, через мост, всю страницу кабинета.
+          redirectUrl={preview ? '' : (form.schema.redirectUrl ?? '')}
           bridge={redirectSelf ? null : bridge}
           badge={form.showBadge}
+          preview={preview}
         />
       </>
     )
@@ -497,7 +525,12 @@ export function FormView({
       <CoverBand cover={cover} />
       <main className={pageClass(cover)}>
         {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}
+        {/* Заголовок прячет настройка вставки: над блоком на чужой странице обычно
+            уже стоит свой заголовок, и второй читается как дубль. Прячется только
+            показ — в документе формы заголовок остаётся, поэтому og-мета, выгрузка и
+            сама форма по прямой ссылке не меняются. */}
         {chrome &&
+          !hideTitle &&
           (formTitle ? (
             <BlockField block={formTitle} />
           ) : (
