@@ -8,5 +8,5 @@ export const multiChoice: EditorKind = {
   description: 'Выбор нескольких вариантов из списка (флажки).',
   icon: <CheckSquare className="size-4" />,
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', lineH: 'h-6', optionRows: true },
+  row: { surface: 'choice', optionRows: true, lineH: 'h-[var(--rf-control-h)]' },
 }

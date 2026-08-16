@@ -66,6 +66,48 @@ describe('дерево целей: страница → вопрос → вар�
     expect(row.label).toBe('Короткий ответ')
   })
 
+  // Глиф — свойство ТИПА, а тип есть только у блока (решение владельца 2026-08-16).
+  // Поэтому в дереве он достаётся не всем пунктам, и «кому именно» проверяется здесь.
+  describe('глиф достаётся только блоку', () => {
+    const glyphs = (
+      tree: ReturnType<typeof targetTree>,
+    ): Record<string, string | undefined> =>
+      Object.fromEntries(
+        tree.flatMap((p) =>
+          p.items.flatMap((n) => [
+            [n.id, n.glyphType] as const,
+            ...n.children.map((c) => [c.id, c.glyphType] as const),
+          ]),
+        ),
+      )
+
+    it('у ГРУППЫ глифа нет — вопрос из нескольких блоков сам блоком не является', () => {
+      const g = glyphs(targetTree(doc(), 'show'))
+      expect(g.q1cap).toBeUndefined()
+      expect(g.q2cap).toBeUndefined()
+    })
+
+    it('строка вопроса несёт СВОЙ тип', () => {
+      expect(glyphs(targetTree(doc(), 'show')).q1).toBe('short_text')
+    })
+
+    it('у ВАРИАНТА глифа нет — он не блок', () => {
+      const g = glyphs(targetTree(doc(), 'show'))
+      expect(g.o1).toBeUndefined()
+      expect(g.o2).toBeUndefined()
+    })
+
+    it('одинокий блок — сам себе узел, и глиф у него собственный', () => {
+      // Голое поле со списком: блоков в группе один, значит узел это он сам.
+      expect(glyphs(targetTree(doc(), 'show')).list).toBe('multi_choice')
+      expect(glyphs(targetTree([blk('h', 'gh', 'heading')], 'show')).h).toBe('heading')
+    })
+
+    it('«обязателен» адресует сам отвечаемый блок — его тип и берётся', () => {
+      expect(glyphs(targetTree(doc(), 'require')).q1).toBe('short_text')
+    })
+  })
+
   it('сам блок logic целью не бывает', () => {
     const two = [...doc(), logic('L2', {})]
     expect(ids(targetTree(two, 'show'))).not.toContain('L2')

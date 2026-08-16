@@ -24,13 +24,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import {
-  Asterisk,
-  Copy,
-  GripVertical,
-  Plus,
-  Trash2,
-} from 'lucide-react'
+import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
@@ -61,7 +55,7 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { chords } from './shortcuts'
 import { handleRowKeys, type ArrowDir } from './rowKeys'
-import { useRowFocus } from './activeRow'
+import { useActiveRow, useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
 
 export interface BlockRowProps {
@@ -193,10 +187,12 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   const dragListeners = groupHandle ? groupHandle.listeners : listeners
 
   const row = rowFacts(block.type)
-  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
-  // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
-  // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
-  // они стоят на уровне текста.
+  // Высота кластеров значков = высота ПЕРВОЙ строки блока (объявлена типом, fields.css —
+  // источник самих чисел). Кластеры absolute и центрируют значок по своей высоте, поэтому
+  // только так они стоят на уровне того, чем строка правится: у текстовой строки это
+  // line-height (28px у вопроса и заголовка раздела, 24px у остального), у строки с
+  // КОНТРОЛОМ — --rf-control-h (36px). Разница видна сразу: с высотой текста кластер у
+  // поля вставал на 6px выше его середины (высота поля 36 = 6 паддинга + 24 строка + 6).
   const rowLineH = row?.lineH ?? 'h-6'
 
   // Кластер значков строки ВЫБОРА снят (решение владельца, ADR §10). Управление списком
@@ -259,9 +255,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
       className={`group relative rounded-md py-1.5 -mb-1.5 ${
         firstInGroup ? '-mt-1.5' : 'mt-[calc(0.875rem*var(--rf-density)_-_0.375rem)]'
-      } ${
-        isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''
-      }`}
+      } ${isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''}`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Проявляются по hover/фокусу строки;
@@ -294,13 +288,16 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           свои кластеры (см. OptionCard). */}
       {!ownedByQuestion && (
         <div
-          // mr-2.5 (не mr-1): между кластером и текстом живёт рейл группы (-left-2,
-          // GroupRow) — значки отодвинуты, чтобы грип не ложился на линию.
+          // mr-1 (решение владельца 2026-08-16): кластер стоит вплотную к своему блоку.
+          // Прежние 10px держали дистанцию от рейла группы (-left-2, GroupRow) — теперь
+          // жёлоб уже рейла, и у группы из трёх и более блоков наведённая строка
+          // накрывает линию своей подложкой (CLUSTER_BACKDROP). Разойтись им негде:
+          // рейл лежит МЕЖДУ кластером и текстом, и любое сближение его закрывает.
           // СЛЕВА ВСЕГДА (2026-08-11): прежде у правой колонки ряда кластер зеркалился
           // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
           // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
           // стороны кластер получил подложку (CLUSTER_BACKDROP) и слой поверх соседа.
-          className={`${CLUSTER_BACKDROP} absolute top-1.5 right-full mr-2.5 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+          className={`${CLUSTER_BACKDROP} absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -702,20 +699,18 @@ const BlockRowBody = memo(function BlockRowBody({
     }
   }
 
-  // Высота кластеров значков = line-height ПЕРВОЙ строки блока (объявлена типом,
-  // fields.css — источник самих чисел): вопрос и заголовок раздела 28px (h-7), остальное
-  // 24px (h-6). Кластеры absolute и центрируют значок по своей высоте, поэтому только так
-  // они стоят на уровне текста.
+  // Высота кластеров значков = высота ПЕРВОЙ строки блока (объявлена типом, fields.css —
+  // источник самих чисел). Кластеры absolute и центрируют значок по своей высоте, поэтому
+  // только так они стоят на уровне того, чем строка правится: у текстовой строки это
+  // line-height (28px у вопроса и заголовка раздела, 24px у остального), у строки с
+  // КОНТРОЛОМ — --rf-control-h (36px). Разница видна сразу: с высотой текста кластер у
+  // поля вставал на 6px выше его середины (высота поля 36 = 6 паддинга + 24 строка + 6).
   const rowLineH = row?.lineH ?? 'h-6'
 
   // Кластер отметок строится ОДИН РАЗ и отдаётся одному из двух мест (см. marksAtField):
   // меняется только предок, от которого считается его absolute, а не сам элемент.
   const marksCluster = showMarks ? (
-    <RowMarks
-      requiredFor={requiredFor}
-      showRequired={showRequired}
-      lineH={rowLineH}
-    />
+    <RowMarks requiredFor={requiredFor} showRequired={showRequired} lineH={rowLineH} />
   ) : null
 
   return (
@@ -767,7 +762,7 @@ const BlockRowBody = memo(function BlockRowBody({
       {/* Второе место кластера отметок: у блока БЕЗ подписи текстовой строки нет, и
           цепляться инлайн не к чему. Тогда кластер absolute, и вопрос лишь в том, ЧТО
           ему якорь. Строка тянется на всю колонку (700px), а поле упирается в
-          --rf-input-max (350px) — прицепленный к строке кластер висел бы в полуметре
+          --rf-input-max (320px) — прицепленный к строке кластер висел бы в полуметре
           пустоты правее поля. Поэтому у поля с плейсхолдером он уезжает в .rf-field-wrap
           (marks у AnswerField ниже): та коробка ширины САМОГО поля. У остальных
           поверхностей своей коробки нет, и кластер остаётся при строке.
@@ -1116,7 +1111,7 @@ function AnswerField({
   const setPh = (value: string) =>
     updateBlock(block.id, { settings: { ...block.settings, placeholder: value } })
   // Подсказку-хинт показываем только при фокусе (клике) на поле.
-  const hint = focused ? 'Плейсхолдер ответа (необязательно)' : undefined
+  const hint = focused ? 'Плейсхолдер ответа' : undefined
 
   // ↑ с начала / ↓ с конца поля — уход на соседнюю строку (§2.1). Backspace в пустом
   // плейсхолдере УДАЛЯЕТ поле и уводит каретку на предыдущую остановку — единое
@@ -1267,6 +1262,22 @@ function OptionsInline({
   // У призрака свой контекст подсказок: клавиши варианта на нём не работают (двигать
   // и удалять нечего), а обещать неработающее нельзя (§7).
   const ghostFocus = useRowFocus(block.id, 'newOption')
+  // ПРИЗРАК ЖИВЁТ, ПОКА АКТИВЕН ВОПРОС (решение владельца 2026-08-16): строка
+  // «добавить» — приглашение автору, который сейчас здесь, а не постоянная деталь
+  // формы. Мерка активности — та же, по которой показывается чип подписи и карта
+  // клавиш (activeRow), но берётся она по ГРУППЕ, а не по блоку: каретка на
+  // заголовке вопроса значит «автор работает над этим вопросом», и список вариантов
+  // не имеет права схлопнуться у него под рукой.
+  //
+  // ИСКЛЮЧЕНИЕ — ПУСТОЙ СПИСОК: у него, кроме призрака, нет ни одной строки, и без
+  // него неактивный блок исчез бы с полотна целиком. Исчезнувший блок нечем
+  // активировать мышью — кликать не по чему, — то есть правило само отрезало бы себе
+  // вход. Пустой список законен: блок рождается без вариантов.
+  const activeRow = useActiveRow()
+  const activeGroup = useBuilderStore(
+    (s) => s.blocks.find((b) => b.id === activeRow?.id)?.groupId,
+  )
+  const showGhost = options.length === 0 || activeGroup === block.groupId
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
   const ghostRef = useRef<HTMLInputElement>(null)
   // Id варианта, который тащат (null — драга нет): от него зависит, светить ли
@@ -1526,15 +1537,26 @@ function OptionsInline({
               нет: набранный в ней текст рождает НАСТОЯЩИЙ вариант, а призрак тут же
               появляется под ним. Так список набирается подряд, как текст, а пустые
               варианты перестают уезжать в опубликованную форму. */}
-          <GhostOption
-            ref={ghostRef}
-            multiple={!isSingleChoiceType(block.type)}
-            onType={(text) => {
-              pendingFocus.current = addOption(block.id, text)
-            }}
-            onKeyDown={onGhostKeyDown}
-            rowFocus={ghostFocus}
-          />
+          {showGhost && (
+            <GhostOption
+              ref={ghostRef}
+              multiple={!isSingleChoiceType(block.type)}
+              // Буква будущего варианта — следующая за последним (у списка «один из
+              // списка» глиф это бейдж, а не чекбокс). Пустой бейдж читался бы поломкой.
+              nextKey={optionKey(options.length)}
+              onType={(text) => {
+                pendingFocus.current = addOption(block.id, text)
+              }}
+              // Клик по глифу рождает ПУСТОЙ вариант и уводит в него каретку (решение
+              // владельца 2026-08-16). Набор текстом остаётся главным путём, но глиф,
+              // который видно, обязан работать: невидимая кнопка была бы обманом.
+              onAdd={() => {
+                pendingFocus.current = addOption(block.id)
+              }}
+              onKeyDown={onGhostKeyDown}
+              rowFocus={ghostFocus}
+            />
+          )}
         </div>
       </SortableContext>
     </DndContext>
@@ -1576,14 +1598,19 @@ function FreeCell({ optionId }: { optionId: string }) {
 function GhostOption({
   ref,
   multiple,
+  nextKey,
   onType,
+  onAdd,
   onKeyDown,
   rowFocus,
 }: {
   ref: React.RefObject<HTMLInputElement | null>
-  // Тип списка решает ширину невидимого слота под глифом (чекбокс шире буквы).
+  // Тип списка решает, что стоит перед текстом: чекбокс или буквенный бейдж.
   multiple: boolean
+  // Буква будущего варианта (null — их больше 26, бейджа не будет и у настоящего).
+  nextKey: string | null
   onType: (text: string) => void
+  onAdd: () => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   rowFocus: ReturnType<typeof useRowFocus>
 }) {
@@ -1591,16 +1618,37 @@ function GhostOption({
   return (
     // Приглушён сильнее обычного (решение владельца 2026-07-26): строка обязана
     // читаться как приглашение, а не как ещё один вариант, который автор забыл
-    // заполнить. В фокусе гасит приглушение — в неё уже набирают.
-    <div className="relative flex items-center opacity-45 transition-opacity focus-within:opacity-100">
+    // заполнить. Под наведением приглушение слабеет, в фокусе снимается совсем — в
+    // строку уже набирают.
+    //
+    // МИНА: hover и focus-within правят ОДНО свойство, и у обоих одна специфичность —
+    // побеждает тот класс, что позже в СОБРАННОМ CSS, а не в строке className
+    // (web/CLAUDE.md). Замер: hover у Tailwind идёт после focus-within, поэтому голый
+    // `hover:opacity-70` глушил бы строку, в которую сейчас набирают, стоило навести на
+    // неё курсор. Отсюда `not-focus-within:` — состояния разведены, а не переспорены.
+    // Проверяется только computed-стилем.
+    <div
+      // НАЖИМАЕТСЯ ВСЯ СТРОКА, а не один глиф (решение владельца 2026-08-16): клик по
+      // ней рождает пустой вариант и уводит в него каретку. Клик мимо 20-пиксельного
+      // чекбокса — тот же жест «добавить», и отвечать на него молчанием строка, у
+      // которой курсор-указатель, не имеет права.
+      //
+      // preventDefault на mousedown гасит фокус ПРИЗРАКА: без него каретка успевает
+      // сесть в его инпут и тут же уезжает в рождённый вариант — мигание на ровном
+      // месте. Клавиатурный вход в призрак это не трогает (фокус туда ставят кодом).
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onAdd}
+      className="relative flex cursor-pointer items-center opacity-45 transition-opacity focus-within:opacity-100 not-focus-within:hover:opacity-70"
+    >
       <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
-        {/* Слот под глиф будущего варианта — невидимый, но место занимает: без него
-            текст призрака стоял бы левее списка и прыгал бы вправо на первом же
-            набранном символе. Ширину даёт тот же класс, что у настоящего варианта. */}
-        <span
-          aria-hidden="true"
-          className={`${multiple ? 'rf-mark rf-mark--check' : 'rf-option-key'} opacity-0`}
-        />
+        {/* Глиф будущего варианта — НАСТОЯЩИЙ, а не невидимый слот под него (решение
+            владельца 2026-08-16): строка «добавить» выглядит следующим вариантом
+            списка, и место под текст держит тем же классом, что у настоящего.
+            Декоративен (span, aria-hidden) — как и глифы настоящих вариантов: жест
+            принимает строка целиком, а имя ей даёт её инпут. */}
+        <span aria-hidden="true" className={multiple ? 'rf-mark rf-mark--check' : 'rf-option-key'}>
+          {multiple ? null : nextKey}
+        </span>
         <span className="rf-option-edit" data-value={placeholder}>
           <input
             ref={ref}
@@ -1610,6 +1658,9 @@ function GhostOption({
             onChange={(e) => onType(e.target.value)}
             onKeyDown={onKeyDown}
             {...rowFocus}
+            // data-ghost — указатель вместо текстового курсора (index.css). Утилитой
+            // это не решается: правило инпута карточки специфичнее её.
+            data-ghost=""
             className="bg-transparent outline-none placeholder:text-muted-foreground"
           />
         </span>
@@ -1735,12 +1786,12 @@ function OptionCard({
           порядок (удалить, перетащить — ручка ближе к тексту), то же проявление по
           hover своей карточки (group/opt: безымянный group занят строкой блока, и от
           него значки расцветали у всех вариантов разом — TD-31).
-          Отступ тоже тот же (mr-2.5, не mr-1.5): в жёлобе между кластером и текстом
-          лежит рейл группы (-left-2, GroupRow), и с меньшим отступом ручка ложится
-          прямо на линию. Ручки вариантов и ручки строк выстраиваются в одну
-          вертикаль — у обоих кластеров правый край на 10px левее колонки. */}
+          Отступ тоже тот же (mr-1): ручки вариантов и ручки строк обязаны стоять в
+          одну вертикаль — правый край у обоих кластеров на 4px левее колонки. Разойдись
+          они, у списка получилось бы два этажа управления, различающихся парой
+          пикселей. */}
       <div
-        className={`${CLUSTER_BACKDROP} absolute right-full mr-2.5 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
+        className={`${CLUSTER_BACKDROP} absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
       >
         <button
           type="button"

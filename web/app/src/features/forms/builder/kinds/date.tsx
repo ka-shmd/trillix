@@ -10,5 +10,10 @@ export const date: EditorKind = {
   icon: <Calendar className="size-4" />,
   // Объектная остановка, а не инпут: плейсхолдера у поля даты нет (браузер рисует свой
   // формат), править внутри строки нечего — каретка встаёт НА поле.
-  row: { surface: 'object', lineH: 'h-6', Control: DateControl, hint: 'object' },
+  row: {
+    surface: 'object',
+    Control: DateControl,
+    hint: 'object',
+    lineH: 'h-[var(--rf-control-h)]',
+  },
 }

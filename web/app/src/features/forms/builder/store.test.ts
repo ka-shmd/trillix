@@ -590,7 +590,7 @@ describe('createBuilderStore', () => {
     store.getState().addBlock('label')
     const b = store.getState().blocks
 
-    // Подпись летит над голое поле: рейл зажжётся у пары «подпись+поле», которой
+    // Подпись летит над голое поле: состав считается у пары «подпись+поле», которой
     // ещё нет — вопрос рождается этим самым дропом.
     const join = planBlockDrop(b, b[1]!.id, null)
     expect(join?.groupIds).toEqual([b[1]!.id, b[0]!.id])

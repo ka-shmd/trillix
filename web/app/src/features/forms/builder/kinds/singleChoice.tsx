@@ -12,5 +12,5 @@ export const singleChoice: EditorKind = {
   // нет. Пустой вариант не сохраняется и не публикуется, зато каретке всегда есть куда
   // встать.
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', lineH: 'h-6', optionRows: true },
+  row: { surface: 'choice', optionRows: true, lineH: 'h-[var(--rf-control-h)]' },
 }

@@ -8,5 +8,5 @@ export const dropdown: EditorKind = {
   description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.',
   icon: <ChevronDown className="size-4" />,
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', lineH: 'h-6', optionRows: false },
+  row: { surface: 'choice', optionRows: false, lineH: 'h-[var(--rf-control-h)]' },
 }

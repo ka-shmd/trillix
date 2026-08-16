@@ -7,5 +7,5 @@ export const numberField: EditorKind = {
   label: 'Число',
   description: 'Числовой ответ — количество, возраст, сумма.',
   icon: <Hash className="size-4" />,
-  row: { surface: 'placeholder', lineH: 'h-6' },
+  row: { surface: 'placeholder', lineH: 'h-[var(--rf-control-h)]' },
 }

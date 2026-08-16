@@ -7,5 +7,5 @@ export const phone: EditorKind = {
   label: 'Телефон',
   description: 'Номер телефона. Проверяется мягко — любой формат записи.',
   icon: <Phone className="size-4" />,
-  row: { surface: 'placeholder', lineH: 'h-6' },
+  row: { surface: 'placeholder', lineH: 'h-[var(--rf-control-h)]' },
 }
