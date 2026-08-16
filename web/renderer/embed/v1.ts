@@ -254,8 +254,6 @@ function buildWidget(opts: MountOptions): Mounted {
   close.setAttribute('aria-label', 'Закрыть форму')
   close.textContent = '×'
   close.style.position = 'absolute'
-  close.style.top = '8px'
-  close.style.right = '8px'
   close.style.width = '28px'
   close.style.height = '28px'
   close.style.border = '0'
@@ -269,40 +267,17 @@ function buildWidget(opts: MountOptions): Mounted {
   close.style.zIndex = '2'
   close.addEventListener('click', closeWidget)
 
-  // ОБЁРТКА держит всё, что обязано не скроллиться и не обрезаться панелью: эмодзи на
-  // её углу (он выступает за край, а у панели `overflow-y: auto`) и крестик (он стоит
-  // на месте, пока форма прокручивается). Обёртка ничего не прячет и задаёт ширину,
-  // панель занимает её целиком.
+  // ОБЁРТКА нужна ради крестика: он висит на углу панели, ВЫСТУПАЯ за её край, а у
+  // самой панели `overflow-y: auto` — там его бы срезало. Заодно обёртка не
+  // скроллится, поэтому кнопка стоит на месте, пока длинная форма прокручивается.
+  // Ничего не прячет и задаёт ширину, панель занимает её целиком.
   const panel = document.createElement('div')
   panel.style.position = 'relative'
   panel.style.width = '100%'
   panel.style.pointerEvents = 'auto'
 
-  const badge = opts.emoji ? document.createElement('div') : null
-  if (badge) {
-    badge.textContent = opts.emoji!
-    badge.style.position = 'absolute'
-    badge.style.top = '-16px'
-    badge.style.left = '-10px'
-    badge.style.fontSize = '30px'
-    badge.style.lineHeight = '1'
-    badge.style.pointerEvents = 'none'
-    // НАД панелью, а не под ней: в потоке эмодзи идёт раньше, и без z-index панель
-    // закрашивала бы его выступающую часть собой — эмодзи выглядел бы обрезанным.
-    badge.style.zIndex = '1'
-    const move = EMOJI_MOVES[opts.emojiAnimation ?? 'none']
-    if (move) {
-      badge.animate(move.frames, {
-        duration: move.duration,
-        iterations: Infinity,
-        easing: 'ease-in-out',
-      })
-    }
-  }
-
   const frame = createFrame(opts)
   dialog.appendChild(frame)
-  if (badge) panel.appendChild(badge)
   panel.appendChild(dialog)
   panel.appendChild(close)
   overlay.appendChild(panel)
@@ -331,9 +306,10 @@ function buildWidget(opts: MountOptions): Mounted {
     dialog.style.maxHeight = full ? '100dvh' : 'min(680px, calc(100dvh - 48px))'
     dialog.style.minHeight = full ? '100dvh' : '0'
 
-    // На весь экран эмодзи не показываем: он висит на углу панели, а у формы во весь
-    // вьюпорт этого угла нет — вышла бы наклейка посреди страницы.
-    if (badge) badge.style.display = full ? 'none' : 'block'
+    // На весь экран крестик встаёт внутрь угла: снаружи у формы во весь вьюпорт места
+    // нет — кнопка ушла бы за край экрана.
+    close.style.top = full ? '12px' : '-14px'
+    close.style.left = full ? '12px' : '-14px'
   }
   place()
   narrow.addEventListener('change', place)
@@ -429,47 +405,6 @@ function createButton(opts: MountOptions) {
   document.body.appendChild(button)
   widgetButtons[opts.form] = button
   return button
-}
-
-// Движения эмодзи. Через WAAPI, а не `@keyframes`: вставить правило в чужой документ
-// нам нечем (стили ставим только свойствами, иначе строгая CSP отбрасывает атрибут
-// style), а `animate` политика не трогает.
-//
-// Пауза внутри каждого цикла обязательна: непрерывное движение в углу чужой страницы
-// раздражает через десять секунд, а не привлекает. Оттого и длинные `duration` — сам
-// жест занимает первую их треть, остальное эмодзи стоит на месте.
-const EMOJI_MOVES: Record<string, { frames: Keyframe[]; duration: number }> = {
-  wave: {
-    frames: [
-      { transform: 'rotate(0deg)', offset: 0 },
-      { transform: 'rotate(16deg)', offset: 0.08 },
-      { transform: 'rotate(-8deg)', offset: 0.16 },
-      { transform: 'rotate(14deg)', offset: 0.24 },
-      { transform: 'rotate(0deg)', offset: 0.32 },
-      { transform: 'rotate(0deg)', offset: 1 },
-    ],
-    duration: 3600,
-  },
-  bounce: {
-    frames: [
-      { transform: 'translateY(0)', offset: 0 },
-      { transform: 'translateY(-10px)', offset: 0.1 },
-      { transform: 'translateY(0)', offset: 0.2 },
-      { transform: 'translateY(-5px)', offset: 0.28 },
-      { transform: 'translateY(0)', offset: 0.36 },
-      { transform: 'translateY(0)', offset: 1 },
-    ],
-    duration: 3000,
-  },
-  pulse: {
-    frames: [
-      { transform: 'scale(1)', offset: 0 },
-      { transform: 'scale(1.25)', offset: 0.12 },
-      { transform: 'scale(1)', offset: 0.28 },
-      { transform: 'scale(1)', offset: 1 },
-    ],
-    duration: 2800,
-  },
 }
 
 // АВТООТКРЫТИЕ — РОВНО ОДИН РАЗ ЗА ЗАГРУЗКУ СТРАНИЦЫ. Форма, всплывающая снова после

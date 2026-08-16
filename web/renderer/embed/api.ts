@@ -21,11 +21,6 @@ export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
 
 const TRIGGERS: readonly string[] = ['click', 'delay', 'scroll', 'exit']
 
-/** Движение эмодзи на углу открытой панели. */
-export type EmojiAnimation = 'none' | 'wave' | 'bounce' | 'pulse'
-
-const ANIMATIONS: readonly string[] = ['none', 'wave', 'bounce', 'pulse']
-
 /** Секунды до автооткрытия по задержке и доля прокрутки (%) для скролла. */
 export const DEFAULT_OPEN_DELAY = 5
 export const DEFAULT_OPEN_SCROLL = 50
@@ -59,10 +54,6 @@ export interface MountOptions {
   open?: OpenTrigger
   /** Секунды у `delay`, проценты прокрутки у `scroll`. У остальных не значит ничего. */
   openValue?: number
-  /** Эмодзи на углу открытой панели виджета. На кнопке его нет. */
-  emoji?: string
-  /** Как эмодзи оживает, когда панель открылась. */
-  emojiAnimation?: EmojiAnimation
   /** Убрать виджет со страницы после отправки ответа. */
   hideOnSubmit?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
@@ -168,7 +159,6 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
   const label = el.getAttribute('data-label')
-  const emoji = el.getAttribute('data-emoji')
   const trigger = el.getAttribute('data-open')
   return {
     form,
@@ -189,8 +179,6 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
     overlay: el.getAttribute('data-overlay') !== 'none',
     open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
     openValue: size(el.getAttribute('data-open-value'), 0),
-    emoji: emoji ?? '',
-    emojiAnimation: readAnimation(el.getAttribute('data-emoji-animation')),
     hideOnSubmit: el.getAttribute('data-hide-on-submit') === '1',
   }
 }
@@ -199,12 +187,6 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
 function size(raw: string | null, fallback: number): number {
   const value = Number(raw)
   return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-// Неизвестное движение — никакого: непонятая настройка вида обязана дать спокойный
-// эмодзи, а не выбранный за автора эффект.
-function readAnimation(raw: string | null): EmojiAnimation {
-  return raw !== null && ANIMATIONS.includes(raw) ? (raw as EmojiAnimation) : 'none'
 }
 
 // Неизвестный угол — правый нижний: сниппет с опечаткой обязан показать кнопку, а не

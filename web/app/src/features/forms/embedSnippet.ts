@@ -40,16 +40,6 @@ export const WIDGET_POSITIONS: Record<WidgetPosition, string> = {
 /** Что открывает виджет. Зеркалит `OpenTrigger` загрузчика (`embed/api.ts`). */
 export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
 
-/** Движение эмодзи на углу панели. Зеркалит `EmojiAnimation` загрузчика. */
-export type EmojiAnimation = 'none' | 'wave' | 'bounce' | 'pulse'
-
-export const EMOJI_ANIMATIONS: Record<EmojiAnimation, string> = {
-  none: 'Без движения',
-  wave: 'Помахать',
-  bounce: 'Подпрыгнуть',
-  pulse: 'Увеличиться',
-}
-
 export const OPEN_TRIGGERS: Record<OpenTrigger, string> = {
   click: 'По клику на кнопку',
   delay: 'Через паузу после загрузки',
@@ -80,10 +70,6 @@ export interface SnippetOptions {
   open?: OpenTrigger
   /** Секунды у `delay`, проценты прокрутки у `scroll`. */
   openValue?: number
-  /** Эмодзи на углу открытой панели виджета. */
-  emoji?: string
-  /** Как эмодзи оживает при открытии панели. */
-  emojiAnimation?: EmojiAnimation
   /** Убрать виджет со страницы после отправки ответа. */
   hideOnSubmit?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
@@ -113,19 +99,11 @@ export const DEFAULT_BLOCK_HEIGHT = 520
 export const DEFAULT_WIDGET_WIDTH = 376
 
 /**
- * Эмодзи на кнопке по умолчанию: приветственный жест, который у виджета в углу и
- * означает «здесь можно спросить».
- *
- * ДВА УМОЛЧАНИЯ У ЭМОДЗИ И ЗАТЕМНЕНИЯ РАЗНЫЕ, и это не расхождение. Здесь — с чего
- * начинает автор в панели; в загрузчике — что значит ОТСУТСТВИЕ атрибута, и трогать
- * его нельзя: `v1.js` живёт на чужих сайтах, где вставки без атрибута уже работают
- * (без эмодзи и с затемнением). Поэтому новые настройки уезжают в сниппет явными
- * атрибутами, а старые вставки продолжают вести себя как раньше.
+ * ПАНЕЛЬ КАБИНЕТА НАЧИНАЕТ БЕЗ ЗАТЕМНЕНИЯ, а загрузчик без атрибута его показывает, и
+ * это не расхождение: умолчание загрузчика — часть бессрочного контракта `v1.js`, где
+ * вставки без атрибута уже работают на чужих сайтах. Поэтому кабинет пишет
+ * `data-overlay="none"` явным атрибутом, а не переворачивает умолчание.
  */
-export const DEFAULT_WIDGET_EMOJI = '👋'
-
-/** Движение эмодзи, с которого начинает панель. */
-export const DEFAULT_EMOJI_ANIMATION: EmojiAnimation = 'wave'
 
 /** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
 export const DEFAULT_OPEN_DELAY = 5
@@ -160,12 +138,6 @@ export function scriptSnippet(opts: SnippetOptions): string {
     if (opts.open && opts.open !== 'click') {
       attrs.push(`data-open="${opts.open}"`)
       if (opts.openValue) attrs.push(`data-open-value="${opts.openValue}"`)
-    }
-    if (opts.emoji) {
-      attrs.push(`data-emoji="${escapeAttr(opts.emoji)}"`)
-      if (opts.emojiAnimation && opts.emojiAnimation !== 'none') {
-        attrs.push(`data-emoji-animation="${opts.emojiAnimation}"`)
-      }
     }
     if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   } else {

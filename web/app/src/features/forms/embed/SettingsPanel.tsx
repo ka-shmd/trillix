@@ -4,13 +4,11 @@ import { useUpdateBranding } from '../queries'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
-  EMOJI_ANIMATIONS,
   MODE_HINTS,
   MODE_TITLES,
   OPEN_TRIGGERS,
   WIDGET_POSITIONS,
   type EmbedMode,
-  type EmojiAnimation,
   type OpenTrigger,
   type WidgetPosition,
 } from '../embedSnippet'
@@ -49,8 +47,6 @@ export interface EmbedSettings {
   overlay: boolean
   open: OpenTrigger
   openValue: number
-  emoji: string
-  emojiAnimation: EmojiAnimation
   hideOnSubmit: boolean
   /** Вставка без загрузчика — голым `<iframe>`; у виджета невозможна. */
   plain: boolean
@@ -171,38 +167,6 @@ export function SettingsPanel({
               className="mt-1"
             />
           </div>
-
-          <div>
-            <Label htmlFor="embed-emoji">Эмодзи на кнопке</Label>
-            <Input
-              id="embed-emoji"
-              value={settings.emoji}
-              placeholder="например, 👋"
-              onChange={(e) => onChange({ emoji: e.target.value })}
-              className="mt-1"
-            />
-          </div>
-
-          {settings.emoji !== '' && (
-            <div>
-              <Label htmlFor="embed-emoji-animation">Движение эмодзи</Label>
-              <Select
-                value={settings.emojiAnimation}
-                onValueChange={(v) => onChange({ emojiAnimation: v as EmojiAnimation })}
-              >
-                <SelectTrigger id="embed-emoji-animation" className="mt-1 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(EMOJI_ANIMATIONS).map(([value, title]) => (
-                    <SelectItem key={value} value={value}>
-                      {title}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
 
           <div>
             <Label htmlFor="embed-width">Ширина панели, px</Label>

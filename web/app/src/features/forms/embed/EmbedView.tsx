@@ -5,9 +5,7 @@ import { Code2, Eye, X } from 'lucide-react'
 import { type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
-  DEFAULT_EMOJI_ANIMATION,
   DEFAULT_OPEN_DELAY,
-  DEFAULT_WIDGET_EMOJI,
   DEFAULT_WIDGET_WIDTH,
   iframeSnippet,
   scriptSnippet,
@@ -56,8 +54,6 @@ export function EmbedView({
     overlay: false,
     open: 'click',
     openValue: DEFAULT_OPEN_DELAY,
-    emoji: DEFAULT_WIDGET_EMOJI,
-    emojiAnimation: DEFAULT_EMOJI_ANIMATION,
     hideOnSubmit: false,
     plain: false,
   })
@@ -82,8 +78,6 @@ export function EmbedView({
     overlay: settings.overlay,
     open: settings.open,
     openValue: settings.openValue,
-    emoji: settings.emoji,
-    emojiAnimation: settings.emojiAnimation,
     hideOnSubmit: settings.hideOnSubmit,
   }
   const usePlain = settings.plain && mode !== 'widget'
