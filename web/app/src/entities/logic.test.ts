@@ -4,6 +4,7 @@ import {
   type Block,
   type LogicCondition,
   type LogicOperator,
+  MAX_LOGIC_ACTIONS,
   MAX_LOGIC_NODES,
   formSchemaSchema,
 } from '@entities/formSchema'
@@ -439,6 +440,50 @@ describe('схема: форма правил', () => {
         },
       ]),
     ],
+    [
+      'блок logic: условие и все виды действий',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+        {
+          id: 'L',
+          groupId: 'g2',
+          type: 'logic',
+          logic: {
+            when: { blockId: 'a', op: 'is', value: 'o1' },
+            then: [
+              { kind: 'show', target: 'b' },
+              { kind: 'hide', target: 'c' },
+              { kind: 'require', target: 'b' },
+              { kind: 'show_options', target: 'c', options: ['o2'] },
+              { kind: 'hide_options', target: 'c', options: ['o2', 'o3'] },
+              { kind: 'jump', to: 'br' },
+              { kind: 'jump', end: true },
+              { kind: 'block_submit' },
+            ],
+          },
+        },
+        { id: 'b', groupId: 'g3', type: 'short_text' },
+        { id: 'c', groupId: 'g4', type: 'multi_choice' },
+      ]),
+    ],
+    [
+      'блок logic без условия и без действий — законный черновик',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: {} }]),
+    ],
+    ['блок logic вовсе без поля logic', doc([{ id: 'L', groupId: 'g1', type: 'logic' }])],
+    [
+      'действие на удалённую цель — инертно, но валидно',
+      doc([
+        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', target: 'призрак' }] } },
+      ]),
+    ],
+    [
+      'цель СТОИТ ВЫШЕ блока — инертно, но валидно',
+      doc([
+        { id: 'b', groupId: 'g1', type: 'short_text' },
+        { id: 'L', groupId: 'g2', type: 'logic', logic: { then: [{ kind: 'show', target: 'b' }] } },
+      ]),
+    ],
   ]
 
   it.each(valid)('валиден: %s', (_name, document) => {
@@ -559,6 +604,95 @@ describe('схема: форма правил', () => {
           groupId: 'g1',
           type: 'page_break',
           jumpIf: [{ when: { blockId: 'a', op: 'answered' }, to: 'br2', end: true }],
+        },
+      ]),
+    ],
+    [
+      'logic у чужого типа',
+      doc([
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'short_text',
+          logic: { then: [{ kind: 'show', target: 'c' }] },
+        },
+      ]),
+    ],
+    [
+      'неизвестное действие',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'calculate', target: 'b' }] } }]),
+    ],
+    [
+      'действие без цели',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show' }] } }]),
+    ],
+    [
+      'пустая цель',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', target: '' }] } }]),
+    ],
+    [
+      'варианты без списка',
+      doc([
+        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'hide_options', target: 'c' }] } },
+      ]),
+    ],
+    [
+      'пустой список вариантов',
+      doc([
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'hide_options', target: 'c', options: [] }] },
+        },
+      ]),
+    ],
+    [
+      'варианты у действия, которое их не адресует',
+      doc([
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'show', target: 'c', options: ['o1'] }] },
+        },
+      ]),
+    ],
+    [
+      'переход в блоке logic без цели',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'jump' }] } }]),
+    ],
+    [
+      'переход в блоке logic с двумя целями',
+      doc([
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'jump', to: 'br', end: true }] },
+        },
+      ]),
+    ],
+    [
+      'цель перехода у действия, которое не переход',
+      doc([
+        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'block_submit', to: 'br' }] } },
+      ]),
+    ],
+    [
+      'лишний ключ в блоке logic',
+      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { when: undefined, otherwise: [] } }]),
+    ],
+    [
+      'действий больше лимита',
+      doc([
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: {
+            then: Array.from({ length: MAX_LOGIC_ACTIONS + 1 }, () => ({ kind: 'show', target: 'b' })),
+          },
         },
       ]),
     ],

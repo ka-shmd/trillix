@@ -44,6 +44,9 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   // splitPages, превращая в границу шага. До BlockField он доходит только на поверхности,
   // которую ещё не научили страницам, — там он рисуется ничем (BlockField).
   page_break: null,
+  // Блок условной логики у респондента не рисуется вовсе (BlockField отсекает выше):
+  // он про поведение формы, а не про её содержимое.
+  logic: null,
   form_title: null,
 }
 

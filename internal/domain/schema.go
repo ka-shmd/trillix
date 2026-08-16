@@ -125,6 +125,11 @@ const (
 	// вовсе: ответ приходит одним запросом со всех страниц сразу, поэтому ни приём,
 	// ни валидация ответов разбиения не видят. Зеркалит 'page_break' в contract.ts.
 	BlockPageBreak BlockType = "page_break"
+	// Условная логика: «когда <условие> → тогда <действия>». Неотвечаемый, как прочий
+	// контент, и респонденту не показывается вовсе — он видит последствие. Позиция
+	// блока значима: источники условия выше него, цели действий ниже (ADR §10).
+	// Зеркалит 'logic' в contract.ts.
+	BlockLogic BlockType = "logic"
 	// Заголовок ФОРМЫ (фаза 15): первая строка документа, <h1> у респондента.
 	// Отдельный тип, а не BlockTitle: тот — подпись ВОПРОСА, из которой аналитика
 	// берёт имя колонки и шага воронки. Слить их значило бы навсегда объяснять,
@@ -146,8 +151,8 @@ var blockTypes = []BlockType{
 	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
 	// подписи
 	BlockTitle, BlockLabel,
-	// контент, разрыв страницы и заголовок формы
-	BlockHeading, BlockText, BlockImage, BlockPageBreak, BlockFormTitle,
+	// контент, разрыв страницы, условная логика и заголовок формы
+	BlockHeading, BlockText, BlockImage, BlockPageBreak, BlockLogic, BlockFormTitle,
 }
 
 func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
@@ -184,7 +189,7 @@ func (t BlockType) isCaption() bool {
 // у формы появится колонка в выгрузке и шаг воронки, которых автор не создавал.
 func (t BlockType) isContent() bool {
 	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
-		t == BlockImage || t == BlockPageBreak || t == BlockFormTitle
+		t == BlockImage || t == BlockPageBreak || t == BlockLogic || t == BlockFormTitle
 }
 
 // isAnswerable — блок собирает ответ (все отвечаемые типы, включая consent).
@@ -209,7 +214,12 @@ func (t BlockType) carriesText() bool {
 // Разрыв страницы (фаза 19) исключён по той же причине, что заголовок формы, — по
 // устройству, а не по виду: он граница раскладки, а не её элемент, и половина ряда, за
 // которой начинается новая страница, не значит ничего.
-func (t BlockType) canShareRow() bool { return t != BlockFormTitle && t != BlockPageBreak }
+// Блок условной логики исключён по тому же доводу: он не элемент раскладки, а
+// утверждение о поведении формы, и половина ряда, в которой стоит условие, не значит
+// ничего.
+func (t BlockType) canShareRow() bool {
+	return t != BlockFormTitle && t != BlockPageBreak && t != BlockLogic
+}
 
 // Option — вариант выбора у choice-блока. id стабилен и генерируется на клиенте
 // один раз: ответы ссылаются на него, поэтому переименование label связь не рвёт.
@@ -286,6 +296,10 @@ type Block struct {
 	// JumpIf — переходы со страницы, которую закрывает ЭТОТ разрыв; только у
 	// page_break. Порядок = приоритет.
 	JumpIf []JumpRule `json:"jumpIf,omitempty"`
+	// Logic — содержимое блока logic: условие и список действий. Только у BlockLogic.
+	// Верхний уровень, а не Settings, по тому же доводу, что и правила выше, — и потому
+	// что Settings это общий мешок ключей, в котором дерево условий чужеродно.
+	Logic *Logic `json:"logic,omitempty"`
 	// Class — СВОЁ имя блока для CSS автора (фаза 22, слайс 7). Уезжает в атрибут
 	// class рядом с нашими rf-*, и по нему автор пишет правило в design.css.
 	//

@@ -42,6 +42,7 @@ const (
 	MaxLogicNodes    = 40  // узлов (групп и листьев) в одном правиле
 	MaxLogicValueLen = 200 // длина значения сравнения, в рунах (как placeholder)
 	MaxJumpRules     = 10  // переходов у одного разрыва страницы
+	MaxLogicActions  = 10  // действий в одном блоке logic
 )
 
 // LogicOp — оператор сравнения в листе условия. Зеркалит LOGIC_OPERATORS в logic.ts.
@@ -127,6 +128,132 @@ type JumpRule struct {
 	When *Condition `json:"when"`
 	To   string     `json:"to,omitempty"`
 	End  bool       `json:"end,omitempty"`
+}
+
+// LogicActionKind — что правило ДЕЛАЕТ, когда условие сработало. Зеркалит LOGIC_ACTIONS
+// в blocks/logic.ts; порядок списка контрактный (logicparity_test.go читает тот файл).
+type LogicActionKind string
+
+const (
+	// Видимость цели: ActShow переворачивает умолчание вопроса в «скрыт» и показывает
+	// по условию, ActHide оставляет «виден» и прячет по условию.
+	ActShow LogicActionKind = "show"
+	ActHide LogicActionKind = "hide"
+	// Обязательность отвечаемого блока; складывается с флагом Required по ИЛИ.
+	ActRequire LogicActionKind = "require"
+	// Видимость отдельных вариантов внутри choice-вопроса (каскадные списки).
+	ActShowOptions LogicActionKind = "show_options"
+	ActHideOptions LogicActionKind = "hide_options"
+	// Переход со страницы, на которой стоит блок.
+	ActJump LogicActionKind = "jump"
+	// «Кнопки нет»: обход завершается на этой странице, отправить форму нельзя.
+	ActBlockSubmit LogicActionKind = "block_submit"
+)
+
+var logicActions = []LogicActionKind{
+	ActShow, ActHide, ActRequire, ActShowOptions, ActHideOptions, ActJump, ActBlockSubmit,
+}
+
+func (k LogicActionKind) valid() bool { return slices.Contains(logicActions, k) }
+
+// needsTarget — действие адресует блок. У перехода цель своя (To/End), у блокировки
+// отправки цели нет вовсе: она про страницу, на которой блок стоит.
+func (k LogicActionKind) needsTarget() bool {
+	switch k {
+	case ActShow, ActHide, ActRequire, ActShowOptions, ActHideOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+// needsOptions — действие адресует варианты ВНУТРИ блока-цели.
+func (k LogicActionKind) needsOptions() bool {
+	return k == ActShowOptions || k == ActHideOptions
+}
+
+// LogicAction — одно действие. Одна структура на все формы, а не интерфейс с семью
+// реализациями, — по тому же доводу, что у Condition: так работает
+// DisallowUnknownFields, и JSON разбирается stdlib'ом без своего UnmarshalJSON.
+type LogicAction struct {
+	Kind LogicActionKind `json:"kind"`
+	// Target — id блока-цели. Голова группы у show/hide (прячется вопрос целиком),
+	// отвечаемый блок у require, choice-блок у *_options. Ссылка на groupId
+	// невозможна: он ВЫВОДИТСЯ (regroup) и сущностью схемы не является.
+	Target string `json:"target,omitempty"`
+	// Options — id вариантов внутри Target. Списком, а не действием на вариант: автор
+	// прячет «все, кроме подходящих» одним движением.
+	Options []string `json:"options,omitempty"`
+	// To/End — цель перехода, ровно одна из двух (довод — у JumpRule выше).
+	To  string `json:"to,omitempty"`
+	End bool   `json:"end,omitempty"`
+}
+
+// BlockLogic — содержимое блока logic. Обе половины НЕОБЯЗАТЕЛЬНЫ по отдельности: блок,
+// у которого автор ещё не выбрал условие или ещё не выбрал действие, — законное
+// состояние черновика, ровно как лист с пустым Value. Полупустой блок инертен целиком.
+type Logic struct {
+	When *Condition    `json:"when,omitempty"`
+	Then []LogicAction `json:"then,omitempty"`
+}
+
+// validateBlockLogic — форма содержимого блока logic. Что здесь НЕ проверяется:
+// существование блока-цели, её позиция относительно блока, совместимость цели с
+// действием (обязательным можно сделать только отвечаемый, варианты бывают только у
+// choice). Всё это кросс-блочное — см. доклок файла: неразрешимое действие ИНЕРТНО.
+func validateBlockLogic(l *Logic) error {
+	if l == nil {
+		return nil
+	}
+	if err := validateCondition(l.When, "logic.when"); err != nil {
+		return err
+	}
+	if len(l.Then) > MaxLogicActions {
+		return fmt.Errorf("больше %d действий", MaxLogicActions)
+	}
+	for i, a := range l.Then {
+		at := fmt.Sprintf("действие #%d", i)
+		if !a.Kind.valid() {
+			return fmt.Errorf("%s: неизвестное действие %q", at, a.Kind)
+		}
+		if a.Kind.needsTarget() {
+			if err := validateID(a.Target); err != nil {
+				return fmt.Errorf("%s: target: %s", at, err)
+			}
+		} else if a.Target != "" {
+			return fmt.Errorf("%s: действие %q не адресует блок", at, a.Kind)
+		}
+		if a.Kind.needsOptions() {
+			if len(a.Options) == 0 {
+				return fmt.Errorf("%s: не выбрано ни одного варианта", at)
+			}
+			if len(a.Options) > MaxOptions {
+				return fmt.Errorf("%s: больше %d вариантов", at, MaxOptions)
+			}
+			for _, id := range a.Options {
+				if err := validateID(id); err != nil {
+					return fmt.Errorf("%s: options: %s", at, err)
+				}
+			}
+		} else if len(a.Options) > 0 {
+			return fmt.Errorf("%s: действие %q не адресует варианты", at, a.Kind)
+		}
+		if a.Kind == ActJump {
+			if (a.To != "") == a.End {
+				return fmt.Errorf("%s: нужна ровно одна цель — to или end", at)
+			}
+			if a.To != "" {
+				if err := validateID(a.To); err != nil {
+					return fmt.Errorf("%s: to: %s", at, err)
+				}
+			}
+			continue
+		}
+		if a.To != "" || a.End {
+			return fmt.Errorf("%s: цель перехода задана у действия %q", at, a.Kind)
+		}
+	}
+	return nil
 }
 
 // validateCondition проверяет форму дерева. Что здесь НЕ проверяется — существование
@@ -216,6 +343,14 @@ func validateLogic(b Block) error {
 		if b.Required {
 			return fmt.Errorf("обязательность задана дважды: required и requiredIf")
 		}
+	}
+	// Условие и действия несёт только блок logic. Проверка внутриблочная: тип блока и
+	// его содержимое лежат рядом, промежуточных состояний драга у этой пары нет.
+	if b.Logic != nil && b.Type != BlockLogic {
+		return fmt.Errorf("тип %q не несёт условной логики", b.Type)
+	}
+	if err := validateBlockLogic(b.Logic); err != nil {
+		return err
 	}
 	if len(b.JumpIf) > 0 && b.Type != BlockPageBreak {
 		return fmt.Errorf("переходы задаются только у разрыва страницы")

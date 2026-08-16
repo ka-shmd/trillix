@@ -7,7 +7,7 @@ import {
   MAX_OPTIONS,
   MAX_PLACEHOLDER_LEN,
 } from './limits'
-import { ruleSchema } from './logic'
+import { ruleSchema } from './conditions'
 
 // Настройки блока — ОДИН объект на все типы, а не объединение по типу.
 //

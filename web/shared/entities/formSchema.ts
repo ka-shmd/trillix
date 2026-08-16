@@ -26,7 +26,8 @@ import {
   MAX_TEXT_LEN,
   MAX_THANK_YOU_TEXT_LEN,
 } from './blocks/limits'
-import { jumpIfSchema, ruleSchema } from './blocks/logic'
+import { jumpIfSchema, ruleSchema } from './blocks/conditions'
+import { blockLogicSchema } from './blocks/logic'
 import { OWNED_SETTINGS, idSchema, settingsSchema } from './blocks/settings'
 
 // Схема формы — единый контракт двух сторон. Зеркало Go-типов и ValidateSchema
@@ -79,6 +80,15 @@ export {
   type JumpRule,
   type LogicCondition,
   type LogicOperator,
+} from './blocks/conditions'
+export {
+  LOGIC_ACTIONS,
+  blockLogicSchema,
+  logicActionKindSchema,
+  logicActionSchema,
+  type BlockLogic,
+  type LogicAction,
+  type LogicActionKind,
 } from './blocks/logic'
 export {
   columnSchema,
@@ -283,6 +293,10 @@ export const blockSchema = z
     visibleIf: ruleSchema.optional(),
     requiredIf: ruleSchema.optional(),
     jumpIf: jumpIfSchema.optional(),
+    // Содержимое блока `logic`: условие и список действий (blocks/logic.ts). Верхний
+    // уровень, а не settings, по тому же доводу, что и правила выше, — и потому что
+    // settings это общий мешок ключей, в котором дерево условий было бы чужеродным.
+    logic: blockLogicSchema.optional(),
     // Своё имя блока для CSS автора (фаза 22, слайс 7): уезжает в атрибут class
     // рядом с нашими rf-*. Строгая форма, а не любая строка — в значении не должно
     // быть ни пробела (второй класс это второе имя), ни заглавных, ни чего-либо,
@@ -339,6 +353,17 @@ export const blockSchema = z
         code: 'custom',
         message: 'переходы задаются только у разрыва страницы',
         path: ['jumpIf'],
+      })
+    }
+    // Условие и действия несёт только блок `logic`. Проверка внутриблочная: тип блока и
+    // его содержимое лежат рядом, промежуточных состояний драга у этой пары нет. Что
+    // тут по-прежнему НЕ проверяется — существование цели и её позиция относительно
+    // блока: это кросс-блочное, и неразрешимое действие инертно, а не невалидно.
+    if (b.logic && b.type !== 'logic') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не несёт условной логики`,
+        path: ['logic'],
       })
     }
 

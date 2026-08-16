@@ -613,6 +613,36 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 			{"id":"b","groupId":"g2","type":"short_text","settings":{},"visibleIf":
 				{"all":[{"any":[{"all":[{"blockId":"a","op":"answered"}]}]}]}}
 		]}`,
+		"блок logic: условие и все виды действий": `{"schemaVersion":1,"blocks":[
+			{"id":"a","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да"}]}},
+			{"id":"L","groupId":"g2","type":"logic","logic":{
+				"when":{"blockId":"a","op":"is","value":"o1"},
+				"then":[
+					{"kind":"show","target":"b"},
+					{"kind":"hide","target":"c"},
+					{"kind":"require","target":"b"},
+					{"kind":"show_options","target":"c","options":["o2"]},
+					{"kind":"hide_options","target":"c","options":["o2","o3"]},
+					{"kind":"jump","to":"br"},
+					{"kind":"jump","end":true},
+					{"kind":"block_submit"}
+				]}},
+			{"id":"b","groupId":"g3","type":"short_text","settings":{}},
+			{"id":"c","groupId":"g4","type":"multi_choice","settings":{}}
+		]}`,
+		"блок logic без условия и без действий — законный черновик": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{}}
+		]}`,
+		"блок logic вовсе без поля logic": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic"}
+		]}`,
+		"действие на удалённую цель — инертно, но валидно": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":"призрак"}]}}
+		]}`,
+		"цель СТОИТ ВЫШЕ блока — инертно, но валидно": `{"schemaVersion":1,"blocks":[
+			{"id":"b","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"L","groupId":"g2","type":"logic","logic":{"then":[{"kind":"show","target":"b"}]}}
+		]}`,
 	}
 
 	for name, raw := range cases {
@@ -627,6 +657,8 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 func TestValidateSchema_LogicInvalid(t *testing.T) {
 	deep := `{"all":[{"all":[{"all":[{"all":[{"blockId":"a","op":"answered"}]}]}]}]}`
 	long := strings.Repeat("я", MaxLogicValueLen+1)
+	manyActions := strings.TrimSuffix(
+		strings.Repeat(`{"kind":"show","target":"b"},`, MaxLogicActions+1), ",")
 
 	cases := map[string]string{
 		"пустое условие": `{"schemaVersion":1,"blocks":[
@@ -684,6 +716,42 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 		]}`,
 		"переход с двумя целями": `{"schemaVersion":1,"blocks":[
 			{"id":"br","groupId":"g1","type":"page_break","jumpIf":[{"when":{"blockId":"a","op":"answered"},"to":"br2","end":true}]}
+		]}`,
+		"logic у чужого типа": `{"schemaVersion":1,"blocks":[
+			{"id":"b","groupId":"g1","type":"short_text","settings":{},"logic":{"then":[{"kind":"show","target":"c"}]}}
+		]}`,
+		"неизвестное действие": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"calculate","target":"b"}]}}
+		]}`,
+		"действие без цели": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show"}]}}
+		]}`,
+		"пустая цель": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":""}]}}
+		]}`,
+		"варианты без списка": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide_options","target":"c"}]}}
+		]}`,
+		"пустой список вариантов": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"hide_options","target":"c","options":[]}]}}
+		]}`,
+		"варианты у действия, которое их не адресует": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"show","target":"c","options":["o1"]}]}}
+		]}`,
+		"переход в блоке logic без цели": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"jump"}]}}
+		]}`,
+		"переход в блоке logic с двумя целями": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"jump","to":"br","end":true}]}}
+		]}`,
+		"цель перехода у действия, которое не переход": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[{"kind":"block_submit","to":"br"}]}}
+		]}`,
+		"лишний ключ в блоке logic": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"otherwise":[]}}
+		]}`,
+		"действий больше лимита": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"g1","type":"logic","logic":{"then":[` + manyActions + `]}}
 		]}`,
 	}
 
