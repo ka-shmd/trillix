@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
 
 // Сборка кода для вставки формы на чужой сайт (фаза 20). Чистые функции: экран
@@ -8,7 +10,24 @@ import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
 // Настройки вставки нигде не сохраняются (решение владельца 2026-08-05): они живут
 // в самом сниппете, на чужой странице, и правятся там же.
 
-export type EmbedMode = 'block' | 'widget' | 'page'
+// Вид вставки живёт в адресе экрана «Встроить», поэтому у него есть схема разбора:
+// параметр правят руками, и опечатка обязана дать умолчание, а не уронить экран.
+export const embedModeSchema = z.enum(['block', 'widget', 'page'])
+export type EmbedMode = z.infer<typeof embedModeSchema>
+export const DEFAULT_EMBED_MODE: EmbedMode = 'block'
+
+/** Как вид вставки называется и что обещает — один текст на все три экрана. */
+export const MODE_TITLES: Record<EmbedMode, string> = {
+  block: 'Блок',
+  widget: 'Виджет',
+  page: 'Страница',
+}
+export const MODE_HINTS: Record<EmbedMode, string> = {
+  block: 'Форма стоит в потоке страницы и растёт по мере заполнения',
+  widget: 'Кнопка в углу экрана открывает форму поверх сайта',
+  page: 'Форма занимает весь экран — удобно длинной анкете',
+}
+
 export type WidgetPosition = 'bottom-right' | 'bottom-left'
 
 export interface SnippetOptions {
@@ -22,10 +41,30 @@ export interface SnippetOptions {
   transparent?: boolean
   /** Высота простого iframe: у него авторесайза нет, размер задаётся сразу. */
   height?: number
+  /** Заголовок формы не показывать: над блоком на чужой странице обычно есть свой. */
+  hideTitle?: boolean
+  /** Прижать содержимое влево независимо от оформления формы. */
+  alignLeft?: boolean
+  /**
+   * Предпросмотр: та же вставка, но форма не считает визит и не отправляет ответ.
+   *
+   * Флаг ставит ТОЛЬКО макет на экране «Встроить»; в коде, который видит и копирует
+   * автор, его нет. Разница между показанным и исполненным кодом ровно в этом одном
+   * атрибуте — и она существует затем, чтобы предпросмотр не оставлял следов
+   * (ARCHITECTURE §10).
+   */
+  preview?: boolean
 }
 
 /** Высота простого `<iframe>` без загрузчика: подстраиваться ему нечем. */
 export const PLAIN_IFRAME_HEIGHT = 720
+
+/**
+ * Высота блока до первого сообщения о размере — зеркалит `DEFAULT_HEIGHT` загрузчика
+ * (`web/renderer/embed/api.ts`). Значение по умолчанию в сниппет не пишется: атрибут
+ * без него означает ровно то же самое.
+ */
+export const DEFAULT_BLOCK_HEIGHT = 520
 
 const loaderUrl = (baseUrl: string) => `${baseUrl}/embed/v1.js`
 
@@ -51,8 +90,33 @@ export function scriptSnippet(opts: SnippetOptions): string {
     attrs.push(`data-trillix-form="${escapeAttr(opts.slug)}"`)
     if (opts.mode === 'page') attrs.push('data-mode="page"')
     if (opts.transparent) attrs.push('data-bg="transparent"')
+    // Высота нужна только там, где фрейм стоит в потоке: у виджета её ведёт модалка,
+    // у страницы — вьюпорт. Пишем, лишь когда автор отошёл от умолчания загрузчика.
+    if (opts.mode === 'block' && opts.height && opts.height !== DEFAULT_BLOCK_HEIGHT) {
+      attrs.push(`data-height="${opts.height}"`)
+    }
   }
+  if (opts.hideTitle) attrs.push('data-hide-title="1"')
+  if (opts.alignLeft) attrs.push('data-align="left"')
+  if (opts.preview) attrs.push('data-preview="1"')
   return `<script src="${loaderUrl(opts.baseUrl)}" ${attrs.join(' ')} async></script>`
+}
+
+/**
+ * frameUrl — адрес формы во фрейме: то же, что строит загрузчик (`frameSrc`).
+ *
+ * Отдаётся автору и как «ссылка для вставки» (Notion, Ghost, Canva умеют вставлять
+ * фрейм по адресу), и как `src` голого `<iframe>` — это один и тот же адрес, поэтому
+ * и собирается в одном месте.
+ */
+export function frameUrl(opts: SnippetOptions): string {
+  // У виджета своего адреса нет: модалка показывает ту же форму, что и блок.
+  const params = new URLSearchParams({ embed: opts.mode === 'widget' ? 'block' : opts.mode })
+  if (opts.transparent) params.set('bg', 'transparent')
+  if (opts.hideTitle) params.set('hideTitle', '1')
+  if (opts.alignLeft) params.set('align', 'left')
+  if (opts.preview) params.set('preview', '1')
+  return `${opts.baseUrl}/r/${encodeURIComponent(opts.slug)}?${params.toString()}`
 }
 
 /**
@@ -63,9 +127,7 @@ export function scriptSnippet(opts: SnippetOptions): string {
  * известна и показывается рядом: высота фиксированная, виджета не существует.
  */
 export function iframeSnippet(opts: SnippetOptions): string {
-  const params = new URLSearchParams({ embed: opts.mode === 'widget' ? 'block' : opts.mode })
-  if (opts.transparent) params.set('bg', 'transparent')
-  const src = `${opts.baseUrl}/r/${encodeURIComponent(opts.slug)}?${params.toString()}`
+  const src = frameUrl(opts)
   const height = opts.mode === 'page' ? '100%' : String(opts.height ?? PLAIN_IFRAME_HEIGHT)
   return `<iframe src="${escapeAttr(src)}" title="Форма" width="100%" height="${height}" style="border:0"></iframe>`
 }

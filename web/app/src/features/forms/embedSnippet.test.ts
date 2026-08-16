@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import { textFromString, type Block } from '@entities/formSchema'
 import {
+  DEFAULT_BLOCK_HEIGHT,
+  frameUrl,
   iframeSnippet,
   prefillFields,
   prefillSnippet,
@@ -55,6 +57,47 @@ describe('scriptSnippet', () => {
     const code = scriptSnippet({ ...base, mode: 'widget', label: 'Оставить "заявку" <b>' })
     expect(code).toContain('data-label="Оставить &quot;заявку&quot; &lt;b&gt;"')
     expect(code).toMatch(/^<script src="[^"]+" [^>]*async><\/script>$/)
+  })
+})
+
+describe('scriptSnippet: настройки вида и предпросмотр', () => {
+  it('скрытый заголовок и выравнивание — отдельными атрибутами', () => {
+    const code = scriptSnippet({ ...base, hideTitle: true, alignLeft: true })
+    expect(code).toContain('data-hide-title="1"')
+    expect(code).toContain('data-align="left"')
+  })
+
+  // Умолчание в сниппет не пишется: атрибут без него значит ровно то же самое, а
+  // лишняя строка в коде на чужой странице — это вопрос «а это зачем?».
+  it('высота блока пишется, только когда автор её менял', () => {
+    expect(scriptSnippet({ ...base, height: DEFAULT_BLOCK_HEIGHT })).not.toContain('data-height')
+    expect(scriptSnippet({ ...base, height: 400 })).toContain('data-height="400"')
+    // У виджета и страницы своей высоты нет: её ведут модалка и вьюпорт.
+    expect(scriptSnippet({ ...base, mode: 'page', height: 400 })).not.toContain('data-height')
+  })
+
+  // ЭТО ЕДИНСТВЕННОЕ ОТЛИЧИЕ кода, который исполняется в макете, от кода, который
+  // автор копирует. Флаг обязан появляться только по явной просьбе — иначе вставка
+  // на настоящем сайте молча перестала бы принимать ответы.
+  it('флаг предпросмотра — только когда его попросили', () => {
+    expect(scriptSnippet(base)).not.toContain('data-preview')
+    expect(scriptSnippet({ ...base, preview: true })).toContain('data-preview="1"')
+    expect(iframeSnippet(base)).not.toContain('preview=1')
+    expect(iframeSnippet({ ...base, preview: true })).toContain('preview=1')
+  })
+})
+
+describe('frameUrl', () => {
+  it('тот же адрес, что у ссылки на форму, плюс настройки вида', () => {
+    expect(frameUrl(base)).toBe('https://f.trillix.ru/r/opros?embed=block')
+    const tuned = frameUrl({ ...base, transparent: true, hideTitle: true, alignLeft: true })
+    expect(tuned).toContain('bg=transparent')
+    expect(tuned).toContain('hideTitle=1')
+    expect(tuned).toContain('align=left')
+  })
+
+  it('у виджета своего адреса нет — та же форма блоком', () => {
+    expect(frameUrl({ ...base, mode: 'widget' })).toContain('embed=block')
   })
 })
 
