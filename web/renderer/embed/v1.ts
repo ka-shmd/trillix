@@ -230,6 +230,14 @@ function buildWidget(opts: MountOptions): Mounted {
   dialog.style.width = '100%'
   dialog.style.overflowY = 'auto'
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
+  // Полоса прокрутки панели — тонкая и приглушённая: системная широкая полоса в окне
+  // шириной 376 съедает край формы и выглядит как часть чужого сайта, а не наша.
+  // Свойствами, а не псевдоэлементом `::-webkit-scrollbar`: вставить правило в чужой
+  // документ нам нечем (стили назначаются только через CSSOM), а эта пара
+  // поддерживается и в Firefox, и в свежем Chrome. Где не поддерживается — остаётся
+  // системная полоса, то есть сегодняшний вид.
+  dialog.style.setProperty('scrollbar-width', 'thin')
+  dialog.style.setProperty('scrollbar-color', 'rgba(15, 23, 42, 0.25) transparent')
 
   // КРЕСТИК ЖИВЁТ НА ОБЁРТКЕ, А НЕ ВНУТРИ ПАНЕЛИ, и это не про вёрстку: панель — это
   // скролл-контейнер длинной формы, и лежащий внутри неё крестик уезжал вверх вместе с
@@ -246,11 +254,8 @@ function buildWidget(opts: MountOptions): Mounted {
   close.setAttribute('aria-label', 'Закрыть форму')
   close.textContent = '×'
   close.style.position = 'absolute'
-  // На КРАЮ панели, зеркально эмодзи: тот висит на левом верхнем углу, крестик — на
-  // правом. Половина кнопки снаружи, поэтому она не наезжает на обложку и не спорит с
-  // первым, что респондент видит в форме.
-  close.style.top = '-14px'
-  close.style.right = '-14px'
+  close.style.top = '8px'
+  close.style.right = '8px'
   close.style.width = '28px'
   close.style.height = '28px'
   close.style.border = '0'
