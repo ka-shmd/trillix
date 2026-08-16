@@ -125,16 +125,21 @@ describe('scriptSnippet: настройки виджета', () => {
     expect(scriptSnippet({ ...widget, open: 'exit' })).toContain('data-open="exit"')
   })
 
-  it('эмодзи экранируется, помахивание — отдельным флагом', () => {
-    const code = scriptSnippet({ ...widget, emoji: '👋', emojiWave: true })
+  it('эмодзи экранируется, движение — отдельным атрибутом', () => {
+    const code = scriptSnippet({ ...widget, emoji: '👋', emojiAnimation: 'bounce' })
     expect(code).toContain('data-emoji="👋"')
-    expect(code).toContain('data-emoji-wave="1"')
+    expect(code).toContain('data-emoji-animation="bounce"')
     // Эмодзи вводит автор, и оно уезжает в атрибут на чужой странице — кавычка в нём
     // оборвала бы сниппет так же, как в надписи кнопки.
     expect(scriptSnippet({ ...widget, emoji: '" onload="x' })).toContain(
       'data-emoji="&quot; onload=&quot;x"',
     )
-    expect(scriptSnippet({ ...widget, emojiWave: true })).not.toContain('data-emoji-wave')
+    // «Без движения» — умолчание загрузчика, писать его в сниппет незачем; движение без
+    // эмодзи не значит ничего, и атрибута тоже быть не должно.
+    expect(scriptSnippet({ ...widget, emoji: '👋', emojiAnimation: 'none' })).not.toContain(
+      'data-emoji-animation',
+    )
+    expect(scriptSnippet({ ...widget, emojiAnimation: 'wave' })).not.toContain('data-emoji')
   })
 
   it('уборка после отправки — флагом', () => {

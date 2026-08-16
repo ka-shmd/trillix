@@ -234,6 +234,14 @@ function buildWidget(opts: MountOptions): Mounted {
     // НАД панелью, а не под ней: в потоке эмодзи идёт раньше, и без z-index панель
     // закрашивала бы его выступающую часть собой — эмодзи выглядел бы обрезанным.
     badge.style.zIndex = '1'
+    const move = EMOJI_MOVES[opts.emojiAnimation ?? 'none']
+    if (move) {
+      badge.animate(move.frames, {
+        duration: move.duration,
+        iterations: Infinity,
+        easing: 'ease-in-out',
+      })
+    }
   }
 
   const frame = createFrame(opts)
@@ -262,9 +270,9 @@ function buildWidget(opts: MountOptions): Mounted {
     dialog.style.borderRadius = full ? '0' : '12px'
     // ПАНЕЛЬ НИЖЕ ВЬЮПОРТА, а не во всю его высоту (правка владельца 2026-08-16):
     // окно, растянутое от края до края, читается как модалка — ровно то, чем виджет
-    // перестал быть. Потолок 560 против «вьюпорт минус отступы» — это треть высоты и
-    // больше на любом ноутбуке; длинная форма скроллится внутри панели.
-    dialog.style.maxHeight = full ? '100dvh' : 'min(560px, calc(100dvh - 48px))'
+    // перестал быть. 680 — второй подход после 560: та высота оказалась мала под
+    // форму из нескольких вопросов. Длинная форма скроллится внутри панели.
+    dialog.style.maxHeight = full ? '100dvh' : 'min(680px, calc(100dvh - 48px))'
     dialog.style.minHeight = full ? '100dvh' : '0'
 
     // На весь экран эмодзи не показываем: он висит на углу панели, а у формы во весь
@@ -342,16 +350,9 @@ function createButton(opts: MountOptions) {
 
   const button = document.createElement('button')
   button.type = 'button'
-  // Эмодзи — отдельным узлом, а не в текст кнопки: махать надо им одним, и текст
-  // владельца рядом с ним остаётся текстом (в кнопку он попадает через textContent).
-  const emoji = opts.emoji ? document.createElement('span') : null
-  if (emoji) {
-    emoji.textContent = opts.emoji!
-    emoji.style.marginRight = '8px'
-    emoji.style.display = 'inline-block'
-    button.appendChild(emoji)
-  }
-  button.appendChild(document.createTextNode(opts.label ?? DEFAULT_LABEL))
+  // ЭМОДЗИ НА КНОПКЕ НЕТ (правка владельца 2026-08-16): он живёт на углу открытой
+  // панели. Кнопка — это надпись, и только она.
+  button.textContent = opts.label ?? DEFAULT_LABEL
   button.style.position = 'fixed'
   // Смещение считается от своего края: у верхних углов кнопки растут вниз, у нижних —
   // вверх, и в обоих случаях вторая не ложится на первую.
@@ -371,23 +372,48 @@ function createButton(opts: MountOptions) {
   button.addEventListener('click', () => open(opts, button))
   document.body.appendChild(button)
   widgetButtons[opts.form] = button
-
-  // Помахать эмодзи: анимация через WAAPI, а не через @keyframes, — вставить правило
-  // в чужой документ нам нечем (стили ставим только свойствами, иначе строгая CSP
-  // отбрасывает атрибут style), а `animate` политика не трогает.
-  if (emoji && opts.emojiWave) {
-    emoji.animate(
-      [
-        { transform: 'rotate(0deg)' },
-        { transform: 'rotate(16deg)' },
-        { transform: 'rotate(-8deg)' },
-        { transform: 'rotate(14deg)' },
-        { transform: 'rotate(0deg)' },
-      ],
-      { duration: 1200, iterations: Infinity, easing: 'ease-in-out' },
-    )
-  }
   return button
+}
+
+// Движения эмодзи. Через WAAPI, а не `@keyframes`: вставить правило в чужой документ
+// нам нечем (стили ставим только свойствами, иначе строгая CSP отбрасывает атрибут
+// style), а `animate` политика не трогает.
+//
+// Пауза внутри каждого цикла обязательна: непрерывное движение в углу чужой страницы
+// раздражает через десять секунд, а не привлекает. Оттого и длинные `duration` — сам
+// жест занимает первую их треть, остальное эмодзи стоит на месте.
+const EMOJI_MOVES: Record<string, { frames: Keyframe[]; duration: number }> = {
+  wave: {
+    frames: [
+      { transform: 'rotate(0deg)', offset: 0 },
+      { transform: 'rotate(16deg)', offset: 0.08 },
+      { transform: 'rotate(-8deg)', offset: 0.16 },
+      { transform: 'rotate(14deg)', offset: 0.24 },
+      { transform: 'rotate(0deg)', offset: 0.32 },
+      { transform: 'rotate(0deg)', offset: 1 },
+    ],
+    duration: 3600,
+  },
+  bounce: {
+    frames: [
+      { transform: 'translateY(0)', offset: 0 },
+      { transform: 'translateY(-10px)', offset: 0.1 },
+      { transform: 'translateY(0)', offset: 0.2 },
+      { transform: 'translateY(-5px)', offset: 0.28 },
+      { transform: 'translateY(0)', offset: 0.36 },
+      { transform: 'translateY(0)', offset: 1 },
+    ],
+    duration: 3000,
+  },
+  pulse: {
+    frames: [
+      { transform: 'scale(1)', offset: 0 },
+      { transform: 'scale(1.25)', offset: 0.12 },
+      { transform: 'scale(1)', offset: 0.28 },
+      { transform: 'scale(1)', offset: 1 },
+    ],
+    duration: 2800,
+  },
 }
 
 // АВТООТКРЫТИЕ — РОВНО ОДИН РАЗ ЗА ЗАГРУЗКУ СТРАНИЦЫ. Форма, всплывающая снова после

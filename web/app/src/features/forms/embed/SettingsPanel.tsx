@@ -4,11 +4,13 @@ import { useUpdateBranding } from '../queries'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
+  EMOJI_ANIMATIONS,
   MODE_HINTS,
   MODE_TITLES,
   OPEN_TRIGGERS,
   WIDGET_POSITIONS,
   type EmbedMode,
+  type EmojiAnimation,
   type OpenTrigger,
   type WidgetPosition,
 } from '../embedSnippet'
@@ -48,7 +50,7 @@ export interface EmbedSettings {
   open: OpenTrigger
   openValue: number
   emoji: string
-  emojiWave: boolean
+  emojiAnimation: EmojiAnimation
   hideOnSubmit: boolean
   /** Вставка без загрузчика — голым `<iframe>`; у виджета невозможна. */
   plain: boolean
@@ -181,18 +183,31 @@ export function SettingsPanel({
               onChange={(e) => onChange({ emoji: e.target.value })}
               className="mt-1"
             />
-            {settings.emoji !== '' && (
-              <div className="mt-2">
-                <Toggle
-                  id="embed-emoji-wave"
-                  checked={settings.emojiWave}
-                  onChange={(v) => onChange({ emojiWave: v })}
-                  text="Помахать эмодзи"
-                  hint="Кнопка привлекает внимание движением, а не цветом."
-                />
-              </div>
-            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Показывается на углу открытой панели, не на кнопке.
+            </p>
           </div>
+
+          {settings.emoji !== '' && (
+            <div>
+              <Label htmlFor="embed-emoji-animation">Движение эмодзи</Label>
+              <Select
+                value={settings.emojiAnimation}
+                onValueChange={(v) => onChange({ emojiAnimation: v as EmojiAnimation })}
+              >
+                <SelectTrigger id="embed-emoji-animation" className="mt-1 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(EMOJI_ANIMATIONS).map(([value, title]) => (
+                    <SelectItem key={value} value={value}>
+                      {title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <div>
             <Label htmlFor="embed-width">Ширина панели, px</Label>

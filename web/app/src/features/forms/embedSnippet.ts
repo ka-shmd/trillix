@@ -40,6 +40,16 @@ export const WIDGET_POSITIONS: Record<WidgetPosition, string> = {
 /** Что открывает виджет. Зеркалит `OpenTrigger` загрузчика (`embed/api.ts`). */
 export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
 
+/** Движение эмодзи на углу панели. Зеркалит `EmojiAnimation` загрузчика. */
+export type EmojiAnimation = 'none' | 'wave' | 'bounce' | 'pulse'
+
+export const EMOJI_ANIMATIONS: Record<EmojiAnimation, string> = {
+  none: 'Без движения',
+  wave: 'Помахать',
+  bounce: 'Подпрыгнуть',
+  pulse: 'Увеличиться',
+}
+
 export const OPEN_TRIGGERS: Record<OpenTrigger, string> = {
   click: 'По клику на кнопку',
   delay: 'Через паузу после загрузки',
@@ -70,10 +80,10 @@ export interface SnippetOptions {
   open?: OpenTrigger
   /** Секунды у `delay`, проценты прокрутки у `scroll`. */
   openValue?: number
-  /** Эмодзи перед надписью на кнопке виджета. */
+  /** Эмодзи на углу открытой панели виджета. */
   emoji?: string
-  /** Кнопка машет эмодзи. */
-  emojiWave?: boolean
+  /** Как эмодзи оживает при открытии панели. */
+  emojiAnimation?: EmojiAnimation
   /** Убрать виджет со страницы после отправки ответа. */
   hideOnSubmit?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
@@ -114,6 +124,9 @@ export const DEFAULT_WIDGET_WIDTH = 376
  */
 export const DEFAULT_WIDGET_EMOJI = '👋'
 
+/** Движение эмодзи, с которого начинает панель. */
+export const DEFAULT_EMOJI_ANIMATION: EmojiAnimation = 'wave'
+
 /** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
 export const DEFAULT_OPEN_DELAY = 5
 export const DEFAULT_OPEN_SCROLL = 50
@@ -150,7 +163,9 @@ export function scriptSnippet(opts: SnippetOptions): string {
     }
     if (opts.emoji) {
       attrs.push(`data-emoji="${escapeAttr(opts.emoji)}"`)
-      if (opts.emojiWave) attrs.push('data-emoji-wave="1"')
+      if (opts.emojiAnimation && opts.emojiAnimation !== 'none') {
+        attrs.push(`data-emoji-animation="${opts.emojiAnimation}"`)
+      }
     }
     if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   } else {

@@ -99,7 +99,7 @@ describe('optionsFromAttrs', () => {
       open: 'click',
       openValue: 0,
       emoji: '',
-      emojiWave: false,
+      emojiAnimation: 'none',
       hideOnSubmit: false,
     })
   })
@@ -125,6 +125,19 @@ describe('optionsFromAttrs', () => {
     expect(corner('top-right')).toBe('top-right')
     expect(corner('bottom-left')).toBe('bottom-left')
     expect(corner('справа')).toBe('bottom-right')
+  })
+
+  // Непонятая настройка вида обязана дать спокойный эмодзи, а не выбранный за автора
+  // эффект: значение приходит с чужой страницы, где его правят руками.
+  it('движение эмодзи: известное — как написано, чужое — никакого', () => {
+    const move = (value: string) =>
+      optionsFromAttrs(attrs({ 'data-trillix-widget': 'a', 'data-emoji-animation': value }))
+        ?.emojiAnimation
+    expect(move('wave')).toBe('wave')
+    expect(move('bounce')).toBe('bounce')
+    expect(move('pulse')).toBe('pulse')
+    expect(move('spin')).toBe('none')
+    expect(optionsFromAttrs(attrs({ 'data-trillix-widget': 'a' }))?.emojiAnimation).toBe('none')
   })
 
   it('триггер открытия: известный — как написан, чужой — клик', () => {
