@@ -93,8 +93,7 @@ export function SettingsPanel({
         <p className="mt-1.5 text-xs text-muted-foreground">{MODE_HINTS[mode]}</p>
         {multipage && mode === 'block' && (
           <p className="mt-2 text-xs text-muted-foreground">
-            У формы есть разрывы страниц — во встроенном виде ей обычно лучше подходит
-            «Страница»: шаг помещается в экран целиком.
+            У формы есть разрывы страниц — ей обычно лучше подходит «Страница».
           </p>
         )}
       </div>
@@ -118,12 +117,11 @@ export function SettingsPanel({
                 ))}
               </SelectContent>
             </Select>
-            {/* Автооткрытие срабатывает один раз за визит — закрывший форму человек
-                больше её не увидит, но кнопка остаётся. Это стоит сказать: иначе
-                автор проверит настройку, закроет окно и решит, что она сломалась. */}
+            {/* Единственная подсказка, которую автор иначе прочтёт как поломку:
+                проверит настройку, закроет панель и не дождётся повторного показа. */}
             {settings.open !== 'click' && (
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Откроется один раз за визит. Закрыв её, посетитель сможет вернуться кнопкой.
+                Откроется один раз за визит. Дальше — по кнопке.
               </p>
             )}
           </div>
@@ -183,9 +181,6 @@ export function SettingsPanel({
               onChange={(e) => onChange({ emoji: e.target.value })}
               className="mt-1"
             />
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              Показывается на углу открытой панели, не на кнопке.
-            </p>
           </div>
 
           {settings.emoji !== '' && (
@@ -221,7 +216,7 @@ export function SettingsPanel({
               className="mt-1"
             />
             <p className="mt-1.5 text-xs text-muted-foreground">
-              На телефоне панель всё равно раскрывается во весь экран.
+              На телефоне панель раскрывается во весь экран.
             </p>
           </div>
         </>
@@ -243,8 +238,8 @@ export function SettingsPanel({
           />
           <p className="mt-1.5 text-xs text-muted-foreground">
             {plain || !settings.dynamicHeight
-              ? 'Высота фиксированная: длинная форма будет скроллиться внутри блока.'
-              : 'Дальше высоту ведёт сама форма — это лишь размер до её загрузки.'}
+              ? 'Длинная форма будет скроллиться внутри блока.'
+              : 'Размер, пока форма грузится: дальше её ведёт сама форма.'}
           </p>
         </div>
       )}
@@ -259,8 +254,8 @@ export function SettingsPanel({
             text="Живая высота"
             hint={
               plain
-                ? 'Без скрипта подстраивать высоту нечем.'
-                : 'Блок растёт вместе с формой, вместо того чтобы скроллиться внутри себя.'
+                ? 'Без скрипта высота не подстраивается.'
+                : 'Блок растёт вместе с формой.'
             }
           />
         )}
@@ -278,7 +273,7 @@ export function SettingsPanel({
               checked={settings.alignLeft}
               onChange={(v) => onChange({ alignLeft: v })}
               text="Выровнять содержимое влево"
-              hint="Перебивает выравнивание из оформления — только в этой вставке."
+              hint="Не зависит от выравнивания в оформлении формы."
             />
           </>
         )}
@@ -289,7 +284,7 @@ export function SettingsPanel({
               checked={settings.overlay}
               onChange={(v) => onChange({ overlay: v })}
               text="Затемнять страницу"
-              hint="С затемнением клик мимо панели закрывает её; без него сайт остаётся кликабельным."
+              hint="Страница за панелью темнеет."
             />
             <Toggle
               id="embed-hide-on-submit"
@@ -314,7 +309,7 @@ export function SettingsPanel({
             checked={plain}
             onChange={(v) => onChange({ plain: v })}
             text="Без скрипта, простым iframe"
-            hint="Нужно, если сайт запрещает сторонние скрипты. Цена — фиксированная высота."
+            hint="Для сайтов, где запрещены сторонние скрипты."
           />
         )}
       </div>
@@ -345,7 +340,7 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         disabled={update.isPending}
         onChange={(v) => update.mutate({ form, show: v })}
         text="Показывать «Сделано в Trillix»"
-        hint="Настройка формы, а не вставки: действует и на прямую ссылку тоже."
+        hint="Настройка всей формы: действует и на прямую ссылку."
       />
       {!show && !canRemove && (
         <p className="mt-2 text-xs text-muted-foreground">

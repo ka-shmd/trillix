@@ -119,6 +119,23 @@ function insertSnippet(doc: Document, slot: Element, snippet: string) {
       for (const attr of Array.from(original.attributes)) {
         script.setAttribute(attr.name, attr.value)
       }
+      // ВИДЖЕТ В ПРЕДПРОСМОТРЕ ПОКАЗЫВАЕТСЯ ОТКРЫТЫМ: смотреть на кнопку в углу
+      // бессмысленно, автор пришёл за видом формы. Открываем НАЖАТИЕМ НА ТУ САМУЮ
+      // КНОПКУ, которую построил сниппет, а не своим вызовом `Trillix.open` с
+      // собранными заново настройками, — иначе предпросмотр перестал бы быть
+      // предпросмотром вставленного кода.
+      //
+      // МИНА: открытие уводит фокус на кнопку закрытия внутри макета, а макет
+      // пересобирается на каждую правку настройки — автор, набирающий надпись кнопки,
+      // терял бы каретку через полсекунды после каждого символа. Поэтому фокус
+      // возвращается туда, где он был в кабинете.
+      if (script.hasAttribute('data-trillix-widget')) {
+        script.addEventListener('load', () => {
+          const active = document.activeElement as HTMLElement | null
+          doc.querySelector<HTMLButtonElement>('body > button')?.click()
+          active?.focus()
+        })
+      }
       slot.append(script)
       continue
     }
