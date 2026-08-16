@@ -135,7 +135,9 @@ describe('planForm: видимость вопроса', () => {
     expect(plan.visible.has('src')).toBe(true)
   })
 
-  it('правило на не головном блоке группы инертно', () => {
+  // Два уровня видимости: голова прячет вопрос ЦЕЛИКОМ, любая другая строка группы —
+  // только себя (2026-08-16).
+  it('правило на строке группы прячет только её, подпись остаётся', () => {
     const blocks: Block[] = [
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }]),
       showRule('dep', leaf('src', 'is', 'yes')),
@@ -143,8 +145,25 @@ describe('planForm: видимость вопроса', () => {
       blk('dep', 'g2', 'short_text'),
     ]
     const plan = planForm(blocks, { src: 'no' })
-    expect(plan.visible.has('dep')).toBe(true)
+    expect(plan.visible.has('dep')).toBe(false)
     expect(plan.visible.has('cap')).toBe(true)
+  })
+
+  it('спрятанный вопрос не показывает своих строк', () => {
+    const blocks: Block[] = [
+      choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
+      showRule('cap', leaf('src', 'is', 'yes')),
+      {
+        id: 'L2',
+        groupId: 'gL2',
+        type: 'logic',
+        logic: { when: leaf('src', 'answered'), then: [{ kind: 'show', targets: ['dep'] }] },
+      },
+      blk('cap', 'g2', 'title'),
+      blk('dep', 'g2', 'short_text'),
+    ]
+    // Собственное правило строки сработало, правило вопроса — нет.
+    expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(false)
   })
 
   it('скрытый источник считается пустым', () => {
@@ -434,14 +453,6 @@ describe('planForm: блок logic — показ и скрытие', () => {
       logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
-  })
-
-  it('действие на НЕ головной блок группы инертно', () => {
-    const l: Block['logic'] = {
-      when: leaf('src', 'is', 'yes'),
-      then: [{ kind: 'show', targets: ['dep'] }],
-    }
-    expect(planForm(doc(l), { src: 'no' }).visible.has('dep')).toBe(true)
   })
 
   it('скрыть побеждает показать', () => {

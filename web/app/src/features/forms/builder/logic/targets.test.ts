@@ -6,7 +6,7 @@ import { JUMP_END, filterTargetTree, jumpTargetsFrom, logicBlockWarnings, target
 
 // Плоский список id дерева целей — удобнее сравнивать, чем вложенную структуру.
 const ids = (tree: ReturnType<typeof targetTree>): string[] =>
-  tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.options.map((o) => o.id)]))
+  tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.children.map((c) => c.id)]))
 
 // Редакторская сторона: что автору предлагают выбрать и о чём предупреждают. Цели с
 // 2026-08-16 НЕ сужаются позицией (ADR §10) — блок волен стоять где угодно, а негодную
@@ -36,18 +36,34 @@ const doc = (l: Block['logic'] = {}): Block[] => [
 ]
 
 describe('дерево целей: страница → вопрос → варианты', () => {
-  it('«показать» адресует вопросы, включая стоящие ВЫШЕ блока, и их варианты', () => {
-    expect(ids(targetTree(doc(), 'show'))).toEqual(['q1cap', 'q2cap', 'list', 'o1', 'o2'])
+  it('«показать» адресует вопросы, их СТРОКИ и варианты', () => {
+    expect(ids(targetTree(doc(), 'show'))).toEqual([
+      'q1cap',
+      'q1',
+      'q2cap',
+      'q2',
+      'list',
+      'o1',
+      'o2',
+    ])
   })
 
   it('«обязателен» адресует отвечаемые, но НЕ варианты', () => {
     expect(ids(targetTree(doc(), 'require'))).toEqual(['q1', 'q2', 'list'])
   })
 
-  it('варианты висят на своём вопросе, а не отдельным узлом', () => {
+  it('строки и варианты висят на своём вопросе, а не отдельными узлами', () => {
     const tree = targetTree(doc(), 'show')
-    const node = tree.flatMap((p) => p.items).find((n) => n.id === 'list')!
-    expect(node.options.map((o) => o.id)).toEqual(['o1', 'o2'])
+    const items = tree.flatMap((p) => p.items)
+    // Голова в детях не повторяется: она и есть сам узел.
+    expect(items.find((n) => n.id === 'q1cap')!.children.map((c) => c.id)).toEqual(['q1'])
+    expect(items.find((n) => n.id === 'list')!.children.map((c) => c.id)).toEqual(['o1', 'o2'])
+  })
+
+  it('строка без своего текста называется именем ТИПА, а не именем вопроса', () => {
+    const tree = targetTree(doc(), 'show')
+    const row = tree.flatMap((p) => p.items).find((n) => n.id === 'q1cap')!.children[0]!
+    expect(row.label).toBe('Короткий ответ')
   })
 
   it('сам блок logic целью не бывает', () => {
@@ -85,7 +101,7 @@ describe('поиск по дереву целей', () => {
     expect(filterTargetTree(tree, '  ')).toBe(tree)
   })
 
-  it('совпал вопрос — он остаётся со всеми своими вариантами', () => {
+  it('совпал вопрос — он остаётся со всеми своими детьми', () => {
     // Имя вопроса без подписи выводится (derivedQuestionName), поэтому берём его из
     // самого дерева, а не пишем строкой: иначе тест сломается от правки имён.
     const label = tree.flatMap((p) => p.items).find((n) => n.id === 'list')!.label
@@ -172,9 +188,9 @@ describe('предупреждения блока', () => {
     expect(out.join(' ')).toContain('удалена')
   })
 
-  it('цель показа — не голова группы', () => {
-    const out = warn({ then: [{ kind: 'show', targets: ['q2'] }] })
-    expect(out.join(' ')).toContain('не первая строка')
+  it('строка вопроса — законная цель, предупреждения нет', () => {
+    // Правило на строке группы прячет её одну — вопрос при этом остаётся.
+    expect(warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', targets: ['q2'] }] })).toEqual([])
   })
 
   it('обязателен всегда — условие ничего не меняет', () => {
