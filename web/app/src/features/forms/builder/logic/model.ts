@@ -208,6 +208,29 @@ function targetNode(
   }
 }
 
+// Совпадение по ОБОИМ уровням дерева: подошёл вопрос — показываем его со всеми
+// вариантами; подошёл только вариант — показываем вопрос и подошедшие варианты, иначе
+// автор не поймёт, к чему они относятся.
+//
+// Фильтр СВОЙ, а не cmdk: свёрнутый узел не отрисован, и его дети для чужого фильтра не
+// существуют — поиск молча не находил бы половину документа.
+export function filterTargetTree(
+  tree: { page: number; items: TargetNode[] }[],
+  query: string,
+): { page: number; items: TargetNode[] }[] {
+  const q = query.trim().toLowerCase()
+  if (q === '') return tree
+  const hit = (s: string): boolean => s.toLowerCase().includes(q)
+  const out: { page: number; items: TargetNode[] }[] = []
+  for (const { page, items } of tree) {
+    const kept = items
+      .map((n) => (hit(n.label) ? n : { ...n, options: n.options.filter((o) => hit(o.label)) }))
+      .filter((n) => hit(n.label) || n.options.length > 0)
+    if (kept.length > 0) out.push({ page, items: kept })
+  }
+  return out
+}
+
 // Почему правило блока не действует — ПРЕДУПРЕЖДЕНИЯ, а не отказ схемы: всё это
 // кросс-блочное, и валидатор ловил бы 422 в автосейве от первого же драга. Причины
 // условия даёт вычислитель (ruleWarnings — одна копия на всех, иначе разъедется);

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { type Block } from '@entities/formSchema'
 
-import { JUMP_END, jumpTargetsFrom, logicBlockWarnings, targetTree } from './model'
+import { JUMP_END, filterTargetTree, jumpTargetsFrom, logicBlockWarnings, targetTree } from './model'
 
 // Плоский список id дерева целей — удобнее сравнивать, чем вложенную структуру.
 const ids = (tree: ReturnType<typeof targetTree>): string[] =>
@@ -75,6 +75,31 @@ describe('дерево целей: страница → вопрос → вар�
       [1, ['q1cap']],
       [2, ['q2cap']],
     ])
+  })
+})
+
+describe('поиск по дереву целей', () => {
+  const tree = targetTree(doc(), 'show')
+
+  it('пустой запрос отдаёт дерево как есть', () => {
+    expect(filterTargetTree(tree, '  ')).toBe(tree)
+  })
+
+  it('совпал вопрос — он остаётся со всеми своими вариантами', () => {
+    // Имя вопроса без подписи выводится (derivedQuestionName), поэтому берём его из
+    // самого дерева, а не пишем строкой: иначе тест сломается от правки имён.
+    const label = tree.flatMap((p) => p.items).find((n) => n.id === 'list')!.label
+    const found = filterTargetTree(tree, label)
+    expect(ids(found)).toEqual(['list', 'o1', 'o2'])
+  })
+
+  it('совпал только ВАРИАНТ — вопрос остаётся, чтобы было понятно, чей он', () => {
+    const found = filterTargetTree(tree, 'Один')
+    expect(ids(found)).toEqual(['list', 'o1'])
+  })
+
+  it('страница без совпадений уходит целиком', () => {
+    expect(filterTargetTree(tree, 'ничего такого')).toEqual([])
   })
 })
 

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 
 import {
@@ -13,8 +13,6 @@ import {
 import { Button } from '@/components/ui/button'
 import {
   Command,
-  CommandEmpty,
-  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -38,6 +36,7 @@ import {
   jumpTargetsFrom,
   logicBlockWarnings,
   logicSources,
+  filterTargetTree,
   targetTree,
   type TargetNode,
 } from './model'
@@ -310,15 +309,21 @@ function JumpTarget({
   )
 }
 
-// Пикер целей — ДЕРЕВО С ГАЛКАМИ: страница → вопрос → его варианты (образец — Tally).
+// Пикер целей — ДЕРЕВО: страница → вопрос → его варианты (образец — Tally). Узлы
+// раскрываются и сворачиваются шевроном, вложенность держат рейлы.
 //
 // Дерево, а не плоский список, потому что вариант выбора — такая же цель, что и вопрос:
 // отдельного действия «скрыть варианты» нет, и в одном пикере лежат оба уровня.
-// Множественный выбор — потому что «скрыть эту ветку» это обычно несколько блоков сразу,
-// и пять действий вместо одного сделали бы блок нечитаемым.
+// Множественный выбор — потому что «скрыть эту ветку» это обычно несколько блоков сразу.
 //
-// Варианты показываются РАЗВЁРНУТЫМИ, без сворачивания: у Tally там шеврон, но список
-// вариантов короткий по построению, а поиск и так ищет по обоим уровням.
+// УМОЛЧАНИЕ: страницы раскрыты, варианты свёрнуты (решение владельца 2026-08-16). Автор
+// почти всегда ищет вопрос, а не вариант, и развёрнутые списки вариантов отодвигали бы
+// вопросы за нижний край.
+//
+// ФИЛЬТРУЕМ САМИ (`shouldFilter={false}`), а не отдаём cmdk: свёрнутый узел не
+// отрисован, и его дети для чужого фильтра не существуют — поиск молча не находил бы
+// половину документа. Поэтому при непустом запросе дерево раскрывается целиком, а
+// совпадение ищется и по вариантам.
 function TargetPicker({
   tree,
   picks,
@@ -329,6 +334,10 @@ function TargetPicker({
   onToggle: (id: string) => void
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [closedPages, setClosedPages] = useState<ReadonlySet<number>>(new Set())
+  const [openNodes, setOpenNodes] = useState<ReadonlySet<string>>(new Set())
+
   const names = new Map<string, string>()
   for (const { items } of tree) {
     for (const n of items) {
@@ -346,6 +355,9 @@ function TargetPicker({
         ? names.get(chosen[0]!)!
         : `Выбрано: ${chosen.length}`
 
+  const found = filterTargetTree(tree, query)
+  const searching = query.trim() !== ''
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -362,34 +374,57 @@ function TargetPicker({
           <ChevronDown className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Поиск" />
-          <CommandList>
-            <CommandEmpty>Ничего не найдено</CommandEmpty>
-            {tree.map(({ page, items }) => (
-              <CommandGroup key={page} heading={`Страница ${page}`}>
-                {items.flatMap((node) => [
-                  <PickRow
-                    key={node.id}
-                    id={node.id}
-                    label={node.label}
-                    on={picks.includes(node.id)}
-                    onToggle={onToggle}
-                  />,
-                  ...node.options.map((o) => (
-                    <PickRow
-                      key={o.id}
-                      id={o.id}
-                      label={o.label}
-                      nested
-                      on={picks.includes(o.id)}
-                      onToggle={onToggle}
+      <PopoverContent className="w-80 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="Поиск" value={query} onValueChange={setQuery} />
+          <CommandList className="max-h-80">
+            {found.length === 0 ? (
+              <div className="text-muted-foreground py-6 text-center text-sm">Ничего не найдено</div>
+            ) : (
+              found.map(({ page, items }) => {
+                const pageOpen = searching || !closedPages.has(page)
+                return (
+                  <div key={page} className="px-1 py-1">
+                    <TreeRow
+                      chevron={pageOpen}
+                      onChevron={() => setClosedPages(toggled(closedPages, page))}
+                      label={`Страница ${page}`}
+                      muted
                     />
-                  )),
-                ])}
-              </CommandGroup>
-            ))}
+                    {pageOpen && (
+                      <Rail>
+                        {items.map((node) => {
+                          const nodeOpen = searching || openNodes.has(node.id)
+                          return (
+                            <div key={node.id}>
+                              <TreeRow
+                                chevron={node.options.length > 0 ? nodeOpen : undefined}
+                                onChevron={() => setOpenNodes(toggled(openNodes, node.id))}
+                                label={node.label}
+                                checked={picks.includes(node.id)}
+                                onSelect={() => onToggle(node.id)}
+                              />
+                              {nodeOpen && node.options.length > 0 && (
+                                <Rail>
+                                  {node.options.map((o) => (
+                                    <TreeRow
+                                      key={o.id}
+                                      label={o.label}
+                                      checked={picks.includes(o.id)}
+                                      onSelect={() => onToggle(o.id)}
+                                    />
+                                  ))}
+                                </Rail>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </Rail>
+                    )}
+                  </div>
+                )
+              })
+            )}
           </CommandList>
         </Command>
       </PopoverContent>
@@ -397,36 +432,79 @@ function TargetPicker({
   )
 }
 
-function PickRow({
-  id,
+const toggled = <T,>(set: ReadonlySet<T>, key: T): ReadonlySet<T> => {
+  const next = new Set(set)
+  if (!next.delete(key)) next.add(key)
+  return next
+}
+
+// Ветка дерева: отступ плюс вертикальный рейл, тот самый, что держит вложенность на глаз.
+function Rail({ children }: { children: React.ReactNode }) {
+  return <div className="border-border ml-[13px] border-l pl-2">{children}</div>
+}
+
+// Строка дерева. Три роли в одной: заголовок страницы (muted, без галки), вопрос и
+// вариант. Шеврон — СВОЯ кнопка: клик по нему раскрывает узел, клик по строке отмечает
+// цель, и путать эти два жеста нельзя.
+function TreeRow({
+  chevron,
+  onChevron,
   label,
-  on,
-  nested = false,
-  onToggle,
+  checked,
+  onSelect,
+  muted = false,
 }: {
-  id: string
+  chevron?: boolean
+  onChevron?: () => void
   label: string
-  on: boolean
-  nested?: boolean
-  onToggle: (id: string) => void
+  checked?: boolean
+  onSelect?: () => void
+  muted?: boolean
 }) {
+  const body = (
+    <>
+      {chevron === undefined ? (
+        <span className="size-4 shrink-0" aria-hidden="true" />
+      ) : (
+        <button
+          type="button"
+          aria-label={chevron ? `Свернуть «${label}»` : `Раскрыть «${label}»`}
+          className="hover:bg-muted flex size-4 shrink-0 items-center justify-center rounded-sm"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.stopPropagation()
+            onChevron?.()
+          }}
+        >
+          {chevron ? (
+            <ChevronDown className="size-3.5 opacity-60" />
+          ) : (
+            <ChevronRight className="size-3.5 opacity-60" />
+          )}
+        </button>
+      )}
+      {checked !== undefined && (
+        <span
+          className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
+            checked ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
+          }`}
+          aria-hidden="true"
+        >
+          {checked && <Check className="size-3" />}
+        </span>
+      )}
+      <span className={`truncate ${muted ? 'text-muted-foreground text-xs' : ''}`}>{label}</span>
+    </>
+  )
+
+  // Заголовок страницы целью не бывает: страница — не блок, и адресовать её действию
+  // нечем. Поэтому он не CommandItem — по нему не ходит клавиатура выбора.
+  if (onSelect === undefined) {
+    return <div className="flex items-center gap-2 px-2 py-1.5">{body}</div>
+  }
   return (
-    <CommandItem
-      // Значение — то, по чему ищет cmdk. Имя плюс id: две цели могут называться
-      // одинаково, и без id они схлопнулись бы в один пункт.
-      value={`${label} ${id}`}
-      onSelect={() => onToggle(id)}
-      className={nested ? 'pl-7' : undefined}
-    >
-      <span
-        className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
-          on ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
-        }`}
-        aria-hidden="true"
-      >
-        {on && <Check className="size-3" />}
-      </span>
-      <span className="truncate">{label}</span>
+    <CommandItem value={label} onSelect={onSelect} className="gap-2">
+      {body}
     </CommandItem>
   )
 }
