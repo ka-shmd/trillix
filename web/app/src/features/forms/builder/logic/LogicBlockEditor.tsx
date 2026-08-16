@@ -1,4 +1,5 @@
-import { Plus, X } from 'lucide-react'
+import { Copy, Plus, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 
 import {
   type Block,
@@ -20,6 +21,7 @@ import {
 
 import { useBuilderStore } from '../storeContext'
 import { ConditionEditor } from './ConditionEditor'
+import { RowMenu } from './rowMenu'
 import {
   ACTION_LABELS,
   JUMP_END,
@@ -89,25 +91,32 @@ export function LogicBlockEditor({ block }: { block: Block }) {
               logicId={block.id}
               value={action}
               onChange={(next) => setActions(actions.map((a, j) => (j === i ? next : a)))}
-              onRemove={() => setActions(actions.filter((_, j) => j !== i))}
+              menu={{
+                // Больше лимита схемы пункт не показываем: 422 в автосейве от нажатия
+                // собственной кнопки — худший способ узнать про лимит.
+                onAdd:
+                  actions.length < MAX_LOGIC_ACTIONS
+                    ? () => setActions(insertAfter(actions, i, defaultAction(blocks, block.id)))
+                    : undefined,
+                onRemove: () => setActions(actions.filter((_, j) => j !== i)),
+                onDuplicate:
+                  actions.length < MAX_LOGIC_ACTIONS
+                    ? () => setActions(insertAfter(actions, i, action))
+                    : undefined,
+              }}
             />
           ))}
-          {actions.length === 0 && <Note>действие не выбрано — блок ничего не делает</Note>}
-          {/* Больше лимита схемы кнопку не показываем: 422 в автосейве от нажатия
-              собственной кнопки — худший способ узнать про лимит. */}
-          {actions.length < MAX_LOGIC_ACTIONS && (
-            <div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-7"
-                onClick={() => setActions([...actions, defaultAction(blocks, block.id)])}
-              >
-                <Plus className="size-3.5" />
-                Действие
-              </Button>
-            </div>
+          {/* Пустой список рисуется ОДНОЙ незаполненной строкой, а не кнопкой
+              «добавить», — тем же приёмом, что пустое условие: сняв кнопку, автор
+              иначе остался бы без входа. В документ действие попадает, когда собрано
+              настолько, чтобы быть валидным (кинд плюс цель, если она нужна). */}
+          {actions.length === 0 && (
+            <ActionRow
+              blocks={blocks}
+              logicId={block.id}
+              value={null}
+              onChange={(next) => setActions([next])}
+            />
           )}
         </div>
       </Tier>
@@ -145,72 +154,93 @@ function defaultAction(blocks: readonly Block[], logicId: string): LogicAction {
   return target ? { kind: 'show', target: target.id } : { kind: 'block_submit' }
 }
 
+const insertAfter = (list: LogicAction[], i: number, node: LogicAction): LogicAction[] => [
+  ...list.slice(0, i + 1),
+  node,
+  ...list.slice(i + 1),
+]
+
+// Действие по виду и цели — или null, если цель нужна, а взять её неоткуда. Null значит
+// «в документ ещё нечего писать»: пустая цель невалидна по схеме, и автосейв поймал бы
+// на ней 422.
+function buildAction(
+  kind: LogicActionKind,
+  targets: readonly Block[],
+  keep?: string,
+): LogicAction | null {
+  if (kind === 'block_submit') return { kind }
+  if (kind === 'jump') return { kind, end: true }
+  const target = targets.some((b) => b.id === keep) ? keep : targets[0]?.id
+  if (target === undefined) return null
+  return kind === 'show_options' || kind === 'hide_options'
+    ? { kind, target, options: [] }
+    : { kind, target }
+}
+
 function ActionRow({
   blocks,
   logicId,
   value,
   onChange,
-  onRemove,
+  menu,
 }: {
   blocks: readonly Block[]
   logicId: string
-  value: LogicAction
+  // null — незаполненная строка: вид действия ещё не выбран.
+  value: LogicAction | null
   onChange: (next: LogicAction) => void
-  onRemove: () => void
+  menu?: { onAdd?: () => void; onRemove: () => void; onDuplicate?: () => void }
 }) {
-  const targets = targetsForKind(blocks, logicId, value.kind)
+  // Вид, выбранный, но ещё не записанный в документ: так бывает, когда действию нужна
+  // цель, а ниже блока её пока нет. Держать такое состояние в документе нельзя (пустая
+  // цель невалидна), а терять выбор автора — грубо: строка показывает вид и ждёт цель.
+  const [draftKind, setDraftKind] = useState<LogicActionKind | null>(null)
+  const kind = value?.kind ?? draftKind
+  const targets = kind ? targetsForKind(blocks, logicId, kind) : []
+  const target = value && 'target' in value ? value.target : undefined
 
-  // Смена действия роняет цель, если она новому действию не подходит: обязательным
-  // бывает только отвечаемый блок, варианты — только у списка. Несовместимая пара
-  // сделала бы действие инертным молча.
-  const pickKind = (kind: LogicActionKind): void => {
-    if (kind === 'block_submit') {
-      onChange({ kind })
+  // Смена вида роняет цель, если она новому виду не подходит: обязательным бывает
+  // только отвечаемый блок, варианты — только у списка. Несовместимая пара сделала бы
+  // действие инертным молча.
+  const pickKind = (next: LogicActionKind): void => {
+    const built = buildAction(next, targetsForKind(blocks, logicId, next), target)
+    if (built === null) {
+      setDraftKind(next)
       return
     }
-    if (kind === 'jump') {
-      onChange({ kind, end: true })
-      return
-    }
-    const keep =
-      'target' in value && targetsForKind(blocks, logicId, kind).some((b) => b.id === value.target)
-    const target = keep && 'target' in value ? value.target : targetsForKind(blocks, logicId, kind)[0]?.id
-    if (target === undefined) return
+    setDraftKind(null)
+    onChange(built)
+  }
+
+  const pickTarget = (id: string): void => {
+    if (!kind) return
+    setDraftKind(null)
     onChange(
       kind === 'show_options' || kind === 'hide_options'
-        ? { kind, target, options: [] }
-        : { kind, target },
+        ? { kind, target: id, options: [] }
+        : { kind: kind as 'show' | 'hide' | 'require', target: id },
     )
   }
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <Select value={value.kind} onValueChange={(k) => pickKind(k as LogicActionKind)}>
+      <Select value={kind ?? ''} onValueChange={(k) => pickKind(k as LogicActionKind)}>
         <SelectTrigger size="sm" className="h-7 min-w-44" aria-label="Действие">
-          <SelectValue />
+          <SelectValue placeholder="Выберите действие" />
         </SelectTrigger>
         <SelectContent>
-          {LOGIC_ACTIONS.map((kind) => (
-            <SelectItem key={kind} value={kind}>
-              {ACTION_LABELS[kind]}
+          {LOGIC_ACTIONS.map((k) => (
+            <SelectItem key={k} value={k}>
+              {ACTION_LABELS[k]}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
 
-      {value.kind === 'jump' ? (
+      {kind === 'jump' && value?.kind === 'jump' ? (
         <JumpTarget blocks={blocks} logicId={logicId} value={value} onChange={onChange} />
-      ) : value.kind === 'block_submit' ? null : (
-        <Select
-          value={targets.some((b) => b.id === value.target) ? value.target : ''}
-          onValueChange={(id) =>
-            onChange(
-              value.kind === 'show_options' || value.kind === 'hide_options'
-                ? { kind: value.kind, target: id, options: [] }
-                : { kind: value.kind, target: id },
-            )
-          }
-        >
+      ) : kind === undefined || kind === null || kind === 'block_submit' ? null : (
+        <Select value={targets.some((b) => b.id === target) ? target : ''} onValueChange={pickTarget}>
           <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Цель действия">
             <SelectValue placeholder={targets.length === 0 ? 'ниже нечего выбрать' : 'Цель…'} />
           </SelectTrigger>
@@ -224,18 +254,20 @@ function ActionRow({
         </Select>
       )}
 
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="size-7"
-        aria-label="Удалить действие"
-        onClick={onRemove}
-      >
-        <X className="size-4" />
-      </Button>
+      {menu && (
+        <RowMenu
+          label="Действия со строкой"
+          items={[
+            ...(menu.onAdd ? [{ icon: Plus, label: 'Добавить действие', onSelect: menu.onAdd }] : []),
+            { icon: Trash2, label: 'Удалить', onSelect: menu.onRemove },
+            ...(menu.onDuplicate
+              ? [{ icon: Copy, label: 'Дублировать', onSelect: menu.onDuplicate }]
+              : []),
+          ]}
+        />
+      )}
 
-      {(value.kind === 'show_options' || value.kind === 'hide_options') && (
+      {(value?.kind === 'show_options' || value?.kind === 'hide_options') && (
         <OptionPicker blocks={blocks} value={value} onChange={onChange} />
       )}
     </div>

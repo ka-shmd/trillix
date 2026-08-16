@@ -1,4 +1,4 @@
-import { Copy, EllipsisVertical, Plus, Repeat, Trash2 } from 'lucide-react'
+import { Copy, Plus, Repeat, Trash2 } from 'lucide-react'
 
 import {
   type Block,
@@ -10,13 +10,6 @@ import {
 } from '@entities/formSchema'
 import { operatorsFor } from '@fields/logic'
 
-import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -27,6 +20,7 @@ import {
 } from '@/components/ui/select'
 
 import { type Group, OPERATOR_LABELS, defaultLeaf, sourceLabel, valueChoices } from './model'
+import { RowMenu as RowMenuButton } from './rowMenu'
 
 // Редактор дерева условий. Рекурсивный: группа рисует своих детей тем же компонентом,
 // поэтому вложенность «(А и Б) или В» не стоит ни одной особой ветки.
@@ -323,45 +317,21 @@ function LeafRow({
   )
 }
 
-// Меню операций строки — ПОСЛЕ значения, там, где раньше стоял крестик. Состав и
-// порядок пунктов взяты у Tally (образец вида полотна, `fields/README.md`): добавить,
-// удалить, дублировать, обернуть в группу.
+// Меню операций строки. Состав и порядок пунктов взяты у Tally (образец вида полотна,
+// `fields/README.md`): добавить, удалить, дублировать, обернуть в группу. Сам значок и
+// его положение — общий `RowMenu`, тот же, что у яруса действий.
 function RowActions({ menu }: { menu: RowMenu }) {
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-7"
-          aria-label="Действия с условием"
-        >
-          <EllipsisVertical className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-52">
-        {menu.onAdd && (
-          <DropdownMenuItem onSelect={menu.onAdd}>
-            <Plus className="size-4" />
-            Добавить условие
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem onSelect={menu.onRemove}>
-          <Trash2 className="size-4" />
-          Удалить
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={menu.onDuplicate}>
-          <Copy className="size-4" />
-          Дублировать
-        </DropdownMenuItem>
-        {menu.onWrap && (
-          <DropdownMenuItem onSelect={menu.onWrap}>
-            <Repeat className="size-4" />
-            Обернуть в группу
-          </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <RowMenuButton
+      label="Действия с условием"
+      items={[
+        ...(menu.onAdd ? [{ icon: Plus, label: 'Добавить условие', onSelect: menu.onAdd }] : []),
+        { icon: Trash2, label: 'Удалить', onSelect: menu.onRemove },
+        { icon: Copy, label: 'Дублировать', onSelect: menu.onDuplicate },
+        ...(menu.onWrap
+          ? [{ icon: Repeat, label: 'Обернуть в группу', onSelect: menu.onWrap }]
+          : []),
+      ]}
+    />
   )
 }
