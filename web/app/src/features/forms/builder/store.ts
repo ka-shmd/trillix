@@ -62,7 +62,15 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 export type BlockPatch = Partial<
   Pick<
     Block,
-    'text' | 'name' | 'required' | 'settings' | 'visibleIf' | 'requiredIf' | 'jumpIf' | 'class'
+    | 'text'
+    | 'name'
+    | 'required'
+    | 'settings'
+    | 'visibleIf'
+    | 'requiredIf'
+    | 'jumpIf'
+    | 'logic'
+    | 'class'
   >
 >
 

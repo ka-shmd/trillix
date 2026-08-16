@@ -1,5 +1,6 @@
 import {
   type Block,
+  type LogicActionKind,
   type LogicCondition,
   type LogicOperator,
   isAnswerableType,
@@ -9,7 +10,7 @@ import {
   scaleRange,
 } from '@entities/formSchema'
 import { pageNumbers } from '@fields/groups'
-import { operatorsFor } from '@fields/logic'
+import { operatorsFor, ruleWarnings } from '@fields/logic'
 
 import { derivedQuestionName } from '../questionName'
 
@@ -185,6 +186,131 @@ export function jumpSummary(blocks: readonly Block[], block: Block): string {
   const target = first.end === true ? 'к отправке' : `на страницу ${opens.get(first.to ?? '') ?? '?'}`
   const head = `${target}, если ${ruleSummary(blocks, first.when)}`
   return rules.length > 1 ? `${head} +${rules.length - 1}` : head
+}
+
+// ЦЕЛИ ДЕЙСТВИЙ БЛОКА `logic`. Зеркальны источникам: источник обязан стоять ВЫШЕ блока,
+// цель — НИЖЕ него (ADR §10). Ниже стоящее и предлагаем; о правилах, обездвиженных
+// перестановкой, предупреждает ruleWarnings.
+
+// Голова группы — то, что адресуют «показать»/«скрыть»: прячется вопрос целиком.
+// Группа смежна по инварианту схемы, поэтому голова — первый блок своего groupId.
+function groupHeads(blocks: readonly Block[]): Block[] {
+  return blocks.filter((b, i) => b.type !== 'logic' && b.groupId !== blocks[i - 1]?.groupId)
+}
+
+function below(blocks: readonly Block[], logicId: string): Block[] {
+  const at = blocks.findIndex((b) => b.id === logicId)
+  return at < 0 ? [] : blocks.slice(at + 1)
+}
+
+export function showTargets(blocks: readonly Block[], logicId: string): Block[] {
+  const tail = below(blocks, logicId)
+  const heads = new Set(groupHeads(blocks).map((b) => b.id))
+  return tail.filter((b) => heads.has(b.id))
+}
+
+// Обязательным можно сделать только отвечаемый блок — у подписи и контента ответа нет.
+export function requireTargets(blocks: readonly Block[], logicId: string): Block[] {
+  return below(blocks, logicId).filter((b) => isAnswerableType(b.type))
+}
+
+// Варианты бывают только у choice-вопроса.
+export function optionTargets(blocks: readonly Block[], logicId: string): Block[] {
+  return below(blocks, logicId).filter((b) => isChoiceType(b.type))
+}
+
+// Как называется цель в списке. У отвечаемого — то же имя, что в данных; у подписи и
+// контента имени в данных нет, поэтому берётся их собственный текст.
+export function targetLabel(blocks: readonly Block[], block: Block): string {
+  if (isAnswerableType(block.type)) return sourceLabel(blocks, block)
+  return captionOf(block) || derivedQuestionName([...blocks], block)
+}
+
+// Страница, на которой стоит блок, — по ТОМУ ЖЕ разбиению, которым форма режется
+// респонденту (pageNumbers). Собственный счёт разрывов разошёлся бы с показом на первом
+// же инертном разрыве.
+function pageOf(blocks: readonly Block[], blockId: string): number {
+  const opens = pageNumbers([...blocks])
+  let page = 1
+  for (const b of blocks) {
+    if (b.id === blockId) return page
+    page = opens.get(b.id) ?? page
+  }
+  return page
+}
+
+// Цели перехода для блока `logic`: страницы ПОСЛЕ той, на которой он стоит, плюс
+// «к отправке». Переход назад инертен по построению обхода, и показывать его в списке
+// значило бы пообещать работу, которой не будет.
+export function jumpTargetsFrom(
+  blocks: readonly Block[],
+  logicId: string,
+): { value: string; label: string }[] {
+  const from = pageOf(blocks, logicId)
+  const opens = pageNumbers([...blocks])
+  const out: { value: string; label: string }[] = []
+  for (const b of blocks) {
+    const page = opens.get(b.id)
+    if (b.type !== 'page_break' || page === undefined || page <= from) continue
+    out.push({ value: b.id, label: `Страница ${page}` })
+  }
+  out.push({ value: JUMP_END, label: 'К отправке' })
+  return out
+}
+
+// Почему правило блока не действует — ПРЕДУПРЕЖДЕНИЯ, а не отказ схемы: всё это
+// кросс-блочное, и валидатор ловил бы 422 в автосейве от первого же драга. Причины
+// условия даёт вычислитель (ruleWarnings — одна копия на всех, иначе разъедется);
+// причины действий живут здесь, потому что «цель ниже блока» знает только редактор.
+export function logicBlockWarnings(blocks: readonly Block[], block: Block): string[] {
+  const out = ruleWarnings(blocks, block.id, block.logic?.when).map((w) => w.reason)
+  const at = blocks.findIndex((b) => b.id === block.id)
+  const heads = new Set(
+    blocks.filter((b, i) => b.groupId !== blocks[i - 1]?.groupId).map((b) => b.id),
+  )
+
+  for (const a of block.logic?.then ?? []) {
+    if (a.kind === 'block_submit') continue
+    if (a.kind === 'jump') {
+      if (jumpTargetsFrom(blocks, block.id).some((t) => t.value === (a.end === true ? JUMP_END : a.to))) {
+        continue
+      }
+      out.push('переход некуда вести — страницы ниже нет')
+      continue
+    }
+    const target = blocks.find((b) => b.id === a.target)
+    if (!target) {
+      out.push('цель удалена — действие не работает')
+      continue
+    }
+    if (blocks.indexOf(target) <= at) {
+      out.push(`«${targetLabel(blocks, target)}» стоит выше блока — действие не работает`)
+      continue
+    }
+    if ((a.kind === 'show' || a.kind === 'hide') && !heads.has(target.id)) {
+      out.push(`«${targetLabel(blocks, target)}» не первая строка вопроса — действие не работает`)
+      continue
+    }
+    if (a.kind === 'require' && target.required === true) {
+      out.push(`«${targetLabel(blocks, target)}» обязателен всегда — условие ничего не меняет`)
+      continue
+    }
+    if ((a.kind === 'show_options' || a.kind === 'hide_options') && a.options.length === 0) {
+      out.push('не выбрано ни одного варианта')
+    }
+  }
+  // Дубли не показываем: два действия с одной бедой — одна строка, а не две.
+  return [...new Set(out)]
+}
+
+export const ACTION_LABELS: Record<LogicActionKind, string> = {
+  show: 'Показать',
+  hide: 'Скрыть',
+  require: 'Сделать обязательным',
+  show_options: 'Показать варианты',
+  hide_options: 'Скрыть варианты',
+  jump: 'Перейти на страницу',
+  block_submit: 'Скрыть кнопку отправки',
 }
 
 // Значение глазами автора: у списка это подпись варианта, а не его id.
