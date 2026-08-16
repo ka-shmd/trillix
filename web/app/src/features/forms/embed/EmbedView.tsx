@@ -176,7 +176,7 @@ function PreviewArea({ snippet }: { snippet: string }) {
   return (
     <div className="h-full p-4">
       <div className="h-full overflow-hidden rounded-lg border bg-white shadow-sm">
-        <MockSite key={applied} snippet={applied} />
+        <MockSite snippet={applied} />
       </div>
     </div>
   )

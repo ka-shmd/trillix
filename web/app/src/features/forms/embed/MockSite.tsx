@@ -32,39 +32,46 @@ const MOCK_STYLES = `
 `
 
 export function MockSite({ snippet }: { snippet: string }) {
-  const frameRef = useRef<HTMLIFrameElement>(null)
+  const hostRef = useRef<HTMLDivElement>(null)
 
+  // ФРЕЙМ СОЗДАЁТСЯ ЭФФЕКТОМ И УНОСИТСЯ ВМЕСТЕ С НИМ, а не живёт в разметке. Причина
+  // — состояние загрузчика: оно лежит в ОКНЕ фрейма (реестр вставок, счётчик кнопок
+  // по углам, запертый скролл), а окно переживает и уборку узлов, и `document.open`.
+  // В dev StrictMode прогоняет эффект дважды, и с постоянным фреймом второй прогон
+  // отдавал бы свой сниппет уже живущему экземпляру загрузчика: в углу вставали две
+  // кнопки виджета — ровно та мина, о которой предупреждает EMBED.md §10, только у
+  // нас на экране. Новый элемент = новое окно = чистый лист.
   useEffect(() => {
-    const doc = frameRef.current?.contentDocument
-    if (!doc) return
+    const host = hostRef.current
+    if (!host) return
 
-    doc.documentElement.lang = 'ru'
-    const style = doc.createElement('style')
-    style.textContent = MOCK_STYLES
-    doc.head.appendChild(style)
+    const frame = host.ownerDocument.createElement('iframe')
+    frame.title = 'Страница сайта с формой'
+    frame.className = 'block h-full w-full border-0 bg-white'
+    host.append(frame)
 
-    const wrap = box(doc, 'wrap')
-    wrap.append(
-      box(doc, 'bar'),
-      box(doc, 'line'),
-      box(doc, 'line line-short'),
-      cols(doc),
-      box(doc, 'slot'),
-    )
-    const slot = wrap.lastElementChild!
-    wrap.append(box(doc, 'foot'))
-    doc.body.append(wrap)
+    // Документ у пустого фрейма есть сразу после вставки в дерево — это тот же
+    // about:blank, в который пишет превью формы (PreviewFrame).
+    const doc = frame.contentDocument
+    if (doc) {
+      doc.documentElement.lang = 'ru'
+      const style = doc.createElement('style')
+      style.textContent = MOCK_STYLES
+      doc.head.append(style)
 
-    insertSnippet(doc, slot, snippet)
+      const wrap = box(doc, 'wrap')
+      const slot = box(doc, 'slot')
+      wrap.append(box(doc, 'bar'), box(doc, 'line'), box(doc, 'line line-short'), cols(doc), slot)
+      wrap.append(box(doc, 'foot'))
+      doc.body.append(wrap)
+
+      insertSnippet(doc, slot, snippet)
+    }
+
+    return () => frame.remove()
   }, [snippet])
 
-  return (
-    <iframe
-      ref={frameRef}
-      title="Страница сайта с формой"
-      className="block h-full w-full border-0 bg-white"
-    />
-  )
+  return <div ref={hostRef} className="h-full w-full" />
 }
 
 function box(doc: Document, className: string): HTMLDivElement {
@@ -92,13 +99,20 @@ function cols(doc: Document): HTMLDivElement {
  * через `escapeAttr`. Проверка эта не на месте использования, поэтому и вынесена в
  * комментарий: испортить её можно только правкой генератора, у которого свои юниты.
  *
- * МИНА: `<script>`, попавший в документ разбором, НЕ ИСПОЛНЯЕТСЯ (спецификация
- * помечает такие узлы «уже начатыми»), поэтому тег пересоздаётся с теми же
- * атрибутами. Голый `<iframe>` из второго варианта вставки переносится как есть.
+ * ДВЕ МИНЫ, обе тихие:
+ *
+ * 1. `<script>`, попавший в документ разбором, НЕ ИСПОЛНЯЕТСЯ (спецификация помечает
+ *    такие узлы «уже начатыми»), поэтому тег пересоздаётся с теми же атрибутами.
+ *    Голый `<iframe>` из второго варианта вставки переносится как есть.
+ * 2. Разбор кладёт ВЕДУЩИЙ `<script>` в `head`, а не в `body` — по правилам разбора
+ *    HTML тело начинается с первого узла, который в голове стоять не может. Наш
+ *    сниппет со скриптом — ровно этот случай, поэтому обходятся обе половины
+ *    документа; смотри только на `body`, и предпросмотр останется пустым.
  */
 function insertSnippet(doc: Document, slot: Element, snippet: string) {
   const parsed = new DOMParser().parseFromString(snippet, 'text/html')
-  for (const node of Array.from(parsed.body.childNodes)) {
+  const nodes = [...Array.from(parsed.head.childNodes), ...Array.from(parsed.body.childNodes)]
+  for (const node of nodes) {
     if (node.nodeName === 'SCRIPT') {
       const original = node as HTMLScriptElement
       const script = doc.createElement('script')
