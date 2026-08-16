@@ -158,12 +158,12 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// Обрезка объявлена ВАРИАНТОМ `*:data-[slot=select-value]:truncate`, а не классом на
-// самом триггере: текст рисует вложенный SelectValue, и `truncate` снаружи до него не
-// достаёт (web/CLAUDE.md — про конфликтующие утилиты и про то, что проверяется это
-// только computed-стилем).
+// Многоточие в конце — тремя классами разом; почему именно тремя, разобрано в
+// ConditionEditor (`TRUNCATE`): `block` перебивает флекс слота, иначе `text-overflow` не
+// действует и текст режется посреди буквы, `min-w-0` разрешает флекс-элементу сжаться,
+// `truncate` ставит саму обрезку.
 const CONTROL =
-  'h-7 w-44 max-w-full overflow-hidden *:data-[slot=select-value]:truncate'
+  'h-7 w-52 max-w-full *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -416,7 +416,7 @@ function TargetPicker({
           disabled={disabled}
           className={`${CONTROL} justify-between font-normal`}
         >
-          <span className="truncate">{summary}</span>
+          <span className="min-w-0 truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>

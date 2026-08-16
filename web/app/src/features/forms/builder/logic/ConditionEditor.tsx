@@ -52,14 +52,23 @@ import { RowMenu as RowMenuButton } from './rowMenu'
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// Обрезка объявлена ВАРИАНТОМ `*:data-[slot=select-value]:truncate`, а не классом на
-// самом триггере: текст рисует вложенный SelectValue, и `truncate` снаружи до него не
-// достаёт (web/CLAUDE.md — про конфликтующие утилиты и про то, что проверяется это
-// только computed-стилем).
-const TRUNCATE = 'overflow-hidden *:data-[slot=select-value]:truncate'
-const SOURCE = `h-7 w-44 max-w-full ${TRUNCATE}`
-const OPERATOR = `h-7 w-32 max-w-full ${TRUNCATE}`
-const VALUE = `h-7 w-36 max-w-full ${TRUNCATE}`
+// МНОГОТОЧИЕ, А НЕ ОБРЕЗКА ПО ЖИВОМУ. Три класса, и ни один не лишний:
+//
+//   • `block` ПЕРЕБИВАЕТ `flex`, который shadcn ставит слоту значения. На флекс-
+//     контейнере `text-overflow` не действует вовсе — текст клипается по границе, ровно
+//     посреди буквы;
+//   • `min-w-0` — слот лежит внутри флекса-триггера, а флекс-элемент по умолчанию не
+//     сжимается уже своего содержимого, и обрезать было бы нечего;
+//   • `truncate` — собственно `overflow:hidden` + `ellipsis` + `nowrap`.
+//
+// Все три объявлены ТЕМ ЖЕ вариантом, что и перебиваемое (`*:data-[slot=select-value]:`),
+// иначе tailwind-merge их не сольёт и победит порядок в собранном CSS, а не в строке
+// (web/CLAUDE.md). Проверяется только computed-стилем.
+const TRUNCATE =
+  '*:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
+const SOURCE = `h-7 w-56 max-w-full ${TRUNCATE}`
+const OPERATOR = `h-7 w-36 max-w-full ${TRUNCATE}`
+const VALUE = `h-7 w-44 max-w-full ${TRUNCATE}`
 
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
 const isAnd = (g: Group): boolean => 'all' in g
@@ -333,7 +342,7 @@ function LeafRow({
           </Select>
         ) : (
           <Input
-            className="h-7 w-36 max-w-full text-sm"
+            className="h-7 w-44 max-w-full text-sm"
             disabled={value === null}
             value={value?.value ?? ''}
             placeholder="Значение…"
