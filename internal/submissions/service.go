@@ -101,13 +101,13 @@ type Plans interface {
 // прежним путём, ответ с файлами при nil-коллабораторе отвергается — молча принять
 // ссылку, которую некому проверить, нельзя.
 type AnswerFiles interface {
-	Verify(ctx context.Context, formID uuid.UUID, byBlock map[string][]string) error
+	Verify(ctx context.Context, formID, submissionID uuid.UUID, byBlock map[string][]string) error
 	Claim(ctx context.Context, tx pgx.Tx, submissionID, formID uuid.UUID, byBlock map[string][]string) error
 	// RemoveBySubmission сносит объекты ответа из бакета. Зовётся ДО удаления
 	// строки ответа: каскад унёс бы вместе со строками ключи, и объекты остались
 	// бы в бакете навсегда — их не нашла бы ни чистка (она смотрит в таблицу), ни
 	// человек.
-	RemoveBySubmission(ctx context.Context, submissionID uuid.UUID) error
+	RemoveBySubmission(ctx context.Context, formID, submissionID uuid.UUID) error
 	// InfoBySubmissions — имена и размеры файлов перечисленных ответов: id → файл.
 	// Нужны и таблице ответов, и выгрузке — в обеих автор видит имя, а не id.
 	InfoBySubmissions(ctx context.Context, submissionIDs []uuid.UUID) (map[string]domain.AnswerFile, error)
@@ -267,7 +267,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		if s.files == nil {
 			return fmt.Errorf("%w: форма не принимает файлы", domain.ErrValidation)
 		}
-		if err := s.files.Verify(ctx, pf.FormID, files); err != nil {
+		if err := s.files.Verify(ctx, pf.FormID, id, files); err != nil {
 			return err
 		}
 	}
@@ -625,7 +625,7 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 	// (он повторит), чем оставить в бакете чужие персональные данные, о которых
 	// больше нигде нет записи.
 	if s.files != nil {
-		if err := s.files.RemoveBySubmission(ctx, submissionID); err != nil {
+		if err := s.files.RemoveBySubmission(ctx, formID, submissionID); err != nil {
 			return err
 		}
 	}

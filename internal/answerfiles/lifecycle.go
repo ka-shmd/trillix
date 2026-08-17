@@ -11,6 +11,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 // OrphanTTL — сколько живёт незаявленная загрузка. Ровно потолок возраста токена
@@ -22,6 +23,11 @@ const OrphanTTL = 24 * time.Hour
 // производительность, а про предсказуемость: задача ходит по расписанию, и проход,
 // выгребающий таблицу целиком, однажды совпал бы с пиком нагрузки.
 const orphanBatch = 200
+
+// removeBatch — порция сноса при удалении формы. То же соображение, что у сирот:
+// у формы с десятью тысячами ответов столько же файлов, и вычитывать их разом
+// незачем.
+const removeBatch = 200
 
 // Download — что нужно, чтобы отдать файл автору: короткий адрес и имя.
 type Download struct {
@@ -56,15 +62,21 @@ func (s *Service) DownloadURL(ctx context.Context, userID, fileID uuid.UUID) (Do
 	return Download{URL: url, Name: f.OriginalName}, nil
 }
 
-// RemoveBySubmission сносит объекты ответа и их строки. Зовётся ДО удаления самого
-// ответа: каскад унёс бы строки вместе с ключами, и объекты остались бы в бакете
-// навсегда.
-func (s *Service) RemoveBySubmission(ctx context.Context, submissionID uuid.UUID) error {
-	files, err := s.repo.BySubmissions(ctx, s.db, []uuid.UUID{submissionID})
+// RemoveBySubmission сносит объекты одного ответа и их строки. Зовётся ДО удаления
+// самого ответа: каскад унёс бы строки вместе с ключами, и объекты остались бы в
+// бакете навсегда.
+//
+// ФОРМА — часть условия, а не украшение сигнатуры. Право на удаление проверяется по
+// форме из адреса, а id ответа рядом с ним ничем с этой формой не связан: без этого
+// ограничения член одного пространства сносил бы файлы чужого, подставив чужой
+// submission_id (сама строка ответа при этом уцелела бы — её удаление формой
+// ограничено, — и ссылалась бы в никуда).
+func (s *Service) RemoveBySubmission(ctx context.Context, formID, submissionID uuid.UUID) error {
+	files, err := s.repo.OfFormSubmission(ctx, s.db, formID, submissionID)
 	if err != nil {
 		return err
 	}
-	return s.remove(ctx, files)
+	return s.remove(ctx, files, s.repo.Delete)
 }
 
 // InfoBySubmissions — имена и размеры файлов перечисленных ответов (id → файл).
@@ -80,6 +92,31 @@ func (s *Service) InfoBySubmissions(ctx context.Context, submissionIDs []uuid.UU
 		out[f.ID.String()] = domain.AnswerFile{Name: f.OriginalName, Size: f.SizeBytes}
 	}
 	return out, nil
+}
+
+// RemoveByForm сносит объекты ВСЕЙ формы и их строки. Зовётся ДО удаления самой
+// формы: `DELETE FROM forms` уносит строки загрузок каскадом вместе с ключами, и
+// объекты после этого не найдёт никто — ни чистка сирот (она смотрит в ту же
+// таблицу), ни человек, потому что `ListObjects` в blob сознательно не написан.
+//
+// Порциями, а не одним списком: у формы с десятью тысячами ответов файлов столько
+// же, и вычитывать их разом незачем.
+func (s *Service) RemoveByForm(ctx context.Context, formID uuid.UUID) error {
+	for {
+		files, err := s.repo.KeysByForm(ctx, s.db, formID, removeBatch)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return nil
+		}
+		if err := s.remove(ctx, files, s.repo.Delete); err != nil {
+			return err
+		}
+		if len(files) < removeBatch {
+			return nil
+		}
+	}
 }
 
 // InfoByForm — имена и размеры ВСЕХ файлов формы (id → файл), для выгрузки.
@@ -104,7 +141,10 @@ func (s *Service) CleanupOrphans(ctx context.Context, now time.Time) (int, error
 	if err != nil {
 		return 0, err
 	}
-	if err := s.remove(ctx, files); err != nil {
+	// Строки сирот снимаются запросом с проверкой незаявленности: между листингом
+	// и удалением загрузку мог заявить пришедший ответ, и такую строку трогать
+	// нельзя — иначе он потеряет ссылку на свой файл.
+	if err := s.remove(ctx, files, s.repo.DeleteOrphans); err != nil {
 		return 0, err
 	}
 	return len(files), nil
@@ -113,7 +153,7 @@ func (s *Service) CleanupOrphans(ctx context.Context, now time.Time) (int, error
 // remove — общий порядок уборки: сначала объекты, потом строки. Отсутствие объекта
 // в бакете ошибкой не считается (его мог снести прошлый, оборвавшийся проход) —
 // иначе одна такая строка блокировала бы чистку вечно.
-func (s *Service) remove(ctx context.Context, files []File) error {
+func (s *Service) remove(ctx context.Context, files []File, del func(context.Context, postgres.DBTX, []uuid.UUID) error) error {
 	if len(files) == 0 {
 		return nil
 	}
@@ -124,5 +164,5 @@ func (s *Service) remove(ctx context.Context, files []File) error {
 		}
 		ids = append(ids, f.ID)
 	}
-	return s.repo.Delete(ctx, s.db, ids)
+	return del(ctx, s.db, ids)
 }

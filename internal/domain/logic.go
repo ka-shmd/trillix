@@ -825,6 +825,17 @@ func decodeAnswer(b Block, raw json.RawMessage, opts map[string]bool) answerValu
 	if len(raw) == 0 {
 		return answerValue{}
 	}
+	// Файл: значение — массив id загрузок, и разбирается он как список. Без этой
+	// ветки правило «если файл приложен» было бы ИНЕРТНЫМ: строковый разбор массива
+	// падает, ответ выглядит пустым, и условие не срабатывает никогда — молча.
+	// Опций у файла нет, поэтому фильтр по ним не применяется.
+	if b.Type == BlockFile {
+		var ids []string
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			return answerValue{}
+		}
+		return answerValue{list: ids}
+	}
 	if b.Type.isMultiChoice() {
 		var ids []string
 		if err := json.Unmarshal(raw, &ids); err != nil {

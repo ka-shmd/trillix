@@ -46,7 +46,7 @@ SELECT p.code AS plan_code,
           JOIN users mu ON mu.id = mm.user_id AND mu.deleted_at IS NULL
          WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count,
        (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
-         WHERE f.workspace_id = o.workspace_id AND f.claimed_at IS NOT NULL)::bigint AS storage_used
+         WHERE f.workspace_id = o.workspace_id)::bigint AS storage_used
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -94,17 +94,18 @@ WHERE o.workspace_id = $1 AND o.role = 'owner';
 -- нужна одной операции (выдаче подписи на загрузку) и не должна ложиться на приём
 -- ответа.
 --
--- Считаются ЗАЯВЛЕННЫЕ файлы: незаявленная загрузка ещё может не состояться, и
--- квота, считающая её, отказывала бы по расходу, которого не будет. Цена в обмен —
--- окно, в котором параллельные загрузки видят один и тот же расход; потолок при
--- этом превышается на размер этих загрузок, а не безгранично (лимитер по IP).
+-- Считаются ВСЕ строки, включая незаявленные. Место занято с момента выдачи слота:
+-- байты уже лежат в бакете и уже стоят денег, а «не состоится» разрешает чистка
+-- сирот — она вернёт место в течение суток. Считать только заявленные значило бы
+-- не ограничивать того, кто грузит и не отправляет, — то есть ровно того, от кого
+-- квота и защищает.
 -- name: GetEntitlementsWithStorage :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
        (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
-         WHERE f.workspace_id = o.workspace_id AND f.claimed_at IS NOT NULL)::bigint AS storage_used
+         WHERE f.workspace_id = o.workspace_id)::bigint AS storage_used
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code

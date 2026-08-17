@@ -40,6 +40,24 @@ FROM submission_files
 WHERE submission_id = ANY($1::uuid[])
 ORDER BY created_at;
 
+-- Файлы одного ответа В ПРЕДЕЛАХ ФОРМЫ — для удаления. Форма в условии
+-- обязательна: право на удаление проверяется по форме из адреса, а id ответа рядом
+-- с ним ничем не связан с этой формой. Без этого условия член одного пространства
+-- сносил бы файлы чужого, просто подставив чужой submission_id.
+-- name: ListFormSubmissionFiles :many
+SELECT id, object_key
+FROM submission_files
+WHERE submission_id = $1 AND form_id = $2;
+
+-- Загрузка для СВЕРКИ при приёме ответа: либо ещё не заявленная, либо заявленная
+-- ЭТИМ же ответом. Второй случай — не поблажка, а идемпотентность: приём повторяют
+-- тем же submission_id после обрыва сети, и на повторе файлы уже заявлены. Без него
+-- каждый ретрай отправки с файлом отвечал бы 422 на уже принятом ответе.
+-- name: GetSubmissionFileForAnswer :one
+SELECT id, workspace_id, form_id, block_id, object_key, original_name, size_bytes, content_type, created_at
+FROM submission_files
+WHERE id = $1 AND (claimed_at IS NULL OR submission_id = $2);
+
 -- Один файл для скачивания автором. Членство спрашивает сервис (файл живёт в
 -- воркспейсе формы), поэтому здесь — только адрес объекта и его имя.
 -- name: GetSubmissionFile :one
@@ -60,6 +78,22 @@ LIMIT $2;
 -- ключ, и объект, переживший её, найти уже нечем.
 -- name: DeleteSubmissionFiles :exec
 DELETE FROM submission_files WHERE id = ANY($1::uuid[]);
+
+-- То же для чистки сирот, но только НЕЗАЯВЛЕННЫХ. Условие страхует окно между
+-- листингом сирот и их удалением: заявленную за это время строку чистка обязана
+-- оставить, иначе ответ потеряет ссылку на свой файл.
+-- name: DeleteOrphanSubmissionFiles :exec
+DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL;
+
+-- ВСЕ файлы формы (и заявленные, и нет) с ключами — для сноса объектов при удалении
+-- самой формы. Порция ограничена: у формы их может быть сколько угодно, а удаление
+-- ходит в хранилище по объекту.
+-- name: ListFormFileKeys :many
+SELECT id, object_key
+FROM submission_files
+WHERE form_id = $1
+ORDER BY created_at
+LIMIT $2;
 
 -- Все заявленные файлы формы — выгрузке: в CSV автор видит имя, а не id. Одним
 -- запросом на форму, а не по ответу: строчный запрос дал бы десять тысяч поездок

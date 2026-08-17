@@ -26,6 +26,12 @@ function FileField(p: ControlProps) {
   const aborts = useRef(new Map<string, AbortController>())
 
   const ids = Array.isArray(p.value) ? p.value : []
+  // Зеркало value для асинхронных обработчиков. МИНА: без него две параллельные
+  // загрузки, завершившиеся одна за другой, обе считают ids тем, чем он был на их
+  // рендере, и вторая затирает первую — в ответ уходит только последний файл.
+  // onChange даёт не апдейтер, а значение, поэтому свежий список держим сами.
+  const idsRef = useRef<string[]>(ids)
+  idsRef.current = ids
   const maxFiles = p.block.settings?.maxFiles ?? DEFAULT_MAX_FILES
   const maxSizeMiB = p.block.settings?.maxFileSize ?? DEFAULT_MAX_FILE_SIZE_MIB
   const full = ids.length + pending.length >= maxFiles
@@ -63,7 +69,9 @@ function FileField(p: ControlProps) {
         signal: ctl.signal,
       })
       setDone((cur) => [...cur, uploaded])
-      p.onChange?.([...ids, uploaded.id])
+      const next = [...idsRef.current, uploaded.id]
+      idsRef.current = next
+      p.onChange?.(next)
       setPending((cur) => cur.filter((x) => x.key !== key))
     } catch (err) {
       if (ctl.signal.aborted) {
@@ -78,7 +86,9 @@ function FileField(p: ControlProps) {
   }
 
   function removeUploaded(id: string) {
-    p.onChange?.(ids.filter((x) => x !== id))
+    const next = idsRef.current.filter((x) => x !== id)
+    idsRef.current = next
+    p.onChange?.(next)
     setDone((cur) => cur.filter((f) => f.id !== id))
   }
 

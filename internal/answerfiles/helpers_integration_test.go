@@ -87,6 +87,9 @@ func newStack(t *testing.T) (*httptest.Server, *answerfiles.Service) {
 
 	filesSvc := answerfiles.NewService(testPool, answerfiles.Repo{},
 		answerfiles.NewBucket(blob.New(testS3), blob.New(testS3), filesBucket), formsSvc, entSvc)
+	// Связь двусторонняя, как в main: answerfiles спрашивает у forms доступ, forms
+	// зовёт answerfiles при удалении формы.
+	formsSvc.WithFiles(filesSvc)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, ratelimit.AllowAll{}, testSecret,
 		submissions.DefaultMinFillTime, false)
 	filesH := answerfiles.NewHandler(filesSvc, authH.RequireAuth)
@@ -253,9 +256,16 @@ func putObject(t *testing.T, url string, body []byte, contentType string) {
 
 func submitAnswer(t *testing.T, srv *httptest.Server, slug, tok string, answers map[string]any, want int) {
 	t.Helper()
+	submitWithID(t, srv, slug, uuid.Must(uuid.NewV7()).String(), answers, want)
+}
+
+// submitWithID — отправка с ЗАДАННЫМ submission_id: им проверяется идемпотентность
+// (повтор после обрыва сети шлёт тот же id).
+func submitWithID(t *testing.T, srv *httptest.Server, slug, id string, answers map[string]any, want int) {
+	t.Helper()
 	payload, _ := json.Marshal(map[string]any{
-		"submission_id": uuid.Must(uuid.NewV7()).String(),
-		"token":         tok,
+		"submission_id": id,
+		"token":         freshToken(),
 		"answers":       answers,
 		"website":       "",
 		"visit_id":      "",

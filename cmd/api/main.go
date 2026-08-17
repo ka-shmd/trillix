@@ -361,6 +361,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	filesSvc := answerfiles.NewService(pool, answerfiles.Repo{},
 		answerfiles.NewBucket(publicBlobClient, blobClient, cfg.S3FilesBucket), formsSvc, entitlementsSvc)
+	// Связь двусторонняя и потому ставится здесь: answerfiles спрашивает у forms
+	// доступ, forms зовёт answerfiles при удалении формы. Обратный импорт замкнул
+	// бы цикл.
+	formsSvc.WithFiles(filesSvc)
 	filesHandler := answerfiles.NewHandler(filesSvc, authHandler.RequireAuth)
 	uploadLimiter := ratelimit.NewTokenBucket(uploadRatePerSec, uploadBurst)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,

@@ -40,10 +40,13 @@ type Plans interface {
 // Store — доступ к данным, объявленный потребителем. Реализация — Repo.
 type Store interface {
 	Insert(ctx context.Context, db postgres.DBTX, f NewFile) error
-	Pending(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error)
+	ForAnswer(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID) (File, error)
+	OfFormSubmission(ctx context.Context, db postgres.DBTX, formID, submissionID uuid.UUID) ([]File, error)
+	DeleteOrphans(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error
 	Claim(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID, formID uuid.UUID, blockID string) (bool, error)
 	BySubmissions(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) ([]File, error)
 	ByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]File, error)
+	KeysByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]File, error)
 	Get(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error)
 	Orphans(ctx context.Context, db postgres.DBTX, olderThan time.Time, limit int32) ([]File, error)
 	Delete(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error
@@ -171,19 +174,24 @@ func (s *Service) IssueSlot(ctx context.Context, req SlotRequest) (Slot, error) 
 // Сетевой поход в хранилище здесь, а не в транзакции приёма, намеренно: держать
 // транзакцию открытой на время HEAD к S3 значит отдать самый атакуемый эндпоинт во
 // власть чужого таймаута.
-func (s *Service) Verify(ctx context.Context, formID uuid.UUID, byBlock map[string][]string) error {
+//
+// submissionID нужен ровно для повторной отправки: приём идемпотентен по нему, и на
+// ретрае после обрыва сети файлы УЖЕ заявлены этим же ответом. Сверка, знающая
+// только про незаявленные, отвечала бы 422 на каждом таком повторе — притом что
+// ответ давно принят.
+func (s *Service) Verify(ctx context.Context, formID, submissionID uuid.UUID, byBlock map[string][]string) error {
 	for blockID, ids := range byBlock {
 		for _, raw := range ids {
 			id, err := uuid.Parse(raw)
 			if err != nil {
 				return fmt.Errorf("%w: неизвестный файл", domain.ErrValidation)
 			}
-			f, err := s.repo.Pending(ctx, s.db, id)
+			f, err := s.repo.ForAnswer(ctx, s.db, id, submissionID)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					// Уже заявленная, чужая и несуществующая — один случай:
-					// различать их наружу значило бы отвечать на вопрос «а такой
-					// файл вообще есть?».
+					// Заявленная ЧУЖИМ ответом, чужая и несуществующая — один
+					// случай: различать их наружу значило бы отвечать на вопрос
+					// «а такой файл вообще есть?».
 					return fmt.Errorf("%w: неизвестный файл", domain.ErrValidation)
 				}
 				return err

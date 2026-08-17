@@ -60,12 +60,17 @@ func (Repo) Insert(ctx context.Context, db postgres.DBTX, f NewFile) error {
 	return nil
 }
 
-// Pending — незаявленная загрузка по id. pgx.ErrNoRows пробрасывается: «нет такой
-// загрузки» и «её уже заявили» — один случай для вызывающего и оба означают отказ.
-func (Repo) Pending(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error) {
-	row, err := postgres.New(db).GetPendingSubmissionFile(ctx, id)
+// ForAnswer — загрузка, которую этот ответ вправе назвать: либо ещё не заявленная,
+// либо заявленная ИМ ЖЕ (повторная отправка после обрыва сети шлёт тот же
+// submission_id). pgx.ErrNoRows пробрасывается: «нет такой» и «заявлена чужим
+// ответом» — один случай для вызывающего, и оба означают отказ.
+func (Repo) ForAnswer(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID) (File, error) {
+	row, err := postgres.New(db).GetSubmissionFileForAnswer(ctx, postgres.GetSubmissionFileForAnswerParams{
+		ID:           id,
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: true},
+	})
 	if err != nil {
-		return File{}, fmt.Errorf("get pending submission file %s: %w", id, err)
+		return File{}, fmt.Errorf("get submission file %s for answer: %w", id, err)
 	}
 	return File{
 		ID:           row.ID,
@@ -97,6 +102,36 @@ func (Repo) Claim(ctx context.Context, db postgres.DBTX, id, submissionID uuid.U
 		return false, fmt.Errorf("claim submission file %s: %w", id, err)
 	}
 	return n == 1, nil
+}
+
+// OfFormSubmission — файлы ОДНОГО ответа в пределах формы (удаление). Форма в
+// условии обязательна: право проверяется по форме из адреса, а id ответа рядом с ним
+// ничем с этой формой не связан.
+func (Repo) OfFormSubmission(ctx context.Context, db postgres.DBTX, formID, submissionID uuid.UUID) ([]File, error) {
+	rows, err := postgres.New(db).ListFormSubmissionFiles(ctx, postgres.ListFormSubmissionFilesParams{
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: true},
+		FormID:       formID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list files of submission %s: %w", submissionID, err)
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, File{ID: r.ID, ObjectKey: r.ObjectKey})
+	}
+	return out, nil
+}
+
+// DeleteOrphans снимает строки СИРОТ: то же, что Delete, но с проверкой
+// незаявленности — она страхует окно между листингом сирот и их удалением.
+func (Repo) DeleteOrphans(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if err := postgres.New(db).DeleteOrphanSubmissionFiles(ctx, ids); err != nil {
+		return fmt.Errorf("delete orphan submission files: %w", err)
+	}
+	return nil
 }
 
 // BySubmissions — файлы перечисленных ответов (таблица ответов, выгрузка,
@@ -169,6 +204,19 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error
 		return fmt.Errorf("delete submission files: %w", err)
 	}
 	return nil
+}
+
+// KeysByForm — ключи файлов формы порцией (снос при удалении формы).
+func (Repo) KeysByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]File, error) {
+	rows, err := postgres.New(db).ListFormFileKeys(ctx, postgres.ListFormFileKeysParams{FormID: formID, Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list file keys of form %s: %w", formID, err)
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, File{ID: r.ID, ObjectKey: r.ObjectKey})
+	}
+	return out, nil
 }
 
 // ByForm — все заявленные файлы формы (имя и размер), для выгрузки.
