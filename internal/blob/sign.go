@@ -13,8 +13,9 @@ import (
 )
 
 // AWS Signature Version 4 для S3-совместимого API. Своя реализация вместо SDK:
-// нужны только подписи Put/Delete (публичное чтение идёт голым URL без подписи),
-// поверхность мала — зависимость сверх замороженного списка не оправдана
+// нужны подписи Put/Delete/Head и presigned-адреса (presign.go); публичное чтение
+// картинок идёт голым URL без подписи. Поверхность мала — зависимость сверх
+// замороженного списка не оправдана
 // (internal/CLAUDE.md). Корректность подписи проверяется интеграционным тестом
 // против настоящего MinIO (blob_integration_test.go): неверная канонизация даёт
 // SignatureDoesNotMatch — сильнее золотого вектора.
@@ -78,7 +79,12 @@ func canonicalHeaders(req *http.Request) (signed, canonical string) {
 	if ct := req.Header.Get("Content-Type"); ct != "" {
 		headers["content-type"] = ct
 	}
+	return canonicalizeHeaders(headers)
+}
 
+// canonicalizeHeaders — общий вид набора «имя (нижним регистром) → значение» для
+// канонического запроса: значения без крайних пробелов, имена отсортированы.
+func canonicalizeHeaders(headers map[string]string) (signed, canonical string) {
 	names := make([]string, 0, len(headers))
 	for n := range headers {
 		names = append(names, n)
@@ -107,7 +113,14 @@ func canonicalURI(u *url.URL) string {
 // canonicalQuery — отсортированная кодированная query-строка. Текущие операции
 // query не используют (вернёт ""); реализовано корректно на будущее.
 func canonicalQuery(u *url.URL) string {
-	vals := u.Query()
+	return canonicalQueryValues(u.Query())
+}
+
+// canonicalQueryValues — та же канонизация от готового набора значений. Её
+// результат годится и как RawQuery: кодирование по RFC 3986 (пробел — %20, а не
+// «+», как у url.Values.Encode), то есть то, что уходит в сеть, совпадает с тем,
+// что подписано, — иначе подпись не сходится на первом же значении с пробелом.
+func canonicalQueryValues(vals url.Values) string {
 	if len(vals) == 0 {
 		return ""
 	}
