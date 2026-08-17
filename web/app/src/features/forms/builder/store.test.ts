@@ -2250,10 +2250,20 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
       row.map((cell) => cell.map((o) => o.label).join('+')),
     )
 
+  // Жест «встань новой колонкой ряда цели» — insert со следующим номером. Колонку
+  // называет вызывающий (полотно берёт её у зоны), команда только клампит.
+  const intoRow = (
+    store: ReturnType<typeof createBuilderStore>,
+    id: string,
+    optionId: string,
+    targetId: string,
+    col: number,
+  ) => store.getState().placeOptionInRow(id, optionId, targetId, col, true)
+
   it('placeOptionInRow — тот же бит и та же упаковка, что у вопросов', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
     const [, b] = options(store)
-    store.getState().placeOptionInRow(id, b!.id, options(store)[0]!.id)
+    intoRow(store, id, b!.id, options(store)[0]!.id, 2)
     expect(optRows(store)).toEqual([['a', 'b'], ['c']])
 
     store.getState().undo()
@@ -2263,7 +2273,7 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
   it('placeOptionInRow переносит вариант вплотную за цель', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
     const [a, , c] = options(store)
-    store.getState().placeOptionInRow(id, c!.id, a!.id)
+    intoRow(store, id, c!.id, a!.id, 2)
     expect(optRows(store)).toEqual([['a', 'c'], ['b']])
   })
 
@@ -2273,28 +2283,28 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
     const labels = Array.from({ length: MAX_COLUMNS + 1 }, (_, i) => `o${i + 1}`)
     const { store, id } = choiceWith(...labels)
     const first = options(store)[0]!.id
-    for (const o of options(store).slice(1, MAX_COLUMNS)) {
-      store.getState().placeOptionInRow(id, o.id, first)
-    }
+    options(store)
+      .slice(1, MAX_COLUMNS)
+      .forEach((o, i) => intoRow(store, id, o.id, first, i + 2))
     expect(optRows(store)).toEqual([labels.slice(0, MAX_COLUMNS), [labels[MAX_COLUMNS]!]])
     store.getState().markSaved()
 
     // Ряд полон: лишний вариант в него не встаёт и историю не трогает.
-    store.getState().placeOptionInRow(id, options(store)[MAX_COLUMNS]!.id, first)
+    intoRow(store, id, options(store)[MAX_COLUMNS]!.id, first, MAX_COLUMNS + 1)
     expect(store.getState().dirty).toBe(false)
     expect(optRows(store)).toEqual([labels.slice(0, MAX_COLUMNS), [labels[MAX_COLUMNS]!]])
   })
 
   it('takeOptionOwnRow возвращает вариант своим рядом', () => {
     const { store, id } = choiceWith('a', 'b')
-    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    intoRow(store, id, options(store)[1]!.id, options(store)[0]!.id, 2)
     store.getState().takeOptionOwnRow(id, options(store)[1]!.id)
     expect(optRows(store)).toEqual([['a'], ['b']])
   })
 
   it('удаление левого варианта снимает бит правого', () => {
     const { store, id } = choiceWith('a', 'b')
-    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    intoRow(store, id, options(store)[1]!.id, options(store)[0]!.id, 2)
     store.getState().removeOption(id, options(store)[0]!.id)
     expect(options(store)[0]).not.toHaveProperty('column')
     expect(optRows(store)).toEqual([['b']])
@@ -2302,14 +2312,14 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
 
   it('вариант, уехавший наверх Alt+↑, теряет бит', () => {
     const { store, id } = choiceWith('a', 'b')
-    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    intoRow(store, id, options(store)[1]!.id, options(store)[0]!.id, 2)
     store.getState().moveOption(id, options(store)[1]!.id, 'up')
     expect(optRows(store)).toEqual([['b'], ['a']])
   })
 
   it('вариант, уехавший вниз, не приклеивается к новому соседу', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
-    store.getState().placeOptionInRow(id, options(store)[1]!.id, options(store)[0]!.id)
+    intoRow(store, id, options(store)[1]!.id, options(store)[0]!.id, 2)
     expect(optRows(store)).toEqual([['a', 'b'], ['c']])
     // b уезжает под c: бит держался за a, значит снимается — иначе b встал бы в ряд с c.
     store.getState().moveOption(id, options(store)[1]!.id, 'down')
@@ -2319,13 +2329,41 @@ describe('createBuilderStore — ряды вариантов (фаза 13.6, §5
   it('перестановка dnd не собирает ряд молча (сосед сменился — бит снят)', () => {
     const { store, id } = choiceWith('a', 'b', 'c')
     const [a, b, c] = options(store)
-    store.getState().placeOptionInRow(id, b!.id, a!.id) // ряд [a, b]
-    store.getState().reorderOptions(id, c!.id, b!.id) // c встаёт на место b
+    intoRow(store, id, b!.id, a!.id, 2) // ряд [a, b]
+    store.getState().moveOptionAfter(id, c!.id, a!.id) // c встаёт между a и b
     expect(optRows(store)).toEqual([['a'], ['c'], ['b']])
+  })
+
+  it('стопка в колонке: insert=false кладёт вариант под её последнего', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    intoRow(store, id, b!.id, a!.id, 2) // секция [a | b]
+    store.getState().placeOptionInRow(id, c!.id, a!.id, 1, false)
+    expect(optRows(store)).toEqual([['a+c', 'b']])
+  })
+
+  it('стопка у полноширинного ряда ничего не значит — no-op без dirty', () => {
+    const { store, id } = choiceWith('a', 'b')
+    const [a, b] = options(store)
+    store.getState().markSaved()
+    store.getState().placeOptionInRow(id, b!.id, a!.id, 1, false)
+    expect(store.getState().dirty).toBe(false)
+    expect(optRows(store)).toEqual([['a'], ['b']])
+  })
+
+  it('перенос между колонками СВОЕЙ секции: ряд не разваливается', () => {
+    const { store, id } = choiceWith('a', 'b', 'c')
+    const [a, b, c] = options(store)
+    intoRow(store, id, b!.id, a!.id, 2)
+    intoRow(store, id, c!.id, a!.id, 3) // секция [a | b | c]
+    expect(optRows(store)).toEqual([['a', 'b', 'c']])
+    // c переезжает в первую колонку, к a: колонок становится две, номера съезжают.
+    store.getState().placeOptionInRow(id, c!.id, a!.id, 1, false)
+    expect(optRows(store)).toEqual([['a+c', 'b']])
   })
 })
 
-describe('createBuilderStore — reorderOptions (dnd вариантов, фаза 13.6)', () => {
+describe('createBuilderStore — moveOptionAfter (вертикальный дроп варианта)', () => {
   const choiceWith3 = () => {
     const store = createBuilderStore()
     store.getState().addBlock('single_choice')
@@ -2336,21 +2374,57 @@ describe('createBuilderStore — reorderOptions (dnd вариантов, фаз�
   const labels = (store: ReturnType<typeof createBuilderStore>) =>
     store.getState().blocks[0]!.settings!.options!.map((o) => o.label)
 
-  it('переносит вариант на позицию цели (сплайс, как reorderBlocks)', () => {
+  it('адрес — «после такого-то», а не «на позицию»', () => {
     const { store, id } = choiceWith3()
     const [a, , c] = store.getState().blocks[0]!.settings!.options!
-    store.getState().reorderOptions(id, a!.id, c!.id)
+    store.getState().moveOptionAfter(id, a!.id, c!.id)
     expect(labels(store)).toEqual(['b', 'c', 'a'])
+  })
+
+  it('null значит «первым в списке»', () => {
+    const { store, id } = choiceWith3()
+    const c = store.getState().blocks[0]!.settings!.options![2]!
+    store.getState().moveOptionAfter(id, c.id, null)
+    expect(labels(store)).toEqual(['c', 'a', 'b'])
   })
 
   it('незнакомый id и дроп на себя — no-op без dirty', () => {
     const { store, id } = choiceWith3()
     const a = store.getState().blocks[0]!.settings!.options![0]!
     store.getState().markSaved()
-    store.getState().reorderOptions(id, a.id, a.id)
-    store.getState().reorderOptions(id, 'нет-такого', a.id)
+    store.getState().moveOptionAfter(id, a.id, a.id)
+    store.getState().moveOptionAfter(id, 'нет-такого', a.id)
+    store.getState().moveOptionAfter(id, a.id, 'нет-такого')
     expect(store.getState().dirty).toBe(false)
     expect(labels(store)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('ВЫХОД ИЗ СВОЕГО РЯДА ВНИЗ: бит снимается явно, а не уборкой', () => {
+    // Тот самый жест, который на полотне не делал ничего (владелец, 2026-08-12): в
+    // порядке документа b уже стоит за a, и правило «сосед сменился» тут молчит.
+    const { store, id } = choiceWith3()
+    const [a, b] = store.getState().blocks[0]!.settings!.options!
+    store.getState().placeOptionInRow(id, b!.id, a!.id, 2, true)
+    expect(store.getState().blocks[0]!.settings!.options![1]!.column).toBe(2)
+    store.getState().moveOptionAfter(id, b!.id, a!.id)
+    expect(store.getState().blocks[0]!.settings!.options![1]).not.toHaveProperty('column')
+    expect(labels(store)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('щель ВНУТРИ колонки: номер приезжает целью, секция цела', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('single_choice')
+    const id = store.getState().blocks[0]!.id
+    for (const label of ['a', 'b', 'c', 'd']) store.getState().addOption(id, label)
+    const opts = () => store.getState().blocks[0]!.settings!.options!
+    const [a, b, c, d] = opts()
+    store.getState().placeOptionInRow(id, b!.id, a!.id, 2, true) // [a | b]
+    store.getState().placeOptionInRow(id, c!.id, a!.id, 1, false) // [a+c | b]
+    // d приходит СНАРУЖИ ряда и встаёт в первую колонку между a и c.
+    store.getState().moveOptionAfter(id, d!.id, a!.id, 1)
+    expect(
+      packOptionRows(opts()).map((row) => row.map((cell) => cell.map((o) => o.label).join('+'))),
+    ).toEqual([['a+d+c', 'b']])
   })
 })
 

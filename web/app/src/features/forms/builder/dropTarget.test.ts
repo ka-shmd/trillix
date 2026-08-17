@@ -26,6 +26,11 @@ const blk = (type: Block['type'], extra: Partial<Block> = {}): Block => ({
 
 const layout = (blocks: Block[]) => packRows(groupBlocks(blocks))
 
+// Внутренние ряды вопроса — знание ПОЛОТНА, а не прицела: с обобщением на слой вариантов
+// раскладчик приезжает в pickDropTarget колбэком (см. PickOpts.inner). Здесь тот же
+// колбэк, что в SlashEditor, — иначе тест проверял бы другую конфигурацию.
+const INNER = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
+
 const H = 40 // высота строки
 const GAP_ROW = 28 // между вопросами (gap-7)
 const GAP_IN = 14 // внутри вопроса (gap-3.5)
@@ -76,10 +81,10 @@ const on = (boxes: Map<string, Box>, id: string) => {
   return { x: (b.left + b.right) / 2, y: (b.top + b.bottom) / 2 }
 }
 
-const pick = (blocks: Block[], at: string, activeId: string, layer: 'block' | 'group' = 'block') => {
+const pick = (blocks: Block[], at: string, activeId: string, layer: 'part' | 'unit' = 'part') => {
   const rows = layout(blocks)
   const boxes = boxesOf(rows)
-  return pickDropTarget(rows, boxes, on(boxes, at), { layer, activeId })
+  return pickDropTarget(rows, boxes, on(boxes, at), { layer, inner: INNER, activeId })
 }
 
 describe('pickDropTarget — линия всегда под элементом под указателем', () => {
@@ -123,7 +128,7 @@ describe('pickDropTarget — линия всегда под элементом �
     const rows = layout([a, b])
     const boxes = boxesOf(rows)
 
-    expect(pickDropTarget(rows, boxes, { x: W / 2, y: -20 }, { layer: 'block', activeId: b.id }))
+    expect(pickDropTarget(rows, boxes, { x: W / 2, y: -20 }, { layer: 'part', inner: INNER, activeId: b.id }))
       .toEqual({ afterId: null, lineIds: [a.id], before: true })
   })
 
@@ -183,9 +188,9 @@ describe('pickDropTarget — вопрос из нескольких строк',
     const blocks = [above, caption, field]
 
     // Указатель на заголовке вопроса — ни «под абзацем», ни «под вопросом».
-    expect(pick(blocks, caption.id, 'таскаем-другую-группу', 'group')).toBeNull()
+    expect(pick(blocks, caption.id, 'таскаем-другую-группу', 'unit')).toBeNull()
     // Дошли до последней строки — вот теперь «под вопросом», во всю его ширину.
-    expect(pick(blocks, field.id, 'таскаем-другую-группу', 'group')).toEqual({
+    expect(pick(blocks, field.id, 'таскаем-другую-группу', 'unit')).toEqual({
       afterId: field.id,
       lineIds: [caption.id, field.id],
       before: false,
@@ -198,7 +203,7 @@ describe('pickDropTarget — вопрос из нескольких строк',
     const blocks = [caption, field, tail]
     const rows = layout(blocks)
     const boxes = boxesOf(rows)
-    const opts = { layer: 'group' as const, activeId: tail.groupId }
+    const opts = { layer: 'unit' as const, activeId: tail.groupId }
 
     // На заголовке ПЕРВОГО вопроса «встать первым» уже кончилось: полоса этой позиции
     // держится, только пока указатель выше самого первого элемента полотна.
@@ -222,7 +227,7 @@ describe('pickHoverGroup — вопрос под указателем', () => {
     const rows = layout(blocks)
     const boxes = boxesOf(rows)
     const at = on(boxes, caption.id)
-    const opts = { layer: 'group' as const, activeId: 'таскаем-другую-группу' }
+    const opts = { layer: 'unit' as const, activeId: 'таскаем-другую-группу' }
 
     // Щели на этой точке нет вовсе: над вопросом она кончилась, под ним не началась.
     expect(pickDropTarget(rows, boxes, at, opts)).toBeNull()
@@ -237,7 +242,7 @@ describe('pickHoverGroup — вопрос под указателем', () => {
     const boxes = boxesOf(rows)
 
     // Указатель ровно на перетаскиваемом вопросе — назван сосед, а не он сам.
-    expect(pickHoverGroup(rows, boxes, on(boxes, a.id), { layer: 'group', activeId: a.groupId }))
+    expect(pickHoverGroup(rows, boxes, on(boxes, a.id), { layer: 'unit', activeId: a.groupId }))
       .toBe(b.groupId)
   })
 
@@ -248,7 +253,7 @@ describe('pickHoverGroup — вопрос под указателем', () => {
     const boxes = boxesOf(rows)
     const y = boxes.get(a.id)!.bottom + 4 // просвет сразу под первым
 
-    expect(pickHoverGroup(rows, boxes, { x: W / 2, y }, { layer: 'block', activeId: 'чужой' }))
+    expect(pickHoverGroup(rows, boxes, { x: W / 2, y }, { layer: 'part', inner: INNER, activeId: 'чужой' }))
       .toBe(a.groupId)
   })
 })
@@ -316,7 +321,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     const rows = layout(blocks)
     expect(rows[0]).toHaveLength(2)
     const boxes = boxesOf(rows)
-    const opts = { layer: 'group' as const, activeId: left.groupId }
+    const opts = { layer: 'unit' as const, activeId: left.groupId }
     const under = { afterId: r2.id, lineIds: [r1.id, r2.id], before: false }
 
     // Тащим единственный блок левой колонки. На высоте ПОСЛЕДНЕГО блока правой цель
@@ -335,8 +340,8 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     const boxes = boxesOf(rows)
     const y = boxes.get(left.id)!.top + H / 2
 
-    const atLeft = pickDropTarget(rows, boxes, { x: 40, y }, { layer: 'block', activeId: right.id })
-    const atRight = pickDropTarget(rows, boxes, { x: W - 40, y }, { layer: 'block', activeId: left.id })
+    const atLeft = pickDropTarget(rows, boxes, { x: 40, y }, { layer: 'part', inner: INNER, activeId: right.id })
+    const atRight = pickDropTarget(rows, boxes, { x: W - 40, y }, { layer: 'part', inner: INNER, activeId: left.id })
     expect(atLeft?.afterId).toBe(left.id)
     expect(atRight?.afterId).toBe(right.id)
   })
@@ -348,7 +353,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     const boxes = boxesOf(rows)
     const y = boxes.get(left.id)!.bottom + GAP_ROW / 2
 
-    const t = pickDropTarget(rows, boxes, { x: 40, y }, { layer: 'block', activeId: below.id })
+    const t = pickDropTarget(rows, boxes, { x: 40, y }, { layer: 'part', inner: INNER, activeId: below.id })
     expect(t).toEqual({ afterId: right.id, lineIds: [left.id, right.id], before: false })
   })
 
@@ -387,7 +392,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     // Указатель в правой (короткой) колонке, но на высоте ВТОРОЙ строки левой.
     const at = { x: boxes.get(short.id)!.left + 10, y: boxes.get(field.id)!.top + H / 2 }
 
-    expect(pickDropTarget(rows, boxes, at, { layer: 'block', activeId: outsider.id })).toEqual({
+    expect(pickDropTarget(rows, boxes, at, { layer: 'part', inner: INNER, activeId: outsider.id })).toEqual({
       afterId: short.id,
       lineIds: [caption.id, field.id, short.id],
       before: false,
@@ -427,7 +432,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     // Целимся в ЛЕВУЮ колонку: прежде это была та самая сырая цель, от которой группа
     // вставала МЕЖДУ колонками и пересобирала ряд новым составом.
     const t = pickDropTarget(rows, boxes, on(boxes, left!.id), {
-      layer: 'group',
+      layer: 'unit',
       activeId: txt!.groupId,
     })
     expect(t).toEqual({ afterId: right!.id, lineIds: [left!.id, right!.id], before: false })
@@ -471,7 +476,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
       })
       // Тот же ответ соседу по секции: «свой» и «чужой» здесь не различаются, различает
       // только попадание указателя в колонку.
-      expect(pick(blocks, a.id, d.groupId, 'group')).toEqual({
+      expect(pick(blocks, a.id, d.groupId, 'unit')).toEqual({
         afterId: a.id,
         lineIds: [a.id],
         before: false,
@@ -492,7 +497,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
         column: 1,
       })
       // Групповой слой отвечает то же самое: правило про колонку, а не про слой.
-      expect(pick(blocks, a.id, c.groupId, 'group')).toEqual({
+      expect(pick(blocks, a.id, c.groupId, 'unit')).toEqual({
         afterId: a.id,
         lineIds: [a.id],
         before: false,
@@ -522,7 +527,7 @@ describe('pickDropTarget — ряд атомарен для вертикальн
       const rows = layout([alone, r1, r2, r3])
       expect(rows[0]).toHaveLength(2)
       const boxes = boxesOf(rows)
-      const opts = { layer: 'group' as const, activeId: alone.groupId }
+      const opts = { layer: 'unit' as const, activeId: alone.groupId }
 
       // Курсор в ЛЕВОЙ половине: своя колонка опустела, ближайшей стала чужая стопка.
       for (const id of [r1.id, r2.id]) {
