@@ -21,6 +21,8 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { Link } from '@tanstack/react-router'
+import { LayoutTemplate, SquarePen } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -1215,7 +1217,10 @@ export function SlashEditor({
               onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
             />
 
-            <SubmitButtonEditor />
+            {/* Кнопки отправки у пустого полотна нет: отправлять нечего, а единственный
+          элемент страницы уводил бы внимание с приглашения начать (EmptyStarter).
+          Появляется с первым же блоком. */}
+            {blocks.length > 0 && <SubmitButtonEditor />}
             </div>
           </div>
         </ActiveRowValueProvider>
@@ -1662,7 +1667,8 @@ const GroupRow = memo(function GroupRow({
   )
 }, sameGroupProps)
 
-// SubmitButtonEditor — кнопка отправки формы (всегда видна). Клик открывает поповер
+// SubmitButtonEditor — кнопка отправки формы (видна, пока на полотне есть хоть один
+// блок — см. место вызова). Клик открывает поповер
 // со сменой её текста; пусто → показывается дефолт. Пишет в стор (форма-уровень),
 // автосейв сохраняет вместе со схемой.
 function SubmitButtonEditor() {
@@ -1717,6 +1723,9 @@ function EmptyStarter({
   const rowFocus = useRowFocus(CANVAS_ROW, 'canvas')
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Клавиши обрабатывает только сама область. Внутри неё живёт ссылка на шаблоны, и
+    // её Enter обязан открывать страницу, а не рождать блок под ней.
+    if (e.target !== e.currentTarget) return
     if (chords.enter(e)) {
       e.preventDefault()
       onStart()
@@ -1733,25 +1742,62 @@ function EmptyStarter({
     <div
       tabIndex={0}
       onKeyDown={onKeyDown}
-      onClick={() => onStart()}
+      // Клика по САМОЙ области нет (решение владельца): блок заводят кнопка «начать» и
+      // набор с клавиатуры, а не тычок в любое место страницы. Клик область по-прежнему
+      // ФОКУСИРУЕТ (tabIndex), поэтому «кликнул и печатаю» работает как работало.
       {...rowFocus}
-      // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
-      // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
-      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
+      // Отступ от заголовка формы КОРОЧЕ, чем у списка блоков (решение владельца):
+      // приглашение — не первый вопрос, а надпись под заголовком, и ритм «заголовок →
+      // форма» ей велик. Множитель плотности тот же, что у полотна: приглашение обязано
+      // ехать за настройкой автора, как и всё остальное.
+      className="mt-[calc(2rem*var(--rf-density)_+_0.5rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
     >
-      <p>
-        Нажмите <Kbd>Enter</Kbd>, чтобы начать
-      </p>
-      <p>
-        Нажмите <Kbd>/</Kbd>, чтобы вставить блок
-      </p>
+      <button type="button" onClick={() => onStart()} className={HINT_ROW}>
+        <SquarePen className="size-4 shrink-0" aria-hidden="true" />
+        <span>
+          Нажмите <Kbd>Enter</Kbd>, чтобы начать
+        </span>
+      </button>
+      <Link to="/templates" className={HINT_ROW}>
+        <LayoutTemplate className="size-4 shrink-0" aria-hidden="true" />
+        <span>Использовать шаблон</span>
+      </Link>
+      {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
+          «текст»): это не подсказка редактора, а строка о продукте, и приглушать её
+          заодно с подсказками незачем.
+
+          ОТСТУП ЖИВЁТ НА ОБЁРТКЕ, а не на самом абзаце: `.rf-text` объявляет
+          `margin: 0`, специфичность у него та же, что у tailwind-утилиты, а
+          `fields.css` подключается ПОСЛЕ `index.css` (main.tsx) — значит любой
+          `mt-*` на этом элементе проигрывает молча (web/CLAUDE.md, «конфликтующие
+          утилиты»). Класс на элементе виден, отступа нет. */}
+      <div className="mt-8">
+        <p className="rf-text max-w-prose">
+          Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
+          чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
+          вопрос.
+        </p>
+      </div>
     </div>
   )
 }
 
+// Строка подсказки пустого полотна: глиф слева, текст справа, вся строка нажимается.
+// Подчёркивания нет намеренно (решение владельца): приглашение читается как текст
+// документа, а не как ссылка в вебе — цель называет глиф и серая подложка под курсором
+// (цвет текста при наведении не меняется).
+//
+// Отрицательный левый отступ равен горизонтальному padding'у: подложка выступает за край
+// колонки, а САМ ТЕКСТ остаётся на нуле — там, где появится первый блок формы.
+const HINT_ROW =
+  '-ml-2 flex w-fit cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-muted'
+
+// Kbd — ярлык клавиши в тексте приглашения. Кегль на ступень МЕНЬШЕ соседнего текста, а
+// не два (было text-xs при базовом 16px): в чипе стоят одиночные символы «/» и «@», и на
+// 12px моноширинного шрифта их не разглядеть.
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
       {children}
     </kbd>
   )
