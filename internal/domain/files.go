@@ -198,3 +198,12 @@ func FileAnswers(schema FormSchema, answers map[string]json.RawMessage) map[stri
 	}
 	return out
 }
+
+// AnswerFile — что о приложенном файле знает кабинет, не открывая его. Живёт в
+// домене, а не в модуле хранения: этим типом ОБЩАЮТСЯ два модуля (answerfiles
+// отдаёт, submissions показывает), и объявленный у любого из них он развернул бы
+// направление зависимости.
+type AnswerFile struct {
+	Name string
+	Size int64
+}

@@ -43,6 +43,7 @@ type Store interface {
 	Pending(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error)
 	Claim(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID, formID uuid.UUID, blockID string) (bool, error)
 	BySubmissions(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) ([]File, error)
+	ByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]File, error)
 	Get(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error)
 	Orphans(ctx context.Context, db postgres.DBTX, olderThan time.Time, limit int32) ([]File, error)
 	Delete(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error

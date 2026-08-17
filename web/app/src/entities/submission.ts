@@ -21,11 +21,24 @@ export type Submission = z.infer<typeof submissionSchema>
 // GET /forms/{id}/submissions: страница + непрозрачный курсор (null — последняя) +
 // счётчики. total — сколько ВИДНО; hidden — сколько скрыто квотой тарифа (0014):
 // эти ответы сохранены и откроются после перехода на план, который их вмещает.
+// Приложенный файл (фаза 24): id загрузки → имя и размер. Отдельной картой рядом
+// со страницей, а не внутри answers: в самом ответе лежат ТОЛЬКО id, и правда о
+// файле живёт на сервере. Ссылки здесь нет намеренно — подпись хранилища живёт
+// минуту и протухла бы раньше, чем автор доскроллит; скачивание идёт через
+// GET /api/v1/files/{id}.
+export const answerFileSchema = z.object({
+  name: z.string(),
+  size: z.number().int(),
+})
+export type AnswerFile = z.infer<typeof answerFileSchema>
+
 export const submissionsPageSchema = z.object({
   submissions: z.array(submissionSchema),
   nextCursor: z.string().nullable(),
   total: z.number().int(),
   hidden: z.number().int(),
+  // Пусто у форм без вопросов-файлов — сервер поле не печатает вовсе.
+  files: z.record(z.string(), answerFileSchema).default({}),
 })
 
 export type SubmissionsPage = z.infer<typeof submissionsPageSchema>

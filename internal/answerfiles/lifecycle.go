@@ -67,6 +67,36 @@ func (s *Service) RemoveBySubmission(ctx context.Context, submissionID uuid.UUID
 	return s.remove(ctx, files)
 }
 
+// InfoBySubmissions — имена и размеры файлов перечисленных ответов (id → файл).
+// Одним запросом на всю страницу таблицы: по одному на ответ дало бы тридцать
+// поездок за тридцатью строками.
+func (s *Service) InfoBySubmissions(ctx context.Context, submissionIDs []uuid.UUID) (map[string]domain.AnswerFile, error) {
+	files, err := s.repo.BySubmissions(ctx, s.db, submissionIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]domain.AnswerFile, len(files))
+	for _, f := range files {
+		out[f.ID.String()] = domain.AnswerFile{Name: f.OriginalName, Size: f.SizeBytes}
+	}
+	return out, nil
+}
+
+// InfoByForm — имена и размеры ВСЕХ файлов формы (id → файл), для выгрузки.
+// Одним запросом: построчный дал бы поездку на каждый ответ, а объём результата
+// ограничен квотой хранилища пространства.
+func (s *Service) InfoByForm(ctx context.Context, formID uuid.UUID) (map[string]domain.AnswerFile, error) {
+	files, err := s.repo.ByForm(ctx, s.db, formID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]domain.AnswerFile, len(files))
+	for _, f := range files {
+		out[f.ID.String()] = domain.AnswerFile{Name: f.OriginalName, Size: f.SizeBytes}
+	}
+	return out, nil
+}
+
 // CleanupOrphans сносит незаявленные загрузки старше TTL: слот выдали, ответ не
 // пришёл. Возвращает число снесённых — его пишет в лог фоновая задача.
 func (s *Service) CleanupOrphans(ctx context.Context, now time.Time) (int, error) {

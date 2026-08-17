@@ -108,6 +108,12 @@ type AnswerFiles interface {
 	// бы в бакете навсегда — их не нашла бы ни чистка (она смотрит в таблицу), ни
 	// человек.
 	RemoveBySubmission(ctx context.Context, submissionID uuid.UUID) error
+	// InfoBySubmissions — имена и размеры файлов перечисленных ответов: id → файл.
+	// Нужны и таблице ответов, и выгрузке — в обеих автор видит имя, а не id.
+	InfoBySubmissions(ctx context.Context, submissionIDs []uuid.UUID) (map[string]domain.AnswerFile, error)
+	// InfoByForm — то же по всей форме: выгрузка не может собирать имена по
+	// ответу, иначе получит поездку в базу на каждую строку файла.
+	InfoByForm(ctx context.Context, formID uuid.UUID) (map[string]domain.AnswerFile, error)
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
@@ -150,6 +156,11 @@ type Page struct {
 	// Hidden — сколько скрыто квотой тарифа (0014). Кабинет показывает это числом
 	// в плашке: молча спрятать собранные человеком данные нельзя.
 	Hidden int64
+	// Files — метаданные приложенных файлов, id → имя и размер (фаза 24). Отдельной
+	// картой, а не внутри answers: в ответе лежат только id (правда о файле живёт в
+	// submission_files), и подмешивать имя в значение ответа значило бы хранить его
+	// в двух местах, из которых одно — недоверенное.
+	Files map[string]domain.AnswerFile
 }
 
 var _ Store = Repo{}
@@ -461,6 +472,20 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 		page.Submissions = rows[:limit]
 		page.NextCursor = &Cursor{ID: last.ID}
 	}
+
+	// Файлы страницы — одним запросом на всю страницу, а не по ответу: тридцать
+	// строк таблицы иначе дали бы тридцать поездок в базу.
+	if s.files != nil {
+		ids := make([]uuid.UUID, 0, len(page.Submissions))
+		for _, r := range page.Submissions {
+			ids = append(ids, r.ID)
+		}
+		files, err := s.files.InfoBySubmissions(ctx, ids)
+		if err != nil {
+			return Page{}, err
+		}
+		page.Files = files
+	}
 	return page, nil
 }
 
@@ -543,6 +568,15 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	// Имена файлов — только если у формы вообще есть вопрос-файл: у остальных (а
+	// это подавляющее большинство) выгрузка не платит ни запросом, ни памятью.
+	if s.files != nil && hasFileBlock(vs) {
+		files, err := s.files.InfoByForm(ctx, formID)
+		if err != nil {
+			return err
+		}
+		builder.WithFiles(files)
+	}
 	if err := emit(builder.Header()); err != nil {
 		return err
 	}
@@ -603,6 +637,19 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// hasFileBlock — есть ли в какой-нибудь версии формы вопрос-файл. Дешёвый обход
+// уже разобранных схем: он решает, платить ли за имена файлов вообще.
+func hasFileBlock(vs []domain.VersionedSchema) bool {
+	for _, v := range vs {
+		for i := range v.Schema.Blocks {
+			if v.Schema.Blocks[i].Type == domain.BlockFile {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func clampLimit(limit int) int {

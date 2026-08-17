@@ -170,3 +170,16 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error
 	}
 	return nil
 }
+
+// ByForm — все заявленные файлы формы (имя и размер), для выгрузки.
+func (Repo) ByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]File, error) {
+	rows, err := postgres.New(db).ListFormFiles(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("list form files %s: %w", formID, err)
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, File{ID: r.ID, OriginalName: r.OriginalName, SizeBytes: r.SizeBytes})
+	}
+	return out, nil
+}

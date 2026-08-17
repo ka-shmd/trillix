@@ -60,3 +60,12 @@ LIMIT $2;
 -- ключ, и объект, переживший её, найти уже нечем.
 -- name: DeleteSubmissionFiles :exec
 DELETE FROM submission_files WHERE id = ANY($1::uuid[]);
+
+-- Все заявленные файлы формы — выгрузке: в CSV автор видит имя, а не id. Одним
+-- запросом на форму, а не по ответу: строчный запрос дал бы десять тысяч поездок
+-- на форму с десятью тысячами ответов. Объём результата ограничен квотой
+-- хранилища самого пространства.
+-- name: ListFormFiles :many
+SELECT id, original_name, size_bytes
+FROM submission_files
+WHERE form_id = $1 AND claimed_at IS NOT NULL;

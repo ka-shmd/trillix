@@ -1916,6 +1916,42 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 	return err
 }
 
+const listFormFiles = `-- name: ListFormFiles :many
+SELECT id, original_name, size_bytes
+FROM submission_files
+WHERE form_id = $1 AND claimed_at IS NOT NULL
+`
+
+type ListFormFilesRow struct {
+	ID           uuid.UUID
+	OriginalName string
+	SizeBytes    int64
+}
+
+// Все заявленные файлы формы — выгрузке: в CSV автор видит имя, а не id. Одним
+// запросом на форму, а не по ответу: строчный запрос дал бы десять тысяч поездок
+// на форму с десятью тысячами ответов. Объём результата ограничен квотой
+// хранилища самого пространства.
+func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFormFilesRow, error) {
+	rows, err := q.db.Query(ctx, listFormFiles, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormFilesRow
+	for rows.Next() {
+		var i ListFormFilesRow
+		if err := rows.Scan(&i.ID, &i.OriginalName, &i.SizeBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormNames = `-- name: ListFormNames :many
 SELECT name, title FROM forms WHERE workspace_id = $1
 `

@@ -10,10 +10,10 @@ import {
   useDeleteSubmission,
 } from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
-import { formatAnswer } from '../../features/submissions/answerFormat'
+import { answerFiles, formatAnswer } from '../../features/submissions/answerFormat'
 import { FormStats } from '../../features/forms/FormStats'
 import { formatDate, pluralAnswers } from '../../shared/format'
-import { type Submission } from '../../entities/submission'
+import { type AnswerFile, type AnswerValue, type Submission } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -64,6 +64,12 @@ function ResponsesPage() {
   // Ответы, скрытые квотой тарифа. Показываем ЧИСЛОМ и словами «сохранены»:
   // человек собрал эти данные, и молчаливая пропажа читается как потеря.
   const hidden = list.data?.pages[0]?.hidden ?? 0
+  // Имена приложенных файлов приходят рядом со страницей (в самих ответах лежат
+  // только id загрузок). Страниц может быть несколько — карты сливаются.
+  const files = Object.assign({}, ...(list.data?.pages ?? []).map((p) => p.files)) as Record<
+    string,
+    AnswerFile
+  >
   // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (подписи/контент)
   // ответов не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
   // Подпись колонки берётся из группы блока (title/label), поэтому считаем meta по
@@ -144,11 +150,7 @@ function ResponsesPage() {
               </TableHeader>
               <TableBody>
                 {submissions.map((s) => (
-                  <TableRow
-                    key={s.id}
-                    className="cursor-pointer"
-                    onClick={() => openSubmission(s)}
-                  >
+                  <TableRow key={s.id} className="cursor-pointer" onClick={() => openSubmission(s)}>
                     <TableCell className="whitespace-nowrap">{formatDate(s.createdAt)}</TableCell>
                     <TableCell>{s.formVersion}</TableCell>
                     <TableCell className="text-right">
@@ -189,6 +191,7 @@ function ResponsesPage() {
             <SubmissionPanel
               submission={selected}
               blocks={blocks}
+              files={files}
               groups={groups}
               formId={formId}
               onClose={() => setOpen(false)}
@@ -205,12 +208,14 @@ function ResponsesPage() {
 function SubmissionPanel({
   submission,
   blocks,
+  files,
   groups,
   formId,
   onClose,
 }: {
   submission: Submission
   blocks: Block[]
+  files: Record<string, AnswerFile>
   groups: ReturnType<typeof groupMeta>
   formId: string
   onClose: () => void
@@ -236,7 +241,11 @@ function SubmissionPanel({
           <div key={b.id}>
             <dt className="text-sm font-medium">{blockTitle(b, groups.get(b.groupId)?.caption)}</dt>
             <dd className="mt-0.5 text-sm text-muted-foreground">
-              {formatAnswer(b, submission.answers[b.id]) || '—'}
+              {b.type === 'file' ? (
+                <FileLinks value={submission.answers[b.id]} files={files} />
+              ) : (
+                formatAnswer(b, submission.answers[b.id]) || '—'
+              )}
             </dd>
           </div>
         ))}
@@ -288,3 +297,28 @@ function blockTitle(b: Block, caption?: string): string {
   )
 }
 
+// FileLinks — приложенные файлы ссылками на скачивание. Ссылка ведёт на НАШ
+// эндпоинт, а не на хранилище: подпись живёт минуту, и вшитая в разметку она
+// протухла бы, пока автор читает ответ. Скачивание — обычная навигация, поэтому
+// download и target здесь не нужны: сервер отдаёт вложение сам.
+function FileLinks({
+  value,
+  files,
+}: {
+  value: AnswerValue | undefined
+  files: Record<string, AnswerFile>
+}) {
+  const items = answerFiles(value, files)
+  if (items.length === 0) return <>—</>
+  return (
+    <ul className="flex flex-col gap-1">
+      {items.map((f) => (
+        <li key={f.id}>
+          <a className="text-primary underline underline-offset-4" href={`/api/v1/files/${f.id}`}>
+            {f.name}
+          </a>
+        </li>
+      ))}
+    </ul>
+  )
+}

@@ -82,6 +82,18 @@ type listResponse struct {
 	// лимит укладывается. Кабинет рисует по нему плашку со словами «сохранены и
 	// откроются после перехода на Pro»: спрятать данные молча нельзя.
 	Hidden int64 `json:"hidden"`
+	// Files — метаданные приложенных файлов страницы, upload_id → имя и размер
+	// (фаза 24). Отдельной картой, а не внутри answers: в самом ответе лежат
+	// только id, и подмешивать имя в значение значило бы держать его в двух
+	// местах, из которых одно пришло от клиента. Скачивание — GET /files/{id},
+	// ссылки здесь нет намеренно: подпись живёт минуту и в списке протухла бы
+	// раньше, чем автор до неё доскроллит.
+	Files map[string]fileResponse `json:"files,omitempty"`
+}
+
+type fileResponse struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +127,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := listResponse{Submissions: items, Total: page.Total, Hidden: page.Hidden}
+	if len(page.Files) > 0 {
+		resp.Files = make(map[string]fileResponse, len(page.Files))
+		for id, f := range page.Files {
+			resp.Files[id] = fileResponse{Name: f.Name, Size: f.Size}
+		}
+	}
 	if page.NextCursor != nil {
 		enc := encodeCursor(*page.NextCursor)
 		resp.NextCursor = &enc
