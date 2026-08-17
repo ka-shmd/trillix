@@ -49,6 +49,7 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 		Limits:          row.Limits,
 		SubmissionsUsed: row.SubmissionsUsed,
 		MembersCount:    row.MembersCount,
+		StorageUsed:     row.StorageUsed,
 	}, nil
 }
 
@@ -83,5 +84,23 @@ func (Repo) EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, works
 		Limits:          row.Limits,
 		SubmissionsUsed: row.SubmissionsUsed,
 		MembersCount:    row.MembersCount,
+	}, nil
+}
+
+// EntitlementsWithStorage — состояние тарифа плюс расход хранилища (гейт файлов).
+func (Repo) EntitlementsWithStorage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error) {
+	row, err := postgres.New(db).GetEntitlementsWithStorage(ctx, postgres.GetEntitlementsWithStorageParams{
+		WorkspaceID: workspaceID,
+		Period:      pgtype.Date{Time: period, Valid: true},
+	})
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements with storage of workspace %s: %w", workspaceID, err)
+	}
+	return Row{
+		PlanCode:        row.PlanCode,
+		PlanTitle:       row.PlanTitle,
+		Limits:          row.Limits,
+		SubmissionsUsed: row.SubmissionsUsed,
+		StorageUsed:     row.StorageUsed,
 	}, nil
 }

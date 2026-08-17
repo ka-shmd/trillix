@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ka-shmd/trillix/internal/answerfiles"
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/config"
@@ -44,6 +45,14 @@ const (
 	// человек отвечают с одного IP, но режет автоматический перебор.
 	submitRatePerSec = 1.0 / 3.0
 	submitBurst      = 20
+
+	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
+	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
+	// право записи в наш бакет, то есть чужие байты за наш счёт. Запас 10,
+	// пополнение ~1 в 6 с: человек с формой на десяток вложений успевает всё
+	// приложить, автоматический перебор упирается почти сразу.
+	uploadRatePerSec = 1.0 / 6.0
+	uploadBurst      = 10
 
 	// Жёсткий лимит на POST визита по IP (своё ведро, ARCHITECTURE §4.6). Щедрее
 	// приёма ответа: один человек за визит шлёт минимум два бикона, а
@@ -138,6 +147,10 @@ const (
 
 	// Чистка истёкших токенов подтверждения email (живут 24 ч; тот же прогон).
 	verificationTokenCleanupTimeout = 30 * time.Second
+	// Чистка сирот-загрузок ходит и в базу, и в хранилище, поэтому времени ей
+	// нужно больше, чем чисто-табличным задачам: порция до 200 объектов сносится
+	// по одному запросу на объект.
+	orphanFileCleanupTimeout = 2 * time.Minute
 
 	// Диспетчер outbox (почтовая фаза): раз в интервал отправляет пачку готовых
 	// писем. Интервал — компромисс «сброс пароля не должен ощутимо ждать» против
@@ -334,6 +347,29 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	// Файлы в ответах (фаза 24): свой бакет — приватный, у картинок форм политика
+	// несовместимая (те раздаются анонимно).
+	// Второй клиент — ТОЛЬКО чтобы подписывать адреса для браузера: имя хоста входит
+	// в подпись, а респондент видит хранилище по внешнему адресу (в контуре, где
+	// Go ходит к нему по внутренней сети, они разные).
+	publicBlobClient := blob.New(blob.Config{
+		Endpoint:  cfg.S3PublicEndpoint,
+		Region:    cfg.S3Region,
+		AccessKey: cfg.S3AccessKey,
+		SecretKey: cfg.S3SecretKey,
+		PathStyle: cfg.S3PathStyle,
+	})
+	filesSvc := answerfiles.NewService(pool, answerfiles.Repo{},
+		answerfiles.NewBucket(publicBlobClient, blobClient, cfg.S3FilesBucket), formsSvc, entitlementsSvc)
+	// Связь двусторонняя и потому ставится здесь: answerfiles спрашивает у forms
+	// доступ, forms зовёт answerfiles при удалении формы. Обратный импорт замкнул
+	// бы цикл.
+	formsSvc.WithFiles(filesSvc)
+	filesHandler := answerfiles.NewHandler(filesSvc, authHandler.RequireAuth)
+	uploadLimiter := ratelimit.NewTokenBucket(uploadRatePerSec, uploadBurst)
+	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,
+		submissions.DefaultMinFillTime, cfg.TrustedProxy)
+
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
@@ -341,7 +377,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
-	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin)
+	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
+		WithFiles(filesSvc)
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -349,6 +386,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
+		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -400,6 +438,24 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("spent invitations purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Сироты загрузок: слот выдали, ответ не пришёл (фаза 24). Интервал тот же, что
+	// у прочей уборки; порог возраста — сутки, потолок жизни токена формы.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "answer-file-orphan-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, orphanFileCleanupTimeout)
+			defer cancel()
+			n, err := filesSvc.CleanupOrphans(ctx, time.Now())
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("orphan answer files purged", slog.Int("count", n))
 			}
 			return nil
 		},

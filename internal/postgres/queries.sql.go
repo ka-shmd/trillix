@@ -12,6 +12,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
+UPDATE submission_files
+SET submission_id = $2, claimed_at = now()
+WHERE id = $1 AND form_id = $3 AND block_id = $4
+  AND (claimed_at IS NULL OR submission_id = $2)
+`
+
+type ClaimSubmissionFileParams struct {
+	ID           uuid.UUID
+	SubmissionID pgtype.UUID
+	FormID       uuid.UUID
+	BlockID      string
+}
+
+// Заявление: файл привязывается к ответу. Возвращает число строк — ноль значит,
+// что загрузка чужая, не та, или заявлена ДРУГИМ ответом, и приём обязан это
+// заметить.
+//
+// Условие про свой ответ (submission_id = $2) обязательно: приём идемпотентен по
+// submission_id (ретрай после сетевого сбоя шлёт тот же), и без него повторная
+// отправка отвергала бы собственные, уже заявленные файлы.
+// Размер здесь НЕ трогается: он записан при выдаче слота (и тем же числом
+// подписан), а Verify перед приёмом уже сверил его с настоящим размером объекта в
+// хранилище. Переписать проверенное значение на присланное значило бы вернуть
+// клиенту ровно то доверие, ради отсутствия которого вся проверка и сделана.
+func (q *Queries) ClaimSubmissionFile(ctx context.Context, arg ClaimSubmissionFileParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimSubmissionFile,
+		arg.ID,
+		arg.SubmissionID,
+		arg.FormID,
+		arg.BlockID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const confirmTOTP = `-- name: ConfirmTOTP :exec
 UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1
 `
@@ -681,6 +719,18 @@ func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteOrphanSubmissionFiles = `-- name: DeleteOrphanSubmissionFiles :exec
+DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL
+`
+
+// То же для чистки сирот, но только НЕЗАЯВЛЕННЫХ. Условие страхует окно между
+// листингом сирот и их удалением: заявленную за это время строку чистка обязана
+// оставить, иначе ответ потеряет ссылку на свой файл.
+func (q *Queries) DeleteOrphanSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteOrphanSubmissionFiles, dollar_1)
+	return err
+}
+
 const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
 DELETE FROM invitations
 WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL
@@ -746,6 +796,17 @@ func (q *Queries) DeleteSubmission(ctx context.Context, arg DeleteSubmissionPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteSubmissionFiles = `-- name: DeleteSubmissionFiles :exec
+DELETE FROM submission_files WHERE id = ANY($1::uuid[])
+`
+
+// Снятие строк по id. Зовётся ПОСЛЕ удаления объектов: строка уносит с собой
+// ключ, и объект, переживший её, найти уже нечем.
+func (q *Queries) DeleteSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSubmissionFiles, dollar_1)
+	return err
 }
 
 const deleteTOTP = `-- name: DeleteTOTP :exec
@@ -1025,7 +1086,9 @@ SELECT p.code AS plan_code,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
        (SELECT count(*) FROM workspace_members mm
           JOIN users mu ON mu.id = mm.user_id AND mu.deleted_at IS NULL
-         WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count
+         WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count,
+       (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
+         WHERE f.workspace_id = o.workspace_id)::bigint AS storage_used
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -1047,6 +1110,7 @@ type GetEntitlementsForUserRow struct {
 	Limits          []byte
 	SubmissionsUsed int64
 	MembersCount    int64
+	StorageUsed     int64
 }
 
 // То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
@@ -1068,6 +1132,7 @@ func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlement
 		&i.Limits,
 		&i.SubmissionsUsed,
 		&i.MembersCount,
+		&i.StorageUsed,
 	)
 	return i, err
 }
@@ -1114,6 +1179,57 @@ func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitle
 		&i.Limits,
 		&i.SubmissionsUsed,
 		&i.MembersCount,
+	)
+	return i, err
+}
+
+const getEntitlementsWithStorage = `-- name: GetEntitlementsWithStorage :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
+         WHERE f.workspace_id = o.workspace_id)::bigint AS storage_used
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
+`
+
+type GetEntitlementsWithStorageParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsWithStorageRow struct {
+	PlanCode        string
+	PlanTitle       string
+	Limits          []byte
+	SubmissionsUsed int64
+	StorageUsed     int64
+}
+
+// То же состояние плюс расход хранилища — для гейта файлов (фаза 24). Отдельным
+// запросом по тому же доводу, что и счётчик участников: сумма по submission_files
+// нужна одной операции (выдаче подписи на загрузку) и не должна ложиться на приём
+// ответа.
+//
+// Считаются ВСЕ строки, включая незаявленные. Место занято с момента выдачи слота:
+// байты уже лежат в бакете и уже стоят денег, а «не состоится» разрешает чистка
+// сирот — она вернёт место в течение суток. Считать только заявленные значило бы
+// не ограничивать того, кто грузит и не отправляет, — то есть ровно того, от кого
+// квота и защищает.
+func (q *Queries) GetEntitlementsWithStorage(ctx context.Context, arg GetEntitlementsWithStorageParams) (GetEntitlementsWithStorageRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsWithStorage, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsWithStorageRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+		&i.StorageUsed,
 	)
 	return i, err
 }
@@ -1326,6 +1442,44 @@ func (q *Queries) GetMemberRole(ctx context.Context, arg GetMemberRoleParams) (s
 	return role, err
 }
 
+const getPendingSubmissionFile = `-- name: GetPendingSubmissionFile :one
+SELECT id, workspace_id, form_id, block_id, object_key, original_name, size_bytes, content_type, created_at
+FROM submission_files
+WHERE id = $1 AND claimed_at IS NULL
+`
+
+type GetPendingSubmissionFileRow struct {
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	FormID       uuid.UUID
+	BlockID      string
+	ObjectKey    string
+	OriginalName string
+	SizeBytes    int64
+	ContentType  string
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Незаявленная загрузка по id — для сверки при приёме ответа. Условие
+// claimed_at IS NULL — часть ЗАПРОСА, а не проверка после: заявить дважды один
+// файл нельзя, и решать это должна база, а не окно между чтением и записью.
+func (q *Queries) GetPendingSubmissionFile(ctx context.Context, id uuid.UUID) (GetPendingSubmissionFileRow, error) {
+	row := q.db.QueryRow(ctx, getPendingSubmissionFile, id)
+	var i GetPendingSubmissionFileRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FormID,
+		&i.BlockID,
+		&i.ObjectKey,
+		&i.OriginalName,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getPersonalWorkspace = `-- name: GetPersonalWorkspace :one
 
 SELECT id
@@ -1437,6 +1591,83 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+	)
+	return i, err
+}
+
+const getSubmissionFile = `-- name: GetSubmissionFile :one
+SELECT id, workspace_id, form_id, submission_id, object_key, original_name, content_type
+FROM submission_files
+WHERE id = $1 AND claimed_at IS NOT NULL
+`
+
+type GetSubmissionFileRow struct {
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	FormID       uuid.UUID
+	SubmissionID pgtype.UUID
+	ObjectKey    string
+	OriginalName string
+	ContentType  string
+}
+
+// Один файл для скачивания автором. Членство спрашивает сервис (файл живёт в
+// воркспейсе формы), поэтому здесь — только адрес объекта и его имя.
+func (q *Queries) GetSubmissionFile(ctx context.Context, id uuid.UUID) (GetSubmissionFileRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionFile, id)
+	var i GetSubmissionFileRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FormID,
+		&i.SubmissionID,
+		&i.ObjectKey,
+		&i.OriginalName,
+		&i.ContentType,
+	)
+	return i, err
+}
+
+const getSubmissionFileForAnswer = `-- name: GetSubmissionFileForAnswer :one
+SELECT id, workspace_id, form_id, block_id, object_key, original_name, size_bytes, content_type, created_at
+FROM submission_files
+WHERE id = $1 AND (claimed_at IS NULL OR submission_id = $2)
+`
+
+type GetSubmissionFileForAnswerParams struct {
+	ID           uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+type GetSubmissionFileForAnswerRow struct {
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	FormID       uuid.UUID
+	BlockID      string
+	ObjectKey    string
+	OriginalName string
+	SizeBytes    int64
+	ContentType  string
+	CreatedAt    pgtype.Timestamptz
+}
+
+// Загрузка для СВЕРКИ при приёме ответа: либо ещё не заявленная, либо заявленная
+// ЭТИМ же ответом. Второй случай — не поблажка, а идемпотентность: приём повторяют
+// тем же submission_id после обрыва сети, и на повторе файлы уже заявлены. Без него
+// каждый ретрай отправки с файлом отвечал бы 422 на уже принятом ответе.
+func (q *Queries) GetSubmissionFileForAnswer(ctx context.Context, arg GetSubmissionFileForAnswerParams) (GetSubmissionFileForAnswerRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionFileForAnswer, arg.ID, arg.SubmissionID)
+	var i GetSubmissionFileForAnswerRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.FormID,
+		&i.BlockID,
+		&i.ObjectKey,
+		&i.OriginalName,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1706,6 +1937,119 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 	return result.RowsAffected(), nil
 }
 
+const insertSubmissionFile = `-- name: InsertSubmissionFile :exec
+
+INSERT INTO submission_files (
+    id, workspace_id, form_id, block_id, object_key, original_name, size_bytes, content_type
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertSubmissionFileParams struct {
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	FormID       uuid.UUID
+	BlockID      string
+	ObjectKey    string
+	OriginalName string
+	SizeBytes    int64
+	ContentType  string
+}
+
+// Запросы модуля answerfiles. Схема — migrations/0027_submission_files.
+// Генерация: `make sqlc`.
+// Слот загрузки: строка «ожидает». submission_id и claimed_at пусты до приёма
+// ответа — обе половины заявления появляются вместе (CHECK в 0027).
+func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmissionFileParams) error {
+	_, err := q.db.Exec(ctx, insertSubmissionFile,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.FormID,
+		arg.BlockID,
+		arg.ObjectKey,
+		arg.OriginalName,
+		arg.SizeBytes,
+		arg.ContentType,
+	)
+	return err
+}
+
+const listFormFileKeys = `-- name: ListFormFileKeys :many
+SELECT id, object_key
+FROM submission_files
+WHERE form_id = $1
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListFormFileKeysParams struct {
+	FormID uuid.UUID
+	Limit  int32
+}
+
+type ListFormFileKeysRow struct {
+	ID        uuid.UUID
+	ObjectKey string
+}
+
+// ВСЕ файлы формы (и заявленные, и нет) с ключами — для сноса объектов при удалении
+// самой формы. Порция ограничена: у формы их может быть сколько угодно, а удаление
+// ходит в хранилище по объекту.
+func (q *Queries) ListFormFileKeys(ctx context.Context, arg ListFormFileKeysParams) ([]ListFormFileKeysRow, error) {
+	rows, err := q.db.Query(ctx, listFormFileKeys, arg.FormID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormFileKeysRow
+	for rows.Next() {
+		var i ListFormFileKeysRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFormFiles = `-- name: ListFormFiles :many
+SELECT id, original_name, size_bytes
+FROM submission_files
+WHERE form_id = $1 AND claimed_at IS NOT NULL
+`
+
+type ListFormFilesRow struct {
+	ID           uuid.UUID
+	OriginalName string
+	SizeBytes    int64
+}
+
+// Все заявленные файлы формы — выгрузке: в CSV автор видит имя, а не id. Одним
+// запросом на форму, а не по ответу: строчный запрос дал бы десять тысяч поездок
+// на форму с десятью тысячами ответов. Объём результата ограничен квотой
+// хранилища самого пространства.
+func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFormFilesRow, error) {
+	rows, err := q.db.Query(ctx, listFormFiles, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormFilesRow
+	for rows.Next() {
+		var i ListFormFilesRow
+		if err := rows.Scan(&i.ID, &i.OriginalName, &i.SizeBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormNames = `-- name: ListFormNames :many
 SELECT name, title FROM forms WHERE workspace_id = $1
 `
@@ -1728,6 +2072,46 @@ func (q *Queries) ListFormNames(ctx context.Context, workspaceID uuid.UUID) ([]L
 	for rows.Next() {
 		var i ListFormNamesRow
 		if err := rows.Scan(&i.Name, &i.Title); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFormSubmissionFiles = `-- name: ListFormSubmissionFiles :many
+SELECT id, object_key
+FROM submission_files
+WHERE submission_id = $1 AND form_id = $2
+`
+
+type ListFormSubmissionFilesParams struct {
+	SubmissionID pgtype.UUID
+	FormID       uuid.UUID
+}
+
+type ListFormSubmissionFilesRow struct {
+	ID        uuid.UUID
+	ObjectKey string
+}
+
+// Файлы одного ответа В ПРЕДЕЛАХ ФОРМЫ — для удаления. Форма в условии
+// обязательна: право на удаление проверяется по форме из адреса, а id ответа рядом
+// с ним ничем не связан с этой формой. Без этого условия член одного пространства
+// сносил бы файлы чужого, просто подставив чужой submission_id.
+func (q *Queries) ListFormSubmissionFiles(ctx context.Context, arg ListFormSubmissionFilesParams) ([]ListFormSubmissionFilesRow, error) {
+	rows, err := q.db.Query(ctx, listFormSubmissionFiles, arg.SubmissionID, arg.FormID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormSubmissionFilesRow
+	for rows.Next() {
+		var i ListFormSubmissionFilesRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -1947,6 +2331,46 @@ func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListI
 	return items, nil
 }
 
+const listOrphanSubmissionFiles = `-- name: ListOrphanSubmissionFiles :many
+SELECT id, object_key
+FROM submission_files
+WHERE claimed_at IS NULL AND created_at < $1
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListOrphanSubmissionFilesParams struct {
+	CreatedAt pgtype.Timestamptz
+	Limit     int32
+}
+
+type ListOrphanSubmissionFilesRow struct {
+	ID        uuid.UUID
+	ObjectKey string
+}
+
+// Сироты: слот выдан, ответ не пришёл. Порция ограничена — чистка ходит по
+// расписанию и не должна выгребать таблицу целиком одним запросом.
+func (q *Queries) ListOrphanSubmissionFiles(ctx context.Context, arg ListOrphanSubmissionFilesParams) ([]ListOrphanSubmissionFilesRow, error) {
+	rows, err := q.db.Query(ctx, listOrphanSubmissionFiles, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrphanSubmissionFilesRow
+	for rows.Next() {
+		var i ListOrphanSubmissionFilesRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOwnedTeamsWithMembers = `-- name: ListOwnedTeamsWithMembers :many
 SELECT w.name
 FROM workspaces w
@@ -2056,6 +2480,52 @@ func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPen
 			&i.Channel,
 			&i.Payload,
 			&i.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSubmissionFiles = `-- name: ListSubmissionFiles :many
+SELECT id, submission_id, block_id, object_key, original_name, size_bytes, content_type
+FROM submission_files
+WHERE submission_id = ANY($1::uuid[])
+ORDER BY created_at
+`
+
+type ListSubmissionFilesRow struct {
+	ID           uuid.UUID
+	SubmissionID pgtype.UUID
+	BlockID      string
+	ObjectKey    string
+	OriginalName string
+	SizeBytes    int64
+	ContentType  string
+}
+
+// Файлы ответа — автору (имя для таблицы, ключ для выдачи) и удалению.
+func (q *Queries) ListSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID) ([]ListSubmissionFilesRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionFiles, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionFilesRow
+	for rows.Next() {
+		var i ListSubmissionFilesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SubmissionID,
+			&i.BlockID,
+			&i.ObjectKey,
+			&i.OriginalName,
+			&i.SizeBytes,
+			&i.ContentType,
 		); err != nil {
 			return nil, err
 		}

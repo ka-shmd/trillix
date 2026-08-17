@@ -519,6 +519,14 @@ function visibleOptions(
 // выбор, иначе условие «выбрал X» срабатывало бы от значения, которого не показывали.
 function decodeAnswer(b: Block, raw: Answer | undefined, opts: Set<string> | null): Decided {
   if (raw === undefined) return EMPTY
+  // Файл: значение — массив id загрузок, разбирается как список. Без этой ветки
+  // правило «если файл приложен» было бы ИНЕРТНЫМ — строковая ветка ниже отвергает
+  // массив, ответ выглядит пустым, и условие не срабатывает никогда, молча.
+  // Опций у файла нет, поэтому фильтр скрытых вариантов к нему не применяется.
+  // Зеркалит ветку BlockFile в decodeAnswer (internal/domain/logic.go).
+  if (b.type === 'file') {
+    return Array.isArray(raw) ? { text: '', list: [...raw] } : EMPTY
+  }
   if (isMultiChoiceType(b.type)) {
     if (!Array.isArray(raw)) return EMPTY
     return { text: '', list: opts === null ? [...raw] : raw.filter((id) => opts.has(id)) }

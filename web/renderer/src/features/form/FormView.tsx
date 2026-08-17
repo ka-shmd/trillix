@@ -1,16 +1,19 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 
 import { DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import {
-  groupBlocks,
-  groupMeta,
-  packGroupRows,
-  packRows,
-  splitFormTitle,
-} from '@fields/groups'
+import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
 import { customStyleSheet } from '@fields/customCss'
+import { UploaderProvider } from '@fields/fileUpload'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { MentionContext, mentionResolver } from '@fields/mention'
@@ -30,6 +33,7 @@ import {
 } from './answers'
 import { firstErrorPage, firstQuestionIndex } from './pages'
 import { uuidv7 } from './submissionId'
+import { makeUploader } from './uploads'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
 import { createVisitTracker, type VisitTracker } from './visits'
@@ -111,10 +115,14 @@ export function FormView({
   // здесь только источник правды о том, какой блок вообще можно заполнить: это
   // опубликованная схема, по которой респондент сейчас отвечает.
   const [answers, dispatch] = useReducer(answersReducer, null, () =>
-    applyPrefill(loadAnswers(slug, form.version), readPrefill(window.location.search), (blockId) => {
-      const block = form.schema.blocks.find((b) => b.id === blockId)
-      return block !== undefined && isAnswerableType(block.type) && block.type !== 'multi_choice'
-    }),
+    applyPrefill(
+      loadAnswers(slug, form.version),
+      readPrefill(window.location.search),
+      (blockId) => {
+        const block = form.schema.blocks.find((b) => b.id === blockId)
+        return block !== undefined && isAnswerableType(block.type) && block.type !== 'multi_choice'
+      },
+    ),
   )
   // ПЛАН ФОРМЫ (фаза 21) — что видно при текущих ответах: страницы, видимые блоки,
   // фактическая обязательность. Форма без правил даёт ровно то же, что splitPages до
@@ -130,6 +138,13 @@ export function FormView({
   // каждое нажатие. Живость подстановки этим и держится: свежий резолвер на каждый
   // введённый символ.
   const mentions = mentionResolver(blocks, answers, plan)
+  // Загрузчик файлов: в предпросмотре его НЕТ — поле рисуется целиком, но байтов
+  // не принимает. Иначе автор, разглядывая свою форму, засорял бы бакет
+  // загрузками, которые никогда не станут ответом.
+  const uploader = useMemo(
+    () => (preview ? null : makeUploader(slug, form.token)),
+    [preview, slug, form.token],
+  )
   const pages = plan.pages
   const lastPage = pages.length - 1
   const multi = pages.length > 1
@@ -377,7 +392,8 @@ export function FormView({
   const onBlur = (blockId: string) => {
     const block = blocks.find((b) => b.id === blockId)
 
-    if (block) setBlockError(blockId, validateBlock(block, answers[blockId], plan.required.has(blockId)))
+    if (block)
+      setBlockError(blockId, validateBlock(block, answers[blockId], plan.required.has(blockId)))
   }
 
   // «Далее» проверяет ТОЛЬКО текущую страницу: пугать красным вопросы, до которых
@@ -516,142 +532,149 @@ export function FormView({
   return (
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
-    <MentionContext.Provider value={mentions}>
-      {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
+    <UploaderProvider value={uploader}>
+      <MentionContext.Provider value={mentions}>
+        {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
           ПОСЛЕ наших правил: в каскаде выигрывает последний при равной специфичности,
           поэтому автор перебивает вид, не трогая fields.css. Следом идёт сторож
           текста согласия (customCss.ts) — порог, а не стена, и это записано там же. */}
-      {authorStyle}
-      <CoverBand cover={cover} />
-      <main className={pageClass(cover)}>
-        {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}
-        {/* Заголовок прячет настройка вставки: над блоком на чужой странице обычно
+        {authorStyle}
+        <CoverBand cover={cover} />
+        <main className={pageClass(cover)}>
+          {chrome && <LogoMark logo={form.schema.logo} over={Boolean(cover)} />}
+          {/* Заголовок прячет настройка вставки: над блоком на чужой странице обычно
             уже стоит свой заголовок, и второй читается как дубль. Прячется только
             показ — в документе формы заголовок остаётся, поэтому og-мета, выгрузка и
             сама форма по прямой ссылке не меняются. */}
-        {chrome &&
-          !hideTitle &&
-          (formTitle ? (
-            <BlockField block={formTitle} />
-          ) : (
-            form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
-          ))}
-        <div
-          className="rf-form"
-          ref={pageRef}
-          tabIndex={multi ? -1 : undefined}
-          aria-label={multi ? `Шаг ${page + 1} из ${pages.length}` : undefined}
-        >
-          {packRows(groupBlocks(pageBlocks)).map((row) => {
-            // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
-            // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
-            // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
-            // спека §5); обёртка ряда — только у ряда из двоих.
-            const renderGroup = (group: (typeof row)[number][number]) => (
-              <div key={group.id} className="rf-group">
-                {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
+          {chrome &&
+            !hideTitle &&
+            (formTitle ? (
+              <BlockField block={formTitle} />
+            ) : (
+              form.title.trim() && <h1 className="rf-title">{form.title.trim()}</h1>
+            ))}
+          <div
+            className="rf-form"
+            ref={pageRef}
+            tabIndex={multi ? -1 : undefined}
+            aria-label={multi ? `Шаг ${page + 1} из ${pages.length}` : undefined}
+          >
+            {packRows(groupBlocks(pageBlocks)).map((row) => {
+              // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
+              // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
+              // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
+              // спека §5); обёртка ряда — только у ряда из двоих.
+              const renderGroup = (group: (typeof row)[number][number]) => (
+                <div key={group.id} className="rf-group">
+                  {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
                   бок той же обёрткой .rf-row, что и два вопроса. Ряд из одного
                   остаётся прямым ребёнком .rf-group. */}
-                {packGroupRows(group.blocks).map((innerRow) => {
-                  const render = (block: (typeof innerRow)[number][number]) => (
-                    // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
-                    <FocusReporter
-                      key={block.id}
-                      index={blocks.indexOf(block)}
-                      onReach={markFurthest}
-                    >
-                      <BlockField
-                        // Скрытые условием варианты в список не попадают (фаза 21).
-                        block={withVisibleOptions(block, plan)}
-                        captionText={groups.get(block.groupId)?.caption}
-                        captionRequired={groups.get(block.groupId)?.required}
-                        value={answers[block.id]}
-                        onChange={(value: Answer) => onChange(block.id, value)}
-                        onBlur={() => onBlur(block.id)}
-                        error={errors[block.id]}
-                        disabled={locked}
-                      />
-                    </FocusReporter>
-                  )
-                  return innerRow.length > 1 ? (
-                    <div key={innerRow[0]![0]!.id} className="rf-row">
-                      {innerRow.map((cell) => (
-                        <div key={cell[0]!.id} className="rf-cell">
-                          {cell.map(render)}
-                        </div>
-                      ))}
+                  {packGroupRows(group.blocks).map((innerRow) => {
+                    const render = (block: (typeof innerRow)[number][number]) => (
+                      // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
+                      <FocusReporter
+                        key={block.id}
+                        index={blocks.indexOf(block)}
+                        onReach={markFurthest}
+                      >
+                        <BlockField
+                          // Скрытые условием варианты в список не попадают (фаза 21).
+                          block={withVisibleOptions(block, plan)}
+                          captionText={groups.get(block.groupId)?.caption}
+                          captionRequired={groups.get(block.groupId)?.required}
+                          value={answers[block.id]}
+                          onChange={(value: Answer) => onChange(block.id, value)}
+                          onBlur={() => onBlur(block.id)}
+                          error={errors[block.id]}
+                          disabled={locked}
+                        />
+                      </FocusReporter>
+                    )
+                    return innerRow.length > 1 ? (
+                      <div key={innerRow[0]![0]!.id} className="rf-row">
+                        {innerRow.map((cell) => (
+                          <div key={cell[0]!.id} className="rf-cell">
+                            {cell.map(render)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      render(innerRow[0]![0]!)
+                    )
+                  })}
+                </div>
+              )
+              // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
+              // справа помещается несколько коротких. Слева стопки не бывает — там всегда
+              // тот, кто открыл ряд.
+              const first = row[0]?.[0]
+              if (!first) return null
+              return row.length > 1 ? (
+                <div key={first.id} className="rf-row">
+                  {row.map((cell) => (
+                    <div key={cell[0]!.id} className="rf-cell">
+                      {cell.map(renderGroup)}
                     </div>
-                  ) : (
-                    render(innerRow[0]![0]!)
-                  )
-                })}
-              </div>
-            )
-            // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
-            // справа помещается несколько коротких. Слева стопки не бывает — там всегда
-            // тот, кто открыл ряд.
-            const first = row[0]?.[0]
-            if (!first) return null
-            return row.length > 1 ? (
-              <div key={first.id} className="rf-row">
-                {row.map((cell) => (
-                  <div key={cell[0]!.id} className="rf-cell">
-                    {cell.map(renderGroup)}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              renderGroup(first)
-            )
-          })}
-        </div>
-        {/* Отправка — только на последней странице; на остальных её место занимает
+                  ))}
+                </div>
+              ) : (
+                renderGroup(first)
+              )
+            })}
+          </div>
+          {/* Отправка — только на последней странице; на остальных её место занимает
             «Далее». Иначе форма собирала бы неполные ответы у тех, кто дошёл до
             середины: кнопка отправки посреди шагов читается как «готово». */}
-        <div className="rf-nav">
-          {page > 0 && (
-            <button className="rf-back" type="button" onClick={onBack} disabled={locked}>
-              Назад
-            </button>
-          )}
-          {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
+          <div className="rf-nav">
+            {page > 0 && (
+              <button className="rf-back" type="button" onClick={onBack} disabled={locked}>
+                Назад
+              </button>
+            )}
+            {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
               отправить нельзя. Кнопки нет вовсе, а не disabled — отключённая кнопка
               обещает, что вот-вот станет доступной. Сервер это же состояние проверяет
               сам (NormalizeAnswers): спрятанная разметкой кнопка не защищает от curl. */}
-          {plan.blocked && page === lastPage ? null : page < lastPage ? (
-            <button className="rf-submit rf-next" type="button" onClick={onNext} disabled={locked}>
-              Далее
-            </button>
-          ) : (
-            <button
-              className="rf-submit"
-              type="button"
-              onClick={() => void onSubmit()}
-              disabled={phase === 'submitting'}
-            >
-              {phase === 'submitting' ? 'Отправка…' : submitLabel}
-            </button>
-          )}
-        </div>
-        {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
+            {plan.blocked && page === lastPage ? null : page < lastPage ? (
+              <button
+                className="rf-submit rf-next"
+                type="button"
+                onClick={onNext}
+                disabled={locked}
+              >
+                Далее
+              </button>
+            ) : (
+              <button
+                className="rf-submit"
+                type="button"
+                onClick={() => void onSubmit()}
+                disabled={phase === 'submitting'}
+              >
+                {phase === 'submitting' ? 'Отправка…' : submitLabel}
+              </button>
+            )}
+          </div>
+          {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Клик по пройденной линии возвращает на тот шаг: то же, что
             «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
             «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
-        <StepBar pages={pages.length} page={page} onGo={onBackTo} />
-        {attempted && hasFieldErrors && (
-          <p className="form-note form-note-error" role="alert">
-            Проверьте выделенные поля.
-          </p>
-        )}
-        {notice && !hasFieldErrors && (
-          <p className="form-note form-note-error" role="alert">
-            {notice}
-          </p>
-        )}
-        {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
+          <StepBar pages={pages.length} page={page} onGo={onBackTo} />
+          {attempted && hasFieldErrors && (
+            <p className="form-note form-note-error" role="alert">
+              Проверьте выделенные поля.
+            </p>
+          )}
+          {notice && !hasFieldErrors && (
+            <p className="form-note form-note-error" role="alert">
+              {notice}
+            </p>
+          )}
+          {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
             а не про форму, и лезть выше содержимого автора ему незачем. */}
-        {form.showBadge && <Badge />}
-      </main>
-    </MentionContext.Provider>
+          {form.showBadge && <Badge />}
+        </main>
+      </MentionContext.Provider>
+    </UploaderProvider>
   )
 }

@@ -37,6 +37,8 @@ func TestValidateSchema_Valid(t *testing.T) {
 		"оба поля экрана заданы":               `{"blocks":[],"thankYouText":"Спасибо!","redirectUrl":"https://example.com"}`,
 		"placeholder у текстового поля":        `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"placeholder":"Например, Иван"}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","groupId":"g1","type":"single_choice","settings":{}}]}`,
+		"файл без настроек — дефолты":          `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{}}]}`,
+		"файл с настройками":                   `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{"maxFiles":3,"maxFileSize":5,"accept":["document","table"]}}]}`,
 		"пустая подпись — валидный черновик":   `{"blocks":[{"id":"b","groupId":"g1","type":"title","text":[]}]}`,
 		"settings опущен":                      `{"blocks":[{"id":"b","groupId":"g1","type":"short_text"}]}`,
 		// Имя вопроса (фаза 16, этап 16.4) — необязательное переопределение у отвечаемого.
@@ -192,6 +194,15 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"column выше потолка":          `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":` + strconv.Itoa(MaxColumns+1) + `}}]}`,
 		"column отрицательный":         `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":-1}}]}`,
 		"column варианта выше потолка": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","column":` + strconv.Itoa(MaxColumns+1) + `}]}}]}`,
+		// Фаза 24: настройки файла. Потолки — предел АВТОРА: подпись загрузки сверх них
+		// не выдаётся, поэтому настройка, которую нельзя исполнить, обязана краснеть в
+		// редакторе, а не тихо не работать у респондента.
+		"maxFiles выше потолка":         `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"file","settings":{"maxFiles":` + strconv.Itoa(MaxFilesUpperBound+1) + `}}]}`,
+		"maxFiles отрицательный":        `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"file","settings":{"maxFiles":-1}}]}`,
+		"maxFileSize выше потолка":      `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"file","settings":{"maxFileSize":` + strconv.Itoa(MaxFileSizeUpperBoundMiB+1) + `}}]}`,
+		"неизвестное семейство":         `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"file","settings":{"accept":["binary"]}}]}`,
+		"повтор семейства":              `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"file","settings":{"accept":["image","image"]}}]}`,
+		"настройки файла на чужом типе": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"maxFiles":2}}]}`,
 		// Фаза 15: инварианты заголовка формы (спека §3.2).
 		"два form_title": `{"schemaVersion":1,"blocks":[
 			{"id":"f1","groupId":"g1","type":"form_title","text":[{"t":"А"}]},

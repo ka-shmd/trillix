@@ -257,6 +257,15 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		}
 		a.answered++
 		a.counts[v]++
+	case typ == BlockFile:
+		// Файлы: агрегировать нечего (SummaryFill), но факт заполнения обязан
+		// считаться — а значение приходит массивом, и общая ветка внизу, которая
+		// ждёт строку, молча дала бы «заполнили 0».
+		var ids []string
+		if json.Unmarshal(raw, &ids) != nil || len(ids) == 0 {
+			return
+		}
+		a.answered++
 	case typ == BlockNumber:
 		v, ok := decodeString(raw)
 		if !ok {

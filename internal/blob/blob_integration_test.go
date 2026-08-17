@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
@@ -101,4 +103,133 @@ func startMinIO(t *testing.T, ctx context.Context) (endpoint string, stop func()
 		t.Fatalf("minio port: %v", err)
 	}
 	return fmt.Sprintf("http://%s:%s", host, port.Port()), stop
+}
+
+// Presigned-адреса против настоящего MinIO. Проверяется не «URL собрался», а два
+// свойства, ради которых поток файлов в ответах вообще устроен так (спека
+// design/answer-files.md §3): подписанный размер РЕАЛЬНО не даёт положить больше,
+// а выдача умеет переопределить заголовки ответа на вложение.
+func TestClient_Presign(t *testing.T) {
+	ctx := context.Background()
+	endpoint, stop := startMinIO(t, ctx)
+	defer stop()
+
+	c := blob.New(blob.Config{
+		Endpoint:  endpoint,
+		Region:    "us-east-1",
+		AccessKey: "minioadmin",
+		SecretKey: "minioadmin",
+		PathStyle: true,
+	})
+
+	const bucket = "app-files"
+	if err := c.CreateBucket(ctx, bucket); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+
+	const key = "answers/22222222-2222-7222-8222-222222222222/report.pdf"
+	body := []byte("%PDF-1.7 fake document bytes")
+	opt := blob.PutOptions{
+		ContentType:   "application/pdf",
+		ContentLength: int64(len(body)),
+		Expires:       5 * time.Minute,
+	}
+
+	putURL, err := c.PresignPut(bucket, key, opt, time.Now())
+	if err != nil {
+		t.Fatalf("presign put: %v", err)
+	}
+
+	// Тело ровно того размера, что подписан, — загрузка проходит.
+	if code := doPut(t, putURL, body, "application/pdf"); code != http.StatusOK {
+		t.Fatalf("presigned put: status %d, want 200", code)
+	}
+
+	// Тот же адрес, но байт больше: хранилище обязано отказать САМО — иначе
+	// потолок размера держался бы только нашей проверкой, которой у владельца
+	// адреса нет.
+	overURL, err := c.PresignPut(bucket, key, opt, time.Now())
+	if err != nil {
+		t.Fatalf("presign put (over): %v", err)
+	}
+	if code := doPut(t, overURL, append(body, '!'), "application/pdf"); code < 400 {
+		t.Fatalf("presigned put over signed length: status %d, want 4xx", code)
+	}
+
+	// Настоящий размер знает только хранилище: байты клал не Go.
+	info, err := c.HeadObject(ctx, bucket, key)
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	if info.Size != int64(len(body)) {
+		t.Fatalf("head size = %d, want %d", info.Size, len(body))
+	}
+	if info.ContentType != "application/pdf" {
+		t.Fatalf("head content-type = %q, want application/pdf", info.ContentType)
+	}
+
+	// Выдача: тип и расположение переопределяются подписью, а не заголовками
+	// объекта, — пользовательский файл обязан скачиваться вложением.
+	getURL, err := c.PresignGet(bucket, key, blob.GetOptions{
+		Expires:             time.Minute,
+		ResponseContentType: "application/octet-stream",
+		ResponseDisposition: `attachment; filename="report.pdf"`,
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("presign get: %v", err)
+	}
+	resp, err := http.Get(getURL) //nolint:gosec,noctx // адрес построен тестом
+	if err != nil {
+		t.Fatalf("presigned get: %v", err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("presigned get: status %d, body %s", resp.StatusCode, got)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("presigned get body = %q, want %q", got, body)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); cd != `attachment; filename="report.pdf"` {
+		t.Fatalf("content-disposition = %q, want attachment", cd)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("content-type = %q, want application/octet-stream", ct)
+	}
+
+	// Просроченная подпись не работает: срок — часть подписи, а не наша проверка.
+	expired, err := c.PresignGet(bucket, key, blob.GetOptions{Expires: time.Minute}, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("presign get (expired): %v", err)
+	}
+	resp, err = http.Get(expired) //nolint:gosec,noctx // адрес построен тестом
+	if err != nil {
+		t.Fatalf("expired get: %v", err)
+	}
+	drainResp(resp)
+	if resp.StatusCode < 400 {
+		t.Fatalf("expired presigned get: status %d, want 4xx", resp.StatusCode)
+	}
+}
+
+// doPut шлёт тело по presigned-адресу и возвращает статус.
+func doPut(t *testing.T, url string, body []byte, contentType string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body)) //nolint:noctx // тест
+	if err != nil {
+		t.Fatalf("build put: %v", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.ContentLength = int64(len(body))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	drainResp(resp)
+	return resp.StatusCode
+}
+
+func drainResp(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 }

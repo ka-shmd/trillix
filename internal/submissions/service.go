@@ -87,6 +87,35 @@ type Plans interface {
 	PeriodStart() time.Time
 }
 
+// AnswerFiles — коллаборатор из модуля answerfiles: файлы, приложенные к ответу
+// (фаза 24). Реализация — *answerfiles.Service.
+//
+// Две операции, и порядок между ними принципиален. Verify ходит в хранилище и
+// потому зовётся ДО транзакции: держать её открытой на время HEAD к S3 значит
+// отдать самый атакуемый эндпоинт во власть чужого таймаута. Claim пишет и потому
+// зовётся ВНУТРИ неё: файл, заявленный без ответа, нарушил бы внешний ключ, а
+// ответ без заявленных файлов остался бы со ссылками на строки, которые через
+// сутки унесёт чистка сирот.
+//
+// nil означает «файлов в этой сборке нет» (юнит-тесты): ответ без файлов проходит
+// прежним путём, ответ с файлами при nil-коллабораторе отвергается — молча принять
+// ссылку, которую некому проверить, нельзя.
+type AnswerFiles interface {
+	Verify(ctx context.Context, formID, submissionID uuid.UUID, byBlock map[string][]string) error
+	Claim(ctx context.Context, tx pgx.Tx, submissionID, formID uuid.UUID, byBlock map[string][]string) error
+	// RemoveBySubmission сносит объекты ответа из бакета. Зовётся ДО удаления
+	// строки ответа: каскад унёс бы вместе со строками ключи, и объекты остались
+	// бы в бакете навсегда — их не нашла бы ни чистка (она смотрит в таблицу), ни
+	// человек.
+	RemoveBySubmission(ctx context.Context, formID, submissionID uuid.UUID) error
+	// InfoBySubmissions — имена и размеры файлов перечисленных ответов: id → файл.
+	// Нужны и таблице ответов, и выгрузке — в обеих автор видит имя, а не id.
+	InfoBySubmissions(ctx context.Context, submissionIDs []uuid.UUID) (map[string]domain.AnswerFile, error)
+	// InfoByForm — то же по всей форме: выгрузка не может собирать имена по
+	// ответу, иначе получит поездку в базу на каждую строку файла.
+	InfoByForm(ctx context.Context, formID uuid.UUID) (map[string]domain.AnswerFile, error)
+}
+
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
@@ -127,6 +156,11 @@ type Page struct {
 	// Hidden — сколько скрыто квотой тарифа (0014). Кабинет показывает это числом
 	// в плашке: молча спрятать собранные человеком данные нельзя.
 	Hidden int64
+	// Files — метаданные приложенных файлов, id → имя и размер (фаза 24). Отдельной
+	// картой, а не внутри answers: в ответе лежат только id (правда о файле живёт в
+	// submission_files), и подмешивать имя в значение ответа значило бы хранить его
+	// в двух местах, из которых одно — недоверенное.
+	Files map[string]domain.AnswerFile
 }
 
 var _ Store = Repo{}
@@ -155,6 +189,11 @@ type Service struct {
 	mail   Mailer
 	plans  Plans
 	repo   Store
+	// files — файлы в ответах (фаза 24). Не в конструкторе, а отдельным сеттером
+	// (тот же приём, что WithTeams у auth): у приёма ответа уже восемь
+	// коллабораторов, и девятый позиционный аргумент — это способ однажды
+	// перепутать два соседних интерфейса местами.
+	files AnswerFiles
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
 	appBaseURL string
@@ -163,6 +202,14 @@ type Service struct {
 
 func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
 	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, plans: plans, repo: repo, appBaseURL: appBaseURL, now: time.Now}
+}
+
+// WithFiles подключает модуль файлов ответов. Без него форма с блоком file
+// отвергает ответ с файлами (см. Submit) — молча принять ссылку, которую некому
+// проверить, нельзя.
+func (s *Service) WithFiles(f AnswerFiles) *Service {
+	s.files = f
+	return s
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -211,6 +258,20 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return err
 	}
 
+	// Файлы, названные в ответе, сверяются с базой и хранилищем ДО записи: та ли
+	// форма, тот ли вопрос, лежит ли объект и совпал ли его размер с подписанным.
+	// Без этой сверки в ответе оказалась бы ссылка на чужую или несуществующую
+	// загрузку — и увидел бы это автор, а не тот, кто её подставил.
+	files := domain.FileAnswers(schema, clean)
+	if len(files) > 0 {
+		if s.files == nil {
+			return fmt.Errorf("%w: форма не принимает файлы", domain.ErrValidation)
+		}
+		if err := s.files.Verify(ctx, pf.FormID, id, files); err != nil {
+			return err
+		}
+	}
+
 	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -255,14 +316,33 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
 	var inserted bool
 
-	// Без лимита — прежний путь без блокировки: одна вставка на пуле.
-	if pf.ResponseLimit == nil {
+	switch {
+	// Без лимита и без файлов — прежний путь без блокировки: одна вставка на пуле.
+	case pf.ResponseLimit == nil && len(files) == 0:
 		n, err := s.repo.InsertSubmission(ctx, s.db, in)
 		if err != nil {
 			return err
 		}
 		inserted = n > 0
-	} else {
+
+	// Есть файлы, но нет лимита: транзакция нужна не ради счёта, а ради атомарности
+	// «ответ + заявленные файлы». Разъехавшись, эти две записи дают либо ответ со
+	// ссылками на сирот, либо файлы, привязанные к ответу, которого нет.
+	case pf.ResponseLimit == nil:
+		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+			n, err := s.repo.InsertSubmission(ctx, tx, in)
+			if err != nil {
+				return err
+			}
+			// n == 0 — идемпотентный ретрай: заявление всё равно повторяем, оно
+			// узнаёт свои же файлы (условие submission_id в запросе Claim).
+			inserted = n > 0
+			return s.files.Claim(ctx, tx, id, pf.FormID, files)
+		}); err != nil {
+			return err
+		}
+
+	default:
 		// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
 		// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
 		// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
@@ -288,6 +368,9 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 				return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 			}
 			inserted = true
+			if len(files) > 0 {
+				return s.files.Claim(ctx, tx, id, pf.FormID, files)
+			}
 			return nil
 		}); err != nil {
 			return err
@@ -389,6 +472,20 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 		page.Submissions = rows[:limit]
 		page.NextCursor = &Cursor{ID: last.ID}
 	}
+
+	// Файлы страницы — одним запросом на всю страницу, а не по ответу: тридцать
+	// строк таблицы иначе дали бы тридцать поездок в базу.
+	if s.files != nil {
+		ids := make([]uuid.UUID, 0, len(page.Submissions))
+		for _, r := range page.Submissions {
+			ids = append(ids, r.ID)
+		}
+		files, err := s.files.InfoBySubmissions(ctx, ids)
+		if err != nil {
+			return Page{}, err
+		}
+		page.Files = files
+	}
 	return page, nil
 }
 
@@ -471,6 +568,15 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	// Имена файлов — только если у формы вообще есть вопрос-файл: у остальных (а
+	// это подавляющее большинство) выгрузка не платит ни запросом, ни памятью.
+	if s.files != nil && hasFileBlock(vs) {
+		files, err := s.files.InfoByForm(ctx, formID)
+		if err != nil {
+			return err
+		}
+		builder.WithFiles(files)
+	}
 	if err := emit(builder.Header()); err != nil {
 		return err
 	}
@@ -514,6 +620,15 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
 		return err
 	}
+	// Файлы — первыми: строка ответа уносит каскадом строки загрузок, а с ними и
+	// ключи объектов. Сбой здесь ОСТАНАВЛИВАЕТ удаление: лучше отказать автору
+	// (он повторит), чем оставить в бакете чужие персональные данные, о которых
+	// больше нигде нет записи.
+	if s.files != nil {
+		if err := s.files.RemoveBySubmission(ctx, formID, submissionID); err != nil {
+			return err
+		}
+	}
 	n, err := s.repo.DeleteSubmission(ctx, s.db, submissionID, formID)
 	if err != nil {
 		return err
@@ -522,6 +637,19 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// hasFileBlock — есть ли в какой-нибудь версии формы вопрос-файл. Дешёвый обход
+// уже разобранных схем: он решает, платить ли за имена файлов вообще.
+func hasFileBlock(vs []domain.VersionedSchema) bool {
+	for _, v := range vs {
+		for i := range v.Schema.Blocks {
+			if v.Schema.Blocks[i].Type == domain.BlockFile {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func clampLimit(limit int) int {

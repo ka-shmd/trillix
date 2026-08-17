@@ -1384,3 +1384,27 @@ func TestSummary_HiddenByJump_NotAsked(t *testing.T) {
 		}
 	}
 }
+
+// РЕГРЕСС (ревью фазы 24). Ответ-файл — массив id загрузок. Пока разбор знал только
+// про multi_choice, строковая ветка отвергала массив, ответ выглядел пустым, и
+// правило «если файл приложен» не срабатывало НИКОГДА — молча, без ошибок.
+func TestLogic_FileAnswerIsVisibleToConditions(t *testing.T) {
+	blocks := []Block{
+		{ID: "cv", GroupID: "g1", Type: BlockFile},
+		{ID: "rule", GroupID: "g2", Type: BlockLogic, Logic: &Logic{
+			When: &Condition{BlockID: "cv", Op: OpAnswered},
+			Then: []LogicAction{{Kind: ActShow, Targets: []string{"note"}}},
+		}},
+		{ID: "note", GroupID: "g3", Type: BlockShortText},
+	}
+
+	withFile := PlanForm(blocks, map[string]json.RawMessage{"cv": json.RawMessage(`["u1"]`)})
+	if !withFile.Visible["note"] {
+		t.Error("условие «файл приложен» не сработало на непустом списке загрузок")
+	}
+
+	withoutFile := PlanForm(blocks, map[string]json.RawMessage{"cv": json.RawMessage(`[]`)})
+	if withoutFile.Visible["note"] {
+		t.Error("условие сработало на пустом списке файлов")
+	}
+}

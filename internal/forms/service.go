@@ -162,10 +162,29 @@ type Service struct {
 	repo   Store
 	access Access // права в пространстве: спрашиваются по действию, не по роли
 	plans  Plans  // тариф: спрашивается на публикации, не на сохранении
+	// files — файлы в ответах (фаза 24). Нужны ровно одному действию — удалению
+	// формы, — поэтому подключаются сеттером, а не шестым позиционным аргументом.
+	// nil = «модуля файлов в этой сборке нет» (юнит-тесты): удаление формы тогда
+	// работает как раньше.
+	files AnswerFiles
+}
+
+// AnswerFiles — коллаборатор из модуля answerfiles: снос файлов удаляемой формы.
+// Реализация — *answerfiles.Service; связь ставится в main (обратный импорт
+// невозможен — answerfiles уже зависит от forms).
+type AnswerFiles interface {
+	RemoveByForm(ctx context.Context, formID uuid.UUID) error
 }
 
 func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, plans Plans) *Service {
 	return &Service{db: db, tx: tx, repo: repo, access: access, plans: plans}
+}
+
+// WithFiles подключает модуль файлов ответов (тот же приём, что WithFiles у
+// submissions): без него удаление формы оставило бы её файлы в бакете навсегда.
+func (s *Service) WithFiles(f AnswerFiles) *Service {
+	s.files = f
+	return s
 }
 
 // resolveWorkspace превращает «в каком пространстве работаем» в id и проверяет
@@ -435,6 +454,15 @@ func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormDelete)
 	if err != nil {
 		return err
+	}
+	// Файлы ответов — ПЕРЕД строкой формы: каскад унесёт строки загрузок вместе с
+	// ключами объектов, и найти оставшееся в бакете будет уже нечем. Сбой
+	// останавливает удаление: лучше отказать автору (он повторит), чем оставить в
+	// хранилище чужие персональные данные без единой записи о них.
+	if s.files != nil {
+		if err := s.files.RemoveByForm(ctx, form.ID); err != nil {
+			return err
+		}
 	}
 	n, err := s.repo.DeleteForm(ctx, s.db, form.ID, form.WorkspaceID)
 	if err != nil {

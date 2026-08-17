@@ -33,6 +33,9 @@ var csvMetaHeader = []string{"ID ответа", "Отправлен", "Верс�
 type blockView struct {
 	typ     BlockType
 	options map[string]string
+	// files — та же карта, что у строителя: ячейка резолвит id в имя, а вида
+	// блока для этого достаточно (тип уже здесь).
+	files map[string]AnswerFile
 }
 
 // CSVBuilder строит заголовок и строки CSV по набору версий схемы. Собирается один
@@ -41,6 +44,18 @@ type CSVBuilder struct {
 	columns []string                     // block_id в порядке колонок
 	headers []string                     // подписи колонок (мета + вопросы)
 	byVer   map[int]map[string]blockView // версия → block_id → вид блока
+	// files — имена приложенных файлов (upload_id → файл), фаза 24. В выгрузке
+	// автору нужно ИМЯ, а не id, и уж точно не подпись хранилища: та живёт минуту
+	// и протухла бы раньше, чем он откроет скачанный файл.
+	files map[string]AnswerFile
+}
+
+// WithFiles подмешивает имена файлов. Отдельным вызовом, а не аргументом
+// конструктора: выгрузка формы без вопросов-файлов не должна платить ни запросом,
+// ни памятью — а таких форм подавляющее большинство.
+func (b *CSVBuilder) WithFiles(files map[string]AnswerFile) *CSVBuilder {
+	b.files = files
+	return b
 }
 
 // NewCSVBuilder разбирает версии в модель колонок. versions ожидаются по
@@ -96,6 +111,7 @@ func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers ma
 			row = append(row, "")
 			continue
 		}
+		view.files = b.files
 		row = append(row, formatCell(view, raw))
 	}
 	// Защита от CSV formula injection: ответы респондента недоверенны. Мета-ячейки
@@ -128,6 +144,21 @@ func formatCell(view blockView, raw json.RawMessage) string {
 			labels[i] = optionLabel(view.options, id)
 		}
 		return strings.Join(labels, "; ")
+	case BlockFile:
+		// Файлы: имена через «; », как варианты множественного выбора. Ссылку в
+		// выгрузку не кладём — короткая подпись протухнет, а вечная означала бы
+		// раздачу чужих персональных данных по ссылке из файла.
+		var ids []string
+		if json.Unmarshal(raw, &ids) != nil {
+			return ""
+		}
+		names := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if f, ok := view.files[id]; ok {
+				names = append(names, f.Name)
+			}
+		}
+		return strings.Join(names, "; ")
 	case BlockConsent:
 		// «yes»/пусто — внутренняя кодировка ответа; в выгрузке владельцу нужен
 		// человеческий текст.

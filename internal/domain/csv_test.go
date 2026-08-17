@@ -229,3 +229,31 @@ func TestCSVBuilder_UnknownOptionIDFallsBackToID(t *testing.T) {
 		t.Fatalf("неизвестная опция = %q, ожидался фолбэк «ghost»", row[3])
 	}
 }
+
+// Файлы в выгрузке: автору нужны ИМЕНА, а не id загрузок и не ссылки. Ссылку сюда
+// класть нельзя вовсе — короткая подпись протухнет к моменту открытия файла, а
+// вечная раздавала бы чужие персональные данные всякому, кто получил выгрузку.
+func TestCSV_FileNamesInsteadOfIDs(t *testing.T) {
+	versions := []VersionedSchema{vs(1, grp("Резюме", Block{ID: "cv", Type: BlockFile})...)}
+
+	b := NewCSVBuilder(versions).WithFiles(map[string]AnswerFile{
+		"u1": {Name: "резюме.pdf", Size: 100},
+		"u2": {Name: "портфолио.zip", Size: 200},
+	})
+	row := b.Row("s1", time.Unix(0, 0).UTC(), 1, map[string]json.RawMessage{
+		"cv": json.RawMessage(`["u1","u2"]`),
+	})
+	got := row[len(row)-1]
+	if got != "резюме.pdf; портфолио.zip" {
+		t.Fatalf("ячейка файлов = %q, ждали имена через «; »", got)
+	}
+
+	// Строитель без имён (форма без файлов, выгрузка не платит за запрос) не
+	// печатает id: пустая ячейка честнее, чем «018f…» в колонке «Резюме».
+	plain := NewCSVBuilder(versions).Row("s1", time.Unix(0, 0).UTC(), 1, map[string]json.RawMessage{
+		"cv": json.RawMessage(`["u1"]`),
+	})
+	if cell := plain[len(plain)-1]; cell != "" {
+		t.Fatalf("без имён ячейка = %q, ждали пустую", cell)
+	}
+}

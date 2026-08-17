@@ -13,11 +13,17 @@
 
 services:
   # MinIO — S3-совместимое хранилище медиа. Порт наружу НЕ публикуется: доступен
-  # только по внутренней docker-сети (api ходит на http://minio:9000; раздача
-  # картинок наружу — через Caddy /media).
+  # api ходит на http://minio:9000, раздача картинок наружу — через Caddy /media.
+  #
+  # Порт 9000 опубликован на 127.0.0.1 ради ФАЙЛОВ В ОТВЕТАХ (фаза 24): их браузер
+  # кладёт в хранилище напрямую по подписи, а внутреннее имя minio он не резолвит.
+  # Так prod-local повторяет прод, где хранилище арендованное и публичное. Наружу
+  # машины порт не выставлен — только на петлю.
   minio:
     image: minio/minio:RELEASE.2024-01-16T16-07-38Z
     command: server /data
+    ports:
+      - "127.0.0.1:9000:9000"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
@@ -36,11 +42,13 @@ services:
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
       S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+      S3_FILES_BUCKET: ${S3_FILES_BUCKET}
     entrypoint: >
       /bin/sh -c "
       until mc alias set local http://minio:9000 $${S3_ACCESS_KEY} $${S3_SECRET_KEY}; do sleep 1; done;
       mc mb --ignore-existing local/$${S3_MEDIA_BUCKET};
       mc anonymous set download local/$${S3_MEDIA_BUCKET};
+      mc mb --ignore-existing local/$${S3_FILES_BUCKET};
       "
     restart: "no"
 

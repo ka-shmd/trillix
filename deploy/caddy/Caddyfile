@@ -50,7 +50,7 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		Strict-Transport-Security "max-age={$HSTS_MAX_AGE}; includeSubDomains"
-		Content-Security-Policy "default-src 'self'; script-src {args[2]}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src {args[3]}; frame-ancestors {args[1]}"
+		Content-Security-Policy "default-src 'self'; script-src {args[2]}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src {args[4]}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-src {args[3]}; frame-ancestors {args[1]}"
 		-Server
 	}
 }
@@ -115,7 +115,7 @@
 	# Зато САМ кабинет фреймит рендерер — на экране «Встроить» (предпросмотр вставки):
 	# отсюда загрузчик в script-src и страница формы в frame-src, оба с путём. Это
 	# разрешение НАРУЖУ, а не внутрь: незафреймливаемость кабинета им не затрагивается.
-	import secheaders * "'none'" "'self' https://{$RENDERER_DOMAIN}/embed/" "'self' https://{$RENDERER_DOMAIN}/r/"
+	import secheaders * "'none'" "'self' https://{$RENDERER_DOMAIN}/embed/" "'self' https://{$RENDERER_DOMAIN}/r/" "'self'"
 	header * X-Frame-Options DENY
 
 	# Приватный API кабинета — тот же origin, поэтому CORS не нужен, cookie
@@ -169,8 +169,16 @@
 	# браузерах, которые смотрят на него первым.
 	@embeddable path /r/*
 	@chrome not path /r/*
-	import secheaders @embeddable "*" "'self'" "'self'"
-	import secheaders @chrome "'self'" "'self'" "'self'"
+	# connect-src у страницы формы шире на ОДИН источник — хранилище: файл в ответе
+	# респондент кладёт туда напрямую по подписи (docs/design/answer-files.md §3),
+	# и без этой строки браузер молча заблокирует PUT. Адрес берётся из той же
+	# переменной, по которой сервер подписывает адрес, — разъехавшись, они дали бы
+	# загрузку, которая падает только в проде.
+	#
+	# У остальных путей домена (и у всего кабинета) connect-src остаётся 'self':
+	# писать в хранилище незачем никому, кроме страницы формы.
+	import secheaders @embeddable "*" "'self'" "'self'" "'self' {$S3_PUBLIC_ENDPOINT}"
+	import secheaders @chrome "'self'" "'self'" "'self'" "'self'"
 	header @chrome X-Frame-Options SAMEORIGIN
 
 	# HTML-документ формы с OG-мета — из Go (краулеры читают <head> без JS).

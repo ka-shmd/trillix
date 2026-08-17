@@ -93,6 +93,27 @@ func (c *Client) GetObject(ctx context.Context, bucket, key string) (data []byte
 	return data, resp.Header.Get("Content-Type"), nil
 }
 
+// ObjectInfo — метаданные объекта без его тела (ответ HEAD).
+type ObjectInfo struct {
+	Size        int64
+	ContentType string
+}
+
+// HeadObject читает метаданные объекта. 404 → ErrNotFound. Нужен там, где о
+// содержимом бакета нельзя судить по своей записи: файл ответа кладёт в бакет
+// браузер, и единственный, кто знает его настоящий размер, — хранилище.
+func (c *Client) HeadObject(ctx context.Context, bucket, key string) (ObjectInfo, error) {
+	resp, err := c.do(ctx, http.MethodHead, bucket, key, nil, "")
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	defer drain(resp)
+	if err := classify(resp, http.MethodHead, bucket, key); err != nil {
+		return ObjectInfo{}, err
+	}
+	return ObjectInfo{Size: resp.ContentLength, ContentType: resp.Header.Get("Content-Type")}, nil
+}
+
 // DeleteObject удаляет объект. Отсутствующий ключ S3 считает успехом (204).
 func (c *Client) DeleteObject(ctx context.Context, bucket, key string) error {
 	resp, err := c.do(ctx, http.MethodDelete, bucket, key, nil, "")
