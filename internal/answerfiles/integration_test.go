@@ -74,7 +74,7 @@ func TestMain(m *testing.M) {
 // Демо фазы в виде теста: PDF доезжает до бакета, ответ его заявляет.
 func TestUpload_RoundTrip(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 
@@ -111,7 +111,7 @@ func TestUpload_RoundTrip(t *testing.T) {
 // Демо фазы: .exe отбивается ДО начала загрузки — байты в бакет не уходят вовсе.
 func TestUpload_RejectsDeniedType(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 
@@ -130,7 +130,7 @@ func TestUpload_RejectsDeniedType(t *testing.T) {
 // Файл сверх потолка блока (5 МиБ в схеме) — тоже до загрузки.
 func TestUpload_RejectsOversized(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 
@@ -147,7 +147,7 @@ func TestUpload_RejectsOversized(t *testing.T) {
 // Подпись выписана на один размер: тело длиннее хранилище не примет само.
 func TestUpload_SignedSizeHolds(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 
@@ -173,7 +173,7 @@ func TestUpload_SignedSizeHolds(t *testing.T) {
 // таблице автора оказалась бы ссылка на файл, которого он не получал.
 func TestSubmit_RejectsUnknownUpload(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 
@@ -193,7 +193,7 @@ func TestSubmit_RejectsUnknownUpload(t *testing.T) {
 // обязан заметить, что объекта нет, и отказать.
 func TestSubmit_RejectsSlotWithoutBytes(t *testing.T) {
 	resetDB(t)
-	srv := newStack(t)
+	srv, _ := newStack(t)
 	author := registerUser(t, srv, "author@example.com")
 	slug := publishFileForm(t, author, srv)
 

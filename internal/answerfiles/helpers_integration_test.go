@@ -74,7 +74,7 @@ func resetDB(t *testing.T) {
 // newStack собирает реальную вертикаль auth+forms+answerfiles+submissions поверх
 // контейнерных Postgres и MinIO. Лимитеры пермиссивные (инвариант 6: лимит ради
 // тестов не ослабляется, а подменяется реализацией).
-func newStack(t *testing.T) *httptest.Server {
+func newStack(t *testing.T) (*httptest.Server, *answerfiles.Service) {
 	t.Helper()
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
@@ -89,21 +89,25 @@ func newStack(t *testing.T) *httptest.Server {
 		answerfiles.NewBucket(blob.New(testS3), filesBucket), formsSvc, entSvc)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, ratelimit.AllowAll{}, testSecret,
 		submissions.DefaultMinFillTime, false)
+	filesH := answerfiles.NewHandler(filesSvc, authH.RequireAuth)
 
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc,
 		noopVisits{}, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://localhost:5173").
 		WithFiles(filesSvc)
 	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret,
 		submissions.DefaultMinFillTime, false)
+	subH := submissions.NewHandler(subSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
 	formsH.Routes(mux)
 	filesPublic.Routes(mux)
+	filesH.Routes(mux)
 	subPublic.Routes(mux)
+	subH.Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, filesSvc
 }
 
 // noopVisits — конверсия визита к файлам отношения не имеет, а поднимать ради неё

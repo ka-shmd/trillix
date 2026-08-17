@@ -147,6 +147,10 @@ const (
 
 	// Чистка истёкших токенов подтверждения email (живут 24 ч; тот же прогон).
 	verificationTokenCleanupTimeout = 30 * time.Second
+	// Чистка сирот-загрузок ходит и в базу, и в хранилище, поэтому времени ей
+	// нужно больше, чем чисто-табличным задачам: порция до 200 объектов сносится
+	// по одному запросу на объект.
+	orphanFileCleanupTimeout = 2 * time.Minute
 
 	// Диспетчер outbox (почтовая фаза): раз в интервал отправляет пачку готовых
 	// писем. Интервал — компромисс «сброс пароля не должен ощутимо ждать» против
@@ -347,6 +351,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// несовместимая (те раздаются анонимно).
 	filesSvc := answerfiles.NewService(pool, answerfiles.Repo{},
 		answerfiles.NewBucket(blobClient, cfg.S3FilesBucket), formsSvc, entitlementsSvc)
+	filesHandler := answerfiles.NewHandler(filesSvc, authHandler.RequireAuth)
 	uploadLimiter := ratelimit.NewTokenBucket(uploadRatePerSec, uploadBurst)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,
 		submissions.DefaultMinFillTime, cfg.TrustedProxy)
@@ -367,7 +372,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
-		filesPublic.Routes,
+		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -419,6 +424,24 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("spent invitations purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Сироты загрузок: слот выдали, ответ не пришёл (фаза 24). Интервал тот же, что
+	// у прочей уборки; порог возраста — сутки, потолок жизни токена формы.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "answer-file-orphan-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, orphanFileCleanupTimeout)
+			defer cancel()
+			n, err := filesSvc.CleanupOrphans(ctx, time.Now())
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("orphan answer files purged", slog.Int("count", n))
 			}
 			return nil
 		},

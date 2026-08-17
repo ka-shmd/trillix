@@ -103,6 +103,11 @@ type Plans interface {
 type AnswerFiles interface {
 	Verify(ctx context.Context, formID uuid.UUID, byBlock map[string][]string) error
 	Claim(ctx context.Context, tx pgx.Tx, submissionID, formID uuid.UUID, byBlock map[string][]string) error
+	// RemoveBySubmission сносит объекты ответа из бакета. Зовётся ДО удаления
+	// строки ответа: каскад унёс бы вместе со строками ключи, и объекты остались
+	// бы в бакете навсегда — их не нашла бы ни чистка (она смотрит в таблицу), ни
+	// человек.
+	RemoveBySubmission(ctx context.Context, submissionID uuid.UUID) error
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
@@ -580,6 +585,15 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID) (domain
 func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error {
 	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
 		return err
+	}
+	// Файлы — первыми: строка ответа уносит каскадом строки загрузок, а с ними и
+	// ключи объектов. Сбой здесь ОСТАНАВЛИВАЕТ удаление: лучше отказать автору
+	// (он повторит), чем оставить в бакете чужие персональные данные, о которых
+	// больше нигде нет записи.
+	if s.files != nil {
+		if err := s.files.RemoveBySubmission(ctx, submissionID); err != nil {
+			return err
+		}
 	}
 	n, err := s.repo.DeleteSubmission(ctx, s.db, submissionID, formID)
 	if err != nil {

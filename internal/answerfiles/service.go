@@ -21,6 +21,10 @@ import (
 // но черновик и несуществующая обязаны давать одинаковый 404 (инвариант 5).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// Get проверяет членство пользователя в воркспейсе формы; чужая или
+	// несуществующая → domain.ErrNotFound (анти-IDOR, приватное не раскрывается).
+	// Скачиванию нужен только факт доступа, не поля формы.
+	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
 }
 
 // Plans — единственная точка «можно ли» (ADR §10). Реализация — *entitlements.Service.
