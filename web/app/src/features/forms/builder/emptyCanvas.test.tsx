@@ -83,13 +83,30 @@ describe('пустое полотно', () => {
 
   it('приглашение называет оба пути: Enter и шаблон', async () => {
     setup([])
-    const link = await screen.findByText('Использовать шаблон')
-    expect(link.getAttribute('href')).toBe('/templates')
+    const link = (await screen.findByText('Использовать шаблон')).closest('a')
+    expect(link?.getAttribute('href')).toBe('/templates')
     expect(document.body.textContent).toContain('Нажмите')
     expect(document.body.textContent).toContain('чтобы начать')
-    // «/» и «@» ушли из подсказок в описание — обещать их полотно не перестало.
-    expect(document.body.textContent).toContain('«/»')
-    expect(document.body.textContent).toContain('«@»')
+    // «/» и «@» ушли из подсказок в описание — обещать их полотно не перестало, и
+    // названы они теми же чипами, что Enter выше (kbd, а не текст в кавычках).
+    expect([...document.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual([
+      'Enter',
+      '/',
+      '@',
+    ])
+  })
+
+  it('клик по подсказке «начать» заводит РОВНО один блок', async () => {
+    // Подсказка — своя кнопка внутри области, которая тоже слушает клик: не гаси она
+    // клик у себя, один клик рождал бы два блока.
+    const { store } = setup([])
+    const hint = await screen.findByText('чтобы начать', { exact: false })
+
+    act(() => {
+      hint.closest('button')!.click()
+    })
+
+    expect(store.getState().blocks).toHaveLength(1)
   })
 
   it('Enter на полотне заводит блок, Enter на ссылке — нет', async () => {

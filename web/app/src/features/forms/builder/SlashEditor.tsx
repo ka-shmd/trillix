@@ -22,6 +22,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Link } from '@tanstack/react-router'
+import { LayoutTemplate, SquarePen } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -1741,33 +1742,42 @@ function EmptyStarter({
     <div
       tabIndex={0}
       onKeyDown={onKeyDown}
-      // Клик по ссылке на шаблоны уводит со страницы — блок под ней заводить незачем.
+      // Обе подсказки — свои клик-цели, и клик по ним не должен считаться дважды:
+      // кнопка «начать» зовёт onStart сама, ссылка на шаблоны уводит со страницы.
       onClick={(e) => {
-        if (!(e.target as HTMLElement).closest('a')) onStart()
+        if (!(e.target as HTMLElement).closest('a,button')) onStart()
       }}
       {...rowFocus}
       // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
       // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
       className="mt-[calc(3rem*var(--rf-density)_+_1rem)] cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
     >
-      <p>
-        Нажмите <Kbd>Enter</Kbd>, чтобы начать
-      </p>
-      <p>
-        <Link
-          to="/templates"
-          className="cursor-pointer underline underline-offset-4 hover:text-foreground"
-        >
-          Использовать шаблон
-        </Link>
-      </p>
-      <p className="mt-6 max-w-prose text-sm">
-        Trillix — конструктор форм, который работает как документ. Печатайте «/», чтобы
-        вставить блок, и «@», чтобы подставить в текст ответ на другой вопрос.
+      <button type="button" onClick={() => onStart()} className={HINT_ROW}>
+        <SquarePen className="size-4 shrink-0" aria-hidden="true" />
+        <span>
+          Нажмите <Kbd>Enter</Kbd>, чтобы начать
+        </span>
+      </button>
+      <Link to="/templates" className={HINT_ROW}>
+        <LayoutTemplate className="size-4 shrink-0" aria-hidden="true" />
+        <span>Использовать шаблон</span>
+      </Link>
+      {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
+          «текст»): это не подсказка редактора, а строка о продукте, и приглушать её
+          заодно с подсказками незачем. */}
+      <p className="rf-text mt-6 max-w-prose">
+        Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
+        чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
+        вопрос.
       </p>
     </div>
   )
 }
+
+// Строка подсказки пустого полотна: глиф слева, текст справа, вся строка нажимается.
+// Подчёркивания нет намеренно (решение владельца): приглашение читается как текст
+// документа, а не как ссылка в вебе — цель называет глиф и подсветка под курсором.
+const HINT_ROW = 'flex w-fit cursor-pointer items-center gap-2 text-left hover:text-foreground'
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
