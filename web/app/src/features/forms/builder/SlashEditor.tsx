@@ -1750,7 +1750,7 @@ function EmptyStarter({
       {...rowFocus}
       // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
       // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
-      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] cursor-text text-base leading-6 text-muted-foreground/60 outline-none"
+      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex cursor-text flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <button type="button" onClick={() => onStart()} className={HINT_ROW}>
         <SquarePen className="size-4 shrink-0" aria-hidden="true" />
@@ -1776,8 +1776,13 @@ function EmptyStarter({
 
 // Строка подсказки пустого полотна: глиф слева, текст справа, вся строка нажимается.
 // Подчёркивания нет намеренно (решение владельца): приглашение читается как текст
-// документа, а не как ссылка в вебе — цель называет глиф и подсветка под курсором.
-const HINT_ROW = 'flex w-fit cursor-pointer items-center gap-2 text-left hover:text-foreground'
+// документа, а не как ссылка в вебе — цель называет глиф и серая подложка под курсором
+// (цвет текста при наведении не меняется).
+//
+// Отрицательный левый отступ равен горизонтальному padding'у: подложка выступает за край
+// колонки, а САМ ТЕКСТ остаётся на нуле — там, где появится первый блок формы.
+const HINT_ROW =
+  '-ml-2 flex w-fit cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-muted'
 
 function Kbd({ children }: { children: ReactNode }) {
   return (
