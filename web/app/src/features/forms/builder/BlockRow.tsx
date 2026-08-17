@@ -1248,7 +1248,7 @@ function OptionsInline({
   const moveOption = useBuilderStore((s) => s.moveOption)
   const placeOptionInRow = useBuilderStore((s) => s.placeOptionInRow)
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
-  const reorderOptions = useBuilderStore((s) => s.reorderOptions)
+  const moveOptionAfter = useBuilderStore((s) => s.moveOptionAfter)
   const removeOption = useBuilderStore((s) => s.removeOption)
   const duplicateOption = useBuilderStore((s) => s.duplicateOption)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
@@ -1410,7 +1410,16 @@ function OptionsInline({
         if (!optionRows) return onRowShift(side)
         const prev = options[i - 1]
         if (side === 'left') takeOptionOwnRow(block.id, optionId)
-        else if (prev) placeOptionInRow(block.id, optionId, prev.id)
+        else if (prev) {
+          // Клавиатура даёт СЛЕДУЮЩУЮ колонку ряда цели — тот же жест, что был у списка
+          // до зон: «встань справа от предыдущего». Номер считаем по раскладке БЕЗ
+          // активного (он мог стоять в этом же ряду, и тогда его колонка в счёт не идёт).
+          const rest = options.filter((o) => o.id !== optionId)
+          const row = packOptionRows(rest).find((r) =>
+            r.some((c) => c.some((o) => o.id === prev.id)),
+          )
+          placeOptionInRow(block.id, optionId, prev.id, (row?.length ?? 1) + 1, true)
+        }
         pendingFocus.current = optionId
       },
       // Alt+↑/↓ — перенос варианта; каретка едет с ним (фокус на тот же optionId).
@@ -1449,10 +1458,10 @@ function OptionsInline({
     if (over === null) return
     const cell = optCellOption(over)
     if (cell !== null) {
-      if (cell !== active) placeOptionInRow(block.id, active, cell)
+      if (cell !== active) placeOptionInRow(block.id, active, cell, 2, true)
       return
     }
-    if (over !== active) reorderOptions(block.id, active, over)
+    if (over !== active) moveOptionAfter(block.id, active, over)
   }
 
   const rows = packOptionRows(options)

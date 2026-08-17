@@ -230,7 +230,16 @@ export type BuilderActions = {
   // Крайняя позиция оси в свою сторону — no-op.
   shiftColumn: (id: string, dir: 'left' | 'right') => void
   // Те же две команды для варианта (спека §5.1: различий с блоками нет ни одного).
-  placeOptionInRow: (blockId: string, activeOptionId: string, targetOptionId: string) => void
+  // col/insert читаются как у placeInRow: insert — «открой ЭТУ колонку ряда, подвинув
+  // остальные», иначе — «встань в стопку этой колонки». Ряду из одной колонки стопка
+  // ничего не значит (колонок у полной ширины нет) — такой дроп командой не выдаётся.
+  placeOptionInRow: (
+    blockId: string,
+    activeOptionId: string,
+    targetOptionId: string,
+    col: number,
+    insert: boolean,
+  ) => void
   takeOptionOwnRow: (blockId: string, optionId: string) => void
   // Редактор опций choice-блока. На non-choice и несуществующем блоке — no-op.
   // addOption добавляет вариант в конец и возвращает его id (нужен фокусу): пустой —
@@ -245,9 +254,22 @@ export type BuilderActions = {
   // это второе действие рядом с «удалить».
   duplicateOption: (blockId: string, optionId: string) => string | null
   updateOption: (blockId: string, optionId: string, label: string) => void
-  // reorderOptions переносит вариант activeOptionId на позицию overOptionId (dnd
-  // вариантов, спека §5.1) — сплайс, как reorderBlocks. Незнакомые id — no-op.
-  reorderOptions: (blockId: string, activeOptionId: string, overOptionId: string) => void
+  // moveOptionAfter — ВЕРТИКАЛЬНЫЙ дроп варианта: «встань после такого-то», null значит
+  // «первым в списке». Адрес, а не позиция, — как у reorderBlocks: у «встать НА индекс»
+  // смысл зависит от направления жеста, и разворачивать щель обратно на каждом вызове
+  // значило бы писать код, который при чтении врёт.
+  //
+  // column НЕСЁТ ЦЕЛЬ, и от него зависит судьба бита: undefined — вариант становится
+  // полноширинным, и бит снимается ЯВНО (щель внутри своего же ряда иначе была бы
+  // no-op'ом: в порядке документа вариант уже стоит за соседом по секции, менялся только
+  // бит); номер — вариант остаётся в этой колонке на этом месте, и секция цела.
+  // Незнакомые id — no-op.
+  moveOptionAfter: (
+    blockId: string,
+    activeOptionId: string,
+    afterOptionId: string | null,
+    column?: number,
+  ) => void
   // removeOption удаляет вариант. Последний вариант уносит с собой сам блок (choice
   // без вариантов не существует) — остаётся подпись группы; это один шаг истории.
   removeOption: (blockId: string, optionId: string) => void
@@ -470,6 +492,33 @@ function emitRows(blocks: Block[], rows: RowPlan[]): Block[] {
 function planRows(blocks: Block[]): RowPlan[] {
   return packRows(rowGroups(blocks)).map((row) => row.map((cell) => cell.slice()))
 }
+
+// ТЕ ЖЕ ДВА ПОМОЩНИКА ДЛЯ ВАРИАНТОВ. Разница с блочными ровно одна: у варианта нет
+// группы, поэтому «участник колонки» — сам вариант, а не голова его группы. Держать их
+// рядом обязательно: разъехавшись, они дают ряд, который команда собрала одним, а
+// раскладчик показал другим.
+type OptionRowPlan = Option[][][]
+
+// emitOptionRows — список ИЗ РЯДОВ: ряды по порядку, внутри ряда колонки по порядку, и
+// каждому участнику проставлен номер ЕГО колонки (ряд из одной колонки = полная ширина,
+// ключ снимается). Порядок документа выходит колоночным — ровно тем, которого ждёт
+// раскладчик и который держит канон (normalizeOptionSections).
+function emitOptionRows(rows: OptionRowPlan): Option[] {
+  const out: Option[] = []
+  for (const row of rows) {
+    const section = row.length > 1
+    row.forEach((cell, ci) => {
+      for (const o of cell) {
+        if (section) out.push(o.column === ci + 1 ? o : { ...o, column: ci + 1 })
+        else out.push(optionWithoutColumn(o))
+      }
+    })
+  }
+  return out
+}
+
+const tidyOptionRows = (rows: OptionRowPlan): OptionRowPlan =>
+  rows.map((row) => row.filter((cell) => cell.length > 0)).filter((row) => row.length > 0)
 
 // tidyRows — выкинуть опустевшие колонки и ряды. Секции с пустой колонкой не бывает
 // (§11.3), поэтому уборка идёт сразу после любого выреза участника.
@@ -779,17 +828,6 @@ function normalizeOptionSections(blocks: Block[]): Block[] {
     }
   })
   return touched ? next : blocks
-}
-
-// У ВАРИАНТОВ жест предлагает только СЛЕДУЮЩУЮ колонку ряда: раскладчик стопку
-// вариантов собрать умеет (ядро общее), но зона дропа у списка своя — ячейка целиком, а
-// не полоса у края, — и приглашения «под этот вариант» у неё нет. Инертным ключ от
-// этого не станет: команда просто не выдаётся, пока колонки не кончились.
-function optionRowHasFreeCell(options: Option[], optionId: string): boolean {
-  const row = packOptionRows(options).find((r) =>
-    r.some((cell) => cell.some((o) => o.id === optionId)),
-  )
-  return row !== undefined && row.length < MAX_COLUMNS
 }
 
 // На втором уровне (§6.4) стопки не бывает по построению: пара внутри вопроса — это
@@ -1844,33 +1882,39 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           return landed?.settings?.column !== undefined ? moved : null
         }),
 
-      placeOptionInRow: (blockId, activeOptionId, targetOptionId) =>
+      placeOptionInRow: (blockId, activeOptionId, targetOptionId, col, insert) =>
         commit(null, (s) =>
           mutateOptions(
             s.blocks,
             blockId,
             (opts) => {
               if (activeOptionId === targetOptionId) return opts
-              const from = opts.findIndex((o) => o.id === activeOptionId)
-              if (from < 0 || !opts.some((o) => o.id === targetOptionId)) return opts
-              // Активного вырезаем до раскладки: он мог стоять в этом же ряду, и тогда
-              // его прежняя колонка в счёт не идёт (иначе потолок считался бы дважды).
-              const next = opts.slice()
-              const [moved] = next.splice(from, 1)
+              if (!opts.some((o) => o.id === activeOptionId)) return opts
+              if (!opts.some((o) => o.id === targetOptionId)) return opts
+              // Активного вырезаем ОТОВСЮДУ до вставки — как в placeInRow: он мог стоять
+              // в этом же ряду (перенос между колонками — обычный жест) или в чужой
+              // секции, которая от его ухода потеряет колонку. Оба случая разрешает одна
+              // уборка пустых колонок (tidy ниже) плюс перенумерация в emitOptionRows.
+              const moved = opts.find((o) => o.id === activeOptionId)!
+              const rows = tidyOptionRows(
+                packOptionRows(opts.filter((o) => o.id !== activeOptionId)).map((row) =>
+                  row.map((cell) => cell.slice()),
+                ),
+              )
+              const ti = rows.findIndex((r) =>
+                r.some((c) => c.some((o) => o.id === targetOptionId)),
+              )
+              if (ti < 0) return opts
+              const target = rows[ti]!
+              // Стопка просится в КОЛОНКУ, а у полноширинного ряда колонок нет: такой
+              // дроп ничего не значит и командой не выдаётся (зона его и не показывает).
+              if (!insert && target.length < 2) return opts
               // Тот же вопрос к раскладчику, что у блока: колонки не бесконечны.
-              if (!optionRowHasFreeCell(next, targetOptionId)) return opts
-              const row = packOptionRows(next).find((r) =>
-                r.some((cell) => cell.some((o) => o.id === targetOptionId)),
-              )!
-              // Вариант встаёт НОВОЙ последней колонкой ряда — единственный жест, который
-              // список показывает (свободная ячейка в конце). Порядок внутри ряда
-              // колоночный, поэтому место в списке — сразу за последним его вариантом.
-              const last = row.at(-1)!.at(-1)!.id
-              next.splice(next.findIndex((o) => o.id === last) + 1, 0, {
-                ...moved!,
-                column: row.length + 1,
-              })
-              return next
+              if (insert && target.length + 1 > MAX_COLUMNS) return opts
+              const at = Math.min(Math.max(col, 1), insert ? target.length + 1 : target.length)
+              if (insert) target.splice(at - 1, 0, [moved])
+              else target[at - 1]!.push(moved)
+              return emitOptionRows(rows)
             },
             // Как у блока: этому варианту сосед меняется по просьбе.
             activeOptionId,
@@ -1938,17 +1982,35 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           ),
         ),
 
-      reorderOptions: (blockId, activeOptionId, overOptionId) =>
+      moveOptionAfter: (blockId, activeOptionId, afterOptionId, column) =>
         commit(null, (s) =>
-          mutateOptions(s.blocks, blockId, (opts) => {
-            const from = opts.findIndex((o) => o.id === activeOptionId)
-            const to = opts.findIndex((o) => o.id === overOptionId)
-            if (from < 0 || to < 0 || from === to) return opts
-            const next = opts.slice()
-            const [moved] = next.splice(from, 1)
-            next.splice(to, 0, moved!)
-            return next
-          }),
+          mutateOptions(
+            s.blocks,
+            blockId,
+            (opts) => {
+              if (activeOptionId === afterOptionId) return opts
+              const from = opts.findIndex((o) => o.id === activeOptionId)
+              if (from < 0) return opts
+              const next = opts.slice()
+              const [moved] = next.splice(from, 1)
+              const at =
+                afterOptionId === null ? 0 : next.findIndex((o) => o.id === afterOptionId) + 1
+              if (at === 0 && afterOptionId !== null) return opts // адрес не найден
+              // Бит СНИМАЕТСЯ ЯВНО, а не «сам» уборкой по сменившемуся соседу: вытащить
+              // участника ряда вниз, под свой же ряд, — обычный жест, и в порядке
+              // документа он уже стоит за соседом по секции. Уборке менять было бы
+              // нечего, и дроп молча не делал бы ничего.
+              next.splice(
+                at,
+                0,
+                column === undefined ? optionWithoutColumn(moved!) : { ...moved!, column },
+              )
+              return next
+            },
+            // Номер колонки приехал ЦЕЛЬЮ (щель внутри колонки) — это прямая просьба, и
+            // правило «сосед сменился» не имеет права её отменить.
+            column === undefined ? undefined : activeOptionId,
+          ),
         ),
 
       removeOption: (blockId, optionId) =>
