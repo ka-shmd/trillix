@@ -14,20 +14,19 @@ import {
   DndContext,
   MeasuringStrategy,
   PointerSensor,
-  closestCenter,
   pointerWithin,
-  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { SortableContext, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
+  MAX_COLUMNS,
   isCaptionType,
   isSingleChoiceType,
   isContentType,
@@ -40,7 +39,32 @@ import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
-import { DRAG_ACTIVATION_DISTANCE, DRAGGED_FADE, DRAGGED_LOOK, noLayoutAnimation } from './dnd'
+import {
+  canvasSorting,
+  DRAG_ACTIVATION_DISTANCE,
+  DRAGGED_FADE,
+  DRAGGED_LOOK,
+  flatRect,
+  noLayoutAnimation,
+} from './dnd'
+import {
+  DropLine,
+  FootDropZone,
+  GapDropZone,
+  GhostFrame,
+  SideDropZone,
+  SourceSlot,
+} from './dragChrome'
+import { measureLine, measureSlot, type Rect, setRect } from './dragMeasure'
+import { type Box, type DropTarget } from './dropTarget'
+import {
+  inviteOptionRowId,
+  optionUnits,
+  optionZoneId,
+  optionZoneTarget,
+  pickHoverOption,
+  pickOptionTarget,
+} from './optionDrop'
 import { useBuilderStore } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
@@ -1205,14 +1229,12 @@ function AnswerField({
 // после текущего; Alt+↑/↓ — перенос варианта; Backspace в пустом — удалить и уйти
 // на предыдущий (пустой первый → onLeaveTop, к подписи группы); ↑/↓ — обход
 // вариантов, на краях — соседняя строка.
-// Свободные ячейки рядов вариантов — отдельное пространство id, чтобы они не путались
-// с id самих вариантов (те — sortable-элементы того же контекста).
-const OPT_CELL = 'optcell:'
-const optCellId = (optionId: string) => `${OPT_CELL}${optionId}`
-const optCellOption = (id: string | number): string | null => {
-  const s = String(id)
-  return s.startsWith(OPT_CELL) ? s.slice(OPT_CELL.length) : null
-}
+// ЯКОРЬ ЗАМЕРА и два числа ритма списка: карточка в потоке не имеет вертикальных
+// отступов (их несёт gap контейнера), поэтому у госта вычитать нечего; просвет списка —
+// 12px (.rf-options), и линия встаёт ровно посередине между карточками.
+const OPT_ANCHOR = 'data-option-id'
+const OPT_GAP = 6
+const OPT_GUTTER = 12
 
 function OptionsInline({
   block,
@@ -1280,10 +1302,29 @@ function OptionsInline({
   const showGhost = options.length === 0 || activeGroup === block.groupId
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
   const ghostRef = useRef<HTMLInputElement>(null)
-  // Id варианта, который тащат (null — драга нет): от него зависит, светить ли
-  // свободные ячейки рядов.
+  // Id варианта, который тащат (null — драга нет): от него зависит, показывать ли зоны.
   const [optDrag, setOptDrag] = useState<string | null>(null)
   const optionIds = useMemo(() => options.map((o) => o.id), [options])
+  // РАСКЛАДКА СПИСКА ДЛЯ ПРИЦЕЛА — вне кадра драга: прицел зовётся на каждое движение
+  // указателя, и пересборка единиц 60 раз в секунду была бы мусором (§5.3 EDITOR.md).
+  const units = useMemo(() => optionUnits(options), [options])
+  // Ответы жеста живут в ref'ах, а в состояние их переносит rAF-цикл — как на полотне:
+  // цель и зона считаются в collisionDetection (там есть указатель и измеренные
+  // прямоугольники), а setState оттуда 60 раз в секунду перерисовывал бы вопрос впустую.
+  const targetRef = useRef<DropTarget | null>(null)
+  const zoneRef = useRef<string | null>(null)
+  const nearRef = useRef<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const frameRafRef = useRef(0)
+  const frameActiveRef = useRef<string | null>(null)
+  const [dropLine, setDropLine] = useState<Rect | null>(null)
+  const [sourceGhost, setSourceGhost] = useState<Rect | null>(null)
+  const [zoneId, setZoneId] = useState<string | null>(null)
+  const [nearOption, setNearOption] = useState<string | null>(null)
+  const hoverZone = useMemo(() => (zoneId === null ? null : optionZoneTarget(zoneId)), [zoneId])
+  // Что рисует ГОСТ ИСТОЧНИКА. Сама карточка в это время едет за курсором трансформой, её
+  // layout-бокс остаётся на месте пустым — гост и есть эта дыра, названная вслух.
+  const draggedOption = optDrag === null ? null : options.find((o) => o.id === optDrag)
   // Тот же порог активации, что у полотна: клик по ручке не должен начинать драг.
   // Клавиатурного сенсора здесь нет намеренно — у вариантов своя карта (Alt+↑↓,
   // Mod+Alt+←/→), и второй клавиатурный путь через ручку дублировал бы её.
@@ -1292,19 +1333,90 @@ function OptionsInline({
   // правка константы рассинхронизирует слой вариантов (попап карточки начал бы
   // выскакивать «иногда» после драга).
   const optSensors = useSensors(useSensor(PointerSensor, OPT_SENSOR_OPTIONS))
-  // Свободная ячейка спрашивается указателем и ПЕРВОЙ — как зона жеста у вопросов:
-  // цель намеренная, в общий конкурс центров её пускать незачем.
-  const optCollision: CollisionDetection = (args) => {
-    const cells = args.droppableContainers.filter((c) => optCellOption(c.id) !== null)
-    if (cells.length > 0) {
-      const hit = pointerWithin({ ...args, droppableContainers: cells })
-      if (hit.length > 0) return hit
-    }
-    return closestCenter({
-      ...args,
-      droppableContainers: args.droppableContainers.filter((c) => optCellOption(c.id) === null),
-    })
+  // Кадры жеста устроены ровно как у полотна (EDITOR.md §5, §5.2), и повторяются здесь
+  // четыре его решения: зоны спрашиваются ПЕРВЫМИ и указателем; ответ зоны кладётся в ref,
+  // а не отдаётся dnd-kit (id зоны нет в items, и `over`-зона гасит активной карточке
+  // трансформу — «вариант пропадает из-под указателя»); цель считает список сам
+  // (pickOptionTarget), а не конкурс центров; в кадрах без цели в `over` уходит тот
+  // вариант, НАД которым указатель, лишь бы он не был пустым.
+  const idleOverId = (activeId: string): string => {
+    const near = nearRef.current
+    if (near !== null && near !== activeId) return near
+    return optionIds.find((id) => id !== activeId) ?? activeId
   }
+  const optCollision: CollisionDetection = (args) => {
+    const activeId = String(args.active.id)
+    const zones = args.droppableContainers.filter((c) => optionZoneTarget(c.id) !== null)
+    const zoneHit =
+      zones.length === 0 ? [] : pointerWithin({ ...args, droppableContainers: zones })
+    zoneRef.current = zoneHit.length > 0 ? String(zoneHit[0]!.id) : null
+    if (zoneRef.current !== null) {
+      // Вертикальную цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
+      // список рисовал бы линию к дропу, которого не будет. Приглашение, наоборот, не
+      // трогаем — пока курсор в зоне, оно прибито к ней.
+      targetRef.current = null
+      const stay = args.droppableContainers.find((c) => String(c.id) === idleOverId(activeId))
+      return stay ? [{ id: stay.id, data: { droppableContainer: stay, value: 0 } }] : []
+    }
+    const point =
+      args.pointerCoordinates ??
+      (() => {
+        const r = flatRect(args.collisionRect)
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      })()
+    const boxes = new Map<string, Box>()
+    for (const c of args.droppableContainers) {
+      const raw = args.droppableRects.get(c.id)
+      if (raw) boxes.set(String(c.id), flatRect(raw))
+    }
+    targetRef.current = pickOptionTarget(units, boxes, point, activeId)
+    nearRef.current = pickHoverOption(units, boxes, point, activeId)
+    const overId = targetRef.current?.afterId ?? idleOverId(activeId)
+    const hit = args.droppableContainers.find((c) => String(c.id) === overId)
+    return hit ? [{ id: hit.id, data: { droppableContainer: hit, value: 0 } }] : []
+  }
+
+  // Кадр жеста: гост источника (место, откуда карточку вынули) и линия вставки. Гост —
+  // ДО всякой цели: он про источник, и курсор в зоне (цели нет вовсе) его не отменяет.
+  function updateOptFrame(activeId: string) {
+    setNearOption(nearRef.current)
+    setZoneId(zoneRef.current)
+    const root = listRef.current
+    if (!root) return
+    setRect(setSourceGhost, measureSlot(root, [activeId], OPT_ANCHOR, 0))
+    const target = targetRef.current
+    if (!target) return void setRect(setDropLine, null)
+    setRect(setDropLine, measureLine(root, target.lineIds, target.before, OPT_ANCHOR, OPT_GAP))
+  }
+
+  function startOptFrames(activeId: string) {
+    frameActiveRef.current = activeId
+    cancelAnimationFrame(frameRafRef.current)
+    const tick = () => {
+      const id = frameActiveRef.current
+      if (id === null) return
+      updateOptFrame(id)
+      frameRafRef.current = requestAnimationFrame(tick)
+    }
+    frameRafRef.current = requestAnimationFrame(tick)
+  }
+
+  function stopOptFrames() {
+    frameActiveRef.current = null
+    cancelAnimationFrame(frameRafRef.current)
+    setOptDrag(null)
+    setDropLine(null)
+    setSourceGhost(null)
+    setZoneId(null)
+    setNearOption(null)
+    targetRef.current = null
+    zoneRef.current = null
+    nearRef.current = null
+  }
+
+  // Страховка на анмаунт посреди жеста (удалили блок, ушли с маршрута): rAF-цикл не
+  // должен пережить список.
+  useEffect(() => () => cancelAnimationFrame(frameRafRef.current), [])
   // Запрос фокуса держим в ref, а не в state: после add/remove опций стор меняет
   // массив → эффект переставляет фокус, не вызывая лишний ре-рендер (setState в
   // эффекте под запретом линта). 'last' — на последнюю опцию (после Enter/добавления).
@@ -1449,23 +1561,39 @@ function OptionsInline({
     })
   }
 
-  // Дроп варианта (§5.1): на другой вариант — перестановка, в свободную ячейку ряда —
-  // бит column. Фокус не трогаем ни в одном исходе — «dnd мышью фокус не трогает» (§2.4).
+  // ДРОП — из ОДНОГО ответа, как на полотне (§5.2): что показала подсказка, то и
+  // исполняется. Зона взята — её команда (собрать ряд/стопку), иначе цель под указателем
+  // (перенос «после такого-то»; номер колонки, если цель внутри колонки). Фокус не
+  // трогаем ни в одном исходе — «dnd мышью фокус не трогает» (§2.4).
   function onOptionDragEnd(e: DragEndEvent) {
-    setOptDrag(null)
     const active = String(e.active.id)
-    const over = e.over ? String(e.over.id) : null
-    if (over === null) return
-    const cell = optCellOption(over)
-    if (cell !== null) {
-      if (cell !== active) placeOptionInRow(block.id, active, cell, 2, true)
+    const zone = zoneRef.current === null ? null : optionZoneTarget(zoneRef.current)
+    const target = targetRef.current
+    stopOptFrames()
+    if (zone !== null) {
+      if (zone.optionId !== active) {
+        placeOptionInRow(block.id, active, zone.optionId, zone.col, zone.insert)
+      }
       return
     }
-    if (over !== active) moveOptionAfter(block.id, active, over)
+    if (target !== null) moveOptionAfter(block.id, active, target.afterId, target.column)
   }
 
   const rows = packOptionRows(options)
   const index = new Map(options.map((o, i) => [o.id, i]))
+  // Ряд, у которого горят зоны, — РОВНО ОДИН, и адресуется он участником, отличным от
+  // перетаскиваемого (optionDrop.ts, там же оба довода). Пока курсор В зоне, приглашение
+  // прибито к ней: иначе, зайдя в зону у края, автор увёл бы её из-под собственного
+  // курсора.
+  const inviteId =
+    optDrag === null ? null : (hoverZone?.optionId ?? inviteOptionRowId(units, nearOption, optDrag))
+  // Горит ли ЭТА полоса: зона под курсором известна списку (zoneId), `isOver` у dnd-kit
+  // зоны не спрашивают — они больше не его `over`.
+  const zoneHot = (col: number, insert: boolean): boolean =>
+    hoverZone !== null &&
+    hoverZone.optionId === inviteId &&
+    hoverZone.col === col &&
+    hoverZone.insert === insert
 
   return (
     // Просвет подпись→первый вариант (14px) даёт групповой контейнер, не свой mt
@@ -1485,60 +1613,124 @@ function OptionsInline({
       sensors={optSensors}
       collisionDetection={optCollision}
       measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
-      onDragStart={(e) => setOptDrag(String(e.active.id))}
-      onDragCancel={() => setOptDrag(null)}
+      onDragStart={(e) => {
+        const id = String(e.active.id)
+        setOptDrag(id)
+        startOptFrames(id)
+      }}
+      onDragCancel={stopOptFrames}
       onDragEnd={onOptionDragEnd}
     >
-      <SortableContext items={optionIds} strategy={rectSortingStrategy}>
+      {/* СТРАТЕГИЯ — та же, что у полотна: соседи НЕ расступаются, двигается только сам
+          перетаскиваемый элемент, а место называет линия (EDITOR.md §5.2). Расступание
+          вариантов было последним местом редактора, где цель уезжала из-под курсора. */}
+      <SortableContext items={optionIds} strategy={canvasSorting}>
         {/* rf-options/rf-row — ТЕ ЖЕ классы, что у превью и рендерера (fields.css), а
             не их Tailwind-копия: оттуда приезжает и ритм списка (12px), и потолок
             карточки min(--rf-input-max, 100%). Копия давала бы ритм, но не потолок —
-            длинный вариант в редакторе был бы шире, чем у респондента. */}
-        <div className="rf-options">
+            длинный вариант в редакторе был бы шире, чем у респондента.
+            relative — система координат оверлеев жеста (линия и гост меряются от него). */}
+        <div className="rf-options relative" ref={listRef}>
+          {/* Оверлеи — absolute ДО списка в DOM и позиционируются ПРЯМО, без своей
+              анимации: те же два урока, что у полотна (§5). */}
+          {sourceGhost && draggedOption && (
+            <SourceSlot rect={sourceGhost}>
+              <GhostFrame>
+                <OptionGhost
+                  label={draggedOption.label}
+                  multiple={!isSingleChoiceType(block.type)}
+                  badge={optionKey(index.get(draggedOption.id)!)}
+                />
+              </GhostFrame>
+            </SourceSlot>
+          )}
+          {dropLine && <DropLine rect={dropLine} />}
           {rows.map((row) => {
-            // .rf-cell — половина ряда (fields.css). Карточка внутри обнимает текст, но
-            // правая начинается с середины: у респондента ровно так же. У ряда из одного
-            // обёртка ни на что не влияет — правило CSS адресует только детей .rf-row.
-            const cells = row.map((cell) => (
-              <div key={cell[0]!.id} className="rf-cell">
-                {cell.map((o) => (
-                  <OptionCard
-                    key={o.id}
-                    block={block}
-                    option={o}
-                    // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок документа
-                    // не меняют, и A/B/C обязаны остаться теми же, что до переноса.
-                    index={index.get(o.id)!}
-                    inputRef={(el) => {
-                      optionRefs.current.set(o.id, el)
-                    }}
-                    onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
-                    onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
-                    onDuplicate={() => {
-                      // Каретка — на копию (§12), через тот же pendingFocus, что у
-                      // остальных операций списка: варианта ещё нет в DOM, фокус
-                      // ставится, когда массив приедет рендером.
-                      const copy = duplicateOption(block.id, o.id)
-                      if (copy) pendingFocus.current = copy
-                    }}
-                    rowFocus={rowFocus}
+            const cols = row.length
+            // Зоны показывает только приглашённый ряд. Границ на одну больше, чем
+            // колонок, а подвал есть у каждой колонки настоящей секции: у полноширинного
+            // ряда колонок нет, и «в стопку» там значить нечему (placeOptionInRow такой
+            // дроп отвергнет). Границы гаснут на потолке: обещать колонку, которой не
+            // будет, нельзя.
+            const zones = inviteId !== null && row.some((c) => c.some((o) => o.id === inviteId))
+            const canAdd = cols < MAX_COLUMNS
+            return (
+              // РЯД — КОНТЕЙНЕР ВСЕГДА, даже об одном варианте: он якорь зон и
+              // единственный бокс, чья геометрия не зависит от содержимого. Тип узла
+              // менять посреди жеста нельзя (урок снятого дублёра, §5.1), а обёртка,
+              // появляющаяся с началом драга, ремаунтила бы карточку вместе с её
+              // инпутом — каретка выпадала бы в body.
+              //
+              // МИНА: у ряда из одного колонка обязана ОБНИМАТЬ карточку
+              // (align-items от холста), иначе .rf-cell растянет её до потолка
+              // --rf-input-max, и одинокий вариант в редакторе станет 320px там, где у
+              // респондента он по тексту. Замерено: 118px против 320px.
+              <div key={row[0]![0]!.id} className="rf-row relative items-start">
+                {zones && canAdd && (
+                  <SideDropZone
+                    id={optionZoneId(inviteId!, 1, true)}
+                    side="left"
+                    railOff={false}
+                    hot={zoneHot(1, true)}
                   />
+                )}
+                {zones && canAdd && (
+                  <SideDropZone
+                    id={optionZoneId(inviteId!, cols + 1, true)}
+                    side="right"
+                    railOff={false}
+                    hot={zoneHot(cols + 1, true)}
+                  />
+                )}
+                {row.map((cell, i) => (
+                  <div
+                    key={cell[0]!.id}
+                    className={`rf-cell relative self-start${
+                      cols === 1 ? ' [align-items:var(--rf-align-items)]' : ''
+                    }`}
+                  >
+                    {zones && i > 0 && canAdd && (
+                      <GapDropZone
+                        id={optionZoneId(inviteId!, i + 1, true)}
+                        hot={zoneHot(i + 1, true)}
+                        gutter={OPT_GUTTER}
+                      />
+                    )}
+                    {zones && cols > 1 && (
+                      <FootDropZone
+                        id={optionZoneId(inviteId!, i + 1, false)}
+                        hot={zoneHot(i + 1, false)}
+                        gutter={OPT_GUTTER}
+                      />
+                    )}
+                    {cell.map((o) => (
+                      <OptionCard
+                        key={o.id}
+                        block={block}
+                        option={o}
+                        // Номер (и буква) — по позиции в ПОЛНОМ списке: ряды порядок
+                        // документа не меняют, и A/B/C обязаны остаться теми же, что до
+                        // переноса.
+                        index={index.get(o.id)!}
+                        dragging={optDrag !== null}
+                        inputRef={(el) => {
+                          optionRefs.current.set(o.id, el)
+                        }}
+                        onKeyDown={(e) => onOptionKeyDown(e, o.id, index.get(o.id)!)}
+                        onRemove={() => removeOptionAt(o.id, index.get(o.id)!)}
+                        onDuplicate={() => {
+                          // Каретка — на копию (§12), через тот же pendingFocus, что у
+                          // остальных операций списка: варианта ещё нет в DOM, фокус
+                          // ставится, когда массив приедет рендером.
+                          const copy = duplicateOption(block.id, o.id)
+                          if (copy) pendingFocus.current = copy
+                        }}
+                        rowFocus={rowFocus}
+                      />
+                    ))}
+                  </div>
                 ))}
               </div>
-            ))
-            // Ряд из одного + идёт драг варианта → правая ячейка показывается как
-            // цель дропа. Зона — вся ПОЛОВИНА ряда (не полоса у края, как у вопросов):
-            // карточка варианта обнимает текст, поэтому «край ряда» у неё не там, где
-            // читается граница, а ячейка занимает ровно то место, куда карточка встанет.
-            const solo = row.length === 1 ? row[0]![0]! : null
-            const showCell = solo !== null && optDrag !== null && optDrag !== solo.id
-            return row.length > 1 || showCell ? (
-              <div key={row[0]![0]!.id} className="rf-row items-start">
-                {cells}
-                {showCell && <FreeCell optionId={solo!.id} />}
-              </div>
-            ) : (
-              cells[0]
             )
           })}
           {/* «Призрак» — пустая строка в конце списка вместо кнопки «Добавить вариант»
@@ -1569,25 +1761,6 @@ function OptionsInline({
         </div>
       </SortableContext>
     </DndContext>
-  )
-}
-
-// Свободная правая ячейка ряда вариантов — цель жеста «встань рядом с этим вариантом»
-// (§5.1). Занимает РОВНО половину ряда (.rf-cell), то есть то самое место, куда карточка
-// и встанет после дропа: у вопросов приглашением служит полоса у края ряда, но карточка
-// варианта обнимает текст, и «край ряда» у неё не там, где читается граница. Живёт только
-// во время драга варианта, поэтому места в покое не занимает и схлопнуть клик по карточке
-// не может (урок TD-22 — про контролы, появляющиеся по hover).
-function FreeCell({ optionId }: { optionId: string }) {
-  const { setNodeRef, isOver } = useDroppable({ id: optCellId(optionId) })
-  return (
-    <div
-      ref={setNodeRef}
-      aria-hidden="true"
-      className={`rf-cell min-h-9 rounded-md border border-dashed transition-colors ${
-        isOver ? 'border-primary bg-primary/10' : 'border-muted-foreground/40'
-      }`}
-    />
   )
 }
 
@@ -1736,6 +1909,35 @@ function OptionActionMenu({
   )
 }
 
+// OptionGhost — НЕПОДВИЖНАЯ копия карточки для госта источника. Не OptionCard: у той
+// внутри инпут и `useSortable`, то есть вторая карточка с тем же id в том же контексте и
+// второй фокусируемый инпут в списке. Копия рисуется теми же классами rf-*, что оригинал,
+// — гост обязан выглядеть картой, а не эскизом.
+function OptionGhost({
+  label,
+  multiple,
+  badge,
+}: {
+  label: string
+  multiple: boolean
+  badge: string | null
+}) {
+  return (
+    <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
+      {multiple ? (
+        <span className="rf-mark rf-mark--check" aria-hidden="true" />
+      ) : (
+        badge && (
+          <span className="rf-option-key" aria-hidden="true">
+            {badge}
+          </span>
+        )
+      )}
+      <span>{label || 'Вариант'}</span>
+    </span>
+  )
+}
+
 // OptionCard — карточка варианта на полотне: sortable-элемент своего изолированного
 // контекста. Значки — тот же кластер, что у строк полотна (удалить + перетащить),
 // только адресованы варианту: строка ответа своих значков лишилась, потому что ею
@@ -1746,6 +1948,7 @@ function OptionCard({
   block,
   option,
   index,
+  dragging,
   inputRef,
   onKeyDown,
   onRemove,
@@ -1755,6 +1958,12 @@ function OptionCard({
   block: Block
   option: NonNullable<NonNullable<Block['settings']>['options']>[number]
   index: number
+  // Идёт ли жест В ЭТОМ списке. Пока он идёт, наведение молчит у всех карточек, кроме
+  // перетаскиваемой (§5 EDITOR.md): курсор с карточкой в руке проезжает по всему списку, и
+  // кластеры значков зажигались бы у каждой, над которой он прошёл. Своей наведение
+  // возвращается — иначе её грип перестаёт быть целью попадания и курсор теряет вид
+  // grabbing.
+  dragging: boolean
   inputRef: (el: HTMLInputElement | null) => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
   // Удаление варианта с исходом каретки по контракту (§12) — считает список, он
@@ -1788,8 +1997,24 @@ function OptionCard({
     // наведении на любую точку строки.
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={`group/opt relative flex items-center ${isDragging ? 'z-10 opacity-70' : ''}`}
+      // data-option-id — якорь замера для оверлеев жеста (линия и гост, updateOptFrame),
+      // зеркало data-block-id у строки полотна.
+      data-option-id={option.id}
+      style={{
+        transform: CSS.Translate.toString(transform),
+        transition,
+        ...(isDragging ? DRAGGED_FADE : null),
+      }}
+      // Перетаскиваемая карточка — ТЕНЬ, а не карточка (dnd.ts, там же довод): тусклее
+      // покоя, книзу растворяется маской, у инпута внутри гаснут фон и тень. Наведение на
+      // время жеста гасится у всех, кроме неё.
+      className={`group/opt relative flex items-center ${
+        isDragging
+          ? `z-10 pointer-events-auto ${DRAGGED_LOOK}`
+          : dragging
+            ? 'pointer-events-none'
+            : ''
+      }`}
     >
       {/* Кластер значков варианта — зеркало кластера строки: те же размеры, тот же
           порядок (удалить, перетащить — ручка ближе к тексту), то же проявление по

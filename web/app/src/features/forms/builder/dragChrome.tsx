@@ -134,12 +134,27 @@ export function SideDropZone({
 // Приглашает боковая полоса (у неё логика своя, §5.1), внутренняя — отклик: загорелась,
 // значит отпускай. Бокс при этом смонтирован ВСЕГДА и у всех колонок: несмонтированный
 // droppable нечем поймать, и зона никогда бы не зажглась.
-export function GapDropZone({ id, hot }: { id: string; hot: boolean }) {
+// gutter — ширина жёлоба слоя в пикселях: 28px между вопросами, 12px между вариантами
+// (.rf-options в fields.css). Зона равна жёлобу и центрована на нём — числом, а не
+// классом: у Tailwind произвольные значения статичны, а жёлоба два.
+export function GapDropZone({ id, hot, gutter }: { id: string; hot: boolean; gutter: number }) {
   const { setNodeRef } = useDroppable({ id })
+  const half = gutter / 2
   return (
     <>
-      {hot && <span aria-hidden="true" className={`${zoneRail('left', true)} -left-3.5`} />}
-      <div ref={setNodeRef} aria-hidden="true" className={`${zoneHit} -left-3.5 w-7 -translate-x-1/2`} />
+      {hot && (
+        <span
+          aria-hidden="true"
+          className={zoneRail('left', true)}
+          style={{ left: -half, right: 'auto' }}
+        />
+      )}
+      <div
+        ref={setNodeRef}
+        aria-hidden="true"
+        className={`${zoneHit} -translate-x-1/2`}
+        style={{ left: -half, width: gutter }}
+      />
     </>
   )
 }
@@ -153,24 +168,31 @@ export function GapDropZone({ id, hot }: { id: string; hot: boolean }) {
 // у вертикального дропа последний элемент колонки.
 //
 // Видна, только когда взята, — то же правило, что у GapDropZone, и по тому же доводу.
-export function FootDropZone({ id, hot }: { id: string; hot: boolean }) {
+export function FootDropZone({ id, hot, gutter }: { id: string; hot: boolean; gutter: number }) {
   const { setNodeRef } = useDroppable({ id })
+  const half = gutter / 2
+  // Полоса — на том же вылете, что боковые рейлы (RAIL_OUT = 8px), но не дальше середины
+  // жёлоба: в 12px-жёлобе списка вариантов вылет 8px прижал бы её к следующему ряду.
   return (
     <>
       {hot && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -bottom-2 z-20 h-0.5 rounded-full bg-primary"
+          className="pointer-events-none absolute inset-x-0 z-20 h-0.5 rounded-full bg-primary"
+          style={{ bottom: -Math.min(RAIL_OUT, half) }}
         />
       )}
       <div
         ref={setNodeRef}
         aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0 -bottom-3.5 z-10 h-7 rounded-md"
+        className="pointer-events-none absolute inset-x-0 z-10 rounded-md"
+        style={{ bottom: -half, height: gutter }}
       />
     </>
   )
 }
+
+const RAIL_OUT = 8
 
 // CellDropZone — та же зона на строке подписи (§6.6 EDITOR.md): дроп собирает ряд ВНУТРИ
 // вопроса. Вид и правила те же, что у SideDropZone, — жест один, уровень разный, и

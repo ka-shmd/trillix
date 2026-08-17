@@ -1130,10 +1130,18 @@ export function SlashEditor({
                               под курсором: показывается зона не сама по себе, а когда взята
                               (§5.1). */}
                           {zones && i > 0 && i < cols && canAdd && (
-                            <GapDropZone id={rowZoneId(inviteRow!, i + 1, true)} hot={zoneHot(i + 1, true)} />
+                            <GapDropZone
+                              id={rowZoneId(inviteRow!, i + 1, true)}
+                              hot={zoneHot(i + 1, true)}
+                              gutter={ROW_GUTTER}
+                            />
                           )}
                           {zones && cols > 1 && i < cols && (
-                            <FootDropZone id={rowZoneId(inviteRow!, i + 1, false)} hot={zoneHot(i + 1, false)} />
+                            <FootDropZone
+                              id={rowZoneId(inviteRow!, i + 1, false)}
+                              hot={zoneHot(i + 1, false)}
+                              gutter={ROW_GUTTER}
+                            />
                           )}
                           {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
                         </div>
@@ -1280,6 +1288,8 @@ const BLOCK_ANCHOR = 'data-block-id'
 const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
 const ROW_PAD = 6
 const ROW_GAP = 7
+// Жёлоб между колонками ряда вопросов (gap-7 у контейнера ряда).
+const ROW_GUTTER = 28
 
 // hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
 // (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес

@@ -448,6 +448,23 @@ describe('значки варианта', () => {
     ],
   }
 
+  it('ряд-контейнер стоит ВСЕГДА, даже у списка из одной колонки', () => {
+    // Обёртка, появляющаяся с началом драга, ремаунтила бы карточку вместе с её инпутом
+    // (тип узла посреди жеста менять нельзя, EDITOR.md §5.1), поэтому .rf-row стоит и у
+    // ряда из одного. Плата — колонка обязана ОБНИМАТЬ карточку: без этого .rf-cell
+    // растянет её до потолка --rf-input-max, и одинокий вариант станет шире, чем у
+    // респондента.
+    setup(CHOICE)
+    const list = document.querySelector('[data-block-id="ch"] .rf-options')!
+    const rows = list.querySelectorAll(':scope > .rf-row')
+    expect(rows).toHaveLength(2) // два варианта — два полноширинных ряда
+    for (const row of rows) {
+      const cell = row.querySelector(':scope > .rf-cell')!
+      expect(cell.className).toContain('[align-items:var(--rf-align-items)]')
+      expect(cell.querySelector('[data-option-id]')).toBeTruthy()
+    }
+  })
+
   it('у каждого варианта своя мусорка и свой грип-настройки, крестика больше нет', () => {
     setup(CHOICE)
     // У каждого варианта свой полный набор. С фазы 16 грип варианта называет КЛИК
