@@ -37,6 +37,7 @@ x-app-env: &app-env
   S3_SECRET_KEY: ${S3_SECRET_KEY}
   S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
   S3_FILES_BUCKET: ${S3_FILES_BUCKET}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT}
   S3_PATH_STYLE: ${S3_PATH_STYLE}
   # Исходящая почта (почтовая фаза). Обязательные: config.Load() без них падает.
   MAIL_TRANSPORT: ${MAIL_TRANSPORT}
@@ -133,6 +134,9 @@ services:
       RENDERER_DOMAIN: ${RENDERER_DOMAIN}
       # Бакет картинок — Caddy подставляет в rewrite /media/* → /<bucket>/*.
       S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+      # Внешний адрес хранилища — в connect-src страницы формы: туда браузер
+      # респондента кладёт файлы ответов по подписи (фаза 24).
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT}
       # Upstream раздачи /media и Host к нему: prod-local → http://minio:9000,
       # реальный прод → https://<арендованный-s3> + тот же хост в Host. Без этих
       # переменных раздача была бы захардкожена на MinIO (см. Caddyfile media).

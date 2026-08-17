@@ -349,8 +349,18 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	// Файлы в ответах (фаза 24): свой бакет — приватный, у картинок форм политика
 	// несовместимая (те раздаются анонимно).
+	// Второй клиент — ТОЛЬКО чтобы подписывать адреса для браузера: имя хоста входит
+	// в подпись, а респондент видит хранилище по внешнему адресу (в контуре, где
+	// Go ходит к нему по внутренней сети, они разные).
+	publicBlobClient := blob.New(blob.Config{
+		Endpoint:  cfg.S3PublicEndpoint,
+		Region:    cfg.S3Region,
+		AccessKey: cfg.S3AccessKey,
+		SecretKey: cfg.S3SecretKey,
+		PathStyle: cfg.S3PathStyle,
+	})
 	filesSvc := answerfiles.NewService(pool, answerfiles.Repo{},
-		answerfiles.NewBucket(blobClient, cfg.S3FilesBucket), formsSvc, entitlementsSvc)
+		answerfiles.NewBucket(publicBlobClient, blobClient, cfg.S3FilesBucket), formsSvc, entitlementsSvc)
 	filesHandler := answerfiles.NewHandler(filesSvc, authHandler.RequireAuth)
 	uploadLimiter := ratelimit.NewTokenBucket(uploadRatePerSec, uploadBurst)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,

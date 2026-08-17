@@ -60,6 +60,15 @@ type Config struct {
 	S3SecretKey string // секрет: не логируется
 	// S3MediaBucket — бакет public-read картинок (app-media).
 	S3MediaBucket string
+	// S3PublicEndpoint — адрес хранилища, каким его видит БРАУЗЕР. Обычно совпадает с
+	// S3Endpoint, но не обязан: в контуре, где Go ходит к хранилищу по внутренней
+	// сети (prod-local: http://minio:9000), респондент по этому адресу не достучится,
+	// а имя хоста входит в подпись — presigned-адрес, выписанный на внутреннее имя,
+	// у браузера не работает вовсе.
+	//
+	// Отдельная переменная, а не «догадаться»: догадка здесь ошибается молча, и
+	// увидеть это можно только загрузкой файла из браузера.
+	S3PublicEndpoint string
 	// S3FilesBucket — бакет файлов ответов (app-files), ПРИВАТНЫЙ. Второй бакет, а
 	// не префикс в первом: у картинок форм и файлов респондентов несовместимые
 	// политики — те раздаются анонимно, эти не раздаются вовсе и живут только за
@@ -162,6 +171,7 @@ func Load() (Config, error) {
 	cfg.S3SecretKey = required("S3_SECRET_KEY")
 	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
 	cfg.S3FilesBucket = required("S3_FILES_BUCKET")
+	cfg.S3PublicEndpoint = required("S3_PUBLIC_ENDPOINT")
 	pathStyleRaw := required("S3_PATH_STYLE")
 	trustedProxyRaw := required("TRUSTED_PROXY")
 	cfg.MailTransport = required("MAIL_TRANSPORT")

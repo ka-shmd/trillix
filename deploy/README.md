@@ -185,6 +185,12 @@ S3_REGION=<region>
 S3_ACCESS_KEY=__EXTERNAL_S3_ACCESS_KEY__
 S3_SECRET_KEY=__EXTERNAL_S3_SECRET_KEY__
 S3_MEDIA_BUCKET=app-media
+# Бакет файлов в ответах (фаза 24). ПРИВАТНЫЙ: публичного чтения у него нет и быть
+# не должно — файлы респондентов отдаются только по короткой подписи и вложением.
+S3_FILES_BUCKET=app-files
+# Внешний адрес хранилища — тот, по которому файл кладёт БРАУЗЕР респондента (имя
+# хоста входит в подпись). На проде совпадает с S3_ENDPOINT.
+S3_PUBLIC_ENDPOINT=https://<s3-host>
 S3_PATH_STYLE=true    # true у path-style провайдеров (Selectel/Yandex/MinIO), false у AWS virtual-hosted
 MEDIA_UPSTREAM=https://<s3-host>
 MEDIA_UPSTREAM_HOST=<s3-host>
@@ -196,6 +202,10 @@ BACKUP_S3_ACCESS_KEY=__YANDEX_SA_ACCESS_KEY__
 BACKUP_S3_SECRET_KEY=__YANDEX_SA_SECRET_KEY__
 BACKUP_S3_BUCKET=trillix-backups
 BACKUP_AGE_RECIPIENT=age1__PASTE_PUBLIC_KEY__
+# Копировать ли в бэкап бакет файлов ответов (фаза 24). Выключено по умолчанию:
+# копия растёт с числом ответов и оплачивается местом и трафиком у второго
+# провайдера. Что теряется при выключенном — RESTORE.md §4.5.
+BACKUP_FILES=0
 
 # --- исходящая почта: Yandex Postbox (почтовая фаза) ---
 # MAIL_TRANSPORT=smtp — прод шлёт письма настоящим SMTP (тот же транспорт, что
@@ -452,6 +462,14 @@ Caddy → Go → Postgres (`200` доказывал бы меньше — его
 `deploy/backup.sh` снимает `pg_dump -Fc`, шифрует его `age` и льёт в S3 **другого
 провайдера**, чем медиа (Yandex Object Storage): отказ или компрометация reg.ru Cloud
 не должны уносить сразу и данные, и бэкапы. Восстановление — [`RESTORE.md`](RESTORE.md).
+
+**Файлы в ответах (фаза 24) — отдельный объект бэкапа.** Дамп несёт только строки
+`submission_files`; сами файлы лежат в `S3_FILES_BUCKET`, и копируются они, только
+если в `.env` стоит `BACKUP_FILES=1`. Шаг выключен по умолчанию осознанно: это
+плата за место и трафик у второго провайдера, и решение тут владельца. При
+выключенном шаге восстановленная база показывает ответы и имена вложений, но само
+вложение не открывается — подробности и обратная синхронизация в
+[`RESTORE.md`](RESTORE.md) §4.5. **Шаг не проверялся** живым прогоном.
 
 ### Однократный провижининг
 

@@ -20,11 +20,18 @@ const (
 	GetTTL = time.Minute
 )
 
-// blobStore — то, что модулю нужно от слоя-1. Интерфейс объявлен ПОТРЕБИТЕЛЕМ
-// (конвенция internal/CLAUDE.md): весь blob.Client сюда не тянется.
-type blobStore interface {
+// blobSigner — выписывает адреса для БРАУЗЕРА. Отдельно от исполнителя ниже, и это
+// не разделение ради красоты: имя хоста входит в подпись, а Go и браузер видят
+// хранилище по разным адресам (внутренняя сеть против внешней). Один клиент на обе
+// роли означал бы подпись, которая у респондента не работает.
+type blobSigner interface {
 	PresignPut(bucket, key string, opt blob.PutOptions, now time.Time) (string, error)
 	PresignGet(bucket, key string, opt blob.GetOptions, now time.Time) (string, error)
+}
+
+// blobStore — то, что модуль делает САМ, своей сетью. Интерфейс объявлен
+// ПОТРЕБИТЕЛЕМ (конвенция internal/CLAUDE.md): весь blob.Client сюда не тянется.
+type blobStore interface {
 	HeadObject(ctx context.Context, bucket, key string) (blob.ObjectInfo, error)
 	DeleteObject(ctx context.Context, bucket, key string) error
 }
@@ -33,13 +40,17 @@ type blobStore interface {
 // выдачи. Слой-2 подсистемы хранилища (docs/S3.md §3), сосед media. Имя не Store —
 // так в модулях проекта называется интерфейс РЕПОЗИТОРИЯ.
 type Bucket struct {
+	signer blobSigner
 	blob   blobStore
 	bucket string
 	now    func() time.Time
 }
 
-func NewBucket(b blobStore, bucket string) *Bucket {
-	return &Bucket{blob: b, bucket: bucket, now: time.Now}
+// NewBucket. signer подписывает адреса для браузера (внешний адрес хранилища),
+// store ходит к нему сам (внутренний). В dev и на проде это один и тот же клиент;
+// различие появляется там, где адреса расходятся.
+func NewBucket(signer blobSigner, store blobStore, bucket string) *Bucket {
+	return &Bucket{signer: signer, blob: store, bucket: bucket, now: time.Now}
 }
 
 // ObjectKey — адрес объекта. Формирует его СЕРВЕР целиком: имя, присланное
@@ -57,7 +68,7 @@ func ObjectKey(workspaceID, formID, fileID uuid.UUID, ext string) string {
 // запрос с другими значениями хранилище отвергнет само, и это единственный
 // механизм, который держит потолок, — байты к нам не приходят.
 func (s *Bucket) UploadURL(key, contentType string, size int64) (string, error) {
-	return s.blob.PresignPut(s.bucket, key, blob.PutOptions{
+	return s.signer.PresignPut(s.bucket, key, blob.PutOptions{
 		ContentType:   contentType,
 		ContentLength: size,
 		Expires:       PutTTL,
@@ -69,7 +80,7 @@ func (s *Bucket) UploadURL(key, contentType string, size int64) (string, error) 
 // origin хранилища. Content-Type объекта при выдаче игнорируется намеренно — он
 // пришёл от того же, кто прислал файл.
 func (s *Bucket) DownloadURL(key, filename string) (string, error) {
-	return s.blob.PresignGet(s.bucket, key, blob.GetOptions{
+	return s.signer.PresignGet(s.bucket, key, blob.GetOptions{
 		Expires:             GetTTL,
 		ResponseContentType: "application/octet-stream",
 		ResponseDisposition: contentDisposition(filename),

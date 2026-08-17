@@ -86,7 +86,7 @@ func newStack(t *testing.T) (*httptest.Server, *answerfiles.Service) {
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	filesSvc := answerfiles.NewService(testPool, answerfiles.Repo{},
-		answerfiles.NewBucket(blob.New(testS3), filesBucket), formsSvc, entSvc)
+		answerfiles.NewBucket(blob.New(testS3), blob.New(testS3), filesBucket), formsSvc, entSvc)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, ratelimit.AllowAll{}, testSecret,
 		submissions.DefaultMinFillTime, false)
 	filesH := answerfiles.NewHandler(filesSvc, authH.RequireAuth)
