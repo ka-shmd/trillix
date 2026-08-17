@@ -1765,7 +1765,7 @@ function EmptyStarter({
       {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
           «текст»): это не подсказка редактора, а строка о продукте, и приглушать её
           заодно с подсказками незачем. */}
-      <p className="rf-text mt-6 max-w-prose">
+      <p className="rf-text mt-10 max-w-prose">
         Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
         чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
         вопрос.
@@ -1784,9 +1784,12 @@ function EmptyStarter({
 const HINT_ROW =
   '-ml-2 flex w-fit cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left hover:bg-muted'
 
+// Kbd — ярлык клавиши в тексте приглашения. Кегль на ступень МЕНЬШЕ соседнего текста, а
+// не два (было text-xs при базовом 16px): в чипе стоят одиночные символы «/» и «@», и на
+// 12px моноширинного шрифта их не разглядеть.
 function Kbd({ children }: { children: ReactNode }) {
   return (
-    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-sm text-foreground">
       {children}
     </kbd>
   )
