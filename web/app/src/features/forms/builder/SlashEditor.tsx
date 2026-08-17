@@ -1742,15 +1742,13 @@ function EmptyStarter({
     <div
       tabIndex={0}
       onKeyDown={onKeyDown}
-      // Обе подсказки — свои клик-цели, и клик по ним не должен считаться дважды:
-      // кнопка «начать» зовёт onStart сама, ссылка на шаблоны уводит со страницы.
-      onClick={(e) => {
-        if (!(e.target as HTMLElement).closest('a,button')) onStart()
-      }}
+      // Клика по САМОЙ области нет (решение владельца): блок заводят кнопка «начать» и
+      // набор с клавиатуры, а не тычок в любое место страницы. Клик область по-прежнему
+      // ФОКУСИРУЕТ (tabIndex), поэтому «кликнул и печатаю» работает как работало.
       {...rowFocus}
       // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
       // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
-      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex cursor-text flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
+      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <button type="button" onClick={() => onStart()} className={HINT_ROW}>
         <SquarePen className="size-4 shrink-0" aria-hidden="true" />
@@ -1765,7 +1763,7 @@ function EmptyStarter({
       {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
           «текст»): это не подсказка редактора, а строка о продукте, и приглушать её
           заодно с подсказками незачем. */}
-      <p className="rf-text mt-10 max-w-prose">
+      <p className="rf-text mt-20 max-w-prose">
         Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
         чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
         вопрос.
