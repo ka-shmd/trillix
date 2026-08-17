@@ -476,7 +476,8 @@ export function SlashEditor({
       if (raw) boxes.set(String(c.id), flatRect(raw))
     }
     const target = pickDropTarget(rows, boxes, point, {
-      layer: isGroupDrag ? 'group' : 'block',
+      layer: isGroupDrag ? 'unit' : 'part',
+      inner: INNER_ROWS,
       activeId: String(args.active.id),
     })
     targetRef.current = target
@@ -486,7 +487,8 @@ export function SlashEditor({
     // его хвоста незачем. Считает pickHoverGroup — там же и довод, почему двум ответам
     // здесь расходиться нечем.
     nearGroupRef.current = pickHoverGroup(rows, boxes, point, {
-      layer: isGroupDrag ? 'group' : 'block',
+      layer: isGroupDrag ? 'unit' : 'part',
+      inner: INNER_ROWS,
       activeId: String(args.active.id),
     })
     // `over` У DND-KIT ОБЯЗАН БЫТЬ НЕПУСТЫМ, и это не про его удобство. Без него
@@ -1277,6 +1279,11 @@ const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 // ROW_GAP — половина просвета между вопросами (28px, .rf-form): линия встаёт ровно
 // посередине между соседями.
 const BLOCK_ANCHOR = 'data-block-id'
+// Внутренние ряды вопроса для прицела (PickOpts.inner): «подпись | поле», тот же
+// раскладчик, что рисует их у превью. МОДУЛЬНАЯ константа, а не литерал в кадре: прицел
+// зовётся на каждое движение указателя, а свежая замыкающая функция каждый кадр — мусор
+// на длинной форме (§5.3).
+const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
 const ROW_PAD = 6
 const ROW_GAP = 7
 

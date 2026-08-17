@@ -1,5 +1,4 @@
-import { type Block } from '@entities/formSchema'
-import { packGroupRows, type Row } from '@fields/groups'
+import { type Row } from '@fields/groups'
 
 // ПРАВИЛО ПРИЦЕЛИВАНИЯ (владелец, 2026-08-11; история — JOURNAL, «Прицеливание при
 // перетаскивании»).
@@ -9,16 +8,25 @@ import { packGroupRows, type Row } from '@fields/groups'
 //
 // **Полоса прицеливания цели начинается у верха ЯКОРЯ** — того элемента, под которым
 // ляжет линия, — и кончается у верха следующего элемента слоя (`Cand`). Якорь блочного
-// драга это сам блок, поэтому полоса совпадает со строкой; якорь ГРУППОВОГО — последняя
-// строка вопроса, поэтому «под этим вопросом» загорается у его хвоста, а не на
-// заголовке. Просвет принадлежит цели, чей якорь выше: 28px-жёлоб между рядами достаётся
+// драга это сам блок, поэтому полоса совпадает со строкой; якорь драга ЦЕЛОЙ ЕДИНИЦЫ
+// (вопрос, вариант) — её последняя часть, поэтому «под этим вопросом» загорается у его
+// хвоста, а не на заголовке. Просвет принадлежит цели, чей якорь выше: 28px-жёлоб между рядами достаётся
 // ряду сверху.
 //
 // Модуль чистый и с собственным тестом по той же причине, что и `rowZones.ts`: жест
 // проверяется мышью, в vitest он не воспроизводится, и без сторожа правила ломались бы
 // правкой соседнего кода молча.
 
-type Group = { id: string; blocks: Block[] }
+// ЕДИНИЦА СЛОЯ и её ЧАСТИ — вся модель, которая нужна прицелу. У полотна единица это
+// вопрос, а части — его строки; у списка вариантов единица это вариант, и часть у него
+// одна, он сам. Больше о слое модуль не знает ничего: ни типов блоков, ни раскладчика,
+// ни того, что бывает внутри вопроса (это приезжает колбэком `inner`).
+//
+// Так правило прицеливания живёт в ОДНОМ месте на оба слоя. Пока модуль был написан по
+// блокам, слой вариантов остался со своей механикой dnd-kit — и разошёлся с полотном во
+// всём: расступание вместо линии, дроп «на позицию» вместо «после такого-то».
+export type Part = { id: string }
+export type Unit<B extends Part = Part> = { id: string; blocks: B[] }
 
 // Прямоугольник строки, ИЗМЕРЕННЫЙ вызывающим. DOM — не дело чистой функции, а живые
 // rect'ы нужны потому же, почему их мерит `measureUnion`: во время драга активная
@@ -46,15 +54,23 @@ export type DropTarget = {
   column?: number
 }
 
-// Слой драга задаёт ЛИСТ обхода, и только его: тащат вопрос — лист группа, тащат
-// строку — лист блок. Правила полос и легальности у слоёв общие.
-export type PickOpts = { layer: 'block' | 'group'; activeId: string }
+// Слой драга задаёт ЛИСТ обхода, и только его: тащат вопрос или вариант — лист единица,
+// тащат строку — лист её часть. Правила полос и легальности у слоёв общие.
+export type PickOpts<B extends Part = Part> = {
+  // Что называет цель: 'part' — части единицы (строки вопроса при блочном драге),
+  // 'unit' — единица целиком (вопрос при групповом драге, вариант в списке).
+  layer: 'part' | 'unit'
+  activeId: string
+  // Внутренние ряды единицы: у вопроса это «подпись | поле» (packGroupRows), у варианта
+  // их нет вовсе. Спрашивается только на слое 'part'.
+  inner?: (blocks: B[]) => B[][]
+}
 
 // Кандидат = цель плюс верх её якоря. Полоса начинается у `anchorTop` и кончается у
 // ВЕРХА СЛЕДУЮЩЕГО ЭЛЕМЕНТА СЛОЯ — не у якоря следующей цели.
 //
-// Разница есть только там, где якорь элемента не совпадает с его верхом, то есть на
-// ГРУППОВОМ слое: якорь вопроса — его последняя строка. Полоса, дотянутая до якоря
+// Разница есть только там, где якорь элемента не совпадает с его верхом, то есть на слое
+// целых единиц: якорь вопроса — его последняя строка. Полоса, дотянутая до якоря
 // следующего вопроса, накрыла бы и его заголовок, и «щель между A и B» горела бы уже на
 // первой строке B. На заголовке цели нет вовсе: указатель стоит на вопросе, а не на
 // щели, и полотну сказать нечего.
@@ -69,11 +85,11 @@ type Cand = DropTarget & { anchorTop: number; until: number }
 // ни одна чужая строка не доехала до DOM.
 //
 // rows — раскладка полотна (`packRows`), boxes — измеренные строки по block-id.
-export function pickDropTarget(
-  rows: Row<Group>[],
+export function pickDropTarget<B extends Part>(
+  rows: Row<Unit<B>>[],
   boxes: Map<string, Box>,
   pointer: { x: number; y: number },
-  opts: PickOpts,
+  opts: PickOpts<B>,
 ): DropTarget | null {
   // Активный элемент вычёркивается ВЕЗДЕ — и из адреса, и из состава линии. Причин две
   // и они разные. «После самого себя» не позиция вовсе: слот, который активный занимает
@@ -81,7 +97,7 @@ export function pickDropTarget(
   // потянувший строку чуть в сторону, целился бы в собственное пустое место. А состав
   // линии его не терпит потому, что меряется она по ЖИВОМУ DOM: активная строка едет за
   // курсором трансформой, и линия, измеренная вместе с ней, растянулась бы до указателя.
-  const ctx: Ctx = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
+  const ctx: Ctx<B> = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
 
   // Первый проход — только живые строки рядов и ВЕРХ каждого ряда: полоса последней
   // цели ряда кончается там, где начинается ряд следующий (см. Cand), и знать это надо
@@ -143,7 +159,7 @@ export function pickDropTarget(
 }
 
 // Верх набора строк.
-function topOf(ctx: Ctx, ids: string[]): number {
+function topOf<B extends Part>(ctx: Ctx<B>, ids: string[]): number {
   let top = Infinity
   for (const id of ids) {
     const box = ctx.boxes.get(id)
@@ -171,13 +187,13 @@ function endOfStripe(tops: number[], anchorTop: number, rowEnd: number): number 
 // Ближайший, а не «строго внутри»: между рядами 28px жёлоб, снаружи колонок — поле
 // полотна, и «мимо всех» там штатное состояние. Меряется вертикаль, горизонталь только
 // разводит колонки, стоящие на одной высоте.
-export function pickHoverGroup(
-  rows: Row<Group>[],
+export function pickHoverGroup<B extends Part>(
+  rows: Row<Unit<B>>[],
   boxes: Map<string, Box>,
   pointer: { x: number; y: number },
-  opts: PickOpts,
+  opts: PickOpts<B>,
 ): string | null {
-  const ctx: Ctx = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
+  const ctx: Ctx<B> = { boxes, active: new Set(activeBlockIds(rows, opts)), opts }
   let best: string | null = null
   let bestV = Infinity
   let bestH = Infinity
@@ -201,7 +217,7 @@ export function pickHoverGroup(
   return best
 }
 
-type Ctx = { boxes: Map<string, Box>; active: Set<string>; opts: PickOpts }
+type Ctx<B extends Part> = { boxes: Map<string, Box>; active: Set<string>; opts: PickOpts<B> }
 
 // collectRow — цели, которые даёт ряд. Здесь же живёт единственное правило ЛЕГАЛЬНОСТИ:
 // **ряд атомарен для вертикальной вставки**.
@@ -231,9 +247,9 @@ type Ctx = { boxes: Map<string, Box>; active: Set<string>; opts: PickOpts }
 //
 // Отсюда же два места, недостижимых вертикальным дропом: «в конец колонки» и «первым в
 // колонке» (линия всегда ПОД элементом). Оба достижимы зоной и клавиатурой.
-function collectRow(
-  ctx: Ctx,
-  row: Row<Group>,
+function collectRow<B extends Part>(
+  ctx: Ctx<B>,
+  row: Row<Unit<B>>,
   ids: string[],
   x: number,
   rowEnd: number,
@@ -250,7 +266,7 @@ function collectRow(
   // Номер колонки нужен целям внутри неё, поэтому он берётся из индекса в РЯДУ, а не в
   // `cells`: колонка, где стоял только перетаскиваемый элемент, из `cells` выпадает
   // (мерить нечего), и индексы разъехались бы.
-  const cells: { groups: Group[]; box: Box; col: number }[] = []
+  const cells: { groups: Unit<B>[]; box: Box; col: number }[] = []
   row.forEach((cell, i) => {
     let box: Box | null = null
     for (const g of cell) box = merge(box, union(ctx, g.blocks))
@@ -266,7 +282,7 @@ function collectRow(
     // Верхи элементов ВЫБРАННОЙ КОЛОНКИ: ими кончаются полосы её целей (`Cand`).
     const colTops: number[] = []
     for (const group of cell.groups) {
-      if (ctx.opts.layer === 'group') {
+      if (ctx.opts.layer === 'unit') {
         const box = union(ctx, group.blocks)
         if (box !== null) colTops.push(box.top)
         continue
@@ -277,7 +293,7 @@ function collectRow(
         if (box) colTops.push(box.top)
       }
     }
-    const liveGroups: { group: Group; ids: string[] }[] = []
+    const liveGroups: { group: Unit<B>; ids: string[] }[] = []
     for (const group of cell.groups) {
       const ids = liveIds(ctx, group.blocks)
       if (ids.length > 0) liveGroups.push({ group, ids })
@@ -289,7 +305,7 @@ function collectRow(
       // якорь «по документу» (он в самой правой колонке) открывал бы полосу «под всей
       // секцией» с верха ряда, съедая позиции внутри левых колонок.
       anchor = gTail
-      if (ctx.opts.layer === 'block') collectInsideGroup(ctx, group, gTail, colTops, rowEnd, out)
+      if (ctx.opts.layer === 'part') collectInsideUnit(ctx, group, gTail, colTops, rowEnd, out)
       // Щель внутри колонки — после каждого живого участника, КРОМЕ последнего: его
       // полосу занимает граница ряда. Линия меряется по участнику, то есть выходит в
       // ширину колонки, — «встанешь сюда», а не «между рядами».
@@ -310,26 +326,27 @@ function collectRow(
 // Полоса без «своих» верхов: кончается концом ряда и только им.
 const EMPTY: number[] = []
 
-// collectInsideGroup — позиции ВНУТРИ вопроса (только блочный слой). У вопроса свои ряды
+// collectInsideUnit — позиции ВНУТРИ единицы (только слой 'part'). У вопроса свои ряды
 // (§6.6 «подпись | поле»), и та же атомарность действует внутри него: щель МЕЖДУ
 // участниками внутреннего ряда рвёт его так же, как внешнего, и легализует её только
 // активный из этого же ряда. Хвост вопроса сюда не попадает — он граница группы и
-// решается уровнем выше.
+// решается уровнем выше. Ряды приезжают колбэком `inner`: раскладчик вопроса — знание
+// слоя, а не прицела (у вариантов внутренних рядов нет вовсе, и колбэка они не дают).
 //
 // Отдельной проверки «щель между участниками ВНУТРЕННЕГО ряда» здесь нет, потому что
 // такой щели не бывает: `packGroupRows` пускает в ряд только пару «подпись + отвечаемое»
 // (`groups.ts`), отвечаемый у группы один (`regroup`), и он группу замыкает — значит
-// внутренний ряд из двоих всегда последний и уходит выше по `tail === gTail`.
-function collectInsideGroup(
-  ctx: Ctx,
-  group: Group,
+// внутренний ряд из двоих всегда последний и уходит выше по `tail === gTail`. Правило
+// это про полотно; прицел его не знает и не проверяет.
+function collectInsideUnit<B extends Part>(
+  ctx: Ctx<B>,
+  group: Unit<B>,
   gTail: string,
   colTops: number[],
   rowEnd: number,
   out: Cand[],
 ): void {
-  for (const inner of packGroupRows(group.blocks)) {
-    const blocks = inner.flat()
+  for (const blocks of ctx.opts.inner?.(group.blocks) ?? []) {
     const innerIds = liveIds(ctx, blocks)
     const tail = innerIds[innerIds.length - 1]
     if (tail === undefined || tail === gTail) continue
@@ -339,8 +356,8 @@ function collectInsideGroup(
 
 // Кандидат без измеренного якоря выбрасывается: полосы у него нет, а цель, которую
 // нельзя показать, хуже отсутствующей.
-function push(
-  ctx: Ctx,
+function push<B extends Part>(
+  ctx: Ctx<B>,
   out: Cand[],
   target: DropTarget,
   anchorId: string,
@@ -353,14 +370,14 @@ function push(
   }
 }
 
-const rowBlocks = (row: Row<Group>): Block[] => row.flat().flatMap((g) => g.blocks)
+const rowBlocks = <B extends Part>(row: Row<Unit<B>>): B[] => row.flat().flatMap((g) => g.blocks)
 
-const liveIds = (ctx: Ctx, blocks: Block[]): string[] =>
+const liveIds = <B extends Part>(ctx: Ctx<B>, blocks: B[]): string[] =>
   blocks.filter((b) => !ctx.active.has(b.id)).map((b) => b.id)
 
 // Блоки, которые едут за курсором и потому целями быть не могут.
-function activeBlockIds(rows: Row<Group>[], opts: PickOpts): string[] {
-  if (opts.layer === 'block') return [opts.activeId]
+function activeBlockIds<B extends Part>(rows: Row<Unit<B>>[], opts: PickOpts<B>): string[] {
+  if (opts.layer === 'part') return [opts.activeId]
   for (const row of rows) {
     for (const g of row.flat()) if (g.id === opts.activeId) return g.blocks.map((b) => b.id)
   }
@@ -370,7 +387,7 @@ function activeBlockIds(rows: Row<Group>[], opts: PickOpts): string[] {
 // Замеры идут на КАЖДОЕ движение указателя и по всему полотну, поэтому промежуточных
 // массивов здесь нет: активный отсеивается на месте (§5.3 EDITOR.md — правила кадра
 // драга; цена мусора на форме в двести блоков уже была измерена в TD-55).
-function union(ctx: Ctx, blocks: Block[]): Box | null {
+function union<B extends Part>(ctx: Ctx<B>, blocks: B[]): Box | null {
   let top = Infinity
   let bottom = -Infinity
   let left = Infinity
