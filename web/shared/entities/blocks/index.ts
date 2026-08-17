@@ -3,6 +3,7 @@ import { consent } from './consent'
 import { date } from './date'
 import { dropdown } from './dropdown'
 import { email } from './email'
+import { file } from './file'
 import { formTitle } from './formTitle'
 import { heading } from './heading'
 import { image } from './image'
@@ -38,6 +39,7 @@ export const BLOCK_KINDS: Record<BlockType, BlockKindContract> = {
   multi_choice: multiChoice,
   date,
   consent,
+  file,
   title,
   label,
   heading,

@@ -132,7 +132,53 @@ func validateAnswer(b Block, raw json.RawMessage, required bool) string {
 	if b.Type == BlockConsent {
 		return validateConsentAnswer(b, raw, required)
 	}
+	if b.Type == BlockFile {
+		return validateFileAnswer(b, raw, required)
+	}
 	return validateTextAnswer(b, raw, required)
+}
+
+// validateFileAnswer — файлы: ответ приходит массивом id загрузок, выданных
+// сервером (design/answer-files.md §4.2), как multi_choice приходит массивом id
+// опций.
+//
+// Здесь проверяется ФОРМА ответа, и только она: существуют ли эти загрузки, той ли
+// они формы и совпал ли размер — вопросы к базе и хранилищу, а этот файл остаётся
+// чистой функцией без SQL и HTTP. Заявление загрузок делает submissions при приёме;
+// пропустить его нельзя — иначе в ответе окажется ссылка на чужой или несуществующий
+// объект.
+func validateFileAnswer(b Block, raw json.RawMessage, required bool) string {
+	if len(raw) == 0 {
+		if required {
+			return msgRequired
+		}
+		return ""
+	}
+	var ids []string
+	if err := json.Unmarshal(raw, &ids); err != nil {
+		return "ожидался список файлов"
+	}
+	if len(ids) == 0 {
+		if required {
+			return msgRequired
+		}
+		return ""
+	}
+	maxFiles, _ := FileLimits(b)
+	if len(ids) > maxFiles {
+		return fmt.Sprintf("больше %d файлов", maxFiles)
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if err := validateID(id); err != nil {
+			return "некорректный файл"
+		}
+		if _, dup := seen[id]; dup {
+			return "повторяющийся файл"
+		}
+		seen[id] = struct{}{}
+	}
+	return ""
 }
 
 // ConsentYes — значение отмеченного согласия. Ответ хранится строкой, а не булевым

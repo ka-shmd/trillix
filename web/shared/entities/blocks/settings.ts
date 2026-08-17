@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  FILE_FAMILIES,
   MAX_COLUMNS,
   MAX_ID_LEN,
   MAX_IMAGE_KEY_LEN,
@@ -58,6 +59,17 @@ export const settingsSchema = z.strictObject({
   // опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
+  // Настройки блока file (фаза 24). Диапазон проверяет сам тип (blocks/file.ts,
+  // issues), как и у шкалы: здесь — форма значения, там — правило типа. Отсутствие
+  // ключа читается как дефолт (DEFAULT_MAX_FILES/DEFAULT_MAX_FILE_SIZE_MIB), и
+  // указатель-подобной пары «не задано против задано 0», как у scaleMin, тут не
+  // нужно: ни нуля файлов, ни файла нулевого размера не бывает.
+  maxFiles: z.number().int().optional(),
+  maxFileSize: z.number().int().optional(),
+  // Семейства типов, которые автор пускает в вопрос. Пусто (и отсутствие ключа) =
+  // все разрешённые продуктом. Белый список MIME живёт только в Go: он — граница
+  // безопасности, и второй его экземпляр здесь означал бы, что она разъедется.
+  accept: z.array(z.enum(FILE_FAMILIES)).max(FILE_FAMILIES.length).optional(),
   // Колонка секции: номер 1..MAX_COLUMNS = «я в этой колонке текущей секции»,
   // отсутствие ключа = полная ширина и КОНЕЦ секции. Ширина не хранится
   // вовсе, её выводит раскладчик. Запрещён только заголовку формы (canShareRow);
@@ -70,7 +82,14 @@ export type Settings = z.infer<typeof settingsSchema>
 // Ключ настроек, ЗАКРЕПЛЁННЫЙ за типом: его наличие у типа, который им не владеет, —
 // ошибка схемы. Владение объявляет сам тип (ownSettings в его файле), а инвентарь
 // ключей живёт здесь: ключ — свойство общего мешка настроек, а не одного типа.
-export type OwnedSettingKey = 'options' | 'imageKey' | 'scaleMin' | 'scaleMax'
+export type OwnedSettingKey =
+  | 'options'
+  | 'imageKey'
+  | 'scaleMin'
+  | 'scaleMax'
+  | 'maxFiles'
+  | 'maxFileSize'
+  | 'accept'
 
 // Инвентарь закреплённых ключей: как называть ключ в сообщении и что считать его
 // НАЛИЧИЕМ. Оба поля переносят сегодняшнее поведение дословно, и ни одно не
@@ -97,4 +116,9 @@ export const OWNED_SETTINGS: ReadonlyArray<{
   { key: 'imageKey', noun: 'картинки', present: (v) => Boolean(v) },
   { key: 'scaleMin', noun: 'шкалы', present: (v) => v !== undefined },
   { key: 'scaleMax', noun: 'шкалы', present: (v) => v !== undefined },
+  // Три ключа блока file делят одно существительное — как пара шкалы: на чужом типе
+  // они дают ОДНО замечание, а не три про одно и то же.
+  { key: 'maxFiles', noun: 'файлов', present: (v) => v !== undefined },
+  { key: 'maxFileSize', noun: 'файлов', present: (v) => v !== undefined },
+  { key: 'accept', noun: 'файлов', present: (v) => Array.isArray(v) && v.length > 0 },
 ]

@@ -326,3 +326,26 @@ func TestSummary_IgnoresAnswerAbsentFromItsVersion(t *testing.T) {
 		t.Fatalf("спросили/ответили = %d/%d, ожидалось 0/0", city.Asked, city.Answered)
 	}
 }
+
+// Файлы: агрегировать нечего, но факт заполнения обязан считаться. Значение
+// приходит массивом, и общая ветка «доли заполнивших», которая ждёт строку, дала бы
+// «заполнили 0» при полном списке ответов — молча, без падения.
+func TestSummary_FileCountsAsFilled(t *testing.T) {
+	src := Block{ID: "cv", GroupID: "g", Type: BlockFile, Name: "Резюме"}
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
+	b.Add(1, ans(map[string]any{"cv": []string{"u1", "u2"}}))
+	b.Add(1, ans(map[string]any{"cv": []string{}}))
+	b.Add(1, ans(map[string]any{}))
+
+	sum := b.Result()
+	if len(sum.Blocks) != 1 {
+		t.Fatalf("блоков в сводке %d, ожидался 1", len(sum.Blocks))
+	}
+	bs := sum.Blocks[0]
+	if bs.Kind != SummaryFill {
+		t.Fatalf("вид сводки = %q, ожидалась доля заполнивших", bs.Kind)
+	}
+	if bs.Asked != 3 || bs.Answered != 1 {
+		t.Fatalf("спросили/ответили = %d/%d, ожидалось 3/1", bs.Asked, bs.Answered)
+	}
+}

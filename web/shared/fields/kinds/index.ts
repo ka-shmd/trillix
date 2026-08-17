@@ -5,6 +5,7 @@ import { type Control } from './contract'
 import { dateControl } from './date'
 import { dropdownControl } from './dropdown'
 import { emailControl } from './email'
+import { fileControl } from './file'
 import { longTextControl } from './longText'
 import { multiChoiceControl } from './multiChoice'
 import { numberControl } from './number'
@@ -33,6 +34,7 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   multi_choice: multiChoiceControl,
   date: dateControl,
   consent: consentControl,
+  file: fileControl,
   // Неотвечаемые: рисуются как статический контент (ContentBlock в BlockField), контрола
   // не имеют по устройству.
   title: null,

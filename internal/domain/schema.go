@@ -69,6 +69,17 @@ const (
 	// Диапазон новой шкалы и фолбэк для схемы без него. Зеркалят DEFAULT_SCALE_*.
 	DefaultScaleMin = 1
 	DefaultScaleMax = 5
+	// Границы блока file (фаза 24). Зеркалят MAX_FILES_*/MAX_FILE_SIZE_* в limits.ts.
+	//
+	// Верх числа файлов — 10, верх размера — 25 МиБ: и то и другое умножается на
+	// число ответов и ложится в счёт за хранилище, а форма с двадцатью вложениями по
+	// сотне мегабайт — это уже файлообменник, а не анкета. Оба потолка — предел
+	// АВТОРА, не наш: сверх них подпись загрузки не выдаётся ни при каких настройках.
+	MaxFilesUpperBound       = 10
+	MaxFileSizeUpperBoundMiB = 25
+	// Дефолты для блока, у которого автор ничего не трогал.
+	DefaultMaxFiles       = 1
+	DefaultMaxFileSizeMiB = 10
 	// Экран «после отправки»: текст благодарности владельца и ссылка перехода.
 	MaxThankYouTextLen = 2000
 	MaxRedirectURLLen  = 2000
@@ -112,6 +123,11 @@ const (
 	BlockMultiChoice  BlockType = "multi_choice"
 	BlockDate         BlockType = "date"
 	BlockConsent      BlockType = "consent"
+	// BlockFile — файл в ответе (фаза 24, design/answer-files.md). Ответ — массив
+	// id загрузок, выданных сервером; ни имени, ни размера, ни MIME в ответе нет:
+	// всё это утверждения клиента, а правда о файле лежит в submission_files и
+	// проверена у хранилища.
+	BlockFile BlockType = "file"
 	// Подписи (текст вопроса в группе).
 	BlockTitle BlockType = "title"
 	BlockLabel BlockType = "label"
@@ -149,7 +165,7 @@ const (
 var blockTypes = []BlockType{
 	// отвечаемые
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
-	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
+	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent, BlockFile,
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
@@ -247,6 +263,18 @@ type BlockSettings struct {
 	ImageKey    string   `json:"imageKey,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
+	// Настройки блока file (фаза 24). Нули означают «автор не трогал» и читаются
+	// как дефолты (DefaultMaxFiles/DefaultMaxFileSizeMiB) — указатели здесь не
+	// нужны в отличие от шкалы: ноль файлов и файл нулевого размера не имеют
+	// смысла, поэтому «не задано» и «задано 0» различать нечего.
+	MaxFiles int `json:"maxFiles,omitempty"`
+	// MaxFileSize — потолок ОДНОГО файла в МиБ.
+	MaxFileSize int `json:"maxFileSize,omitempty"`
+	// Accept — семейства типов, которые автор пускает в этот вопрос. Пусто = все
+	// разрешённые продуктом. Не MIME и не расширения строкой: белый список — наша
+	// граница безопасности, и автор формы выбирает ВНУТРИ него, а не расширяет его
+	// (design/answer-files.md §4.1).
+	Accept []string `json:"accept,omitempty"`
 	// Column — НОМЕР КОЛОНКИ ряда (спека §5): 1..MaxColumns читается как «я в этой
 	// колонке текущего ряда», 0 (пусто) = свой ряд во всю ширину и конец секции.
 	// Ширина не хранится вовсе — её выводит раскладчик. Только у canShareRow-типов.
@@ -610,6 +638,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if err := validateScaleSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)
 	}
+	if err := validateFileSettings(b); err != nil {
+		return schemaErr("%s: %s", at, err)
+	}
 	// Условная логика (фаза 21): проверяется ФОРМА правил, а не их разрешимость —
 	// ссылки, позиции и совместимость операторов кросс-блочны и потому инертны, а не
 	// невалидны (logic.go, доклок).
@@ -673,6 +704,55 @@ func validateScaleSettings(b Block) error {
 		return fmt.Errorf("шкала: минимум не меньше максимума")
 	}
 	return nil
+}
+
+// validateFileSettings — настройки блока file: только у него (как options у choice),
+// потолки в пределах наших границ, семейства — из известного списка.
+//
+// Ноль читается как «автор не трогал» и подменяется дефолтом на чтении
+// (FileLimits), поэтому здесь ноль законен, а вот отрицательное значение и число
+// сверх нашей границы — нет: подпись загрузки такого не выдаст, и настройка,
+// которую нельзя исполнить, обязана краснеть в редакторе, а не тихо не работать
+// у респондента.
+func validateFileSettings(b Block) error {
+	s := b.Settings
+	if b.Type != BlockFile {
+		if s.MaxFiles != 0 || s.MaxFileSize != 0 || len(s.Accept) > 0 {
+			return fmt.Errorf("тип %q не принимает файлы", b.Type)
+		}
+		return nil
+	}
+	if s.MaxFiles < 0 || s.MaxFiles > MaxFilesUpperBound {
+		return fmt.Errorf("файлы: число файлов вне диапазона 1..%d", MaxFilesUpperBound)
+	}
+	if s.MaxFileSize < 0 || s.MaxFileSize > MaxFileSizeUpperBoundMiB {
+		return fmt.Errorf("файлы: размер вне диапазона 1..%d МиБ", MaxFileSizeUpperBoundMiB)
+	}
+	seen := make(map[string]struct{}, len(s.Accept))
+	for _, a := range s.Accept {
+		if !validFileFamily(a) {
+			return fmt.Errorf("файлы: неизвестное семейство %q", a)
+		}
+		if _, dup := seen[a]; dup {
+			return fmt.Errorf("файлы: повторяющееся семейство %q", a)
+		}
+		seen[a] = struct{}{}
+	}
+	return nil
+}
+
+// FileLimits — действующие потолки блока с подстановкой дефолтов. Единственная
+// точка, где ноль превращается в число: и выдача подписи, и приём ответа, и
+// редактор обязаны считать одинаково.
+func FileLimits(b Block) (maxFiles, maxSizeMiB int) {
+	maxFiles, maxSizeMiB = b.Settings.MaxFiles, b.Settings.MaxFileSize
+	if maxFiles <= 0 {
+		maxFiles = DefaultMaxFiles
+	}
+	if maxSizeMiB <= 0 {
+		maxSizeMiB = DefaultMaxFileSizeMiB
+	}
+	return maxFiles, maxSizeMiB
 }
 
 // validateID проверяет стабильный идентификатор блока, группы или опции: непустой,

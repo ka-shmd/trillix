@@ -1421,3 +1421,152 @@ textarea.rf-input {
   text-decoration: underline;
 }
 
+
+/* ФАЙЛ В ОТВЕТЕ (фаза 24) — зона выбора и список приложенного.
+
+   Зона — это <label> с input[type=file] внутри: клик, фокус и клавиатура работают
+   сами, без role="button" и своего onKeyDown. Сам input не прячется display:none
+   (это забрало бы у него фокус) — он прозрачен и растянут на всю зону.
+
+   Контур зоны — пунктир, а не тень полей: она приглашает БРОСИТЬ файл, и обычная
+   рамка контрола этого не говорит. Кегль подписи — служебный (×0.875), как у
+   описания вопроса: это подсказка о лимитах, а не текст автора. */
+.rf-file {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rf-file-zone {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+  min-height: calc(var(--rf-control-h) * 2);
+  padding: 1rem;
+  border: 1px dashed var(--rf-muted);
+  border-radius: var(--rf-radius);
+  background: var(--rf-field-bg);
+  cursor: pointer;
+  text-align: center;
+}
+
+/* Зона под курсором с файлом и заполненная доверху — два разных состояния, и оба
+   обязаны читаться без текста: первое приглашает, второе объясняет, почему клик
+   ничего не даёт. */
+.rf-file-zone--over {
+  border-style: solid;
+  box-shadow: var(--rf-focus-shadow);
+}
+
+.rf-file-zone--full {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.rf-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: inherit;
+}
+
+.rf-file-input:focus-visible {
+  outline: none;
+}
+
+.rf-file-zone:focus-within {
+  box-shadow: var(--rf-focus-shadow);
+}
+
+.rf-file-cta {
+  font-size: var(--rf-font-size);
+  line-height: 1.5rem;
+  color: var(--rf-text);
+}
+
+.rf-file-hint {
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  line-height: 1.5;
+  color: var(--rf-muted);
+}
+
+.rf-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rf-file-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--rf-radius);
+  background: color-mix(in oklab, var(--rf-muted) 12%, transparent);
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  line-height: 1.5;
+  color: var(--rf-text);
+}
+
+/* Имя жмётся, размер и крестик — нет: длинное имя обязано укорачиваться само, а не
+   выталкивать кнопку «убрать» за край колонки. */
+.rf-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rf-file-size {
+  flex: 0 0 auto;
+  color: var(--rf-muted);
+}
+
+.rf-file-item--error .rf-file-size {
+  color: var(--rf-danger);
+}
+
+.rf-file-progress {
+  flex: 0 0 4rem;
+  height: 0.25rem;
+  border-radius: 0.125rem;
+  background: color-mix(in oklab, var(--rf-muted) 30%, transparent);
+  overflow: hidden;
+}
+
+.rf-file-bar {
+  display: block;
+  height: 100%;
+  background: var(--rf-accent);
+}
+
+.rf-file-remove {
+  flex: 0 0 auto;
+  border: 0;
+  background: none;
+  padding: 0 0.25rem;
+  font-family: inherit;
+  font-size: var(--rf-font-size);
+  line-height: 1;
+  color: var(--rf-muted);
+  cursor: pointer;
+}
+
+.rf-file-remove:hover {
+  color: var(--rf-text);
+}
+
+.rf-file-remove:focus-visible {
+  outline: none;
+  border-radius: var(--rf-radius);
+  box-shadow: var(--rf-focus-shadow);
+}

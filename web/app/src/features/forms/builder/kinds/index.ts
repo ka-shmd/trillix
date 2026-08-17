@@ -6,6 +6,7 @@ import { type EditorKind, type RowFacts } from './contract'
 import { date } from './date'
 import { dropdown } from './dropdown'
 import { email } from './email'
+import { file } from './file'
 import { formTitle } from './formTitle'
 import { heading } from './heading'
 import { image } from './image'
@@ -37,6 +38,7 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   multi_choice: multiChoice,
   date,
   consent,
+  file,
   title,
   label,
   heading,

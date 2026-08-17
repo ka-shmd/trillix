@@ -110,3 +110,18 @@ export const BLOCK_CLASS_RE = /^[a-z][a-z0-9-]{0,31}$/
 // читающий, почему именно так. Разъехавшись, они дали бы поле, которое краснеет в
 // панели, но проходит валидатор, или наоборот.
 export const CSS_MARKUP_ESCAPE = '</'
+// Файлы в ответе (фаза 24). Зеркалят MaxFilesUpperBound/MaxFileSizeUpperBoundMiB/
+// DefaultMaxFiles/DefaultMaxFileSizeMiB. Оба потолка — предел АВТОРА, а не наш:
+// сверх них подпись загрузки не выдаётся ни при каких настройках блока, потому что
+// и число файлов, и размер умножаются на число ответов и ложатся в счёт за
+// хранилище.
+export const MAX_FILES_UPPER_BOUND = 10
+export const MAX_FILE_SIZE_UPPER_BOUND_MIB = 25
+export const DEFAULT_MAX_FILES = 1
+export const DEFAULT_MAX_FILE_SIZE_MIB = 10
+// Семейства типов, которые автор пускает в вопрос. Зеркалит FileFamilies в
+// internal/domain/files.go. Автор выбирает ВНУТРИ белого списка продукта, а не
+// расширяет его: сам список MIME живёт только в Go — это граница безопасности, и
+// второй экземпляр на фронте означал бы, что она разъедется.
+export const FILE_FAMILIES = ['image', 'document', 'table', 'archive'] as const
+export type FileFamily = (typeof FILE_FAMILIES)[number]

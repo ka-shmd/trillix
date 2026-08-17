@@ -283,3 +283,44 @@ func TestValidateAnswers_TextBlockNonAnswerable(t *testing.T) {
 		t.Fatalf("ожидалось сообщение под intro (несуществующий вопрос), карта: %v", fields)
 	}
 }
+
+// Файлы: ответ — массив id загрузок, выданных сервером. Здесь проверяется ФОРМА
+// ответа; существуют ли эти загрузки и той ли они формы — вопрос к базе, и его
+// задаёт приём ответа, а не чистая функция.
+func TestValidateAnswers_File(t *testing.T) {
+	block := func(required bool, maxFiles int) FormSchema {
+		b := Block{ID: "f", GroupID: "g", Type: BlockFile, Required: required}
+		b.Settings.MaxFiles = maxFiles
+		return FormSchema{Blocks: []Block{b}}
+	}
+
+	if err := ValidateAnswers(block(true, 3), raws(map[string]string{"f": `["u1","u2"]`})); err != nil {
+		t.Fatalf("два файла при потолке три: %v", err)
+	}
+	if err := ValidateAnswers(block(false, 0), nil); err != nil {
+		t.Fatalf("необязательный без файлов: %v", err)
+	}
+
+	for name, v := range map[string]string{
+		"строка вместо массива": `"u1"`,
+		"повтор одной загрузки": `["u1","u1"]`,
+		"пустой id":             `["" ]`,
+		"больше потолка":        `["u1","u2","u3"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ValidateAnswers(block(false, 2), raws(map[string]string{"f": v})); err == nil {
+				t.Fatalf("ожидалась ошибка для %s", v)
+			}
+		})
+	}
+
+	// Обязательный: пустой массив — это «не ответил», а не «ответил ничем».
+	if err := ValidateAnswers(block(true, 2), raws(map[string]string{"f": `[]`})); err == nil {
+		t.Fatal("пустой список принят у обязательного вопроса")
+	}
+
+	// Дефолт потолка: блок без настроек принимает один файл, не два.
+	if err := ValidateAnswers(block(false, 0), raws(map[string]string{"f": `["u1","u2"]`})); err == nil {
+		t.Fatal("дефолтный потолок (1 файл) не сработал")
+	}
+}
