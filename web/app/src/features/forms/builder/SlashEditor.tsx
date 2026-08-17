@@ -1746,9 +1746,11 @@ function EmptyStarter({
       // набор с клавиатуры, а не тычок в любое место страницы. Клик область по-прежнему
       // ФОКУСИРУЕТ (tabIndex), поэтому «кликнул и печатаю» работает как работало.
       {...rowFocus}
-      // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
-      // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
-      className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
+      // Отступ от заголовка формы ВДВОЕ короче, чем у списка блоков (решение владельца):
+      // приглашение — не первый вопрос, а надпись под заголовком, и ритм «заголовок →
+      // форма» ей велик. Множитель плотности тот же, что у полотна: приглашение обязано
+      // ехать за настройкой автора, как и всё остальное.
+      className="mt-[calc(1.5rem*var(--rf-density)_+_0.5rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <button type="button" onClick={() => onStart()} className={HINT_ROW}>
         <SquarePen className="size-4 shrink-0" aria-hidden="true" />
@@ -1769,7 +1771,7 @@ function EmptyStarter({
           `fields.css` подключается ПОСЛЕ `index.css` (main.tsx) — значит любой
           `mt-*` на этом элементе проигрывает молча (web/CLAUDE.md, «конфликтующие
           утилиты»). Класс на элементе виден, отступа нет. */}
-      <div className="mt-20">
+      <div className="mt-12">
         <p className="rf-text max-w-prose">
           Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
           чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
