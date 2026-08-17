@@ -21,6 +21,7 @@ import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
 import { Route as AuthLoginRouteImport } from './routes/_auth/login'
 import { Route as AuthLinkAccountRouteImport } from './routes/_auth/link-account'
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
+import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
@@ -92,6 +93,11 @@ const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => AuthRoute,
 } as any)
+const AppTemplatesRoute = AppTemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
   id: '/workspaces/',
   path: '/workspaces/',
@@ -162,6 +168,7 @@ export interface FileRoutesByFullPath {
   '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
   '/login': typeof AuthLoginRoute
@@ -186,6 +193,7 @@ export interface FileRoutesByTo {
   '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
   '/login': typeof AuthLoginRoute
@@ -212,6 +220,7 @@ export interface FileRoutesById {
   '/confirm-email-change': typeof ConfirmEmailChangeRoute
   '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/_app/templates': typeof AppTemplatesRoute
   '/_auth/forgot-password': typeof AuthForgotPasswordRoute
   '/_auth/link-account': typeof AuthLinkAccountRoute
   '/_auth/login': typeof AuthLoginRoute
@@ -239,6 +248,7 @@ export interface FileRouteTypes {
     | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
+    | '/templates'
     | '/forgot-password'
     | '/link-account'
     | '/login'
@@ -263,6 +273,7 @@ export interface FileRouteTypes {
     | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
+    | '/templates'
     | '/forgot-password'
     | '/link-account'
     | '/login'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/confirm-email-change'
     | '/invite'
     | '/verify-email'
+    | '/_app/templates'
     | '/_auth/forgot-password'
     | '/_auth/link-account'
     | '/_auth/login'
@@ -403,6 +415,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthForgotPasswordRouteImport
       parentRoute: typeof AuthRoute
     }
+    '/_app/templates': {
+      id: '/_app/templates'
+      path: '/templates'
+      fullPath: '/templates'
+      preLoaderRoute: typeof AppTemplatesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/workspaces/': {
       id: '/_app/workspaces/'
       path: '/workspaces'
@@ -508,6 +527,7 @@ const AppFormsSlugManageRouteWithChildren =
   AppFormsSlugManageRoute._addFileChildren(AppFormsSlugManageRouteChildren)
 
 interface AppRouteChildren {
+  AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
@@ -520,6 +540,7 @@ interface AppRouteChildren {
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,
   AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,

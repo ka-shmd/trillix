@@ -21,6 +21,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { Link } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -1215,7 +1216,10 @@ export function SlashEditor({
               onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
             />
 
-            <SubmitButtonEditor />
+            {/* Кнопки отправки у пустого полотна нет: отправлять нечего, а единственный
+          элемент страницы уводил бы внимание с приглашения начать (EmptyStarter).
+          Появляется с первым же блоком. */}
+            {blocks.length > 0 && <SubmitButtonEditor />}
             </div>
           </div>
         </ActiveRowValueProvider>
@@ -1662,7 +1666,8 @@ const GroupRow = memo(function GroupRow({
   )
 }, sameGroupProps)
 
-// SubmitButtonEditor — кнопка отправки формы (всегда видна). Клик открывает поповер
+// SubmitButtonEditor — кнопка отправки формы (видна, пока на полотне есть хоть один
+// блок — см. место вызова). Клик открывает поповер
 // со сменой её текста; пусто → показывается дефолт. Пишет в стор (форма-уровень),
 // автосейв сохраняет вместе со схемой.
 function SubmitButtonEditor() {
@@ -1717,6 +1722,9 @@ function EmptyStarter({
   const rowFocus = useRowFocus(CANVAS_ROW, 'canvas')
 
   function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    // Клавиши обрабатывает только сама область. Внутри неё живёт ссылка на шаблоны, и
+    // её Enter обязан открывать страницу, а не рождать блок под ней.
+    if (e.target !== e.currentTarget) return
     if (chords.enter(e)) {
       e.preventDefault()
       onStart()
@@ -1733,7 +1741,10 @@ function EmptyStarter({
     <div
       tabIndex={0}
       onKeyDown={onKeyDown}
-      onClick={() => onStart()}
+      // Клик по ссылке на шаблоны уводит со страницы — блок под ней заводить незачем.
+      onClick={(e) => {
+        if (!(e.target as HTMLElement).closest('a')) onStart()
+      }}
       {...rowFocus}
       // Отступ от заголовка формы тот же, что у списка блоков (см. ol выше): приглашение
       // стоит на месте первого вопроса и обязано стоять ровно там, где он появится.
@@ -1743,7 +1754,16 @@ function EmptyStarter({
         Нажмите <Kbd>Enter</Kbd>, чтобы начать
       </p>
       <p>
-        Нажмите <Kbd>/</Kbd>, чтобы вставить блок
+        <Link
+          to="/templates"
+          className="cursor-pointer underline underline-offset-4 hover:text-foreground"
+        >
+          Использовать шаблон
+        </Link>
+      </p>
+      <p className="mt-6 max-w-prose text-sm">
+        Trillix — конструктор форм, который работает как документ. Печатайте «/», чтобы
+        вставить блок, и «@», чтобы подставить в текст ответ на другой вопрос.
       </p>
     </div>
   )
