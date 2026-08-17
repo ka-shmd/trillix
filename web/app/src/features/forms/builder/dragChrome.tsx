@@ -1,132 +1,17 @@
 import { useDroppable } from '@dnd-kit/core'
-import { type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { type ReactNode } from 'react'
 
-// ВИД ЖЕСТА — один на все слои перетаскивания полотна: строки и вопросы (SlashEditor),
+import { type Rect } from './dragMeasure'
+
+// ВИД ЖЕСТА — один на все слои перетаскивания: строки и вопросы полотна (SlashEditor),
 // варианты choice-блока (BlockRow). Отклика ровно три (EDITOR.md §5): линия вставки
 // говорит МЕСТО, гост источника — откуда элемент взяли, полоса зоны — что сделает
-// отпускание. Пока модуля не было, слой вариантов жил своей механикой (dnd-kit со
-// своим расступанием), и «одинаковый жест» держался только на памяти правящего.
+// отпускание. Пока модуля не было, слой вариантов жил своей механикой dnd-kit, и
+// «одинаковый жест» держался только на памяти правящего.
 //
-// Слоёв касается ТОЛЬКО вид и замер. Правила («какая цель под указателем», «у какого
-// ряда горит приглашение») у каждого слоя свои и живут в своих чистых модулях —
-// dropTarget.ts/rowZones.ts у полотна, optionDrop.ts у вариантов.
-
-// Rect — прямоугольник в координатах КОНТЕЙНЕРА оверлеев (`root` у замеров): полотно
-// меряет от холста, список вариантов — от своего .rf-options. Обе системы одинаковы по
-// устройству: контейнер `relative` и без рамки.
-export type Rect = { x: number; y: number; w: number; h: number }
-
-// setRect — бэйл на эквивалентный прямоугольник: замер гонит rAF-цикл, и setState тем же
-// значением каждый кадр перерисовывал бы полотно посреди драга впустую.
-export function setRect(set: Dispatch<SetStateAction<Rect | null>>, next: Rect | null): void {
-  set((p) =>
-    p === next ||
-    (p && next && p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h)
-      ? p
-      : next,
-  )
-}
-
-// Как элемент слоя находится в DOM: атрибут-якорь замера. У строк полотна это
-// data-block-id (BlockRow), у вариантов — data-option-id (OptionCard).
-export type Anchor = 'data-block-id' | 'data-option-id'
-
-const find = (root: HTMLElement, attr: Anchor, id: string): HTMLElement | null =>
-  root.querySelector<HTMLElement>(`[${attr}="${id}"]`)
-
-// measureSlot — бокс СЛОТА, из которого элемент вынули: там стоит гост источника.
-//
-// Меряется НЕ getBoundingClientRect, и это суть функции. Перетаскиваемый элемент едет за
-// курсором CSS-трансформом, поэтому его клиентский прямоугольник показывает, где он
-// сейчас, а нам нужно, где он БЫЛ. `offsetLeft`/`offsetTop`/`offsetWidth` — величины
-// лайаута, про трансформ они не знают ни у самого элемента, ни у его предков (у группы он
-// тоже есть, когда тащат вопрос). Обход идёт по offsetParent, а не по родителям: смещение
-// считается от ближайшего позиционированного предка, и сумма по этой же цепочке даёт
-// координату в системе контейнера оверлеев.
-//
-// Замер каждый кадр, хотя двигать раскладку во время драга полотну нечем: расступание
-// снято, дублёр снят. Это осознанная страховка ценой одного элемента в кадре — снимок,
-// взятый однажды на старте, соврал бы молча, стоит чему-нибудь снова начать двигаться.
-//
-// pad — вертикальный внутренний отступ элемента, который в бокс входит, а в копию нет:
-// у строки полотна это её py-1.5 (6px), у карточки варианта — ноль. Меняешь отступ
-// строки — правь число у вызова.
-export function measureSlot(
-  root: HTMLElement,
-  ids: string[],
-  attr: Anchor,
-  pad: number,
-): Rect | null {
-  let left = Infinity
-  let top = Infinity
-  let right = -Infinity
-  let bottom = -Infinity
-  for (const id of ids) {
-    const el = find(root, attr, id)
-    if (!el) continue
-    let x = 0
-    let y = 0
-    for (
-      let n: HTMLElement | null = el;
-      n !== null && n !== root;
-      n = n.offsetParent as HTMLElement | null
-    ) {
-      x += n.offsetLeft
-      y += n.offsetTop
-    }
-    top = Math.min(top, y)
-    bottom = Math.max(bottom, y + el.offsetHeight)
-    left = Math.min(left, x)
-    right = Math.max(right, x + el.offsetWidth)
-  }
-  if (left === Infinity || top === Infinity) return null
-  return { x: left, y: top + pad, w: right - left, h: Math.max(0, bottom - top - pad * 2) }
-}
-
-// measureUnion — union-rect элементов с данными id по ЖИВОМУ DOM: getBoundingClientRect
-// учитывает трансформы, которыми едет активный элемент, а layout-бокс — нет. null —
-// мерить нечего.
-export function measureUnion(root: HTMLElement, ids: string[], attr: Anchor): Rect | null {
-  if (ids.length === 0) return null
-  const cr = root.getBoundingClientRect()
-  let left = Infinity
-  let top = Infinity
-  let right = -Infinity
-  let bottom = -Infinity
-  for (const id of ids) {
-    const el = find(root, attr, id)
-    if (!el) continue
-    const r = el.getBoundingClientRect()
-    top = Math.min(top, r.top)
-    bottom = Math.max(bottom, r.bottom)
-    left = Math.min(left, r.left)
-    right = Math.max(right, r.right)
-  }
-  if (left === Infinity || top === Infinity) return null
-  return { x: left - cr.left, y: top - cr.top, w: right - left, h: bottom - top }
-}
-
-// measureLine — ЛИНИЯ ВСТАВКИ: горизонтальная черта в просвете у края цели, там, где
-// элемент окажется после дропа (2026-08-11). Заменила расступание строк: раскладка стоит
-// неподвижно, а место называет линия.
-//
-// Ширина — по ЦЕЛИ, а не по контейнеру, и это несёт смысл: линия во всю колонку значит
-// «встанешь в эту колонку», линия во всю ширину — «встанешь между рядами». Половина
-// просвета (gap) ставит её ровно посередине между соседями — так же, как её ставит глаз,
-// когда решает, «куда это упадёт». Просвет у слоёв разный: 28px между вопросами, 12px
-// между вариантами, — поэтому он приходит аргументом.
-const LINE_H = 2
-export function measureLine(
-  root: HTMLElement,
-  ids: string[],
-  before: boolean,
-  attr: Anchor,
-  gap: number,
-): Rect | null {
-  const u = measureUnion(root, ids, attr)
-  if (!u) return null
-  return { x: u.x, y: (before ? u.y - gap : u.y + u.h + gap) - LINE_H / 2, w: u.w, h: LINE_H }
-}
+// Слоёв касается ТОЛЬКО вид и замер (`dragMeasure.ts`). Правила («какая цель под
+// указателем», «у какого ряда горит приглашение») у каждого слоя свои и живут в своих
+// чистых модулях — dropTarget.ts/rowZones.ts у полотна, optionDrop.ts у вариантов.
 
 // DropLine — сама линия. Позиционирование ПРЯМОЕ, без своей анимации: rAF-замер и так
 // даёт гладкие значения, а пружина, ретаргетируемая каждый кадр, копила скорость по
@@ -199,9 +84,9 @@ const zoneHit = 'pointer-events-none absolute inset-y-0 z-10 rounded-md'
 // там надо чем-то назвать. Внутренние (жёлоб между колонками, подвал колонки) заливку
 // потеряли: они ложатся ВПЛОТНУЮ к контенту, и подсвеченный прямоугольник поверх формы
 // читался как «эта часть формы что-то значит».
-export const zoneFill = (hot: boolean) =>
+const zoneFill = (hot: boolean) =>
   `${zoneHit} transition-colors ${hot ? 'bg-primary/20' : 'bg-primary/[0.07]'}`
-export const ZONE_SIDE = { left: ZONE_LEFT, right: ZONE_RIGHT }
+const ZONE_SIDE = { left: ZONE_LEFT, right: ZONE_RIGHT }
 
 // SideDropZone — приглашение «открой здесь НОВУЮ колонку» на внешней границе ряда. Якорь
 // — контейнер РЯДА, а не элемент: край элемента зависит от того, что внутри, а полоса
@@ -284,5 +169,20 @@ export function FootDropZone({ id, hot }: { id: string; hot: boolean }) {
         className="pointer-events-none absolute inset-x-0 -bottom-3.5 z-10 h-7 rounded-md"
       />
     </>
+  )
+}
+
+// CellDropZone — та же зона на строке подписи (§6.6 EDITOR.md): дроп собирает ряд ВНУТРИ
+// вопроса. Вид и правила те же, что у SideDropZone, — жест один, уровень разный, и
+// выглядеть они обязаны одинаково. Сторона всегда правая: пара внутри вопроса
+// направленная (слева подпись, справа поле).
+//
+// Своей линии не рисует никогда: зона второго уровня живёт ТОЛЬКО в блочном драге (её
+// зажигает поле, уносимое из своей мульти-группы), а в нём жёлоб пуст у всех — см.
+// zoneRailOff в SlashEditor.
+export function CellDropZone({ id, hot }: { id: string; hot: boolean }) {
+  const { setNodeRef } = useDroppable({ id })
+  return (
+    <div ref={setNodeRef} aria-hidden="true" className={`${zoneFill(hot)} ${ZONE_SIDE.right}`} />
   )
 }

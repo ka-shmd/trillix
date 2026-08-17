@@ -14,7 +14,6 @@ import {
   MeasuringStrategy,
   PointerSensor,
   pointerWithin,
-  useDroppable,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -58,20 +57,15 @@ import {
   noLayoutAnimation,
 } from './dnd'
 import {
+  CellDropZone,
   DropLine,
   FootDropZone,
   GapDropZone,
   GhostFrame,
-  measureLine,
-  measureSlot,
-  measureUnion,
-  type Rect,
-  setRect,
   SideDropZone,
   SourceSlot,
-  ZONE_SIDE,
-  zoneFill,
 } from './dragChrome'
+import { measureLine, measureSlot, measureUnion, type Rect, setRect } from './dragMeasure'
 import { BlockRow } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
@@ -1331,27 +1325,6 @@ const cellZoneBlock = (id: string | number): string | null => {
 const isRowZone = (id: string | number): boolean =>
   rowZoneTarget(id) !== null || cellZoneBlock(id) !== null
 
-// CellDropZone — та же зона на строке подписи (§6.6): дроп собирает ряд ВНУТРИ
-// вопроса. Вид и правила те же, что у SideDropZone, — жест один, уровень разный, и
-// выглядеть они обязаны одинаково. Сторона всегда правая: пара внутри вопроса
-// направленная (слева подпись, справа поле).
-//
-// Своей линии не рисует никогда: зона второго уровня живёт ТОЛЬКО в блочном драге
-// (её зажигает поле, уносимое из своей мульти-группы), а в нём жёлоб пуст у всех —
-// см. zoneRailOff.
-function CellDropZone({ blockId, hot }: { blockId: string; hot: boolean }) {
-  const { setNodeRef } = useDroppable({ id: cellZoneId(blockId) })
-  return (
-    <>
-      <div
-        ref={setNodeRef}
-        aria-hidden="true"
-        className={`${zoneFill(hot)} ${ZONE_SIDE.right}`}
-      />
-    </>
-  )
-}
-
 // Копия ВОПРОСА (жест между вопросами): все строки группы, тем же раскладчиком
 // внутренних рядов, что у превью.
 function GhostGroup({ group }: { group: { id: string; blocks: Block[] } }) {
@@ -1583,7 +1556,7 @@ const GroupRow = memo(function GroupRow({
           направленная (слева подпись, справа поле), и вопрос, стоящий в секции, зону не
           показывает вовсе (cellCandidate): снаружи него нет поля полотна. */}
       {cellZone !== null && group.blocks.some((b) => b.id === cellZone) && (
-        <CellDropZone blockId={cellZone} hot={cellHot} />
+        <CellDropZone id={cellZoneId(cellZone)} hot={cellHot} />
       )}
       {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
           одной вертикалью и на секции сажает строку на строку. */}
