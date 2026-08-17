@@ -60,6 +60,11 @@ type Config struct {
 	S3SecretKey string // секрет: не логируется
 	// S3MediaBucket — бакет public-read картинок (app-media).
 	S3MediaBucket string
+	// S3FilesBucket — бакет файлов ответов (app-files), ПРИВАТНЫЙ. Второй бакет, а
+	// не префикс в первом: у картинок форм и файлов респондентов несовместимые
+	// политики — те раздаются анонимно, эти не раздаются вовсе и живут только за
+	// короткой подписью (docs/design/answer-files.md §8).
+	S3FilesBucket string
 	// S3PathStyle — path-style адресация (endpoint/bucket/key). MinIO и часть
 	// РФ-провайдеров требуют true; AWS virtual-hosted — false.
 	S3PathStyle bool
@@ -156,6 +161,7 @@ func Load() (Config, error) {
 	cfg.S3AccessKey = required("S3_ACCESS_KEY")
 	cfg.S3SecretKey = required("S3_SECRET_KEY")
 	cfg.S3MediaBucket = required("S3_MEDIA_BUCKET")
+	cfg.S3FilesBucket = required("S3_FILES_BUCKET")
 	pathStyleRaw := required("S3_PATH_STYLE")
 	trustedProxyRaw := required("TRUSTED_PROXY")
 	cfg.MailTransport = required("MAIL_TRANSPORT")

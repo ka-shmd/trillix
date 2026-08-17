@@ -119,6 +119,20 @@ type Submission struct {
 	OverQuota     bool
 }
 
+type SubmissionFile struct {
+	ID           uuid.UUID
+	WorkspaceID  uuid.UUID
+	FormID       uuid.UUID
+	BlockID      string
+	SubmissionID pgtype.UUID
+	ObjectKey    string
+	OriginalName string
+	SizeBytes    int64
+	ContentType  string
+	CreatedAt    pgtype.Timestamptz
+	ClaimedAt    pgtype.Timestamptz
+}
+
 type Subscription struct {
 	PlanCode         string
 	Status           string

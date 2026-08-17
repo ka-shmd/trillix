@@ -36,6 +36,10 @@ type Row struct {
 	// MembersCount — сколько человек в пространстве СЕЙЧАС. Считается только
 	// там, где спрашивают про места: приём ответа за этим не ходит.
 	MembersCount int64
+	// StorageUsed — сколько байт файлов ответов уже лежит в пространстве. Как и
+	// MembersCount, считается только там, где спрашивают: приём ответа и выдача
+	// картинок за этим не ходят.
+	StorageUsed int64
 }
 
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
@@ -48,6 +52,10 @@ type Store interface {
 	// AccountEntitlements — план самого аккаунта и его счётчики. Периода нет:
 	// аккаунт-уровневое считается «здесь и сейчас», а не за расчётный месяц.
 	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error)
+	// EntitlementsWithStorage — то же, что Entitlements, плюс расход хранилища
+	// (гейт файлов). Отдельным запросом по тому же доводу, что и счётчик
+	// участников: сумма по submission_files нужна одной операции.
+	EntitlementsWithStorage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
 	// EntitlementsWithMembers — то же, что Entitlements, плюс счётчик участников.
 	// ОТДЕЛЬНЫМ запросом, а не колонкой в основном: тот стоит на горячем пути
 	// приёма ответа, и подсчёт участников там был бы платой за то, что нужно
@@ -123,8 +131,11 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	// Запрос выбирается счётчиком возможности: горячий путь приёма ответа не
 	// платит за подсчёт участников, который нужен только приглашению.
 	fetch := s.repo.Entitlements
-	if f.Meter == MembersMeter {
+	switch f.Meter {
+	case MembersMeter:
 		fetch = s.repo.EntitlementsWithMembers
+	case StorageMeter:
+		fetch = s.repo.EntitlementsWithStorage
 	}
 	row, err := fetch(ctx, s.db, workspaceID, period)
 	if err != nil {
@@ -246,6 +257,8 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 		used = row.WorkspacesOwned
 	case MembersMeter:
 		used = row.MembersCount
+	case StorageMeter:
+		used = row.StorageUsed
 	case NoMeter:
 		// Расход не считается: у Toggle его нет по смыслу.
 	}

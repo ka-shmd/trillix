@@ -25,6 +25,7 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY", "minioadmin")
 	t.Setenv("S3_SECRET_KEY", "minioadmin")
 	t.Setenv("S3_MEDIA_BUCKET", "app-media")
+	t.Setenv("S3_FILES_BUCKET", "app-files")
 	t.Setenv("S3_PATH_STYLE", "true")
 	t.Setenv("TRUSTED_PROXY", "false")
 	t.Setenv("MAIL_TRANSPORT", "log")

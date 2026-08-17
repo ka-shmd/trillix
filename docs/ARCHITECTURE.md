@@ -348,6 +348,7 @@ github.com/google/uuid           — UUID (v7 поддерживается; ал
 │   │   ├── service.go           #   CheckWorkspace → Decision, Snapshot для кабинета
 │   │   └── repo.go
 │   ├── media/                   # модуль: приём и хранение картинок форм (лейаут-блок image)
+│   ├── answerfiles/             # модуль: файлы в ответах — presigned-загрузка, учёт, выдача вложением
 │   ├── blob/                    # агностичный клиент S3-совместимого хранилища (ручной sigv4)
 │   ├── oauth/                   # вход через провайдеров: authorization code + PKCE (Яндекс ID)
 │   ├── mail/                    # транзакционный outbox + доставка писем (диспетчер, транспорт)

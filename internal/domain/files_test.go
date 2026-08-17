@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Белый список — граница безопасности, и проверяется она с двух сторон: что
 // разрешённое разрешено и что опасное не проходит НИ ПОД КАКИМ MIME.
@@ -58,5 +61,31 @@ func TestFamilyAllowed(t *testing.T) {
 	}
 	if FamilyAllowed([]string{"document"}, FileImage) {
 		t.Error("неперечисленное семейство проходить не должно")
+	}
+}
+
+// Имя файла — данные, а не путь: в ключ объекта оно не попадает вовсе. Здесь
+// проверяется гигиена показа и выдачи — то, чем имя ломает заголовок или врёт
+// автору в таблице ответов.
+func TestSanitizeFileName(t *testing.T) {
+	tests := map[string]string{
+		"отчёт за июль.pdf":       "отчёт за июль.pdf",
+		"../../etc/passwd":        "_.._etc_passwd", // слэши → «_», ведущие точки сняты
+		"файл\r\nX-Injected: 1":   "файлX-Injected: 1",
+		"  паспорт.pdf  ":         "паспорт.pdf",
+		"...hidden":               "hidden",
+		"":                        "file",
+		"   ":                     "file",
+		"C:\\Users\\ivan\\cv.doc": "C:_Users_ivan_cv.doc",
+	}
+	for in, want := range tests {
+		if got := SanitizeFileName(in); got != want {
+			t.Errorf("SanitizeFileName(%q) = %q, ждали %q", in, got, want)
+		}
+	}
+
+	long := strings.Repeat("я", MaxFileNameLen+50)
+	if got := []rune(SanitizeFileName(long)); len(got) != MaxFileNameLen {
+		t.Errorf("длина обрезанного имени = %d, ждали %d", len(got), MaxFileNameLen)
 	}
 }

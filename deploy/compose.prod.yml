@@ -36,6 +36,7 @@ x-app-env: &app-env
   S3_ACCESS_KEY: ${S3_ACCESS_KEY}
   S3_SECRET_KEY: ${S3_SECRET_KEY}
   S3_MEDIA_BUCKET: ${S3_MEDIA_BUCKET}
+  S3_FILES_BUCKET: ${S3_FILES_BUCKET}
   S3_PATH_STYLE: ${S3_PATH_STYLE}
   # Исходящая почта (почтовая фаза). Обязательные: config.Load() без них падает.
   MAIL_TRANSPORT: ${MAIL_TRANSPORT}

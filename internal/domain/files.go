@@ -1,6 +1,15 @@
 package domain
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+// MaxFileNameLen — длина имени файла, в рунах. Имя показывается автору в таблице
+// ответов и уезжает в Content-Disposition; двести рун — это уже не имя, а способ
+// сломать вёрстку строки.
+const MaxFileNameLen = 200
 
 // Что вообще можно приложить к ответу (фаза 24, design/answer-files.md §5).
 //
@@ -127,4 +136,37 @@ func normalizeMIME(mime string) string {
 		mime = mime[:i]
 	}
 	return strings.ToLower(strings.TrimSpace(mime))
+}
+
+// SanitizeFileName приводит присланное имя к тому, что можно хранить и показывать.
+//
+// Имя — ДАННЫЕ, а не путь: в ключ объекта оно не попадает (его формирует сервер),
+// поэтому здесь не «защита от traversal», а гигиена показа. Убирается то, чем имя
+// врёт или ломает: управляющие символы (перевод строки в заголовке выдачи),
+// разделители пути (иначе автор увидит в таблице «../../etc/passwd» и решит, что
+// у нас дыра) и пустота.
+func SanitizeFileName(name string) string {
+	if !utf8.ValidString(name) {
+		return "file"
+	}
+	cleaned := strings.Map(func(r rune) rune {
+		switch {
+		case r == '/' || r == '\\':
+			return '_'
+		case unicode.IsControl(r):
+			return -1
+		default:
+			return r
+		}
+	}, name)
+	cleaned = strings.TrimSpace(cleaned)
+	// Точки в начале прячут файл в unix-листинге и делают «..» именем каталога.
+	cleaned = strings.TrimLeft(cleaned, ".")
+	if r := []rune(cleaned); len(r) > MaxFileNameLen {
+		cleaned = string(r[:MaxFileNameLen])
+	}
+	if strings.TrimSpace(cleaned) == "" {
+		return "file"
+	}
+	return cleaned
 }

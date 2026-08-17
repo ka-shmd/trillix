@@ -58,6 +58,12 @@ const (
 	// бы бейдж со всех опубликованных в этот месяц форм — это не подписка, а
 	// разовая покупка. Поэтому спрашивается при отдаче публичной формы.
 	FormBranding Key = "form_branding"
+	// StoragePerWorkspace — сколько БАЙТ файлов в ответах помещается в пространство
+	// (фаза 24). Единственный ключ, чей расход тратит не автор, а посторонний:
+	// файлы кладёт респондент, поэтому без верхней границы у публичной формы её нет
+	// вовсе. Заведён безлимитным у всех планов — включается одним UPDATE (§6
+	// BILLING.md), как и остальные гейты.
+	StoragePerWorkspace Key = "storage_per_workspace"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -97,6 +103,9 @@ const (
 	// MembersMeter — израсходовано = сколько человек уже в пространстве.
 	// Периода нет: выгнал участника — место освободилось сразу.
 	MembersMeter
+	// StorageMeter — израсходовано = сумма размеров ЗАЯВЛЕННЫХ файлов пространства.
+	// Периода нет, как у мест: удалил ответ — место в хранилище освободилось сразу.
+	StorageMeter
 	// WorkspacesMeter — израсходовано = сколько пространств аккаунт уже держит
 	// (строки workspace_members с role='owner'). Периода у этого счётчика нет:
 	// удалил пространство — освободилось место, ждать первого числа не нужно.
@@ -128,6 +137,7 @@ var CatalogOrder = []Key{
 	FormDesignCustom,
 	FormCustomCSS,
 	FormBranding,
+	StoragePerWorkspace,
 	Workspaces,
 }
 
@@ -135,6 +145,7 @@ var Catalog = map[Key]Feature{
 	SubmissionsPerMonth: {Kind: Quota, Scope: WorkspaceScope, Meter: SubmissionsMeter, Title: "Ответов в месяц"},
 	Workspaces:          {Kind: Quota, Scope: AccountScope, Meter: WorkspacesMeter, Title: "Пространств"},
 	MembersPerWorkspace: {Kind: Quota, Scope: WorkspaceScope, Meter: MembersMeter, Title: "Участников"},
+	StoragePerWorkspace: {Kind: Quota, Scope: WorkspaceScope, Meter: StorageMeter, Title: "Хранилище файлов"},
 	AnalyticsFunnel:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Воронка отвала"},
 	AnalyticsSources:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Источники трафика"},
 	FormDesignCustom:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё оформление"},
