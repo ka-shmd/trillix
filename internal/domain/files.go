@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -169,4 +170,31 @@ func SanitizeFileName(name string) string {
 		return "file"
 	}
 	return cleaned
+}
+
+// FileAnswers — какие загрузки названы в ответе, по блокам: block_id → id файлов.
+// Только у блоков типа file и только у тех, что есть в схеме, — то есть ровно то,
+// что приём ответа обязан сверить с базой и хранилищем.
+//
+// Отдельной функцией, а не разбором по месту: приём ответа делает с этим списком
+// три разные вещи (проверка, заявление, откат), и три независимых обхода схемы
+// однажды разошлись бы в том, что считать файлом.
+func FileAnswers(schema FormSchema, answers map[string]json.RawMessage) map[string][]string {
+	out := map[string][]string{}
+	for i := range schema.Blocks {
+		b := schema.Blocks[i]
+		if b.Type != BlockFile {
+			continue
+		}
+		raw, ok := answers[b.ID]
+		if !ok || len(raw) == 0 {
+			continue
+		}
+		var ids []string
+		if json.Unmarshal(raw, &ids) != nil || len(ids) == 0 {
+			continue
+		}
+		out[b.ID] = ids
+	}
+	return out
 }

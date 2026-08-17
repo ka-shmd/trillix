@@ -87,6 +87,24 @@ type Plans interface {
 	PeriodStart() time.Time
 }
 
+// AnswerFiles — коллаборатор из модуля answerfiles: файлы, приложенные к ответу
+// (фаза 24). Реализация — *answerfiles.Service.
+//
+// Две операции, и порядок между ними принципиален. Verify ходит в хранилище и
+// потому зовётся ДО транзакции: держать её открытой на время HEAD к S3 значит
+// отдать самый атакуемый эндпоинт во власть чужого таймаута. Claim пишет и потому
+// зовётся ВНУТРИ неё: файл, заявленный без ответа, нарушил бы внешний ключ, а
+// ответ без заявленных файлов остался бы со ссылками на строки, которые через
+// сутки унесёт чистка сирот.
+//
+// nil означает «файлов в этой сборке нет» (юнит-тесты): ответ без файлов проходит
+// прежним путём, ответ с файлами при nil-коллабораторе отвергается — молча принять
+// ссылку, которую некому проверить, нельзя.
+type AnswerFiles interface {
+	Verify(ctx context.Context, formID uuid.UUID, byBlock map[string][]string) error
+	Claim(ctx context.Context, tx pgx.Tx, submissionID, formID uuid.UUID, byBlock map[string][]string) error
+}
+
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
@@ -155,6 +173,11 @@ type Service struct {
 	mail   Mailer
 	plans  Plans
 	repo   Store
+	// files — файлы в ответах (фаза 24). Не в конструкторе, а отдельным сеттером
+	// (тот же приём, что WithTeams у auth): у приёма ответа уже восемь
+	// коллабораторов, и девятый позиционный аргумент — это способ однажды
+	// перепутать два соседних интерфейса местами.
+	files AnswerFiles
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
 	appBaseURL string
@@ -163,6 +186,14 @@ type Service struct {
 
 func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
 	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, plans: plans, repo: repo, appBaseURL: appBaseURL, now: time.Now}
+}
+
+// WithFiles подключает модуль файлов ответов. Без него форма с блоком file
+// отвергает ответ с файлами (см. Submit) — молча принять ссылку, которую некому
+// проверить, нельзя.
+func (s *Service) WithFiles(f AnswerFiles) *Service {
+	s.files = f
+	return s
 }
 
 // Submit принимает ответ на форму slug. Порядок: резолв формы (черновик/нет → 404,
@@ -211,6 +242,20 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return err
 	}
 
+	// Файлы, названные в ответе, сверяются с базой и хранилищем ДО записи: та ли
+	// форма, тот ли вопрос, лежит ли объект и совпал ли его размер с подписанным.
+	// Без этой сверки в ответе оказалась бы ссылка на чужую или несуществующую
+	// загрузку — и увидел бы это автор, а не тот, кто её подставил.
+	files := domain.FileAnswers(schema, clean)
+	if len(files) > 0 {
+		if s.files == nil {
+			return fmt.Errorf("%w: форма не принимает файлы", domain.ErrValidation)
+		}
+		if err := s.files.Verify(ctx, pf.FormID, files); err != nil {
+			return err
+		}
+	}
+
 	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -255,14 +300,33 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
 	var inserted bool
 
-	// Без лимита — прежний путь без блокировки: одна вставка на пуле.
-	if pf.ResponseLimit == nil {
+	switch {
+	// Без лимита и без файлов — прежний путь без блокировки: одна вставка на пуле.
+	case pf.ResponseLimit == nil && len(files) == 0:
 		n, err := s.repo.InsertSubmission(ctx, s.db, in)
 		if err != nil {
 			return err
 		}
 		inserted = n > 0
-	} else {
+
+	// Есть файлы, но нет лимита: транзакция нужна не ради счёта, а ради атомарности
+	// «ответ + заявленные файлы». Разъехавшись, эти две записи дают либо ответ со
+	// ссылками на сирот, либо файлы, привязанные к ответу, которого нет.
+	case pf.ResponseLimit == nil:
+		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+			n, err := s.repo.InsertSubmission(ctx, tx, in)
+			if err != nil {
+				return err
+			}
+			// n == 0 — идемпотентный ретрай: заявление всё равно повторяем, оно
+			// узнаёт свои же файлы (условие submission_id в запросе Claim).
+			inserted = n > 0
+			return s.files.Claim(ctx, tx, id, pf.FormID, files)
+		}); err != nil {
+			return err
+		}
+
+	default:
 		// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
 		// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
 		// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
@@ -288,6 +352,9 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 				return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 			}
 			inserted = true
+			if len(files) > 0 {
+				return s.files.Claim(ctx, tx, id, pf.FormID, files)
+			}
 			return nil
 		}); err != nil {
 			return err

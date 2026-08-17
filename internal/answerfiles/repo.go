@@ -80,17 +80,16 @@ func (Repo) Pending(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, 
 	}, nil
 }
 
-// Claim привязывает загрузку к ответу и записывает ПРОВЕРЕННЫЙ размер. Форма и
-// блок — часть условия, а не проверка после чтения: файл, выданный другому
-// вопросу, заявить нельзя, и решает это база.
+// Claim привязывает загрузку к ответу. Форма и блок — часть условия, а не проверка
+// после чтения: файл, выданный другому вопросу, заявить нельзя, и решает это база.
+// Размер не трогается — он проверен до вставки (см. запрос).
 //
 // Возвращает false, если строка не подошла (уже заявлена, чужая форма, другой
 // блок) — вызывающий обязан отвергнуть ответ, а не молча его принять.
-func (Repo) Claim(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID, size int64, formID uuid.UUID, blockID string) (bool, error) {
+func (Repo) Claim(ctx context.Context, db postgres.DBTX, id, submissionID uuid.UUID, formID uuid.UUID, blockID string) (bool, error) {
 	n, err := postgres.New(db).ClaimSubmissionFile(ctx, postgres.ClaimSubmissionFileParams{
 		ID:           id,
 		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: true},
-		SizeBytes:    size,
 		FormID:       formID,
 		BlockID:      blockID,
 	})

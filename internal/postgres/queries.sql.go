@@ -14,25 +14,33 @@ import (
 
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
 UPDATE submission_files
-SET submission_id = $2, claimed_at = now(), size_bytes = $3
-WHERE id = $1 AND claimed_at IS NULL AND form_id = $4 AND block_id = $5
+SET submission_id = $2, claimed_at = now()
+WHERE id = $1 AND form_id = $3 AND block_id = $4
+  AND (claimed_at IS NULL OR submission_id = $2)
 `
 
 type ClaimSubmissionFileParams struct {
 	ID           uuid.UUID
 	SubmissionID pgtype.UUID
-	SizeBytes    int64
 	FormID       uuid.UUID
 	BlockID      string
 }
 
 // Заявление: файл привязывается к ответу. Возвращает число строк — ноль значит,
-// что загрузку уже заявили или её нет, и приём ответа обязан это заметить.
+// что загрузка чужая, не та, или заявлена ДРУГИМ ответом, и приём обязан это
+// заметить.
+//
+// Условие про свой ответ (submission_id = $2) обязательно: приём идемпотентен по
+// submission_id (ретрай после сетевого сбоя шлёт тот же), и без него повторная
+// отправка отвергала бы собственные, уже заявленные файлы.
+// Размер здесь НЕ трогается: он записан при выдаче слота (и тем же числом
+// подписан), а Verify перед приёмом уже сверил его с настоящим размером объекта в
+// хранилище. Переписать проверенное значение на присланное значило бы вернуть
+// клиенту ровно то доверие, ради отсутствия которого вся проверка и сделана.
 func (q *Queries) ClaimSubmissionFile(ctx context.Context, arg ClaimSubmissionFileParams) (int64, error) {
 	result, err := q.db.Exec(ctx, claimSubmissionFile,
 		arg.ID,
 		arg.SubmissionID,
-		arg.SizeBytes,
 		arg.FormID,
 		arg.BlockID,
 	)

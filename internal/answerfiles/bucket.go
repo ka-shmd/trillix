@@ -29,16 +29,17 @@ type blobStore interface {
 	DeleteObject(ctx context.Context, bucket, key string) error
 }
 
-// Store — политика бакета файлов ответов: схема ключей, сроки подписей, правила
-// выдачи. Слой-2 подсистемы хранилища (docs/S3.md §3), сосед media.
-type Store struct {
+// Bucket — политика бакета файлов ответов: схема ключей, сроки подписей, правила
+// выдачи. Слой-2 подсистемы хранилища (docs/S3.md §3), сосед media. Имя не Store —
+// так в модулях проекта называется интерфейс РЕПОЗИТОРИЯ.
+type Bucket struct {
 	blob   blobStore
 	bucket string
 	now    func() time.Time
 }
 
-func NewStore(b blobStore, bucket string) *Store {
-	return &Store{blob: b, bucket: bucket, now: time.Now}
+func NewBucket(b blobStore, bucket string) *Bucket {
+	return &Bucket{blob: b, bucket: bucket, now: time.Now}
 }
 
 // ObjectKey — адрес объекта. Формирует его СЕРВЕР целиком: имя, присланное
@@ -55,7 +56,7 @@ func ObjectKey(workspaceID, formID, fileID uuid.UUID, ext string) string {
 // UploadURL — адрес для загрузки одного файла. Размер и тип входят в подпись:
 // запрос с другими значениями хранилище отвергнет само, и это единственный
 // механизм, который держит потолок, — байты к нам не приходят.
-func (s *Store) UploadURL(key, contentType string, size int64) (string, error) {
+func (s *Bucket) UploadURL(key, contentType string, size int64) (string, error) {
 	return s.blob.PresignPut(s.bucket, key, blob.PutOptions{
 		ContentType:   contentType,
 		ContentLength: size,
@@ -67,7 +68,7 @@ func (s *Store) UploadURL(key, contentType string, size int64) (string, error) {
 // косметические: пользовательский файл обязан СКАЧИВАТЬСЯ, а не открываться в
 // origin хранилища. Content-Type объекта при выдаче игнорируется намеренно — он
 // пришёл от того же, кто прислал файл.
-func (s *Store) DownloadURL(key, filename string) (string, error) {
+func (s *Bucket) DownloadURL(key, filename string) (string, error) {
 	return s.blob.PresignGet(s.bucket, key, blob.GetOptions{
 		Expires:             GetTTL,
 		ResponseContentType: "application/octet-stream",
@@ -77,7 +78,7 @@ func (s *Store) DownloadURL(key, filename string) (string, error) {
 
 // Size — настоящий размер объекта. Спрашивается у хранилища, потому что байты
 // клал браузер: заявленному при выдаче слота размеру верить нечему.
-func (s *Store) Size(ctx context.Context, key string) (int64, error) {
+func (s *Bucket) Size(ctx context.Context, key string) (int64, error) {
 	info, err := s.blob.HeadObject(ctx, s.bucket, key)
 	if err != nil {
 		return 0, err
@@ -86,7 +87,7 @@ func (s *Store) Size(ctx context.Context, key string) (int64, error) {
 }
 
 // Remove сносит объект. Зовётся ДО удаления строки: строка уносит с собой ключ.
-func (s *Store) Remove(ctx context.Context, key string) error {
+func (s *Bucket) Remove(ctx context.Context, key string) error {
 	return s.blob.DeleteObject(ctx, s.bucket, key)
 }
 
