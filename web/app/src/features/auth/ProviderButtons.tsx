@@ -77,7 +77,7 @@ export function ProviderButtons() {
     return (
       <div className="flex flex-col gap-3">
         <p role="status" className="text-sm text-muted-foreground">
-          Ждём подтверждения в окне {providerTitle(started)}. Не закрывайте эту
+          Ждём подтверждения в окне провайдера {providerTitle(started)}. Не закрывайте эту
           вкладку.
         </p>
         <Button variant="outline" className="w-full" onClick={popup.cancel}>

@@ -587,7 +587,7 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
       {popup.waiting && (
         <div className="flex flex-wrap items-center gap-3">
           <p role="status" className="text-sm text-muted-foreground">
-            Ждём подтверждения в окне {providerTitle(started)}.
+            Ждём подтверждения в окне провайдера {providerTitle(started)}.
           </p>
           <Button variant="outline" size="sm" onClick={popup.cancel}>
             Отменить
