@@ -13,6 +13,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+// Ширина экрана решает, уместно ли окно вообще: на телефоне «окно» — фоновая
+// вкладка, и там поход обязан идти обычным переходом.
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true })
+}
+
 interface FakeWindow {
   closed: boolean
   close: () => void
@@ -24,8 +30,7 @@ beforeEach(() => {
   vi.useFakeTimers()
   fake = { closed: false, close: vi.fn() }
   vi.spyOn(window, 'open').mockReturnValue(fake as unknown as Window)
-  // happy-dom по умолчанию 1024×768, но узкий экран проверяется отдельно.
-  window.happyDOM?.setViewport?.({ width: 1280 })
+  setViewportWidth(1280)
 })
 
 // Сообщение приходится собирать руками: source в конструкторе MessageEvent
@@ -138,7 +143,7 @@ describe('useOAuthPopup — когда окна не будет', () => {
   })
 
   it('узкий экран: окно не открывается вовсе', () => {
-    window.happyDOM?.setViewport?.({ width: 500 })
+    setViewportWidth(500)
     const outcomes: string[] = []
     const view = renderHook(() => useOAuthPopup((o) => outcomes.push(o)))
 
