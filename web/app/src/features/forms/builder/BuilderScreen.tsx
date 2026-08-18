@@ -110,7 +110,8 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           <div className="flex w-full items-center gap-2">
             <Breadcrumbs formName={displayFormName(detail)} />
             <div className="ml-auto flex items-center gap-2">
-              <SaveIndicator status={status} onRetry={saveNow} />
+              {/* Отмена/повтор — история документа, ближе всего к полотну,
+                  которое они правят. */}
               <Button
                 variant="ghost"
                 size="icon-sm"
@@ -133,19 +134,13 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
               >
                 <Redo2 className="size-4" />
               </Button>
-              <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
-                <Link to="/forms/$slug/responses" search={(prev) => prev}
-                params={{ slug: detail.slug }}>
-                  Ответы
-                </Link>
-              </Button>
               {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
                   и кнопки, которой можно было бы нажать второй раз, под ним нет.
                   Выход подписан словами на самом слое. */}
               <Button
                 variant="ghost"
                 size="sm"
-                className="gap-1.5"
+                className="gap-1.5 text-muted-foreground"
                 onClick={() => setPreviewOpen(true)}
               >
                 <Eye className="size-4" /> Просмотр
@@ -155,17 +150,17 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
                   закрывая полотно, и второго выхода мимо чего-либо тут нет —
                   закрывать нечему. Отдельно от настроек ещё и потому, что
                   сохраняется иначе: тема применяется сразу и уезжает автосейвом,
-                  настройки — явной кнопкой. */}
+                  настройки — явной кнопкой. Подписана текстом (а не только иконкой,
+                  как «Настройки»): рядом с «Просмотр» безымянная иконка палитры
+                  читалась бы двусмысленно. */}
               <Button
                 variant="ghost"
-                size="icon-sm"
-                className={designOpen ? '' : 'text-muted-foreground'}
+                size="sm"
+                className={designOpen ? 'gap-1.5' : 'gap-1.5 text-muted-foreground'}
                 aria-pressed={designOpen}
                 onClick={() => setDesignOpen((v) => !v)}
-                aria-label="Оформление формы"
-                title="Оформление формы"
               >
-                <Palette className="size-4" />
+                <Palette className="size-4" /> Оформление
               </Button>
               {/* Настройки формы — только вход, не тумблер: назад уводит кнопка на
                   самой странице. Тумблер здесь был бы вторым выходом мимо диалога
@@ -183,6 +178,9 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
               >
                 <Settings className="size-4" />
               </Button>
+              {/* Статус автосейва стоит у самой публикации: именно он решает,
+                  активна ли кнопка «Опубликовать» (canPublish). */}
+              <SaveIndicator status={status} onRetry={saveNow} />
               <PublishControls form={detail} canPublish={canPublish} />
             </div>
           </div>,
