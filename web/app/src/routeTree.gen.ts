@@ -15,6 +15,7 @@ import { Route as ConfirmEmailChangeRouteImport } from './routes/confirm-email-c
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as OauthDoneRouteImport } from './routes/oauth.done'
 import { Route as AuthTwoFactorRouteImport } from './routes/_auth/two-factor'
 import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
@@ -62,6 +63,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppRoute,
+} as any)
+const OauthDoneRoute = OauthDoneRouteImport.update({
+  id: '/oauth/done',
+  path: '/oauth/done',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AuthTwoFactorRoute = AuthTwoFactorRouteImport.update({
   id: '/two-factor',
@@ -175,6 +181,7 @@ export interface FileRoutesByFullPath {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
+  '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
@@ -200,6 +207,7 @@ export interface FileRoutesByTo {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
+  '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
@@ -227,6 +235,7 @@ export interface FileRoutesById {
   '/_auth/register': typeof AuthRegisterRoute
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_auth/two-factor': typeof AuthTwoFactorRoute
+  '/oauth/done': typeof OauthDoneRoute
   '/_app/': typeof AppIndexRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
@@ -255,6 +264,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/two-factor'
+    | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
@@ -280,6 +290,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/two-factor'
+    | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceId'
@@ -306,6 +317,7 @@ export interface FileRouteTypes {
     | '/_auth/register'
     | '/_auth/reset-password'
     | '/_auth/two-factor'
+    | '/oauth/done'
     | '/_app/'
     | '/_app/settings/account'
     | '/_app/settings/plan'
@@ -327,6 +339,7 @@ export interface RootRouteChildren {
   ConfirmEmailChangeRoute: typeof ConfirmEmailChangeRoute
   InviteRoute: typeof InviteRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  OauthDoneRoute: typeof OauthDoneRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -372,6 +385,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/oauth/done': {
+      id: '/oauth/done'
+      path: '/oauth/done'
+      fullPath: '/oauth/done'
+      preLoaderRoute: typeof OauthDoneRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_auth/two-factor': {
       id: '/_auth/two-factor'
@@ -580,6 +600,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConfirmEmailChangeRoute: ConfirmEmailChangeRoute,
   InviteRoute: InviteRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  OauthDoneRoute: OauthDoneRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

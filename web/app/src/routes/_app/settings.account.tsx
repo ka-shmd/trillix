@@ -13,10 +13,12 @@ import {
   useEnableTwoFactor,
   useRequestEmailChange,
   useSetupTwoFactor,
+  useRefreshIdentities,
   useUnlinkIdentity,
   useUpdateProfile,
 } from '../../features/auth/queries'
 import { identityLinkUrl } from '../../features/auth/api'
+import { useOAuthPopup, type OAuthOutcome } from '../../features/auth/oauthPopup'
 import { providerTitle } from '../../entities/identity'
 import { formatDate } from '../../shared/format'
 import { ApiError } from '../../shared/api/errors'
@@ -491,9 +493,21 @@ function emailErrorText(error: unknown): string {
 // того, что вообще включено в окружении бэка.
 function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
   const { link } = Route.useSearch()
+  const navigate = Route.useNavigate()
   const identities = useQuery(identitiesQueryOptions)
   const providers = useQuery(providersQueryOptions)
   const unlink = useUnlinkIdentity()
+  const refreshIdentities = useRefreshIdentities()
+  // Провайдер текущего похода: нужен подписи «ждём подтверждения».
+  const [started, setStarted] = useState('')
+
+  const popup = useOAuthPopup((outcome) => {
+    // Отказ у провайдера — не событие экрана настроек: человек сам передумал,
+    // и показывать ему «не удалось подключить» значит врать.
+    if (outcome === 'denied') return
+    if (outcome === 'link_ok') refreshIdentities()
+    navigate({ to: '/settings/account', search: { link: linkOutcome(outcome) } })
+  })
 
   const connected = identities.data ?? []
   const available = (providers.data ?? []).filter(
@@ -570,13 +584,34 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
         </p>
       )}
 
-      {available.length > 0 && (
+      {popup.waiting && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p role="status" className="text-sm text-muted-foreground">
+            Ждём подтверждения в окне {providerTitle(started)}.
+          </p>
+          <Button variant="outline" size="sm" onClick={popup.cancel}>
+            Отменить
+          </Button>
+        </div>
+      )}
+
+      {!popup.waiting && available.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {available.map((provider) => (
             // Ссылка, а не кнопка с fetch: браузеру нужен полноценный переход к
-            // провайдеру и обратно.
+            // провайдеру и обратно. Клик пробует открыть отдельное окно и гасит
+            // переход, только если это удалось: не вышло (блокировщик попапов,
+            // узкий экран) — ссылка отрабатывает как раньше.
             <Button key={provider} variant="outline" size="sm" asChild>
-              <a href={identityLinkUrl(provider)}>Подключить {providerTitle(provider)}</a>
+              <a
+                href={identityLinkUrl(provider)}
+                onClick={(e) => {
+                  setStarted(provider)
+                  if (popup.open(identityLinkUrl(provider, true))) e.preventDefault()
+                }}
+              >
+                Подключить {providerTitle(provider)}
+              </a>
             </Button>
           ))}
         </div>
@@ -589,6 +624,22 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
       )}
     </section>
   )
+}
+
+// linkOutcome переводит код исхода из отдельного окна в параметр экрана.
+// Исход входа (провайдер вернул «нужен второй фактор» и подобное) сюда приехать
+// может только из брошенного намерения — для настроек это общий отказ.
+function linkOutcome(outcome: OAuthOutcome): 'ok' | 'conflict' | 'expired' | 'failed' {
+  switch (outcome) {
+    case 'link_ok':
+      return 'ok'
+    case 'link_conflict':
+      return 'conflict'
+    case 'link_expired':
+      return 'expired'
+    default:
+      return 'failed'
+  }
 }
 
 function linkOutcomeText(link: 'ok' | 'conflict' | 'expired' | 'failed'): string {

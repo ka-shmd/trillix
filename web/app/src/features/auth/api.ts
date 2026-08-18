@@ -108,8 +108,8 @@ export function unlinkIdentity(provider: string): Promise<void> {
 // провайдеру и вернуться, а XHR за редиректом на чужой домен не пойдёт. Адрес
 // свой, а не /auth/oauth/{p}/start: тот публичный (им входят), этот за сессией
 // и ставит подписанное намерение привязки.
-export function identityLinkUrl(provider: string): string {
-  return `/api/v1/account/identities/${provider}/start`
+export function identityLinkUrl(provider: string, popup = false): string {
+  return `/api/v1/account/identities/${provider}/start` + (popup ? '?mode=popup' : '')
 }
 
 // Второй фактор в настройках (фаза 23, слайс F).
@@ -156,6 +156,9 @@ export function linkProvider(body: Credentials & { code?: string }): Promise<Log
 
 // Ссылка ухода к провайдеру. Именно href, а не fetch: нужен полноценный переход
 // браузера, XHR за редиректом на чужой домен не пойдёт.
-export function providerStartUrl(provider: string): string {
-  return `/api/v1/auth/oauth/${provider}/start`
+//
+// popup=true помечает поход, начатый из отдельного окна: бэк запоминает режим
+// cookie и возвращает окно на /oauth/done с кодом исхода вместо экрана кабинета.
+export function providerStartUrl(provider: string, popup = false): string {
+  return `/api/v1/auth/oauth/${provider}/start` + (popup ? '?mode=popup' : '')
 }
