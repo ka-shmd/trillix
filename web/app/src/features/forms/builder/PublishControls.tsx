@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Share2 } from 'lucide-react'
+import { Link2 } from 'lucide-react'
 
 import { type FormDesign } from '@entities/formSchema'
 
@@ -20,13 +20,20 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
-// PublishControls — кнопка публикации в тонкой шапке редактора. Логика жизненного
-// цикла (ссылка, перепубликация, закрытие) переехала на страницу «Поделиться»:
-//   • черновик (ещё не публиковали) → «Опубликовать» публикует и уводит на /share;
-//   • уже публиковавшаяся (published/closed) → «Поделиться» просто ведёт на /share,
-//     где живут ссылка, превью и управление.
+// PublishControls — кнопка публикации в тонкой шапке редактора. «Опубликовать»
+// стоит здесь ВСЕГДА, в любом состоянии формы: публикация — действие редактора, и
+// у уже опубликованной формы она уносит на живую форму накопленные правки.
+//   • черновик (ещё не публиковали) → публикует и уводит на /share, где ссылка;
+//   • уже публиковавшаяся (published/closed) → публикует и ОСТАВЛЯЕТ в редакторе
+//     (автор правит форму, а не ищет ссылку), а рядом появляется иконка на /share;
+//   • закрытая форма той же кнопкой открывается снова (publish снимает closed).
+//
+// hasUnpublishedChanges приходит с сервера на GET, а после каждого автосейва его
+// проставляет сам автосейв (useAutosave) — иначе подпись «есть изменения» появлялась
+// бы только после перезагрузки страницы.
 //
 // ГЕЙТ ТАРИФА КНОПКУ НЕ ГАСИТ (фаза 22): своё оформление можно настраивать и
 // сохранять на любом тарифе, а отказывает публикация — 402 со списком мешающего,
@@ -82,30 +89,46 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
     navigate({ to: '/forms/$slug/share', params: { slug: form.slug }, search: (prev) => prev })
   const everPublished = form.publishedVersion !== null
 
-  if (everPublished) {
-    return (
-      <Button variant="outline" size="sm" className="gap-1.5" onClick={goShare}>
-        <Share2 className="size-4" /> Поделиться
-      </Button>
-    )
-  }
-
   return (
     <div className="flex flex-col items-end gap-1">
-      <Button
-        size="sm"
-        disabled={!canPublish || publish.isPending}
-        title={!canPublish ? 'Дождитесь сохранения черновика' : undefined}
-        onClick={() => {
-          if (blocked.length > 0) {
-            setRefused(true)
-            return
-          }
-          publish.mutate(form.id, { onSuccess: goShare })
-        }}
-      >
-        {publish.isPending ? 'Публикуем…' : 'Опубликовать'}
-      </Button>
+      <div className="flex items-center gap-2">
+        {/* Подсказка стоит В СТРОКЕ шапки, а не под ней: строка под кнопкой
+            разъезжает бар по высоте (кнопка портирована в общую полосу). */}
+        {everPublished && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground"
+            onClick={goShare}
+            aria-label="Ссылка на форму"
+            title="Ссылка на форму"
+          >
+            <Link2 className="size-4" />
+          </Button>
+        )}
+        {everPublished && form.hasUnpublishedChanges && (
+          <Badge variant="outline" className="border-transparent bg-accent text-accent-foreground">
+            Есть изменения
+          </Badge>
+        )}
+        <Button
+          size="sm"
+          disabled={!canPublish || publish.isPending}
+          title={!canPublish ? 'Дождитесь сохранения черновика' : undefined}
+          onClick={() => {
+            if (blocked.length > 0) {
+              setRefused(true)
+              return
+            }
+            // Уводим на /share только с первой публикации: там автор впервые берёт
+            // ссылку. Перепубликация — правка живой формы, и уносить из редактора её
+            // автора незачем.
+            publish.mutate(form.id, everPublished ? undefined : { onSuccess: goShare })
+          }}
+        >
+          {publish.isPending ? 'Публикуем…' : 'Опубликовать'}
+        </Button>
+      </div>
 
       {/* Диалог, а не строка под кнопкой и не тост: строка разъезжала шапку (кнопка
           живёт в общем баре), а тост уезжает сам и уносит с собой единственную

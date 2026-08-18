@@ -1,4 +1,4 @@
-import { CircleCheck, Loader2, TriangleAlert, type LucideIcon } from 'lucide-react'
+import { Loader2, TriangleAlert, type LucideIcon } from 'lucide-react'
 
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { type SaveStatus } from './useAutosave'
@@ -7,16 +7,19 @@ import { type SaveStatus } from './useAutosave'
 // статуса раскрывается по наведению/фокусу). Ошибка кликабельна: сама иконка —
 // кнопка «повторить». Конфликт несёт нейтральный статус, подробности и действие —
 // у ConflictBanner. TooltipProvider даёт SidebarProvider выше по дереву.
-const META: Record<SaveStatus, { icon: LucideIcon; className: string; label: string }> = {
+//
+// saved — БЕЗ иконки (решение владельца): «всё сохранено» — состояние по
+// умолчанию, а не событие, и иконка на него в шапке была лишним, вечно горящим
+// сигналом. Индикатор появляется, только когда есть что показать — идёт сохранение
+// или что-то пошло не так.
+const META: Record<
+  Exclude<SaveStatus, 'saved'>,
+  { icon: LucideIcon; className: string; label: string }
+> = {
   saving: {
     icon: Loader2,
     className: 'text-primary animate-spin',
     label: 'Сохранение…',
-  },
-  saved: {
-    icon: CircleCheck,
-    className: 'text-emerald-600 dark:text-emerald-500',
-    label: 'Все изменения сохранены',
   },
   error: {
     icon: TriangleAlert,
@@ -31,6 +34,8 @@ const META: Record<SaveStatus, { icon: LucideIcon; className: string; label: str
 }
 
 export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
+  if (status === 'saved') return null
+
   const { icon: Icon, className, label } = META[status]
 
   // Ошибка — кнопка (повтор автосейва); остальные состояния информационны (span).
