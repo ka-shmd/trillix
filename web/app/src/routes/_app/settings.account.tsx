@@ -19,6 +19,7 @@ import {
 } from '../../features/auth/queries'
 import { identityLinkUrl } from '../../features/auth/api'
 import { useOAuthPopup, type OAuthOutcome } from '../../features/auth/oauthPopup'
+import { OAuthWaitingDialog } from '../../features/auth/OAuthWaitingDialog'
 import { providerTitle } from '../../entities/identity'
 import { formatDate } from '../../shared/format'
 import { ApiError } from '../../shared/api/errors'
@@ -584,18 +585,11 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
         </p>
       )}
 
-      {popup.waiting && (
-        <div className="flex flex-wrap items-center gap-3">
-          <p role="status" className="text-sm text-muted-foreground">
-            Ждём подтверждения в окне провайдера {providerTitle(started)}.
-          </p>
-          <Button variant="outline" size="sm" onClick={popup.cancel}>
-            Отменить
-          </Button>
-        </div>
-      )}
+      {/* Ожидание занимает экран целиком: настройки под ним не должны
+          принимать ни клики, ни фокус. */}
+      {popup.waiting && <OAuthWaitingDialog provider={started} onCancel={popup.cancel} />}
 
-      {!popup.waiting && available.length > 0 && (
+      {available.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {available.map((provider) => (
             // Ссылка, а не кнопка с fetch: браузеру нужен полноценный переход к

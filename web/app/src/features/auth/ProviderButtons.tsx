@@ -4,7 +4,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { adoptPopupSession, providersQueryOptions } from './queries'
 import { providerStartUrl } from './api'
 import { useOAuthPopup, type OAuthOutcome } from './oauthPopup'
-import { providerTitle } from '../../entities/identity'
+import { OAuthWaitingDialog } from './OAuthWaitingDialog'
 import { Button } from '@/components/ui/button'
 
 // Подписи известных провайдеров. Имя, которого здесь нет, не рисуется вовсе:
@@ -63,33 +63,11 @@ export function ProviderButtons() {
   const known = (providers ?? []).filter((name) => name in PROVIDER_LABELS)
   if (known.length === 0) return null
 
-  // Разделитель «или» рисуется в обоих состояниях: без него блок прыгал бы на
-  // время ожидания.
-  const divider = (
-    <div className="flex items-center gap-3">
-      <span className="h-px flex-1 bg-border" />
-      <span className="text-xs text-muted-foreground">или</span>
-      <span className="h-px flex-1 bg-border" />
-    </div>
-  )
-
-  if (popup.waiting) {
-    return (
-      <div className="flex flex-col gap-3">
-        <p role="status" className="text-sm text-muted-foreground">
-          Ждём подтверждения в окне провайдера {providerTitle(started)}. Не закрывайте эту
-          вкладку.
-        </p>
-        <Button variant="outline" className="w-full" onClick={popup.cancel}>
-          Отменить
-        </Button>
-        {divider}
-      </div>
-    )
-  }
-
   return (
     <div className="flex flex-col gap-3">
+      {/* Ожидание занимает экран целиком: форма входа под ним не должна
+          принимать ни клики, ни фокус. */}
+      {popup.waiting && <OAuthWaitingDialog provider={started} onCancel={popup.cancel} />}
       {known.map((name) => (
         // Именно <a>, а не onClick+fetch: нужен полноценный переход браузера —
         // XHR за редиректом на домен провайдера не пойдёт. Клик пробует открыть
@@ -107,7 +85,11 @@ export function ProviderButtons() {
           </a>
         </Button>
       ))}
-      {divider}
+      <div className="flex items-center gap-3">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-xs text-muted-foreground">или</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
     </div>
   )
 }
