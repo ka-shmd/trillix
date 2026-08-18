@@ -37,6 +37,14 @@ const (
 	// query-параметре означало бы, что жертву можно заманить пройти привязку и
 	// прицепить к её аккаунту ЛИЧНОСТЬ АТАКУЮЩЕГО, получив постоянный вход.
 	oauthLinkCookie = "oauth_link"
+	// oauthModeCookie помечает поход, начатый из отдельного окна: по ней колбэк
+	// выбирает, вернуть браузер на экран кабинета или на служебный /oauth/done,
+	// который сообщит исход вкладке-опекуну и закроется. Режим едет cookie, а не
+	// параметром колбэка: параметр колбэка подконтролен тому, кто подсунул
+	// ссылку, и этот путь здесь закрыт намеренно (см. redirectToApp).
+	oauthModeCookie = "oauth_mode"
+	// oauthModePopup — единственное осмысленное значение oauthModeCookie.
+	oauthModePopup = "popup"
 
 	// Человек уходит к провайдеру и возвращается — это минуты, не часы.
 	oauthFlowTTL = 15 * time.Minute
@@ -92,7 +100,26 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.setFlowCookie(w, oauthStateCookie, state+":"+verifier)
+	h.setPopupMode(w, r)
 	http.Redirect(w, r, provider.AuthURL(state, verifier), http.StatusFound)
+}
+
+// setPopupMode запоминает, что поход начат из отдельного окна (?mode=popup).
+// Обычный поход метку ГАСИТ, а не просто её не ставит: cookie живёт 15 минут, и
+// без гашения вход в той же вкладке следом за брошенным окном уехал бы на
+// /oauth/done, где опекуна нет и некому передать исход.
+func (h *Handler) setPopupMode(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("mode") == oauthModePopup {
+		h.setFlowCookie(w, oauthModeCookie, oauthModePopup)
+		return
+	}
+	h.expireCookie(w, oauthModeCookie, true)
+}
+
+// readPopupMode отвечает, начат ли этот поход из отдельного окна.
+func (h *Handler) readPopupMode(r *http.Request) bool {
+	c, err := r.Cookie(oauthModeCookie)
+	return err == nil && c.Value == oauthModePopup
 }
 
 func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
@@ -109,35 +136,38 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	// Намерение привязки одноразовое ровно так же: читаем из запроса и гасим.
 	linkUserID, isLink := h.readLinkIntent(r)
 	h.expireCookie(w, oauthLinkCookie, true)
+	// Режим окна одноразовый ровно так же.
+	popup := h.readPopupMode(r)
+	h.expireCookie(w, oauthModeCookie, true)
 
 	// Провайдер вернул отказ (человек нажал «Отклонить») — это не авария.
 	if r.URL.Query().Get("error") != "" {
-		h.redirectToApp(w, r, "/login?oauth=denied")
+		h.finishOAuth(w, r, name, popup, outcomeDenied)
 		return
 	}
 
 	state, verifier, ok := h.readFlowCookie(r, oauthStateCookie)
 	if !ok {
-		h.redirectToApp(w, r, "/login?oauth=expired")
+		h.finishOAuth(w, r, name, popup, outcomeExpired)
 		return
 	}
 	// Сверка state — защита от CSRF: без неё чужой код можно подсунуть
 	// залогиненному человеку и привязать к нему свою личность у провайдера.
 	if subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 {
-		h.redirectToApp(w, r, "/login?oauth=state")
+		h.finishOAuth(w, r, name, popup, outcomeState)
 		return
 	}
 
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		h.redirectToApp(w, r, "/login?oauth=failed")
+		h.finishOAuth(w, r, name, popup, outcomeFailed)
 		return
 	}
 
 	profile, err := provider.Exchange(r.Context(), code, verifier)
 	if err != nil {
 		if errors.Is(err, oauth.ErrNoEmail) {
-			h.redirectToApp(w, r, "/login?oauth=no_email")
+			h.finishOAuth(w, r, name, popup, outcomeNoEmail)
 			return
 		}
 		// Провайдер лежит или не уложился в таймаут. Колбэк — навигация
@@ -145,14 +175,14 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		// человека на origin API без пути назад. Причина уходит в лог, человек —
 		// на экран входа.
 		h.logOAuthFailure(r, name, "exchange", err)
-		h.redirectToApp(w, r, "/login?oauth=failed")
+		h.finishOAuth(w, r, name, popup, outcomeFailed)
 		return
 	}
 
 	// Поход начат из настроек? Тогда это не вход, а привязка к аккаунту, который
 	// уже сидит в этом браузере.
 	if isLink {
-		h.finishLink(w, r, linkUserID, name, profile)
+		h.finishLink(w, r, linkUserID, name, popup, profile)
 		return
 	}
 
@@ -166,27 +196,27 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		h.startSession(w, token)
-		h.redirectToApp(w, r, "/")
+		h.finishOAuth(w, r, name, popup, outcomeOK)
 	case errors.Is(err, ErrTwoFactorRequired):
 		// Провайдер подтвердил личность, но у аккаунта включён второй фактор:
 		// сессии нет, есть подписанный пропуск на один шаг.
 		h.startTwoFactorChallenge(w, user.ID)
-		h.redirectToApp(w, r, "/two-factor")
+		h.finishOAuth(w, r, name, popup, outcomeTwoFactor)
 	case errors.Is(err, ErrPasswordLinkRequired):
 		// Личность подтверждена провайдером, но доступ к аккаунту ещё не доказан.
 		// Кладём её в подписанную cookie: без подписи фронт мог бы прислать в
 		// /link любой provider_user_id и привязать к аккаунту чужую личность,
 		// получив постоянный вход по чужому паролю.
 		h.setFlowCookie(w, oauthPendingCookie, h.signPending(name, profile.ID))
-		h.redirectToApp(w, r, "/link-account?provider="+name)
+		h.finishOAuth(w, r, name, popup, outcomeLinkRequired)
 	case errors.Is(err, ErrProviderOnlyAccount):
 		// Адрес занят аккаунтом, войти в который можно только через провайдера,
 		// а пришли мы с другой личностью. Просить пароль бессмысленно — его нет.
-		h.redirectToApp(w, r, "/login?oauth=provider_only")
+		h.finishOAuth(w, r, name, popup, outcomeProviderOnly)
 	default:
 		// Та же логика, что и на обмене кода: браузеру нужен экран, не JSON.
 		h.logOAuthFailure(r, name, "login", err)
-		h.redirectToApp(w, r, "/login?oauth=failed")
+		h.finishOAuth(w, r, name, popup, outcomeFailed)
 	}
 }
 
@@ -246,6 +276,67 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 	h.expireCookie(w, oauthPendingCookie, true)
 	h.startSession(w, token)
 	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, false))
+}
+
+// oauthOutcome — чем кончился поход к провайдеру. Перечень закрытый: он же
+// уезжает в отдельное окно параметром r, и вкладка-опекун по нему выбирает
+// экран. Отсюда правило: код исхода — единственное, что окно сообщает вкладке;
+// путь вкладка строит сама, иначе postMessage стал бы управляемым редиректом.
+type oauthOutcome string
+
+const (
+	outcomeOK           oauthOutcome = "ok"
+	outcomeTwoFactor    oauthOutcome = "two_factor"
+	outcomeLinkRequired oauthOutcome = "link_required"
+
+	outcomeDenied       oauthOutcome = "denied"
+	outcomeExpired      oauthOutcome = "expired"
+	outcomeState        oauthOutcome = "state"
+	outcomeNoEmail      oauthOutcome = "no_email"
+	outcomeFailed       oauthOutcome = "failed"
+	outcomeProviderOnly oauthOutcome = "provider_only"
+
+	outcomeLinkOK       oauthOutcome = "link_ok"
+	outcomeLinkConflict oauthOutcome = "link_conflict"
+	outcomeLinkExpired  oauthOutcome = "link_expired"
+	outcomeLinkFailed   oauthOutcome = "link_failed"
+)
+
+// finishOAuth возвращает браузер из колбэка. Поход из отдельного окна кончается
+// на служебном /oauth/done: экран кабинета рисовать в окне 560×680 незачем, оно
+// передаёт исход опекуну и закрывается. Обычный поход — как и был, сразу на
+// нужный экран.
+func (h *Handler) finishOAuth(w http.ResponseWriter, r *http.Request, provider string, popup bool, outcome oauthOutcome) {
+	if popup {
+		h.redirectToApp(w, r, "/oauth/done?r="+string(outcome))
+		return
+	}
+	h.redirectToApp(w, r, oauthScreen(provider, outcome))
+}
+
+// oauthScreen — экран кабинета для исхода. Значения параметров совпадают с
+// перечнями, которые разбирают маршруты /login и /settings/account.
+func oauthScreen(provider string, outcome oauthOutcome) string {
+	switch outcome {
+	case outcomeOK:
+		return "/"
+	case outcomeTwoFactor:
+		return "/two-factor"
+	case outcomeLinkRequired:
+		return "/link-account?provider=" + provider
+	case outcomeLinkOK:
+		return "/settings/account?link=ok"
+	case outcomeLinkConflict:
+		return "/settings/account?link=conflict"
+	case outcomeLinkExpired:
+		return "/settings/account?link=expired"
+	case outcomeLinkFailed:
+		return "/settings/account?link=failed"
+	default:
+		// denied, expired, state, no_email, failed, provider_only — причина
+		// показывается на экране входа.
+		return "/login?oauth=" + string(outcome)
+	}
 }
 
 // redirectToApp уводит браузер на экран кабинета. Путь — всегда наш литерал,
@@ -385,18 +476,18 @@ func (h *Handler) intentMAC(label, payload string) []byte {
 // finishLink завершает привязку из настроек. Возвращает человека на экран
 // настроек с исходом в параметре — колбэк это навигация браузера, а не вызов
 // API, и JSON-ошибку сюда отдавать нельзя (правило колбэка, фаза 11).
-func (h *Handler) finishLink(w http.ResponseWriter, r *http.Request, linkUserID uuid.UUID, provider string, profile oauth.Profile) {
+func (h *Handler) finishLink(w http.ResponseWriter, r *http.Request, linkUserID uuid.UUID, provider string, popup bool, profile oauth.Profile) {
 	// Подписанная cookie говорит, ЧЕЙ поход, но живой должна быть и сессия, и
 	// именно та же: иначе привязка доезжает до аккаунта, из которого человек уже
 	// вышел, а браузер тем временем занят другим.
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		h.redirectToApp(w, r, "/settings/account?link=expired")
+		h.finishOAuth(w, r, provider, popup, outcomeLinkExpired)
 		return
 	}
 	user, err := h.svc.UserByToken(r.Context(), c.Value)
 	if err != nil || user.ID != linkUserID {
-		h.redirectToApp(w, r, "/settings/account?link=expired")
+		h.finishOAuth(w, r, provider, popup, outcomeLinkExpired)
 		return
 	}
 
@@ -409,11 +500,11 @@ func (h *Handler) finishLink(w http.ResponseWriter, r *http.Request, linkUserID 
 	})
 	switch {
 	case err == nil:
-		h.redirectToApp(w, r, "/settings/account?link=ok")
+		h.finishOAuth(w, r, provider, popup, outcomeLinkOK)
 	case errors.Is(err, domain.ErrConflict):
-		h.redirectToApp(w, r, "/settings/account?link=conflict")
+		h.finishOAuth(w, r, provider, popup, outcomeLinkConflict)
 	default:
 		h.logOAuthFailure(r, provider, "link", err)
-		h.redirectToApp(w, r, "/settings/account?link=failed")
+		h.finishOAuth(w, r, provider, popup, outcomeLinkFailed)
 	}
 }

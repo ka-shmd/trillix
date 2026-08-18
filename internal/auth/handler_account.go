@@ -315,5 +315,6 @@ func (h *Handler) startIdentityLink(w http.ResponseWriter, r *http.Request) {
 
 	h.setFlowCookie(w, oauthStateCookie, state+":"+verifier)
 	h.setFlowCookie(w, oauthLinkCookie, h.signLinkIntent(user.ID))
+	h.setPopupMode(w, r)
 	http.Redirect(w, r, provider.AuthURL(state, verifier), http.StatusFound)
 }

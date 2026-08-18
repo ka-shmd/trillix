@@ -51,6 +51,14 @@ function adoptSession(qc: QueryClient, user: User): void {
   qc.setQueryData(authKeys.me(), user)
 }
 
+// Сессию открыл колбэк в отдельном окне: объекта пользователя у вкладки нет,
+// есть только факт «вход состоялся». Вывод тот же, что у adoptSession (TD-40) —
+// личность в этой вкладке сменилась, весь накопленный кэш чужой; сам me приедет
+// гардом _app сразу после перехода.
+export function adoptPopupSession(qc: QueryClient): void {
+  qc.clear()
+}
+
 export function useLogin() {
   const qc = useQueryClient()
   return useMutation({
@@ -189,6 +197,17 @@ export const identitiesQueryOptions = queryOptions({
   queryFn: getIdentities,
   retry: false,
 })
+
+// Привязка, завершённая в отдельном окне: мутации, которая обновила бы кэш,
+// здесь нет — привязку сделал колбэк в окне. Инвалидируем те же ключи, что и
+// отвязка, иначе список способов входа останется вчерашним до перезагрузки.
+export function useRefreshIdentities() {
+  const qc = useQueryClient()
+  return () => {
+    void qc.invalidateQueries({ queryKey: authKeys.identities() })
+    void qc.invalidateQueries({ queryKey: authKeys.me() })
+  }
+}
 
 export function useUnlinkIdentity() {
   const qc = useQueryClient()
