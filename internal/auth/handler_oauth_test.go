@@ -313,3 +313,123 @@ func TestOAuthLink_WithoutPendingCookie401(t *testing.T) {
 		t.Fatal("пароль пошёл в проверку без начатой привязки")
 	}
 }
+
+// Вход из отдельного окна (попап). Режим помечается на старте и хранится в
+// cookie: параметр в колбэке подконтролен тому, кто подсунул ссылку.
+func TestOAuthStart_PopupModeMarksFlow(t *testing.T) {
+	cases := map[string]struct {
+		target  string
+		wantSet bool
+	}{
+		"окно":            {target: "/api/v1/auth/oauth/fake/start?mode=popup", wantSet: true},
+		"обычный переход": {target: "/api/v1/auth/oauth/fake/start", wantSet: false},
+		"мусор в режиме":  {target: "/api/v1/auth/oauth/fake/start?mode=nonsense", wantSet: false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, mux := newOAuthHandler(t, &fakeProvider{}, &fakeOAuthService{})
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, c.target, nil))
+
+			var mode *http.Cookie
+			for _, ck := range rec.Result().Cookies() {
+				if ck.Name == oauthModeCookie {
+					mode = ck
+				}
+			}
+			if mode == nil {
+				t.Fatal("метка режима не тронута — обычный поход обязан гасить чужую метку явно")
+			}
+			if c.wantSet {
+				if mode.Value != oauthModePopup || mode.MaxAge <= 0 {
+					t.Fatalf("метка окна = %q (MaxAge %d), want %q со сроком", mode.Value, mode.MaxAge, oauthModePopup)
+				}
+				if !mode.HttpOnly {
+					t.Fatal("метка режима доступна из JS")
+				}
+				return
+			}
+			// Метка живёт 15 минут: брошенное окно не должно уводить следующий
+			// вход в той же вкладке на /oauth/done, где опекуна нет.
+			if mode.MaxAge >= 0 {
+				t.Fatalf("метка окна не погашена на обычном походе: %q (MaxAge %d)", mode.Value, mode.MaxAge)
+			}
+		})
+	}
+}
+
+// Исход попапа приезжает кодом на служебный /oauth/done — экран кабинета в окне
+// 560×680 не рисуется. Коды закрытым перечнем: по ним вкладка-опекун выбирает
+// экран сама.
+func TestOAuthCallback_PopupReturnsOutcomeToDonePage(t *testing.T) {
+	cases := map[string]struct {
+		target string
+		err    error
+		want   string
+	}{
+		"успех":             {target: "?code=abc&state=good-state", want: "ok"},
+		"отказ провайдера":  {target: "?error=access_denied", want: "denied"},
+		"подменённый state": {target: "?code=abc&state=wrong", want: "state"},
+		"второй фактор":     {target: "?code=abc&state=good-state", err: ErrTwoFactorRequired, want: "two_factor"},
+		"нужен пароль":      {target: "?code=abc&state=good-state", err: ErrPasswordLinkRequired, want: "link_required"},
+		"только провайдер":  {target: "?code=abc&state=good-state", err: ErrProviderOnlyAccount, want: "provider_only"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := &fakeProvider{profile: oauth.Profile{ID: "1", Email: "a@b.ru"}}
+			_, mux := newOAuthHandler(t, p, &fakeOAuthService{err: c.err})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/fake/callback"+c.target, nil)
+			req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: "good-state:verifier"})
+			req.AddCookie(&http.Cookie{Name: oauthModeCookie, Value: oauthModePopup})
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			want := "https://app.example/oauth/done?r=" + c.want
+			if got := rec.Header().Get("Location"); got != want {
+				t.Fatalf("Location = %q, want %q", got, want)
+			}
+			// Метка одноразовая: следующий поход не должен наследовать режим.
+			var cleared bool
+			for _, ck := range rec.Result().Cookies() {
+				if ck.Name == oauthModeCookie && ck.MaxAge < 0 {
+					cleared = true
+				}
+			}
+			if !cleared {
+				t.Fatal("метка режима не погашена — переживает ответ колбэка")
+			}
+		})
+	}
+}
+
+// Без метки поведение колбэка обязано остаться прежним: переход в той же
+// вкладке — путь по умолчанию, и он же фолбэк, когда браузер заблокировал окно.
+func TestOAuthCallback_WithoutPopupGoesToScreens(t *testing.T) {
+	cases := map[string]struct {
+		target string
+		err    error
+		want   string
+	}{
+		"успех":            {target: "?code=abc&state=good-state", want: "https://app.example/"},
+		"отказ провайдера": {target: "?error=access_denied", want: "https://app.example/login?oauth=denied"},
+		"второй фактор":    {target: "?code=abc&state=good-state", err: ErrTwoFactorRequired, want: "https://app.example/two-factor"},
+		"нужен пароль":     {target: "?code=abc&state=good-state", err: ErrPasswordLinkRequired, want: "https://app.example/link-account?provider=fake"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			p := &fakeProvider{profile: oauth.Profile{ID: "1", Email: "a@b.ru"}}
+			_, mux := newOAuthHandler(t, p, &fakeOAuthService{err: c.err})
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/fake/callback"+c.target, nil)
+			req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: "good-state:verifier"})
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if got := rec.Header().Get("Location"); got != c.want {
+				t.Fatalf("Location = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
