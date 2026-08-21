@@ -18,11 +18,14 @@ export interface UserAvatarProps {
 
 export function UserAvatar({ person, className }: UserAvatarProps) {
   return (
-    <Avatar className={cn('rounded-md', className)}>
+    <Avatar className={cn('rounded-md text-sm', className)}>
       {person.avatarKey !== '' && (
         <AvatarImage src={mediaSrc(person.avatarKey)} alt="" draggable={false} />
       )}
-      <AvatarFallback className="rounded-md bg-sidebar-primary font-semibold text-sidebar-primary-foreground">
+      {/* Форма и кегль буквы берутся у корня: у вендоренного fallback свои
+          rounded-md и text-sm, и без наследования кружок 64px оставался бы с
+          буквой в 14px, а круглый корень — с квадратной подложкой. */}
+      <AvatarFallback className="rounded-[inherit] bg-sidebar-primary text-[length:inherit] font-semibold text-sidebar-primary-foreground">
         {initials(person)}
       </AvatarFallback>
     </Avatar>
