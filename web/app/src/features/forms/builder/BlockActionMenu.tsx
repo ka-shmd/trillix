@@ -14,7 +14,6 @@ import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
 import { editorKind } from './kinds/index'
 import { SettingRow, TextSetting } from './kinds/settings'
-import { typeIcon } from './blockTypeIcons'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import {
   Command,
@@ -240,7 +239,7 @@ export function BlockActionMenu({
                           close()
                         }}
                       >
-                        {typeIcon(t.type)}
+                        {t.icon}
                         {t.label}
                       </CommandItem>
                     ))}

@@ -136,3 +136,49 @@ describe('превью листает страницы', () => {
     expect(screen.queryByRole('heading', { name: 'Анкета' })).toBeNull()
   })
 })
+
+// Страница «Спасибо» (2026-08-21) — не шаг формы: индикатор её не считает, «Далее» на неё
+// не ведёт, кнопка отправки стоит на последней странице ФОРМЫ. Расхождение здесь такое же
+// молчаливое, как и с самими страницами: превью выглядело бы рабочим, а автор узнал бы о
+// лишнем шаге от людей, которые в него ушли.
+describe('превью и страница «Спасибо»', () => {
+  const withThanks = (): Block[] => [
+    ...twoPages(),
+    { id: 'brkTY', groupId: '', type: 'page_break', settings: { thankYou: true } },
+    { id: 'h', groupId: '', type: 'heading', text: textFromString('Готово, спасибо!') },
+  ]
+
+  it('в шагах её нет: две страницы формы, а не три', () => {
+    renderPreview(withThanks())
+    expect(screen.getByLabelText('Шаг 1 из 2')).toBeTruthy()
+    expect(screen.queryByText('Готово, спасибо!')).toBeNull()
+  })
+
+  it('с последней страницы формы ведёт отправка, а не «Далее»', () => {
+    renderPreview(withThanks())
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    expect(screen.getByLabelText('Шаг 2 из 2')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Далее' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Отправить' })).toBeTruthy()
+  })
+
+  it('отправка показывает страницу «Спасибо» — без шагов и без заголовка формы', () => {
+    const { container } = renderPreview(withThanks())
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(screen.getByText('Готово, спасибо!')).toBeTruthy()
+    expect(container.querySelector('.rf-steps')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Анкета' })).toBeNull()
+    // Вопросов формы на этом экране нет — он показан ПОСЛЕ отправки.
+    expect(screen.queryByLabelText(/Почта/)).toBeNull()
+  })
+
+  it('вопрос на этой странице гасит флаг: она снова обычный шаг', () => {
+    renderPreview([
+      ...twoPages(),
+      { id: 'brkTY', groupId: '', type: 'page_break', settings: { thankYou: true } },
+      ...question('c', 'Телефон'),
+    ])
+    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
+  })
+})

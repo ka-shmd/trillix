@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -44,6 +45,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { type PageNav, pageNavPlan } from './pageNav'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import { captionLoss, needsCaptionFor, planBlockDrop, rowPosition } from './store'
 import { inviteRowId } from './rowZones'
@@ -357,6 +359,21 @@ export function SlashEditor({
   // В двумерном полотне такой цели нет — вертикально вставляются между рядами, и
   // позиция «между участниками» в набор целей просто не попадает (dropTarget.ts).
   const rows = useMemo(() => packRows(groups), [groups])
+  // КНОПКИ ШАГА по рядам (2026-08-21): разрыв закрывает страницу, поэтому кнопки этой
+  // страницы рисуются ПЕРЕД его рядом, а кнопки последней страницы формы — под полотном
+  // либо перед разрывом страницы «Спасибо». Правило целиком — в pageNavPlan; здесь только
+  // перевод «id разрыва → номер ряда».
+  const nav = useMemo(() => {
+    const plan = pageNavPlan(blocks)
+    const byRow = new Map<number, PageNav>()
+    for (const [id, item] of plan.byBreakId) {
+      const row = rows.findIndex((r) =>
+        r.some((cell) => cell.some((g) => g.blocks.some((b) => b.id === id))),
+      )
+      if (row >= 0) byRow.set(row, item)
+    }
+    return { byRow, tail: plan.tail }
+  }, [blocks, rows])
   // Группы, стоящие в СЕКЦИИ. Стороны здесь не считают: при четырёх колонках зеркалить
   // некуда — у средних колонок «своей» стороны нет вовсе, — поэтому кластер значков у
   // всех слева, а от наезда на соседа его держит подложка в цвет холста (BlockRow).
@@ -707,7 +724,7 @@ export function SlashEditor({
         ? addQuestionAfter(insertAfterId, item.type)
         : item.group === 'field'
           ? addFieldAfter(insertAfterId, item.type)
-          : addBlockAfter(insertAfterId, item.type)
+          : addBlockAfter(insertAfterId, item.type, item.preset)
     engine.focusBlock(id)
     setInsertOpen(false)
   }
@@ -1149,18 +1166,23 @@ export function SlashEditor({
                         </div>
                       ))
                       return (
-                        // Ряд — контейнер ВСЕГДА, даже об одном вопросе: он якорь зон и
-                        // единственный бокс, чья геометрия не зависит от того, что внутри.
-                        // Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
-                        // fields.css: иначе полколонки остались бы и на телефоне, где у
-                        // респондента ряд разваливается.
-                        // mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
-                        // ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
-                        // gap здесь — зазор между КОЛОНКАМИ (на мобильном ряд
-                        // разваливается в стек, и тот же зазор становится вертикальным),
-                        // как .rf-row. Оба множатся на --rf-density, как и там.
+                        // Фрагмент несёт key ряда, потому что ПЕРЕД рядом со страницей
+                        // «Спасибо» встаёт кнопка отправки — ровно там, где её увидит
+                        // респондент. Страницы «Спасибо» нет — фрагмент пуст, разметка
+                        // прежняя.
+                        <Fragment key={rowId}>
+                          {nav.byRow.has(rowIndex) && <PageNavRow nav={nav.byRow.get(rowIndex)!} />}
+                          {/* Ряд — контейнер ВСЕГДА, даже об одном вопросе: он якорь зон и
+                        единственный бокс, чья геометрия не зависит от того, что внутри.
+                        Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
+                        fields.css: иначе полколонки остались бы и на телефоне, где у
+                        респондента ряд разваливается.
+                        mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
+                        ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
+                        gap здесь — зазор между КОЛОНКАМИ (на мобильном ряд
+                        разваливается в стек, и тот же зазор становится вертикальным),
+                        как .rf-row. Оба множатся на --rf-density, как и там. */}
                         <div
-                          key={rowId}
                           className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row ${
                             rowIndex === 0 ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
                           }`}
@@ -1183,25 +1205,12 @@ export function SlashEditor({
                           )}
                           {cellNodes}
                         </div>
+                        </Fragment>
                       )
                     })}
                   </ol>
                 </SortableContext>
               </DndContext>
-            )}
-
-            {/* Служебный ярус под полотном: вставка блока мышью. Вход в шпаргалку
-          отсюда не ведёт — она открывается только аккордом Mod+/ (useGlobalChord). */}
-            {blocks.length > 0 && (
-              <div className="mt-4 flex items-center text-sm text-muted-foreground">
-                <button
-                  type="button"
-                  onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
-                  className="text-left hover:text-foreground"
-                >
-                  + Добавить блок
-                </button>
-              </div>
             )}
 
             <BlockTypeDialog
@@ -1217,10 +1226,11 @@ export function SlashEditor({
               onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
             />
 
-            {/* Кнопки отправки у пустого полотна нет: отправлять нечего, а единственный
-          элемент страницы уводил бы внимание с приглашения начать (EmptyStarter).
-          Появляется с первым же блоком. */}
-            {blocks.length > 0 && <SubmitButtonEditor />}
+            {/* Кнопок у пустого полотна нет: отправлять нечего, а единственный элемент
+          страницы уводил бы внимание с приглашения начать (EmptyStarter). Появляются с
+          первым же блоком — но НЕ здесь, если форма кончается страницей «Спасибо»: тогда
+          кнопки нарисованы выше её разрыва (pageNavPlan.tail === null). */}
+            {blocks.length > 0 && nav.tail && <PageNavRow nav={nav.tail} />}
             </div>
           </div>
         </ActiveRowValueProvider>
@@ -1667,22 +1677,44 @@ const GroupRow = memo(function GroupRow({
   )
 }, sameGroupProps)
 
-// SubmitButtonEditor — кнопка отправки формы (видна, пока на полотне есть хоть один
-// блок — см. место вызова). Клик открывает поповер
-// со сменой её текста; пусто → показывается дефолт. Пишет в стор (форма-уровень),
-// автосейв сохраняет вместе со схемой.
+// PageNavRow — КНОПКИ ШАГА, которые респондент увидит в конце этой страницы (2026-08-21).
+// До этого полотно рисовало одну кнопку отправки под всем документом, и многостраничная
+// форма выглядела на нём одностраничной: автор не видел ни «Далее» на конце страницы, ни
+// «Назад» со второй. Что где стоит, считает pageNavPlan — правило проверяется тестом, а не
+// глазами по трём условиям в JSX.
+//
+// «Далее» и «Назад» — ПОКАЗ, а не контролы: нажимать их на полотне некуда (оно один
+// свиток), править в них нечего. Поэтому span'ы с теми же классами, что у респондента:
+// правила .rf-submit/.rf-back element-agnostic, вид получается тот же, а в обход клавиатуры
+// мёртвые кнопки не попадают. Редактируется из этого ряда только текст отправки.
+function PageNavRow({ nav }: { nav: PageNav }) {
+  return (
+    // 48px × --rf-density форма→кнопки = gap .rf-page у превью/рендерера
+    // (этап 13.3; множитель плотности — фаза 22).
+    // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
+    // задаётся justify-content ряда, и без общей коробки настройка работала бы на
+    // двух поверхностях из трёх.
+    <div className="mt-[calc(3rem*var(--rf-density))] rf-nav">
+      {nav.back && <span className="rf-back">Назад</span>}
+      {nav.kind === 'next' ? (
+        <span className="rf-submit rf-next">Далее</span>
+      ) : (
+        <SubmitButtonEditor />
+      )}
+    </div>
+  )
+}
+
+// SubmitButtonEditor — кнопка отправки формы. Клик открывает поповер со сменой её текста;
+// пусто → показывается дефолт. Пишет в стор (форма-уровень), автосейв сохраняет вместе со
+// схемой. Коробку ряда держит PageNavRow — кнопка в нём не одна.
 function SubmitButtonEditor() {
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const setSubmitLabel = useBuilderStore((s) => s.setSubmitLabel)
   const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
 
   return (
-    // 48px × --rf-density форма→кнопка отправки = gap .rf-page у превью/рендерера
-    // (этап 13.3; множитель плотности — фаза 22).
-    // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
-    // задаётся justify-content ряда, и без общей коробки настройка работала бы на
-    // двух поверхностях из трёх. Ряд из одного элемента ничего не портит.
-    <div className="mt-[calc(3rem*var(--rf-density))] rf-nav">
+    <>
       <Popover>
         <PopoverTrigger asChild>
           <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
@@ -1706,7 +1738,7 @@ function SubmitButtonEditor() {
           </p>
         </PopoverContent>
       </Popover>
-    </div>
+    </>
   )
 }
 

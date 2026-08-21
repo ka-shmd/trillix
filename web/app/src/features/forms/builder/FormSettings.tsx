@@ -140,7 +140,9 @@ export function FormSettings({
       <section className="mt-8 border-t pt-6">
         <h2 className="text-sm font-medium">После отправки</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Что респондент увидит, когда отправит ответ.
+          Что респондент увидит, когда отправит ответ. Нужен экран посложнее — соберите
+          страницу «Спасибо» на полотне: включите тумблер на последнем разрыве страницы, и
+          она заменит этот текст.
         </p>
 
         <Label htmlFor="thank-you-text" className="mt-4 block text-sm font-medium">

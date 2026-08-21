@@ -3,7 +3,14 @@ import { useState } from 'react'
 import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import {
+  groupBlocks,
+  groupMeta,
+  packGroupRows,
+  packRows,
+  splitFormTitle,
+  splitThankYou,
+} from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
@@ -40,7 +47,11 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
   // разделителем, что у рендерера. Проп title остаётся фолбэком: форму, которую
   // автор ещё не открывал после фазы, сервер синтезирует при чтении черновика, но
   // до первого автосейва блока в сторе может не быть.
-  const { title: formTitle, rest: blocks } = splitFormTitle(allBlocks)
+  const { title: formTitle, rest: docBlocks } = splitFormTitle(allBlocks)
+  // ЭКРАН ПОСЛЕ ОТПРАВКИ отрезается до planForm, как у респондента (FormView): попади он
+  // в список страниц, превью повело бы автора на него кнопкой «Далее» и посчитало лишний
+  // шаг в индикаторе — то есть соврало бы ровно о том, ради чего превью и существует.
+  const { blocks, thankYou } = splitThankYou(docBlocks)
   // ПРЕВЬЮ ЗАПОЛНЯЕМОЕ (фаза 21). До условной логики поля были декоративны — смотреть
   // не на что, кроме вида. С логикой это перестало работать: ветка показывается ОТ
   // ОТВЕТА, и превью без ответов молча прятало бы от автора всё, что он только что
@@ -65,13 +76,18 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
   // одному дереву?» нет). Автор стёр разрыв, стоя на последней странице, — clamp ниже
   // возвращает его в существующий диапазон, а не показывает пустоту.
   const [rawPage, setPage] = useState(0)
+  // «Отправлено» — состояние ПРОСМОТРА, не документа: автор жмёт кнопку, чтобы увидеть
+  // страницу «Спасибо» так же, как её увидит респондент. Кнопка оживает только когда
+  // показывать есть что: формы без такой страницы получают экран-заглушку, а он живёт в
+  // рендерере (свой .status), и второй его экземпляр здесь разъехался бы с первым.
+  const [done, setDone] = useState(false)
   const page = Math.min(rawPage, lastPage)
   // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
   // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
-  const chrome = page === 0
+  const chrome = page === 0 && !done
   // Ряды вопросов (спека §5): вопрос с column='right' встаёт рядом с предыдущим,
   // ряд из одного — во всю ширину. Тот же раскладчик, что у рендерера и полотна.
-  const rows = packRows(groupBlocks(pages[page] ?? []))
+  const rows = packRows(groupBlocks(done ? (thankYou ?? []) : (pages[page] ?? [])))
   // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
   const hasRules = blocks.some((b) => b.type === 'logic')
   const onChange = (blockId: string, value: Answer) =>
@@ -103,11 +119,11 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             бывает и без логики — например у документа из одного разрыва страницы (он
             инертен, ни одной страницы не открывает), и там правильный текст — второй:
             добавьте блоки. Найдено ревью ветки фазы. */}
-          {plan.pages.every((p) => p.length === 0) && hasRules ? (
+          {!done && plan.pages.every((p) => p.length === 0) && hasRules ? (
             <p className="rf-empty">
               Все вопросы скрыты условиями — ответьте выше или поправьте блок условия.
             </p>
-          ) : plan.pages.every((p) => p.length === 0) ? (
+          ) : !done && plan.pages.every((p) => p.length === 0) ? (
             <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
           ) : (
             <div className="rf-form">
@@ -170,27 +186,52 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
           так же, как её пройдёт респондент. Кнопка отправки по-прежнему без
           обработчика (клик ничего не делает), но выглядит как у респондента —
           активной, и только на последней странице. */}
-          <div className="rf-nav">
-            {page > 0 && (
-              <button type="button" className="rf-back" onClick={() => setPage(page - 1)}>
-                Назад
-              </button>
-            )}
-            {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+          {done ? (
+            // Возврат к форме — контрол ПРОСМОТРА, а не формы, и потому не .rf-nav:
+            // у респондента с этого экрана уйти некуда, и рисовать ему кнопку было бы
+            // ложью. Автору она нужна — иначе просмотр упирается в тупик.
+            <button
+              type="button"
+              className="mt-6 text-xs text-muted-foreground underline hover:text-foreground"
+              onClick={() => setDone(false)}
+            >
+              ← Вернуться к форме
+            </button>
+          ) : (
+            <div className="rf-nav">
+              {page > 0 && (
+                <button type="button" className="rf-back" onClick={() => setPage(page - 1)}>
+                  Назад
+                </button>
+              )}
+              {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
                 автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
-            {plan.blocked && page === lastPage ? null : page < lastPage ? (
-              <button type="button" className="rf-submit rf-next" onClick={() => setPage(page + 1)}>
-                Далее
-              </button>
-            ) : (
-              <button type="button" className="rf-submit">
-                {label}
-              </button>
-            )}
-          </div>
+              {plan.blocked && page === lastPage ? null : page < lastPage ? (
+                <button
+                  type="button"
+                  className="rf-submit rf-next"
+                  onClick={() => setPage(page + 1)}
+                >
+                  Далее
+                </button>
+              ) : (
+                // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
+                // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
+                // остаётся без обработчика — как и была.
+                <button
+                  type="button"
+                  className="rf-submit"
+                  onClick={thankYou ? () => setDone(true) : undefined}
+                >
+                  {label}
+                </button>
+              )}
+            </div>
+          )}
           {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
-            правило «кликом только назад» — часть WYSIWYG. */}
-          <StepBar pages={pages.length} page={page} onGo={setPage} />
+            правило «кликом только назад» — часть WYSIWYG. На экране после отправки шагов
+            нет: он не шаг формы. */}
+          {!done && <StepBar pages={pages.length} page={page} onGo={setPage} />}
           {badge && <Badge />}
         </div>
       </div>

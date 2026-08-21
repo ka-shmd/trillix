@@ -293,9 +293,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           схлопывается синхронно на mousedown (фокус уходит из блока → блок теряет
           :focus-within → высота падает): всё, что ниже, уезжает вверх, mouseup
           приходит уже мимо цели, и браузер диспатчит click на общего предка —
-          обработчик кнопки не срабатывает. Так «+ Описание» (контрол тех времён,
-          сейчас его нет), стоявшее в потоке под заголовком, съедало первый клик по
-          «+ Добавить блок» — TD-22.
+          обработчик кнопки не срабатывает. Так «+ Описание», стоявшее в потоке под
+          заголовком, съедало первый клик по кнопке вставки под полотном — TD-22
+          (оба контрола сняты, правило осталось).
           Любой новый reveal-on-hover контрол блока — только сюда.
 
           Кластер живёт в ОБОЛОЧКЕ, а не в теле: грипу нужны attributes/listeners
@@ -644,7 +644,7 @@ const BlockRowBody = memo(function BlockRowBody({
         ? makeQuestion(block.id, item.type)
         : item.group === 'field'
           ? makeField(block.id, item.type)
-          : changeBlockType(block.id, item.type)
+          : changeBlockType(block.id, item.type, item.preset)
     setSlash(null)
     engine.focusBlock(focusId, 'end')
   }

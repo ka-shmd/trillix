@@ -22,12 +22,18 @@ export type ThankYouPlan = {
 // всё, кроме абсолютного http(s)), но проверяется здесь ещё раз — значение уходит
 // в window.location, и доверять содержимому схемы на месте использования нельзя
 // (инвариант 4).
-export function planThankYou(text: string, redirectUrl: string): ThankYouPlan {
+export function planThankYou(
+  text: string,
+  redirectUrl: string,
+  // Экран собран страницей «Спасибо» (2026-08-21): читать на нём есть что, даже когда
+  // текста в настройках нет вовсе, — значит паузу перед переходом надо держать.
+  hasPage = false,
+): ThankYouPlan {
   const custom = text.trim()
   const target = isHttpUrl(redirectUrl) ? redirectUrl : null
   return {
     message: custom || DEFAULT_THANK_YOU_TEXT,
     target,
-    delayMs: custom ? REDIRECT_DELAY_MS : 0,
+    delayMs: custom || hasPage ? REDIRECT_DELAY_MS : 0,
   }
 }
