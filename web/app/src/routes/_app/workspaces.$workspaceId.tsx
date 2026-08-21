@@ -10,6 +10,7 @@ import {
   workspacesQueryOptions,
 } from '../../features/workspaces/queries'
 import { ApiError } from '../../shared/api/errors'
+import { UserAvatar } from '../../shared/UserAvatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -73,6 +74,7 @@ function MembersPage() {
           <ul className="divide-y rounded-lg border">
             {state.data.members.map((m) => (
               <li key={m.userId} className="flex items-center gap-3 p-4">
+                <UserAvatar person={m} className="rounded-full" />
                 <span className="truncate">{m.email}</span>
                 <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                   {m.role === 'owner' ? 'владелец' : 'редактор'}

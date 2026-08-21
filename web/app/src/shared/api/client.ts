@@ -8,6 +8,9 @@ type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 
 interface RequestOptions<T> {
   method?: Method
+  // FormData едет как есть (файл), всё остальное — JSON'ом. Content-Type у
+  // FormData не ставится намеренно: его выставляет браузер вместе с boundary,
+  // и заданный руками ломает разбор multipart на сервере.
   body?: unknown
   // Схема валидирует успешный ответ на границе: непровалидированный any внутрь
   // приложения не проходит (web/CLAUDE.md). Отсутствует — тело не ожидается.
@@ -19,7 +22,8 @@ interface RequestOptions<T> {
 export async function apiRequest<T>(path: string, opts: RequestOptions<T> = {}): Promise<T> {
   const method = opts.method ?? 'GET'
   const headers: Record<string, string> = {}
-  if (opts.body !== undefined) headers['Content-Type'] = 'application/json'
+  const isForm = opts.body instanceof FormData
+  if (opts.body !== undefined && !isForm) headers['Content-Type'] = 'application/json'
   if (method !== 'GET') {
     const csrf = csrfToken()
     if (csrf) headers[CSRF_HEADER] = csrf
@@ -29,7 +33,7 @@ export async function apiRequest<T>(path: string, opts: RequestOptions<T> = {}):
     method,
     credentials: 'include',
     headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body: isForm ? (opts.body as FormData) : opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
   })
 
   if (!res.ok) throw await toApiError(res)

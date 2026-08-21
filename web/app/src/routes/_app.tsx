@@ -51,6 +51,7 @@ function AppLayout() {
     <SidebarProvider>
       <AppSidebar
         userEmail={user.email}
+        person={user}
         userName={displayName(user)}
         onCreateForm={handleCreate}
         creatingForm={create.isPending}

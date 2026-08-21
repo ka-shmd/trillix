@@ -19,6 +19,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
+import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -33,6 +34,10 @@ import {
 // (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
 export interface AppSidebarProps {
   userEmail: string
+  // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
+  // объектом User: сайдбар презентационный, и знать про пароли и второй фактор
+  // ему незачем.
+  person: UserAvatarProps['person']
   // userName — как звать человека: имя с фамилией, если он их указал, иначе
   // email (entities/user.ts, displayName). Считает вызывающий: сайдбар
   // презентационный и в фичи не ходит.
@@ -45,6 +50,7 @@ export interface AppSidebarProps {
 
 export function AppSidebar({
   userEmail,
+  person,
   userName,
   onCreateForm,
   creatingForm,
@@ -137,9 +143,7 @@ export function AppSidebar({
                   size="lg"
                   className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
                 >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground">
-                    {userName.charAt(0).toUpperCase()}
-                  </span>
+                  <UserAvatar person={person} />
                   <span className="truncate text-sm">{userName}</span>
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
