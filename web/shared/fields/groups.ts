@@ -142,71 +142,69 @@ export function pageName<T extends { settings?: { pageName?: string } }>(
   return opener?.settings?.pageName?.trim() || `Страница ${number}`
 }
 
-// Разрыв, открывший последнюю страницу, ИЗ ГОТОВОГО разбиения: разбор документа один на
-// обе производные ниже, а не по разу на каждую — они считаются на каждый рендер.
-function openerOf<T>(runs: PageRun<T>[]): T | null {
-  return runs.length < 2 ? null : (runs[runs.length - 2]!.closer ?? null)
-}
+// ЭКРАН ПОСЛЕ ОТПРАВКИ — ХВОСТ ДОКУМЕНТА за разрывом с флагом. Отсюда всё остальное:
+// «за ним не бывает страниц» — это и есть «он хвост», а не отдельное правило.
+//
+// Флаг ЛЕГАЛЕН только там, где может подействовать (thankYouIssue ниже), и редактор не
+// даёт его поставить в других местах, а уже стоящий снимает канон стора
+// (normalizeThankYou). Схема при этом кросс-блочных правил по-прежнему не знает: 422 на
+// промежуточном состоянии драга дороже, чем уборка в сторе.
 
-// ДЕЙСТВУЕТ ЛИ ФЛАГ «СПАСИБО»: возвращает разрыв, за которым лежит экран после
-// отправки, либо null. Три условия, и все три производные — потому флаг и не
-// проверяется схемой (см. settings.ts):
+// thankYouIssue — что МЕШАЕТ пометить этот разрыв экраном после отправки. null — ничто.
 //
-//   • страница ПОСЛЕДНЯЯ — за экраном после отправки ничего не бывает. Флаг на разрыве
-//     выше просто игнорируется: автор дописал страницу ниже, и тумблер погас сам;
-//   • страниц БОЛЬШЕ ОДНОЙ — форма, вся состоящая из экрана благодарности, ничего не
-//     собирает, и отправлять с неё нечего;
-//   • на странице НЕТ ОТВЕЧАЕМЫХ блоков — ответ с экрана, показанного ПОСЛЕ отправки,
-//     физически никуда не уйдёт. Стоит там вопрос — это обычная страница.
+//   'not-last' — за разрывом есть ещё страница, а экран после отправки бывает только
+//                хвостом: иначе «Далее» вело бы с него в форму, из которой ответ уже ушёл;
+//   'question' — за разрывом стоит отвечаемый блок, а ответ с экрана, показанного ПОСЛЕ
+//                отправки, физически никуда не уйдёт.
 //
-// Ни одно из условий не делает документ невалидным: он остаётся тем же, гаснет только
-// флаг. Убрал автор вопрос — страница снова «Спасибо», без второго клика.
-export function thankYouOpener<T extends { type: BlockType }>(blocks: T[]): T | null {
-  return thankYouRun(splitPagesWithClosers(blocks))?.opener ?? null
-}
-
-// ПОЧЕМУ ФЛАГ НА ЭТОМ РАЗРЫВЕ НЕ ДЕЙСТВУЕТ — причина, а не булево: тумблер стоит на
-// каждом разрыве и включается всегда, поэтому «включил, а ничего не изменилось» обязано
-// быть объяснено на месте. null — флаг действует (или его тут нет, и мешать нечему).
+// «За разрывом пока пусто» помехой НЕ считается: страница, которую автор сейчас наберёт, —
+// обычное состояние набора, а запрет на неё означал бы, что вставить экран нельзя вовсе
+// (свежий разрыв всегда пуст). Такой флаг законен и просто ещё не действует — ровно как
+// инертный бит колонки.
 //
-//   'empty'    — за разрывом ещё нет блоков: страницы, которую можно пометить, не
-//                существует. Законное состояние набора — автор через секунду допишет;
-//   'not-last' — ниже есть ещё страница, а экран после отправки бывает только последним;
-//   'question' — на странице стоит вопрос, а ответ с экрана, показанного ПОСЛЕ отправки,
-//                никуда не уйдёт.
+// Порядок проверок значим: документ с вопросом на ЧУЖОЙ странице ниже подходит под оба
+// условия, и назвать его надо тем, что автор поймёт, — «ниже есть ещё страница».
 export function thankYouIssue<T extends { id: string; type: BlockType }>(
   blocks: T[],
   breakId: string,
-): 'empty' | 'not-last' | 'question' | null {
-  const runs = splitPagesWithClosers(blocks)
-  const opener = openerOf(runs)
-  if (opener === null || opener.id !== breakId) {
-    // Разрыв, который открывает КАКУЮ-ТО страницу, но не последнюю, — «не последний»;
-    // разрыв, не открывающий ничего, инертен сам по себе (см. pageNumbers).
-    return pageNumbers(blocks).has(breakId) ? 'not-last' : 'empty'
-  }
-  return blockedBy(runs)
+): 'not-last' | 'question' | null {
+  const i = blocks.findIndex((b) => b.id === breakId)
+  if (i < 0) return null
+  const tail = blocks.slice(i + 1)
+  // Больше одной страницы в хвосте = за разрывом есть ещё страница. Хвостовые инертные
+  // разрывы страниц не открывают и помехой не являются — их splitPages и не считает.
+  if (splitPagesWithClosers(tail).length > 1) return 'not-last'
+  return tail.some((b) => isAnswerableType(b.type)) ? 'question' : null
 }
 
-function blockedBy<T extends { type: BlockType }>(runs: PageRun<T>[]): 'question' | null {
-  const page = runs[runs.length - 1]!.blocks
-  return page.some((b) => isAnswerableType(b.type)) ? 'question' : null
+// thankYouOpener — разрыв, за которым лежит ДЕЙСТВУЮЩИЙ экран после отправки, либо null.
+// Действует = флаг стоит, ставить его тут можно (thankYouIssue) и за ним есть хотя бы один
+// блок: пустой экран показывать нечем, и рендерер в этом случае берёт свою заглушку.
+export function thankYouOpener<T extends { id: string; type: BlockType }>(blocks: T[]): T | null {
+  return findThankYou(blocks)?.opener ?? null
 }
 
-// Действующий экран после отправки из готового разбиения: разрыв-носитель и блоки самой
-// страницы. Единственное место, где сходятся все три условия, — и splitThankYou, и
-// thankYouOpener спрашивают здесь.
-function thankYouRun<T extends { type: BlockType }>(
-  runs: PageRun<T>[],
+// Ищем ПОСЛЕДНИЙ подходящий разрыв: экран после отправки один, и он хвост документа.
+// Поиск с конца, а не «разрыв последней страницы», потому что подряд идущие разрывы
+// (законное состояние набора) делают «последнюю страницу» неоднозначной: закрывает её
+// первый из них, а номер получает второй.
+function findThankYou<T extends { id: string; type: BlockType }>(
+  blocks: T[],
 ): { opener: T; blocks: T[] } | null {
-  const opener = openerOf(runs)
-  if (opener === null || !hasThankYouFlag(opener)) return null
-  if (blockedBy(runs) !== null) return null
-  return { opener, blocks: runs[runs.length - 1]!.blocks }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]!
+    if (b.type !== 'page_break') continue
+    if (!hasThankYouFlag(b) || thankYouIssue(blocks, b.id) !== null) continue
+    // Разрывы внутри хвоста инертны по построению (иначе было бы 'not-last'), поэтому
+    // просто выбрасываем их: границ внутри экрана после отправки не бывает.
+    const page = blocks.slice(i + 1).filter((x) => x.type !== 'page_break')
+    return page.length > 0 ? { opener: b, blocks: page } : null
+  }
+  return null
 }
 
 // Флаг читается через хелпер, а не полем в дженерике: `settings` есть у всех блоков, но
-// сужать сигнатуру lastPageOpener до «блок с настройками» незачем — она про раскладку.
+// сужать сигнатуру до «блок с настройками» незачем — функции выше про раскладку.
 function hasThankYouFlag(block: unknown): boolean {
   return (block as { settings?: { thankYou?: boolean } }).settings?.thankYou === true
 }
@@ -219,16 +217,17 @@ function hasThankYouFlag(block: unknown): boolean {
 // нет, а переход условной логики получит цель, с которой ответ уже не уйдёт. Один разрез
 // в одном месте вместо оговорки «кроме последней» в каждом из них.
 //
-// Флаг инертен → thankYou === null и blocks возвращаются как есть, то есть ровно
-// поведение до задачи. Инертные разрывы ПОСЛЕ экрана (законное состояние набора)
-// остаются в форме: они ничего не открывают, и вычищать их — дело стора, а не показа.
+// Экрана нет (флага нет, ставить его тут нельзя, за ним пусто) → thankYou === null и
+// blocks возвращаются как есть, то есть ровно поведение до задачи.
 export function splitThankYou<T extends { id: string; type: BlockType }>(
   blocks: T[],
 ): { blocks: T[]; thankYou: T[] | null } {
-  const run = thankYouRun(splitPagesWithClosers(blocks))
-  if (run === null) return { blocks: [...blocks], thankYou: null }
-  const cut = new Set<string>([run.opener.id, ...run.blocks.map((b) => b.id)])
-  return { blocks: blocks.filter((b) => !cut.has(b.id)), thankYou: run.blocks }
+  const found = findThankYou(blocks)
+  if (found === null) return { blocks: [...blocks], thankYou: null }
+  const cut = blocks.indexOf(found.opener)
+  // Формой остаётся всё ДО разрыва: за ним начинается экран, и хвостовые инертные разрывы
+  // внутри него — тоже его часть, а не забытый мусор формы.
+  return { blocks: blocks.slice(0, cut), thankYou: found.blocks }
 }
 
 // Ряд — это КОЛОНКИ, а колонка — стопка элементов. Полноширинный ряд = одна колонка с

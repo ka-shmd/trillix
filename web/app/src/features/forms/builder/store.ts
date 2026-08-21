@@ -26,6 +26,7 @@ import {
   packGroupRows,
   packOptionRows,
   packRows,
+  thankYouIssue,
 } from '@fields/groups'
 import { editorKind } from './kinds/index'
 import { derivedQuestionName } from './questionName'
@@ -747,6 +748,27 @@ function normalizeSections(blocks: Block[]): Block[] {
 // После уборки документ приводится к КАНОНУ (normalizeSections): левая колонка помечена
 // явно, порядок внутри секции колоночный.
 // Возвращает исходный массив, если править нечего (дешёвые no-op коммиты).
+// normalizeThankYou — СНИМАЕТ флаг «страница „Спасибо"» с разрывов, где он не действует
+// (решение владельца 2026-08-21). Тот же приём и та же причина, что у инертного бита
+// колонки ниже: документ не должен хранить намерение, которое продукт не исполняет, —
+// иначе автор сохраняет страницу «Спасибо», а респондент видит обычный шаг.
+//
+// Уборка живёт в СТОРЕ, а не в схеме: правило кросс-блочное, и в валидаторе оно означало
+// бы 422 на промежуточных состояниях драга и undo — то есть отказ автосейва на документе,
+// который автор через секунду доведёт до нормы. Здесь же оно применяется на каждой правке
+// и на чтении черновика, поэтому нарушенный флаг просто не доживает до сохранения.
+//
+// Порядок обхода не важен: причина (thankYouIssue) считается по РАСКЛАДКЕ и о самих флагах
+// ничего не знает — снятый флаг не может сделать законным чужой.
+function normalizeThankYou(blocks: Block[]): Block[] {
+  return blocks.map((b) => {
+    if (b.settings?.thankYou !== true || thankYouIssue(blocks, b.id) === null) return b
+    const settings = { ...b.settings }
+    delete settings.thankYou
+    return { ...b, settings }
+  })
+}
+
 function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Block[] {
   const blocks = reanchorRowBits(input, prev)
   const clear = new Set<string>() // id блоков, с которых снимаем бит
@@ -1307,7 +1329,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       // groupId именно из него.
       return {
         ...patch,
-        blocks: normalizeColumns(regroup(pinFormTitle(patch.blocks)), get().blocks, placed),
+        blocks: normalizeThankYou(
+          normalizeColumns(regroup(pinFormTitle(patch.blocks)), get().blocks, placed),
+        ),
       }
     }
 
@@ -1329,7 +1353,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           // normalizeColumns и здесь: контракт допускает инертный флаг (и правильно
           // делает), но редактор обязан начинать с документа, где флаг = реальный ряд
           // (dirty не ставится, на сервер уедет со следующей правкой).
-          blocks: normalizeColumns(regroup(schema.blocks.map(cloneBlock))),
+          blocks: normalizeThankYou(normalizeColumns(regroup(schema.blocks.map(cloneBlock)))),
           submitLabel: schema.submitLabel ?? '',
           thankYouText: schema.thankYouText ?? '',
           redirectUrl: schema.redirectUrl ?? '',

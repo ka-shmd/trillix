@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { MAX_PAGE_NAME_LEN, type Block } from '@entities/formSchema'
-import { pageName, pageNumbers, thankYouIssue, thankYouOpener } from '@fields/groups'
+import { pageName, pageNumbers, thankYouIssue } from '@fields/groups'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 import { useBuilderStore } from '../storeContext'
 
@@ -29,10 +30,11 @@ import { useBuilderStore } from '../storeContext'
 // контрол, занимающий место в потоке и рождающийся на hover, схлопывается на mousedown, и
 // клик уходит мимо цели):
 //
-//   • тумблер «Страница „Спасибо"» — на КАЖДОМ разрыве и включается всегда (решение
-//     владельца 2026-08-21). Показывает ФЛАГ документа, а не производную «действует»:
-//     иначе клик по нему на незавершённой форме выглядел бы как поломка — тумблер щёлкнул
-//     и сам вернулся. Почему флаг не сработал, говорит строка рядом (thankYouIssue);
+//   • тумблер «Страница „Спасибо"» — на КАЖДОМ разрыве, но ЗАПРЕЩЁН там, где правило
+//     нарушено (решение владельца 2026-08-21): документ не должен хранить намерение,
+//     которого продукт не исполнит, поэтому включить нельзя, а уже стоящий флаг снимает
+//     канон стора (normalizeThankYou). Причина запрета — в тултипе, а не строкой рядом:
+//     у каждого разрыва многостраничной формы приписка читалась как ошибка;
 //   • подпись — КНОПКА: клик открывает маленький попап с именем страницы. Не инпут по
 //     месту (он завёл бы объектной остановке вторую поверхность ввода со своим
 //     клавиатурным потоком) и не раздел общего попапа настроек (решение владельца).
@@ -42,13 +44,11 @@ import { useBuilderStore } from '../storeContext'
 export function PageBreakField({ block }: { block: Block }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const opens = useBuilderStore((s) => pageNumbers(s.blocks).get(block.id))
-  const active = useBuilderStore((s) => thankYouOpener(s.blocks)?.id === block.id)
   const issue = useBuilderStore((s) => thankYouIssue(s.blocks, block.id))
 
   const flagged = block.settings?.thankYou === true
-  // Тумблер пишет флаг, а не состояние страницы: действует он или нет, решает раскладчик
-  // (thankYouOpener). Снятие стирает ключ, а не пишет false, — канон пустых значений не
-  // хранит, и лишний ключ означал бы третье состояние там, где их два.
+  // Снятие СТИРАЕТ ключ, а не пишет false: канон пустых значений не хранит, и лишний ключ
+  // означал бы третье состояние там, где их два.
   const setThankYou = (on: boolean) =>
     updateBlock(block.id, {
       settings: { ...block.settings, thankYou: on ? true : undefined },
@@ -57,26 +57,46 @@ export function PageBreakField({ block }: { block: Block }) {
   return (
     <div className="flex items-center gap-3 py-1 select-none">
       <div className="flex shrink-0 items-center gap-2">
-        <Switch id={`thankyou-${block.id}`} checked={flagged} onCheckedChange={setThankYou} />
-        <Label htmlFor={`thankyou-${block.id}`} className="cursor-pointer text-xs font-normal">
+        <Tooltip>
+          {/* Обёртка обязательна: у ЗАПРЕЩЁННОГО тумблера нет pointer-событий, и тултип на
+              нём самом не открылся бы — то есть причина запрета оказалась бы недоступна
+              ровно тогда, когда она нужна. */}
+          <TooltipTrigger asChild>
+            <span className="flex items-center">
+              <Switch
+                id={`thankyou-${block.id}`}
+                checked={flagged}
+                // Нарушенное правило НЕ ДАЁТ включить: документ не должен хранить
+                // намерение, которое продукт не исполнит (см. normalizeThankYou в сторе).
+                disabled={issue !== null}
+                onCheckedChange={setThankYou}
+              />
+            </span>
+          </TooltipTrigger>
+          {issue !== null && <TooltipContent>{ISSUE_TEXT[issue]}</TooltipContent>}
+        </Tooltip>
+        <Label
+          htmlFor={`thankyou-${block.id}`}
+          className={`text-xs font-normal ${
+            issue === null ? 'cursor-pointer' : 'text-muted-foreground/60'
+          }`}
+        >
           Страница «Спасибо»
         </Label>
-        {flagged && issue !== null && (
-          <span className="text-muted-foreground/60 text-xs">— {ISSUE_TEXT[issue]}</span>
-        )}
       </div>
       <span className="h-px flex-1 bg-border" aria-hidden="true" />
-      <PageNameButton block={block} opens={opens} active={active} />
+      <PageNameButton block={block} opens={opens} flagged={flagged} />
       <span className="h-px flex-1 bg-border" aria-hidden="true" />
     </div>
   )
 }
 
-// Почему флаг не сработал — словами автора, а не кодом причины.
-const ISSUE_TEXT: Record<'empty' | 'not-last' | 'question', string> = {
-  empty: 'ниже пока нет блоков',
-  'not-last': 'ниже есть ещё страница',
-  question: 'на странице есть вопрос',
+// Почему тумблер запрещён — словами автора, а не кодом причины. Текст уходит в ТУЛТИП: в
+// строке разделителя приписка стояла у каждого разрыва многостраничной формы и читалась как
+// ошибка, хотя «ниже есть ещё страница» — обычное положение дел.
+const ISSUE_TEXT: Record<'not-last' | 'question', string> = {
+  'not-last': 'Экран после отправки бывает только последней страницей',
+  question: 'Уберите вопрос со страницы: ответ с экрана после отправки уже не уйдёт',
 }
 
 // Подпись-кнопка и попап имени. Имя КОММИТИТСЯ КНОПКОЙ «Применить» (и Enter), а не на
@@ -87,11 +107,11 @@ const ISSUE_TEXT: Record<'empty' | 'not-last' | 'question', string> = {
 function PageNameButton({
   block,
   opens,
-  active,
+  flagged,
 }: {
   block: Block
   opens: number | undefined
-  active: boolean
+  flagged: boolean
 }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const name = block.settings?.pageName ?? ''
@@ -132,7 +152,7 @@ function PageNameButton({
             opens === undefined ? 'text-muted-foreground/60' : 'text-muted-foreground'
           }`}
         >
-          {caption(block, opens, active)}
+          {caption(block, opens, flagged)}
         </button>
       </PopoverTrigger>
       <PopoverContent align="center" className="flex w-72 gap-2 p-2">
@@ -168,14 +188,17 @@ function PageNameButton({
 // место. Безымянная страница зовётся номером («Страница 2») — второй раз печатать слово
 // «страница» перед решёткой незачем.
 //
-// У ДЕЙСТВУЮЩЕЙ страницы «Спасибо» номера НЕТ: респондент видит её не шагом, а экраном
-// после отправки, и «#3» на ней означало бы шаг, которого в форме нет.
+// У страницы «Спасибо» номера НЕТ: респондент видит её не шагом, а экраном после отправки,
+// и «#3» на ней означало бы шаг, которого в форме нет. Читается ФЛАГ, а не «экран уже
+// действует»: пока автор не написал ни строчки, хвост пуст и экрана нет, но помечена
+// страница именно так — подпись обязана говорить про намерение, иначе тумблер стоит, а
+// подпись спорит с ним.
 //
-// Инертный разрыв (за ним пока ничего) зовётся «Новой страницей» — так же, как пункт
-// меню, которым автор его только что вставил: слова «разрыв» он в интерфейсе не видел.
-function caption(block: Block, opens: number | undefined, active: boolean): string {
+// Инертный разрыв (за ним пока ничего и флага нет) зовётся «Новой страницей» — так же, как
+// пункт меню, которым автор его только что вставил: слова «разрыв» он в интерфейсе не видел.
+function caption(block: Block, opens: number | undefined, flagged: boolean): string {
   const own = block.settings?.pageName?.trim()
-  if (active) return own || 'Спасибо'
+  if (flagged) return own || 'Спасибо'
   if (opens === undefined) return own || 'Новая страница'
   return own ? `${own} #${opens}` : pageName(null, opens)
 }

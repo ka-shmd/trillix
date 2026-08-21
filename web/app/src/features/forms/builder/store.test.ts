@@ -2987,6 +2987,56 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['a'])
   })
 
+  // КАНОН ФЛАГА «СПАСИБО» (решение владельца 2026-08-21): документ не должен хранить
+  // намерение, которого продукт не исполнит. Редактор не даёт поставить флаг там, где он
+  // не подействует, а приехавший из базы снимает канон — иначе автор «сохранил страницу
+  // Спасибо», а респондент видит обычный шаг.
+  it('чтение снимает флаг с разрыва, за которым стоит вопрос', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break', settings: { thankYou: true } },
+        { id: 'b', groupId: '', type: 'email' },
+      ],
+    })
+    expect(store.getState().blocks.find((b) => b.id === 'brk')?.settings?.thankYou).toBeUndefined()
+  })
+
+  // Правка документа — тот же канон: автор поставил флаг на законном месте, а потом
+  // дописал вопрос на эту страницу. Флаг снимается той же правкой, а не остаётся тихо
+  // лежать в схеме.
+  it('вопрос, дописанный на страницу «Спасибо», снимает её флаг', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break', settings: { thankYou: true } },
+        { id: 'h', groupId: '', type: 'heading', text: textFromString('Готово') },
+      ],
+    })
+    expect(store.getState().blocks.find((b) => b.id === 'brk')?.settings?.thankYou).toBe(true)
+
+    store.getState().addFieldAfter('h', 'email')
+    expect(store.getState().blocks.find((b) => b.id === 'brk')?.settings?.thankYou).toBeUndefined()
+  })
+
+  // Пустой хвост — законное состояние набора: свежий разрыв всегда пуст, и канон его флаг
+  // не трогает, иначе вставить экран после отправки было бы нельзя вовсе.
+  it('флаг на разрыве с пустым хвостом канон не снимает', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: '', type: 'short_text' },
+        { id: 'brk', groupId: '', type: 'page_break', settings: { thankYou: true } },
+      ],
+    })
+    expect(store.getState().blocks.find((b) => b.id === 'brk')?.settings?.thankYou).toBe(true)
+  })
+
   // Перетаскивание границы страницы — не отдельная команда, а обычный перенос группы:
   // документ линейный, поэтому «сдвинул разрыв» и «вопрос сменил страницу» — одно и то
   // же событие. Проверяем следствие, а не механику.

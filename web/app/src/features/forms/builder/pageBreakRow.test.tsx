@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
+import { TooltipProvider } from '@/components/ui/tooltip'
+
 import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 
 import { PageBreakField } from './kinds/pageBreakField'
@@ -32,10 +34,15 @@ function Row() {
 function renderRow(blocks: Block[]) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
+  // TooltipProvider повторяет окружение приложения: в кабинете его даёт SidebarProvider
+  // выше по дереву (как у SaveIndicator), а Radix без провайдера падает на первом же
+  // Tooltip.
   const view = render(
-    <BuilderStoreContext.Provider value={store}>
-      <Row />
-    </BuilderStoreContext.Provider>,
+    <TooltipProvider>
+      <BuilderStoreContext.Provider value={store}>
+        <Row />
+      </BuilderStoreContext.Provider>
+    </TooltipProvider>,
   )
   const settingsOf = (id: string) => store.getState().blocks.find((b) => b.id === id)?.settings
   return { ...view, store, settingsOf }
@@ -58,17 +65,41 @@ describe('тумблер «Страница „Спасибо"»', () => {
     expect(settingsOf('pb')?.thankYou).toBeUndefined()
   })
 
-  // Тумблер показывает ФЛАГ, а не производную: иначе клик по нему на форме, где правило
-  // нарушено, выглядел бы как поломка — щёлкнул и сам вернулся.
-  it('на странице с вопросом остаётся включённым и объясняет, почему не действует', () => {
+  // ЗАПРЕТ, а не «включён, но не действует» (решение владельца 2026-08-21): документ не
+  // должен хранить намерение, которого продукт не исполнит. Флаг, приехавший из базы,
+  // снимает канон стора (normalizeThankYou) — тумблер поэтому и погашен, и недоступен.
+  it('вопрос за разрывом: тумблер погашен, недоступен, флаг снят из документа', () => {
     const withQuestion: Block[] = [
       { id: 'q1', groupId: 'g1', type: 'short_text' },
       { id: 'pb', groupId: 'gp', type: 'page_break', settings: { thankYou: true } },
       { id: 'q2', groupId: 'g2', type: 'email' },
     ]
-    renderRow(withQuestion)
-    expect(screen.getByRole('switch').getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText(/на странице есть вопрос/)).toBeTruthy()
+    const { settingsOf } = renderRow(withQuestion)
+    const sw = screen.getByRole('switch')
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(sw).toHaveProperty('disabled', true)
+    expect(settingsOf('pb')?.thankYou).toBeUndefined()
+  })
+
+  it('ниже есть ещё страница — тумблер тоже недоступен', () => {
+    renderRow([
+      { id: 'q1', groupId: 'g1', type: 'short_text' },
+      { id: 'pb', groupId: 'gp', type: 'page_break' },
+      { id: 'h', groupId: 'g2', type: 'heading', text: textFromString('Готово') },
+      { id: 'pb2', groupId: 'gp2', type: 'page_break' },
+      { id: 'q2', groupId: 'g3', type: 'email' },
+    ])
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', true)
+  })
+
+  // Пустой хвост запретом НЕ является: свежий разрыв всегда пуст, и запрет на него означал
+  // бы, что экран нельзя вставить вовсе.
+  it('за разрывом пусто — тумблер доступен', () => {
+    renderRow([
+      { id: 'q1', groupId: 'g1', type: 'short_text' },
+      { id: 'pb', groupId: 'gp', type: 'page_break' },
+    ])
+    expect(screen.getByRole('switch')).toHaveProperty('disabled', false)
   })
 })
 
