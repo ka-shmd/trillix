@@ -9,7 +9,7 @@ import {
   plainText,
   scaleRange,
 } from '@entities/formSchema'
-import { pageNumbers } from '@fields/groups'
+import { pageName, pageNumbers, thankYouOpener } from '@fields/groups'
 import { operatorsFor, ruleWarnings } from '@fields/logic'
 
 import { editorKind } from '../kinds'
@@ -139,17 +139,25 @@ function pageOf(blocks: readonly Block[], blockId: string): number {
 // Цели перехода для блока `logic`: страницы ПОСЛЕ той, на которой он стоит, плюс
 // «к отправке». Переход назад инертен по построению обхода, и показывать его в списке
 // значило бы пообещать работу, которой не будет.
+//
+// СТРАНИЦА «СПАСИБО» целью не бывает (2026-08-21): она стоит за отправкой, а не перед
+// ней, и переход на неё увёл бы респондента мимо кнопки — ответ не ушёл бы вовсе.
+// Дойти до конца формы умеет «К отправке» (JUMP_END), и второго способа сказать то же
+// самое быть не должно. Правило, нацеленное на неё, инертно и получает предупреждение
+// (logicBlockWarnings спрашивает цели здесь же).
 export function jumpTargetsFrom(
   blocks: readonly Block[],
   logicId: string,
 ): { value: string; label: string }[] {
   const from = pageOf(blocks, logicId)
   const opens = pageNumbers([...blocks])
+  const thankYou = thankYouOpener([...blocks])?.id
   const out: { value: string; label: string }[] = []
   for (const b of blocks) {
     const page = opens.get(b.id)
     if (b.type !== 'page_break' || page === undefined || page <= from) continue
-    out.push({ value: b.id, label: `Страница ${page}` })
+    if (b.id === thankYou) continue
+    out.push({ value: b.id, label: pageName(b, page) })
   }
   out.push({ value: JUMP_END, label: 'К отправке' })
   return out

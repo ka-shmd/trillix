@@ -184,6 +184,30 @@ describe('цели перехода — страницы ниже блока', (
     const late = [...paged, logic('L2', {})]
     expect(jumpTargetsFrom(late, 'L2')).toEqual([{ value: JUMP_END, label: 'К отправке' }])
   })
+
+  it('страница названа своим именем, если автор его дал', () => {
+    const named = paged.map((b) =>
+      b.id === 'br1' ? { ...b, settings: { pageName: 'Контакты' } } : b,
+    )
+    expect(jumpTargetsFrom(named, 'L')[0]).toEqual({ value: 'br1', label: 'Контакты' })
+  })
+
+  // Страница «Спасибо» стоит ЗА отправкой: переход на неё увёл бы респондента мимо
+  // кнопки, и ответ не ушёл бы вовсе. Дойти до конца умеет «К отправке».
+  it('страница «Спасибо» целью перехода не бывает', () => {
+    const withThanks: Block[] = [
+      blk('q1', 'g1', 'short_text'),
+      logic('L', {}),
+      blk('br1', 'gb1', 'page_break'),
+      blk('q2', 'g2', 'short_text'),
+      { ...blk('br2', 'gb2', 'page_break'), settings: { thankYou: true } },
+      blk('h', 'g3', 'heading'),
+    ]
+    expect(jumpTargetsFrom(withThanks, 'L')).toEqual([
+      { value: 'br1', label: 'Страница 2' },
+      { value: JUMP_END, label: 'К отправке' },
+    ])
+  })
 })
 
 describe('предупреждения блока', () => {

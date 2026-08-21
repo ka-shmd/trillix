@@ -172,17 +172,30 @@ export function thankYouOpener<T extends { type: BlockType }>(blocks: T[]): T | 
   return thankYouRun(splitPagesWithClosers(blocks))?.opener ?? null
 }
 
+// ЧТО МЕШАЕТ последней странице быть экраном после отправки: 'question' — на ней стоит
+// вопрос, а ответ с экрана, показанного ПОСЛЕ отправки, никуда не уйдёт. null — ничто.
+//
+// Причина, а не булево: её показывает редактор рядом с погашенным тумблером. Тумблер,
+// который не включается и не объясняет почему, читается как поломка.
+export function thankYouBlocked<T extends { type: BlockType }>(blocks: T[]): 'question' | null {
+  return blockedBy(splitPagesWithClosers(blocks))
+}
+
+function blockedBy<T extends { type: BlockType }>(runs: PageRun<T>[]): 'question' | null {
+  const page = runs[runs.length - 1]!.blocks
+  return page.some((b) => isAnswerableType(b.type)) ? 'question' : null
+}
+
 // Действующий экран после отправки из готового разбиения: разрыв-носитель и блоки самой
-// страницы. Единственное место, где живут все три условия, — и splitThankYou, и
+// страницы. Единственное место, где сходятся все три условия, — и splitThankYou, и
 // thankYouOpener спрашивают здесь.
 function thankYouRun<T extends { type: BlockType }>(
   runs: PageRun<T>[],
 ): { opener: T; blocks: T[] } | null {
   const opener = openerOf(runs)
   if (opener === null || !hasThankYouFlag(opener)) return null
-  const page = runs[runs.length - 1]!.blocks
-  if (page.some((b) => isAnswerableType(b.type))) return null
-  return { opener, blocks: page }
+  if (blockedBy(runs) !== null) return null
+  return { opener, blocks: runs[runs.length - 1]!.blocks }
 }
 
 // Флаг читается через хелпер, а не полем в дженерике: `settings` есть у всех блоков, но
