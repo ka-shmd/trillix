@@ -37,6 +37,12 @@ export const MAX_FORM_TITLE_LEN = 200
 // короткий идентификатор для аналитики, а не текст вопроса. Зеркалит
 // MaxQuestionNameLen.
 export const MAX_QUESTION_NAME_LEN = 100
+// Длина ИМЕНИ СТРАНИЦЫ (settings.pageName у разрыва): строки, которой страница
+// называется автору и аналитике. Не MAX_TEXT_LEN и не MAX_FORM_TITLE_LEN: имя
+// респонденту не показывается вовсе (индикатор шагов остался без подписей, решение
+// владельца 2026-08-05) — это короткий ярлык того же класса, что имя вопроса, и лимит
+// у него тот же. Зеркалит MaxPageNameLen.
+export const MAX_PAGE_NAME_LEN = 100
 export const MAX_OPTION_LABEL_LEN = 500
 export const MAX_ID_LEN = 64
 export const MAX_SUBMIT_LABEL_LEN = 100

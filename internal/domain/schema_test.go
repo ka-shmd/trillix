@@ -27,15 +27,33 @@ func TestValidateSchema_Valid(t *testing.T) {
 				{"id":"blk_11","groupId":"g11","type":"consent","text":[{"t":"Соглашаюсь"}],"required":true,"settings":{}}
 			]
 		}`,
-		"неотвечаемый text-блок":               `{"blocks":[{"id":"b","groupId":"g1","type":"text","text":[{"t":"Раздел А"}],"settings":{}}]}`,
-		"картинка с imageKey":                  `{"blocks":[{"id":"b","groupId":"g1","type":"image","settings":{"imageKey":"ws/deadbeef.png"}}]}`,
-		"картинка без ключа — черновик":        `{"blocks":[{"id":"b","groupId":"g1","type":"image","settings":{}}]}`,
-		"submitLabel задан":                    `{"blocks":[],"submitLabel":"Готово"}`,
-		"thankYouText задан":                   `{"blocks":[],"thankYouText":"Ждём вас на встрече!"}`,
-		"redirectUrl https":                    `{"blocks":[],"redirectUrl":"https://example.com/thanks"}`,
-		"redirectUrl http с портом и query":    `{"blocks":[],"redirectUrl":"http://example.com:8080/ok?from=form"}`,
-		"оба поля экрана заданы":               `{"blocks":[],"thankYouText":"Спасибо!","redirectUrl":"https://example.com"}`,
-		"placeholder у текстового поля":        `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"placeholder":"Например, Иван"}}]}`,
+		"неотвечаемый text-блок":            `{"blocks":[{"id":"b","groupId":"g1","type":"text","text":[{"t":"Раздел А"}],"settings":{}}]}`,
+		"картинка с imageKey":               `{"blocks":[{"id":"b","groupId":"g1","type":"image","settings":{"imageKey":"ws/deadbeef.png"}}]}`,
+		"картинка без ключа — черновик":     `{"blocks":[{"id":"b","groupId":"g1","type":"image","settings":{}}]}`,
+		"submitLabel задан":                 `{"blocks":[],"submitLabel":"Готово"}`,
+		"thankYouText задан":                `{"blocks":[],"thankYouText":"Ждём вас на встрече!"}`,
+		"redirectUrl https":                 `{"blocks":[],"redirectUrl":"https://example.com/thanks"}`,
+		"redirectUrl http с портом и query": `{"blocks":[],"redirectUrl":"http://example.com:8080/ok?from=form"}`,
+		"оба поля экрана заданы":            `{"blocks":[],"thankYouText":"Спасибо!","redirectUrl":"https://example.com"}`,
+		"placeholder у текстового поля":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"placeholder":"Например, Иван"}}]}`,
+		// Настройки страницы у разрыва (2026-08-21). Зеркало «формSchema — валидные» на
+		// фронте. Условия действия флага thankYou кросс-блочны и потому не проверяются
+		// схемой ни на одной стороне: флаг инертен, а не невалиден.
+		"имя страницы у разрыва":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{}},{"id":"pb","groupId":"g2","type":"page_break","settings":{"pageName":"Контакты"}}]}`,
+		"имя страницы ровно в лимит": `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"pageName":"` + strings.Repeat("я", MaxPageNameLen) + `"}}]}`,
+		"флаг страницы «Спасибо» у разрыва": `{"blocks":[
+			{"id":"b","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}},
+			{"id":"h","groupId":"g3","type":"heading","text":[{"t":"Спасибо!"}]}
+		]}`,
+		"инертный флаг «Спасибо» на разрыве в конце": `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{}},{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}}]}`,
+		"вопрос на странице «Спасибо» — флаг инертен, документ валиден": `{"blocks":[
+			{"id":"b1","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}},
+			{"id":"b2","groupId":"g3","type":"email","settings":{}}
+		]}`,
+		"пустое имя страницы у не-разрыва":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"pageName":""}}]}`,
+		"thankYou false у не-разрыва":          `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"thankYou":false}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","groupId":"g1","type":"single_choice","settings":{}}]}`,
 		"файл без настроек — дефолты":          `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{}}]}`,
 		"файл с настройками":                   `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{"maxFiles":3,"maxFileSize":5,"accept":["document","table"]}}]}`,
@@ -138,6 +156,8 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		strings.Repeat("a", MaxImageKeyLen+1) + `"}}]}`
 	longName := `{"schemaVersion":1,"blocks":[{"id":"b","groupId":"g1","type":"short_text","name":"` +
 		strings.Repeat("я", MaxQuestionNameLen+1) + `","settings":{}}]}`
+	longPageName := `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"pageName":"` +
+		strings.Repeat("я", MaxPageNameLen+1) + `"}}]}`
 	longThankYou := `{"blocks":[],"thankYouText":"` + strings.Repeat("я", MaxThankYouTextLen+1) + `"}`
 	longRedirect := `{"blocks":[],"redirectUrl":"https://example.com/` +
 		strings.Repeat("a", MaxRedirectURLLen) + `"}`
@@ -169,6 +189,11 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"дубль id блоков":             `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{}},{"id":"b","groupId":"g_b","type":"email","settings":{}}]}`,
 		"non-choice с опциями":        `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"options":[{"id":"o","label":"z"}]}}]}`,
 		"imageKey на не-image":        `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"imageKey":"ws/x.png"}}]}`,
+		// Настройки страницы принадлежат разрыву (2026-08-21): на чужом типе они
+		// бессмысленны и отвергаются, как imageKey у не-картинки.
+		"имя страницы на не-разрыве":   `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"pageName":"Контакты"}}]}`,
+		"флаг «Спасибо» на не-разрыве": `{"blocks":[{"id":"b","groupId":"g_b","type":"heading","text":[{"t":"x"}],"settings":{"thankYou":true}}]}`,
+		"слишком длинное имя страницы": longPageName,
 		// alt удалён из контракта целиком (фаза 13): отвергается даже у image.
 		"alt удалён из контракта":       `{"blocks":[{"id":"b","groupId":"g_b","type":"image","settings":{"imageKey":"ws/x.png","alt":"y"}}]}`,
 		"image с опциями":               `{"blocks":[{"id":"b","groupId":"g_b","type":"image","settings":{"options":[{"id":"o","label":"z"}]}}]}`,

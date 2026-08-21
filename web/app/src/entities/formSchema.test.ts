@@ -16,6 +16,7 @@ import {
   MAX_FORM_TITLE_LEN,
   MAX_IMAGE_KEY_LEN,
   MAX_OPTIONS,
+  MAX_PAGE_NAME_LEN,
   MAX_PLACEHOLDER_LEN,
   MAX_QUESTION_NAME_LEN,
   MAX_REDIRECT_URL_LEN,
@@ -266,6 +267,46 @@ describe('formSchemaSchema — валидные', () => {
     'шкала NPS от нуля': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'scale', settings: { scaleMin: 0, scaleMax: 10 } }],
     },
+    // Настройки страницы у разрыва (2026-08-21). Оба ключа — свойства страницы, которую
+    // разрыв открывает; условия действия флага thankYou кросс-блочны и потому здесь НЕ
+    // проверяются (флаг инертен, а не невалиден — как бит колонки).
+    'имя страницы у разрыва': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'pb', groupId: 'g2', type: 'page_break', settings: { pageName: 'Контакты' } },
+        { id: 'b2', groupId: 'g3', type: 'email', settings: {} },
+      ],
+    },
+    'флаг страницы «Спасибо» у разрыва': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'pb', groupId: 'g2', type: 'page_break', settings: { thankYou: true } },
+        { id: 'h', groupId: 'g3', type: 'heading', text: [{ t: 'Спасибо!' }] },
+      ],
+    },
+    // Флаг, которому некуда примениться: разрыв последним блоком страницы не открывает.
+    // То же правило, что у инертного бита колонки, — иначе набор и undo ловили бы 422.
+    'инертный флаг «Спасибо» на разрыве в конце': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'pb', groupId: 'g2', type: 'page_break', settings: { thankYou: true } },
+      ],
+    },
+    // Действующая страница «Спасибо» не терпит отвечаемых блоков — но решает это
+    // раскладчик, а не схема: документ ниже валиден, просто флаг на нём инертен.
+    'вопрос на странице «Спасибо» — флаг инертен, документ валиден': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'pb', groupId: 'g2', type: 'page_break', settings: { thankYou: true } },
+        { id: 'b2', groupId: 'g3', type: 'email', settings: {} },
+      ],
+    },
+    'пустое имя страницы у не-разрыва': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { pageName: '' } }],
+    },
+    'thankYou: false у не-разрыва': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { thankYou: false } }],
+    },
     'submitLabel задан': { blocks: [], submitLabel: 'Готово' },
     'thankYouText задан': { blocks: [], thankYouText: 'Ждём вас на встрече!' },
     'redirectUrl https': { blocks: [], redirectUrl: 'https://example.com/thanks' },
@@ -358,6 +399,24 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'imageKey на не-image': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { imageKey: 'ws/x.png' } }],
+    },
+    // Настройки страницы принадлежат разрыву: на чужом типе они бессмысленны, а молча
+    // принятый бессмысленный ключ доживает до читателя, который решит, что он значим.
+    'имя страницы на не-разрыве': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { pageName: 'Контакты' } }],
+    },
+    'флаг «Спасибо» на не-разрыве': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'heading', text: [{ t: 'x' }], settings: { thankYou: true } }],
+    },
+    'слишком длинное имя страницы': {
+      blocks: [
+        {
+          id: 'pb',
+          groupId: 'g1',
+          type: 'page_break',
+          settings: { pageName: 'я'.repeat(MAX_PAGE_NAME_LEN + 1) },
+        },
+      ],
     },
     // alt удалён из контракта целиком (фаза 13): strictObject отвергает его даже у image.
     'alt удалён из контракта': {
