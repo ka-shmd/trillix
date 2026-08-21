@@ -126,6 +126,91 @@ export function pageNumbers<T extends { id: string; type: BlockType }>(
   return out
 }
 
+// ИМЯ СТРАНИЦЫ: своё (settings.pageName разрыва, её открывшего) либо «Страница N».
+//
+// Одна точка подстановки дефолта на все поверхности — по тому же доводу, что и у
+// splitPages: разъедься она, и подпись разделителя на полотне разошлась бы с тем, как
+// страница называется в аналитике. Первая страница ничьим разрывом не открыта (opener
+// null), поэтому имени у неё не бывает вовсе — только номер.
+//
+// Пустая строка и отсутствие ключа значат одно и то же: имени нет. Так автор стирает
+// имя, не оставляя в документе пустого ключа со особым смыслом.
+export function pageName<T extends { settings?: { pageName?: string } }>(
+  opener: T | null,
+  number: number,
+): string {
+  return opener?.settings?.pageName?.trim() || `Страница ${number}`
+}
+
+// РАЗРЫВ, ОТКРЫВАЮЩИЙ ПОСЛЕДНЮЮ СТРАНИЦУ, — единственное место, где тумблер «Спасибо»
+// осмыслен: экран после отправки не может стоять посреди формы. null — страниц меньше
+// двух (последняя страница есть, но её никто не открывал), и тумблеру негде стоять.
+export function lastPageOpener<T extends { type: BlockType }>(blocks: readonly T[]): T | null {
+  return openerOf(splitPagesWithClosers(blocks))
+}
+
+// Разрыв, открывший последнюю страницу, ИЗ ГОТОВОГО разбиения: разбор документа один на
+// обе производные ниже, а не по разу на каждую — они считаются на каждый рендер.
+function openerOf<T>(runs: PageRun<T>[]): T | null {
+  return runs.length < 2 ? null : (runs[runs.length - 2]!.closer ?? null)
+}
+
+// ДЕЙСТВУЕТ ЛИ ФЛАГ «СПАСИБО»: возвращает разрыв, за которым лежит экран после
+// отправки, либо null. Три условия, и все три производные — потому флаг и не
+// проверяется схемой (см. settings.ts):
+//
+//   • страница ПОСЛЕДНЯЯ — за экраном после отправки ничего не бывает. Флаг на разрыве
+//     выше просто игнорируется: автор дописал страницу ниже, и тумблер погас сам;
+//   • страниц БОЛЬШЕ ОДНОЙ — форма, вся состоящая из экрана благодарности, ничего не
+//     собирает, и отправлять с неё нечего;
+//   • на странице НЕТ ОТВЕЧАЕМЫХ блоков — ответ с экрана, показанного ПОСЛЕ отправки,
+//     физически никуда не уйдёт. Стоит там вопрос — это обычная страница.
+//
+// Ни одно из условий не делает документ невалидным: он остаётся тем же, гаснет только
+// флаг. Убрал автор вопрос — страница снова «Спасибо», без второго клика.
+export function thankYouOpener<T extends { type: BlockType }>(blocks: readonly T[]): T | null {
+  return thankYouRun(splitPagesWithClosers(blocks))?.opener ?? null
+}
+
+// Действующий экран после отправки из готового разбиения: разрыв-носитель и блоки самой
+// страницы. Единственное место, где живут все три условия, — и splitThankYou, и
+// thankYouOpener спрашивают здесь.
+function thankYouRun<T extends { type: BlockType }>(
+  runs: PageRun<T>[],
+): { opener: T; blocks: T[] } | null {
+  const opener = openerOf(runs)
+  if (opener === null || !hasThankYouFlag(opener)) return null
+  const page = runs[runs.length - 1]!.blocks
+  if (page.some((b) => isAnswerableType(b.type))) return null
+  return { opener, blocks: page }
+}
+
+// Флаг читается через хелпер, а не полем в дженерике: `settings` есть у всех блоков, но
+// сужать сигнатуру lastPageOpener до «блок с настройками» незачем — она про раскладку.
+function hasThankYouFlag(block: unknown): boolean {
+  return (block as { settings?: { thankYou?: boolean } }).settings?.thankYou === true
+}
+
+// splitThankYou — документ, разрезанный на ФОРМУ и ЭКРАН ПОСЛЕ ОТПРАВКИ.
+//
+// Резать нужно ДО всего остального (planForm, splitPages, индикатор шагов, переходы
+// условной логики): экран после отправки — не шаг формы, и стоит ему попасть в список
+// страниц, как «Далее» поведёт на него мимо отправки, индикатор посчитает шаг, которого
+// нет, а переход условной логики получит цель, с которой ответ уже не уйдёт. Один разрез
+// в одном месте вместо оговорки «кроме последней» в каждом из них.
+//
+// Флаг инертен → thankYou === null и blocks возвращаются как есть, то есть ровно
+// поведение до задачи. Инертные разрывы ПОСЛЕ экрана (законное состояние набора)
+// остаются в форме: они ничего не открывают, и вычищать их — дело стора, а не показа.
+export function splitThankYou<T extends { id: string; type: BlockType }>(
+  blocks: readonly T[],
+): { blocks: T[]; thankYou: T[] | null } {
+  const run = thankYouRun(splitPagesWithClosers(blocks))
+  if (run === null) return { blocks: [...blocks], thankYou: null }
+  const cut = new Set<string>([run.opener.id, ...run.blocks.map((b) => b.id)])
+  return { blocks: blocks.filter((b) => !cut.has(b.id)), thankYou: run.blocks }
+}
+
 // Ряд — это КОЛОНКИ, а колонка — стопка элементов. Полноширинный ряд = одна колонка с
 // одним элементом; СЕКЦИЯ = от двух до MAX_COLUMNS непустых колонок, в каждой сколько
 // угодно элементов.

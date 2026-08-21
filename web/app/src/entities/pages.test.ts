@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { groupBlocks, packRows, pageNumbers, splitPages } from '@fields/groups'
+import {
+  groupBlocks,
+  lastPageOpener,
+  packRows,
+  pageName,
+  pageNumbers,
+  splitPages,
+  splitThankYou,
+} from '@fields/groups'
 import { type Block, type BlockType } from '@entities/formSchema'
 
 // splitPages (@fields/groups) — разбиение документа на страницы разрывами (фаза 19),
@@ -114,5 +122,103 @@ describe('pageNumbers', () => {
     expect(
       numbers([block('a'), brk('p1'), block('b'), brk('p2'), brk('p3'), block('c')]),
     ).toEqual([2, undefined, 3])
+  })
+})
+
+// ЭКРАН ПОСЛЕ ОТПРАВКИ — та же страница документа, помеченная флагом на разрыве
+// (2026-08-21). Флаг легален всегда, а вот ДЕЙСТВУЕТ он по трём производным условиям:
+// страница последняя, страниц больше одной, отвечаемых блоков на ней нет. Условия живут
+// в раскладчике, а не в схеме, — иначе автор ловил бы 422 в момент, когда ставит вопрос
+// на эту страницу или тянет мимо неё блок.
+describe('splitThankYou', () => {
+  const tyBrk = (id: string): Block => ({
+    id,
+    groupId: id,
+    type: 'page_break',
+    settings: { thankYou: true },
+  })
+  const heading = (id: string): Block => ({ id, groupId: id, type: 'heading', text: [{ t: id }] })
+  // Печатаем «что осталось формой | что уехало экраном»; '-' — экрана нет.
+  const split = (blocks: Block[]): string => {
+    const out = splitThankYou(blocks)
+    return `${out.blocks.map((b) => b.id).join(' ')} | ${out.thankYou?.map((b) => b.id).join(' ') ?? '-'}`
+  }
+
+  it('последняя страница с флагом уезжает экраном вместе со своим разрывом', () => {
+    expect(split([block('a'), tyBrk('p'), heading('h')])).toBe('a | h')
+  })
+
+  it('без флага документ не режется', () => {
+    expect(split([block('a'), brk('p'), heading('h')])).toBe('a p h | -')
+  })
+
+  it('флаг на разрыве НЕ последней страницы игнорируется', () => {
+    expect(split([block('a'), tyBrk('p1'), heading('h'), brk('p2'), block('b')])).toBe(
+      'a p1 h p2 b | -',
+    )
+  })
+
+  // Тот же случай, но страница ниже — без вопросов: тогда флаг гасит ровно правило «экран
+  // последний», а не правило «нет отвечаемых». Без этого случая подмена «последняя
+  // страница → первая» осталась бы незамеченной.
+  it('флаг не на последней странице игнорируется, даже когда ниже одна вёрстка', () => {
+    expect(split([block('a'), tyBrk('p1'), heading('h1'), brk('p2'), heading('h2')])).toBe(
+      'a p1 h1 p2 h2 | -',
+    )
+  })
+
+  it('отвечаемый блок на странице гасит флаг: это обычная страница', () => {
+    expect(split([block('a'), tyBrk('p'), block('b')])).toBe('a p b | -')
+  })
+
+  it('форма из одного экрана благодарности невозможна: отправлять было бы нечего', () => {
+    expect(split([tyBrk('p'), heading('h')])).toBe('p h | -')
+  })
+
+  it('инертный разрыв в конце экран не открывает', () => {
+    expect(split([block('a'), tyBrk('p')])).toBe('a p | -')
+  })
+
+  // Инертные разрывы ПОСЛЕ экрана — законное состояние набора; вычищать их дело стора, а
+  // не показа, поэтому в форме они остаются и ничего в ней не открывают.
+  it('разрыв после экрана остаётся в форме', () => {
+    expect(split([block('a'), tyBrk('p1'), heading('h'), brk('p2')])).toBe('a p2 | h')
+  })
+
+  it('экраном уезжает вся страница, а не первый её блок', () => {
+    expect(split([block('a'), tyBrk('p'), heading('h1'), heading('h2')])).toBe('a | h1 h2')
+  })
+})
+
+// Тумблер «Спасибо» осмыслен ровно на одном разрыве — том, что открывает последнюю
+// страницу. lastPageOpener отвечает, где его рисовать; thankYouOpener — горит он или нет.
+describe('lastPageOpener', () => {
+  it('разрыв последней страницы', () => {
+    const blocks = [block('a'), brk('p1'), block('b'), brk('p2'), block('c')]
+    expect(lastPageOpener(blocks)?.id).toBe('p2')
+  })
+
+  it('форма без разрывов — тумблеру негде стоять', () => {
+    expect(lastPageOpener([block('a')])).toBeNull()
+  })
+
+  it('инертный разрыв в конце последней страницы не открывает', () => {
+    expect(lastPageOpener([block('a'), brk('p1'), block('b'), brk('p2')])?.id).toBe('p1')
+  })
+})
+
+// pageName — одна точка подстановки дефолта: разойдись она, подпись разделителя на
+// полотне разошлась бы с тем, как страница называется в аналитике.
+describe('pageName', () => {
+  it('своё имя автора', () => {
+    expect(pageName({ settings: { pageName: 'Контакты' } }, 2)).toBe('Контакты')
+  })
+
+  it('пустое имя и пробелы — то же, что имени нет', () => {
+    expect(pageName({ settings: { pageName: '   ' } }, 3)).toBe('Страница 3')
+  })
+
+  it('первая страница ничьим разрывом не открыта — только номер', () => {
+    expect(pageName(null, 1)).toBe('Страница 1')
   })
 })
