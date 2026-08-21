@@ -1,4 +1,6 @@
-import { type BlockType } from '@entities/formSchema'
+import { type ReactNode } from 'react'
+
+import { type Block, type BlockType } from '@entities/formSchema'
 
 import { editorKind, orderedTypes } from './kinds/index'
 
@@ -19,7 +21,8 @@ export const BLOCK_GROUP_LABELS: Record<BlockGroup, string> = {
 export const BLOCK_GROUP_ORDER: BlockGroup[] = ['question', 'field', 'layout']
 
 // MenuItem — пункт меню. bundle=true (раздел «Вопросы») создаёт title + поле; иначе
-// один блок типа type. key уникален (тип может стоять и в «Вопросах», и в «Полях»).
+// один блок типа type. key уникален (тип может стоять и в «Вопросах», и в «Полях», и
+// дважды в одном разделе — базовым пунктом и вариантом).
 export interface MenuItem {
   key: string
   group: BlockGroup
@@ -27,6 +30,12 @@ export interface MenuItem {
   bundle: boolean
   label: string
   description: string
+  // Иконка приезжает ПУНКТОМ, а не берётся по типу: у варианта она своя (страница
+  // «Спасибо» — тот же тип, что разрыв страницы, и с его значком была бы неотличима).
+  icon: ReactNode
+  // Дефолты варианта поверх дефолтов типа; у базового пункта их нет. Вставка применяет
+  // их в том же шаге истории, что и сам блок, — иначе Mod+Z снимал бы сперва флаг.
+  preset?: Partial<Block>
 }
 
 // Уточнение описания под раздел: один и тот же тип в «Вопросах» приезжает с заголовком, в
@@ -49,19 +58,35 @@ const GROUP_KEY: Record<BlockGroup, string> = { question: 'q', field: 'f', layou
 //
 // Порядок сохранён прежний — вопросы, поля, лэйаут, а внутри раздела порядок
 // BLOCK_TYPES: на нём стоит плоский индекс клавиатурной навигации инлайн-меню.
+// ВАРИАНТЫ типа (kinds/<type>.tsx, поле variants) стоят СРАЗУ ЗА своим базовым пунктом:
+// это тот же блок с другими дефолтами, и в списке им место рядом, а не в конце раздела.
 export const MENU_ITEMS: ReadonlyArray<MenuItem> = BLOCK_GROUP_ORDER.flatMap((group) =>
   orderedTypes
     .filter((type) => editorKind(type).menu[group])
-    .map((type): MenuItem => {
+    .flatMap((type): MenuItem[] => {
       const kind = editorKind(type)
-      return {
+      const base: MenuItem = {
         key: `${GROUP_KEY[group]}_${type}`,
         group,
         type,
         bundle: group === 'question',
         label: kind.label,
         description: `${kind.description}${GROUP_SUFFIX[group]}`,
+        icon: kind.icon,
       }
+      return [
+        base,
+        ...(kind.variants ?? []).map(
+          (v): MenuItem => ({
+            ...base,
+            key: `${base.key}_${v.key}`,
+            label: v.label,
+            description: `${v.description}${GROUP_SUFFIX[group]}`,
+            icon: v.icon,
+            preset: v.defaults,
+          }),
+        ),
+      ]
     }),
 )
 

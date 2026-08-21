@@ -137,7 +137,9 @@ export type BuilderActions = {
   // строку. Вставка ВНУТРЬ группы (Shift+Enter §3.2): новая строка ложится сразу
   // под текущую, regroup оставляет её в той же группе (контент между подписью и
   // полем). Enter (после всей группы) — addBlockAfterGroup.
-  addBlockAfter: (afterId: string | null, type: BlockType) => string
+  // preset — дефолты варианта меню (страница «Спасибо» = разрыв с поднятым флагом):
+  // применяются в ТОМ ЖЕ шаге истории, иначе Mod+Z снимал бы сперва флаг, а потом блок.
+  addBlockAfter: (afterId: string | null, type: BlockType, preset?: Partial<Block>) => string
   // addBlockAfterGroup вставляет блок ПОСЛЕ всей группы afterId (Enter §3.2: новая
   // строка не втискивается в текущий вопрос, а начинает следующий блок под ним) и
   // возвращает его id. В конец при null/ненайденном.
@@ -145,7 +147,7 @@ export type BuilderActions = {
   // changeBlockType меняет тип блока на месте (id стабилен): раздел «Отдельные
   // поля»/«Лэйаут» меню и Backspace-схлопывание. Текст переносится, если новый тип
   // его несёт. Возвращает id для фокуса.
-  changeBlockType: (id: string, type: BlockType) => string
+  changeBlockType: (id: string, type: BlockType, preset?: Partial<Block>) => string
   // makeQuestion — inline-«/», раздел «Вопросы». Одиночный блок → он становится
   // подписью, поле под ним; блок внутри группы → новый вопрос НИЖЕ группы (инпут не
   // встраивается между подписью и контролом). Возвращает id для фокуса.
@@ -344,7 +346,7 @@ export const DOCUMENT_FIELDS = [
 // первой же правки «на месте» — испорченный ДЕФОЛТ ТИПА: следующий новый блок приедет с
 // чужими вариантами внутри, и документ отвергнет ValidateSchema далеко от места ошибки.
 // Клон стоит наносекунды и снимает весь класс.
-function newBlock(type: BlockType): Block {
+function newBlock(type: BlockType, preset?: Partial<Block>): Block {
   // Вопрос рождается ОБЯЗАТЕЛЬНЫМ; снимается звёздочкой на полотне.
   // Только отвечаемым типам: у подписи, абзаца и разрыва страницы required — ключ,
   // которого автор на полотне не увидит и не сотрёт, а схема его не запрещает и
@@ -358,7 +360,14 @@ function newBlock(type: BlockType): Block {
     settings: {},
   }
   const defaults = editorKind(type).defaults
-  return { ...base, ...(defaults ? structuredClone(defaults) : null) }
+  // Пресет ВАРИАНТА меню (blockTypes.ts, KindVariant) кладётся последним и по тем же
+  // правилам, что дефолты типа: поверхностно и клоном. Это не «патч поверх настроек» —
+  // готовый набор, поэтому settings он заменяет целиком.
+  return {
+    ...base,
+    ...(defaults ? structuredClone(defaults) : null),
+    ...(preset ? structuredClone(preset) : null),
+  }
 }
 
 // regroup выводит groupId из раскладки. Правило (v2, фаза 8.7): группами считаются
@@ -1338,8 +1347,8 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         commit(null, (s) => structural({ blocks: [...s.blocks, block] }))
       },
 
-      addBlockAfter: (afterId, type) => {
-        const block = newBlock(type)
+      addBlockAfter: (afterId, type, preset) => {
+        const block = newBlock(type, preset)
         commit(null, (s) => {
           const i = afterId ? s.blocks.findIndex((b) => b.id === afterId) : -1
           // Подпись в СОБРАННЫЙ вопрос не встраивается — ложится под ним, как поле и
@@ -1370,14 +1379,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         return block.id
       },
 
-      changeBlockType: (id, type) => {
+      changeBlockType: (id, type, preset) => {
         commit(null, (s) => {
           const src = s.blocks.find((b) => b.id === id)
           if (!src) return null
           // Конверсия на месте (id стабилен): дефолты нового типа + перенос текста,
           // если новый тип его несёт (иначе текст роняется — у поля его нет).
           const converted: Block = {
-            ...newBlock(type),
+            ...newBlock(type, preset),
             id,
             text: carriesText(type) ? src.text : [],
             // Имя переживает смену типа (§5.4 спеки): его дал автор, и относится оно к

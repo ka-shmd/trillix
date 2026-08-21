@@ -644,7 +644,7 @@ const BlockRowBody = memo(function BlockRowBody({
         ? makeQuestion(block.id, item.type)
         : item.group === 'field'
           ? makeField(block.id, item.type)
-          : changeBlockType(block.id, item.type)
+          : changeBlockType(block.id, item.type, item.preset)
     setSlash(null)
     engine.focusBlock(focusId, 'end')
   }

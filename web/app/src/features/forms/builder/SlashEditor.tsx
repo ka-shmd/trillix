@@ -720,7 +720,7 @@ export function SlashEditor({
         ? addQuestionAfter(insertAfterId, item.type)
         : item.group === 'field'
           ? addFieldAfter(insertAfterId, item.type)
-          : addBlockAfter(insertAfterId, item.type)
+          : addBlockAfter(insertAfterId, item.type, item.preset)
     engine.focusBlock(id)
     setInsertOpen(false)
   }

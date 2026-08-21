@@ -128,7 +128,7 @@ function PageNameButton({
         <button
           type="button"
           aria-label="Название страницы"
-          className={`shrink-0 rounded-sm px-1.5 py-0.5 text-xs tracking-wide uppercase hover:bg-accent ${
+          className={`shrink-0 rounded-sm px-1.5 py-0.5 text-xs hover:bg-accent ${
             opens === undefined ? 'text-muted-foreground/60' : 'text-muted-foreground'
           }`}
         >
@@ -170,9 +170,12 @@ function PageNameButton({
 //
 // У ДЕЙСТВУЮЩЕЙ страницы «Спасибо» номера НЕТ: респондент видит её не шагом, а экраном
 // после отправки, и «#3» на ней означало бы шаг, которого в форме нет.
+//
+// Инертный разрыв (за ним пока ничего) зовётся «Новой страницей» — так же, как пункт
+// меню, которым автор его только что вставил: слова «разрыв» он в интерфейсе не видел.
 function caption(block: Block, opens: number | undefined, active: boolean): string {
   const own = block.settings?.pageName?.trim()
   if (active) return own || 'Спасибо'
-  if (opens === undefined) return own || 'Разрыв страницы'
+  if (opens === undefined) return own || 'Новая страница'
   return own ? `${own} #${opens}` : pageName(null, opens)
 }

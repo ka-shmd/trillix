@@ -2956,6 +2956,37 @@ describe('createBuilderStore — обложка и логотип', () => {
     expect(brk!.groupId).not.toBe(fld!.groupId)
   })
 
+  // Пресет ВАРИАНТА меню (2026-08-21): «Страница „Спасибо"» — тот же разрыв, но
+  // приезжающий с поднятым флагом. Проверяется здесь, а не только в blockTypes.test:
+  // пункт меню может нести пресет, а вставка — его терять, и на глаз это неотличимо от
+  // «тумблер не сработал».
+  it('вставка с пресетом варианта поднимает флаг сразу', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'a', groupId: '', type: 'short_text' }],
+    })
+    const id = store
+      .getState()
+      .addBlockAfter('a', 'page_break', { settings: { thankYou: true } })
+    const block = store.getState().blocks.find((b) => b.id === id)
+    expect(block?.type).toBe('page_break')
+    expect(block?.settings?.thankYou).toBe(true)
+  })
+
+  // Пресет применяется в ТОМ ЖЕ шаге истории, что вставка: иначе первый Mod+Z снимал бы
+  // флаг, оставив на полотне обычный разрыв, которого автор не просил.
+  it('одна отмена убирает вставленную страницу «Спасибо» целиком', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'a', groupId: '', type: 'short_text' }],
+    })
+    store.getState().addBlockAfter('a', 'page_break', { settings: { thankYou: true } })
+    store.getState().undo()
+    expect(store.getState().blocks.map((b) => b.id)).toEqual(['a'])
+  })
+
   // Перетаскивание границы страницы — не отдельная команда, а обычный перенос группы:
   // документ линейный, поэтому «сдвинул разрыв» и «вопрос сменил страницу» — одно и то
   // же событие. Проверяем следствие, а не механику.
