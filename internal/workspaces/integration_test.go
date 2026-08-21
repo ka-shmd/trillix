@@ -738,6 +738,34 @@ func TestMembers_ListRemoveAndOwnerGuard(t *testing.T) {
 }
 
 // Редактор выходит сам — и теряет пространство.
+// Профиль участника доезжает до списка: по нему рисуется кружок с картинкой или
+// инициалами. Колонки приезжают одним JOIN'ом к users, и перепутанный порядок в
+// выборке виден только здесь — типы у всех трёх строковые.
+func TestMembers_ProfileReachesList(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET first_name = $2, last_name = $3, avatar_key = $4 WHERE email = $1`,
+		"alice@example.com", "Алиса", "Иванова", "avatars/abc.png"); err != nil {
+		t.Fatalf("проставить профиль: %v", err)
+	}
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	var got membersDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &got)
+	if len(got.Members) != 1 {
+		t.Fatalf("состав = %+v, ждали одного", got.Members)
+	}
+	m := got.Members[0]
+	if m.FirstName != "Алиса" || m.LastName != "Иванова" || m.AvatarKey != "avatars/abc.png" {
+		t.Fatalf("профиль участника = %+v", m)
+	}
+}
+
 func TestMembers_EditorLeaves(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -862,9 +890,12 @@ func TestMembers_StrangerLeaveIsNotFound(t *testing.T) {
 }
 
 type memberDTO struct {
-	UserID string `json:"userId"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID    string `json:"userId"`
+	Email     string `json:"email"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	AvatarKey string `json:"avatarKey"`
+	Role      string `json:"role"`
 }
 
 type membersDTO struct {

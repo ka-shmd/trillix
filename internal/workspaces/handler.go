@@ -78,10 +78,16 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 }
 
 type memberResponse struct {
-	UserID   string `json:"userId"`
-	Email    string `json:"email"`
-	Role     string `json:"role"`
-	JoinedAt string `json:"joinedAt"`
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	// Имя и ключ аватара — для кружка и подписи в списке участников. Пустые
+	// строки вместо null: null и "" на границе не различаются, а внутри
+	// различаются (колонки nullable), поэтому приведение делает repo.
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	AvatarKey string `json:"avatarKey"`
+	Role      string `json:"role"`
+	JoinedAt  string `json:"joinedAt"`
 }
 
 type pendingInviteResponse struct {
@@ -121,7 +127,9 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 	}
 	for i, m := range members {
 		resp.Members[i] = memberResponse{
-			UserID: m.UserID.String(), Email: m.Email, Role: string(m.Role),
+			UserID: m.UserID.String(), Email: m.Email,
+			FirstName: m.FirstName, LastName: m.LastName, AvatarKey: m.AvatarKey,
+			Role:     string(m.Role),
 			JoinedAt: m.JoinedAt.UTC().Format(time.RFC3339),
 		}
 	}

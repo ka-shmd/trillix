@@ -179,7 +179,11 @@ func (Repo) ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.
 	}
 	out := make([]Member, len(rows))
 	for i, r := range rows {
-		out[i] = Member{UserID: r.UserID, Email: r.Email, Role: Role(r.Role), JoinedAt: r.CreatedAt.Time}
+		out[i] = Member{
+			UserID: r.UserID, Email: r.Email,
+			FirstName: r.FirstName.String, LastName: r.LastName.String, AvatarKey: r.AvatarKey.String,
+			Role: Role(r.Role), JoinedAt: r.CreatedAt.Time,
+		}
 	}
 	return out, nil
 }
