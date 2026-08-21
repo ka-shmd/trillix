@@ -18,6 +18,7 @@ const saved = {
   firstName: 'Иван',
   lastName: 'Петров',
   hasPassword: true,
+  avatarKey: '',
   twoFactorEnabled: false,
 }
 

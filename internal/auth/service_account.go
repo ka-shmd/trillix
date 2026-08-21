@@ -40,6 +40,29 @@ func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, firstName
 	return s.repo.UpdateProfile(ctx, s.db, userID, first, last)
 }
 
+// SetAvatar кладёт картинку в хранилище и записывает её ключ в профиль.
+// Валидация (PNG/JPEG, размеры) живёт в media и приезжает сюда доменной
+// ошибкой — здесь она не дублируется.
+//
+// Прежний объект не удаляется: ключи контент-адресны, и одну картинку могут
+// делить несколько аккаунтов (TD-16 — сборки осиротевших объектов нет вовсе).
+func (s *Service) SetAvatar(ctx context.Context, userID uuid.UUID, data []byte) (User, error) {
+	if s.avatars == nil {
+		return User{}, fmt.Errorf("avatar storage not configured")
+	}
+	key, err := s.avatars.PutAvatar(ctx, data)
+	if err != nil {
+		return User{}, err
+	}
+	return s.repo.SetAvatarKey(ctx, s.db, userID, &key)
+}
+
+// ClearAvatar снимает аватар. Хранилище не спрашивается: снять картинку человек
+// должен мочь и при недоступном S3 — иначе поломка хранилища запирает профиль.
+func (s *Service) ClearAvatar(ctx context.Context, userID uuid.UUID) (User, error) {
+	return s.repo.SetAvatarKey(ctx, s.db, userID, nil)
+}
+
 // ChangePassword меняет пароль текущего пользователя и **рвёт все его сессии**,
 // включая ту, из которой пришёл запрос; взамен открывается новая — её сырой
 // токен и возвращается, чтобы транспорт переставил cookie. Человек, сидящий в

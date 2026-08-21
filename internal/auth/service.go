@@ -75,6 +75,7 @@ type Store interface {
 	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
 	UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
+	SetAvatarKey(ctx context.Context, db postgres.DBTX, userID uuid.UUID, key *string) (User, error)
 	FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
 	SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error
 	CreatePasswordResetToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
@@ -133,6 +134,26 @@ type Service struct {
 	// (реализация — *workspaces.Service, подключается WithTeams). nil =
 	// удаление аккаунта не сконфигурировано и отвечает ошибкой, а не догадкой.
 	teams teamOwnership
+	// avatars — хранилище картинок аватаров (реализация — *media.Service,
+	// подключается WithAvatars). nil = хранилище не сконфигурировано, и
+	// загрузка отвечает ошибкой; снять уже стоящий аватар при этом можно —
+	// на это хранилище не нужно.
+	avatars avatarStore
+}
+
+// avatarStore — узкий интерфейс потребителя над media.Service: кладёт байты
+// картинки и возвращает её ключ. Объявлен здесь, а подключается в main, потому
+// что импортом связь не выразить — media стоит на RequireAuth из auth (тот же
+// приём, что у teamOwnership).
+type avatarStore interface {
+	PutAvatar(ctx context.Context, data []byte) (string, error)
+}
+
+// WithAvatars подключает хранилище аватаров. Отдельный метод, а не аргумент
+// NewService: media собирается позже auth.
+func (s *Service) WithAvatars(a avatarStore) *Service {
+	s.avatars = a
+	return s
 }
 
 // WithTeams подключает вопрос о владении пространствами (нужен удалению

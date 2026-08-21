@@ -13,10 +13,16 @@ import (
 
 // Member — участник пространства.
 type Member struct {
-	UserID   uuid.UUID
-	Email    string
-	Role     Role
-	JoinedAt time.Time
+	UserID uuid.UUID
+	Email  string
+	// FirstName/LastName/AvatarKey — как человек выглядит в списке: кружок с
+	// картинкой или с инициалами. Пустые строки = не заполнено; кабинет тогда
+	// зовёт по email и берёт его первую букву.
+	FirstName string
+	LastName  string
+	AvatarKey string
+	Role      Role
+	JoinedAt  time.Time
 }
 
 // TeamsBlockingAccountDeletion — имена командных пространств, где человек

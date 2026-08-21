@@ -74,6 +74,18 @@ export function updateProfile(body: { firstName: string; lastName: string }): Pr
   return apiRequest('/account/profile', { method: 'PATCH', body, schema: userSchema })
 }
 
+// Аватар: загрузка файлом и снятие. Обе ручки отвечают ПОЛНЫМ профилем — им
+// патчится кэш me, как и у правки имени.
+export function uploadAvatar(file: File): Promise<User> {
+  const body = new FormData()
+  body.append('file', file)
+  return apiRequest('/account/avatar', { method: 'POST', body, schema: userSchema })
+}
+
+export function deleteAvatar(): Promise<User> {
+  return apiRequest('/account/avatar', { method: 'DELETE', schema: userSchema })
+}
+
 // Смена пароля. Ответ 204 без тела: бэк рвёт все сессии и ставит cookie новой —
 // клиенту ловить нечего, кроме успеха.
 export function changePassword(body: { currentPassword: string; newPassword: string }): Promise<void> {

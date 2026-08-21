@@ -22,6 +22,8 @@ import {
   resendVerification,
   resetPassword,
   updateProfile,
+  uploadAvatar,
+  deleteAvatar,
   verifyEmail,
 } from './api'
 import type { User } from '../../entities/user'
@@ -159,6 +161,24 @@ export function useUpdateProfile() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: updateProfile,
+    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+  })
+}
+
+// Аватар. Кэш патчится ответом по той же причине, что у имени: инвалидация
+// дала бы лишний GET /auth/me и мигание кружка в сайдбаре.
+export function useUploadAvatar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: uploadAvatar,
+    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+  })
+}
+
+export function useDeleteAvatar() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAvatar,
     onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
   })
 }

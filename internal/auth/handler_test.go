@@ -36,6 +36,12 @@ type fakeAuthService struct {
 	profileFirstName string    // строки как есть, до нормализации сервисом
 	profileLastName  string
 
+	// Аватар.
+	avatarErr     error
+	avatarUser    uuid.UUID // id, дошедший до сервиса
+	avatarBytes   []byte    // байты картинки как есть
+	avatarCleared bool
+
 	// Смена пароля (фаза 23, слайс C).
 	passwordErr     error
 	passwordCurrent string
@@ -169,6 +175,26 @@ func (f *fakeAuthService) UpdateProfile(_ context.Context, userID uuid.UUID, fir
 	u := f.user
 	u.FirstName = &firstName
 	u.LastName = &lastName
+	return u, nil
+}
+
+func (f *fakeAuthService) SetAvatar(_ context.Context, userID uuid.UUID, data []byte) (User, error) {
+	f.avatarUser = userID
+	f.avatarBytes = data
+	if f.avatarErr != nil {
+		return User{}, f.avatarErr
+	}
+	u := f.user
+	key := "avatars/deadbeef.png"
+	u.AvatarKey = &key
+	return u, nil
+}
+
+func (f *fakeAuthService) ClearAvatar(_ context.Context, userID uuid.UUID) (User, error) {
+	f.avatarUser = userID
+	f.avatarCleared = true
+	u := f.user
+	u.AvatarKey = nil
 	return u, nil
 }
 

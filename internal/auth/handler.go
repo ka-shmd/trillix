@@ -39,6 +39,8 @@ type authService interface {
 	VerifyEmail(ctx context.Context, token string) error
 	ResendVerification(ctx context.Context, user User) error
 	UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error)
+	SetAvatar(ctx context.Context, userID uuid.UUID, data []byte) (User, error)
+	ClearAvatar(ctx context.Context, userID uuid.UUID) (User, error)
 	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
 	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error
 	ConfirmEmailChange(ctx context.Context, token string) error
@@ -104,6 +106,10 @@ type Handler struct {
 	// twoFactorLimiter — по пользователю на включение/выключение второго
 	// фактора: за выключением стоит argon2id и шестизначный код.
 	twoFactorLimiter RateLimiter
+	// avatarLimiter — по пользователю на загрузку аватара: каждая загрузка
+	// декодирует и пере-кодирует до 24 Мпикс, и кнопка, нажатая в цикле,
+	// съедает процессор так же, как argon2id — память.
+	avatarLimiter RateLimiter
 	// deleteAccountLimiter — по пользователю на удаление аккаунта: за ручкой
 	// argon2id и код второго фактора, а нажимают её один раз в жизни.
 	deleteAccountLimiter RateLimiter
@@ -176,6 +182,7 @@ type AccountLimits struct {
 	ConfirmEmail   RateLimiter
 	TwoFactor      RateLimiter
 	DeleteAccount  RateLimiter
+	Avatar         RateLimiter
 }
 
 // WithAccount подключает настройки аккаунта с их вёдрами лимита (по образцу
@@ -187,6 +194,7 @@ func (h *Handler) WithAccount(l AccountLimits) *Handler {
 	h.confirmEmailLimiter = l.ConfirmEmail
 	h.twoFactorLimiter = l.TwoFactor
 	h.deleteAccountLimiter = l.DeleteAccount
+	h.avatarLimiter = l.Avatar
 	return h
 }
 
@@ -247,6 +255,10 @@ type userResponse struct {
 	HasPassword bool `json:"hasPassword"`
 	// TwoFactorEnabled — включён ли второй фактор (фаза 23, слайс F).
 	TwoFactorEnabled bool `json:"twoFactorEnabled"`
+	// AvatarKey — ключ картинки аватара в хранилище, не адрес: абсолютный URL
+	// собирает кабинет из своего MEDIA_BASE_URL (то же правило, что у
+	// settings.imageKey в схеме формы). Пустая строка = аватара нет.
+	AvatarKey string `json:"avatarKey"`
 }
 
 // toUserResponse принимает флаг второго фактора отдельным аргументом: он живёт
@@ -260,6 +272,7 @@ func toUserResponse(u User, twoFactorEnabled bool) userResponse {
 		FirstName:     strOrEmpty(u.FirstName),
 		LastName:      strOrEmpty(u.LastName),
 		HasPassword:   u.PasswordHash != nil,
+		AvatarKey:     strOrEmpty(u.AvatarKey),
 
 		TwoFactorEnabled: twoFactorEnabled,
 	}

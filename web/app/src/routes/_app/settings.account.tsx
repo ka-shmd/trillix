@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { z } from 'zod'
 
 import {
@@ -16,12 +16,15 @@ import {
   useRefreshIdentities,
   useUnlinkIdentity,
   useUpdateProfile,
+  useUploadAvatar,
+  useDeleteAvatar,
 } from '../../features/auth/queries'
 import { identityLinkUrl } from '../../features/auth/api'
 import { useOAuthPopup, type OAuthOutcome } from '../../features/auth/oauthPopup'
 import { OAuthWaitingDialog } from '../../features/auth/OAuthWaitingDialog'
 import { providerTitle } from '../../entities/identity'
 import { formatDate } from '../../shared/format'
+import { UserAvatar } from '../../shared/UserAvatar'
 import { ApiError } from '../../shared/api/errors'
 import type { User } from '../../entities/user'
 import { Button } from '@/components/ui/button'
@@ -180,6 +183,90 @@ function deleteErrorText(error: unknown): string {
   return 'Не удалось удалить аккаунт. Попробуйте ещё раз.'
 }
 
+// AvatarSection — фото профиля. Кадрировать нечего: кружок обрезает картинку по
+// короткой стороне сам (object-cover), а сервер только ужимает её до 512 по
+// длинной — редактор кадра это отдельная работа со своим контролом.
+function AvatarSection({ user }: { user: User }) {
+  const upload = useUploadAvatar()
+  const remove = useDeleteAvatar()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // позволить выбрать тот же файл повторно
+    if (!file) return
+    setError(null)
+    upload.mutate(file, { onError: (err) => setError(avatarErrorText(err)) })
+  }
+
+  const busy = upload.isPending || remove.isPending
+
+  return (
+    <div className="flex items-center gap-4">
+      {/* Нативный файловый диалог — тот случай, когда системный контрол лучше
+          своего (web/CLAUDE.md); сам input спрятан, его открывает кнопка. */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/png,image/jpeg"
+        className="hidden"
+        onChange={onFile}
+      />
+      <UserAvatar person={user} className="size-16 rounded-full text-xl" />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
+          >
+            {upload.isPending ? 'Загружаем…' : user.avatarKey === '' ? 'Загрузить фото' : 'Заменить'}
+          </Button>
+          {user.avatarKey !== '' && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => {
+                setError(null)
+                remove.mutate(undefined, { onError: (err) => setError(avatarErrorText(err)) })
+              }}
+            >
+              Удалить
+            </Button>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          PNG или JPEG, до 5 МБ. Без фото — кружок с инициалами.
+        </p>
+      </div>
+      {error !== null && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function avatarErrorText(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case 'payload_too_large':
+        return 'Файл больше 5 МБ.'
+      case 'validation_failed':
+        return 'Не похоже на картинку. Нужен PNG или JPEG.'
+      case 'rate_limited':
+        return 'Слишком часто. Подождите минуту и попробуйте снова.'
+    }
+  }
+  return 'Не удалось сохранить фото. Попробуйте ещё раз.'
+}
+
 function AccountForm({ user }: { user: User }) {
   const update = useUpdateProfile()
   const [firstName, setFirstName] = useState(user.firstName)
@@ -200,6 +287,8 @@ function AccountForm({ user }: { user: User }) {
         <h1 className="text-lg font-medium">Аккаунт</h1>
         <p className="mt-1 text-sm text-muted-foreground">Как вас зовут в кабинете.</p>
       </section>
+
+      <AvatarSection user={user} />
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div className="grid gap-4 sm:grid-cols-2">

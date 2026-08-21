@@ -45,6 +45,17 @@ const (
 	// то есть сегодня хватило бы 216 (DPR 3). 512 взято с запасом на смену размера
 	// и не стоит ничего заметного: плоская графика в этих габаритах — единицы КиБ.
 	MaxLogoWidth = 512
+	// MaxAvatarSide — потолок ДЛИННОЙ стороны аватара. Аватар рисуется кружком
+	// (~40 CSS-px в сайдбаре, 96 в настройках), поэтому 512 покрывает любой DPR
+	// с запасом. Потолок здесь на длинной стороне, а не на ширине, как у
+	// остальных назначений: кружок обрезает картинку по КОРОТКОЙ стороне
+	// (object-cover), и у высокого портрета кап по ширине оставил бы 512×3000 —
+	// три мегапикселя ради 512 видимых.
+	MaxAvatarSide = 512
+	// avatarKeyPrefix — неймспейс аватаров в бакете. Воркспейса у аватара нет
+	// (он принадлежит человеку, а не пространству), поэтому вместо его id —
+	// собственный префикс.
+	avatarKeyPrefix = "avatars"
 	// jpegQuality — качество при ре-энкоде JPEG.
 	jpegQuality = 85
 )
@@ -61,19 +72,31 @@ const (
 type Purpose string
 
 const (
-	PurposeBlock Purpose = "block"
-	PurposeCover Purpose = "cover"
-	PurposeLogo  Purpose = "logo"
+	PurposeBlock  Purpose = "block"
+	PurposeCover  Purpose = "cover"
+	PurposeLogo   Purpose = "logo"
+	PurposeAvatar Purpose = "avatar"
 )
 
-// maxWidth — потолок ширины для назначения. Неизвестное назначение сюда не
-// доезжает: его отвергает ParsePurpose на границе.
-func (p Purpose) maxWidth() int {
+// targetWidth — ширина, до которой ужимать картинку этого назначения при
+// исходных размерах w×h. Неизвестное назначение сюда не доезжает: его отвергает
+// ParsePurpose на границе.
+func (p Purpose) targetWidth(w, h int) int {
 	switch p {
 	case PurposeCover:
 		return MaxCoverWidth
 	case PurposeLogo:
 		return MaxLogoWidth
+	case PurposeAvatar:
+		if h <= w {
+			return MaxAvatarSide
+		}
+		// Портрет: под потолок уводится высота, ширина едет следом.
+		side := int(math.Round(float64(MaxAvatarSide) * float64(w) / float64(h)))
+		if side < 1 {
+			side = 1
+		}
+		return side
 	default:
 		return MaxImageWidth
 	}
@@ -83,6 +106,10 @@ func (p Purpose) maxWidth() int {
 // загрузки картинки блока, которые про параметр не знают. Неизвестное значение —
 // ошибка, а не молчаливый откат к block: опечатка в назначении означала бы обложку,
 // ужатую до ширины колонки, и заметили бы это глазами через неделю.
+//
+// PurposeAvatar здесь НЕ разбирается: аватар приезжает своей ручкой
+// (POST /api/v1/account/avatar), а не полем формы, и «avatar» в этом параметре
+// означало бы картинку блока, ужатую до 512.
 func ParsePurpose(s string) (Purpose, error) {
 	switch Purpose(s) {
 	case "", PurposeBlock:
@@ -120,23 +147,38 @@ func NewService(f Forms, b blobPutter, bucket string) *Service {
 	return &Service{forms: f, blob: b, bucket: bucket}
 }
 
-// Upload авторизует членство, валидирует и нормализует картинку (ре-энкод снимает
-// EXIF/GPS) и кладёт её в бакет, возвращая стабильный ключ
-// workspaceID/<sha256>.<ext>. Порядок: сначала проверка доступа (инвариант 1),
-// затем обработка байтов. Контент-адресный ключ делает PUT идемпотентным (дедуп).
+// Upload авторизует членство и кладёт картинку формы в бакет, возвращая стабильный
+// ключ workspaceID/<sha256>.<ext>. Порядок: сначала проверка доступа (инвариант 1),
+// затем обработка байтов.
 func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []byte, purpose Purpose) (string, error) {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
 		return "", err // ErrNotFound для чужой/несуществующей — не раскрываем приватное
 	}
 
-	ext, contentType, canonical, err := decodeReencode(data, purpose.maxWidth())
+	return s.put(ctx, form.WorkspaceID.String(), data, purpose)
+}
+
+// PutAvatar кладёт аватар и возвращает его ключ avatars/<sha256>.<ext>.
+// Авторизации здесь нет, и это не пропуск: аватар принадлежит человеку, а не
+// ресурсу, и доказательством права служит сессия — её проверил вызывающий
+// (auth, ручка /account/avatar). Ключ в users.avatar_key пишет тоже он: media
+// про пользователей не знает и знать не должен.
+func (s *Service) PutAvatar(ctx context.Context, data []byte) (string, error) {
+	return s.put(ctx, avatarKeyPrefix, data, PurposeAvatar)
+}
+
+// put — общая половина обеих загрузок: валидация и нормализация байтов
+// (ре-энкод снимает EXIF/GPS), контент-адресный ключ под переданным префиксом,
+// запись в бакет. Ключ по содержимому делает PUT идемпотентным (дедуп).
+func (s *Service) put(ctx context.Context, prefix string, data []byte, purpose Purpose) (string, error) {
+	ext, contentType, canonical, err := decodeReencode(data, purpose)
 	if err != nil {
 		return "", err
 	}
 
 	sum := sha256.Sum256(canonical)
-	key := fmt.Sprintf("%s/%s%s", form.WorkspaceID, hex.EncodeToString(sum[:]), ext)
+	key := fmt.Sprintf("%s/%s%s", prefix, hex.EncodeToString(sum[:]), ext)
 
 	if err := s.blob.PutObject(ctx, s.bucket, key, canonical, contentType); err != nil {
 		return "", fmt.Errorf("put media object: %w", err)
@@ -145,10 +187,10 @@ func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []b
 }
 
 // decodeReencode проверяет, что вход — PNG/JPEG, гардит площадь, уменьшает картинку
-// до maxWidth и пере-кодирует в канонические байты (снимая EXIF/GPS и
+// до потолка назначения и пере-кодирует в канонические байты (снимая EXIF/GPS и
 // нормализуя). Возвращает расширение, content-type и новые байты. Любая проблема
 // входа → ErrValidation (422).
-func decodeReencode(data []byte, maxWidth int) (ext, contentType string, out []byte, err error) {
+func decodeReencode(data []byte, purpose Purpose) (ext, contentType string, out []byte, err error) {
 	// Тип по контенту, не по заголовку/имени файла.
 	sniff := detectImageType(data)
 	if sniff == "" {
@@ -169,7 +211,7 @@ func decodeReencode(data []byte, maxWidth int) (ext, contentType string, out []b
 		return "", "", nil, fmt.Errorf("%w: не удалось декодировать картинку", domain.ErrValidation)
 	}
 
-	return encodeCanonical(downscale(img, maxWidth))
+	return encodeCanonical(downscale(img, purpose.targetWidth(cfg.Width, cfg.Height)))
 }
 
 // downscale уменьшает картинку до maxWidth по ширине, сохраняя пропорции.

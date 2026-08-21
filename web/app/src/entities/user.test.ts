@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { displayName, userSchema, type User } from './user'
+import { displayName, initials, userSchema, type User } from './user'
 
 function user(patch: Partial<User> = {}): User {
   return {
@@ -10,6 +10,7 @@ function user(patch: Partial<User> = {}): User {
     firstName: '',
     lastName: '',
     hasPassword: true,
+    avatarKey: '',
     twoFactorEnabled: false,
     ...patch,
   }
@@ -30,6 +31,30 @@ describe('displayName', () => {
   it('одно заполненное поле не даёт лишних пробелов', () => {
     expect(displayName(user({ firstName: 'Иван' }))).toBe('Иван')
     expect(displayName(user({ lastName: 'Петров' }))).toBe('Петров')
+  })
+})
+
+// Цепочка фолбэков кружка: инициалы имени и фамилии → одна буква того, что
+// заполнено → первая буква email. Кружок есть у каждого аккаунта, поэтому
+// пустого результата у этой функции быть не может.
+describe('initials', () => {
+  it('имя и фамилия дают две буквы', () => {
+    expect(initials(user({ firstName: 'Иван', lastName: 'Петров' }))).toBe('ИП')
+  })
+
+  it('половина профиля даёт одну букву', () => {
+    expect(initials(user({ firstName: 'иван' }))).toBe('И')
+    expect(initials(user({ lastName: 'петров' }))).toBe('П')
+  })
+
+  it('без имени берётся первая буква почты', () => {
+    expect(initials(user())).toBe('I')
+  })
+
+  // Пробелы в профиле — обычное состояние: сервер их подрезает, но кэш кабинета
+  // может держать значение, введённое до сохранения.
+  it('строка из пробелов именем не считается', () => {
+    expect(initials(user({ firstName: '   ' }))).toBe('I')
   })
 })
 

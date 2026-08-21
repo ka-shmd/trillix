@@ -158,6 +158,7 @@ type User struct {
 	FirstName       pgtype.Text
 	LastName        pgtype.Text
 	DeletedAt       pgtype.Timestamptz
+	AvatarKey       pgtype.Text
 }
 
 type UserIdentity struct {

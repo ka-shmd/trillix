@@ -2,7 +2,9 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -24,11 +26,16 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// старте процесса, а не на первом запросе (internal/CLAUDE.md).
 	if h.passwordChangeLimiter == nil || h.emailChangeLimiter == nil ||
 		h.confirmEmailLimiter == nil || h.twoFactorLimiter == nil ||
-		h.deleteAccountLimiter == nil {
+		h.deleteAccountLimiter == nil || h.avatarLimiter == nil {
 		panic("auth: AccountRoutes вызван без WithAccount — вёдра лимита не заданы")
 	}
 
 	mux.Handle("PATCH /api/v1/account/profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.updateProfile))))
+	// Аватар. Тело — multipart, а не JSON: это файл. Снятие отдельным методом
+	// на том же адресе, а не PATCH с пустым ключом, — у ресурса «картинка
+	// профиля» ровно два действия, поставить и снять.
+	mux.Handle("POST /api/v1/account/avatar", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.uploadAvatar))))
+	mux.Handle("DELETE /api/v1/account/avatar", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAvatar))))
 	mux.Handle("POST /api/v1/account/password", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.changePassword))))
 	mux.Handle("POST /api/v1/account/email", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.requestEmailChange))))
 	mux.Handle("GET /api/v1/account/identities", h.RequireAuth(http.HandlerFunc(h.listIdentities)))
@@ -88,14 +95,88 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	// Кабинет патчит этим ответом кэш профиля, поэтому объект обязан быть
-	// полным: соврать про второй фактор здесь значит выключить его на экране.
-	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), user.ID)
+	h.writeProfile(w, r, updated)
+}
+
+// writeProfile отвечает профилем на любую его правку (имя, аватар). Флаг второго
+// фактора дозапрашивается: он живёт в другой таблице, а кабинет патчит этим
+// ответом кэш целиком — соврать про фактор здесь значит выключить его на экране.
+func (h *Handler) writeProfile(w http.ResponseWriter, r *http.Request, u User) {
+	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), u.ID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(updated, twoFactor))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(u, twoFactor))
+}
+
+// maxAvatarBytes зеркалит media.MaxImageBytes: импортировать оттуда нельзя
+// (media стоит на RequireAuth из auth — вышел бы цикл), а расхождение означало
+// бы, что MaxBytesReader режет тело раньше или позже, чем валидатор картинки.
+const maxAvatarBytes = 5 << 20 // 5 МиБ
+
+// uploadAvatar принимает картинку multipart-полем file, кладёт её в хранилище и
+// записывает ключ в профиль. Отвечает ПОЛНЫМ профилем, как и updateProfile:
+// кабинет патчит им кэш, и урезанный ответ стёр бы в нём остальные поля.
+func (h *Handler) uploadAvatar(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	// Лимит по пользователю, как у смены пароля: сессия уже своя, защищаем не от
+	// подбора, а от стоимости декода и ре-энкода картинки.
+	if !h.avatarLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много загрузок аватара", domain.ErrRateLimited))
+		return
+	}
+
+	// Потолок тела (инвариант 3): превышение → 413.
+	r.Body = http.MaxBytesReader(w, r.Body, maxAvatarBytes)
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		httpserver.WriteError(w, r, avatarInputError(err))
+		return
+	}
+	defer func() { _ = file.Close() }()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		httpserver.WriteError(w, r, avatarInputError(err))
+		return
+	}
+
+	updated, err := h.svc.SetAvatar(r.Context(), user.ID, data)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	h.writeProfile(w, r, updated)
+}
+
+// deleteAvatar снимает аватар. Повторный вызов — не ошибка: ключа и так нет.
+func (h *Handler) deleteAvatar(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	updated, err := h.svc.ClearAvatar(r.Context(), user.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	h.writeProfile(w, r, updated)
+}
+
+// avatarInputError переводит ошибку чтения тела в доменную: превышение лимита —
+// 413, отсутствие поля file и битый multipart — 422.
+func avatarInputError(err error) error {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return domain.ErrTooLarge
+	}
+	return fmt.Errorf("%w: ожидается multipart-поле file с картинкой", domain.ErrValidation)
 }
 
 type changePasswordRequest struct {

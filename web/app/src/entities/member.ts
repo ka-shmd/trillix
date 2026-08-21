@@ -6,6 +6,12 @@ import { z } from 'zod'
 export const memberSchema = z.object({
   userId: z.string(),
   email: z.string(),
+  // Профиль коллеги — для кружка в списке: картинка или инициалы (initials в
+  // entities/user.ts). Пустые строки = не заполнено, как и в профиле своего
+  // аккаунта: сервер сводит NULL к строке на границе.
+  firstName: z.string(),
+  lastName: z.string(),
+  avatarKey: z.string(),
   role: z.string(),
   joinedAt: z.string(),
 })

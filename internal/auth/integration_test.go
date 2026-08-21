@@ -49,7 +49,16 @@ func newAuthService() *auth.Service {
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), mailSvc, testAppOrigin)
 	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
 		WithTOTPKey([]byte("integration-test-totp-key")).
-		WithTeams(wsSvc)
+		WithTeams(wsSvc).
+		WithAvatars(stubAvatars{})
+}
+
+// stubAvatars подменяет объектное хранилище: интеграционный тест проверяет путь
+// «ручка → сервис → колонка», а не S3 (для него есть internal/media).
+type stubAvatars struct{}
+
+func (stubAvatars) PutAvatar(_ context.Context, _ []byte) (string, error) {
+	return "avatars/integration.png", nil
 }
 
 var testPool *pgxpool.Pool
@@ -85,7 +94,7 @@ func newStack(t *testing.T) *httptest.Server {
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
 		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).
-		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
+		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.AccountRoutes(mux)
