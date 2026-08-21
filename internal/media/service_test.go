@@ -284,7 +284,7 @@ func TestUpload_RejectsNonImage(t *testing.T) {
 
 func TestDecodeReencode(t *testing.T) {
 	t.Run("PNG ре-энкодится", func(t *testing.T) {
-		ext, ct, out, err := decodeReencode(makePNG(t, 3, 3), MaxImageWidth)
+		ext, ct, out, err := decodeReencode(makePNG(t, 3, 3), PurposeBlock)
 		if err != nil {
 			t.Fatalf("decodeReencode: %v", err)
 		}
@@ -294,14 +294,14 @@ func TestDecodeReencode(t *testing.T) {
 	})
 
 	t.Run("не-картинка отклоняется", func(t *testing.T) {
-		if _, _, _, err := decodeReencode([]byte("GIF89a..."), MaxImageWidth); !errors.Is(err, domain.ErrValidation) {
+		if _, _, _, err := decodeReencode([]byte("GIF89a..."), PurposeBlock); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("err = %v, ожидалось ErrValidation", err)
 		}
 	})
 
 	t.Run("превышение площади отклоняется", func(t *testing.T) {
 		// 6000×5000 = 30 Мпикс > MaxImagePixels; отсекается на DecodeConfig без декода.
-		if _, _, _, err := decodeReencode(makePNGHeader(6000, 5000), MaxImageWidth); !errors.Is(err, domain.ErrValidation) {
+		if _, _, _, err := decodeReencode(makePNGHeader(6000, 5000), PurposeBlock); !errors.Is(err, domain.ErrValidation) {
 			t.Fatalf("err = %v, ожидалось ErrValidation", err)
 		}
 	})

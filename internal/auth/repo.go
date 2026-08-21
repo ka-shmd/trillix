@@ -25,6 +25,10 @@ type User struct {
 	// показывает email. Ничего не гейтят и обязательными не становятся.
 	FirstName *string
 	LastName  *string
+	// AvatarKey — ключ картинки аватара в объектном хранилище (0028), не URL:
+	// адрес собирается из MEDIA_BASE_URL (docs/S3.md §5). nil = аватара нет,
+	// кабинет рисует кружок с инициалами.
+	AvatarKey *string
 }
 
 // Identity — способ входа через провайдера, как его видит экран настроек.
@@ -245,6 +249,18 @@ func (Repo) UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUI
 	return userFromRow(row), nil
 }
 
+// SetAvatarKey ставит ключ картинки аватара; nil — снять (NULL в БД).
+func (Repo) SetAvatarKey(ctx context.Context, db postgres.DBTX, userID uuid.UUID, key *string) (User, error) {
+	row, err := postgres.New(db).SetUserAvatarKey(ctx, postgres.SetUserAvatarKeyParams{
+		ID:        userID,
+		AvatarKey: pgText(key),
+	})
+	if err != nil {
+		return User{}, fmt.Errorf("set avatar key: %w", err)
+	}
+	return userFromRow(row), nil
+}
+
 // FillEmptyProfile заполняет ПУСТЫЕ имя и фамилию (данные провайдера); уже
 // заполненное не трогает.
 func (Repo) FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {
@@ -417,6 +433,7 @@ func userFromRow(u postgres.User) User {
 		EmailVerifiedAt: ptrTime(u.EmailVerifiedAt),
 		FirstName:       ptrStr(u.FirstName),
 		LastName:        ptrStr(u.LastName),
+		AvatarKey:       ptrStr(u.AvatarKey),
 	}
 }
 

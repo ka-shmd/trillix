@@ -539,7 +539,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 `
 
 type CreateUserParams struct {
@@ -561,6 +561,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
@@ -894,7 +895,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 `
 
 type FillEmptyProfileParams struct {
@@ -919,6 +920,7 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
@@ -1572,7 +1574,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL
@@ -1591,6 +1593,7 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
@@ -1715,7 +1718,7 @@ func (q *Queries) GetTOTP(ctx context.Context, userID uuid.UUID) (GetTOTPRow, er
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 FROM users
 WHERE email = $1 AND deleted_at IS NULL
 `
@@ -1732,13 +1735,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
 
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -1771,12 +1775,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL
@@ -1802,6 +1807,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
@@ -2639,7 +2645,7 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 }
 
 const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
-SELECT m.user_id, u.email, m.role, m.created_at
+SELECT m.user_id, u.email, u.first_name, u.last_name, u.avatar_key, m.role, m.created_at
 FROM workspace_members m
 JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
 WHERE m.workspace_id = $1
@@ -2649,6 +2655,9 @@ ORDER BY (m.role = 'owner') DESC, m.created_at ASC
 type ListWorkspaceMembersRow struct {
 	UserID    uuid.UUID
 	Email     string
+	FirstName pgtype.Text
+	LastName  pgtype.Text
+	AvatarKey pgtype.Text
 	Role      string
 	CreatedAt pgtype.Timestamptz
 }
@@ -2670,6 +2679,9 @@ func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUI
 		if err := rows.Scan(
 			&i.UserID,
 			&i.Email,
+			&i.FirstName,
+			&i.LastName,
+			&i.AvatarKey,
 			&i.Role,
 			&i.CreatedAt,
 		); err != nil {
@@ -3053,6 +3065,38 @@ func (q *Queries) SetIdentityEmail(ctx context.Context, arg SetIdentityEmailPara
 	return err
 }
 
+const setUserAvatarKey = `-- name: SetUserAvatarKey :one
+UPDATE users SET avatar_key = $2
+WHERE id = $1
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
+`
+
+type SetUserAvatarKeyParams struct {
+	ID        uuid.UUID
+	AvatarKey pgtype.Text
+}
+
+// Ключ аватара целиком: значение — поставить, NULL — снять. Отдельным запросом,
+// а не полем UpdateUserProfile: имя правится формой с кнопкой «Сохранить», а
+// картинка — загрузкой файла, и общий запрос заставил бы каждую из двух ручек
+// слать чужое поле, чтобы его не затереть.
+func (q *Queries) SetUserAvatarKey(ctx context.Context, arg SetUserAvatarKeyParams) (User, error) {
+	row := q.db.QueryRow(ctx, setUserAvatarKey, arg.ID, arg.AvatarKey)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.CreatedAt,
+		&i.EmailVerifiedAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.DeletedAt,
+		&i.AvatarKey,
+	)
+	return i, err
+}
+
 const setUserPassword = `-- name: SetUserPassword :exec
 UPDATE users SET password_hash = $2 WHERE id = $1
 `
@@ -3285,7 +3329,7 @@ const updateUserEmail = `-- name: UpdateUserEmail :one
 UPDATE users
    SET email = $2, email_verified_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 `
 
 type UpdateUserEmailParams struct {
@@ -3307,6 +3351,7 @@ func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }
@@ -3314,7 +3359,7 @@ func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
 `
 
 type UpdateUserProfileParams struct {
@@ -3338,6 +3383,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.FirstName,
 		&i.LastName,
 		&i.DeletedAt,
+		&i.AvatarKey,
 	)
 	return i, err
 }

@@ -86,7 +86,7 @@ SELECT email FROM users WHERE id = $1;
 -- Удалённые аккаунты в составе не показываются: строка членства переживает
 -- пометку, но человека за ней уже нет, и владельцу он мешал бы дважды —
 -- непонятной строкой в списке и занятым местом по тарифу.
-SELECT m.user_id, u.email, m.role, m.created_at
+SELECT m.user_id, u.email, u.first_name, u.last_name, u.avatar_key, m.role, m.created_at
 FROM workspace_members m
 JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
 WHERE m.workspace_id = $1
