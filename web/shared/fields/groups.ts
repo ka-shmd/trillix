@@ -145,7 +145,7 @@ export function pageName<T extends { settings?: { pageName?: string } }>(
 // РАЗРЫВ, ОТКРЫВАЮЩИЙ ПОСЛЕДНЮЮ СТРАНИЦУ, — единственное место, где тумблер «Спасибо»
 // осмыслен: экран после отправки не может стоять посреди формы. null — страниц меньше
 // двух (последняя страница есть, но её никто не открывал), и тумблеру негде стоять.
-export function lastPageOpener<T extends { type: BlockType }>(blocks: readonly T[]): T | null {
+export function lastPageOpener<T extends { type: BlockType }>(blocks: T[]): T | null {
   return openerOf(splitPagesWithClosers(blocks))
 }
 
@@ -168,7 +168,7 @@ function openerOf<T>(runs: PageRun<T>[]): T | null {
 //
 // Ни одно из условий не делает документ невалидным: он остаётся тем же, гаснет только
 // флаг. Убрал автор вопрос — страница снова «Спасибо», без второго клика.
-export function thankYouOpener<T extends { type: BlockType }>(blocks: readonly T[]): T | null {
+export function thankYouOpener<T extends { type: BlockType }>(blocks: T[]): T | null {
   return thankYouRun(splitPagesWithClosers(blocks))?.opener ?? null
 }
 
@@ -203,7 +203,7 @@ function hasThankYouFlag(block: unknown): boolean {
 // поведение до задачи. Инертные разрывы ПОСЛЕ экрана (законное состояние набора)
 // остаются в форме: они ничего не открывают, и вычищать их — дело стора, а не показа.
 export function splitThankYou<T extends { id: string; type: BlockType }>(
-  blocks: readonly T[],
+  blocks: T[],
 ): { blocks: T[]; thankYou: T[] | null } {
   const run = thankYouRun(splitPagesWithClosers(blocks))
   if (run === null) return { blocks: [...blocks], thankYou: null }

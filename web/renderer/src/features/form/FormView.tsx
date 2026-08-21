@@ -11,7 +11,14 @@ import {
 import { DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, groupMeta, packGroupRows, packRows, splitFormTitle } from '@fields/groups'
+import {
+  groupBlocks,
+  groupMeta,
+  packGroupRows,
+  packRows,
+  splitFormTitle,
+  splitThankYou,
+} from '@fields/groups'
 import { customStyleSheet } from '@fields/customCss'
 import { UploaderProvider } from '@fields/fileUpload'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
@@ -109,7 +116,11 @@ export function FormView({
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
   // полем JSON (form.title), которое сервер резолвит из колонки.
-  const { title: formTitle, rest: blocks } = splitFormTitle(form.schema.blocks)
+  const { title: formTitle, rest: docBlocks } = splitFormTitle(form.schema.blocks)
+  // ЭКРАН ПОСЛЕ ОТПРАВКИ отрезается от документа ДО всего остального (2026-08-21): он не
+  // шаг формы, и всё, что считает шаги — planForm, индикатор, переходы логики, — не
+  // должно его видеть. Флаг инертен → thankYouPage null, и ниже ровно прежнее поведение.
+  const { blocks, thankYou: thankYouPage } = splitThankYou(docBlocks)
 
   // Предзаполнение (фаза 20). Правила и причины обоих фильтров — в applyPrefill;
   // здесь только источник правды о том, какой блок вообще можно заполнить: это
@@ -505,9 +516,12 @@ export function FormView({
 
   if (phase === 'done') {
     return (
-      <>
+      // Подстановка ответов работает и здесь: «Спасибо, @Имя!» — первое, что автор
+      // напишет на этой странице, и увидеть вместо имени сырую метку он не должен.
+      <MentionContext.Provider value={mentions}>
         {authorStyle}
         <ThankYou
+          blocks={thankYouPage}
           text={form.schema.thankYouText ?? ''}
           // В предпросмотре перехода нет: он увёл бы автора с экрана «Встроить» —
           // либо сам фрейм, либо, через мост, всю страницу кабинета.
@@ -516,7 +530,7 @@ export function FormView({
           badge={form.showBadge}
           preview={preview}
         />
-      </>
+      </MentionContext.Provider>
     )
   }
 

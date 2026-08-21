@@ -28,6 +28,17 @@ describe('planThankYou', () => {
     expect(plan.message).toBe(DEFAULT_THANK_YOU_TEXT)
   })
 
+  // Экран, собранный СТРАНИЦЕЙ «Спасибо» (2026-08-21): читать на нём есть что, даже
+  // когда текста в настройках нет вовсе, — иначе респондент увидел бы страницу на один
+  // кадр и уехал по ссылке.
+  it('страница «Спасибо» без текста настроек — уходим с паузой', () => {
+    expect(planThankYou('', 'https://example.com', true).delayMs).toBe(REDIRECT_DELAY_MS)
+  })
+
+  it('без страницы и без текста — по-прежнему сразу', () => {
+    expect(planThankYou('', 'https://example.com', false).delayMs).toBe(0)
+  })
+
   it('текст и ссылка — показываем текст, уходим с паузой', () => {
     const plan = planThankYou('Ждём вас!', 'https://example.com')
     expect(plan.message).toBe('Ждём вас!')
