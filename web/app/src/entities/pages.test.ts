@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   groupBlocks,
-  lastPageOpener,
   packRows,
   pageName,
   pageNumbers,
   splitPages,
   splitThankYou,
+  thankYouIssue,
 } from '@fields/groups'
 import { type Block, type BlockType } from '@entities/formSchema'
 
@@ -22,6 +22,8 @@ const block = (id: string, type: BlockType = 'short_text', right = false): Block
 })
 
 const brk = (id: string): Block => ({ id, groupId: id, type: 'page_break' })
+
+const heading = (id: string): Block => ({ id, groupId: id, type: 'heading', text: [{ t: id }] })
 
 // Страницы печатаем id блоков: ['a b', 'c'] — две страницы, на первой два блока.
 const pages = (blocks: Block[]): string[] =>
@@ -137,7 +139,6 @@ describe('splitThankYou', () => {
     type: 'page_break',
     settings: { thankYou: true },
   })
-  const heading = (id: string): Block => ({ id, groupId: id, type: 'heading', text: [{ t: id }] })
   // Печатаем «что осталось формой | что уехало экраном»; '-' — экрана нет.
   const split = (blocks: Block[]): string => {
     const out = splitThankYou(blocks)
@@ -190,20 +191,30 @@ describe('splitThankYou', () => {
   })
 })
 
-// Тумблер «Спасибо» осмыслен ровно на одном разрыве — том, что открывает последнюю
-// страницу. lastPageOpener отвечает, где его рисовать; thankYouOpener — горит он или нет.
-describe('lastPageOpener', () => {
-  it('разрыв последней страницы', () => {
-    const blocks = [block('a'), brk('p1'), block('b'), brk('p2'), block('c')]
-    expect(lastPageOpener(blocks)?.id).toBe('p2')
+// Тумблер «Спасибо» стоит на КАЖДОМ разрыве и включается всегда, поэтому «включил, а
+// ничего не изменилось» обязано быть объяснено на месте: thankYouIssue называет причину.
+describe('thankYouIssue', () => {
+  const issue = (blocks: Block[], id: string) => thankYouIssue(blocks, id)
+
+  it('на разрыве последней страницы без вопросов — ничто не мешает', () => {
+    expect(issue([block('a'), brk('p'), heading('h')], 'p')).toBeNull()
   })
 
-  it('форма без разрывов — тумблеру негде стоять', () => {
-    expect(lastPageOpener([block('a')])).toBeNull()
+  it('ниже есть ещё страница', () => {
+    const blocks = [block('a'), brk('p1'), heading('h'), brk('p2'), block('b')]
+    expect(issue(blocks, 'p1')).toBe('not-last')
   })
 
-  it('инертный разрыв в конце последней страницы не открывает', () => {
-    expect(lastPageOpener([block('a'), brk('p1'), block('b'), brk('p2')])?.id).toBe('p1')
+  it('на странице стоит вопрос', () => {
+    expect(issue([block('a'), brk('p'), block('b')], 'p')).toBe('question')
+  })
+
+  it('за разрывом пока пусто', () => {
+    expect(issue([block('a'), brk('p')], 'p')).toBe('empty')
+  })
+
+  it('форма без второй страницы: разрыв выше всего содержимого ничего не открывает', () => {
+    expect(issue([brk('p'), block('a')], 'p')).toBe('empty')
   })
 })
 

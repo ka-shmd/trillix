@@ -142,13 +142,6 @@ export function pageName<T extends { settings?: { pageName?: string } }>(
   return opener?.settings?.pageName?.trim() || `Страница ${number}`
 }
 
-// РАЗРЫВ, ОТКРЫВАЮЩИЙ ПОСЛЕДНЮЮ СТРАНИЦУ, — единственное место, где тумблер «Спасибо»
-// осмыслен: экран после отправки не может стоять посреди формы. null — страниц меньше
-// двух (последняя страница есть, но её никто не открывал), и тумблеру негде стоять.
-export function lastPageOpener<T extends { type: BlockType }>(blocks: T[]): T | null {
-  return openerOf(splitPagesWithClosers(blocks))
-}
-
 // Разрыв, открывший последнюю страницу, ИЗ ГОТОВОГО разбиения: разбор документа один на
 // обе производные ниже, а не по разу на каждую — они считаются на каждый рендер.
 function openerOf<T>(runs: PageRun<T>[]): T | null {
@@ -172,13 +165,27 @@ export function thankYouOpener<T extends { type: BlockType }>(blocks: T[]): T | 
   return thankYouRun(splitPagesWithClosers(blocks))?.opener ?? null
 }
 
-// ЧТО МЕШАЕТ последней странице быть экраном после отправки: 'question' — на ней стоит
-// вопрос, а ответ с экрана, показанного ПОСЛЕ отправки, никуда не уйдёт. null — ничто.
+// ПОЧЕМУ ФЛАГ НА ЭТОМ РАЗРЫВЕ НЕ ДЕЙСТВУЕТ — причина, а не булево: тумблер стоит на
+// каждом разрыве и включается всегда, поэтому «включил, а ничего не изменилось» обязано
+// быть объяснено на месте. null — флаг действует (или его тут нет, и мешать нечему).
 //
-// Причина, а не булево: её показывает редактор рядом с погашенным тумблером. Тумблер,
-// который не включается и не объясняет почему, читается как поломка.
-export function thankYouBlocked<T extends { type: BlockType }>(blocks: T[]): 'question' | null {
-  return blockedBy(splitPagesWithClosers(blocks))
+//   'empty'    — за разрывом ещё нет блоков: страницы, которую можно пометить, не
+//                существует. Законное состояние набора — автор через секунду допишет;
+//   'not-last' — ниже есть ещё страница, а экран после отправки бывает только последним;
+//   'question' — на странице стоит вопрос, а ответ с экрана, показанного ПОСЛЕ отправки,
+//                никуда не уйдёт.
+export function thankYouIssue<T extends { id: string; type: BlockType }>(
+  blocks: T[],
+  breakId: string,
+): 'empty' | 'not-last' | 'question' | null {
+  const runs = splitPagesWithClosers(blocks)
+  const opener = openerOf(runs)
+  if (opener === null || opener.id !== breakId) {
+    // Разрыв, который открывает КАКУЮ-ТО страницу, но не последнюю, — «не последний»;
+    // разрыв, не открывающий ничего, инертен сам по себе (см. pageNumbers).
+    return pageNumbers(blocks).has(breakId) ? 'not-last' : 'empty'
+  }
+  return blockedBy(runs)
 }
 
 function blockedBy<T extends { type: BlockType }>(runs: PageRun<T>[]): 'question' | null {
