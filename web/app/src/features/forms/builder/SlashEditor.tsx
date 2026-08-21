@@ -1213,20 +1213,6 @@ export function SlashEditor({
               </DndContext>
             )}
 
-            {/* Служебный ярус под полотном: вставка блока мышью. Вход в шпаргалку
-          отсюда не ведёт — она открывается только аккордом Mod+/ (useGlobalChord). */}
-            {blocks.length > 0 && (
-              <div className="mt-4 flex items-center text-sm text-muted-foreground">
-                <button
-                  type="button"
-                  onClick={() => handleInsertBelow(blocks[blocks.length - 1]?.id ?? '')}
-                  className="text-left hover:text-foreground"
-                >
-                  + Добавить блок
-                </button>
-              </div>
-            )}
-
             <BlockTypeDialog
               open={insertOpen}
               onOpenChange={setInsertOpen}
