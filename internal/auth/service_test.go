@@ -84,6 +84,10 @@ type fakeStore struct {
 	profileFirstName *string
 	profileLastName  *string
 
+	// Аватар. Указатель по той же причине: nil = снять, значение = поставить.
+	avatarKeySet bool
+	avatarKey    *string
+
 	// Способы входа (фаза 23, слайс E). identities — и список, и счётчик:
 	// «сколько осталось способов войти» считается по нему же.
 	identities             []Identity
@@ -340,6 +344,15 @@ func (f *fakeStore) UpdateProfile(_ context.Context, _ postgres.DBTX, userID uui
 	u.ID = userID
 	u.FirstName = firstName
 	u.LastName = lastName
+	return u, nil
+}
+
+func (f *fakeStore) SetAvatarKey(_ context.Context, _ postgres.DBTX, userID uuid.UUID, key *string) (User, error) {
+	f.avatarKeySet = true
+	f.avatarKey = key
+	u := f.user
+	u.ID = userID
+	u.AvatarKey = key
 	return u, nil
 }
 

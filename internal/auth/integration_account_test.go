@@ -3,8 +3,10 @@
 package auth_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"testing"
@@ -285,5 +287,84 @@ func TestAccountEmail_TakenAddressRejected(t *testing.T) {
 	}
 	if n := outboxCount(t); n != 0 {
 		t.Fatalf("на занятый адрес ушло писем: %d", n)
+	}
+}
+
+// avatarKeyOf разбирает ключ аватара из объекта пользователя.
+func avatarKeyOf(t *testing.T, r *http.Response) string {
+	t.Helper()
+	defer func() { _ = r.Body.Close() }()
+	var u struct {
+		AvatarKey string `json:"avatarKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		t.Fatalf("разбор объекта пользователя: %v", err)
+	}
+	return u.AvatarKey
+}
+
+func TestAccountAvatar_PersistsAndClears(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := newClient(t)
+
+	resp := post(t, c, srv.URL+"/api/v1/auth/register", `{"email":"user@example.com","password":"supersecret1"}`, "")
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("register: статус %d, ожидалось 201; тело=%s", resp.StatusCode, body(t, resp))
+	}
+	if key := avatarKeyOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); key != "" {
+		t.Fatalf("у нового аккаунта ключ аватара %q, ожидался пустой", key)
+	}
+
+	csrf := csrfHeader(t, c, srv.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	w, err := mw.CreateFormFile("file", "avatar.png")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := w.Write([]byte("байты картинки")); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart: %v", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/account/avatar", &buf)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-CSRF-Token", csrf)
+	up, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("upload avatar: %v", err)
+	}
+	if up.StatusCode != http.StatusOK {
+		t.Fatalf("upload avatar: статус %d, ожидалось 200; тело=%s", up.StatusCode, body(t, up))
+	}
+	if key := avatarKeyOf(t, up); key != "avatars/integration.png" {
+		t.Fatalf("ответ загрузки: ключ %q", key)
+	}
+
+	// Главное: ключ приехал из БД, а не из ответа предыдущего запроса.
+	if key := avatarKeyOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); key != "avatars/integration.png" {
+		t.Fatalf("me после загрузки: ключ %q", key)
+	}
+
+	del, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/account/avatar", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	del.Header.Set("X-CSRF-Token", csrf)
+	rm, err := c.Do(del)
+	if err != nil {
+		t.Fatalf("delete avatar: %v", err)
+	}
+	if rm.StatusCode != http.StatusOK {
+		t.Fatalf("delete avatar: статус %d, ожидалось 200; тело=%s", rm.StatusCode, body(t, rm))
+	}
+	if key := avatarKeyOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); key != "" {
+		t.Fatalf("me после снятия: ключ %q, ожидался пустой", key)
 	}
 }

@@ -16,7 +16,7 @@ import (
 // знает.
 func newTestAccountHandler(svc authService) http.Handler {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 	return mux
@@ -205,7 +205,7 @@ func TestChangePassword_RequiresAuthAndCSRF(t *testing.T) {
 func TestChangePassword_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 
@@ -300,7 +300,7 @@ func TestDeleteAccount_RequiresAuthAndCSRF(t *testing.T) {
 func TestDeleteAccount_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: denyLimiter{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: denyLimiter{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 

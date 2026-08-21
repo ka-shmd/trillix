@@ -27,6 +27,62 @@ func TestUpdateProfile_TrimsAndStores(t *testing.T) {
 	}
 }
 
+// fakeAvatars — хранилище картинок: отдаёт заранее назначенный ключ.
+type fakeAvatars struct {
+	key  string
+	err  error
+	data []byte
+}
+
+func (f *fakeAvatars) PutAvatar(_ context.Context, data []byte) (string, error) {
+	f.data = data
+	return f.key, f.err
+}
+
+func TestSetAvatar_ПишетКлючХранилища(t *testing.T) {
+	store := &fakeStore{}
+	avatars := &fakeAvatars{key: "avatars/abc.png"}
+	svc := NewService(nil, nil, store, nil, DefaultSessionTTL, testAppOrigin).WithAvatars(avatars)
+	id := domain.NewID()
+
+	if _, err := svc.SetAvatar(context.Background(), id, []byte("картинка")); err != nil {
+		t.Fatalf("SetAvatar: %v", err)
+	}
+	if string(avatars.data) != "картинка" {
+		t.Fatalf("в хранилище уехало %q", avatars.data)
+	}
+	if !store.avatarKeySet || store.avatarKey == nil || *store.avatarKey != "avatars/abc.png" {
+		t.Fatalf("в профиль записано %v, ожидался ключ хранилища", store.avatarKey)
+	}
+}
+
+// Отказ хранилища не должен записывать в профиль ключ, которого в бакете нет.
+func TestSetAvatar_ОшибкаХранилищаНеТрогаетПрофиль(t *testing.T) {
+	store := &fakeStore{}
+	avatars := &fakeAvatars{err: domain.ErrValidation}
+	svc := NewService(nil, nil, store, nil, DefaultSessionTTL, testAppOrigin).WithAvatars(avatars)
+
+	if _, err := svc.SetAvatar(context.Background(), domain.NewID(), []byte("не картинка")); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, ожидалось ErrValidation", err)
+	}
+	if store.avatarKeySet {
+		t.Error("профиль обновлён при провале загрузки")
+	}
+}
+
+// Снятие аватара не спрашивает хранилище: поломка S3 не должна запирать профиль.
+func TestClearAvatar_БезХранилища(t *testing.T) {
+	store := &fakeStore{}
+	svc := NewService(nil, nil, store, nil, DefaultSessionTTL, testAppOrigin)
+
+	if _, err := svc.ClearAvatar(context.Background(), domain.NewID()); err != nil {
+		t.Fatalf("ClearAvatar: %v", err)
+	}
+	if !store.avatarKeySet || store.avatarKey != nil {
+		t.Fatalf("в профиль записано %v, ожидался NULL", store.avatarKey)
+	}
+}
+
 func TestUpdateProfile_EmptyMeansNull(t *testing.T) {
 	store := &fakeStore{}
 	svc := NewService(nil, nil, store, nil, DefaultSessionTTL, testAppOrigin)

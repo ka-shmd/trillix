@@ -138,6 +138,13 @@ const (
 	deleteAccountRatePerSec = 1.0 / 60.0
 	deleteAccountBurst      = 3
 
+	// Загрузка аватара — по ПОЛЬЗОВАТЕЛЮ. Дорога не памятью, а процессором:
+	// декод до 24 Мпикс, ресайз CatmullRom и два ре-энкода на каждый вызов.
+	// Человек меняет картинку раз в полгода и в один заход пробует две-три —
+	// отсюда запас 5 при пополнении раз в 20 секунд.
+	avatarRatePerSec = 1.0 / 20.0
+	avatarBurst      = 5
+
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
@@ -291,12 +298,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	confirmEmailLimiter := ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst)
 	twoFactorLimiter := ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst)
 	deleteAccountLimiter := ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst)
+	avatarLimiter := ratelimit.NewTokenBucket(avatarRatePerSec, avatarBurst)
 	authHandler = authHandler.WithAccount(auth.AccountLimits{
 		PasswordChange: passwordChangeLimiter,
 		EmailChange:    emailChangeLimiter,
 		ConfirmEmail:   confirmEmailLimiter,
 		TwoFactor:      twoFactorLimiter,
 		DeleteAccount:  deleteAccountLimiter,
+		Avatar:         avatarLimiter,
 	})
 
 	// Вход через провайдеров (фаза 11). Нет ключей в окружении — реестр пуст,
@@ -346,6 +355,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
 	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Аватар пишет auth (колонка users.avatar_key его), а картинку хранит media.
+	// Связь подключается здесь, а не импортом: media стоит на RequireAuth из
+	// auth — тот же случай, что WithTeams выше.
+	authSvc.WithAvatars(mediaSvc)
 
 	// Файлы в ответах (фаза 24): свой бакет — приватный, у картинок форм политика
 	// несовместимая (те раздаются анонимно).
@@ -519,7 +532,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
-				twoFactorLimiter.GC() + deleteAccountLimiter.GC()
+				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

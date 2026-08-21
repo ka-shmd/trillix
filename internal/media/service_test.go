@@ -381,3 +381,54 @@ func TestParsePurpose(t *testing.T) {
 		t.Fatalf("err = %v, ожидалось ErrValidation", err)
 	}
 }
+
+// Аватар: свой неймспейс ключа (воркспейса у него нет) и потолок по ДЛИННОЙ
+// стороне — кружок обрезает картинку по короткой, и кап по ширине оставил бы у
+// портрета мегапиксели, которых никто не увидит.
+func TestPutAvatar(t *testing.T) {
+	t.Run("ключ в неймспейсе avatars", func(t *testing.T) {
+		blobStore := &fakeBlob{}
+		svc := NewService(fakeForms{}, blobStore, "app-media")
+
+		key, err := svc.PutAvatar(context.Background(), makePNG(t, 2, 2))
+		if err != nil {
+			t.Fatalf("PutAvatar: %v", err)
+		}
+		if !strings.HasPrefix(key, "avatars/") {
+			t.Fatalf("ключ %q, ожидался префикс avatars/", key)
+		}
+	})
+
+	t.Run("портрет ужимается по высоте", func(t *testing.T) {
+		blobStore := &fakeBlob{}
+		svc := NewService(fakeForms{}, blobStore, "app-media")
+
+		if _, err := svc.PutAvatar(context.Background(), makeNoisePNG(t, 300, 1200)); err != nil {
+			t.Fatalf("PutAvatar: %v", err)
+		}
+		w, h := decodedSize(t, blobStore.data)
+		if h != MaxAvatarSide || w != 128 {
+			t.Fatalf("сохранено %d×%d, ожидалось 128×%d", w, h, MaxAvatarSide)
+		}
+	})
+
+	t.Run("пейзаж ужимается по ширине", func(t *testing.T) {
+		blobStore := &fakeBlob{}
+		svc := NewService(fakeForms{}, blobStore, "app-media")
+
+		if _, err := svc.PutAvatar(context.Background(), makeNoisePNG(t, 1200, 300)); err != nil {
+			t.Fatalf("PutAvatar: %v", err)
+		}
+		if w, _ := decodedSize(t, blobStore.data); w != MaxAvatarSide {
+			t.Fatalf("ширина %d, ожидалась %d", w, MaxAvatarSide)
+		}
+	})
+
+	// Валидация у аватара та же, что у картинки формы: она живёт в одном месте.
+	t.Run("не картинка — 422", func(t *testing.T) {
+		svc := NewService(fakeForms{}, &fakeBlob{}, "app-media")
+		if _, err := svc.PutAvatar(context.Background(), []byte("это не картинка")); !errors.Is(err, domain.ErrValidation) {
+			t.Fatalf("err = %v, ожидалось ErrValidation", err)
+		}
+	})
+}
