@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, House, Plus } from 'lucide-react'
+import { toast } from 'sonner'
 import { workspacesQueryOptions, useCreateWorkspace } from '../../features/workspaces/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { FormRow } from '../../features/forms/FormRow'
-import { formsListQueryOptions } from '../../features/forms/queries'
+import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
 import { DEFAULT_FORMS_SORT } from '../../entities/form'
 import type { Workspace } from '../../entities/workspace'
 import { ApiError } from '../../shared/api/errors'
@@ -132,6 +133,8 @@ function HeaderCrumbs() {
 // разметки в цикле, — потому что у каждого пространства свой список форм со своей
 // подгрузкой, а хук на пространство иначе не заведёшь.
 function WorkspaceSection({ workspace }: { workspace: Workspace }) {
+  const navigate = useNavigate()
+  const create = useCreateForm()
   // Личное адресуем его настоящим id, а не пустой строкой: на этом экране
   // пространства равны, и разбирать «пусто = личное» здесь незачем — сервер
   // одинаково принимает workspaceId любого, где ты состоишь.
@@ -145,14 +148,50 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   )
   const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
 
+  // «+» заводит форму СРАЗУ В ЭТОМ пространстве и уводит в редактор. Кнопка
+  // сайдбара так не умеет: она живёт над деревом маршрутов и берёт пространство из
+  // ?w= адреса, которого на обзоре нет, — то есть всегда клала бы форму в личное.
+  // Пространство едет в адрес редактора по общему правилу кабинета (пусто =
+  // личное): иначе следующая созданная оттуда форма уедет не туда.
+  function handleCreateForm() {
+    create.mutate(
+      { workspaceId: workspace.id },
+      {
+        onSuccess: (form) =>
+          navigate({
+            to: '/forms/$slug/edit',
+            params: { slug: form.slug },
+            search: workspace.isPersonal ? {} : { w: workspace.id },
+          }),
+        // Тихо не получившаяся кнопка — худший исход: упереться можно в лимит форм
+        // тарифа, и человек должен прочесть, во что именно упёрся.
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError && error.code === 'plan_required'
+              ? 'На текущем тарифе больше форм завести нельзя.'
+              : 'Не удалось создать форму. Попробуйте ещё раз.',
+          ),
+      },
+    )
+  }
+
   return (
     <section>
-      <div className="mb-1 flex items-center gap-2">
-        <h2 className="truncate text-lg font-bold tracking-tight">{workspace.name}</h2>
-        {workspace.isPersonal && (
-          <span className="shrink-0 text-xs text-muted-foreground">личное</span>
-        )}
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="min-w-0 flex-1 truncate text-lg font-bold tracking-tight">
+          {workspace.name}
+        </h2>
         <MemberCluster workspace={workspace} />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          onClick={handleCreateForm}
+          disabled={create.isPending}
+        >
+          <Plus className="size-4" />
+          <span className="sr-only">Новая форма в пространстве «{workspace.name}»</span>
+        </Button>
       </div>
 
       {query.isPending ? (
@@ -171,7 +210,7 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
         <p className="px-3 py-2 text-sm text-muted-foreground">Пока нет форм.</p>
       ) : (
         <>
-          <ul>
+          <ul className="space-y-1.5">
             {forms.map((form) => (
               <FormRow key={form.id} form={form} />
             ))}

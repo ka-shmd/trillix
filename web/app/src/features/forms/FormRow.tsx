@@ -43,7 +43,7 @@ export function FormRow({ form }: { form: Form }) {
 
   if (editing) {
     return (
-      <li className="px-3 py-2">
+      <li className="rounded-lg border px-3 py-2">
         <RenameForm
           initial={form.name ?? ''}
           pending={rename.isPending}
@@ -58,7 +58,7 @@ export function FormRow({ form }: { form: Form }) {
 
   return (
     <li
-      className="group relative flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-accent focus-within:bg-accent has-[[data-state=open]]:bg-accent"
+      className="group relative flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-colors hover:bg-accent focus-within:bg-accent has-[[data-state=open]]:bg-accent"
       aria-busy={remove.isPending || duplicate.isPending}
     >
       <Link
