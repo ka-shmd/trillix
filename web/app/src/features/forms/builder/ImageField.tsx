@@ -3,7 +3,7 @@ import { ImagePlus, RefreshCw, Trash2 } from 'lucide-react'
 import { type Block } from '@entities/formSchema'
 import { mediaSrc } from '@fields/media'
 import { useBuilderStore } from './storeContext'
-import { uploadImage } from './mediaUpload'
+import { uploadImage, type FormIdSource } from './mediaUpload'
 
 // ImageField — редактор image-блока: пустой блок показывает зону загрузки, при
 // выборе файла — оптимистичный локальный превью (createObjectURL) с прогресс-баром,
@@ -11,7 +11,7 @@ import { uploadImage } from './mediaUpload'
 // «заменить»/«удалить» — оверлей поверх картинки, виден при наведении.
 // Вид самой картинки — общий rf-image; layout и
 // зона загрузки — Tailwind (editor-only, респондент их не видит).
-export function ImageField({ block, formId }: { block: Block; formId: string }) {
+export function ImageField({ block, formId }: { block: Block; formId: FormIdSource }) {
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const imageKey = block.settings?.imageKey
   const fileRef = useRef<HTMLInputElement>(null)

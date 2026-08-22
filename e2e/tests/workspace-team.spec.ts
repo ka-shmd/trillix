@@ -98,9 +98,13 @@ test('приглашение в пространство: коллега при�
   // После принятия он оказывается в списке форм ЭТОГО пространства.
   await expect(matePage).toHaveURL(/\/forms\?w=/)
 
-  // Формы правит: создаёт свою прямо в общем пространстве.
+  // Формы правит: заводит свою прямо в общем пространстве. Кнопка только открывает
+  // полотно — форму создаёт первая правка (ленивое создание, EDITOR.md §18), поэтому
+  // доказательство права писать здесь — смена сентинела в адресе на настоящий slug.
   await matePage.getByRole('button', { name: 'Новая форма' }).first().click()
-  await expect(matePage).toHaveURL(/\/forms\/[^/]+\/edit/)
+  await expect(matePage).toHaveURL(/\/forms\/new\/edit\?.*w=/)
+  await matePage.getByLabel('Название формы').fill('Форма коллеги')
+  await expect(matePage).not.toHaveURL(/\/forms\/new\/edit/)
 
   // --- Права: тариф редактору закрыт ---
   await matePage.goto('/workspaces')

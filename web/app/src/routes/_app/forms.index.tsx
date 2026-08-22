@@ -3,7 +3,8 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { Plus } from 'lucide-react'
 import { z } from 'zod'
-import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
+import { NEW_FORM_SLUG } from '../../features/forms/draft'
+import { formsListQueryOptions } from '../../features/forms/queries'
 import { FormCard } from '../../features/forms/FormCard'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
 import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
@@ -37,13 +38,16 @@ export const Route = createFileRoute('/_app/forms/')({
 function FormsDashboard() {
   const navigate = useNavigate()
   const { q = '', sort = DEFAULT_FORMS_SORT, w = '' } = Route.useSearch()
-  const create = useCreateForm()
   const query = useInfiniteQuery(formsListQueryOptions({ q, sort, workspaceId: w }))
 
+  // Кнопка НИЧЕГО не создаёт: открывает редактор нового черновика, а форму заводит
+  // первая правка (features/forms/draft.ts). search сохраняется — из него редактор
+  // берёт пространство (?w=), в котором её заводить.
   function handleCreate() {
-    create.mutate({ workspaceId: w || undefined }, {
-      onSuccess: (form) =>
-        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
+    void navigate({
+      to: '/forms/$slug/edit',
+      params: { slug: NEW_FORM_SLUG },
+      search: (prev) => prev,
     })
   }
 
@@ -80,9 +84,9 @@ function FormsDashboard() {
     <section className="mx-auto max-w-5xl p-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Мои формы</h1>
-        <Button onClick={handleCreate} disabled={create.isPending} className="gap-2">
+        <Button onClick={handleCreate} className="gap-2">
           <Plus className="size-4" />
-          {create.isPending ? 'Создаём…' : 'Новая форма'}
+          Новая форма
         </Button>
       </div>
 
@@ -122,7 +126,7 @@ function FormsDashboard() {
             <p className="mt-1 text-sm text-muted-foreground">
               Создайте первую — она появится здесь.
             </p>
-            <Button onClick={handleCreate} disabled={create.isPending} className="mt-4 gap-2">
+            <Button onClick={handleCreate} className="mt-4 gap-2">
               <Plus className="size-4" />
               Новая форма
             </Button>

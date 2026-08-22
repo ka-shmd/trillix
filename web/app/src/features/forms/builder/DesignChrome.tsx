@@ -27,7 +27,7 @@ import {
   patchCoverHeight,
   patchLogo,
 } from './designEdit'
-import { uploadImage, type UploadPurpose } from './mediaUpload'
+import { uploadImage, type FormIdSource, type UploadPurpose } from './mediaUpload'
 import { NumberRow } from './NumberRow'
 import { useBuilderStore } from './storeContext'
 
@@ -52,7 +52,7 @@ import { useBuilderStore } from './storeContext'
 // из хука, читается в рендере — это ловит react-hooks/refs, и законного обхода у него
 // нет. Элемент живёт ровно до выбора файла и в документ не попадает.
 function useChromeUpload(
-  formId: string,
+  formId: FormIdSource,
   purpose: UploadPurpose,
   apply: (imageKey: string) => void,
 ) {
@@ -153,7 +153,7 @@ function ChromeButton({
 // Пустая кнопка ведёт СРАЗУ в диалог выбора файла, а заполненная открывает меню
 // «заменить/удалить»: у логотипа без картинки других состояний нет, и лишний шаг
 // перед единственным действием был бы шагом в никуда.
-export function LogoRow({ formId }: { formId: string }) {
+export function LogoRow({ formId }: { formId: FormIdSource }) {
   const logo = useBuilderStore((s) => s.logo)
   const setLogo = useBuilderStore((s) => s.setLogo)
   const [open, setOpen] = useState(false)
@@ -254,7 +254,7 @@ export function LogoRow({ formId }: { formId: string }) {
 //
 // Кнопка ведёт в меню и при пустой обложке тоже — в отличие от логотипа: у обложки
 // два способа появиться (цвет и картинка), и выбирать между ними всё равно придётся.
-export function CoverRow({ formId }: { formId: string }) {
+export function CoverRow({ formId }: { formId: FormIdSource }) {
   const cover = useBuilderStore((s) => s.cover)
   const setCover = useBuilderStore((s) => s.setCover)
   const [open, setOpen] = useState(false)

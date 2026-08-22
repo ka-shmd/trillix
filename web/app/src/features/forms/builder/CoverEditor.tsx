@@ -7,7 +7,7 @@ import { CoverBand, LogoMark } from '@fields/pageChrome'
 import { ColorPicker } from './ColorPicker'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
 import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
-import { uploadImage } from './mediaUpload'
+import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
@@ -93,7 +93,7 @@ function ProgressOverlay({ pct, className = '' }: { pct: number; className?: str
 // FormChrome — обложка и логотип на полотне редактора со всеми жестами автора.
 // Рисуется ДО колонки блоков: обложка идёт во всю ширину полотна, поэтому живёт вне
 // коробки с максимальной шириной, а логотип — уже внутри неё (см. SlashEditor).
-export function CoverArea({ formId }: { formId: string }) {
+export function CoverArea({ formId }: { formId: FormIdSource }) {
   const cover = useBuilderStore((s) => s.cover)
   const setCover = useBuilderStore((s) => s.setCover)
   const setCoverY = useBuilderStore((s) => s.setCoverY)
@@ -251,7 +251,7 @@ export function CoverArea({ formId }: { formId: string }) {
 
 // LogoArea — логотип на полотне со своим оверлеем. Стоит ВНУТРИ колонки (в отличие
 // от обложки), поэтому и компонент отдельный: они соседи по смыслу, но не по DOM.
-export function LogoArea({ formId, over }: { formId: string; over: boolean }) {
+export function LogoArea({ formId, over }: { formId: FormIdSource; over: boolean }) {
   const logo = useBuilderStore((s) => s.logo)
   const setLogo = useBuilderStore((s) => s.setLogo)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -328,7 +328,7 @@ export function AddChrome({
   formId,
   onOpenDesign,
 }: {
-  formId: string
+  formId: FormIdSource
   onOpenDesign: () => void
 }) {
   const cover = useBuilderStore((s) => s.cover)

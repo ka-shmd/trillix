@@ -52,6 +52,7 @@ import { inviteRowId } from './rowZones'
 import { type Box, type DropTarget, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
+import { type FormIdSource } from './mediaUpload'
 import {
   canvasSorting,
   DRAG_ACTIVATION_DISTANCE,
@@ -109,7 +110,7 @@ export function SlashEditor({
   engine,
   onOpenDesign,
 }: {
-  formId: string
+  formId: FormIdSource
   // Фокус-движок создаётся в BuilderScreen (переживает смену режима и нужен undo/redo,
   // §2.4) и раздаётся полотну через контекст.
   engine: FocusEngine
@@ -1400,7 +1401,7 @@ type GroupRowProps = {
   // Вопрос открывает стопку своей колонки: интервала перед собой не несёт, расстояние
   // до предыдущего ряда держит сам ряд.
   headOfCell: boolean
-  formId: string
+  formId: FormIdSource
   blockIds: string[]
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
   // (SlashEditor), чья геометрия не зависит от содержимого. Здесь остаётся только

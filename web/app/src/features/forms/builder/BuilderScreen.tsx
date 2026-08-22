@@ -15,10 +15,11 @@ import { PreviewOverlay } from './PreviewOverlay'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
 import { SlashEditor } from './SlashEditor'
+import { type FormIdSource } from './mediaUpload'
 import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
-import { useAutosave } from './useAutosave'
+import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
@@ -37,7 +38,17 @@ type Mode = 'edit' | 'settings'
 // верхнюю шапку приложения — в один бар с кнопкой сворачивания сайдбара.
 // Стор создаётся один раз на инстанс и сразу гидрируется черновиком; маршрут
 // монтирует экран с key={formId}, поэтому переход на другую форму даёт свежий стор.
-export function BuilderScreen({ detail }: { detail: FormDetail }) {
+//
+// draft задан, пока формы НЕТ на сервере (ленивое создание, features/forms/draft.ts):
+// detail тогда синтетическая, detail.id пуст, и всё, что адресует форму по id,
+// спрашивает ensureForm — она заводит форму по первой надобности.
+export function BuilderScreen({
+  detail,
+  draft,
+}: {
+  detail: FormDetail
+  draft?: DraftCreation
+}) {
   // Тариф спрашивается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
   // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
   // потребовался бы каждому, кто его рисует, включая тесты раскладки.
@@ -55,7 +66,17 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
   const [engine] = useState(() => createFocusEngine())
 
   const headerSlot = useHeaderSlot()
-  const { status, saveNow } = useAutosave(store, detail.id, detail.slug, detail.updatedAt)
+  const { status, saveNow, ensureForm } = useAutosave(
+    store,
+    detail.id,
+    detail.slug,
+    detail.updatedAt,
+    draft,
+  )
+  // Куда грузить картинки. Пока формы нет, вниз уходит не id, а обещание его добыть:
+  // обложку автор вправе выбрать первым же действием, раньше любой правки полотна, —
+  // и тогда форму заводит она (mediaUpload.FormIdSource).
+  const uploadTo: FormIdSource = detail.id || (() => ensureForm().then((f) => f.id))
   const [mode, setMode] = useState<Mode>('edit')
   const [previewOpen, setPreviewOpen] = useState(false)
   // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
@@ -181,7 +202,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
               {/* Статус автосейва стоит у самой публикации: именно он решает,
                   активна ли кнопка «Опубликовать» (canPublish). */}
               <SaveIndicator status={status} onRetry={saveNow} />
-              <PublishControls form={detail} canPublish={canPublish} />
+              <PublishControls form={detail} canPublish={canPublish} ensureForm={ensureForm} />
             </div>
           </div>,
           headerSlot,
@@ -190,7 +211,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {status === 'conflict' && <ConflictBanner />}
 
       {mode === 'edit' && (
-        <SlashEditor formId={detail.id} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
+        <SlashEditor formId={uploadTo} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
       )}
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
@@ -209,7 +230,12 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
       {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
           иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
       {mode === 'settings' && (
-        <FormSettings detail={detail} onBack={() => setMode('edit')} onSaved={saveNow} />
+        <FormSettings
+          detail={detail}
+          ensureForm={ensureForm}
+          onBack={() => setMode('edit')}
+          onSaved={saveNow}
+        />
       )}
       {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
           проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,
@@ -219,7 +245,7 @@ export function BuilderScreen({ detail }: { detail: FormDetail }) {
           подписана на s.design — он при вводе не меняется. Только в режиме полотна:
           поверх превью или настроек шторке нечего показывать. */}
       {mode === 'edit' && (
-        <DesignDrawer formId={detail.id} open={designOpen} onOpenChange={setDesignOpen} />
+        <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={setDesignOpen} />
       )}
     </BuilderStoreContext.Provider>
   )

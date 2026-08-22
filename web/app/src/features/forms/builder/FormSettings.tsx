@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
 import { useUpdateCloseSettings, useUpdateNotifyOnSubmission } from '../queries'
 
 import { useBuilderStore } from './storeContext'
+import { type FormRef } from './useAutosave'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,12 +35,22 @@ import { Textarea } from '@/components/ui/textarea'
 // касается). Сохранение везде ЯВНОЕ, кнопкой (решение владельца): молчаливый автосейв
 // ломал бы привычный флоу — человек не понимает, сохранилось ли. Уход с
 // несохранёнными правками любой секции стережёт диалог.
+// ensureForm — адрес формы на сервере, добытый по надобности. Секция «После отправки»
+// в нём не нуждается (она правит стор, а форму заведёт автосейв), а вот «Закрытие» и
+// письма — живые колонки: их PATCH адресует форму по id, которого у нового черновика
+// ещё нет (ленивое создание, features/forms/draft.ts).
+// Отказ ensureForm значит одно: форму, которой ещё не было, не удалось завести.
+// Ошибки самих настроек показывают их собственные секции.
+const CREATE_FAILED = 'Не удалось создать форму. Попробуйте ещё раз.'
+
 export function FormSettings({
   detail,
+  ensureForm,
   onBack,
   onSaved,
 }: {
   detail: FormDetail
+  ensureForm: () => Promise<FormRef>
   onBack: () => void
   onSaved: () => void
 }) {
@@ -111,14 +123,18 @@ export function FormSettings({
 
   function saveClose() {
     if (limitInvalid) return
-    updateClose.mutate({
-      id: detail.id,
-      settings: {
-        closeAt: localInputToIso(closeDraft.closeLocal),
-        responseLimit: limitTrimmed === '' ? null : limitNum,
-        closedMessage: closeDraft.message,
-      },
-    })
+    void ensureForm()
+      .then(({ id }) =>
+        updateClose.mutate({
+          id,
+          settings: {
+            closeAt: localInputToIso(closeDraft.closeLocal),
+            responseLimit: limitTrimmed === '' ? null : limitNum,
+            closedMessage: closeDraft.message,
+          },
+        }),
+      )
+      .catch(() => toast.error(CREATE_FAILED))
   }
 
   function back() {
@@ -291,7 +307,9 @@ export function FormSettings({
             checked={detail.notifyOnSubmission}
             disabled={updateNotify.isPending}
             onCheckedChange={(enabled) =>
-              updateNotify.mutate({ id: detail.id, slug: detail.slug, enabled })
+              void ensureForm()
+                .then(({ id, slug }) => updateNotify.mutate({ id, slug, enabled }))
+                .catch(() => toast.error(CREATE_FAILED))
             }
           />
           <Label htmlFor="notify-on-submission" className="text-sm font-normal">

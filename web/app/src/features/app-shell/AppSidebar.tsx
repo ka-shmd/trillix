@@ -42,8 +42,10 @@ export interface AppSidebarProps {
   // email (entities/user.ts, displayName). Считает вызывающий: сайдбар
   // презентационный и в фичи не ходит.
   userName: string
+  // «Новая форма» открывает редактор нового черновика и НЕ ждёт сервера: форму
+  // заводит первая правка (features/forms/draft.ts), поэтому состояния «Создаём…»
+  // у кнопки больше нет.
   onCreateForm: () => void
-  creatingForm: boolean
   onLogout: () => void
   loggingOut: boolean
 }
@@ -53,7 +55,6 @@ export function AppSidebar({
   person,
   userName,
   onCreateForm,
-  creatingForm,
   onLogout,
   loggingOut,
 }: AppSidebarProps) {
@@ -75,13 +76,9 @@ export function AppSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
-            <Button
-              className="w-full justify-start gap-2"
-              onClick={onCreateForm}
-              disabled={creatingForm}
-            >
+            <Button className="w-full justify-start gap-2" onClick={onCreateForm}>
               <Plus className="size-4" />
-              {creatingForm ? 'Создаём…' : 'Новая форма'}
+              Новая форма
             </Button>
           </SidebarGroupContent>
         </SidebarGroup>
