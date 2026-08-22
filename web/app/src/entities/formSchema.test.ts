@@ -194,6 +194,36 @@ describe('formSchemaSchema — валидные', () => {
         },
       ],
     },
+    // Доли колонок (2026-08-22, ADR §10). Ряд, где доли НЕ сходятся, тоже валиден:
+    // сумма кросс-блочна, её считает раскладчик (rowWidths), а не схема — иначе
+    // добавление колонки в ряд ловило бы 422 до того, как канон раздаст новые доли.
+    'доли колонок сходятся': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: { column: 1, columnWidth: 70 } },
+        { id: 'b2', groupId: 'g2', type: 'email', settings: { column: 2, columnWidth: 30 } },
+      ],
+    },
+    'доли колонок не сходятся — инертны, но валидны': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: { column: 1, columnWidth: 70 } },
+        { id: 'b2', groupId: 'g2', type: 'email', settings: { column: 2, columnWidth: 70 } },
+      ],
+    },
+    'доля колонки у варианта': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: {
+            options: [
+              { id: 'o1', label: 'Да', column: 1, columnWidth: 60 },
+              { id: 'o2', label: 'Нет', column: 2, columnWidth: 40 },
+            ],
+          },
+        },
+      ],
+    },
     // Whitelist коротких контролов отменён (2026-07-29): бит законен у любого типа,
     // включая длинный ответ, шкалу, выбор и лэйаут-блоки. Что читается в половину
     // колонки — решает автор формы, а не схема.
@@ -507,6 +537,31 @@ describe('formSchemaSchema — невалидные', () => {
     'column у варианта вне двух значений': {
       blocks: [
         { id: 'b', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да', column: 'center' }] } },
+      ],
+    },
+    // Доля колонки: диапазон и тот же запрет у типа вне рядов, что у column.
+    'columnWidth выше потолка': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { columnWidth: 101 } }],
+    },
+    'columnWidth нулевой': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { columnWidth: 0 } }],
+    },
+    'columnWidth дробный': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { columnWidth: 33.5 } }],
+    },
+    'columnWidth у form_title': {
+      blocks: [
+        { id: 'ft', groupId: 'gft', type: 'form_title', text: [{ t: 'Анкета' }], settings: { columnWidth: 50 } },
+      ],
+    },
+    'columnWidth варианта выше потолка': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да', columnWidth: 120 }] },
+        },
       ],
     },
     // Инвариант 4: значение уходит в window.location — чужая схема там это XSS.

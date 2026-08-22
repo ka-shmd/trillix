@@ -35,8 +35,9 @@ import {
   type Span,
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
-import { packOptionRows } from '@fields/groups'
+import { optionRowWidths, packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { ColumnResizer } from './ColumnResizer'
 import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
@@ -322,7 +323,16 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
           // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
           // стороны кластер получил подложку (CLUSTER_BACKDROP) и слой поверх соседа.
-          className={`${CLUSTER_BACKDROP} absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+          //
+          // МИНА: погашенный кластер обязан быть ПРОЗРАЧЕН ДЛЯ УКАЗАТЕЛЯ. Он лежит вне
+          // бокса строки (right-full), но остаётся её потомком, поэтому наведение на
+          // ЕГО площадь — это group-hover строки: без pointer-events-none кластер
+          // зажигает сам себя, стоит курсору попасть в левое поле, где его ещё нет.
+          // Кроме вранья («навёлся на пустое место — появились чужие значки») это
+          // отбирает жёлоб у ручки ширины: 72px кластера шире 28px жёлоба.
+          // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
+          // hover, ушедший со строки на кластер, гасил бы его под курсором.
+          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -915,8 +925,17 @@ const BlockRowBody = memo(function BlockRowBody({
 })
 
 // RowMarks — отметка обязательности вопроса. Инлайн (сразу за текстом подписи) — там
-// же, где её увидит респондент; absolute в правом поле — у поля БЕЗ подписи, где
-// текстовой строки нет.
+// же, где её увидит респондент; у поля БЕЗ подписи текстовой строки нет, и звёздочка
+// висит БЕЙДЖЕМ в правом верхнем углу самого блока (решение владельца 2026-08-22).
+//
+// Место бейджа собственное, ЗА краем якоря его быть не может: там жёлоб ряда с ручкой
+// ширины, а у объектной остановки — соседняя колонка. `right-1` держит бейдж В колонке,
+// отрицательный `top` поднимает над верхней границей блока.
+//
+// МИНА: подъём на 12px разводит бейдж с ГЛИФОМ ТИПА, который у многострочного поля
+// стоит у верхней строки, а не по центру (glyphTop в FieldWrap). Поднимешь меньше —
+// подложка бейджа накроет глиф. История — JOURNAL, «Задача вне плана. Ширина колонки
+// перетаскиванием».
 //
 // Значков условий здесь больше НЕТ: правило перестало быть невидимым свойством вопроса
 // и стоит на полотне своей строкой — блоком `logic` (ADR §10). Помечать вопрос второй
@@ -937,7 +956,7 @@ function RowMarks({
       className={
         inline
           ? `flex shrink-0 ${lineH} items-center`
-          : `absolute left-full top-1.5 ml-1 flex ${lineH} items-center`
+          : 'absolute -top-3 right-1 z-10 flex items-center rounded-full bg-[var(--rf-canvas)]'
       }
     >
       {showRequired && <RequiredToggle block={requiredFor!} />}
@@ -1270,6 +1289,7 @@ function OptionsInline({
   const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
   const moveOption = useBuilderStore((s) => s.moveOption)
   const placeOptionInRow = useBuilderStore((s) => s.placeOptionInRow)
+  const setOptionRowWidths = useBuilderStore((s) => s.setOptionRowWidths)
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const moveOptionAfter = useBuilderStore((s) => s.moveOptionAfter)
   const removeOption = useBuilderStore((s) => s.removeOption)
@@ -1655,6 +1675,9 @@ function OptionsInline({
             // будет, нельзя.
             const zones = inviteId !== null && row.some((c) => c.some((o) => o.id === inviteId))
             const canAdd = cols < MAX_COLUMNS
+            // Доли колонок — тот же раскладчик и то же правило, что у вопросов; ячейка
+            // здесь настоящая .rf-cell, поэтому доля едет переменной, как у респондента.
+            const widths = optionRowWidths(row)
             return (
               // РЯД — КОНТЕЙНЕР ВСЕГДА, даже об одном варианте: он якорь зон и
               // единственный бокс, чья геометрия не зависит от содержимого. Тип узла
@@ -1689,7 +1712,27 @@ function OptionsInline({
                     className={`rf-cell relative self-start${
                       cols === 1 ? ' [align-items:var(--rf-align-items)]' : ''
                     }`}
+                    // Доля — inline flex-grow, а не переменной, как у респондента: то
+                    // же свойство правит жест ширины, и два способа записи на одной
+                    // ячейке разъехались бы на первом же перетаскивании.
+                    style={{ flexGrow: widths?.[i] }}
+                    // Только у настоящей секции: у ряда из одного варианта обёртка стоит
+                    // всегда (якорь зон), и метка сняла бы потолок карточки там, где ряда
+                    // нет.
+                    {...(cols > 1 ? { 'data-rf-cell': '' } : {})}
                   >
+                    {/* Ручка ширины — тот же жест, что у вопросов; жёлоб списка 12px.
+                        Во время драга вариантов не рисуется: список в этот момент
+                        показывает свои три отклика и наведение не обслуживает. */}
+                    {i > 0 && optDrag === null && (
+                      <ColumnResizer
+                        index={i}
+                        gutter={OPT_GUTTER}
+                        onCommit={(next) =>
+                          setOptionRowWidths(block.id, row[0]![0]!.id, next)
+                        }
+                      />
+                    )}
                     {zones && i > 0 && canAdd && (
                       <GapDropZone
                         id={optionZoneId(inviteId!, i + 1, true)}
@@ -2026,7 +2069,9 @@ function OptionCard({
           они, у списка получилось бы два этажа управления, различающихся парой
           пикселей. */}
       <div
-        className={`${CLUSTER_BACKDROP} absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
+        // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
+        // у кластера строки: иначе он зажигается от собственной площади в левом поле.
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
       >
         <button
           type="button"

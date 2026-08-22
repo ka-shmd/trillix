@@ -52,8 +52,13 @@ func TestValidateSchema_Valid(t *testing.T) {
 			{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}},
 			{"id":"b2","groupId":"g3","type":"email","settings":{}}
 		]}`,
-		"пустое имя страницы у не-разрыва":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"pageName":""}}]}`,
-		"thankYou false у не-разрыва":          `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"thankYou":false}}]}`,
+		"пустое имя страницы у не-разрыва": `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"pageName":""}}]}`,
+		"thankYou false у не-разрыва":      `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"thankYou":false}}]}`,
+		// Доли колонок (2026-08-22): ряд с ними валиден, и НЕСХОДЯЩИЙСЯ ряд тоже —
+		// сумма кросс-блочна, её считает раскладчик фронта, а не схема.
+		"доли колонок сходятся":                `{"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":1,"columnWidth":70}},{"id":"b2","groupId":"g2","type":"email","settings":{"column":2,"columnWidth":30}}]}`,
+		"доли колонок не сходятся":             `{"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":1,"columnWidth":70}},{"id":"b2","groupId":"g2","type":"email","settings":{"column":2,"columnWidth":70}}]}`,
+		"доля колонки у варианта":              `{"blocks":[{"id":"b","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","column":1,"columnWidth":60},{"id":"o2","label":"Нет","column":2,"columnWidth":40}]}}]}`,
 		"choice без опций — валидный черновик": `{"blocks":[{"id":"b","groupId":"g1","type":"single_choice","settings":{}}]}`,
 		"файл без настроек — дефолты":          `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{}}]}`,
 		"файл с настройками":                   `{"blocks":[{"id":"b","groupId":"g1","type":"file","settings":{"maxFiles":3,"maxFileSize":5,"accept":["document","table"]}}]}`,
@@ -219,6 +224,13 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"column выше потолка":          `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":` + strconv.Itoa(MaxColumns+1) + `}}]}`,
 		"column отрицательный":         `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":-1}}]}`,
 		"column варианта выше потолка": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","column":` + strconv.Itoa(MaxColumns+1) + `}]}}]}`,
+		// Доля колонки (2026-08-22): диапазон и запрет у типа вне рядов — всё, что
+		// валидатор о ширине знает. Сходимость суммы по ряду кросс-блочна и намеренно
+		// не проверяется, как «секция открыта» у самой колонки.
+		"columnWidth выше потолка":          `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"columnWidth":` + strconv.Itoa(ColumnWidthTotal+1) + `}}]}`,
+		"columnWidth отрицательный":         `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"columnWidth":-1}}]}`,
+		"columnWidth у form_title":          `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Анкета"}],"settings":{"columnWidth":50}}]}`,
+		"columnWidth варианта выше потолка": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"single_choice","settings":{"options":[{"id":"o1","label":"Да","columnWidth":` + strconv.Itoa(ColumnWidthTotal+1) + `}]}}]}`,
 		// Фаза 24: настройки файла. Потолки — предел АВТОРА: подпись загрузки сверх них
 		// не выдаётся, поэтому настройка, которую нельзя исполнить, обязана краснеть в
 		// редакторе, а не тихо не работать у респондента.

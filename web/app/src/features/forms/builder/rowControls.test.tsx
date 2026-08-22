@@ -125,6 +125,19 @@ const QUESTION: FormSchema = {
 }
 
 describe('кластер значков строки', () => {
+  // ПОГАШЕННЫЙ КЛАСТЕР ПРОЗРАЧЕН ДЛЯ УКАЗАТЕЛЯ (2026-08-22, жалоба владельца: «значки
+  // появляются, когда наводишь на место, где они должны быть»). Кластер лежит ВНЕ бокса
+  // строки, оставаясь её потомком, поэтому без этого класса он сам себе делает
+  // group-hover — и заодно отбирает жёлоб у ручки ширины. Проверяется классом: :hover в
+  // happy-dom не считается, а правило здесь чисто CSS'ное.
+  it('невидимый кластер не ловит указатель, показанный — ловит', () => {
+    setup(QUESTION)
+    const cluster = row('inp').getByLabelText('Удалить блок').parentElement!
+    expect(cluster.className).toContain('pointer-events-none')
+    expect(cluster.className).toContain('group-hover:pointer-events-auto')
+    expect(cluster.className).toContain('group-focus-within:pointer-events-auto')
+  })
+
   it('у строки ответа в вопросе значки есть — её можно унести отдельно (фаза 15)', () => {
     setup(QUESTION)
     expect(controls('inp')).toContain('Удалить блок')
@@ -409,6 +422,17 @@ describe('звёздочка обязательности', () => {
   it('у голого поля кластер висит на обёртке поля, а не у края строки', () => {
     setup(REQUIRED)
     expect(row('bare').getByLabelText(STAR).closest('.rf-field-wrap')).toBeTruthy()
+  })
+
+  // БЕЙДЖ В УГЛУ, А НЕ ХВОСТ СПРАВА (решение владельца 2026-08-22). Прежнее место
+  // (`left-full`) лежало за правым краем якоря: у поля в ряду это жёлоб с ручкой
+  // ширины, у объектной остановки — вовсе соседняя колонка.
+  it('у голого поля звёздочка висит бейджем в правом верхнем углу блока', () => {
+    setup(REQUIRED)
+    const marks = row('bare').getByLabelText(STAR).parentElement!
+    expect(marks.className).toContain('absolute')
+    expect(marks.className).toContain('right-1')
+    expect(marks.className).not.toContain('left-full')
   })
 
   it('у вопроса с подписью кластер инлайн, в обёртку поля не уезжает', () => {

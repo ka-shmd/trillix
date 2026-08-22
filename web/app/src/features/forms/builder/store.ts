@@ -17,12 +17,16 @@ import {
   requiresCaption,
   supportsPlaceholder,
   MAX_COLUMNS,
+  COLUMN_WIDTH_TOTAL,
   sameRichText,
 } from '@entities/formSchema'
 import {
+  blockRowWidths,
   groupBlocks,
   groupCanPair,
   groupMeta,
+  groupRowWidths,
+  optionRowWidths,
   packGroupRows,
   packOptionRows,
   packRows,
@@ -232,6 +236,19 @@ export type BuilderActions = {
   // элемент стоит сейчас (rowPosition), а не от режима, который где-то хранится.
   // Крайняя позиция оси в свою сторону — no-op.
   shiftColumn: (id: string, dir: 'left' | 'right') => void
+  // setRowWidths — ДОЛИ КОЛОНОК ряда, в котором стоит anchor (2026-08-22): перетащив
+  // границу колонок, автор задаёт ряду пропорции. Ряд ищется сперва ВНУТРИ вопроса,
+  // потом среди рядов вопросов — порядок безопасен, потому что группа с внутренним
+  // рядом занимает всю ширину и в кросс-групповой ряд не встаёт (groupCanShareRow).
+  //
+  // Доли проставляются ВСЕМ участникам колонки, а не одному носителю: читает их
+  // раскладчик у первого элемента колонки, и перестановка внутри стопки иначе
+  // роняла бы ряд в равные доли. Сумма обязана быть COLUMN_WIDTH_TOTAL, длина —
+  // числом колонок; иначе no-op (документ не должен хранить доли, которые не
+  // подействуют).
+  setRowWidths: (anchorBlockId: string, widths: number[]) => void
+  // Та же команда для ряда ВАРИАНТОВ внутри choice-блока.
+  setOptionRowWidths: (blockId: string, anchorOptionId: string, widths: number[]) => void
   // Те же две команды для варианта (спека §5.1: различий с блоками нет ни одного).
   // col/insert читаются как у placeInRow: insert — «открой ЭТУ колонку ряда, подвинув
   // остальные», иначе — «встань в стопку этой колонки». Ряду из одной колонки стопка
@@ -472,6 +489,53 @@ type RowPlan = { id: string; blocks: Block[] }[][]
 function withColumn(b: Block, column: number | undefined): Block {
   if (b.settings?.column === column) return b
   return column === undefined ? withoutColumn(b) : { ...b, settings: { ...b.settings, column } }
+}
+
+// withWidth — доля колонки на носителе. Как withColumn: значение уже то → тот же блок.
+function withWidth(b: Block, width: number | undefined): Block {
+  if (b.settings?.columnWidth === width) return b
+  if (width === undefined) {
+    const settings = { ...b.settings }
+    delete settings.columnWidth
+    return { ...b, settings }
+  }
+  return { ...b, settings: { ...b.settings, columnWidth: width } }
+}
+
+function optionWithWidth(o: Option, width: number | undefined): Option {
+  if (o.columnWidth === width) return o
+  if (width === undefined) {
+    const next = { ...o }
+    delete next.columnWidth
+    return next
+  }
+  return { ...o, columnWidth: width }
+}
+
+// rowCellsAt — КОЛОНКИ ряда, в котором стоит блок, списком id участников. Сперва ряды
+// ВНУТРИ вопроса, потом ряды вопросов: порядок безопасен, потому что группа с
+// внутренним рядом занимает всю ширину и в кросс-групповой ряд не встаёт. Ряд из
+// одной колонки — не ряд: делить там нечего.
+function rowCellsAt(blocks: Block[], anchorId: string): string[][] | null {
+  for (const g of groupBlocks(blocks)) {
+    if (!g.blocks.some((b) => b.id === anchorId)) continue
+    for (const row of packGroupRows(g.blocks)) {
+      if (row.length > 1 && row.some((cell) => cell.some((b) => b.id === anchorId))) {
+        return row.map((cell) => cell.map((b) => b.id))
+      }
+    }
+  }
+  const groups = rowGroups(blocks)
+  const owner = groups.find((g) => g.blocks.some((b) => b.id === anchorId))
+  if (!owner) return null
+  for (const row of packRows(groups)) {
+    if (row.length > 1 && row.some((cell) => cell.some((g) => g.id === owner.id))) {
+      // Носитель ключа у группы — её ГОЛОВА (§6.2), поэтому доля достаётся первым
+      // блокам групп колонки, а не всем их строкам.
+      return row.map((cell) => cell.map((g) => g.blocks[0]!.id))
+    }
+  }
+  return null
 }
 
 // emitRows — документ ИЗ РЯДОВ: заголовок формы, затем ряды по порядку, внутри ряда —
@@ -769,6 +833,61 @@ function normalizeThankYou(blocks: Block[]): Block[] {
   })
 }
 
+// normalizeWidths — КАНОН ДОЛЕЙ (2026-08-22): доля, которая не действует, снимается, а
+// действующая раздаётся всем участникам своей колонки.
+//
+// Что действует, решает ТОТ ЖЕ раскладчик, который рисует ряды (rowWidths): доля у
+// первого элемента каждой колонки и сумма ровно COLUMN_WIDTH_TOTAL. Отсюда обещанный
+// владельцу сброс в равные — колонку добавили, у неё доли нет; колонку унесли, сумма
+// не сходится; в обоих случаях ряд рисуется поровну уже в том кадре, а этот канон
+// доводит документ до того же состояния, чтобы прежние доли не воскресли при
+// следующей правке (тот же довод, что у инертного бита колонки).
+//
+// Раздача всем участникам колонки, а не одному носителю: колонка — стопка, читается
+// доля у её первого элемента, и перестановка внутри стопки (Alt+Shift+↑↓) иначе
+// роняла бы ряд в равные доли.
+//
+// Три слоя обходятся по отдельности и пересечься не могут: голова группы выражает
+// долю внутреннего ряда только у группы с внутренним рядом, а такая группа занимает
+// всю ширину и в кросс-групповой ряд не встаёт (groupCanShareRow).
+function normalizeWidths(blocks: Block[]): Block[] {
+  const width = new Map<string, number>() // id блока → доля его колонки
+  const groups = rowGroups(blocks)
+  for (const row of packRows(groups)) {
+    const widths = groupRowWidths(row)
+    if (widths === null) continue
+    row.forEach((cell, i) => {
+      for (const g of cell) width.set(g.blocks[0]!.id, widths[i]!)
+    })
+  }
+  for (const g of groupBlocks(blocks)) {
+    for (const row of packGroupRows(g.blocks)) {
+      const widths = blockRowWidths(row)
+      if (widths === null) continue
+      row.forEach((cell, i) => {
+        for (const b of cell) width.set(b.id, widths[i]!)
+      })
+    }
+  }
+  return blocks.map((b) => {
+    const next = withWidth(b, width.get(b.id))
+    const options = next.settings?.options
+    if (!options?.length) return next
+    const optWidth = new Map<string, number>()
+    for (const row of packOptionRows(options)) {
+      const widths = optionRowWidths(row)
+      if (widths === null) continue
+      row.forEach((cell, i) => {
+        for (const o of cell) optWidth.set(o.id, widths[i]!)
+      })
+    }
+    const nextOptions = options.map((o) => optionWithWidth(o, optWidth.get(o.id)))
+    return nextOptions.some((o, i) => o !== options[i])
+      ? { ...next, settings: { ...next.settings, options: nextOptions } }
+      : next
+  })
+}
+
 function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Block[] {
   const blocks = reanchorRowBits(input, prev)
   const clear = new Set<string>() // id блоков, с которых снимаем бит
@@ -808,7 +927,7 @@ function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Bloc
     if (ids.size > 0) optClear.set(b.id, ids)
   }
   if (clear.size === 0 && optClear.size === 0) {
-    return normalizeOptionSections(normalizeSections(blocks))
+    return normalizeWidths(normalizeOptionSections(normalizeSections(blocks)))
   }
   const cleaned = blocks.map((b) => {
     const ids = optClear.get(b.id)
@@ -823,7 +942,7 @@ function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Bloc
       : b
     return clear.has(b.id) ? withoutColumn(next) : next
   })
-  return normalizeOptionSections(normalizeSections(cleaned))
+  return normalizeWidths(normalizeOptionSections(normalizeSections(cleaned)))
 }
 
 // Канон КОЛОНОК У ВАРИАНТОВ — то же, что normalizeSections у блоков, и по тому же
@@ -1791,6 +1910,44 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
             // Смена секции здесь — по прямой просьбе, а не побочный эффект переноса.
             activeGroup.blocks[0]!.id,
           )
+        }),
+
+      setRowWidths: (anchorBlockId, widths) =>
+        commit(null, (s) => {
+          const cells = rowCellsAt(s.blocks, anchorBlockId)
+          if (cells === null || cells.length !== widths.length) return null
+          if (widths.reduce((a, b) => a + b, 0) !== COLUMN_WIDTH_TOTAL) return null
+          const width = new Map<string, number>()
+          cells.forEach((cell, i) => {
+            for (const id of cell) width.set(id, widths[i]!)
+          })
+          const blocks = s.blocks.map((b) => withWidth(b, width.get(b.id) ?? b.settings?.columnWidth))
+          // Правка НЕ структурная: состав, порядок и колонки те же, меняется только
+          // пропорция — regroup и уборке битов здесь делать нечего.
+          return blocks.some((b, i) => b !== s.blocks[i]) ? { blocks } : null
+        }),
+
+      setOptionRowWidths: (blockId, anchorOptionId, widths) =>
+        commit(null, (s) => {
+          const block = s.blocks.find((b) => b.id === blockId)
+          const options = block?.settings?.options
+          if (!options?.length) return null
+          const row = packOptionRows(options).find(
+            (r) => r.length > 1 && r.some((cell) => cell.some((o) => o.id === anchorOptionId)),
+          )
+          if (!row || row.length !== widths.length) return null
+          if (widths.reduce((a, b) => a + b, 0) !== COLUMN_WIDTH_TOTAL) return null
+          const width = new Map<string, number>()
+          row.forEach((cell, i) => {
+            for (const o of cell) width.set(o.id, widths[i]!)
+          })
+          const next = options.map((o) => optionWithWidth(o, width.get(o.id) ?? o.columnWidth))
+          if (!next.some((o, i) => o !== options[i])) return null
+          return {
+            blocks: s.blocks.map((b) =>
+              b.id === blockId ? { ...b, settings: { ...b.settings, options: next } } : b,
+            ),
+          }
         }),
 
       takeOwnRow: (id) =>

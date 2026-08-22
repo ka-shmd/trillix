@@ -1,7 +1,7 @@
 import { type Block } from '@entities/formSchema'
 
 import { type Answer, optionKey, toggleMulti } from '../answer'
-import { packOptionRows } from '../groups'
+import { cellVars, optionRowWidths, packOptionRows } from '../groups'
 
 // Список вариантов: радиокнопки для одиночного выбора, чекбоксы для множественного. Общий
 // для single_choice и multi_choice — разница между ними в ОДНОМ бите (multiple), и
@@ -79,10 +79,14 @@ export function ChoiceList({
         // Ряд из двоих — две ячейки .rf-cell по половине колонки; карточка внутри обнимает
         // текст, но начинается там, где ячейка (правая — с середины). В правой ячейке
         // может стоять СТОПКА вариантов — тот же раскладчик, что у вопросов (§5).
+        // Доли колонок, если автор их задал: то же правило и тот же раскладчик, что у
+        // рядов вопросов. Ширину карточки внутри доля не отменяет — потолок
+        // --rf-input-max остаётся, колонка лишь перестаёт быть половиной ряда.
+        const widths = optionRowWidths(row)
         return row.length > 1 ? (
           <div key={first.id} className="rf-row">
-            {row.map((cell) => (
-              <div key={cell[0]!.id} className="rf-cell">
+            {row.map((cell, i) => (
+              <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
                 {cell.map((o) => card(o, index.get(o.id)!))}
               </div>
             ))}

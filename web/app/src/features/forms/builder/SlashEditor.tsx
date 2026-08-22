@@ -41,6 +41,8 @@ import {
   groupBlocks,
   groupCanPair,
   groupMeta,
+  blockRowWidths,
+  groupRowWidths,
   packGroupRows,
   packRows,
   splitFormTitle,
@@ -48,6 +50,7 @@ import {
 import { type PageNav, pageNavPlan } from './pageNav'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import { captionLoss, needsCaptionFor, planBlockDrop, rowPosition } from './store'
+import { ColumnResizer } from './ColumnResizer'
 import { inviteRowId } from './rowZones'
 import { type Box, type DropTarget, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
@@ -139,6 +142,7 @@ export function SlashEditor({
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
+  const setRowWidths = useBuilderStore((s) => s.setRowWidths)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
@@ -418,7 +422,7 @@ export function SlashEditor({
     // группу полноширинной (groupCanShareRow = «внутреннего ряда нет»), то есть дроп
     // молча развалил бы секцию, в которой вопрос стоит, — обещание зоны и её
     // последствие разошлись бы. Заодно снаружи такого вопроса нет поля полотна: зона
-    // легла бы в 28px-жёлоб и наехала на соседнюю колонку.
+    // легла бы в 12px-жёлоб и наехала на соседнюю колонку.
     if (inSection.has(g.id)) return null
     const caption = g.blocks.find((x) => isCaptionType(x.type))
     if (!caption || caption.id === b.id) return null
@@ -1126,6 +1130,12 @@ export function SlashEditor({
                       // отклика. Ушёл он вместе с последней причиной, по которой полотно
                       // во время драга вообще что-то двигало: раскладка теперь неподвижна
                       // целиком, а место называют линия (§5.2) и полоса взятой зоны.
+                      // Доли колонок — тем же правилом и тем же раскладчиком, что у
+                      // превью и рендерера. Полотно рисует их inline `flexGrow`, а не
+                      // переменной `--rf-cell-grow`: ячейка здесь своя (Tailwind), класса
+                      // .rf-cell на ней нет, а жест правит именно это свойство напрямую,
+                      // минуя стор (columnResize).
+                      const widths = groupRowWidths(row)
                       const cellNodes = row.map((c, i) => (
                         <div
                           key={c[0]!.id}
@@ -1140,7 +1150,25 @@ export function SlashEditor({
                           // Вертикального зазора у колонки нет: интервал стопки несут сами
                           // вопросы (mt-7 у li в GroupRow), как .rf-cell у превью.
                           className="relative flex min-w-0 flex-1 flex-col self-start"
+                          style={{ flexGrow: widths?.[i] }}
+                          // Ячейка ряда для жеста ширины: по этой метке ручка находит
+                          // колонки своего ряда, не считая соседями зоны драга. Только у
+                          // НАСТОЯЩЕЙ секции: метка снимает потолок поля (fields.css), а
+                          // у полноширинного вопроса он в силе — иначе полотно показывало
+                          // бы поле шире, чем превью и респондент.
+                          {...(cols > 1 ? { 'data-rf-cell': '' } : {})}
                         >
+                          {/* Ручка ширины — в жёлобе слева от колонки; у первой её нет
+                              (границы слева от ряда не существует). Во время драга не
+                              рисуется вовсе: полотно в этот момент не отвечает на
+                              наведение (§5), и линия обещала бы жест, которого нет. */}
+                          {i > 0 && drag === null && (
+                            <ColumnResizer
+                              index={i}
+                              gutter={ROW_GUTTER}
+                              onCommit={(next) => setRowWidths(row[0]![0]!.blocks[0]!.id, next)}
+                            />
+                          )}
                           {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
                               жёлобе слева от неё, подвал — под ней. Первая колонка
                               границы не показывает: слева от неё внешняя полоса, у
@@ -1180,11 +1208,13 @@ export function SlashEditor({
                         респондента ряд разваливается.
                         mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
                         ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
-                        gap здесь — зазор между КОЛОНКАМИ (на мобильном ряд
-                        разваливается в стек, и тот же зазор становится вертикальным),
-                        как .rf-row. Оба множатся на --rf-density, как и там. */}
+                        gap здесь — зазор между КОЛОНКАМИ, 12px, как .rf-row; на
+                        мобильном ряд разваливается в стек, и зазор возвращается к 28px
+                        — там он снова интервал МЕЖДУ ВОПРОСАМИ (то же правило и тот же
+                        брейкпоинт, что у .rf-row в fields.css). Оба множатся на
+                        --rf-density, как и там. */}
                         <div
-                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row ${
+                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row sm:gap-[calc(0.75rem*var(--rf-density))] ${
                             rowIndex === 0 ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
                           }`}
                         >
@@ -1305,7 +1335,12 @@ const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat(
 const ROW_PAD = 6
 const ROW_GAP = 7
 // Жёлоб между колонками ряда вопросов (gap-7 у контейнера ряда).
-const ROW_GUTTER = 28
+// Жёлоб между колонками ряда вопросов — 12px (.rf-row в fields.css, там же довод):
+// по горизонтали интервал колонки СОБИРАЕТ, поэтому он теснее вертикальных 28px.
+const ROW_GUTTER = 12
+// Жёлоб ряда ВНУТРИ вопроса — 14px: ритм внутри вопроса (.rf-group > .rf-row в
+// fields.css), а не между вопросами.
+const INNER_GUTTER = 14
 
 // hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
 // (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес
@@ -1516,6 +1551,8 @@ const GroupRow = memo(function GroupRow({
   // `{ attributes, listeners }` пересоздавался на каждый рендер группы и в одиночку
   // отменял memo у подписи: одна такая строка на вопрос — это половина строк формы.
   const groupHandle = useMemo(() => ({ attributes, listeners }), [attributes, listeners])
+  // Жест ширины внутреннего ряда: команда стора стабильна, memo группы она не ломает.
+  const setRowWidths = useBuilderStore((s) => s.setRowWidths)
   // Есть ли в группе контрол ответа: от этого зависит, работает ли Mod+Enter из
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
@@ -1646,6 +1683,7 @@ const GroupRow = memo(function GroupRow({
               )
             }
             const pair = innerRow.length > 1
+            const innerWidths = blockRowWidths(innerRow)
             // Обёртки стоят ВСЕГДА и в одиночном ряду схлопнуты в display:contents —
             // строка остаётся прямым flex-ребёнком колонки, как и была (лишний бокс
             // сместил бы кластеры значков). Урок, оплаченный снятым дублёром второго
@@ -1662,10 +1700,24 @@ const GroupRow = memo(function GroupRow({
                     : 'contents'
                 }
               >
-                {innerRow.map((cell) => (
+                {innerRow.map((cell, i) => (
                   // min-w-0 обязателен, как у .rf-cell: без него длинная подпись не
                   // даёт колонке ужаться и ломает 50/50.
-                  <div key={cell[0]!.id} className={pair ? 'min-w-0 flex-1' : 'contents'}>
+                  <div
+                    key={cell[0]!.id}
+                    className={pair ? 'relative min-w-0 flex-1' : 'contents'}
+                    style={pair ? { flexGrow: innerWidths?.[i] } : undefined}
+                    {...(pair ? { 'data-rf-cell': '' } : {})}
+                  >
+                    {/* Тот же жест на втором уровне рядов: жёлоб здесь 14px — ритм
+                        внутри вопроса, а не между вопросами. */}
+                    {pair && i > 0 && (
+                      <ColumnResizer
+                        index={i}
+                        gutter={INNER_GUTTER}
+                        onCommit={(next) => setRowWidths(innerRow[0]![0]!.id, next)}
+                      />
+                    )}
                     {cell.map(render)}
                   </div>
                 ))}

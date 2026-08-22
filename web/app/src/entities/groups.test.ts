@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { groupBlocks, packGroupRows, packOptionRows, packRows } from '@fields/groups'
+import {
+  blockRowWidths,
+  cellVars,
+  groupBlocks,
+  groupRowWidths,
+  optionRowWidths,
+  packGroupRows,
+  packOptionRows,
+  packRows,
+} from '@fields/groups'
 import { type Block, type BlockType, type Option, textFromString } from '@entities/formSchema'
 
 // packRows/packOptionRows (@fields/groups) — раскладчик рядов (спека §5/§5.1), общий
@@ -226,5 +235,63 @@ describe('packOptionRows', () => {
       .flat(2)
       .map((o) => o.id)
     expect(flat).toEqual(['o1', 'o2', 'o3'])
+  })
+})
+
+// ШИРИНЫ КОЛОНОК (2026-08-22). Правило действия одно на все три слоя и живёт в
+// раскладчике: доля у первого элемента КАЖДОЙ колонки и сумма ровно 100. Проверяется
+// здесь, потому что из него выводится обещанный владельцу сброс в равные — ни одна
+// команда ряда для этого своей проверки не имеет.
+describe('rowWidths — доли колонок', () => {
+  const wide = (id: string, column: number, columnWidth: number): Block => ({
+    id,
+    groupId: id,
+    type: 'short_text',
+    settings: { column, columnWidth },
+  })
+  const widthsOf = (blocks: Block[]): (number[] | null)[] =>
+    packRows(groupBlocks(blocks)).map((row) => groupRowWidths(row))
+
+  it('доли у всех колонок и сумма 100 — действуют', () => {
+    expect(widthsOf([wide('a', 1, 70), wide('b', 2, 30)])).toEqual([[70, 30]])
+  })
+
+  it('колонку добавили (у новой доли нет) — ряд поровну', () => {
+    const third: Block = { id: 'c', groupId: 'c', type: 'short_text', settings: { column: 3 } }
+    expect(widthsOf([wide('a', 1, 70), wide('b', 2, 30), third])).toEqual([null])
+  })
+
+  it('колонку унесли (сумма не сходится) — ряд поровну', () => {
+    expect(widthsOf([wide('a', 1, 50), wide('b', 2, 20)])).toEqual([null])
+  })
+
+  it('ряд из одной колонки долей не имеет', () => {
+    expect(widthsOf([wide('a', 1, 100)])).toEqual([null])
+  })
+
+  it('доля читается у ПЕРВОГО элемента колонки, стопка её не меняет', () => {
+    const blocks = [wide('a', 1, 70), wide('b', 2, 30), wide('c', 2, 55)]
+    expect(widthsOf(blocks)).toEqual([[70, 30]])
+  })
+
+  it('внутренний ряд вопроса — тот же расчёт', () => {
+    const inner = packGroupRows([
+      { id: 't', groupId: 'g', type: 'title', text: textFromString('Q'), settings: { column: 1, columnWidth: 35 } },
+      { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 2, columnWidth: 65 } },
+    ])
+    expect(inner.map((row) => blockRowWidths(row))).toEqual([[35, 65]])
+  })
+
+  it('ряд вариантов — тот же расчёт', () => {
+    const options: Option[] = [
+      { id: 'o1', label: 'Да', column: 1, columnWidth: 25 },
+      { id: 'o2', label: 'Нет', column: 2, columnWidth: 75 },
+    ]
+    expect(packOptionRows(options).map((row) => optionRowWidths(row))).toEqual([[25, 75]])
+  })
+
+  it('cellVars печатает переменную только у действующих долей', () => {
+    expect(cellVars([70, 30], 1)).toEqual({ '--rf-cell-grow': 30 })
+    expect(cellVars(null, 0)).toBeUndefined()
   })
 })

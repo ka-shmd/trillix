@@ -14,6 +14,9 @@ import { BlockField } from '@fields/BlockField'
 import {
   groupBlocks,
   groupMeta,
+  blockRowWidths,
+  cellVars,
+  groupRowWidths,
   packGroupRows,
   packRows,
   splitFormTitle,
@@ -604,10 +607,11 @@ export function FormView({
                         />
                       </FocusReporter>
                     )
+                    const innerWidths = blockRowWidths(innerRow)
                     return innerRow.length > 1 ? (
                       <div key={innerRow[0]![0]!.id} className="rf-row">
-                        {innerRow.map((cell) => (
-                          <div key={cell[0]!.id} className="rf-cell">
+                        {innerRow.map((cell, i) => (
+                          <div key={cell[0]!.id} className="rf-cell" style={cellVars(innerWidths, i)}>
                             {cell.map(render)}
                           </div>
                         ))}
@@ -623,10 +627,13 @@ export function FormView({
               // тот, кто открыл ряд.
               const first = row[0]?.[0]
               if (!first) return null
+              // Доли колонок — из документа, тем же правилом, что у превью и полотна
+              // (rowWidths): не сходятся или заданы не у всех — ряд делится поровну.
+              const widths = groupRowWidths(row)
               return row.length > 1 ? (
                 <div key={first.id} className="rf-row">
-                  {row.map((cell) => (
-                    <div key={cell[0]!.id} className="rf-cell">
+                  {row.map((cell, i) => (
+                    <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
                       {cell.map(renderGroup)}
                     </div>
                   ))}
