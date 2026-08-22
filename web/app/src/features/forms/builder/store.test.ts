@@ -3117,3 +3117,123 @@ it('DOCUMENT_FIELDS покрывает весь состав toSchema', () => {
   const keys = Object.keys(store.getState().toSchema()).filter((k) => k !== 'schemaVersion')
   expect(keys.sort()).toEqual([...DOCUMENT_FIELDS].sort())
 })
+
+// ДОЛИ КОЛОНОК (2026-08-22). Правило действия проверено у раскладчика
+// (groups.test.ts), разметка — у поверхностей (columnWidth.test.tsx); здесь то, что
+// умеет только стор: команда жеста и канон, который снимает доли, переставшие
+// действовать. Из этого канона и берётся обещанный владельцу сброс в равные —
+// отдельного правила «при смене состава ряда сбрось доли» ни в одной команде нет.
+describe('createBuilderStore — доли колонок', () => {
+  const fields = (...types: ('short_text' | 'email' | 'phone' | 'single_choice')[]) => {
+    const store = createBuilderStore()
+    for (const t of types) store.getState().addBlock(t)
+    return store
+  }
+  const widths = (store: ReturnType<typeof createBuilderStore>) =>
+    store.getState().blocks.map((b) => b.settings?.columnWidth ?? '-')
+
+  const pairedStore = () => {
+    const store = fields('short_text', 'email')
+    const [a, b] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
+    return store
+  }
+
+  it('setRowWidths ставит доли обеим колонкам ряда', () => {
+    const store = pairedStore()
+    const [a] = store.getState().blocks
+    store.getState().markSaved()
+
+    store.getState().setRowWidths(a!.id, [70, 30])
+
+    expect(widths(store)).toEqual([70, 30])
+    expect(store.getState().dirty).toBe(true)
+    expect(formSchemaSchema.safeParse(store.getState().toSchema()).success).toBe(true)
+  })
+
+  it('доли не в сумме 100 — команда не трогает документ', () => {
+    const store = pairedStore()
+    const [a] = store.getState().blocks
+    store.getState().markSaved()
+
+    store.getState().setRowWidths(a!.id, [70, 40])
+
+    expect(widths(store)).toEqual(['-', '-'])
+    expect(store.getState().dirty).toBe(false)
+  })
+
+  it('доля достаётся ВСЕМ участникам колонки, а не одному носителю', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true) // [a | b]
+    store.getState().placeInRow(c!.groupId, a!.groupId, 1, false) // [a, c | b]
+
+    store.getState().setRowWidths(a!.id, [60, 40])
+
+    // Порядок документа внутри секции колоночный: a, c — первая колонка, b — вторая.
+    expect(widths(store)).toEqual([60, 60, 40])
+  })
+
+  it('Mod+Z откатывает пропорцию одной правкой', () => {
+    const store = pairedStore()
+    const [a] = store.getState().blocks
+    store.getState().setRowWidths(a!.id, [70, 30])
+
+    store.getState().undo()
+
+    expect(widths(store)).toEqual(['-', '-'])
+  })
+
+  it('колонку добавили — доли сброшены в равные', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
+    store.getState().setRowWidths(a!.id, [70, 30])
+
+    store.getState().placeInRow(c!.groupId, a!.groupId, 3, true)
+
+    expect(widths(store)).toEqual(['-', '-', '-'])
+  })
+
+  it('колонку унесли — доли сброшены в равные', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
+    store.getState().placeInRow(c!.groupId, a!.groupId, 3, true)
+    store.getState().setRowWidths(a!.id, [50, 30, 20])
+    expect(widths(store)).toEqual([50, 30, 20])
+
+    store.getState().takeOwnRow(c!.id)
+
+    expect(widths(store)).toEqual(['-', '-', '-'])
+  })
+
+  it('перестановка внутри колонки доли ряда не роняет', () => {
+    const store = fields('short_text', 'email', 'phone')
+    const [a, b, c] = store.getState().blocks
+    store.getState().placeInRow(b!.groupId, a!.groupId, 2, true) // [a | b]
+    store.getState().placeInRow(c!.groupId, a!.groupId, 1, false) // [a, c | b]
+    store.getState().setRowWidths(a!.id, [60, 40])
+
+    store.getState().reorderGroups(c!.groupId, a!.groupId, 1) // c перед a внутри колонки
+
+    expect(widths(store)).toEqual([60, 60, 40])
+  })
+
+  it('ряд вариантов: своя команда и тот же канон', () => {
+    const store = fields('single_choice')
+    const block = store.getState().blocks[0]!
+    store.getState().addOption(block.id, 'Да')
+    store.getState().addOption(block.id, 'Нет')
+    const opts = () => store.getState().blocks[0]!.settings!.options!
+    const [o1, o2] = opts()
+    store.getState().placeOptionInRow(block.id, o2!.id, o1!.id, 2, true)
+
+    store.getState().setOptionRowWidths(block.id, o1!.id, [25, 75])
+    expect(opts().map((o) => o.columnWidth ?? '-')).toEqual([25, 75])
+
+    // Ряд распался — доли сняты тем же каноном, что и у блоков.
+    store.getState().moveOption(block.id, o2!.id, 'up')
+    expect(opts().map((o) => o.columnWidth ?? '-')).toEqual(['-', '-'])
+  })
+})
