@@ -72,6 +72,27 @@ describe('Backspace в начале строки', () => {
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['a', 'b'])
   })
 
+  // Отчёт владельца 2026-08-23: «должны возвращать каретку в инпут, а не к заголовку».
+  // Схлопывание перескакивало лист-поле тем же `stopNeighbor`, что и стрелки, и каретка
+  // уезжала через целую строку назад — в подпись, где автор дописывал текст в заголовок
+  // вопроса, думая, что пишет в поле.
+  it('строка под вопросом схлопывается В ПОЛЕ вопроса, а не в его подпись', () => {
+    const { store } = setup([
+      { id: 't', groupId: 'g1', type: 'title', text: textFromString('Как вас зовут?') },
+      { id: 'f', groupId: 'g1', type: 'short_text', settings: {} },
+      { id: 'b', groupId: 'g2', type: 'text', text: [] },
+    ])
+
+    backspaceAtStart(1) // rich-строк на полотне две: подпись и пустой абзац
+
+    expect(store.getState().blocks.map((x) => x.id)).toEqual(['t', 'f'])
+    // Каретка в инпуте поля, а не в подписи: адресуемся к самому активному элементу —
+    // именно его видит автор, продолжая печатать.
+    const active = document.activeElement as HTMLElement
+    expect(active.tagName).toBe('INPUT')
+    expect(active.closest('[data-block-id]')?.getAttribute('data-block-id')).toBe('f')
+  })
+
   it('пустая ПОДПИСЬ сносит группу целиком — поле не остаётся сиротой', () => {
     const { store } = setup([
       { id: 'a', groupId: 'g1', type: 'text', text: textFromString('Абзац') },

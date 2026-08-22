@@ -93,7 +93,7 @@ import {
   useActiveRowState,
   useRowFocus,
 } from './activeRow'
-import { stopNeighbor } from './navigation'
+import { prevRow, stopNeighbor } from './navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -768,10 +768,13 @@ export function SlashEditor({
     // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
     // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
     // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
-    // блока нет — полотно пустеет, каретка на заголовок (не в body). Инпут плейсхолдера
-    // перескакиваем (stopNeighbor): каретка встаёт на подпись, а не в поле.
+    // блока нет — полотно пустеет, каретка на заголовок (не в body).
+    //
+    // Каретка идёт в предыдущую СТРОКУ, а не в предыдущую остановку (`prevRow`, а не
+    // `stopNeighbor`): инпут плейсхолдера схлопывание не перескакивает — см.
+    // navigation.ts, там же и почему обход его всё-таки перескакивает.
     if (isBlank(cur)) {
-      const prevStop = stopNeighbor(blocks, i, 'up')
+      const prevStop = prevRow(blocks, i)
       if (isCaptionType(cur.type)) removeGroup(id)
       else removeBlock(id)
       if (prevStop) engine.focusBlock(prevStop.id, 'end')

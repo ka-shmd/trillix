@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Block } from '@entities/formSchema'
-import { isFlowLeaf, stopNeighbor } from './navigation'
+import { isFlowLeaf, prevRow, stopNeighbor } from './navigation'
 
 // Хелпер сборки блока: тип + группа, остальное по вкусу теста.
 function blk(id: string, groupId: string, type: Block['type']): Block {
@@ -29,6 +29,26 @@ describe('isFlowLeaf — что поток перескакивает', () => {
       blk('sc', 'g4', 'scale'),
     ]
     for (const b of blocks) expect(isFlowLeaf(blocks, b), b.type).toBe(false)
+  })
+})
+
+// Схлопывание строки — не обход, и лист-поле оно НЕ перескакивает (решение владельца
+// 2026-08-23). Разница видна ровно на этой паре тестов: из одной и той же точки
+// stopNeighbor уходит на подпись, а prevRow остаётся в поле.
+describe('prevRow — адрес схлопывания', () => {
+  const afterQuestion = [
+    blk('c1', 'g1', 'label'),
+    blk('f1', 'g1', 'short_text'),
+    blk('t', 'g2', 'text'),
+  ]
+
+  it('строка под вопросом схлопывается В ПОЛЕ, а не в подпись', () => {
+    expect(prevRow(afterQuestion, 2)?.id).toBe('f1')
+    expect(stopNeighbor(afterQuestion, 2, 'up')?.id).toBe('c1') // обход — по-прежнему мимо
+  })
+
+  it('первая строка полотна — undefined (каретку забирает заголовок формы)', () => {
+    expect(prevRow(afterQuestion, 0)).toBeUndefined()
   })
 })
 
