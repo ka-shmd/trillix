@@ -213,11 +213,6 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             </button>
           ) : (
             <div className="rf-nav">
-              {page > 0 && (
-                <button type="button" className="rf-back" onClick={() => setPage(page - 1)}>
-                  Назад
-                </button>
-              )}
               {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
                 автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
               {plan.blocked && page === lastPage ? null : page < lastPage ? (
@@ -242,10 +237,11 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
               )}
             </div>
           )}
-          {/* Линии шагов — тот же компонент и то же место, что у респондента: и вид, и
-            правило «кликом только назад» — часть WYSIWYG. На экране после отправки шагов
-            нет: он не шаг формы. */}
-          {!done && <StepBar pages={pages.length} page={page} onGo={setPage} />}
+          {/* Линии шагов — тот же компонент и то же место, что у респондента: некликабельны
+            и здесь (ход назад снят целиком, 2026-08-22) — вид обязан совпадать. Автор
+            листает превью только вперёд, ровно как респондент. На экране после отправки
+            шагов нет: он не шаг формы. */}
+          {!done && <StepBar pages={pages.length} page={page} />}
           {badge && <Badge />}
         </div>
       </div>

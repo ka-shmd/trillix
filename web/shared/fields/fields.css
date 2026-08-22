@@ -30,9 +30,8 @@
                                   шкала (rf-text, rf-input, rf-option, rf-consent,
                                   rf-scale-mark, rf-label--sm) и заголовок раздела 3
                                   (rf-heading--3, вес 700)
-     ×0.875 = 14px / 400 / 1.5  — служебное: описание вопроса, заметки, ошибка, кнопка
-                                  отправки и «Назад» (rf-desc, rf-empty, rf-error,
-                                  rf-submit, rf-back)
+     ×0.875 = 14px / 400 / 1.5  — служебное: описание вопроса, заметки, ошибка и кнопка
+                                  отправки (rf-desc, rf-empty, rf-error, rf-submit)
      ×0.75  = 12px / 900        — буквенный бейдж варианта (rf-option-key)
 
    Седьмого размера тут быть не должно. Новому элементу полотна размер НЕ подбирается
@@ -717,40 +716,6 @@
   justify-content: var(--rf-submit-justify);
 }
 
-/* Кнопка «Назад» — вторичная: тот же размер и радиус, что у отправки (высота одна на
-   всё полотно), но контуром. Она не действие формы, а возврат.
-
-   Размер и поля берутся из ТЕХ ЖЕ токенов, что у отправки: настройка называется
-   «Кнопки» и управляет всеми кнопками шага (решение владельца 2026-08-09). Иначе на
-   второй странице в одном ряду стоят две разные кнопки — «Далее» носит .rf-submit и
-   за размером едет, а «Назад» осталась бы на 36px, — что прямо нарушает правило из
-   :root: высота контрола одна на всё полотно. */
-.rf-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: var(--rf-submit-h);
-  padding: 0 var(--rf-submit-px);
-  border: 1px solid var(--rf-muted);
-  border-radius: var(--rf-radius);
-  background: transparent;
-  color: var(--rf-text);
-  font-family: inherit;
-  font-size: calc(var(--rf-font-size) * var(--rf-submit-ratio));
-  font-weight: 500;
-  line-height: 1.25rem;
-  cursor: pointer;
-}
-
-.rf-back:hover {
-  border-color: var(--rf-text);
-}
-
-.rf-back:focus-visible {
-  outline: 2px solid var(--rf-text);
-  outline-offset: 2px;
-}
-
 /* Прогресс: линии шагов и «Шаг 2 из 4». Свои элементы, а не <progress>: у нативного
    вид задаётся вендорными псевдоэлементами, и поверхности разъехались бы по браузерам.
    Стоит ПОД кнопками шага, у нижнего края страницы (решение владельца 2026-08-05),
@@ -777,10 +742,10 @@
   display: flex;
 }
 
-/* Сама линия. Кнопка и span выглядят ОДИНАКОВО: разница между «сюда можно вернуться» и
-   «сюда ещё нельзя» показана цветом состояния, а не формой, иначе индикатор превратился
-   бы в панель управления. Height/border у кнопки сбрасываются явно — иначе браузерный
-   вид кнопки протёк бы в полоску. */
+/* Сама линия. Все три состояния (пройден, текущий, впереди) различаются ТОЛЬКО цветом:
+   индикатор — счётчик, а не панель управления, нажимать в нём нечего (ход назад снят
+   2026-08-22, `stepBar.tsx`). Сброс height/border остался от кнопки, которой линия
+   пройденного шага была до этого решения, и стоит копейки. */
 .rf-step-mark {
   display: block;
   width: 100%;
@@ -800,31 +765,6 @@
 
 .rf-step-mark--current {
   background: var(--rf-primary);
-}
-
-.rf-step-link {
-  cursor: pointer;
-}
-
-.rf-step-link:hover {
-  background: color-mix(in oklab, var(--rf-primary) 70%, transparent);
-}
-
-/* Цель клика — 4px высотой, то есть промах гарантирован на телефоне. Расширяем зону
-   псевдоэлементом, не трогая вид: линия остаётся волосяной, палец попадает. */
-.rf-step-link {
-  position: relative;
-}
-
-.rf-step-link::after {
-  content: '';
-  position: absolute;
-  inset: -0.625rem 0;
-}
-
-.rf-step-link:focus-visible {
-  outline: 2px solid var(--rf-text);
-  outline-offset: 3px;
 }
 
 /* Видимой подписи у индикатора нет — счёт шагов остаётся только для скринридера

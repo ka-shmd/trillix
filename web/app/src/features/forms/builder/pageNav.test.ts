@@ -21,9 +21,8 @@ const heading = (id: string): Block => ({ id, groupId: id, type: 'heading', text
 // Печатаем план строкой: «id разрыва: кнопки | tail: кнопки».
 const plan = (blocks: Block[]): string => {
   const p = pageNavPlan(blocks)
-  const show = (n: { back: boolean; kind: string }) => `${n.back ? 'назад+' : ''}${n.kind}`
-  const parts = [...p.byBreakId].map(([id, n]) => `${id}: ${show(n)}`)
-  parts.push(`tail: ${p.tail ? show(p.tail) : '—'}`)
+  const parts = [...p.byBreakId].map(([id, n]) => `${id}: ${n.kind}`)
+  parts.push(`tail: ${p.tail ? p.tail.kind : '—'}`)
   return parts.join(' | ')
 }
 
@@ -32,13 +31,15 @@ describe('pageNavPlan', () => {
     expect(plan([q('a')])).toBe('tail: submit')
   })
 
-  it('две страницы: «Далее» перед разрывом, «Назад» с отправкой в конце', () => {
-    expect(plan([q('a'), brk('p'), q('b')])).toBe('p: next | tail: назад+submit')
+  it('две страницы: «Далее» перед разрывом, отправка в конце', () => {
+    expect(plan([q('a'), brk('p'), q('b')])).toBe('p: next | tail: submit')
   })
 
-  it('три страницы: «Назад» появляется со второй', () => {
+  // У каждой страницы ровно одна кнопка — своя главная: ход назад в форме снят целиком
+  // (решение владельца 2026-08-22), кнопки «Назад» не существует.
+  it('три страницы: у каждой ровно одна кнопка', () => {
     expect(plan([q('a'), brk('p1'), q('b'), brk('p2'), q('c')])).toBe(
-      'p1: next | p2: назад+next | tail: назад+submit',
+      'p1: next | p2: next | tail: submit',
     )
   })
 
@@ -46,11 +47,11 @@ describe('pageNavPlan', () => {
   // а под полотном кнопок нет вовсе — иначе автор видел бы «Отправить» под благодарностью.
   it('страница «Спасибо»: отправка перед её разрывом, под полотном пусто', () => {
     expect(plan([q('a'), brk('p1'), q('b'), brk('p2', true), heading('h')])).toBe(
-      'p1: next | p2: назад+submit | tail: —',
+      'p1: next | p2: submit | tail: —',
     )
   })
 
-  it('форма из одной страницы и «Спасибо»: отправка без «Назад»', () => {
+  it('форма из одной страницы и «Спасибо»: отправка перед разрывом', () => {
     expect(plan([q('a'), brk('p', true), heading('h')])).toBe('p: submit | tail: —')
   })
 
@@ -67,7 +68,7 @@ describe('pageNavPlan', () => {
   // вырожденном состоянии набора и специально закреплено здесь: «починка» любой из двух
   // сторон сдвинула бы кнопки или имя относительно того, что видит респондент.
   it('два разрыва подряд: кнопки у первого, номер у второго', () => {
-    expect(plan([q('a'), brk('p1'), brk('p2'), q('b')])).toBe('p1: next | tail: назад+submit')
+    expect(plan([q('a'), brk('p1'), brk('p2'), q('b')])).toBe('p1: next | tail: submit')
   })
 
   it('разрыв выше всего содержимого кнопок не получает', () => {
@@ -78,7 +79,7 @@ describe('pageNavPlan', () => {
   // страницу обычной: иначе отправка уехала бы в середину формы.
   it('инертный флаг «Спасибо» не переносит отправку в середину', () => {
     expect(plan([q('a'), brk('p1', true), heading('h'), brk('p2'), q('b')])).toBe(
-      'p1: next | p2: назад+next | tail: назад+submit',
+      'p1: next | p2: next | tail: submit',
     )
   })
 })
