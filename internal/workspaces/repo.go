@@ -20,6 +20,10 @@ type Workspace struct {
 	// не удаляется, не покидается и не замораживается при даунгрейде (ADR §10).
 	IsPersonal bool
 	CreatedAt  time.Time
+	// FormCount — сколько форм в пространстве; заполняется только списком
+	// (ListByUser), где его считает тот же запрос. У создания и переименования
+	// он ноль: их ответ — сама вывеска, а не сводка, и список кабинет перечитает.
+	FormCount int64
 }
 
 // Repo — доступ к данным workspaces поверх sqlc-запросов. Методы принимают
@@ -35,7 +39,10 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) 
 	}
 	out := make([]Workspace, len(rows))
 	for i, r := range rows {
-		out[i] = Workspace{ID: r.ID, Name: r.Name, IsPersonal: r.IsPersonal, CreatedAt: r.CreatedAt.Time}
+		out[i] = Workspace{
+			ID: r.ID, Name: r.Name, IsPersonal: r.IsPersonal,
+			CreatedAt: r.CreatedAt.Time, FormCount: r.FormCount,
+		}
 	}
 	return out, nil
 }
@@ -48,6 +55,16 @@ func (Repo) Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name str
 		return Workspace{}, fmt.Errorf("create workspace: %w", err)
 	}
 	return Workspace{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// Rename меняет название пространства. Право спрашивает сервис: repo логики не
+// содержит, а id из URL сам по себе правом не является.
+func (Repo) Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+	row, err := postgres.New(db).RenameWorkspace(ctx, postgres.RenameWorkspaceParams{ID: id, Name: name})
+	if err != nil {
+		return Workspace{}, fmt.Errorf("rename workspace %s: %w", id, err)
+	}
+	return Workspace{ID: row.ID, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
 }
 
 // AddOwner делает пользователя владельцем пространства. Владелец ровно один —

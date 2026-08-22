@@ -11,8 +11,14 @@
 -- кабинету важно «личное ли оно ДЛЯ МЕНЯ», а не чьё оно вообще. IS NOT DISTINCT
 -- FROM, а не «=»: у неличного пространства personal_user_id равен NULL, и
 -- обычное сравнение дало бы NULL вместо false — то есть непустой bool в Go.
+--
+-- form_count — сколько форм в пространстве (подпись рядом с названием в обзоре).
+-- Подзапрос, а не второй поход в forms: обзор рисует ВСЕ пространства разом, и
+-- отдельный запрос на каждое был бы N+1 ради одного числа. Мягкого удаления у
+-- форм нет — считаются все строки, включая черновики.
 SELECT w.id, w.name, w.created_at,
-       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal
+       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
+       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -28,6 +34,14 @@ ORDER BY w.created_at ASC;
 INSERT INTO workspaces (id, name)
 VALUES ($1, $2)
 RETURNING id, name, created_at;
+
+-- name: RenameWorkspace :one
+-- Переименование пространства. Право спрашивает сервис (ActionWorkspaceManage);
+-- запрос никого не охраняет и адресует пространство одним id.
+UPDATE workspaces
+SET name = $2
+WHERE id = $1
+RETURNING id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal;
 
 -- name: GetMemberRole :one
 -- Роль участника: основа проверки прав (Can). Нет строки → не участник, и это

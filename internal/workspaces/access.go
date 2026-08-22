@@ -42,6 +42,7 @@ var roleActions = map[Role]map[domain.Action]bool{
 		domain.ActionBillingView:      true,
 		domain.ActionMemberRead:       true,
 		domain.ActionMemberManage:     true,
+		domain.ActionWorkspaceManage:  true,
 	},
 	RoleEditor: {
 		domain.ActionFormRead:         true,
@@ -51,6 +52,7 @@ var roleActions = map[Role]map[domain.Action]bool{
 		domain.ActionBillingView:      false,
 		domain.ActionMemberRead:       true,
 		domain.ActionMemberManage:     false,
+		domain.ActionWorkspaceManage:  false,
 	},
 }
 
@@ -66,6 +68,7 @@ var AllActions = []domain.Action{
 	domain.ActionBillingView,
 	domain.ActionMemberRead,
 	domain.ActionMemberManage,
+	domain.ActionWorkspaceManage,
 }
 
 // allows — чистое решение по матрице, без БД: роль + действие → можно ли.

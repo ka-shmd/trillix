@@ -23,6 +23,8 @@ type fakeStore struct {
 
 	createdName     string
 	createErr       error
+	renamedName     string
+	renameErr       error
 	ownerAdded      bool
 	addOwnerErr     error
 	ownerUserID     uuid.UUID
@@ -36,6 +38,11 @@ type fakeStore struct {
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
 	f.gotUserID = userID
 	return f.workspaces, f.err
+}
+
+func (f *fakeStore) Rename(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+	f.renamedName = name
+	return Workspace{ID: id, Name: name}, f.renameErr
 }
 
 // MemberRole фейку списка не нужен — права проверяет отдельный набор
@@ -282,5 +289,62 @@ func TestCreate_OwnerFailureAborts(t *testing.T) {
 
 	if _, err := svc.Create(context.Background(), uuid.New(), "Команда"); !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, ждали %v", err, wantErr)
+	}
+}
+
+// Переименование спрашивает право ДО записи: id пространства в адресе правом не
+// является (инвариант безопасности 1). Роль без workspace.manage не должна
+// доехать до репозитория вовсе.
+func TestRename_ForbiddenRoleDoesNotWrite(t *testing.T) {
+	store := &roleStore{role: string(RoleEditor)}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+
+	_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "Новое имя")
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("err = %v, ждали domain.ErrForbidden", err)
+	}
+	if store.renamedName != "" {
+		t.Errorf("в репозиторий ушло имя %q, хотя права нет", store.renamedName)
+	}
+}
+
+// Имя проверяется тем же кодом, что у создания: разъехавшись, две проверки
+// дадут пространство, которое нельзя завести, но можно получить
+// переименованием.
+func TestRename_NameValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"пустое", ""},
+		{"из одних пробелов", "   \t\n"},
+		{"длиннее потолка", strings.Repeat("я", MaxNameLen+1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &roleStore{role: string(RoleOwner)}
+			svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+			_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), tc.in)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("err = %v, ждали domain.ErrValidation", err)
+			}
+			if store.renamedName != "" {
+				t.Errorf("невалидное имя %q всё равно записано", store.renamedName)
+			}
+		})
+	}
+}
+
+// Пробелы по краям срезаются, как и при создании.
+func TestRename_TrimsName(t *testing.T) {
+	store := &roleStore{role: string(RoleOwner)}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+
+	ws, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "  Отдел маркетинга  ")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if ws.Name != "Отдел маркетинга" || store.renamedName != "Отдел маркетинга" {
+		t.Errorf("имя = %q (в репозиторий ушло %q), ждали обрезанное", ws.Name, store.renamedName)
 	}
 }

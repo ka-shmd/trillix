@@ -34,6 +34,7 @@ type Store interface {
 	ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error)
 	DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
 	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
+	Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
 }
 
@@ -87,12 +88,9 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Workspac
 // Подписка здесь НЕ создаётся: субъект тарифа — аккаунт, и она у него уже есть
 // с регистрации (0016). Пространство работает по плану своего владельца.
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, name string) (Workspace, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return Workspace{}, fmt.Errorf("%w: имя пространства пустое", domain.ErrValidation)
-	}
-	if utf8.RuneCountInString(name) > MaxNameLen {
-		return Workspace{}, fmt.Errorf("%w: имя пространства длиннее %d символов", domain.ErrValidation, MaxNameLen)
+	name, err := validateName(name)
+	if err != nil {
+		return Workspace{}, err
 	}
 
 	d, err := s.plans.CheckAccount(ctx, userID, entitlements.Workspaces)
@@ -121,4 +119,35 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name string) (Wo
 		return Workspace{}, err
 	}
 	return created, nil
+}
+
+// Rename меняет название пространства. Проверка права — первой строкой
+// (инвариант безопасности 1): id из URL доказательством доступа не является, а
+// вывеску правит тот, кому это позволяет действие, а не тот, кто знает адрес.
+//
+// Валидация имени та же, что у создания, и намеренно вызывается общим кодом:
+// разъехавшись, две проверки дадут пространство, которое нельзя завести, но
+// можно получить переименованием.
+func (s *Service) Rename(ctx context.Context, userID, workspaceID uuid.UUID, name string) (Workspace, error) {
+	if err := s.Can(ctx, workspaceID, userID, domain.ActionWorkspaceManage); err != nil {
+		return Workspace{}, err
+	}
+	name, err := validateName(name)
+	if err != nil {
+		return Workspace{}, err
+	}
+	return s.repo.Rename(ctx, s.db, workspaceID, name)
+}
+
+// validateName — общая проверка имени пространства для создания и
+// переименования: непустое после обрезки пробелов и не длиннее MaxNameLen рун.
+func validateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("%w: имя пространства пустое", domain.ErrValidation)
+	}
+	if utf8.RuneCountInString(name) > MaxNameLen {
+		return "", fmt.Errorf("%w: имя пространства длиннее %d символов", domain.ErrValidation, MaxNameLen)
+	}
+	return name, nil
 }

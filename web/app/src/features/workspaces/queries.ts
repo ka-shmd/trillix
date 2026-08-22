@@ -9,6 +9,7 @@ import {
   listWorkspaces,
   previewInvitation,
   removeMember,
+  renameWorkspace,
 } from './api'
 
 // Пространства пользователя — серверный стейт, живёт только в Query. Меняются
@@ -25,6 +26,18 @@ export function useCreateWorkspace() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (name: string) => createWorkspace(name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
+  })
+}
+
+// Переименование инвалидирует список: он же рисует обзор, сайдбар и крошки
+// редактора — и оставшееся старое имя читалось бы как «правка не сохранилась».
+// Патчить кэш ответом нельзя: в нём formCount = 0 (мутация отвечает вывеской,
+// а не сводкой), и число форм в обзоре обнулилось бы на ровном месте.
+export function useRenameWorkspace(workspaceId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => renameWorkspace(workspaceId, name),
     onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
   })
 }

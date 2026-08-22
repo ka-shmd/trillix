@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +84,7 @@ type workspaceDTO struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	IsPersonal bool   `json:"isPersonal"`
+	FormCount  int64  `json:"formCount"`
 }
 
 type listDTO struct {
@@ -180,6 +182,22 @@ func do(t *testing.T, c *http.Client, method, u string) *http.Response {
 func post(t *testing.T, c *http.Client, srv *httptest.Server, path, jsonBody string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(jsonBody))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+// patch — как post, другим методом: запись тоже за RequireCSRF.
+func patch(t *testing.T, c *http.Client, srv *httptest.Server, path, jsonBody string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPatch, srv.URL+path, strings.NewReader(jsonBody))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -1029,5 +1047,107 @@ func TestFreeze_ExtraMembersInPersonalWorkspace(t *testing.T) {
 	}
 	if members != 2 {
 		t.Fatalf("участников = %d, ждали 2 — заморозка не удаляет членство", members)
+	}
+}
+
+// Переименование: владелец правит вывеску, редактор — нет (403), и отказ ничего
+// не меняет. Пространство адресуется id, но право даёт роль, а не знание адреса.
+func TestRenameWorkspace_OwnerRenamesEditorCannot(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 SELECT $1, id, 'editor' FROM users WHERE email = 'bob@example.com'`, team.ID); err != nil {
+		t.Fatalf("добавить участника: %v", err)
+	}
+
+	var renamed workspaceDTO
+	decode(t, patch(t, alice, srv, "/api/v1/workspaces/"+team.ID, `{"name":"  Отдел маркетинга  "}`), &renamed)
+	if renamed.Name != "Отдел маркетинга" {
+		t.Errorf("имя = %q, ждали обрезанное «Отдел маркетинга»", renamed.Name)
+	}
+
+	bob := loginUser(t, srv, "bob@example.com")
+	r := patch(t, bob, srv, "/api/v1/workspaces/"+team.ID, `{"name":"Бобово"}`)
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("статус у редактора = %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var got listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	if got.Workspaces[1].Name != "Отдел маркетинга" {
+		t.Errorf("в списке имя = %q, ждали «Отдел маркетинга»", got.Workspaces[1].Name)
+	}
+}
+
+// Без CSRF-заголовка переименование не проходит (инвариант: мутация за RequireCSRF).
+func TestRenameWorkspace_RequiresCSRF(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	var got listDTO
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	r := doBody(t, c, http.MethodPatch, srv.URL+"/api/v1/workspaces/"+got.Workspaces[0].ID, `{"name":"Другое"}`)
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("статус = %d, ожидалось 403 (нет CSRF-заголовка)", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Чужому пространство не переименовать и не подтвердить его существование:
+// не участник получает 404, а не 403 (инвариант безопасности 5).
+func TestRenameWorkspace_StrangerGetsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	bob := loginUser(t, srv, "bob@example.com")
+	r := patch(t, bob, srv, "/api/v1/workspaces/"+team.ID, `{"name":"Бобово"}`)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус = %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// formCount в списке считает формы своего пространства и только их: подпись
+// рядом с названием в обзоре кабинета берётся отсюда.
+func TestWorkspaces_FormCountInList(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	var before listDTO
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces"), &before)
+	personalID := before.Workspaces[0].ID
+	if before.Workspaces[0].FormCount != 0 {
+		t.Fatalf("у нового аккаунта форм = %d, ждали 0", before.Workspaces[0].FormCount)
+	}
+
+	var team workspaceDTO
+	decode(t, post(t, c, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	for i, ws := range []string{personalID, personalID, team.ID} {
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO forms (id, workspace_id, slug) VALUES ($1, $2, $3)`,
+			uuid.New(), ws, "slug"+strconv.Itoa(i)); err != nil {
+			t.Fatalf("вставить форму: %v", err)
+		}
+	}
+
+	var got listDTO
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
+	if got.Workspaces[0].FormCount != 2 || got.Workspaces[1].FormCount != 1 {
+		t.Errorf("формы = %d и %d, ждали 2 (личное) и 1 (команда)",
+			got.Workspaces[0].FormCount, got.Workspaces[1].FormCount)
 	}
 }

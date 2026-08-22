@@ -4,13 +4,18 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, House, MoreHorizontal, Plus } from 'lucide-react'
 import { toast } from 'sonner'
-import { workspacesQueryOptions, useCreateWorkspace } from '../../features/workspaces/queries'
+import {
+  membersQueryOptions,
+  useCreateWorkspace,
+  useRenameWorkspace,
+  workspacesQueryOptions,
+} from '../../features/workspaces/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { FormRow } from '../../features/forms/FormRow'
 import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
 import { DEFAULT_FORMS_SORT } from '../../entities/form'
-import type { Workspace } from '../../entities/workspace'
+import { MAX_WORKSPACE_NAME_LEN, type Workspace } from '../../entities/workspace'
 import { ApiError } from '../../shared/api/errors'
 import { useHeaderSlot } from '../../shared/headerSlot'
 import { Button } from '@/components/ui/button'
@@ -94,7 +99,7 @@ function WorkspacesPage() {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Например, «Отдел маркетинга»"
-            maxLength={60}
+            maxLength={MAX_WORKSPACE_NAME_LEN}
           />
           <Button type="submit" disabled={name.trim() === '' || create.isPending}>
             <Plus className="size-4" />
@@ -142,9 +147,16 @@ function HeaderCrumbs() {
 function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate()
   const create = useCreateForm()
+  const rename = useRenameWorkspace(workspace.id)
   // Диалог состава принадлежит секции, а не кластеру кружков: открыть его могут
   // двое — кластер и меню «…», а два владельца одного состояния дали бы два окна.
   const [membersOpen, setMembersOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  // Права берутся из ответа состава — того же, что уже читает кластер кружков
+  // (общий ключ кэша, лишнего запроса нет). Матрица прав живёт на сервере, и
+  // кабинет не повторяет её на TypeScript: спрашиваем действие, а не роль.
+  const members = useQuery(membersQueryOptions(workspace.id))
+  const canManage = members.data?.permissions.includes('workspace.manage') ?? false
   // Личное адресуем его настоящим id, а не пустой строкой: на этом экране
   // пространства равны, и разбирать «пусто = личное» здесь незачем — сервер
   // одинаково принимает workspaceId любого, где ты состоишь.
@@ -188,20 +200,37 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   return (
     <section>
       <div className="mb-2 flex items-center gap-2">
-        <h2 className="min-w-0 max-w-full truncate text-lg font-bold tracking-tight">
-          {workspace.name}
-        </h2>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-7 shrink-0">
-              <MoreHorizontal className="size-4" />
-              <span className="sr-only">Действия с пространством «{workspace.name}»</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={() => setMembersOpen(true)}>Участники</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {renaming ? (
+          <RenameWorkspaceForm
+            initial={workspace.name}
+            pending={rename.isPending}
+            onCancel={() => setRenaming(false)}
+            onSubmit={(name) => rename.mutate(name, { onSuccess: () => setRenaming(false) })}
+          />
+        ) : (
+          <>
+            <h2 className="min-w-0 truncate text-lg font-bold tracking-tight">{workspace.name}</h2>
+            {/* Число форм — с сервера (formCount), а не длина загруженного списка:
+                под пространством видна первая десятка, и счёт по ней врал бы. */}
+            <span className="shrink-0 text-sm text-muted-foreground">{workspace.formCount}</span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="size-7 shrink-0">
+                  <MoreHorizontal className="size-4" />
+                  <span className="sr-only">Действия с пространством «{workspace.name}»</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {canManage && (
+                  <DropdownMenuItem onClick={() => setRenaming(true)}>
+                    Переименовать
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={() => setMembersOpen(true)}>Участники</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-1">
           <MemberCluster workspace={workspace} onOpen={() => setMembersOpen(true)} />
           <Button
@@ -265,4 +294,54 @@ function formsErrorText(error: unknown): string {
     return 'Доступ к формам закрыт: тариф больше не покрывает столько пространств или участников. Формы и ответы целы — доступ вернётся вместе с тарифом.'
   }
   return 'Не удалось загрузить формы пространства.'
+}
+
+// Инлайн-переименование пространства прямо в строке заголовка: отдельный экран
+// ради одного поля не нужен. Пустое имя не отправляем — совпадает с серверной
+// валидацией (имя обязательно, потолок MAX_WORKSPACE_NAME_LEN рун).
+function RenameWorkspaceForm({
+  initial,
+  pending,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string
+  pending: boolean
+  onSubmit: (name: string) => void
+  onCancel: () => void
+}) {
+  const [name, setName] = useState(initial)
+  const trimmed = name.trim()
+
+  return (
+    <form
+      className="flex flex-1 items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (trimmed !== '') onSubmit(trimmed)
+      }}
+    >
+      <Label htmlFor="rename-workspace" className="sr-only">
+        Название пространства
+      </Label>
+      <Input
+        id="rename-workspace"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        // Escape отменяет правку не выходя из поля: тот же жест, что у полотна.
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel()
+        }}
+        autoFocus
+        maxLength={MAX_WORKSPACE_NAME_LEN}
+        className="h-8 max-w-xs"
+      />
+      <Button type="submit" size="sm" disabled={pending || trimmed === ''}>
+        {pending ? 'Сохраняем…' : 'Сохранить'}
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={pending}>
+        Отмена
+      </Button>
+    </form>
+  )
 }
