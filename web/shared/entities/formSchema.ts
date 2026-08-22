@@ -330,6 +330,17 @@ export const blockSchema = z
       })
     }
 
+    // columnWidth — там же, где column, и по тому же правилу: доля ряда у типа, который
+    // ряд делить не может, не значит ничего ни при какой раскладке. Сходится ли сумма
+    // долей по ряду, здесь по-прежнему НЕ проверяется — это кросс-блочное. Зеркалит Go.
+    if (b.settings?.columnWidth !== undefined && !canShareRow(b.type)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `тип ${b.type} не может делить ряд`,
+        path: ['settings', 'columnWidth'],
+      })
+    }
+
     const settings = b.settings
     if (!settings) return
     const kind = blockKind(b.type)

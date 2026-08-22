@@ -108,6 +108,13 @@ const (
 // читается в такой колонке, решает автор формы (ADR §10).
 const MaxColumns = 4
 
+// ColumnWidthTotal — сумма долей колонок ДЕЙСТВУЮЩЕЙ раскладки ряда. Зеркалит
+// COLUMN_WIDTH_TOTAL в limits.ts. Ширина колонки хранится долей ряда в процентах
+// (ADR §10), и сходимость суммы — признак того, что доли применяются: ряд, где они не
+// сходятся, фронт делит поровну. Здесь число служит только верхней границей ключа:
+// сумма кросс-блочна и не проверяется, как не проверяется и «секция открыта».
+const ColumnWidthTotal = 100
+
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
 // оформление). Подписи и контент неотвечаемы (isContent): исключены из
@@ -252,6 +259,10 @@ type Option struct {
 	// dropdown инертен (список живёт в нативном select) — и потому не запрещён, как
 	// и любой другой флаг, которому некуда примениться.
 	Column int `json:"column,omitempty"`
+	// ColumnWidth — доля ряда в процентах: ширина колонки, в которой стоит вариант.
+	// Тот же ключ, что у блока, и то же правило действия — у первого варианта каждой
+	// колонки, сумма по ряду ColumnWidthTotal.
+	ColumnWidth int `json:"columnWidth,omitempty"`
 }
 
 // BlockSettings — типоспецифичные настройки блока: options у choice-типов,
@@ -298,7 +309,7 @@ type BlockSettings struct {
 	ThankYou bool `json:"thankYou,omitempty"`
 	// Column — НОМЕР КОЛОНКИ ряда (спека §5): 1..MaxColumns читается как «я в этой
 	// колонке текущего ряда», 0 (пусто) = свой ряд во всю ширину и конец секции.
-	// Ширина не хранится вовсе — её выводит раскладчик. Только у canShareRow-типов.
+	// Ширину колонки несёт ColumnWidth ниже. Только у canShareRow-типов.
 	//
 	// Нумерация с единицы — из-за `omitempty`: нулевой индекс исчез бы при
 	// сериализации, и первая колонка стала бы полной шириной.
@@ -307,6 +318,16 @@ type BlockSettings struct {
 	// НЕ проверяется намеренно: флаг, которому некуда примениться, инертен и
 	// легален, иначе undo и промежуточные состояния драга ловили бы 422.
 	Column int `json:"column,omitempty"`
+	// ColumnWidth — ШИРИНА КОЛОНКИ, в которой стоит блок: доля ряда в процентах,
+	// 1..ColumnWidthTotal, 0 (пусто) = «автор долю не задавал». Только у
+	// canShareRow-типов, как и Column.
+	//
+	// Действует ключ целым РЯДОМ: доля обязана стоять у первого элемента каждой
+	// колонки, и сумма по ряду — ровно ColumnWidthTotal. Проверяет это фронтовый
+	// раскладчик (rowWidths в @fields/groups), а не Go: условие кросс-блочное, а ряд
+	// с несходящимися долями — законное промежуточное состояние (колонку добавили,
+	// колонку унесли, undo), на котором 422 уронил бы автосейв.
+	ColumnWidth int `json:"columnWidth,omitempty"`
 }
 
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
@@ -659,6 +680,17 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 			return schemaErr("%s: тип %q не может делить ряд", at, b.Type)
 		}
 	}
+	// columnWidth — там же, где column, и по тому же правилу: доля ряда у типа, который
+	// ряд делить не может, не значит ничего ни при какой раскладке. Сходимость суммы по
+	// ряду не проверяется — она кросс-блочна (см. ColumnWidth в BlockSettings).
+	if b.Settings.ColumnWidth != 0 {
+		if b.Settings.ColumnWidth < 0 || b.Settings.ColumnWidth > ColumnWidthTotal {
+			return schemaErr("%s: доля колонки %d вне диапазона 1..%d", at, b.Settings.ColumnWidth, ColumnWidthTotal)
+		}
+		if !b.Type.canShareRow() {
+			return schemaErr("%s: тип %q не может делить ряд", at, b.Type)
+		}
+	}
 	if err := validateScaleSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)
 	}
@@ -698,6 +730,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		// раскладчик. Открыта ли секция — не проверяется, как и у блока: флаг инертен.
 		if o.Column != 0 && (o.Column < 0 || o.Column > MaxColumns) {
 			return schemaErr("%s: опция #%d: колонка %d вне диапазона 1..%d", at, j, o.Column, MaxColumns)
+		}
+		if o.ColumnWidth != 0 && (o.ColumnWidth < 0 || o.ColumnWidth > ColumnWidthTotal) {
+			return schemaErr("%s: опция #%d: доля колонки %d вне диапазона 1..%d", at, j, o.ColumnWidth, ColumnWidthTotal)
 		}
 	}
 	return nil

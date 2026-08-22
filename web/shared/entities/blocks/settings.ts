@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  COLUMN_WIDTH_TOTAL,
   FILE_FAMILIES,
   MAX_COLUMNS,
   MAX_ID_LEN,
@@ -30,6 +31,17 @@ import {
 // Верхнюю границу держит MAX_COLUMNS — она про вид, а не про устройство.
 export const columnSchema = z.number().int().min(1).max(MAX_COLUMNS)
 
+// ДОЛЯ РЯДА в процентах: ширина колонки, в которой стоит носитель (ADR §10). Ключ
+// живёт там же, где номер колонки, и по тем же правилам — у каждого участника
+// колонки, инертен без секции, кросс-блочно не проверяется.
+//
+// Действует он только целым РЯДОМ: доля обязана стоять у первого элемента каждой
+// колонки, и сумма по ряду — ровно COLUMN_WIDTH_TOTAL. Проверку делает раскладчик
+// (rowWidths в @fields/groups), а не схема: ряд с несходящимися долями — законное
+// промежуточное состояние (колонку добавили, колонку унесли, undo), и 422 в
+// автосейве на нём означало бы падение правки, которой автор не делал.
+export const columnWidthSchema = z.number().int().min(1).max(COLUMN_WIDTH_TOTAL)
+
 // Стабильный id блока/опции: непустой, в пределах длины. Формат (blk_/opt_) не
 // навязываем — id генерируется клиентом, важны непустота и уникальность.
 export const idSchema = z.string().min(1).max(MAX_ID_LEN)
@@ -43,6 +55,8 @@ export const optionSchema = z.strictObject({
   // а не невалиден. У опций dropdown инертен всегда (список живёт в нативном
   // select) — и потому не запрещён.
   column: columnSchema.optional(),
+  // Доля ряда в процентах — тот же ключ, что у блока, и тот же раскладчик.
+  columnWidth: columnWidthSchema.optional(),
 })
 export type Option = z.infer<typeof optionSchema>
 
@@ -89,6 +103,10 @@ export const settingsSchema = z.strictObject({
   // кросс-блочное условие «секция открыта» намеренно не валидируется — инертный флаг
   // легален, иначе undo и промежуточные состояния драга ловили бы 422.
   column: columnSchema.optional(),
+  // ШИРИНА КОЛОНКИ, в которой стоит носитель, — доля ряда в процентах. Ключ
+  // необязательный: его отсутствие (и любой ряд, где доли не сходятся) значит
+  // «колонки поровну», как было до 2026-08-22.
+  columnWidth: columnWidthSchema.optional(),
 })
 export type Settings = z.infer<typeof settingsSchema>
 
