@@ -47,6 +47,11 @@ export type FormPlan = {
   // Посещаемые страницы в порядке прохода, в них только видимые блоки. Страниц всегда
   // хотя бы одна (как у splitPages): пустой документ — это один пустой шаг с кнопкой.
   pages: Block[][]
+  // Текст кнопки «Далее» у каждой показанной страницы, ПАРАЛЛЕЛЬНО pages: пусто =
+  // DEFAULT_NEXT_LABEL. Берётся у разрыва, который страницу ЗАКРЫВАЕТ (settings.nextLabel);
+  // считается здесь, а не поверхностями, потому что при переходах логики страницы
+  // показываются не подряд, и «закрывающий разрыв» знает только обход.
+  nextLabels: string[]
   visible: Set<string>
   // Обязательные ФАКТИЧЕСКИ (флаг required или сработавшее действие), только среди
   // видимых.
@@ -218,6 +223,7 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
   const decided = new Map<string, Decided>()
   const plan: FormPlan = {
     pages: [],
+    nextLabels: [],
     visible: new Set(),
     required: new Set(),
     options: new Map(),
@@ -359,7 +365,12 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
     // Страница, где не осталось ни одного видимого блока, посещается (её переходы
     // считаются), но респонденту не показывается: пустой шаг с одной кнопкой «Далее» —
     // это не страница.
-    if (shown.length > 0) plan.pages.push(shown)
+    if (shown.length > 0) {
+      plan.pages.push(shown)
+      // Массивы обязаны идти нога в ногу: страница без видимых блоков не попадает ни в
+      // один из них, иначе кнопка последней страницы получила бы чужой текст.
+      plan.nextLabels.push(page.closer?.settings?.nextLabel?.trim() ?? '')
+    }
 
     const here = new Set(page.blocks.map((b) => b.id))
     if (page.closer) here.add(page.closer.id)
@@ -386,7 +397,10 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
     }
   })
 
-  if (plan.pages.length === 0) plan.pages.push([])
+  if (plan.pages.length === 0) {
+    plan.pages.push([])
+    plan.nextLabels.push('')
+  }
   return plan
 }
 

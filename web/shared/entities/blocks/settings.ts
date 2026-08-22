@@ -9,6 +9,7 @@ import {
   MAX_OPTIONS,
   MAX_PAGE_NAME_LEN,
   MAX_PLACEHOLDER_LEN,
+  MAX_SUBMIT_LABEL_LEN,
 } from './limits'
 
 // Настройки блока — ОДИН объект на все типы, а не объединение по типу.
@@ -89,6 +90,16 @@ export const settingsSchema = z.strictObject({
   // (подпись разделителя на полотне) и для аналитики. Пустая строка и отсутствие ключа
   // значат одно: имени нет, страница зовётся «Страница N» (pageName в @fields/groups).
   pageName: z.string().max(MAX_PAGE_NAME_LEN).optional(),
+  // ТЕКСТ КНОПКИ «ДАЛЕЕ», которой закрывается страница ПЕРЕД этим разрывом.
+  //
+  // Разрыв стоит между двумя страницами и несёт настройки обеих сторон: pageName и
+  // thankYou — про страницу ЗА ним (он её открывает), nextLabel — про кнопку страницы
+  // ПЕРЕД ним (он её закрывает). Так же считает и полотно: pageNavPlan вешает кнопки
+  // страницы на её ЗАКРЫВАЮЩИЙ разрыв.
+  //
+  // Лимит общий с submitLabel: обе строки — текст кнопки шага, и разные числа тут были
+  // бы разницей без причины. Пусто и отсутствие ключа значат одно — DEFAULT_NEXT_LABEL.
+  nextLabel: z.string().max(MAX_SUBMIT_LABEL_LEN).optional(),
   // Страница за этим разрывом — ЭКРАН ПОСЛЕ ОТПРАВКИ, а не шаг формы.
   //
   // Флаг НЕ проверяется кросс-блочно и потому легален всегда — как бит колонки и как
@@ -122,6 +133,7 @@ export type OwnedSettingKey =
   | 'maxFileSize'
   | 'accept'
   | 'pageName'
+  | 'nextLabel'
   | 'thankYou'
 
 // Инвентарь закреплённых ключей: как называть ключ в сообщении и что считать его
@@ -154,8 +166,9 @@ export const OWNED_SETTINGS: ReadonlyArray<{
   { key: 'maxFiles', noun: 'файлов', present: (v) => v !== undefined },
   { key: 'maxFileSize', noun: 'файлов', present: (v) => v !== undefined },
   { key: 'accept', noun: 'файлов', present: (v) => Array.isArray(v) && v.length > 0 },
-  // Оба ключа разрыва страницы делят существительное по тому же правилу, что шкала и
+  // Три ключа разрыва страницы делят существительное по тому же правилу, что шкала и
   // файлы: на чужом типе они говорят об одном — «это не страница».
   { key: 'pageName', noun: 'страницы', present: (v) => Boolean(v) },
+  { key: 'nextLabel', noun: 'страницы', present: (v) => Boolean(v) },
   { key: 'thankYou', noun: 'страницы', present: (v) => v === true },
 ]

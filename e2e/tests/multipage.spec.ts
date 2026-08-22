@@ -2,7 +2,7 @@ import { test, expect, devices } from '@playwright/test'
 import { login, seedAccount } from './helpers/session'
 
 // Многостраничная форма (фаза 19) против prod-local: шаги, пошаговая валидация,
-// сохранность ответов при возврате и уточнённая воронка.
+// отсутствие хода назад и уточнённая воронка.
 //
 // ЗАЧЕМ ОТДЕЛЬНЫЙ СЦЕНАРИЙ. Многостраничность — единственная работа фазы, которая
 // целиком живёт на границе «браузер ↔ наш код»: история переходов, фокус после смены
@@ -18,7 +18,8 @@ import { login, seedAccount } from './helpers/session'
 //      поля следующих — головной критерий приёмки фазы;
 //   2. хром страницы (заголовок формы) виден только на первой — решение владельца
 //      2026-08-05, у которого нет другого сторожа в рендерере;
-//   3. «Назад» возвращает ответы нетронутыми;
+//   3. хода назад нет НИ ОДНОГО (решение владельца 2026-08-22): ни экранной кнопки, ни
+//      клика по линии шага, ни записи в истории — системная «Назад» уводит со страницы;
 //   4. воронка ставит ушедшего на первый вопрос ДОСТИГНУТОЙ страницы, а не на поле,
 //      которого он коснулся руками, — то самое уточнение, ради которого фаза трогала
 //      аналитику.
@@ -28,7 +29,7 @@ const Q1 = 'Ваше имя'
 const Q2 = 'Ваша почта'
 const Q3 = 'Комментарий'
 
-test('форма из трёх страниц: шаги, пошаговая валидация, возврат и воронка', async ({
+test('форма из трёх страниц: шаги, пошаговая валидация, хода назад нет, воронка', async ({
   page,
   browser,
 }) => {
@@ -132,34 +133,23 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await respondent.locator('button.rf-next').click()
 
   // 3. Вторая страница: хром остался на первой (заголовка формы больше нет), вопрос
-  // сменился, появилась кнопка «Назад».
+  // сменился, а кнопки «Назад» нет — ни здесь, ни где-либо ещё.
   await expect(respondent.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
   await expect(respondent.getByRole('heading', { name: formTitle })).toHaveCount(0)
   await expect(respondent.getByLabel(Q2)).toBeVisible()
-  await expect(respondent.getByRole('button', { name: 'Назад' })).toBeVisible()
+  await expect(respondent.getByRole('button', { name: 'Назад' })).toHaveCount(0)
 
   await respondent.getByLabel(Q2).fill(`ivan${uniq}@example.com`)
 
-  // 4. «Назад» и вперёд: ответы обеих страниц целы.
-  await respondent.getByRole('button', { name: 'Назад' }).click()
-  await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
-  await respondent.locator('button.rf-next').click()
-  await expect(respondent.getByLabel(Q2)).toHaveValue(`ivan${uniq}@example.com`)
-
-  // 4б. Линии шагов: клик по пройденной возвращает на неё, непройденная кнопкой не
-  // является вовсе (вперёд ведёт только «Далее» с проверкой).
-  await respondent.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }).click()
-  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
-  await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
+  // 4. Линии шагов — счётчик, а не управление: пройденный шаг кнопкой НЕ становится.
   await expect(respondent.locator('button.rf-step-mark')).toHaveCount(0)
-  await respondent.locator('button.rf-next').click()
+  await expect(respondent.getByRole('button', { name: /Вернуться к шагу/ })).toHaveCount(0)
 
-  // 5. Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: это ровно та
-  // правка (pushState/popstate), которую не видит ни один юнит.
-  await respondent.goBack()
-  await expect(respondent.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
-  await expect(respondent.getByLabel(Q1)).toHaveValue(`Иван ${uniq}`)
-  await respondent.locator('button.rf-next').click()
+  // 5. Истории шагов больше нет: «Далее» не пишет запись через pushState, поэтому
+  // системной «Назад» некуда вести внутри формы — она уводит со страницы. Проверяем
+  // здесь именно отсутствие записи, а сам уход — в конце сценария: уйти посреди него
+  // значило бы потерять ответы, которые он дальше и проверяет.
+  expect(await respondent.evaluate(() => window.history.state)).toBeNull()
 
   // 6. Третья страница — последняя: «Далее» нет, есть отправка.
   await respondent.locator('button.rf-next').click()
@@ -171,6 +161,11 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await respondent.waitForTimeout(3500)
   await respondent.locator('button.rf-submit').click()
   await expect(respondent.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
+
+  // 6б. Вторая половина проверки истории: системная «Назад» уводит СО СТРАНИЦЫ. Записей
+  // от формы в истории нет, поэтому шаг назад отдаёт странице, с которой сюда пришли.
+  await respondent.goBack()
+  await expect(respondent.getByRole('heading', { name: 'Спасибо!' })).toHaveCount(0)
   await respondent.goto('about:blank')
   await mobile.close()
 

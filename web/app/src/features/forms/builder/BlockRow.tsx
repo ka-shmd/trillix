@@ -40,7 +40,7 @@ import { filterMenuItems, type MenuItem } from './blockTypes'
 import { ColumnResizer } from './ColumnResizer'
 import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
-import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
+import { FieldWrap, PLACEHOLDER_CLS } from './kinds/fieldWrap'
 import {
   canvasSorting,
   DRAG_ACTIVATION_DISTANCE,
@@ -279,7 +279,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
-      className={`group relative rounded-md py-1.5 -mb-1.5 ${
+      className={`group ${GAP_BRIDGE} relative rounded-md py-1.5 -mb-1.5 ${
         firstInGroup ? '-mt-1.5' : 'mt-[calc(0.75rem*var(--rf-density)_-_0.375rem)]'
       } ${isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''}`}
     >
@@ -414,7 +414,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   )
 })
 
-const ICON_BTN =
+export const ICON_BTN =
   'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
 // CLUSTER_BACKDROP — подложка под кластером значков: непрозрачный прямоугольник в цвет
@@ -430,7 +430,26 @@ const ICON_BTN =
 // оформление формы (фаза 22) меняет холст, и подложка обязана ехать за ним, иначе на
 // тёмной форме под значками светилось бы белое пятно. Tailwind-цвет кабинета здесь не
 // годится по той же причине.
-const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+export const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+
+// GAP_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к ЛЕВОМУ краю строки
+// (или карточки варианта) и закрывающая просвет между ней и её кластером значков.
+//
+// МИНА: без неё до значков не доехать мышью. Курсор, идущий от текста влево, на этих 4px
+// оказывается вне и строки, и кластера: `group-hover` гаснет, кластеру возвращается
+// `pointer-events-none`, и зажечь его снова уже нечем — погашенный он для указателя
+// прозрачен, то есть наведением на себя не восстанавливается.
+//
+// Полоса — псевдоэлемент САМОЙ ГРУППЫ, а не кластера, и это второй заход (первый повесил
+// её на кластер): у кластера своя высота — строка текста, у варианта и вовсе 20px, — и
+// просвет оставался мёртвым выше и ниже этой полосы, то есть ровно там, где курсор идёт к
+// значкам по диагонали от соседней строки. `inset-y-0` группы кроет её ВСЮ.
+//
+// Наведение на полосу = наведение на группу, поэтому она и держит поднятый кластер, и
+// поднимает погашенный. Второе — осознанное послабление к мине «кластер не зажигает сам
+// себя»: запрет был про его собственные 72px в левом поле, а 4px вплотную к блоку — это
+// его же край.
+export const GAP_BRIDGE = 'before:absolute before:inset-y-0 before:right-full before:w-1'
 
 // Опции сенсора списка вариантов — МОДУЛЬНАЯ КОНСТАНТА, по той же причине, что у
 // полотна (см. POINTER_OPTIONS в SlashEditor): `useSensor` мемоизирует дескриптор по
@@ -1221,7 +1240,7 @@ function AnswerField({
         placeholder={hint}
         // block: убрать базлайн-просвет inline-block textarea (см. подпись выше) —
         // иначе под длинным полем копится ~7px и ритм 13.3 расходится.
-        className={`block ${FIELD_CLS}`}
+        className={`block ${PLACEHOLDER_CLS}`}
         {...focusProps}
       />,
       true,
@@ -1236,7 +1255,7 @@ function AnswerField({
       onChange={(e) => setPh(e.target.value)}
       onKeyDown={onFieldKeyDown}
       placeholder={hint}
-      className={FIELD_CLS}
+      className={PLACEHOLDER_CLS}
       {...focusProps}
     />,
   )
@@ -2052,7 +2071,7 @@ function OptionCard({
       // Перетаскиваемая карточка — ТЕНЬ, а не карточка (dnd.ts, там же довод): тусклее
       // покоя, книзу растворяется маской, у инпута внутри гаснут фон и тень. Наведение на
       // время жеста гасится у всех, кроме неё.
-      className={`group/opt relative flex items-center ${
+      className={`group/opt ${GAP_BRIDGE} relative flex items-center ${
         isDragging
           ? `z-10 pointer-events-auto ${DRAGGED_LOOK}`
           : dragging
@@ -2071,7 +2090,15 @@ function OptionCard({
       <div
         // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
         // у кластера строки: иначе он зажигается от собственной площади в левом поле.
-        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
+        //
+        // ФОКУС ДЕРЖИТ КЛАСТЕР ПОДНЯТЫМ — как у строки (group-focus-within выше), и это
+        // не украшение, а единственное, что делает значки достижимыми мышью. Наведением
+        // одним они держатся ровно пока курсор внутри карточки, а карточка обнимает свой
+        // текст: у короткого варианта это 120px, и дорога к значкам идёт снаружи неё.
+        // Пока каретка в варианте — а она там всегда, когда автор собрался его удалить
+        // или утащить, — кластер стоит независимо от курсора, и вести к нему можно как
+        // угодно. Просвет (GAP_BRIDGE на карточке) остаётся для случая без каретки.
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100`}
       >
         <button
           type="button"

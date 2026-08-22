@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 
-import { DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
+import { DEFAULT_NEXT_LABEL, DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import {
@@ -260,41 +260,21 @@ export function FormView({
     bridge?.page(page)
   }, [page, bridge])
 
-  // Системная кнопка «Назад» ведёт по шагам формы, а не со страницы: на телефоне ею
-  // пользуются вместо экранной, и уход с заполненной формы читается как потеря данных
-  // (черновик переживёт, но человек этого не знает). URL не трогаем — pushState без
-  // адреса кладёт запись в историю, оставляя ссылку прежней: ссылкой делятся, и «шаг 3»
-  // в ней не нужен никому. Роутера в рендерере нет и не заводим (web/CLAUDE.md).
-  useEffect(() => {
-    const onPop = (e: PopStateEvent) => {
-      const state = e.state as { formPage?: unknown } | null
-      const n = typeof state?.formPage === 'number' ? state.formPage : 0
-      navigated.current = true
-      setPage(n >= 0 && n <= lastPage ? n : 0)
-    }
-    window.addEventListener('popstate', onPop)
-    return () => window.removeEventListener('popstate', onPop)
-  }, [lastPage])
-
-  // goToPage — единственная точка смены шага: и кнопки, и переброс к странице с ошибкой.
-  // История пишется здесь, а не в эффекте на page: эффект сработал бы и на popstate,
-  // и «назад» упирался бы в собственную запись.
+  // ИСТОРИИ ШАГОВ НЕТ (решение владельца 2026-08-22): переход не пишет запись через
+  // pushState, слушателя popstate нет, и системная «Назад» уводит СО СТРАНИЦЫ, как на
+  // любой одностраничной форме. Это часть решения «хода назад не существует», а не
+  // недосмотр: экранная кнопка и клик по линии шага сняты там же, и запись в истории,
+  // ведущая туда, куда интерфейс не пускает, была бы третьим путём — тайным. Цена названа
+  // вслух: на телефоне «Назад» уводит с заполненной формы одним нажатием (черновик её
+  // переживёт, но человек этого не знает). Заводя историю обратно, заводи и все три пути.
+  //
+  // goToPage — единственная точка смены шага: и «Далее», и переброс к странице с ошибкой
+  // при отправке. Последний остался единственным движением назад по документу, и он не
+  // ход человека, а показ места, которое надо починить.
   const goToPage = (next: number) => {
     if (next === page) return
     navigated.current = true
-    window.history.pushState({ formPage: next }, '')
     setPage(next)
-  }
-
-  // onBackTo — возврат кликом по линии пройденного шага. Отдельно от goToPage, потому
-  // что это ход НАЗАД со всеми его правилами: гасим показанные ошибки и «уже пробовали
-  // отправить», как это делает кнопка «Назад». Вперёд линии не ведут (StepBar их не
-  // делает кнопками), поэтому проверять здесь нечего.
-  const onBackTo = (next: number) => {
-    if (locked) return
-    setNotice(null)
-    setAttempted(false)
-    goToPage(next)
   }
 
   const pageBlocks = pages[page] ?? []
@@ -307,6 +287,9 @@ export function FormView({
   // ничем не помеченному.
   const groups = groupMeta(blocks, plan.required)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
+  // Текст «Далее» у КАЖДОЙ страницы свой (settings.nextLabel закрывающего разрыва):
+  // обход кладёт его в план рядом со страницами, здесь остаётся дефолт на пустое.
+  const nextLabel = plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL
   const locked = phase !== 'editing'
 
   // Визит: «открыли» на монтировании, «дошёл до вопроса» на уходе со страницы.
@@ -371,9 +354,10 @@ export function FormView({
   // наблюдения, не модель»). Ни новых полей, ни правок в Go и SQL: тот же бикон с тем же
   // last_block_id, сервер по-прежнему берёт максимальный seq.
   //
-  // Шлём ТОЛЬКО когда страница дальше уже достигнутого: «Назад» дальнюю точку не
-  // откатывает, иначе вернувшийся на первый шаг выглядел бы в воронке как ушедший с него.
-  // Сравнение — в позициях документа, той же мерой, что у фокусной дальней точки.
+  // Шлём ТОЛЬКО когда страница дальше уже достигнутого: дальняя точка не откатывается.
+  // Ходов назад у человека больше нет (2026-08-22), но переброс к странице с ошибкой при
+  // отправке остался, и без этой проверки он выглядел бы в воронке как уход с дальнего
+  // шага. Сравнение — в позициях документа, той же мерой, что у фокусной дальней точки.
   useEffect(() => {
     if (!navigated.current) return
     const index = firstQuestionIndex(blocks, pages[page] ?? [])
@@ -423,15 +407,6 @@ export function FormView({
     if (Object.keys(found).length > 0) return
     setAttempted(false)
     goToPage(Math.min(page + 1, lastPage))
-  }
-
-  const onBack = () => {
-    if (locked) return
-    // Назад пускаем всегда: незаполненное обязательное поле не повод запирать человека
-    // на шаге. Ответы остаются в reducer'е и в черновике — вернувшись, он их увидит.
-    setNotice(null)
-    setAttempted(false)
-    goToPage(Math.max(page - 1, 0))
   }
 
   const onSubmit = async () => {
@@ -651,11 +626,6 @@ export function FormView({
             «Далее». Иначе форма собирала бы неполные ответы у тех, кто дошёл до
             середины: кнопка отправки посреди шагов читается как «готово». */}
           <div className="rf-nav">
-            {page > 0 && (
-              <button className="rf-back" type="button" onClick={onBack} disabled={locked}>
-                Назад
-              </button>
-            )}
             {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
               отправить нельзя. Кнопки нет вовсе, а не disabled — отключённая кнопка
               обещает, что вот-вот станет доступной. Сервер это же состояние проверяет
@@ -667,7 +637,7 @@ export function FormView({
                 onClick={onNext}
                 disabled={locked}
               >
-                Далее
+                {nextLabel}
               </button>
             ) : (
               <button
@@ -681,10 +651,9 @@ export function FormView({
             )}
           </div>
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
-            2026-08-05). Клик по пройденной линии возвращает на тот шаг: то же, что
-            «Назад», только сразу на нужный. Вперёд по ним не ходят — туда ведёт только
-            «Далее» с проверкой текущей страницы. Разметка общая с превью (@fields). */}
-          <StepBar pages={pages.length} page={page} onGo={onBackTo} />
+            2026-08-05). Не кнопки: ход назад снят целиком (2026-08-22), линии остались
+            счётчиком «где я и сколько всего». Разметка общая с превью (@fields). */}
+          <StepBar pages={pages.length} page={page} />
           {attempted && hasFieldErrors && (
             <p className="form-note form-note-error" role="alert">
               Проверьте выделенные поля.

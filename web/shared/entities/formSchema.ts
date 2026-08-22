@@ -97,6 +97,10 @@ export { scaleRange } from './blocks/scale'
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
+// Текст кнопки перехода на следующую страницу, когда автор своего не задал
+// (settings.nextLabel у закрывающего разрыва). Живёт рядом с дефолтом отправки: обе
+// кнопки шага, и обе поверхности их берут отсюда, а не литералом у себя.
+export const DEFAULT_NEXT_LABEL = 'Далее'
 
 // Экран «Спасибо» по умолчанию (когда thankYouText в схеме пуст).
 export const DEFAULT_THANK_YOU_TITLE = 'Спасибо!'

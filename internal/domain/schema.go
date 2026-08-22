@@ -310,6 +310,13 @@ type BlockSettings struct {
 	// PageName — имя страницы для автора и аналитики; респондент его не видит
 	// (индикатор шагов остался без подписей). Пусто = «Страница N» по номеру.
 	PageName string `json:"pageName,omitempty"`
+	// NextLabel — текст кнопки «Далее» страницы ПЕРЕД этим разрывом (2026-08-22).
+	//
+	// Стороны у разрыва разные: PageName и ThankYou про страницу ЗА ним (он её
+	// открывает), NextLabel — про кнопку страницы ПЕРЕД ним (он её закрывает). Так же
+	// вешает кнопки полотно (pageNavPlan). Лимит общий с SubmitLabel: обе строки —
+	// текст кнопки шага.
+	NextLabel string `json:"nextLabel,omitempty"`
 	// ThankYou — «страница за этим разрывом это экран после отправки, а не шаг формы».
 	//
 	// Условия, при которых флаг ДЕЙСТВУЕТ (страница последняя, страниц больше одной, на
@@ -752,9 +759,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	return nil
 }
 
-// validatePageSettings — настройки страницы (имя и флаг «экран после отправки»): только
-// у разрыва, как options у choice. Длина имени проверяется здесь же, чтобы у обеих
-// настроек разрыва был один читатель.
+// validatePageSettings — настройки страницы (имя, текст кнопки «Далее» и флаг «экран
+// после отправки»): только у разрыва, как options у choice. Длины проверяются здесь же,
+// чтобы у всех настроек разрыва был один читатель.
 //
 // Пустое имя и thankYou=false законны у ЛЮБОГО типа: это «ничего не задано», и канон их
 // не хранит (omitempty). Отвергается только заданное значение на чужом типе — молча
@@ -764,10 +771,13 @@ func validatePageSettings(b Block) error {
 	if n := utf8.RuneCountInString(b.Settings.PageName); n > MaxPageNameLen {
 		return fmt.Errorf("имя страницы длиннее %d символов", MaxPageNameLen)
 	}
+	if n := utf8.RuneCountInString(b.Settings.NextLabel); n > MaxSubmitLabelLen {
+		return fmt.Errorf("текст кнопки «Далее» длиннее %d символов", MaxSubmitLabelLen)
+	}
 	if b.Type == BlockPageBreak {
 		return nil
 	}
-	if b.Settings.PageName != "" || b.Settings.ThankYou {
+	if b.Settings.PageName != "" || b.Settings.NextLabel != "" || b.Settings.ThankYou {
 		return fmt.Errorf("тип %q не имеет страницы", b.Type)
 	}
 	return nil

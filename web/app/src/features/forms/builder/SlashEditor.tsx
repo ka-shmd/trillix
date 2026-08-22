@@ -23,10 +23,11 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Link } from '@tanstack/react-router'
-import { LayoutTemplate, SquarePen } from 'lucide-react'
+import { LayoutTemplate, Settings, SquarePen } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   type Block,
+  DEFAULT_NEXT_LABEL,
   DEFAULT_SUBMIT_LABEL,
   isAnswerableType,
   isCaptionType,
@@ -76,7 +77,7 @@ import {
   SourceSlot,
 } from './dragChrome'
 import { measureLine, measureSlot, measureUnion, type Rect, setRect } from './dragMeasure'
-import { BlockRow } from './BlockRow'
+import { BlockRow, CLUSTER_BACKDROP, GAP_BRIDGE, ICON_BTN } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
@@ -372,12 +373,15 @@ export function SlashEditor({
   // перевод «id разрыва → номер ряда».
   const nav = useMemo(() => {
     const plan = pageNavPlan(blocks)
-    const byRow = new Map<number, PageNav>()
+    // Вместе с кнопкой ряд получает id ЗАКРЫВАЮЩЕГО разрыва: он носитель текста «Далее»
+    // (settings.nextLabel), и без него кнопку нечем было бы править. У кнопки под
+    // полотном носителя нет — её текст форма-уровневый (submitLabel).
+    const byRow = new Map<number, PageNav & { breakId: string }>()
     for (const [id, item] of plan.byBreakId) {
       const row = rows.findIndex((r) =>
         r.some((cell) => cell.some((g) => g.blocks.some((b) => b.id === id))),
       )
-      if (row >= 0) byRow.set(row, item)
+      if (row >= 0) byRow.set(row, { ...item, breakId: id })
     }
     return { byRow, tail: plan.tail }
   }, [blocks, rows])
@@ -1204,7 +1208,12 @@ export function SlashEditor({
                         // респондент. Страницы «Спасибо» нет — фрагмент пуст, разметка
                         // прежняя.
                         <Fragment key={rowId}>
-                          {nav.byRow.has(rowIndex) && <PageNavRow nav={nav.byRow.get(rowIndex)!} />}
+                          {nav.byRow.has(rowIndex) && (
+                            <PageNavRow
+                              nav={nav.byRow.get(rowIndex)!}
+                              breakId={nav.byRow.get(rowIndex)!.breakId}
+                            />
+                          )}
                           {/* Ряд — контейнер ВСЕГДА, даже об одном вопросе: он якорь зон и
                         единственный бокс, чья геометрия не зависит от того, что внутри.
                         Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
@@ -1740,17 +1749,18 @@ const GroupRow = memo(function GroupRow({
   )
 }, sameGroupProps)
 
-// PageNavRow — КНОПКИ ШАГА, которые респондент увидит в конце этой страницы (2026-08-21).
-// До этого полотно рисовало одну кнопку отправки под всем документом, и многостраничная
-// форма выглядела на нём одностраничной: автор не видел ни «Далее» на конце страницы, ни
-// «Назад» со второй. Что где стоит, считает pageNavPlan — правило проверяется тестом, а не
-// глазами по трём условиям в JSX.
+// PageNavRow — КНОПКА ШАГА, которую респондент увидит в конце этой страницы (2026-08-21).
+// Без неё полотно рисовало одну кнопку отправки под всем документом, и многостраничная
+// форма выглядела на нём одностраничной: автор не видел «Далее» на конце страницы. Где
+// какая кнопка, считает pageNavPlan — правило проверяется тестом, а не глазами по трём
+// условиям в JSX. Кнопка у страницы ровно одна: ход назад в форме снят целиком (решение
+// владельца 2026-08-22), и «Назад» больше не существует нигде.
 //
-// «Далее» и «Назад» — ПОКАЗ, а не контролы: нажимать их на полотне некуда (оно один
-// свиток), править в них нечего. Поэтому span'ы с теми же классами, что у респондента:
-// правила .rf-submit/.rf-back element-agnostic, вид получается тот же, а в обход клавиатуры
-// мёртвые кнопки не попадают. Редактируется из этого ряда только текст отправки.
-function PageNavRow({ nav }: { nav: PageNav }) {
+// «Далее» — ПОКАЗ, а не контрол: нажимать его на полотне некуда (оно один свиток),
+// править в нём нечего. Поэтому span с тем же классом, что у респондента: правило
+// .rf-submit element-agnostic, вид получается тот же, а в обход клавиатуры мёртвая кнопка
+// не попадает. Редактируется из этого ряда только текст отправки.
+function PageNavRow({ nav, breakId }: { nav: PageNav; breakId?: string }) {
   return (
     // 24px × --rf-density форма→кнопки = gap .rf-page у превью/рендерера
     // (этап 13.3, уменьшено с 48px владельцем 2026-08-22; множитель — фаза 22).
@@ -1758,50 +1768,136 @@ function PageNavRow({ nav }: { nav: PageNav }) {
     // задаётся justify-content ряда, и без общей коробки настройка работала бы на
     // двух поверхностях из трёх.
     <div className="mt-[calc(1.5rem*var(--rf-density))] rf-nav">
-      {nav.back && <span className="rf-back">Назад</span>}
-      {nav.kind === 'next' ? (
-        <span className="rf-submit rf-next">Далее</span>
-      ) : (
+      {/* Носитель текста у «Далее» — закрывающий разрыв, и без него кнопка не рисуется
+          вовсе: подстановка отправки на её место назвала бы страницу последней. Случай
+          невозможен по построению (pageNavPlan ключует «Далее» id разрыва) — на то он и
+          пустая ветка, а не запасная кнопка. */}
+      {nav.kind === 'submit' ? (
         <SubmitButtonEditor />
-      )}
+      ) : breakId ? (
+        <NextButtonEditor breakId={breakId} />
+      ) : null}
     </div>
   )
 }
 
-// SubmitButtonEditor — кнопка отправки формы. Клик открывает поповер со сменой её текста;
-// пусто → показывается дефолт. Пишет в стор (форма-уровень), автосейв сохраняет вместе со
-// схемой. Коробку ряда держит PageNavRow — кнопка в нём не одна.
-function SubmitButtonEditor() {
-  const submitLabel = useBuilderStore((s) => s.submitLabel)
-  const setSubmitLabel = useBuilderStore((s) => s.setSubmitLabel)
-  const label = submitLabel.trim() || DEFAULT_SUBMIT_LABEL
-
+// StepButtonEditor — КНОПКА ШАГА С ШЕСТЕРЁНКОЙ (решение владельца 2026-08-22). Сама
+// кнопка на полотне не нажимается (это span, показ — см. PageNavRow); правится она
+// значком настроек, который проявляется слева при наведении — тем же жестом и тем же
+// значком, каким открываются настройки блока (шапка билдера, BuilderScreen). Так правятся обе кнопки шага —
+// «Далее» каждой страницы и отправка, — и до этого решения текст менялся кликом по
+// САМОЙ кнопке отправки: жест был только у неё, и на полотне выглядел так, будто кнопка
+// работает.
+//
+// МИНА (TD-22, §4 EDITOR): значок обязан быть ABSOLUTE и проявляться прозрачностью.
+// Контрол, который появляется по hover и занимает место в потоке, схлопывается на
+// mousedown — фокус уходит, hover теряется, всё едет, и mouseup приходит мимо цели:
+// клик молча пропадает. Отсюда же кластерные правила строки, которые тут повторены
+// один в один: погашенный — pointer-events-none (иначе зажигает сам себя от пустого
+// левого поля), показанный — снова ловит события, а просвет между ним и кнопкой закрыт
+// полосой GAP_BRIDGE — псевдоэлементом самой группы во всю её высоту (без неё курсор,
+// идущий к значку, гасит его на полпути).
+// Пока поповер открыт, значок виден и нажимаем при любом положении курсора
+// (data-[state=open]) — иначе он исчезал бы под собственным поповером.
+function StepButtonEditor({
+  className,
+  label,
+  value,
+  fieldId,
+  fieldLabel,
+  hint,
+  onChange,
+}: {
+  className: string
+  // Что нарисовано на кнопке: значение автора или дефолт поверхности.
+  label: string
+  // Что стоит в поле поповера: РОВНО значение автора, пустое — пустое (плейсхолдер поля
+  // показывает дефолт). Иначе автор, стерев текст, получал бы дефолт как набранный им.
+  value: string
+  fieldId: string
+  fieldLabel: string
+  hint: string
+  onChange: (next: string) => void
+}) {
   return (
-    <>
+    <span className={`group/btn ${GAP_BRIDGE} relative`}>
+      <span className={className}>{label}</span>
       <Popover>
         <PopoverTrigger asChild>
-          <button type="button" className="rf-submit" title="Нажмите, чтобы изменить текст кнопки">
-            {label}
+          <button
+            type="button"
+            // Полотно — один Tab-stop (§3.1), значки из обхода выпадают, как и в кластере
+            // строки: правка кнопки — мышиное удобство.
+            tabIndex={-1}
+            aria-label={`Изменить текст кнопки «${label}»`}
+            title="Изменить текст кнопки"
+            className={`${CLUSTER_BACKDROP} ${ICON_BTN} pointer-events-none absolute top-1/2 right-full mr-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/btn:pointer-events-auto group-hover/btn:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100`}
+          >
+            <Settings className="size-4" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72">
-          <Label htmlFor="submit-label" className="text-sm font-medium">
-            Текст кнопки отправки
+          <Label htmlFor={fieldId} className="text-sm font-medium">
+            {fieldLabel}
           </Label>
           <Input
-            id="submit-label"
-            value={submitLabel}
-            placeholder={DEFAULT_SUBMIT_LABEL}
+            id={fieldId}
+            value={value}
+            placeholder={label}
             maxLength={MAX_SUBMIT_LABEL_LEN}
-            onChange={(e) => setSubmitLabel(e.target.value)}
+            onChange={(e) => onChange(e.target.value)}
             className="mt-1.5"
           />
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Эту кнопку респондент нажимает, чтобы отправить ответ.
-          </p>
+          <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>
         </PopoverContent>
       </Popover>
-    </>
+    </span>
+  )
+}
+
+// NextButtonEditor — «Далее» ОДНОЙ страницы. Носитель текста — разрыв, который эту
+// страницу закрывает (settings.nextLabel), поэтому у каждой страницы кнопка своя:
+// «Далее», «Продолжить», «К оплате» — форма из трёх шагов вправе называть их по-разному.
+// Пишется обычным updateBlock, поэтому набор коалесится в один шаг истории и уезжает
+// автосейвом вместе со схемой.
+function NextButtonEditor({ breakId }: { breakId: string }) {
+  const updateBlock = useBuilderStore((s) => s.updateBlock)
+  const block = useBuilderStore((s) => s.blocks.find((b) => b.id === breakId))
+  const value = block?.settings?.nextLabel ?? ''
+
+  return (
+    <StepButtonEditor
+      className="rf-submit rf-next"
+      label={value.trim() || DEFAULT_NEXT_LABEL}
+      value={value}
+      fieldId={`next-label-${breakId}`}
+      fieldLabel="Текст кнопки перехода"
+      hint="Эту кнопку респондент нажимает, чтобы перейти на следующую страницу."
+      onChange={(next) =>
+        block && updateBlock(breakId, { settings: { ...block.settings, nextLabel: next } })
+      }
+    />
+  )
+}
+
+// SubmitButtonEditor — кнопка отправки формы. Текст правится шестерёнкой слева, как у
+// «Далее»; пусто → показывается дефолт. Пишет в стор (форма-уровень, одна на всю форму —
+// в отличие от «Далее», у которого носитель свой на каждой странице), автосейв сохраняет
+// вместе со схемой.
+function SubmitButtonEditor() {
+  const submitLabel = useBuilderStore((s) => s.submitLabel)
+  const setSubmitLabel = useBuilderStore((s) => s.setSubmitLabel)
+
+  return (
+    <StepButtonEditor
+      className="rf-submit"
+      label={submitLabel.trim() || DEFAULT_SUBMIT_LABEL}
+      value={submitLabel}
+      fieldId="submit-label"
+      fieldLabel="Текст кнопки отправки"
+      hint="Эту кнопку респондент нажимает, чтобы отправить ответ."
+      onChange={setSubmitLabel}
+    />
   )
 }
 

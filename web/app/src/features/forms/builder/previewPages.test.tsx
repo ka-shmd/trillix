@@ -55,7 +55,7 @@ describe('превью листает страницы', () => {
     expect(screen.queryByText('Почта')).toBeNull()
     expect(screen.getByLabelText('Шаг 1 из 2')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Отправить' })).toBeNull()
-    // Назад с первой страницы некуда — кнопки нет вовсе, а не disabled.
+    // Кнопки «Назад» нет нигде и никогда (2026-08-22).
     expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
   })
 
@@ -90,43 +90,30 @@ describe('превью листает страницы', () => {
     expect(live.className).toContain('rf-sr-only')
   })
 
-  // Линии шагов (решение владельца 2026-08-05): по одной на страницу, кликом — только
-  // НАЗАД. Кликабельность вперёд сделала бы из индикатора оглавление со скачком, а оно
-  // обесценивает пошаговую валидацию — то самое, от чего владелец отказался в первой
-  // развилке фазы.
+  // Линии шагов (решение владельца 2026-08-05): по одной на страницу. С 2026-08-22 они
+  // НЕ кнопки: ход назад снят целиком — ни экранной «Назад», ни клика по линии, ни
+  // записи в истории браузера. Индикатор остался счётчиком «где я и сколько всего».
   it('линий столько же, сколько страниц', () => {
     const { container } = renderPreview(threePages())
     expect(container.querySelectorAll('.rf-step-mark')).toHaveLength(3)
   })
 
-  it('вперёд по линиям не ходят: непройденный шаг — не кнопка вовсе', () => {
+  it('линия шага не кнопка ни на одном шаге', () => {
     const { container } = renderPreview(threePages())
-    // На первом шаге кнопок-линий нет ни одной: назад некуда, вперёд нельзя.
     expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
-  })
-
-  it('клик по пройденной линии возвращает на её шаг', () => {
-    const { container } = renderPreview(threePages())
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     expect(screen.getByLabelText('Шаг 3 из 3')).toBeTruthy()
-
-    // Пройденных шагов теперь два, текущий кнопкой не бывает.
-    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(2)
-    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
-    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
-    expect(screen.getByLabelText(/Имя/)).toBeTruthy()
+    // Два шага позади — и ни один из них не стал кнопкой возврата.
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /Вернуться к шагу/ })).toBeNull()
   })
 
-  it('вернувшись назад, вперёд по линиям не уйти — даже на шаг, где уже был', () => {
-    const { container } = renderPreview(threePages())
+  it('кнопки «Назад» нет и на последней странице', () => {
+    renderPreview(threePages())
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
-    // Второй шаг пройден, но он ВПЕРЕДИ — значит не кнопка. Кликабельность «до самого
-    // дальнего достигнутого» пускала отсюда на второй шаг мимо «Далее», то есть мимо
-    // проверки текущей страницы, ради которой пошаговость и заведена.
-    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
-    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+    expect(screen.getByLabelText('Шаг 2 из 3')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
   })
 
   it('заголовок формы виден только на первой странице', () => {

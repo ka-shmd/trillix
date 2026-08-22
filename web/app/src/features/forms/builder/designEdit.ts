@@ -36,7 +36,7 @@ export const SWATCHES = [
   '#ffffff',
   '#faf6f0',
   '#0f2e22',
-  '#007aff',
+  '#0070d7',
   '#00875a',
   '#c2703d',
   '#b91c1c',

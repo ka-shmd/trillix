@@ -17,7 +17,8 @@ export function pageOfBlock(pages: readonly Block[][], blockId: string): number 
 //
 // Позиция, а не id: воронке нужен id, но «дальше или ближе» сравнивается только по
 // порядку документа — тому же, которым считается самая дальняя точка визита по фокусу.
-// Две меры одной величины в разных единицах разошлись бы на первом же «Назад».
+// Две меры одной величины в разных единицах разошлись бы на первом же прыжке назад —
+// теперь это переброс к странице с ошибкой при отправке (ход назад у человека снят).
 export function firstQuestionIndex(blocks: readonly Block[], page: readonly Block[]): number {
   const first = page.find((b) => isAnswerableType(b.type))
   return first === undefined ? -1 : blocks.indexOf(first)
