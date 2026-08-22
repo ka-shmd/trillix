@@ -2,7 +2,16 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, House, MoreHorizontal, Pencil, Plus, Trash2, Users } from 'lucide-react'
+import {
+  ChevronRight,
+  House,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  SquarePlus,
+  Trash2,
+  Users,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   membersQueryOptions,
@@ -78,13 +87,14 @@ function WorkspacesPage() {
             <HeaderCrumbs />
             <Button
               variant="ghost"
-              size="icon"
-              className="ml-auto size-8"
+              size="sm"
+              className="ml-auto gap-2"
               onClick={() => setCreating(true)}
-              aria-label="Новое пространство"
-              title="Новое пространство"
             >
-              <Plus className="size-4" />
+              {/* Квадрат с плюсом — «завести пространство»; голый Plus в шапке
+                  кабинета уже занят смыслом «новая форма» (кнопка сайдбара). */}
+              <SquarePlus className="size-4" />
+              Новое пространство
             </Button>
           </>,
           headerSlot,
