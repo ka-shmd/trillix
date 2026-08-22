@@ -20,6 +20,7 @@ import { Badge } from '@fields/Badge'
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, designToVars, showFormBadge } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
+import { groupClass } from '@fields/space'
 import { StepBar } from '@fields/stepBar'
 
 import { useBuilderStore } from './storeContext'
@@ -132,7 +133,9 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             <div className="rf-form">
               {rows.map((row) => {
                 const renderGroup = (group: (typeof row)[number][number]) => (
-                  <div key={group.id} className="rf-group">
+                  // Ступень воздуха перед вопросом — по типу его первого блока
+                  // (@fields/space), тем же кодом, что у рендерера и полотна.
+                  <div key={group.id} className={groupClass(group.blocks)}>
                     {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
                     бок той же обёрткой .rf-row. Ряд из одного остаётся прямым
                     ребёнком .rf-group — лишний div не меняет вид, но шумит в DOM. */}

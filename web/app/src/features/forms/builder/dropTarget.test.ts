@@ -32,8 +32,10 @@ const layout = (blocks: Block[]) => packRows(groupBlocks(blocks))
 const INNER = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
 
 const H = 40 // высота строки
-const GAP_ROW = 28 // между вопросами (gap-7)
-const GAP_IN = 14 // внутри вопроса (gap-3.5)
+// Числа — геометрия ФИКСТУРЫ, а не ритм полотна (он с 2026-08-22 везде 12px): прицел
+// читает прямоугольники, и разные просветы здесь удобны тем, что промах видно по числу.
+const GAP_ROW = 28 // между вопросами
+const GAP_IN = 14 // внутри вопроса
 const GUTTER = 28 // жёлоб между колонками
 const W = 700 // ширина холста
 

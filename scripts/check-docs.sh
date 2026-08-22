@@ -70,10 +70,12 @@ ok_if_clean "все миграции ($(ls migrations/*.up.sql | wc -l)) упо�
 # «как добавить тип» — единственный документ, куда идут именно за полнотой списка.
 begin
 readme=web/shared/fields/README.md
-listed=$(grep -oE '^\| `[a-z_]+` \|' "$readme" | grep -oE '[a-z_]+' | sort -u)
+# Цифра в имени типа законна (heading_2/heading_3, 2026-08-22): без неё обе выборки
+# молча теряли бы такой тип, и проверка проходила бы, ничего не проверив.
+listed=$(grep -oE '^\| `[a-z0-9_]+` \|' "$readme" | grep -oE '[a-z0-9_]+' | sort -u)
 declared=$(sed -n '/^export const BLOCK_TYPES = \[/,/\] as const/p' \
 	web/shared/entities/blocks/contract.ts |
-	grep -vE '^\s*//' | grep -oE "'[a-z_]+'" | tr -d "'" | sort -u)
+	grep -vE '^\s*//' | grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort -u)
 for t in $declared; do
 	echo "$listed" | grep -qx "$t" || err "тип $t объявлен в BLOCK_TYPES, но его нет в сводной таблице" "файл: $readme"
 done

@@ -116,8 +116,8 @@ const MaxColumns = 4
 const ColumnWidthTotal = 100
 
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
-// подписи (title/label — текст вопроса в группе) и контент (heading/text/image —
-// оформление). Подписи и контент неотвечаемы (isContent): исключены из
+// подписи (title/label — текст вопроса в группе) и контент (heading/heading_2/
+// heading_3/text/image — оформление). Подписи и контент неотвечаемы (isContent): исключены из
 // ValidateAnswers и CSV. consent — отвечаемый, но несёт собственный текст.
 type BlockType string
 
@@ -142,10 +142,16 @@ const (
 	// Подписи (текст вопроса в группе).
 	BlockTitle BlockType = "title"
 	BlockLabel BlockType = "label"
-	// Контент (оформление).
-	BlockHeading BlockType = "heading"
-	BlockText    BlockType = "text"
-	BlockImage   BlockType = "image"
+	// Контент (оформление). Заголовки — три уровня, как H1/H2/H3 текстового
+	// редактора (решение владельца 2026-08-22). Первый уровень остался типом
+	// "heading" и НЕ переименован: этот тип лежит в опубликованных формах на проде,
+	// а механизма перезаписи документов у схемы нет — переименование сделало бы
+	// живую форму невалидной. В интерфейсе он зовётся «Заголовок 1».
+	BlockHeading  BlockType = "heading"
+	BlockHeading2 BlockType = "heading_2"
+	BlockHeading3 BlockType = "heading_3"
+	BlockText     BlockType = "text"
+	BlockImage    BlockType = "image"
 	// Разрыв страницы (фаза 19): граница между страницами формы. Неотвечаемый, как
 	// прочий контент; страница сущностью схемы не является — её выводит раскладчик
 	// фронта (splitPages), как groupId выводит regroup. Go про страницы не знает
@@ -180,7 +186,8 @@ var blockTypes = []BlockType{
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
-	BlockHeading, BlockText, BlockImage, BlockPageBreak, BlockLogic, BlockFormTitle,
+	BlockHeading, BlockHeading2, BlockHeading3, BlockText, BlockImage,
+	BlockPageBreak, BlockLogic, BlockFormTitle,
 }
 
 func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
@@ -216,8 +223,15 @@ func (t BlockType) isCaption() bool {
 // модели вопросов. Забыть здесь новый тип — значит молча сделать его отвечаемым:
 // у формы появится колонка в выгрузке и шаг воронки, которых автор не создавал.
 func (t BlockType) isContent() bool {
-	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
+	return t == BlockTitle || t == BlockLabel || t.isHeading() || t == BlockText ||
 		t == BlockImage || t == BlockPageBreak || t == BlockLogic || t == BlockFormTitle
+}
+
+// isHeading — заголовок раздела любого из трёх уровней. Предикатом, а не тремя
+// сравнениями по месту: уровни различаются ТОЛЬКО видом, и всякий, кто спрашивает
+// «это заголовок», обязан получить один ответ на все три.
+func (t BlockType) isHeading() bool {
+	return t == BlockHeading || t == BlockHeading2 || t == BlockHeading3
 }
 
 // isAnswerable — блок собирает ответ (все отвечаемые типы, включая consent).
@@ -227,7 +241,7 @@ func (t BlockType) isAnswerable() bool { return !t.isContent() }
 // заголовки, заголовок формы и consent (текст согласия рядом с галочкой). У прочих
 // отвечаемых (и у image) поле text обязано быть пустым.
 func (t BlockType) carriesText() bool {
-	return t == BlockTitle || t == BlockLabel || t == BlockHeading || t == BlockText ||
+	return t == BlockTitle || t == BlockLabel || t.isHeading() || t == BlockText ||
 		t == BlockConsent || t == BlockFormTitle
 }
 

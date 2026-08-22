@@ -78,6 +78,8 @@ func TestValidateSchema_Valid(t *testing.T) {
 			{"id":"b1","groupId":"g1","type":"short_text","settings":{}}
 		]}`,
 		"секционный heading своей группой": `{"schemaVersion":1,"blocks":[{"id":"h1","groupId":"g1","type":"heading","text":[{"t":"О компании"}]},{"id":"b1","groupId":"g2","type":"short_text","settings":{}}]}`,
+		// Три уровня заголовка (2026-08-22) — три типа, различающиеся только видом.
+		"заголовки второго и третьего уровня": `{"schemaVersion":1,"blocks":[{"id":"h2","groupId":"g1","type":"heading_2","text":[{"t":"Подраздел"}]},{"id":"h3","groupId":"g2","type":"heading_3","text":[{"t":"Пункт"}]}]}`,
 		// Фаза 13.6: бит ряда у whitelist-типов и у вариантов.
 		"column right у short_text": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":2}}]}`,
 		"column right у dropdown":   `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"dropdown","settings":{"column":2,"options":[{"id":"o1","label":"Мск"}]}}]}`,

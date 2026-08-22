@@ -10,7 +10,7 @@ import { BlockControl } from '@fields/BlockField'
 // scaleSettings.tsx.
 export function ScaleControl({ block }: { block: Block }) {
   // Без FieldShell: подпись рисует строка заголовка выше — оболочка дублировала бы её
-  // (вопрос стоял бы и над блоком, и над шкалой). Просвет подпись→шкала (14px) даёт
+  // (вопрос стоял бы и над блоком, и над шкалой). Просвет подпись→шкала (12px) даёт
   // групповой контейнер, не свой mt (ритм 13.3).
   return <BlockControl block={block} />
 }

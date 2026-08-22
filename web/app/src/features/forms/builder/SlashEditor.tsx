@@ -47,11 +47,13 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { groupSpace } from '@fields/space'
 import { type PageNav, pageNavPlan } from './pageNav'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import { captionLoss, needsCaptionFor, planBlockDrop, rowPosition } from './store'
 import { ColumnResizer } from './ColumnResizer'
 import { inviteRowId } from './rowZones'
+import { rowSpace, rowSpaceBelow, spaceMt } from './space'
 import { type Box, type DropTarget, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
 import { type MenuItem } from './blockTypes'
@@ -1086,14 +1088,16 @@ export function SlashEditor({
                 <SortableContext items={groupIdList} strategy={canvasSorting}>
                   {/* Ритм полотна = ритм превью/рендерера (этап 13.3). ИНТЕРВАЛ НЕСЁТ САМ
                 ЭЛЕМЕНТ — это его ВЕРХНИЙ отступ, «место передо мной», а не gap
-                контейнера (2026-08-13, см. .rf-form в fields.css): 28px у ряда
-                и у вопроса в колонке = .rf-form, 14px внутри вопроса даёт строка
-                (BlockRow). У контейнера остаётся только 64px заголовок
-                формы→первый блок = gap .rf-page (48px) + margin-bottom .rf-title
-                (16px, добавка сверх ритма — fields.css).
+                контейнера (2026-08-13, см. .rf-form в fields.css): 12px у ряда
+                и у вопроса в колонке = .rf-form, те же 12px внутри вопроса даёт строка
+                (BlockRow; шаг сведён к одному числу 2026-08-22, было 28/14).
+                У контейнера остаётся только 48px заголовок
+                формы→первый блок = gap .rf-page (24px) + margin-bottom .rf-title
+                (24px, добавка сверх ритма — fields.css; уменьшено владельцем
+                2026-08-22 с 64px, а gap — с 48px).
                 КАЖДОЕ ЧИСЛО РИТМА УМНОЖЕНО НА --rf-density — тем же множителем, что в
                 fields.css: плотность у автора одна на все три поверхности, и литерал
-                здесь означал бы полотно, которое за настройкой не едет. Добавка 16px
+                здесь означал бы полотно, которое за настройкой не едет. Добавка 24px
                 от .rf-title множителю не подчиняется — она не интервал ритма.
                 py-1.5 строк в вертикаль НЕ входит (там -mb-1.5 и укороченный на
                 столько же mt, см. BlockRow), поэтому просвет здесь — чистый контент и
@@ -1105,7 +1109,7 @@ export function SlashEditor({
                 превью и рендерером один в один: .rf-row → .rf-cell → группы.
                 DOM-порядок = порядок документа, sortable-вселенная не тронута —
                 обёртки не заводят вложенных SortableContext, только лэйаут. */}
-                  <ol className="mt-[calc(3rem*var(--rf-density)_+_1rem)] flex flex-col">
+                  <ol className="mt-[calc(1.5rem*var(--rf-density)_+_1.5rem)] flex flex-col">
                     {rows.map((row, rowIndex) => {
                       const rowId = row[0]![0]!.id
                       // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
@@ -1148,7 +1152,7 @@ export function SlashEditor({
                           // осознанное расхождение с `.rf-cell` рендерера — там растяжение
                           // безвредно, зон нет.
                           // Вертикального зазора у колонки нет: интервал стопки несут сами
-                          // вопросы (mt-7 у li в GroupRow), как .rf-cell у превью.
+                          // вопросы (mt у li в GroupRow), как .rf-cell у превью.
                           className="relative flex min-w-0 flex-1 flex-col self-start"
                           style={{ flexGrow: widths?.[i] }}
                           // Ячейка ряда для жеста ширины: по этой метке ручка находит
@@ -1206,17 +1210,19 @@ export function SlashEditor({
                         Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
                         fields.css: иначе полколонки остались бы и на телефоне, где у
                         респондента ряд разваливается.
-                        mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
-                        ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
-                        gap здесь — зазор между КОЛОНКАМИ, 12px, как .rf-row; на
-                        мобильном ряд разваливается в стек, и зазор возвращается к 28px
-                        — там он снова интервал МЕЖДУ ВОПРОСАМИ (то же правило и тот же
-                        брейкпоинт, что у .rf-row в fields.css). Оба множатся на
-                        --rf-density, как и там. */}
+                        mt — интервал ПЕРЕД рядом: базовые 12px (.rf-form у превью), а у
+                        ПОЛНОШИРИННОГО ряда — ступень его единственного вопроса (rowSpace,
+                        space.ts: у превью такой вопрос сам прямой ребёнок .rf-form, и
+                        ступень достаётся ему). У первого ряда интервала нет вовсе, начало
+                        полотна задаёт отступ ol от заголовка формы.
+                        gap здесь — зазор между КОЛОНКАМИ, те же 12px, что и по
+                        вертикали (.rf-row), поэтому на мобильном, где ряд разваливается
+                        в стек, зазор не меняется — как и у .rf-row в fields.css. Оба
+                        множатся на --rf-density, как и там. */}
                         <div
-                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row sm:gap-[calc(0.75rem*var(--rf-density))] ${
-                            rowIndex === 0 ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
-                          }`}
+                          className={`relative flex flex-col gap-[calc(0.75rem*var(--rf-density))] sm:flex-row ${
+                            rowIndex === 0 ? '' : spaceMt(rowSpace(row))
+                          } ${rowSpaceBelow(row)}`}
                         >
                           {zones && canAdd && (
                             <SideDropZone
@@ -1324,8 +1330,11 @@ const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 // ROW_PAD — та же плата, что была у снятого измеренного рейла: бокс строки включает её
 // py-1.5, а копия рисуется от текста. Без вычета гост сидел бы на 6px выше дыры.
 // Меняешь py-1.5 у строки — правь это число.
-// ROW_GAP — половина просвета между вопросами (28px, .rf-form): линия встаёт ровно
-// посередине между соседями.
+// ROW_GAP — отступ линии от края замеренного бокса. Он НУЛЕВОЙ, и это не «просвета
+// нет»: просвет 12px (.rf-form), но бокс строки включает её py-1.5 с обеих сторон,
+// то есть боксы соседей смыкаются ровно посередине просвета. Отступ здесь сдвинул бы
+// линию с середины на чужой контент. Меняешь ритм или py-1.5 — пересчитывай:
+// ROW_GAP = (ритм − 2×ROW_PAD) / 2.
 const BLOCK_ANCHOR = 'data-block-id'
 // Внутренние ряды вопроса для прицела (PickOpts.inner): «подпись | поле», тот же
 // раскладчик, что рисует их у превью. МОДУЛЬНАЯ константа, а не литерал в кадре: прицел
@@ -1333,14 +1342,12 @@ const BLOCK_ANCHOR = 'data-block-id'
 // на длинной форме (§5.3).
 const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
 const ROW_PAD = 6
-const ROW_GAP = 7
-// Жёлоб между колонками ряда вопросов (gap-7 у контейнера ряда).
-// Жёлоб между колонками ряда вопросов — 12px (.rf-row в fields.css, там же довод):
-// по горизонтали интервал колонки СОБИРАЕТ, поэтому он теснее вертикальных 28px.
+const ROW_GAP = 0
+// Жёлоб между колонками ряда вопросов — 12px (.rf-row в fields.css), он же ритм по
+// вертикали и он же жёлоб ряда ВНУТРИ вопроса (.rf-group > .rf-row). Числа разошлись
+// бы снова, если ритм поменяют на одной поверхности, — поэтому две константы, а не одна.
 const ROW_GUTTER = 12
-// Жёлоб ряда ВНУТРИ вопроса — 14px: ритм внутри вопроса (.rf-group > .rf-row в
-// fields.css), а не между вопросами.
-const INNER_GUTTER = 14
+const INNER_GUTTER = 12
 
 // hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
 // (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес
@@ -1580,12 +1587,14 @@ const GroupRow = memo(function GroupRow({
       // значит «тащу над этим», а не «хочу это править». Гасится на ГРУППЕ, а не на
       // строке: строка не знает, что тащат её же вопрос. Перетаскиваемой строке
       // наведение возвращает pointer-events-auto (BlockRow) — ей нужен курсор grabbing.
-      // mt — интервал ПЕРЕД вопросом (28px × --rf-density, .rf-form/.rf-cell у превью): он разводит
-      // стопку в колонке ряда, а у вопроса, открывающего колонку, его нет — там
-      // расстояние держит сам ряд. ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста,
-      // и паддинг увёл бы рейл группы вместе с линией вставки.
+      // mt — интервал ПЕРЕД вопросом в СТОПКЕ колонки (.rf-cell у превью): базовые 12px,
+      // а у вопроса с заголовком или подписью — его ступень (space.ts). У вопроса,
+      // открывающего колонку, mt нет — там расстояние держит сам ряд, и ступень
+      // полноширинного ряда лежит на ряде (rowSpace, там же мина про два разных бокса).
+      // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы рейл группы
+      // вместе с линией вставки.
       className={`group/grp relative w-full rounded-md ${
-        headOfCell ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
+        headOfCell ? '' : spaceMt(groupSpace(group.blocks))
       } ${
         isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''
       }`}
@@ -1624,20 +1633,21 @@ const GroupRow = memo(function GroupRow({
       {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
           одной вертикалью и на секции сажает строку на строку. */}
       <SortableContext items={blockIds} strategy={canvasSorting}>
-        {/* Внутри вопроса блоки стоят теснее — 14px, как .rf-group у превью. Интервал
+        {/* Внутри вопроса блоки стоят с тем же шагом 12px, что между вопросами (=
+            .rf-group у превью, решение владельца 2026-08-22). Интервал
             несёт САМА СТРОКА (mt у BlockRow), поэтому зазора у колонки нет: у первой
             строки вопроса интервала нет, и li обнимает чистый контент — от этого
             зависит рейл группы (top-0 bottom-0). */}
         <div className="flex flex-col">
           {/* Второй уровень рядов (фаза 15, §6.4/§6.7): пара «подпись | поле» встаёт
               бок о бок. Раскладчик тот же, что у превью и рендерера (packGroupRows),
-              и вид тот же: зазор 14px × --rf-density (= .rf-group) и выравнивание по центру
+              и вид тот же: зазор 12px × --rf-density (= .rf-group) и выравнивание по центру
               (items-center = align-items у .rf-group > .rf-row). Ряд из одного
               остаётся прямой строкой колонки — лишняя обёртка сместила бы кластеры. */}
           {packGroupRows(group.blocks).map((innerRow, ri) => {
             // Кто в вопросе ПЕРВЫЙ — знает только раскладчик группы, и знание это
             // позиционное: интервал перед собой несёт строка, а первой его нести
-            // незачем — расстояние до предыдущего вопроса держит сам вопрос (mt-7 у li).
+            // незачем — расстояние до предыдущего вопроса держит сам вопрос (mt у li).
             // Внутри вопроса стопки не бывает (пара — «подпись + поле», а отвечаемый
             // блок в группе один), поэтому ячейка здесь всегда об одном блоке.
             const render = (b: Block) => {
@@ -1696,7 +1706,7 @@ const GroupRow = memo(function GroupRow({
                 key={innerRow[0]![0]!.id}
                 className={
                   pair
-                    ? 'flex items-center gap-[calc(0.875rem*var(--rf-density))]'
+                    ? 'flex items-center gap-[calc(0.75rem*var(--rf-density))]'
                     : 'contents'
                 }
               >
@@ -1709,8 +1719,8 @@ const GroupRow = memo(function GroupRow({
                     style={pair ? { flexGrow: innerWidths?.[i] } : undefined}
                     {...(pair ? { 'data-rf-cell': '' } : {})}
                   >
-                    {/* Тот же жест на втором уровне рядов: жёлоб здесь 14px — ритм
-                        внутри вопроса, а не между вопросами. */}
+                    {/* Тот же жест на втором уровне рядов: жёлоб здесь тот же 12px —
+                        ритм полотна на всех уровнях одно число. */}
                     {pair && i > 0 && (
                       <ColumnResizer
                         index={i}
@@ -1742,12 +1752,12 @@ const GroupRow = memo(function GroupRow({
 // мёртвые кнопки не попадают. Редактируется из этого ряда только текст отправки.
 function PageNavRow({ nav }: { nav: PageNav }) {
   return (
-    // 48px × --rf-density форма→кнопки = gap .rf-page у превью/рендерера
-    // (этап 13.3; множитель плотности — фаза 22).
+    // 24px × --rf-density форма→кнопки = gap .rf-page у превью/рендерера
+    // (этап 13.3, уменьшено с 48px владельцем 2026-08-22; множитель — фаза 22).
     // .rf-nav — ТА ЖЕ коробка, что у превью и рендерера (фаза 22): положение кнопки
     // задаётся justify-content ряда, и без общей коробки настройка работала бы на
     // двух поверхностях из трёх.
-    <div className="mt-[calc(3rem*var(--rf-density))] rf-nav">
+    <div className="mt-[calc(1.5rem*var(--rf-density))] rf-nav">
       {nav.back && <span className="rf-back">Назад</span>}
       {nav.kind === 'next' ? (
         <span className="rf-submit rf-next">Далее</span>
@@ -1835,7 +1845,7 @@ function EmptyStarter({
       // приглашение — не первый вопрос, а надпись под заголовком, и ритм «заголовок →
       // форма» ей велик. Множитель плотности тот же, что у полотна: приглашение обязано
       // ехать за настройкой автора, как и всё остальное.
-      className="mt-[calc(2rem*var(--rf-density)_+_0.5rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
+      className="mt-[calc(1rem*var(--rf-density)_+_1rem)] flex flex-col items-start gap-2 text-base leading-6 text-muted-foreground/60 outline-none"
     >
       <button type="button" onClick={() => onStart()} className={HINT_ROW}>
         <SquarePen className="size-4 shrink-0" aria-hidden="true" />

@@ -40,6 +40,8 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   title: null,
   label: null,
   heading: null,
+  heading_2: null,
+  heading_3: null,
   text: null,
   image: null,
   // Разрыв страницы контрола не имеет и у респондента не рисуется вовсе: его потребляет

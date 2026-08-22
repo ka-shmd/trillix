@@ -89,7 +89,7 @@ export interface BlockRowProps {
   // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
   formId: FormIdSource
   // firstInGroup — строка первая в своём вопросе, и потому интервала перед собой не
-  // несёт: расстояние до предыдущего вопроса держит сам вопрос (mt-7 у li группы).
+  // несёт: расстояние до предыдущего вопроса держит сам вопрос (mt у li группы).
   // Позиция, а не свойство строки, — знает её только раскладчик группы (GroupRow).
   firstInGroup?: boolean
   // groupHandle — attributes+listeners sortable-элемента ГРУППЫ (внешний уровень
@@ -263,10 +263,10 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // центрируются по top-1.5 = padding → на первой строке текста. Меняешь padding —
       // правь отступы И top-1.5 значков.
       //
-      // ИНТЕРВАЛ ПЕРЕД СТРОКОЙ — её собственный ВЕРХНИЙ отступ (14px внутри вопроса,
+      // ИНТЕРВАЛ ПЕРЕД СТРОКОЙ — её собственный ВЕРХНИЙ отступ (12px внутри вопроса,
       // см. .rf-group в fields.css), а не gap контейнера: интервал принадлежит блоку и
-      // может быть задан ему отдельно. Из четырнадцати вычитается 6px — их уже отдал
-      // padding предыдущей строки, то же вычитание, что у -mb-1.5 снизу; сами 14px
+      // может быть задан ему отдельно. Из двенадцати вычитается 6px — их уже отдал
+      // padding предыдущей строки, то же вычитание, что у -mb-1.5 снизу; сами 12px
       // множатся на --rf-density (плотность автора, фаза 22), вычет 6px — нет: он
       // компенсирует padding, а padding за плотностью не едет.
       // Первая строка вопроса интервала не несёт (его несёт сам вопрос), и её -mt-1.5
@@ -280,7 +280,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
       className={`group relative rounded-md py-1.5 -mb-1.5 ${
-        firstInGroup ? '-mt-1.5' : 'mt-[calc(0.875rem*var(--rf-density)_-_0.375rem)]'
+        firstInGroup ? '-mt-1.5' : 'mt-[calc(0.75rem*var(--rf-density)_-_0.375rem)]'
       } ${isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''}`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
@@ -329,7 +329,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // ЕГО площадь — это group-hover строки: без pointer-events-none кластер
           // зажигает сам себя, стоит курсору попасть в левое поле, где его ещё нет.
           // Кроме вранья («навёлся на пустое место — появились чужие значки») это
-          // отбирает жёлоб у ручки ширины: 72px кластера шире 28px жёлоба.
+          // отбирает жёлоб у ручки ширины: 72px кластера шире 12px жёлоба.
           // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
           // hover, ушедший со строки на кластер, гасил бы его под курсором.
           className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
@@ -1191,7 +1191,7 @@ function AnswerField({
 
   // Обёртка — якорь глифа типа и кластера отметок; ширину берёт из .rf-field-wrap
   // (index.css), где стоит тот же потолок --rf-input-max, что у поля. Просвет
-  // подпись→поле (14px) даёт групповой контейнер (зазор внутреннего ряда в GroupRow) — свой mt тут не
+  // подпись→поле (12px) даёт групповой контейнер (зазор внутреннего ряда в GroupRow) — свой mt тут не
   // нужен (был бы двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
     <FieldWrap block={block} wide={wide} glyphTop={multiline} marks={marks}>
@@ -1617,7 +1617,7 @@ function OptionsInline({
     hoverZone.insert === insert
 
   return (
-    // Просвет подпись→первый вариант (14px) даёт групповой контейнер, не свой mt
+    // Просвет подпись→первый вариант (12px) даёт групповой контейнер, не свой mt
     // (ритм 13.3).
     //
     // Dnd вариантов — СВОЙ DndContext, изолированный от блочного и группового слоёв
