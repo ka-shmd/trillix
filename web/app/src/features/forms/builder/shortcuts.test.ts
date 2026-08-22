@@ -74,11 +74,18 @@ describe('карта SHORTCUTS — единый источник (§3.2)', () =>
     }
   })
 
-  it('Shift+Enter в тексте — отдельная строка карты, матчится только с Shift', () => {
-    const inside = SHORTCUTS.text.find((s) => s.label === 'Shift+Enter')
-    expect(inside).toBeDefined()
-    expect(inside!.match!(key({ code: 'Enter', shiftKey: true }))).toBe(true)
-    expect(inside!.match!(key({ code: 'Enter' }))).toBe(false)
+  it('Enter и Shift+Enter в тексте — разные пункты и непересекающиеся матчеры', () => {
+    // Жест «Shift+Enter — новый блок внутрь вопроса» снят 2026-08-22: у клавиши
+    // текстовое поведение (перенос строки), и карта обязана обещать именно его.
+    const enter = SHORTCUTS.text.find((s) => s.label === 'Enter')
+    const brk = SHORTCUTS.text.find((s) => s.label === 'Shift+Enter')
+    expect(brk?.hint).toBe('Перенос строки внутри блока')
+    expect(brk!.match!(key({ code: 'Enter', shiftKey: true }))).toBe(true)
+    expect(brk!.match!(key({ code: 'Enter' }))).toBe(false)
+    // Обратная половина — та, из-за которой жест и снимался: голый матчер Enter
+    // забирал бы Shift+Enter себе, и перенос никогда не доехал бы до текста.
+    expect(enter!.match!(key({ code: 'Enter' }))).toBe(true)
+    expect(enter!.match!(key({ code: 'Enter', shiftKey: true }))).toBe(false)
   })
 })
 

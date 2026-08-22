@@ -93,7 +93,7 @@ import {
   useActiveRowState,
   useRowFocus,
 } from './activeRow'
-import { stopNeighbor } from './navigation'
+import { prevRow, stopNeighbor } from './navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -670,17 +670,25 @@ export function SlashEditor({
     }
   }
 
-  // Создаёт новую текстовую строку и фокусирует её. Enter (§3.2) кладёт строку ПОСЛЕ
-  // всей группы — новый блок не втискивается в текущий вопрос; Shift+Enter (opts.inside)
-  // — сразу под текущей строкой, внутри группы (regroup оставит контент в вопросе).
+  // Создаёт новую текстовую строку и фокусирует её. Место вставки решает ЗДЕСЬ, а не
+  // событие клавиатуры: Enter кладёт строку СРАЗУ ПОД текущей — она не перепрыгивает
+  // через поле ответа своего вопроса (решение владельца 2026-08-22, вместе с ним снят
+  // Shift+Enter «внутрь вопроса»: у той клавиши теперь перенос строки).
+  //
+  // Исключение одно, и оно про раскладку, а не про группы: со строки, которая ПОСЛЕДНЯЯ
+  // в своей группе, вставка идёт через `addBlockAfterGroup`. Позиция та же самая всюду,
+  // кроме двухколоночной секции, — там полноширинный новичок в середине разрезал бы её
+  // пополам и снял биты колонки у остатка (`sectionMates`), поэтому он встаёт ПОД всей
+  // секцией (EDITOR §13, решение владельца подтверждено 2026-08-22).
+  //
   // Засев первого символа и открытие меню типов — опции с объектной остановки/пустого
   // полотна.
   const startBlock = useCallback(
-    (
-      afterId: string | null,
-      opts: { openMenu?: boolean; seed?: string; inside?: boolean } = {},
-    ) => {
-      const id = opts.inside
+    (afterId: string | null, opts: { openMenu?: boolean; seed?: string } = {}) => {
+      const now = storeApi.getState().blocks
+      const i = afterId ? now.findIndex((b) => b.id === afterId) : -1
+      const insideGroup = i >= 0 && now[i + 1]?.groupId === now[i]!.groupId
+      const id = insideGroup
         ? addBlockAfter(afterId, DEFAULT_BLOCK_TYPE)
         : addBlockAfterGroup(afterId, DEFAULT_BLOCK_TYPE)
       // openMenu (вставка блока по «/» с объектной остановки/пустого полотна) засевает
@@ -691,7 +699,7 @@ export function SlashEditor({
       if (opts.openMenu) setMenuForId(id)
       engine.focusBlock(id)
     },
-    [addBlockAfter, addBlockAfterGroup, updateBlock, engine],
+    [storeApi, addBlockAfter, addBlockAfterGroup, updateBlock, engine],
   )
 
   function focusFirstOrCreate() {
@@ -708,11 +716,10 @@ export function SlashEditor({
     if (title) engine.focusBlock(title.id, 'end')
   }, [storeApi, engine])
 
-  // onAddBelow: новая текстовая строка ниже — Enter (после группы), Shift+Enter
-  // (opts.inside — внутрь группы), либо с засевом/меню с объектной остановки (§2.2).
-  // Прокидывает opts в startBlock.
+  // onAddBelow: новая текстовая строка ниже — Enter либо засев/меню с объектной
+  // остановки (§2.2). Куда именно ляжет строка, решает startBlock. Прокидывает opts.
   const handleAddBelow = useCallback(
-    (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => {
+    (id: string, opts?: { openMenu?: boolean; seed?: string }) => {
       startBlock(id, opts)
     },
     [startBlock],
@@ -761,10 +768,13 @@ export function SlashEditor({
     // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
     // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
     // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
-    // блока нет — полотно пустеет, каретка на заголовок (не в body). Инпут плейсхолдера
-    // перескакиваем (stopNeighbor): каретка встаёт на подпись, а не в поле.
+    // блока нет — полотно пустеет, каретка на заголовок (не в body).
+    //
+    // Каретка идёт в предыдущую СТРОКУ, а не в предыдущую остановку (`prevRow`, а не
+    // `stopNeighbor`): инпут плейсхолдера схлопывание не перескакивает — см.
+    // navigation.ts, там же и почему обход его всё-таки перескакивает.
     if (isBlank(cur)) {
-      const prevStop = stopNeighbor(blocks, i, 'up')
+      const prevStop = prevRow(blocks, i)
       if (isCaptionType(cur.type)) removeGroup(id)
       else removeBlock(id)
       if (prevStop) engine.focusBlock(prevStop.id, 'end')
@@ -1467,7 +1477,7 @@ type GroupRowProps = {
   // (групповой драг над этой группой), off — скрыт (любой другой драг).
   rail: 'auto' | 'on' | 'off'
   menuForId: string | null
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onInsertBelow: (id: string) => void
   onBackspaceAtStart: (id: string) => void
   onBackspaceDelete: (id: string) => void

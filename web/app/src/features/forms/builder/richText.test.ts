@@ -8,6 +8,7 @@ import {
   cutRange,
   hasMarkThroughout,
   insertMention,
+  insertText,
   markClass,
   normalize,
   pointAt,
@@ -136,6 +137,37 @@ describe('чип подстановки неделим', () => {
   })
 })
 
+// Перенос строки (Shift+Enter) — единственный потребитель `insertText`: всё остальное
+// автор печатает в саму поверхность, и модель приезжает разбором DOM.
+describe('вставка текста в модель', () => {
+  it('в середину куска — оформление куска продолжается, спан остаётся один', () => {
+    expect(insertText([{ t: 'абвг', m: ['b'] }], 2, '\n')).toEqual([{ t: 'аб\nвг', m: ['b'] }])
+  })
+
+  it('на стыке кусков достаётся ЛЕВОМУ — там, где стоит каретка', () => {
+    expect(insertText([{ t: 'аб', m: ['b'] }, { t: 'вг' }], 2, '\n')).toEqual([
+      { t: 'аб\n', m: ['b'] },
+      { t: 'вг' },
+    ])
+  })
+
+  it('в конец строки и в пустую строку', () => {
+    expect(insertText([{ t: 'аб' }], 2, '\n')).toEqual([{ t: 'аб\n' }])
+    expect(insertText([], 0, '\n')).toEqual([{ t: '\n' }])
+  })
+
+  it('чип не разрезает: у его начала — перед ним, иначе за ним', () => {
+    const chip: Span[] = [{ t: 'Имя', ref: 'q1' }, { t: ' хвост' }]
+    expect(insertText(chip, 0, '\n')).toEqual([{ t: '\n' }, { t: 'Имя', ref: 'q1' }, { t: ' хвост' }])
+    expect(insertText(chip, 2, '\n')).toEqual([{ t: 'Имя', ref: 'q1' }, { t: '\n хвост' }])
+  })
+
+  it('пустая вставка модель не трогает', () => {
+    const spans: Span[] = [{ t: 'аб' }]
+    expect(insertText(spans, 1, '')).toBe(spans)
+  })
+})
+
 describe('вставка чипа', () => {
   it('в середину куска — с разрезом и сохранением оформления вокруг', () => {
     const out = insertMention([{ t: 'абвг', m: ['b'] }], 2, 'Имя', 'q1')
@@ -255,12 +287,14 @@ describe('DOM ↔ модель', () => {
     expect(spansFromDom(el)).toEqual([{ t: 'а', color: '#c026d3' }])
   })
 
-  it('<br> ПОСРЕДИ текста становится пробелом — строка полотна однострочная', () => {
+  // Строка многострочная с 2026-08-22: <br>, который принёс браузер, — перенос, а не
+  // пробел. Сам редактор <br> не создаёт (перенос вставляет insertText символом).
+  it('<br> ПОСРЕДИ текста становится переносом', () => {
     const el = div()
     el.appendChild(document.createTextNode('а'))
     el.appendChild(document.createElement('br'))
     el.appendChild(document.createTextNode('б'))
-    expect(plainText(spansFromDom(el))).toBe('а б')
+    expect(plainText(spansFromDom(el))).toBe('а\nб')
   })
 
   // Дефект, из-за которого строку было НЕ ОПУСТОШИТЬ: стерев последний символ, автор
@@ -279,8 +313,8 @@ describe('DOM ↔ модель', () => {
     expect(spansFromDom(el)).toEqual([{ t: 'а' }])
   })
 
-  // Пробел на месте переноса наследует стиль своего места, иначе он не склеится с
-  // соседями и один жирный кусок поедет тремя.
+  // Перенос наследует стиль своего места, иначе он не склеится с соседями и один
+  // жирный кусок поедет тремя.
   it('перенос между двумя жирными кусками склеивается в один спан', () => {
     const el = div()
     const mk = (t: string) => {
@@ -295,7 +329,7 @@ describe('DOM ↔ модель', () => {
     wrap.appendChild(document.createElement('br'))
     wrap.appendChild(mk('б'))
     el.appendChild(wrap)
-    expect(spansFromDom(el)).toEqual([{ t: 'а б', m: ['b'] }])
+    expect(spansFromDom(el)).toEqual([{ t: 'а\nб', m: ['b'] }])
   })
 })
 

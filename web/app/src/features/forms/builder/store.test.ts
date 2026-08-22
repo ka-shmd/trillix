@@ -1141,7 +1141,7 @@ describe('createBuilderStore — undo/redo', () => {
 
   // --- Этап 13.2: клавиатурный поток ---
 
-  it('addBlockAfterGroup вставляет строку ПОСЛЕ всей группы (Enter §3.2)', () => {
+  it('addBlockAfterGroup вставляет строку ПОСЛЕ всей группы (Enter с последней строки)', () => {
     const store = createBuilderStore()
     // Группа [title, text(контент), short_text] + одиночка ниже.
     store.getState().addQuestionAfter(null, 'short_text')
@@ -1162,12 +1162,12 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().dirty).toBe(true)
   })
 
-  it('addBlockAfter (Shift+Enter) вставляет строку ВНУТРЬ группы', () => {
+  it('addBlockAfter вставляет строку ВНУТРЬ группы (Enter с подписи вопроса)', () => {
     const store = createBuilderStore()
     store.getState().addQuestionAfter(null, 'short_text') // [title, short_text]
     const titleId = store.getState().blocks[0]!.id
 
-    // Shift+Enter с подписи → контент сразу под ней, в той же группе.
+    // Enter с подписи → контент сразу под ней, в той же группе (не через поле).
     store.getState().addBlockAfter(titleId, 'text')
 
     const s = store.getState().blocks
@@ -1654,7 +1654,7 @@ describe('createBuilderStore — ряды из двух вопросов (фаз
     store.getState().placeInRow(b!.groupId, a!.groupId, 2, true)
     expect(cells(store)).toEqual([[1, 1]])
 
-    // Enter зовёт addBlockAfterGroup с активной строкой — из ЛЕВОЙ колонки.
+    // Enter с последней строки группы зовёт addBlockAfterGroup — из ЛЕВОЙ колонки.
     store.getState().addBlockAfterGroup(a!.id, 'text')
     expect(store.getState().blocks.map((x) => x.type)).toEqual(['short_text', 'email', 'text'])
     // Секция цела, новичок — полноширинный ряд под ней.

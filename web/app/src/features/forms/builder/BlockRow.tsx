@@ -123,10 +123,10 @@ export interface BlockRowProps {
   needsCaption?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
-  // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
-  // (opts.inside) — внутрь группы под текущей строкой; с объектной остановки — засев
-  // (печатный символ/вставка → seed) или открытие меню («/»).
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  // onAddBelow — новая текстовая строка сразу под этой (место вставки считает
+  // SlashEditor); с объектной остановки — засев (печатный символ/вставка → seed) или
+  // открытие меню («/»).
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
   onInsertBelow: (id: string) => void
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
@@ -535,13 +535,16 @@ const BlockRowBody = memo(function BlockRowBody({
   // подписей он от позиции не зависит (тип уже сказал, что это) и виден всегда; у
   // обычного текста зависит и показывается только под кареткой: неактивная пустая
   // строка молчит, иначе полотно пестрит серым текстом.
-  const textPh = insideQuestion
-    ? // Пустой текст внутри вопроса — это его описание, а не новый блок.
-      'Пояснение к вопросу'
-    : firstOfForm
-      ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
-        'Текст, или «/» — чтобы добавить вопрос'
-      : 'Текст, или «/» для поля'
+  // Место в документе меняет подсказку ровно один раз — на ПЕРВОЙ строке формы.
+  // Отдельной подписи «Пояснение к вопросу» у текста внутри вопроса больше нет
+  // (решение владельца 2026-08-23): с тех пор как Enter кладёт новую строку внутрь
+  // вопроса, это обычный путь набора, а не особый жанр блока, — и своя подпись у него
+  // означала, что одна и та же клавиша даёт то строку, то «пояснение». Заодно она
+  // прятала «/»: подсказка про поле у такой строки не показывалась вовсе.
+  const textPh = firstOfForm
+    ? // Первая строка формы: «/» здесь чаще всего зовут ради вопроса, а не поля.
+      'Текст, или «/» — чтобы добавить вопрос'
+    : 'Напечатайте «/», чтобы выбрать блок'
   // Имя строки, её классы и глиф — факты типа (kinds/<type>.tsx, row). У абзаца имя
   // ПОЗИЦИОННОЕ (name: null): пустая строка значит разное в разных местах документа,
   // поэтому оно берётся из подсказки места — это отношение, а не свойство типа.
@@ -651,8 +654,9 @@ const BlockRowBody = memo(function BlockRowBody({
       moveItem: (dir) => captionGuard(() => moveBlock(block.id, dir)),
       arrow: (dir) => onArrow(block.id, dir),
       arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
-      // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
-      enter: (ev) => onAddBelow(block.id, { inside: ev.shiftKey }),
+      // Enter — новая строка сразу под этой (§3.2). Shift+Enter сюда не доходит вовсе:
+      // он принадлежит тексту (перенос строки) и погашен в RichLine.
+      enter: () => onAddBelow(block.id),
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий.
@@ -909,6 +913,7 @@ const BlockRowBody = memo(function BlockRowBody({
           <AnswerField
             block={block}
             insideQuestion={insideQuestion}
+            onAddBelow={onAddBelow}
             onArrow={onArrow}
             onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
@@ -1027,7 +1032,7 @@ function ObjectStop({
   // предыдущим вопросом (§6.6) — карта обязана называть то, что клавиша делает.
   insideQuestion?: boolean
   children: ReactNode
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onOpenActions: () => void
@@ -1121,6 +1126,7 @@ function ObjectStop({
 function AnswerField({
   block,
   insideQuestion = false,
+  onAddBelow,
   onArrow,
   onBackspaceDelete,
   onDeleteBlock,
@@ -1132,6 +1138,9 @@ function AnswerField({
   block: Block
   // Как у ObjectStop: не первая строка группы меняет подпись пункта Mod+Alt+→.
   insideQuestion?: boolean
+  // Enter — новая строка ниже, как с любой другой строки полотна (решение владельца
+  // 2026-08-22). Внутри объектной остановки (date) поля рисуются без обработчиков.
+  onAddBelow?: (id: string) => void
   onArrow?: (id: string, dir: 'up' | 'down') => void
   // Backspace в ПУСТОМ плейсхолдере — удалить поле (см. проп BlockRow). Внутри
   // объектной остановки (date) поля рисуются без обработчиков — там свой Backspace.
@@ -1199,6 +1208,13 @@ function AnswerField({
       // Стрелка уходит со строки только с края каретки: вертикаль внутри длинного
       // плейсхолдера остаётся нативной.
       arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
+      // Enter — новая строка ниже (решение владельца 2026-08-22). До него поверхность
+      // аккорд не объявляла вовсе, и Enter в инпуте молча не делал НИЧЕГО: строка
+      // ответа была «необязательным листом обхода», с которого полотно не продолжают.
+      // У многострочного плейсхолдера (длинный ответ) перенос остаётся на Shift+Enter:
+      // его цепочка не ловит, и он уходит в textarea нативно — ровно та же пара, что у
+      // текстовой строки.
+      enter: onAddBelow && (() => onAddBelow(block.id)),
       backspace: onBackspaceDelete && (() => onBackspaceDelete(block.id)),
       backspaceHandles: () => el.value === '',
     })
@@ -1290,7 +1306,7 @@ function OptionsInline({
   onArrow: (id: string, dir: 'up' | 'down') => void
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
   // после всей группы choice-блока.
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
   onDeleteBlock: (id: string) => void
   // Backspace в пустом «призраке», когда вариантов нет: блок уходит, каретка — на

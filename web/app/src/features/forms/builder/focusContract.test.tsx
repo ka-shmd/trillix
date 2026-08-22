@@ -107,9 +107,9 @@ describe('контракт фокус-целей строк (§2.1)', () => {
     expect(named('Заголовок вопроса')).not.toBeNull()
     expect(named('Текст согласия')).not.toBeNull()
     // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
-    expect(named('Текст, или «/» для поля')).not.toBeNull()
+    expect(named('Напечатайте «/», чтобы выбрать блок')).not.toBeNull()
     engine.focusBlock('para', 'end')
-    expect(el().getAttribute('aria-label')).toBe('Текст, или «/» для поля')
+    expect(el().getAttribute('aria-label')).toBe('Напечатайте «/», чтобы выбрать блок')
   })
 
   it('край каретки: start → в начало, end → в конец текста', () => {
@@ -272,6 +272,38 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
   })
 })
 
+// Enter на СТРОКЕ ОТВЕТА (решение владельца 2026-08-22). До него поверхность аккорд не
+// объявляла вовсе — строка ответа считалась «необязательным листом обхода», и Enter в
+// инпуте молча не делал ничего: полотно с неё было не продолжить, не взявшись за мышь.
+describe('Enter на инпуте плейсхолдера', () => {
+  it('однострочное поле → новая строка ниже', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
+    })
+    engine.focusBlock('st', 'end')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('st')
+  })
+
+  it('многострочное поле: Enter — блок ниже, Shift+Enter остаётся textarea', () => {
+    // Пара та же, что у текстовой строки, и разводит её тот же `chords.enter`: перенос
+    // внутри длинного плейсхолдера цепочка не ловит и отдаёт нативному вводу.
+    const { engine, handlers } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'lt', groupId: 'g1', type: 'long_text', settings: {} }],
+    })
+    engine.focusBlock('lt', 'end')
+    expect(el().tagName).toBe('TEXTAREA')
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', shiftKey: true })
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('lt')
+  })
+})
+
 // Клавиатурный поток (§3.2, этап 13.2). Строки рендерятся из статичного снапшота
 // (setup не пере-подписывается), поэтому наблюдаем НЕ ре-рендер, а результат: спай
 // onAddBelow для текстовых маршрутов и store.getState() для операций над документом.
@@ -285,16 +317,18 @@ describe('Enter / Shift+Enter на текстовой строке (§3.2)', () 
     return ctx
   }
 
-  it('Enter → новая строка после группы (inside: false)', () => {
+  it('Enter → новая строка ниже, без выбора места на самой строке', () => {
     const { handlers } = textRow()
     fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
-    expect(handlers.onAddBelow).toHaveBeenCalledWith('t', { inside: false })
+    // Флага «внутрь группы» больше нет: куда ляжет строка, считает startBlock по
+    // документу (SlashEditor), а не событие клавиатуры.
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('t')
   })
 
-  it('Shift+Enter → новая строка внутрь группы (inside: true)', () => {
+  it('Shift+Enter блока НЕ создаёт — это перенос строки внутри текста', () => {
     const { handlers } = textRow()
     fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', shiftKey: true })
-    expect(handlers.onAddBelow).toHaveBeenCalledWith('t', { inside: true })
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
   })
 
   it('Alt+Shift+↓ на подписи — перенос группы целиком (moveGroup)', () => {
@@ -335,6 +369,16 @@ describe('клавиатура вариантов choice (§3.2, Д5)', () => {
     expect(ids).toHaveLength(3)
     expect(ids[0]).toBe('o1')
     expect(ids[2]).toBe('o2') // новый встал между o1 и o2
+  })
+
+  // Жест Shift+Enter снят целиком (2026-08-22), а не переехал в текст: на поверхностях
+  // без текста он молчит. Пока `chords.enter` был голым матчером, он забирал Shift+Enter
+  // себе и вариант рождался — то есть карта клавиш обещала одно, а строка делала другое.
+  it('Shift+Enter на варианте не делает ничего', () => {
+    const { store, engine } = choiceRow([{ id: 'o1', label: 'A' }])
+    engine.focusBlock('ch', 'start')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', shiftKey: true })
+    expect(opts(store).map((o) => o.id)).toEqual(['o1'])
   })
 
   it('Enter в пустом последнем варианте → выход из списка (удалить + строка ниже)', () => {
@@ -676,11 +720,44 @@ describe('ось колонок: каретка едет с блоком чер�
     expect(caretBlock()).toBe('c')
   })
 
-  it('Enter из колонки: новая строка ПОД секцией, каретка в ней', () => {
+  it('Enter с ПОСЛЕДНЕЙ строки колонки: новая строка ПОД секцией, каретка в ней', () => {
     // Полноширинная строка в середине секции разрезала бы её пополам (§11.3), поэтому
-    // Enter из колонки кладёт новую строку под всей секцией — и каретка обязана уехать
-    // туда же, иначе автор печатает вслепую не там, где смотрит. Enter жмём на ПОДПИСИ:
-    // инпут плейсхолдера — необязательный лист обхода, Enter в нём не обрабатывается.
+    // Enter отсюда кладёт новую строку под всей секцией — и каретка обязана уехать
+    // туда же, иначе автор печатает вслепую не там, где смотрит. Жмём на абзаце: он
+    // сам себе группа, то есть в ней последний.
+    const store = createBuilderStore()
+    store.getState().hydrate({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [
+        { id: 'a', groupId: 'ga', type: 'text', text: textFromString('Слева') },
+        { id: 'b', groupId: 'gb', type: 'email', settings: {} },
+      ],
+    })
+    const engine = createFocusEngine()
+    render(
+      <BuilderStoreContext.Provider value={store}>
+        <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
+      </BuilderStoreContext.Provider>,
+    )
+    engine.focusBlock('b', 'start')
+    shift('right') // секция [a | b]
+    expect(cols(store)).toEqual([1, 2])
+    engine.focusBlock('a', 'end') // каретка в ЛЕВОЙ колонке
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+
+    const ids = store.getState().blocks.map((x) => x.id)
+    expect(ids.slice(0, 2)).toEqual(['a', 'b'])
+    expect(ids).toHaveLength(3)
+    const fresh = ids[2]! // новая строка последняя, то есть под всей секцией
+    expect(cols(store)).toEqual([1, 2, '-'])
+    expect(caretBlock()).toBe(fresh)
+  })
+
+  it('Enter с подписи вопроса в колонке: строка внутрь вопроса, секция цела', () => {
+    // Обратная половина того же правила (2026-08-22): не последняя в группе строка
+    // рождает соседа ВНУТРИ своей группы, а состав секции считается группами —
+    // поэтому колонки от такой вставки не рассыпаются и уводить строку из них незачем.
     const store = createBuilderStore()
     store.getState().hydrate({
       schemaVersion: SCHEMA_VERSION,
@@ -699,15 +776,14 @@ describe('ось колонок: каретка едет с блоком чер�
     engine.focusBlock('b', 'start')
     shift('right') // секция [вопрос | b]
     expect(cols(store)).toEqual([1, '-', 2])
-    engine.focusBlock('ca', 'end') // каретка в ЛЕВОЙ колонке
+    engine.focusBlock('ca', 'end')
 
     fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
 
     const ids = store.getState().blocks.map((x) => x.id)
-    expect(ids.slice(0, 3)).toEqual(['ca', 'fa', 'b'])
-    expect(ids).toHaveLength(4)
-    const fresh = ids[3]! // новая строка последняя, то есть под всей секцией
-    expect(cols(store)).toEqual([1, '-', 2, '-'])
-    expect(caretBlock()).toBe(fresh)
+    expect(ids[0]).toBe('ca')
+    expect(ids[2]).toBe('fa') // новая строка встала МЕЖДУ подписью и полем
+    expect(cols(store)).toEqual([1, '-', '-', 2])
+    expect(caretBlock()).toBe(ids[1])
   })
 })
