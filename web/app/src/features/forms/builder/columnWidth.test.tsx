@@ -119,6 +119,27 @@ describe('доли колонок доезжают до разметки', () =>
 
 // РУЧКА ЖЕСТА в разметке полотна: где она есть и где её нет. Само перетаскивание в
 // vitest не воспроизводится — его арифметика проверена в columnResize.test.ts.
+// Метка ячейки — не только адрес для ручки: по ней CSS снимает потолок поля
+// (--rf-input-max), поэтому у полноширинного вопроса её быть НЕ должно — иначе полотно
+// показывало бы поле шире, чем превью и респондент.
+describe('метка ячейки ряда', () => {
+  const cells = (container: Element) => container.querySelectorAll('ol [data-rf-cell]')
+
+  it('стоит у каждой колонки секции', () => {
+    expect(cells(canvas(schema(wide('a', 1), wide('b', 2))))).toHaveLength(2)
+  })
+
+  it('у полноширинных вопросов её нет', () => {
+    const container = canvas(
+      schema(
+        { id: 'a', groupId: 'a', type: 'short_text' },
+        { id: 'b', groupId: 'b', type: 'email' },
+      ),
+    )
+    expect(cells(container)).toHaveLength(0)
+  })
+})
+
 describe('ручка ширины на полотне', () => {
   const handles = (container: Element) => container.querySelectorAll('[data-rf-resizer]')
 
