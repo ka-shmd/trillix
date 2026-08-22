@@ -66,11 +66,11 @@ var designVarSpecs = []designVarSpec{
 	{"--rf-text", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Text }) }},
 	{"--rf-muted", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Muted }) }},
 	{"--rf-accent", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Accent }) }},
-	// Буквенный бейдж выбранного варианта — свой токен: у Tally он замерен чуть темнее
-	// акцента (rgb(0,112,215) против rgb(0,122,255)), и это соотношение не выражается
-	// ни одним множителем. Дефолт остаётся замеренным, но как только автор задал
-	// акцент, бейдж обязан ехать за ним — иначе выбранный вариант получает синюю
-	// метку посреди зелёной формы.
+	// Буквенный бейдж выбранного варианта — свой токен, хотя дефолты у него и у акцента
+	// с 2026-08-22 совпали (оба #0070D7): прежде он был замерен у Tally чуть темнее
+	// акцента, и соотношение не выражалось ни одним множителем. Совпадение дефолтов
+	// ничего не отменяет — как только автор задал акцент, бейдж обязан ехать за ним,
+	// иначе выбранный вариант получает синюю метку посреди зелёной формы.
 	{"--rf-accent-badge", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Accent }) }},
 	{"--rf-primary", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Button }) }},
 	{"--rf-primary-foreground", func(d *FormDesign) string {

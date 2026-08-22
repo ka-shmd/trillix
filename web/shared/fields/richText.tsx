@@ -58,7 +58,11 @@ export function RichText({
           return (
             <a
               key={i}
-              className={cls}
+              // rf-link — общий вид ссылки (fields.css): цвет акцента и подчёркивание.
+              // Без класса <a> достаётся браузерный дефолт, а в кабинете и того нет:
+              // сброс Tailwind красит ссылку `inherit`, и в превью она неотличима от
+              // текста вокруг.
+              className={cls ? `rf-link ${cls}` : 'rf-link'}
               style={style}
               href={s.href}
               target="_blank"
