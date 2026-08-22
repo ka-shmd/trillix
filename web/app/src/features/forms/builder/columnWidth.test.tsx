@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 
 import { type FormSchema, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 import { createBuilderStore } from './store'
@@ -44,6 +44,10 @@ function preview(s: FormSchema) {
 function canvas(s: FormSchema) {
   const store = createBuilderStore()
   store.getState().hydrate(s)
+  return canvasWith(store)
+}
+
+function canvasWith(store: ReturnType<typeof createBuilderStore>) {
   const engine = createFocusEngine()
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   const { container } = render(
@@ -146,5 +150,61 @@ describe('ручка ширины на полотне', () => {
       ),
     )
     expect(handles(container)).toHaveLength(1)
+  })
+})
+
+// СКВОЗНОЙ ЖЕСТ: ручка → DOM → стор. Формулы проверены отдельно (columnResize.test.ts),
+// здесь — проводка, которую формулы не видят: те ли ячейки найдены, та ли команда
+// позвана и доехало ли до документа то, что автор нарисовал мышью.
+//
+// happy-dom не считает лэйаут (все боксы нулевые) и не знает захвата указателя,
+// поэтому и то и другое подставляется: жест меряет РЕАЛЬНЫЕ ширины, и без подмены
+// мерить было бы нечего.
+describe('перетаскивание границы колонок', () => {
+  beforeEach(() => {
+    HTMLElement.prototype.setPointerCapture = vi.fn()
+    HTMLElement.prototype.releasePointerCapture = vi.fn()
+  })
+
+  const measureCells = (container: Element, px: number[]) => {
+    const cells = [...container.querySelectorAll<HTMLElement>('ol [data-rf-cell]')]
+    cells.forEach((c, i) => {
+      c.getBoundingClientRect = () => ({ width: px[i]!, height: 40 }) as DOMRect
+    })
+    return cells
+  }
+
+  it('тянем границу вправо — левая колонка растёт, правая ужимается ровно на столько же', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate(schema(wide('a', 1), wide('b', 2)))
+    const container = canvasWith(store)
+    measureCells(container, [300, 300])
+
+    const handle = container.querySelector('[data-rf-resizer]')!
+    fireEvent.pointerDown(handle, { button: 0, clientX: 350, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 410, pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+
+    expect(store.getState().blocks.map((b) => b.settings?.columnWidth)).toEqual([60, 40])
+  })
+
+  it('Escape посреди жеста ничего не сохраняет', () => {
+    const store = createBuilderStore()
+    store.getState().hydrate(schema(wide('a', 1), wide('b', 2)))
+    const container = canvasWith(store)
+    measureCells(container, [300, 300])
+    store.getState().markSaved()
+
+    const handle = container.querySelector('[data-rf-resizer]')!
+    fireEvent.pointerDown(handle, { button: 0, clientX: 350, pointerId: 1 })
+    fireEvent.pointerMove(handle, { clientX: 410, pointerId: 1 })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+
+    expect(store.getState().blocks.map((b) => b.settings?.columnWidth)).toEqual([
+      undefined,
+      undefined,
+    ])
+    expect(store.getState().dirty).toBe(false)
   })
 })
