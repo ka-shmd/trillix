@@ -41,6 +41,8 @@ import {
   groupBlocks,
   groupCanPair,
   groupMeta,
+  blockRowWidths,
+  groupRowWidths,
   packGroupRows,
   packRows,
   splitFormTitle,
@@ -1126,6 +1128,12 @@ export function SlashEditor({
                       // отклика. Ушёл он вместе с последней причиной, по которой полотно
                       // во время драга вообще что-то двигало: раскладка теперь неподвижна
                       // целиком, а место называют линия (§5.2) и полоса взятой зоны.
+                      // Доли колонок — тем же правилом и тем же раскладчиком, что у
+                      // превью и рендерера. Полотно рисует их inline `flexGrow`, а не
+                      // переменной `--rf-cell-grow`: ячейка здесь своя (Tailwind), класса
+                      // .rf-cell на ней нет, а жест правит именно это свойство напрямую,
+                      // минуя стор (columnResize).
+                      const widths = groupRowWidths(row)
                       const cellNodes = row.map((c, i) => (
                         <div
                           key={c[0]!.id}
@@ -1140,6 +1148,7 @@ export function SlashEditor({
                           // Вертикального зазора у колонки нет: интервал стопки несут сами
                           // вопросы (mt-7 у li в GroupRow), как .rf-cell у превью.
                           className="relative flex min-w-0 flex-1 flex-col self-start"
+                          style={{ flexGrow: widths?.[i] }}
                         >
                           {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
                               жёлобе слева от неё, подвал — под ней. Первая колонка
@@ -1646,6 +1655,7 @@ const GroupRow = memo(function GroupRow({
               )
             }
             const pair = innerRow.length > 1
+            const innerWidths = blockRowWidths(innerRow)
             // Обёртки стоят ВСЕГДА и в одиночном ряду схлопнуты в display:contents —
             // строка остаётся прямым flex-ребёнком колонки, как и была (лишний бокс
             // сместил бы кластеры значков). Урок, оплаченный снятым дублёром второго
@@ -1662,10 +1672,14 @@ const GroupRow = memo(function GroupRow({
                     : 'contents'
                 }
               >
-                {innerRow.map((cell) => (
+                {innerRow.map((cell, i) => (
                   // min-w-0 обязателен, как у .rf-cell: без него длинная подпись не
                   // даёт колонке ужаться и ломает 50/50.
-                  <div key={cell[0]!.id} className={pair ? 'min-w-0 flex-1' : 'contents'}>
+                  <div
+                    key={cell[0]!.id}
+                    className={pair ? 'min-w-0 flex-1' : 'contents'}
+                    style={pair ? { flexGrow: innerWidths?.[i] } : undefined}
+                  >
                     {cell.map(render)}
                   </div>
                 ))}

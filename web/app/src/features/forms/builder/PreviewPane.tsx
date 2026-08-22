@@ -6,6 +6,9 @@ import { BlockField } from '@fields/BlockField'
 import {
   groupBlocks,
   groupMeta,
+  blockRowWidths,
+  cellVars,
+  groupRowWidths,
   packGroupRows,
   packRows,
   splitFormTitle,
@@ -148,10 +151,15 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
                           disabled={false}
                         />
                       )
+                      const innerWidths = blockRowWidths(innerRow)
                       return innerRow.length > 1 ? (
                         <div key={innerRow[0]![0]!.id} className="rf-row">
-                          {innerRow.map((cell) => (
-                            <div key={cell[0]!.id} className="rf-cell">
+                          {innerRow.map((cell, i) => (
+                            <div
+                              key={cell[0]!.id}
+                              className="rf-cell"
+                              style={cellVars(innerWidths, i)}
+                            >
                               {cell.map(render)}
                             </div>
                           ))}
@@ -168,10 +176,13 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
                 // блоком слева. Слева стопки не бывает — там всегда тот, кто открыл ряд.
                 const first = row[0]?.[0]
                 if (!first) return null
+                // Доли колонок — тем же правилом, что у рендерера: превью обязано
+                // показывать ровно то, что увидит респондент (критерий 13.3).
+                const widths = groupRowWidths(row)
                 return row.length > 1 ? (
                   <div key={first.id} className="rf-row">
-                    {row.map((cell) => (
-                      <div key={cell[0]!.id} className="rf-cell">
+                    {row.map((cell, i) => (
+                      <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
                         {cell.map(renderGroup)}
                       </div>
                     ))}

@@ -35,7 +35,7 @@ import {
   type Span,
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
-import { packOptionRows } from '@fields/groups'
+import { cellVars, optionRowWidths, packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
@@ -1655,6 +1655,9 @@ function OptionsInline({
             // будет, нельзя.
             const zones = inviteId !== null && row.some((c) => c.some((o) => o.id === inviteId))
             const canAdd = cols < MAX_COLUMNS
+            // Доли колонок — тот же раскладчик и то же правило, что у вопросов; ячейка
+            // здесь настоящая .rf-cell, поэтому доля едет переменной, как у респондента.
+            const widths = optionRowWidths(row)
             return (
               // РЯД — КОНТЕЙНЕР ВСЕГДА, даже об одном варианте: он якорь зон и
               // единственный бокс, чья геометрия не зависит от содержимого. Тип узла
@@ -1689,6 +1692,7 @@ function OptionsInline({
                     className={`rf-cell relative self-start${
                       cols === 1 ? ' [align-items:var(--rf-align-items)]' : ''
                     }`}
+                    style={cellVars(widths, i)}
                   >
                     {zones && i > 0 && canAdd && (
                       <GapDropZone
