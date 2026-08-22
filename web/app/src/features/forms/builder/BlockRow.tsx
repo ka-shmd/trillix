@@ -37,6 +37,7 @@ import {
 import { optionKey } from '@fields/answer'
 import { packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
 import {
@@ -85,7 +86,7 @@ import { CaptionChip } from './CaptionChip'
 export interface BlockRowProps {
   block: Block
   // formId нужен image-блоку для загрузки картинки (POST /forms/{id}/media).
-  formId: string
+  formId: FormIdSource
   // firstInGroup — строка первая в своём вопросе, и потому интервала перед собой не
   // несёт: расстояние до предыдущего вопроса держит сам вопрос (mt-7 у li группы).
   // Позиция, а не свойство строки, — знает её только раскладчик группы (GroupRow).

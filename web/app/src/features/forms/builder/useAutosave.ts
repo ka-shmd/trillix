@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type StoreApi } from 'zustand/vanilla'
 
 import { ApiError } from '../../../shared/api/errors'
-import { type FormDetail } from '../../../entities/form'
+import { type Form, type FormDetail } from '../../../entities/form'
 import { formKeys } from '../keys'
 import { saveDraftSchema } from './api'
 import { DOCUMENT_FIELDS, type BuilderStore } from './store'
@@ -26,6 +26,20 @@ export function formLockToken(
   return qc.getQueryData<FormDetail>(formKeys.detail(slug))?.updatedAt ?? fallback
 }
 
+// Ленивое создание (features/forms/draft.ts): формы на сервере ещё нет, и завести её
+// нужно первой же правкой. create зовётся не раньше неё, onCreated отдаёт готовую
+// карточку тому, кто держит адрес и кэш (маршрут редактора).
+export interface DraftCreation {
+  create: () => Promise<Form>
+  onCreated: (form: Form) => void
+}
+
+// Ссылка на существующую форму: id для запросов, slug для адреса и ключа кэша.
+export interface FormRef {
+  id: string
+  slug: string
+}
+
 // useAutosave связывает стор билдера с бэкендом: правки документа (dirty) через
 // дебаунс уходят в PATCH всей схемы. updatedAt-токен оптимистичной блокировки
 // читается из кэша detail (formLockToken) и обновляется там ответом каждого
@@ -33,12 +47,18 @@ export function formLockToken(
 // молчим, пользователь перезагружает.
 //
 // formId (UUID) — цель самого PATCH /forms/{id}; slug — ключ кэша detail (по нему
-// адресована форма в URL кабинета). Возвращает статус для индикатора и retry.
+// адресована форма в URL кабинета). У ЕЩЁ НЕ СОЗДАННОГО черновика оба пусты, и
+// настоящие приезжают из ответа POST — поэтому хук держит их в ref и раздаёт
+// через ensureForm, а не пробрасывает проп дальше.
+//
+// Возвращает статус для индикатора, retry и ensureForm — единственную точку, где
+// форма появляется на сервере.
 export function useAutosave(
   store: StoreApi<BuilderStore>,
   formId: string,
   slug: string,
   initialUpdatedAt: string,
+  draft?: DraftCreation,
 ) {
   const qc = useQueryClient()
   const [status, setStatus] = useState<SaveStatus>('saved')
@@ -59,6 +79,64 @@ export function useAutosave(
   useEffect(() => {
     initialUpdatedAtRef.current = initialUpdatedAt
   }, [initialUpdatedAt])
+
+  // Адрес формы на сервере. Пусто = формы ещё нет (ленивое создание); заполняется
+  // ответом POST внутри ensureForm, а пропсы его только догоняют. Догоняют
+  // ОДНОСТОРОННЕ: id, единожды появившись, не исчезает, и пустой проп после создания
+  // означал бы отставший рендер — синхронизация им отправила бы PATCH в «/forms//».
+  const formIdRef = useRef(formId)
+  const slugRef = useRef(slug)
+  useEffect(() => {
+    if (formId === '') return
+    formIdRef.current = formId
+    slugRef.current = slug
+  }, [formId, slug])
+
+  const draftRef = useRef(draft)
+  useEffect(() => {
+    draftRef.current = draft
+  }, [draft])
+
+  // Ссылка на уже существующую форму — СИНХРОННО. Флаш на размонтировании обязан
+  // начать запрос в том же такте (autosave-flush.test.tsx, TD-42), а лишний await
+  // отдал бы управление обратно в цикл событий на ровном месте.
+  const knownForm = useCallback(
+    (): FormRef | null =>
+      formIdRef.current === '' ? null : { id: formIdRef.current, slug: slugRef.current },
+    [],
+  )
+
+  // ensureForm — единственное место, где форма заводится на сервере. Отдаёт ссылку на
+  // неё, создавая при первом обращении. Параллельные вызовы (автосейв и загрузка
+  // обложки в одну секунду) ждут ОДИН запрос: иначе автор получил бы две формы, и
+  // вторая осталась бы сиротой — полотно уехало бы сохраняться в первую.
+  const creatingRef = useRef<Promise<FormRef> | null>(null)
+  const ensureForm = useCallback((): Promise<FormRef> => {
+    const known = knownForm()
+    if (known) return Promise.resolve(known)
+    const lazy = draftRef.current
+    if (!lazy) return Promise.reject(new Error('Форма не создана'))
+    if (!creatingRef.current) {
+      creatingRef.current = lazy
+        .create()
+        .then((form) => {
+          formIdRef.current = form.id
+          slugRef.current = form.slug
+          // Токен блокировки следующего PATCH: кэша detail у только что созданной
+          // формы ещё нет, и до первого ответа сохранения он живёт только здесь.
+          initialUpdatedAtRef.current = form.updatedAt
+          lazy.onCreated(form)
+          return { id: form.id, slug: form.slug }
+        })
+        .catch((err: unknown) => {
+          // Провал не запирает черновик навсегда: следующая правка или «Повторить»
+          // пробуют снова.
+          creatingRef.current = null
+          throw err
+        })
+    }
+    return creatingRef.current
+  }, [knownForm])
 
   useEffect(() => {
     const clearTimer = () => {
@@ -86,18 +164,21 @@ export function useAutosave(
       const snapshotJson = JSON.stringify(snapshot)
       let ok = false
       try {
+        // Первая правка нового черновика ЗДЕСЬ же и создаёт форму: до неё формы на
+        // сервере нет вовсе (ленивое создание, features/forms/draft.ts).
+        const { id, slug: formSlug } = knownForm() ?? (await ensureForm())
         // Токен блокировки — свежий из кэша: если между дебаунсами прошёл rename
         // заголовка, он уже подвинул updatedAt в detail, и мы не отправим устаревший.
         const form = await saveDraftSchema(
-          formId,
+          id,
           snapshot,
-          formLockToken(qc, slug, initialUpdatedAtRef.current),
+          formLockToken(qc, formSlug, initialUpdatedAtRef.current),
         )
         ok = true
         // Список форм сортируется по updatedAt — он изменился; detail патчим, чтобы
         // повторный вход в форму гидрировал стор сохранённым состоянием и токеном.
         qc.invalidateQueries({ queryKey: formKeys.list() })
-        qc.setQueryData<FormDetail>(formKeys.detail(slug), (old) =>
+        qc.setQueryData<FormDetail>(formKeys.detail(formSlug), (old) =>
           old
             ? {
                 ...old,
@@ -164,7 +245,10 @@ export function useAutosave(
     }
     // initialUpdatedAt намеренно НЕ в зависимостях — см. initialUpdatedAtRef выше:
     // его смена (rename заголовка) не должна пересоздавать эффект и гасить дебаунс.
-  }, [store, formId, slug, qc])
+    // formId и slug — по той же причине и вдобавок по своей: у нового черновика они
+    // МЕНЯЮТСЯ на глазах (создание формы), а пересозданный эффект погасил бы дебаунс
+    // ровно той правки, которая форму и создала.
+  }, [store, qc, knownForm, ensureForm])
 
   // Предупреждение при уходе с несохранёнными правками (в т.ч. пока идёт сохранение).
   useEffect(() => {
@@ -180,5 +264,5 @@ export function useAutosave(
   // явное — ждать дебаунс после нажатия было бы враньём индикатора).
   const saveNow = () => runRef.current()
 
-  return { status, saveNow }
+  return { status, saveNow, ensureForm }
 }

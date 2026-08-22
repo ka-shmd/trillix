@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Link2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { type FormDesign } from '@entities/formSchema'
 
@@ -8,6 +9,7 @@ import { type Form } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { planRequiredMessage } from '../../plan/planError'
 import { usePublishForm } from '../queries'
+import { type FormRef } from './useAutosave'
 import { hasCustomFields } from './designTheme'
 import { useBuilderStore } from './storeContext'
 import {
@@ -71,7 +73,18 @@ function paidInUse(
   return out
 }
 
-export function PublishControls({ form, canPublish }: { form: Form; canPublish: boolean }) {
+// ensureForm — адрес формы на сервере, добытый по надобности: у нового черновика
+// формы ещё нет (ленивое создание), а публикация пустой формы законна как и раньше
+// (гейта публикации в проекте нет, ADR §10) — значит, нажатие обязано её завести.
+export function PublishControls({
+  form,
+  canPublish,
+  ensureForm,
+}: {
+  form: Form
+  canPublish: boolean
+  ensureForm: () => Promise<FormRef>
+}) {
   const publish = usePublishForm()
   const navigate = useNavigate()
   const design = useBuilderStore((s) => s.design)
@@ -85,8 +98,10 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
   // за пределами этой кнопки не нужен (web/CLAUDE.md).
   const [refused, setRefused] = useState(false)
 
-  const goShare = () =>
-    navigate({ to: '/forms/$slug/share', params: { slug: form.slug }, search: (prev) => prev })
+  // Slug берётся у формы, а не у пропа: только что созданная форма получила его
+  // секунду назад, и проп мог ещё не доехать до этого замыкания.
+  const goShare = (slug: string) =>
+    navigate({ to: '/forms/$slug/share', params: { slug }, search: (prev) => prev })
   const everPublished = form.publishedVersion !== null
 
   return (
@@ -99,7 +114,7 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
             variant="ghost"
             size="icon-sm"
             className="text-muted-foreground"
-            onClick={goShare}
+            onClick={() => void goShare(form.slug)}
             aria-label="Ссылка на форму"
             title="Ссылка на форму"
           >
@@ -123,7 +138,17 @@ export function PublishControls({ form, canPublish }: { form: Form; canPublish: 
             // Уводим на /share только с первой публикации: там автор впервые берёт
             // ссылку. Перепубликация — правка живой формы, и уносить из редактора её
             // автора незачем.
-            publish.mutate(form.id, everPublished ? undefined : { onSuccess: goShare })
+            void ensureForm()
+              .then(({ id, slug }) =>
+                publish.mutate(
+                  id,
+                  everPublished ? undefined : { onSuccess: () => void goShare(slug) },
+                ),
+              )
+              // Провалиться здесь может только создание формы (публикация свои ошибки
+              // показывает сама, ниже): нажали «Опубликовать» на нетронутом черновике,
+              // и завести его не вышло. Молчащая кнопка в этом месте — худший исход.
+              .catch(() => toast.error('Не удалось создать форму. Попробуйте ещё раз.'))
           }}
         >
           {publish.isPending ? 'Публикуем…' : 'Опубликовать'}

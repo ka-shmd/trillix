@@ -2,13 +2,12 @@ import { createFileRoute, redirect, useNavigate, Outlet } from '@tanstack/react-
 import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
 import { displayName } from '../entities/user'
-import { useCreateForm } from '../features/forms/queries'
+import { NEW_FORM_SLUG } from '../features/forms/draft'
 import { useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
 import { HeaderSlotContext } from '../shared/headerSlot'
-import { useCurrentWorkspaceId } from '../shared/currentWorkspace'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
 // сессии → редирект на /login (защищённый маршрут не показывает контент).
@@ -27,23 +26,20 @@ function AppLayout() {
   const navigate = useNavigate()
   const { data: user } = useQuery(meQueryOptions)
   const logout = useLogout()
-  const create = useCreateForm()
-  // Форма создаётся в том пространстве, в котором человек сейчас работает,
-  // а не всегда в личном: кнопка живёт в оболочке, поэтому пространство берётся
-  // из адреса (пусто = личное).
-  const workspaceId = useCurrentWorkspaceId()
   // DOM-узел слота действий в шапке; страницы порталят в него свои кнопки.
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null)
 
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
   if (!user) return null
 
+  // «Новая форма» НИЧЕГО не создаёт: открывается редактор несуществующего черновика,
+  // а форма заводится первой правкой (features/forms/draft.ts). search сохраняется —
+  // из него редактор узнаёт пространство, в котором заводить форму (пусто = личное).
   function handleCreate() {
-    create.mutate({ workspaceId: workspaceId || undefined }, {
-      onSuccess: (form) =>
-        // search сохраняется: иначе редактор откроется «вне пространства», и
-        // следующая созданная оттуда форма уедет в личное.
-        navigate({ to: '/forms/$slug/edit', params: { slug: form.slug }, search: (prev) => prev }),
+    void navigate({
+      to: '/forms/$slug/edit',
+      params: { slug: NEW_FORM_SLUG },
+      search: (prev) => prev,
     })
   }
 
@@ -54,7 +50,6 @@ function AppLayout() {
         person={user}
         userName={displayName(user)}
         onCreateForm={handleCreate}
-        creatingForm={create.isPending}
         onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
         loggingOut={logout.isPending}
       />

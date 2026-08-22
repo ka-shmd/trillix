@@ -24,7 +24,8 @@ import {
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { FormRow } from '../../features/forms/FormRow'
-import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
+import { NEW_FORM_SLUG } from '../../features/forms/draft'
+import { formsListQueryOptions } from '../../features/forms/queries'
 import { formKeys } from '../../features/forms/keys'
 import { DEFAULT_FORMS_SORT } from '../../entities/form'
 import { MAX_WORKSPACE_NAME_LEN, type Workspace } from '../../entities/workspace'
@@ -243,7 +244,6 @@ function HeaderCrumbs() {
 // подгрузкой, а хук на пространство иначе не заведёшь.
 function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate()
-  const create = useCreateForm()
   const rename = useRenameWorkspace(workspace.id)
   const remove = useDeleteWorkspace(workspace.id)
   const qc = useQueryClient()
@@ -277,31 +277,18 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   )
   const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
 
-  // «+» заводит форму СРАЗУ В ЭТОМ пространстве и уводит в редактор. Кнопка
-  // сайдбара так не умеет: она живёт над деревом маршрутов и берёт пространство из
-  // ?w= адреса, которого на обзоре нет, — то есть всегда клала бы форму в личное.
-  // Пространство едет в адрес редактора по общему правилу кабинета (пусто =
-  // личное): иначе следующая созданная оттуда форма уедет не туда.
+  // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
+  // её заводит первая правка (features/forms/draft.ts). Кнопка сайдбара так не умеет:
+  // она живёт над деревом маршрутов и берёт пространство из ?w= адреса, которого на
+  // обзоре нет, — то есть всегда клала бы форму в личное. Пространство едет в адрес
+  // редактора по общему правилу кабинета (пусто = личное): из адреса его прочтёт и
+  // создание, и следующая созданная оттуда форма.
   function handleCreateForm() {
-    create.mutate(
-      { workspaceId: workspace.id },
-      {
-        onSuccess: (form) =>
-          navigate({
-            to: '/forms/$slug/edit',
-            params: { slug: form.slug },
-            search: workspace.isPersonal ? {} : { w: workspace.id },
-          }),
-        // Тихо не получившаяся кнопка — худший исход: упереться можно в лимит форм
-        // тарифа, и человек должен прочесть, во что именно упёрся.
-        onError: (error) =>
-          toast.error(
-            error instanceof ApiError && error.code === 'plan_required'
-              ? 'На текущем тарифе больше форм завести нельзя.'
-              : 'Не удалось создать форму. Попробуйте ещё раз.',
-          ),
-      },
-    )
+    void navigate({
+      to: '/forms/$slug/edit',
+      params: { slug: NEW_FORM_SLUG },
+      search: workspace.isPersonal ? {} : { w: workspace.id },
+    })
   }
 
   return (
@@ -380,7 +367,6 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
             size="icon"
             className="size-8 shrink-0"
             onClick={handleCreateForm}
-            disabled={create.isPending}
           >
             <Plus className="size-4" />
             <span className="sr-only">Новая форма в пространстве «{workspace.name}»</span>

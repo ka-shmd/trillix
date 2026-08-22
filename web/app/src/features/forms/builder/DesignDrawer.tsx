@@ -48,6 +48,7 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 
 import { ColorPicker } from './ColorPicker'
 import { CoverRow, LogoRow } from './DesignChrome'
+import { type FormIdSource } from './mediaUpload'
 import { PALETTE_FIELDS, patch, patchTop, SWATCHES } from './designEdit'
 import { currentTheme, hasCustomFields, resetToTheme, withTheme } from './designTheme'
 import { lowContrast } from './designWarnings'
@@ -88,7 +89,7 @@ export function DesignDrawer({
 }: {
   // formId нужен строкам хрома: загрузка картинки логотипа и обложки идёт в медиа
   // формы, а не воркспейса (тот же поток, что у картинки блока).
-  formId: string
+  formId: FormIdSource
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {

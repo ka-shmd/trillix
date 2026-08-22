@@ -2,6 +2,8 @@ import { type ReactNode } from 'react'
 
 import { type Block } from '@entities/formSchema'
 
+import { type FormIdSource } from '../mediaUpload'
+
 // Контракт файла типа в РЕДАКТОРЕ (фаза 16, этап 16.1в). Третий и последний слой среза:
 // контракт живёт в @entities/blocks, вид у респондента — в @fields/kinds, а здесь то, что
 // знает только полотно.
@@ -39,7 +41,7 @@ type LineHeight = 'h-6' | 'h-7' | 'h-[var(--rf-control-h)]'
 // шкала, превью даты). Компонент, а не строковый признак: строковый признак пришлось бы
 // разворачивать в JSX через ветвление в BlockRow, то есть оставить там ту же карту
 // «тип → контрол», которую этап и уносит в файлы типов.
-export type ObjectControl = (props: { block: Block; formId: string }) => ReactNode
+export type ObjectControl = (props: { block: Block; formId: FormIdSource }) => ReactNode
 
 // Факты о строке типа на полотне. РАЗДЕЛЁННОЕ объединение, а не общий мешок: имя строки и
 // классы текста есть только у текстовой поверхности, и требовать их от шкалы значило бы

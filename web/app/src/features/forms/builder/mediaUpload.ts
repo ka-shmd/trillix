@@ -14,13 +14,32 @@ export interface UploadHandlers {
 // колонки, логотип кратно уже. Значение по умолчанию — картинка блока.
 export type UploadPurpose = 'block' | 'cover' | 'logo'
 
+// Куда грузить: id формы — либо обещание его получить. Второе появилось с ленивым
+// созданием (features/forms/draft.ts): у нового черновика формы на сервере ещё нет, а
+// обложку автор вправе выбрать первым же действием — тогда id приезжает из ensureForm,
+// которая по дороге форму и заводит. Полотно поэтому носит вниз не строку, а «адрес
+// формы, каким он к этому моменту будет».
+export type FormIdSource = string | (() => Promise<string>)
+
+const resolveFormId = (source: FormIdSource): Promise<string> =>
+  typeof source === 'string' ? Promise.resolve(source) : source()
+
 // uploadImage грузит файл в POST /forms/{formId}/media и резолвит imageKey. Ошибки
 // маппятся в человекочитаемое сообщение по статусу (сервер валидирует независимо).
 export function uploadImage(
-  formId: string,
+  form: FormIdSource,
   file: File,
   h: UploadHandlers = {},
   purpose: UploadPurpose = 'block',
+): Promise<string> {
+  return resolveFormId(form).then((formId) => sendImage(formId, file, h, purpose))
+}
+
+function sendImage(
+  formId: string,
+  file: File,
+  h: UploadHandlers,
+  purpose: UploadPurpose,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const body = new FormData()
