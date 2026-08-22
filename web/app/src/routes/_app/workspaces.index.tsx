@@ -1,17 +1,28 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { createFileRoute } from '@tanstack/react-router'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Plus, User, Users } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { workspacesQueryOptions, useCreateWorkspace } from '../../features/workspaces/queries'
+import { MemberCluster } from '../../features/workspaces/MemberCluster'
+import { FormRow } from '../../features/forms/FormRow'
+import { formsListQueryOptions } from '../../features/forms/queries'
+import { DEFAULT_FORMS_SORT } from '../../entities/form'
+import type { Workspace } from '../../entities/workspace'
 import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 
-// Список пространств (/workspaces): куда переключиться и где завести новое.
-// Пункт сайдбара рядом с «Формы» и «Тариф» — переключение отсюда, а не из
-// выпадашки в шапке (решение владельца).
+// Сколько форм видно под пространством сразу; «Показать ещё» просит следующую
+// такую же страницу (решение владельца 2026-08-22). Страница показывает ВСЕ
+// пространства разом, поэтому длина каждого списка — общий бюджет экрана, а не
+// частное дело одного пространства.
+const FORMS_PER_WORKSPACE = 10
+
+// Обзор пространств (/workspaces): пространство — надпись с кружками участников,
+// под ней его формы списком. Отдельного экрана участников нет — состав и
+// приглашения живут в диалоге за кластером кружков.
 export const Route = createFileRoute('/_app/workspaces/')({
   component: WorkspacesPage,
 })
@@ -31,14 +42,14 @@ function WorkspacesPage() {
   return (
     <div className="mx-auto w-full max-w-3xl p-6">
       <h1 className="mb-1 text-2xl font-semibold tracking-tight">Пространства</h1>
-      <p className="mb-6 text-sm text-muted-foreground">
+      <p className="mb-8 text-sm text-muted-foreground">
         Формы принадлежат пространству. Личное заводится вместе с аккаунтом, остальные — вы сами.
       </p>
 
       {workspaces.isPending && (
-        <div className="space-y-2">
-          <Skeleton className="h-16 w-full" />
-          <Skeleton className="h-16 w-full" />
+        <div className="space-y-6">
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
         </div>
       )}
 
@@ -52,39 +63,14 @@ function WorkspacesPage() {
       )}
 
       {workspaces.data && (
-        <ul className="space-y-2">
+        <div className="space-y-8">
           {workspaces.data.map((ws) => (
-            <li key={ws.id}>
-              {/* Личное адресуется «/forms» без параметра — так же, как его
-                  трактует сервер (нет workspaceId = личное). */}
-              <Link
-                to="/forms"
-                search={ws.isPersonal ? {} : { w: ws.id }}
-                className="flex items-center gap-3 rounded-lg border p-4 transition-colors hover:bg-accent"
-              >
-                {ws.isPersonal ? (
-                  <User className="size-5 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Users className="size-5 shrink-0 text-muted-foreground" />
-                )}
-                <span className="truncate font-medium">{ws.name}</span>
-                {ws.isPersonal && (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">личное</span>
-                )}
-              </Link>
-              <Link
-                to="/workspaces/$workspaceId"
-                params={{ workspaceId: ws.id }}
-                className="mt-1 inline-block pl-4 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Участники
-              </Link>
-            </li>
+            <WorkspaceSection key={ws.id} workspace={ws} />
           ))}
-        </ul>
+        </div>
       )}
 
-      <form onSubmit={handleSubmit} className="mt-8 border-t pt-6">
+      <form onSubmit={handleSubmit} className="mt-10 border-t pt-6">
         <Label htmlFor="workspace-name" className="mb-2 block">
           Новое пространство
         </Label>
@@ -113,4 +99,79 @@ function WorkspacesPage() {
       </form>
     </div>
   )
+}
+
+// Одно пространство: заголовок с составом и его формы. Свой компонент, а не кусок
+// разметки в цикле, — потому что у каждого пространства свой список форм со своей
+// подгрузкой, а хук на пространство иначе не заведёшь.
+function WorkspaceSection({ workspace }: { workspace: Workspace }) {
+  // Личное адресуем его настоящим id, а не пустой строкой: на этом экране
+  // пространства равны, и разбирать «пусто = личное» здесь незачем — сервер
+  // одинаково принимает workspaceId любого, где ты состоишь.
+  const query = useInfiniteQuery(
+    formsListQueryOptions({
+      q: '',
+      sort: DEFAULT_FORMS_SORT,
+      workspaceId: workspace.id,
+      limit: FORMS_PER_WORKSPACE,
+    }),
+  )
+  const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
+
+  return (
+    <section>
+      <div className="mb-1 flex items-center gap-2">
+        <h2 className="truncate text-lg font-bold tracking-tight">{workspace.name}</h2>
+        {workspace.isPersonal && (
+          <span className="shrink-0 text-xs text-muted-foreground">личное</span>
+        )}
+        <MemberCluster workspace={workspace} />
+      </div>
+
+      {query.isPending ? (
+        <div className="space-y-1 py-1" aria-hidden="true">
+          <Skeleton className="h-9 w-full" />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ) : query.isError ? (
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+          <p className="mb-3 text-sm">{formsErrorText(query.error)}</p>
+          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+            Повторить
+          </Button>
+        </div>
+      ) : forms.length === 0 ? (
+        <p className="px-3 py-2 text-sm text-muted-foreground">Пока нет форм.</p>
+      ) : (
+        <>
+          <ul>
+            {forms.map((form) => (
+              <FormRow key={form.id} form={form} />
+            ))}
+          </ul>
+          {query.hasNextPage && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-1 mt-1 text-muted-foreground"
+              onClick={() => query.fetchNextPage()}
+              disabled={query.isFetchingNextPage}
+            >
+              {query.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+            </Button>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+// Замороженное даунгрейдом пространство отдаёт 403 на свои формы. Это не поломка:
+// формы целы, доступ вернётся вместе с тарифом — и сказать это надо словами,
+// а не «не удалось загрузить».
+function formsErrorText(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'workspace_frozen') {
+    return 'Доступ к формам закрыт: тариф больше не покрывает столько пространств или участников. Формы и ответы целы — доступ вернётся вместе с тарифом.'
+  }
+  return 'Не удалось загрузить формы пространства.'
 }
