@@ -175,6 +175,11 @@ export function useAutosave(
           formLockToken(qc, formSlug, initialUpdatedAtRef.current),
         )
         ok = true
+        // Фолбэк токена держим свежим сами: кэш detail — источник основной, но у
+        // только что созданной формы его может ещё не быть, и тогда следующий PATCH
+        // ушёл бы с updatedAt из ответа POST. Это 409 «изменена в другой вкладке» на
+        // втором сохранении формы, которую автор только что завёл.
+        initialUpdatedAtRef.current = form.updatedAt
         // Список форм сортируется по updatedAt — он изменился; detail патчим, чтобы
         // повторный вход в форму гидрировал стор сохранённым состоянием и токеном.
         qc.invalidateQueries({ queryKey: formKeys.list() })
