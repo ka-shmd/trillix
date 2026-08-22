@@ -23,7 +23,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Link } from '@tanstack/react-router'
-import { LayoutTemplate, Pencil, SquarePen } from 'lucide-react'
+import { LayoutTemplate, Settings, SquarePen } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -1781,21 +1781,22 @@ function PageNavRow({ nav, breakId }: { nav: PageNav; breakId?: string }) {
   )
 }
 
-// StepButtonEditor — КНОПКА ШАГА С КАРАНДАШОМ (решение владельца 2026-08-22). Сама
+// StepButtonEditor — КНОПКА ШАГА С ШЕСТЕРЁНКОЙ (решение владельца 2026-08-22). Сама
 // кнопка на полотне не нажимается (это span, показ — см. PageNavRow); правится она
-// значком, который проявляется слева при наведении. Так правятся обе кнопки шага —
+// значком настроек, который проявляется слева при наведении — тем же жестом и тем же
+// значком, каким открываются настройки блока (шапка билдера, BuilderScreen). Так правятся обе кнопки шага —
 // «Далее» каждой страницы и отправка, — и до этого решения текст менялся кликом по
 // САМОЙ кнопке отправки: жест был только у неё, и на полотне выглядел так, будто кнопка
 // работает.
 //
-// МИНА (TD-22, §4 EDITOR): карандаш обязан быть ABSOLUTE и проявляться прозрачностью.
+// МИНА (TD-22, §4 EDITOR): значок обязан быть ABSOLUTE и проявляться прозрачностью.
 // Контрол, который появляется по hover и занимает место в потоке, схлопывается на
 // mousedown — фокус уходит, hover теряется, всё едет, и mouseup приходит мимо цели:
 // клик молча пропадает. Отсюда же кластерные правила строки, которые тут повторены
 // один в один: погашенный — pointer-events-none (иначе зажигает сам себя от пустого
 // левого поля), показанный — снова ловит события, а просвет между ним и кнопкой закрыт
 // полосой CLUSTER_BRIDGE (без неё курсор, идущий к значку, гасит его на полпути).
-// Пока поповер открыт, карандаш виден и нажимаем при любом положении курсора
+// Пока поповер открыт, значок виден и нажимаем при любом положении курсора
 // (data-[state=open]) — иначе он исчезал бы под собственным поповером.
 function StepButtonEditor({
   className,
@@ -1831,7 +1832,7 @@ function StepButtonEditor({
             title="Изменить текст кнопки"
             className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} ${ICON_BTN} pointer-events-none absolute top-1/2 right-full mr-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/btn:pointer-events-auto group-hover/btn:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100`}
           >
-            <Pencil className="size-4" />
+            <Settings className="size-4" />
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72">
@@ -1878,7 +1879,7 @@ function NextButtonEditor({ breakId }: { breakId: string }) {
   )
 }
 
-// SubmitButtonEditor — кнопка отправки формы. Текст правится карандашом слева, как у
+// SubmitButtonEditor — кнопка отправки формы. Текст правится шестерёнкой слева, как у
 // «Далее»; пусто → показывается дефолт. Пишет в стор (форма-уровень, одна на всю форму —
 // в отличие от «Далее», у которого носитель свой на каждой странице), автосейв сохраняет
 // вместе со схемой.

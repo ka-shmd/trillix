@@ -19,7 +19,7 @@ import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { SlashEditor } from './SlashEditor'
 
 // КНОПКИ ШАГА НА ПОЛОТНЕ (решение владельца 2026-08-22): у каждой страницы своя кнопка
-// «Далее», и правятся все кнопки одинаково — карандашом слева, а не кликом по самой
+// «Далее», и правятся все кнопки одинаково — шестерёнкой слева, а не кликом по самой
 // кнопке. Полотно монтируется целиком: кто где рисует кнопки, решает SlashEditor, и
 // проверка на уровне строки этого не видит (тот же довод, что у emptyCanvas.test).
 //
@@ -83,9 +83,9 @@ const threePages = (a?: string, b?: string): FormSchema['blocks'] => [
   ...q('q3', 'Комментарий'),
 ]
 
-// Карандаш правки конкретной кнопки: имя называет ТЕКСТ кнопки, поэтому по нему же
-// кнопки и различаются на полотне.
-const pencil = (label: string) =>
+// Значок правки конкретной кнопки: имя называет ТЕКСТ кнопки, поэтому по нему же кнопки
+// и различаются на полотне.
+const gear = (label: string) =>
   screen.getByRole('button', { name: `Изменить текст кнопки «${label}»` })
 
 describe('кнопки шага на полотне', () => {
@@ -111,11 +111,11 @@ describe('кнопки шага на полотне', () => {
     expect(screen.getByText('Отправить').tagName).toBe('SPAN')
   })
 
-  it('карандаш правит «Далее» СВОЕЙ страницы, а не всех сразу', async () => {
+  it('шестерёнка правит «Далее» СВОЕЙ страницы, а не всех сразу', async () => {
     const { store } = setup(threePages('Продолжить', 'К оплате'))
     await screen.findByText('Продолжить')
 
-    fireEvent.click(pencil('К оплате'))
+    fireEvent.click(gear('К оплате'))
     fireEvent.change(screen.getByLabelText('Текст кнопки перехода'), {
       target: { value: 'Оплатить' },
     })
@@ -126,11 +126,11 @@ describe('кнопки шага на полотне', () => {
     expect(settings('pb1')).toBe('Продолжить')
   })
 
-  it('карандаш отправки правит форма-уровневый текст', async () => {
+  it('шестерёнка отправки правит форма-уровневый текст', async () => {
     const { store } = setup(threePages())
     await screen.findByText('Отправить')
 
-    fireEvent.click(pencil('Отправить'))
+    fireEvent.click(gear('Отправить'))
     fireEvent.change(screen.getByLabelText('Текст кнопки отправки'), {
       target: { value: 'Готово' },
     })
@@ -143,7 +143,7 @@ describe('кнопки шага на полотне', () => {
     setup(threePages('Продолжить', 'К оплате'))
     await screen.findByText('Продолжить')
 
-    fireEvent.click(pencil('Продолжить'))
+    fireEvent.click(gear('Продолжить'))
     fireEvent.change(screen.getByLabelText('Текст кнопки перехода'), { target: { value: '' } })
 
     // Пустое значение = «своего текста нет», и кнопка зовётся дефолтом. Сосед при этом
