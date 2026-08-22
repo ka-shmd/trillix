@@ -331,8 +331,20 @@ describe('formSchemaSchema — валидные', () => {
         { id: 'b2', groupId: 'g3', type: 'email', settings: {} },
       ],
     },
+    // Текст кнопки «Далее» — настройка того же разрыва, но про ДРУГУЮ его сторону: имя
+    // открывает страницу за разрывом, кнопка закрывает страницу перед ним.
+    'текст «Далее» у разрыва': {
+      blocks: [
+        { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+        { id: 'pb', groupId: 'g2', type: 'page_break', settings: { nextLabel: 'Продолжить' } },
+        { id: 'b2', groupId: 'g3', type: 'email', settings: {} },
+      ],
+    },
     'пустое имя страницы у не-разрыва': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { pageName: '' } }],
+    },
+    'пустой текст «Далее» у не-разрыва': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { nextLabel: '' } }],
     },
     'thankYou: false у не-разрыва': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { thankYou: false } }],
@@ -437,6 +449,19 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'флаг «Спасибо» на не-разрыве': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'heading', text: [{ t: 'x' }], settings: { thankYou: true } }],
+    },
+    'текст «Далее» на не-разрыве': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { nextLabel: 'Продолжить' } }],
+    },
+    'слишком длинный текст «Далее»': {
+      blocks: [
+        {
+          id: 'pb',
+          groupId: 'g1',
+          type: 'page_break',
+          settings: { nextLabel: 'я'.repeat(MAX_SUBMIT_LABEL_LEN + 1) },
+        },
+      ],
     },
     'слишком длинное имя страницы': {
       blocks: [

@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 
-import { DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
+import { DEFAULT_NEXT_LABEL, DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import {
@@ -287,6 +287,9 @@ export function FormView({
   // ничем не помеченному.
   const groups = groupMeta(blocks, plan.required)
   const submitLabel = form.schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
+  // Текст «Далее» у КАЖДОЙ страницы свой (settings.nextLabel закрывающего разрыва):
+  // обход кладёт его в план рядом со страницами, здесь остаётся дефолт на пустое.
+  const nextLabel = plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL
   const locked = phase !== 'editing'
 
   // Визит: «открыли» на монтировании, «дошёл до вопроса» на уходе со страницы.
@@ -634,7 +637,7 @@ export function FormView({
                 onClick={onNext}
                 disabled={locked}
               >
-                Далее
+                {nextLabel}
               </button>
             ) : (
               <button

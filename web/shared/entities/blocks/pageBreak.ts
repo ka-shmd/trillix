@@ -10,11 +10,16 @@ import { type BlockKindContract } from './contract'
 // принимаемых документов):
 //
 //   • pageName — имя страницы, которое видит автор и аналитика;
-//   • thankYou — «страница за мной это экран после отправки».
+//   • thankYou — «страница за мной это экран после отправки»;
+//   • nextLabel — текст кнопки «Далее» страницы ПЕРЕД разрывом (2026-08-22).
 //
 // Носитель — разрыв, а не сама страница, потому что страницы в схеме нет: её выводит
 // splitPages, как groupId выводит regroup. Отсюда и то, что имени у ПЕРВОЙ страницы не
 // бывает: её никакой разрыв не открывает, и она зовётся «Страница 1».
+//
+// Стороны у разрыва РАЗНЫЕ, и это не небрежность: он и конец одной страницы, и начало
+// следующей. Первые два ключа — про страницу за ним, nextLabel — про кнопку страницы
+// перед ним (её этот разрыв закрывает, и на него же вешает кнопки pageNavPlan).
 export const pageBreak: BlockKindContract = {
   family: 'content',
   carriesText: false,
@@ -22,7 +27,7 @@ export const pageBreak: BlockKindContract = {
   // разрыв не элемент раскладки, а её граница. Половина ряда, за которой начинается
   // новая страница, не значит ничего.
   canShareRow: false,
-  ownSettings: ['pageName', 'thankYou'],
+  ownSettings: ['pageName', 'nextLabel', 'thankYou'],
   supportsPlaceholder: false,
   requiresCaption: false,
 }

@@ -271,6 +271,12 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
                                     //   видит — оно для автора и аналитики; пусто =
                                     //   «Страница N». У первой страницы имени нет
                                     //   вовсе: её никакой разрыв не открывает
+        "nextLabel": "Продолжить",  // только у page_break: текст кнопки «Далее»
+                                    //   страницы, которую разрыв ЗАКРЫВАЕТ (≤100,
+                                    //   лимит общий с submitLabel). Пусто = «Далее».
+                                    //   Стороны у разрыва разные: pageName про
+                                    //   страницу ЗА ним, nextLabel — про кнопку
+                                    //   страницы ПЕРЕД ним
         "thankYou": true,           // только у page_break: «страница за мной это
                                     //   экран ПОСЛЕ ОТПРАВКИ, а не шаг формы».
                                     //   Условия действия (страница последняя, страниц
@@ -408,6 +414,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `settings.scaleMin` / `scaleMax` (scale) | оба или ни одного; 0 ≤ min < max ≤ 10 |
 | длина `settings.imageKey` (image) | ≤ 200 |
 | длина `settings.pageName` (page_break) | ≤ 100 |
+| длина `settings.nextLabel` (page_break) | ≤ 100 (тот же лимит, что у `submitLabel`) |
 | `settings.thankYou` (page_break) | `true` либо ключа нет; условия действия — производные, схемой не проверяются |
 | `settings.column` | целое 1..4 — номер колонки (2026-08-11), у любого типа **кроме `form_title`** (whitelist коротких контролов отменён 2026-07-29 — ADR §10) |
 | `column` у варианта | целое 1..4; тип блока не ограничен (у dropdown флаг инертен) |

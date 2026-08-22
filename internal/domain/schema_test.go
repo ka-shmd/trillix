@@ -41,6 +41,11 @@ func TestValidateSchema_Valid(t *testing.T) {
 		// схемой ни на одной стороне: флаг инертен, а не невалиден.
 		"имя страницы у разрыва":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{}},{"id":"pb","groupId":"g2","type":"page_break","settings":{"pageName":"Контакты"}}]}`,
 		"имя страницы ровно в лимит": `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"pageName":"` + strings.Repeat("я", MaxPageNameLen) + `"}}]}`,
+		// Текст кнопки «Далее» — настройка того же разрыва, что и имя страницы, но про
+		// ДРУГУЮ сторону: имя открывает страницу за разрывом, кнопка закрывает страницу
+		// перед ним.
+		"текст «Далее» у разрыва":     `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{}},{"id":"pb","groupId":"g2","type":"page_break","settings":{"nextLabel":"Продолжить"}}]}`,
+		"текст «Далее» ровно в лимит": `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"nextLabel":"` + strings.Repeat("я", MaxSubmitLabelLen) + `"}}]}`,
 		"флаг страницы «Спасибо» у разрыва": `{"blocks":[
 			{"id":"b","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}},
@@ -52,8 +57,9 @@ func TestValidateSchema_Valid(t *testing.T) {
 			{"id":"pb","groupId":"g2","type":"page_break","settings":{"thankYou":true}},
 			{"id":"b2","groupId":"g3","type":"email","settings":{}}
 		]}`,
-		"пустое имя страницы у не-разрыва": `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"pageName":""}}]}`,
-		"thankYou false у не-разрыва":      `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"thankYou":false}}]}`,
+		"пустое имя страницы у не-разрыва":  `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"pageName":""}}]}`,
+		"пустой текст «Далее» у не-разрыва": `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"nextLabel":""}}]}`,
+		"thankYou false у не-разрыва":       `{"blocks":[{"id":"b","groupId":"g1","type":"short_text","settings":{"thankYou":false}}]}`,
 		// Доли колонок (2026-08-22): ряд с ними валиден, и НЕСХОДЯЩИЙСЯ ряд тоже —
 		// сумма кросс-блочна, её считает раскладчик фронта, а не схема.
 		"доли колонок сходятся":                `{"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":1,"columnWidth":70}},{"id":"b2","groupId":"g2","type":"email","settings":{"column":2,"columnWidth":30}}]}`,
@@ -165,6 +171,8 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		strings.Repeat("я", MaxQuestionNameLen+1) + `","settings":{}}]}`
 	longPageName := `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"pageName":"` +
 		strings.Repeat("я", MaxPageNameLen+1) + `"}}]}`
+	longNextLabel := `{"blocks":[{"id":"pb","groupId":"g1","type":"page_break","settings":{"nextLabel":"` +
+		strings.Repeat("я", MaxSubmitLabelLen+1) + `"}}]}`
 	longThankYou := `{"blocks":[],"thankYouText":"` + strings.Repeat("я", MaxThankYouTextLen+1) + `"}`
 	longRedirect := `{"blocks":[],"redirectUrl":"https://example.com/` +
 		strings.Repeat("a", MaxRedirectURLLen) + `"}`
@@ -198,9 +206,11 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"imageKey на не-image":        `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"imageKey":"ws/x.png"}}]}`,
 		// Настройки страницы принадлежат разрыву (2026-08-21): на чужом типе они
 		// бессмысленны и отвергаются, как imageKey у не-картинки.
-		"имя страницы на не-разрыве":   `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"pageName":"Контакты"}}]}`,
-		"флаг «Спасибо» на не-разрыве": `{"blocks":[{"id":"b","groupId":"g_b","type":"heading","text":[{"t":"x"}],"settings":{"thankYou":true}}]}`,
-		"слишком длинное имя страницы": longPageName,
+		"имя страницы на не-разрыве":    `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"pageName":"Контакты"}}]}`,
+		"флаг «Спасибо» на не-разрыве":  `{"blocks":[{"id":"b","groupId":"g_b","type":"heading","text":[{"t":"x"}],"settings":{"thankYou":true}}]}`,
+		"слишком длинное имя страницы":  longPageName,
+		"текст «Далее» на не-разрыве":   `{"blocks":[{"id":"b","groupId":"g_b","type":"short_text","settings":{"nextLabel":"Продолжить"}}]}`,
+		"слишком длинный текст «Далее»": longNextLabel,
 		// alt удалён из контракта целиком (фаза 13): отвергается даже у image.
 		"alt удалён из контракта":       `{"blocks":[{"id":"b","groupId":"g_b","type":"image","settings":{"imageKey":"ws/x.png","alt":"y"}}]}`,
 		"image с опциями":               `{"blocks":[{"id":"b","groupId":"g_b","type":"image","settings":{"options":[{"id":"o","label":"z"}]}}]}`,

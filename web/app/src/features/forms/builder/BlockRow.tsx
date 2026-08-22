@@ -414,7 +414,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   )
 })
 
-const ICON_BTN =
+export const ICON_BTN =
   'flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground'
 
 // CLUSTER_BACKDROP — подложка под кластером значков: непрозрачный прямоугольник в цвет
@@ -430,7 +430,7 @@ const ICON_BTN =
 // оформление формы (фаза 22) меняет холст, и подложка обязана ехать за ним, иначе на
 // тёмной форме под значками светилось бы белое пятно. Tailwind-цвет кабинета здесь не
 // годится по той же причине.
-const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+export const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
 
 // CLUSTER_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к правому краю кластера
 // и закрывающая просвет между ним и блоком.
@@ -442,7 +442,7 @@ const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
 // кластера, значит наведение на неё есть наведение на потомка строки (`group-hover`
 // держится), а `pointer-events` наследуется, и у погашенного кластера она прозрачна так же,
 // как он сам.
-const CLUSTER_BRIDGE = 'after:absolute after:inset-y-0 after:left-full after:w-1'
+export const CLUSTER_BRIDGE = 'after:absolute after:inset-y-0 after:left-full after:w-1'
 
 // Опции сенсора списка вариантов — МОДУЛЬНАЯ КОНСТАНТА, по той же причине, что у
 // полотна (см. POINTER_OPTIONS в SlashEditor): `useSensor` мемоизирует дескриптор по

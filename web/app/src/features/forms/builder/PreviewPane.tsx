@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
+import { DEFAULT_NEXT_LABEL, DEFAULT_SUBMIT_LABEL } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import {
@@ -221,7 +221,7 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
                   className="rf-submit rf-next"
                   onClick={() => setPage(page + 1)}
                 >
-                  Далее
+                  {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
                 </button>
               ) : (
                 // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
