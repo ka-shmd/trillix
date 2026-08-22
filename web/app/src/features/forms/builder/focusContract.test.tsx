@@ -272,6 +272,38 @@ describe('Backspace на инпуте плейсхолдера (§2.1, реше�
   })
 })
 
+// Enter на СТРОКЕ ОТВЕТА (решение владельца 2026-08-22). До него поверхность аккорд не
+// объявляла вовсе — строка ответа считалась «необязательным листом обхода», и Enter в
+// инпуте молча не делал ничего: полотно с неё было не продолжить, не взявшись за мышь.
+describe('Enter на инпуте плейсхолдера', () => {
+  it('однострочное поле → новая строка ниже', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'st', groupId: 'g1', type: 'short_text', settings: {} }],
+    })
+    engine.focusBlock('st', 'end')
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('st')
+  })
+
+  it('многострочное поле: Enter — блок ниже, Shift+Enter остаётся textarea', () => {
+    // Пара та же, что у текстовой строки, и разводит её тот же `chords.enter`: перенос
+    // внутри длинного плейсхолдера цепочка не ловит и отдаёт нативному вводу.
+    const { engine, handlers } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'lt', groupId: 'g1', type: 'long_text', settings: {} }],
+    })
+    engine.focusBlock('lt', 'end')
+    expect(el().tagName).toBe('TEXTAREA')
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter', shiftKey: true })
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(el(), { key: 'Enter', code: 'Enter' })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('lt')
+  })
+})
+
 // Клавиатурный поток (§3.2, этап 13.2). Строки рендерятся из статичного снапшота
 // (setup не пере-подписывается), поэтому наблюдаем НЕ ре-рендер, а результат: спай
 // onAddBelow для текстовых маршрутов и store.getState() для операций над документом.

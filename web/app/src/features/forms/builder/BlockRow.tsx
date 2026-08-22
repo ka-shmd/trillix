@@ -910,6 +910,7 @@ const BlockRowBody = memo(function BlockRowBody({
           <AnswerField
             block={block}
             insideQuestion={insideQuestion}
+            onAddBelow={onAddBelow}
             onArrow={onArrow}
             onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
@@ -1122,6 +1123,7 @@ function ObjectStop({
 function AnswerField({
   block,
   insideQuestion = false,
+  onAddBelow,
   onArrow,
   onBackspaceDelete,
   onDeleteBlock,
@@ -1133,6 +1135,9 @@ function AnswerField({
   block: Block
   // Как у ObjectStop: не первая строка группы меняет подпись пункта Mod+Alt+→.
   insideQuestion?: boolean
+  // Enter — новая строка ниже, как с любой другой строки полотна (решение владельца
+  // 2026-08-22). Внутри объектной остановки (date) поля рисуются без обработчиков.
+  onAddBelow?: (id: string) => void
   onArrow?: (id: string, dir: 'up' | 'down') => void
   // Backspace в ПУСТОМ плейсхолдере — удалить поле (см. проп BlockRow). Внутри
   // объектной остановки (date) поля рисуются без обработчиков — там свой Backspace.
@@ -1200,6 +1205,13 @@ function AnswerField({
       // Стрелка уходит со строки только с края каретки: вертикаль внутри длинного
       // плейсхолдера остаётся нативной.
       arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
+      // Enter — новая строка ниже (решение владельца 2026-08-22). До него поверхность
+      // аккорд не объявляла вовсе, и Enter в инпуте молча не делал НИЧЕГО: строка
+      // ответа была «необязательным листом обхода», с которого полотно не продолжают.
+      // У многострочного плейсхолдера (длинный ответ) перенос остаётся на Shift+Enter:
+      // его цепочка не ловит, и он уходит в textarea нативно — ровно та же пара, что у
+      // текстовой строки.
+      enter: onAddBelow && (() => onAddBelow(block.id)),
       backspace: onBackspaceDelete && (() => onBackspaceDelete(block.id)),
       backspaceHandles: () => el.value === '',
     })
