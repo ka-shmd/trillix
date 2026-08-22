@@ -332,7 +332,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // отбирает жёлоб у ручки ширины: 72px кластера шире 12px жёлоба.
           // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
           // hover, ушедший со строки на кластер, гасил бы его под курсором.
-          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
+          className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -431,6 +431,18 @@ const ICON_BTN =
 // тёмной форме под значками светилось бы белое пятно. Tailwind-цвет кабинета здесь не
 // годится по той же причине.
 const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+
+// CLUSTER_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к правому краю кластера
+// и закрывающая просвет между ним и блоком.
+//
+// МИНА: без неё до значков не доехать мышью. Курсор, идущий от текста влево, на этих 4px
+// оказывается вне и строки, и кластера: `group-hover` гаснет, кластеру возвращается
+// `pointer-events-none`, и зажечь его снова уже нечем — погашенный он для указателя
+// прозрачен, то есть наведением на себя не восстанавливается. Полоса — псевдоэлемент
+// кластера, значит наведение на неё есть наведение на потомка строки (`group-hover`
+// держится), а `pointer-events` наследуется, и у погашенного кластера она прозрачна так же,
+// как он сам.
+const CLUSTER_BRIDGE = 'after:absolute after:inset-y-0 after:left-full after:w-1'
 
 // Опции сенсора списка вариантов — МОДУЛЬНАЯ КОНСТАНТА, по той же причине, что у
 // полотна (см. POINTER_OPTIONS в SlashEditor): `useSensor` мемоизирует дескриптор по
@@ -2071,7 +2083,7 @@ function OptionCard({
       <div
         // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
         // у кластера строки: иначе он зажигается от собственной площади в левом поле.
-        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
+        className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
       >
         <button
           type="button"
