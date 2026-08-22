@@ -61,9 +61,16 @@ export const chords = {
   // Mod+T: Ctrl/Cmd+T — новая вкладка, её браузер забирает себе и странице не отдаёт
   // (preventDefault там не работает), так что обещание в карте было бы ложью.
   addCaption: (e: KeyLike) => mod(e) && e.altKey && e.code === 'KeyT',
-  // Enter — новый блок/вариант; Shift+Enter (внутрь группы) отличают по e.shiftKey
-  // в обработчике. Проверяется после answerAction (Cmd+Enter — тоже code 'Enter').
-  enter: (e: KeyLike) => e.code === 'Enter',
+  // Enter — новый блок/вариант. Shift ИСКЛЮЧЁН явно: Shift+Enter принадлежит тексту
+  // (перенос строки внутри блока, `lineBreak` ниже), и голый матчер отдавал бы его
+  // жесту полотна. Проверяется после answerAction (Cmd+Enter — тоже code 'Enter').
+  enter: (e: KeyLike) => e.code === 'Enter' && !e.shiftKey,
+  // Shift+Enter — перенос строки ВНУТРИ блока: текстовое поведение, а не жест полотна
+  // (решение владельца 2026-08-22, отменяет «новый блок внутрь вопроса»). Аккорд
+  // назван, потому что перенос вставляет строка сама (RichLine), в модель: браузерный
+  // <br> не считается символом в textContent, и координаты каретки — те же, в которых
+  // работают слеш-меню, «@» и все команды форматирования, — разъехались бы с моделью.
+  lineBreak: (e: KeyLike) => e.code === 'Enter' && e.shiftKey,
   // Backspace — схлопывание/удаление объекта/варианта. Проверяется после deleteBlock.
   backspace: (e: KeyLike) => e.code === 'Backspace',
   arrowUp: (e: KeyLike) => e.code === 'ArrowUp',
@@ -142,9 +149,9 @@ export interface Shortcut {
   hint: string
   // short — та же мысль в размер чипа (его читает CaptionChip). Чип стоит справа В
   // СТРОКЕ, места там столько,
-  // сколько не занял текст, и полное `hint` («Новый блок после вопроса») ложится на
+  // сколько не занял текст, и полное `hint` («Перенос строки внутри блока») ложится на
   // подпись. Шпаргалке место не жмёт — она печатает `hint`, где важна точность
-  // (Enter «после вопроса» против Shift+Enter «внутрь вопроса»). Нет short — чип
+  // (Enter «новый блок ниже» против Shift+Enter «перенос строки»). Нет short — чип
   // берёт hint.
   short?: string
   match?: (e: KeyLike) => boolean
@@ -204,7 +211,7 @@ export const BLOCK_COMMON: Shortcut[] = [
 // одна карта на код и на подсказки, расхождение = баг (демо-критерий 13.5).
 export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
   text: [
-    sc(chords.enter, 'Enter', 'Новый блок после вопроса', 'Новый блок'),
+    sc(chords.enter, 'Enter', 'Новый блок сразу под этой строкой', 'Новый блок'),
     gesture('/', 'Вставить поле или заголовок', 'Поле'),
     // Подстановка ответа (docs/design/mentions.md). Символьный жест, как «/»: карта
     // обещает его ровно там, где он работает, — в текстовой строке полотна.
@@ -213,7 +220,7 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     // там есть: в одиночном абзаце handleAnswerAction ничего не находит и молчит.
     // Поэтому пункт условный, см. shortcutsFor({ hasAnswer }).
     sc(chords.answerAction, 'Mod+Enter', 'К полю ответа', 'К полю'),
-    sc((e) => chords.enter(e) && e.shiftKey, 'Shift+Enter', 'Новый блок внутрь вопроса'),
+    sc(chords.lineBreak, 'Shift+Enter', 'Перенос строки внутри блока', 'Перенос строки'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
     sc(chords.rowRight, 'Mod+Alt+→', 'В ряд с предыдущим вопросом', 'В ряд'),
@@ -293,7 +300,10 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
     sc(chords.rowLeft, 'Mod+Alt+←', 'Вернуть своим рядом', 'Свой ряд'),
     gesture('/', 'Вставить блок ниже'),
   ],
-  title: [sc((e) => chords.enter(e) || chords.arrowDown(e), 'Enter / ↓', 'К первому блоку')],
+  title: [
+    sc((e) => chords.enter(e) || chords.arrowDown(e), 'Enter / ↓', 'К первому блоку'),
+    sc(chords.lineBreak, 'Shift+Enter', 'Перенос строки внутри блока', 'Перенос строки'),
+  ],
   canvas: [
     sc(chords.enter, 'Enter', 'Начать'),
     gesture('/', 'Выбрать тип блока'),

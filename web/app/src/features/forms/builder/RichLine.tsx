@@ -30,6 +30,7 @@ import {
   applyDefaultMarks,
   cutRange,
   insertMention,
+  insertText,
   setBg,
   setColor,
   setHref,
@@ -410,6 +411,32 @@ export function RichLine({
     syncSelection()
   }
 
+  // Shift+Enter — перенос строки внутри блока (решение владельца 2026-08-22: жест
+  // «новый блок внутрь вопроса» снят, у клавиши остаётся текстовое поведение).
+  //
+  // Работает как `pickMention` и по той же причине: строка НЕуправляемая, ресинк из
+  // стора придёт с кареткой, снятой ДО правки, — поэтому поверхность перепечатывается и
+  // каретка ставится здесь же, за переносом, а наружу уходит готовая модель.
+  //
+  // Символ `\n`, а не <br> браузера: <br> не считается символом в `textContent`, то есть
+  // в координатах, которыми поток строки, слеш-меню и форматирование адресуют текст
+  // (`insertText`). Своя история отмены переносу не нужна — `kind` не передаём, и он
+  // коалесится с набором вокруг, как обычный символ.
+  function breakLine(el: HTMLDivElement): void {
+    const sel = selectionRange(el)
+    const spans = spansFromDom(el)
+    const at = sel ? sel.from : richCaret(el).text().caret
+    const next = insertText(sel ? cutRange(spans, sel.from, sel.to) : spans, at, '\n')
+    spansToDom(el, next)
+    const caret = at + 1
+    setCaret(el, caret)
+    last.current = next
+    onChange(next, caret)
+    // Перенос — правка текста: «@»-меню ведётся по плоскому тексту и позиции каретки,
+    // и без пересчёта осталось бы открытым с устаревшим фильтром.
+    syncMention(plainText(next), caret)
+  }
+
   function handleKeyDown(e: KeyboardEvent<HTMLDivElement>): void {
     // Открытое «@»-меню забирает навигацию — как слеш-меню в строке полотна: ↑/↓ по
     // пунктам, Enter — выбор, Esc — закрыть (набранное остаётся текстом). Backspace
@@ -463,6 +490,12 @@ export function RichLine({
       setLinkOpen(true)
       return
     }
+    // Перенос строки — до потока полотна: `chords.enter` его уже не ловит (Shift
+    // исключён явно), но браузеру отдавать нельзя — он вставит <br> мимо модели.
+    if (chords.lineBreak(e)) {
+      e.preventDefault()
+      return breakLine(e.currentTarget)
+    }
     onKeyDown(e)
   }
 
@@ -498,8 +531,10 @@ export function RichLine({
       onPaste={(e) => {
         // Вставка приводится к plain text (§3.2 спеки, осознанная граница v1): разбор
         // чужого HTML из Word/Docs — самостоятельная задача со своим списком ловушек,
-        // в демо-критерий фазы она не входит и записана в BACKLOG. Строка однострочная,
-        // поэтому переносы становятся пробелами.
+        // в демо-критерий фазы она не входит и записана в BACKLOG. Переносы вставка
+        // по-прежнему схлопывает в пробелы, хотя сама строка с 2026-08-22 многострочная:
+        // текст сюда кладёт `execCommand`, и что он сделает с `\n` — вопрос браузера, а
+        // не наш. Многострочная вставка едет тем же пунктом BACKLOG.
         e.preventDefault()
         const text = e.clipboardData.getData('text/plain').replace(/\s*\n\s*/g, ' ')
         if (!text) return

@@ -123,10 +123,10 @@ export interface BlockRowProps {
   needsCaption?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
-  // onAddBelow — новая текстовая строка. Enter — после всей группы; Shift+Enter
-  // (opts.inside) — внутрь группы под текущей строкой; с объектной остановки — засев
-  // (печатный символ/вставка → seed) или открытие меню («/»).
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  // onAddBelow — новая текстовая строка сразу под этой (место вставки считает
+  // SlashEditor); с объектной остановки — засев (печатный символ/вставка → seed) или
+  // открытие меню («/»).
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   // onInsertBelow — кнопка «+»: новая строка с открытым меню выбора типа.
   onInsertBelow: (id: string) => void
   // onBackspaceAtStart — Backspace в начале блока: удалить картинку-соседа сверху или
@@ -651,8 +651,9 @@ const BlockRowBody = memo(function BlockRowBody({
       moveItem: (dir) => captionGuard(() => moveBlock(block.id, dir)),
       arrow: (dir) => onArrow(block.id, dir),
       arrowLeaves: (dir) => (dir === 'up' ? c.caretAtStart() : c.caretAtEnd()),
-      // Enter — новый блок после группы; Shift+Enter — внутрь группы (§3.2).
-      enter: (ev) => onAddBelow(block.id, { inside: ev.shiftKey }),
+      // Enter — новая строка сразу под этой (§3.2). Shift+Enter сюда не доходит вовсе:
+      // он принадлежит тексту (перенос строки) и погашен в RichLine.
+      enter: () => onAddBelow(block.id),
       // Каретка схлопнута в начале блока. Решение принимает родитель (знает соседей):
       // предыдущий блок — картинка → удалить её (как Backspace перед элементом в
       // текстовом документе), иначе пустой текущий блок схлопнуть в предыдущий.
@@ -1027,7 +1028,7 @@ function ObjectStop({
   // предыдущим вопросом (§6.6) — карта обязана называть то, что клавиша делает.
   insideQuestion?: boolean
   children: ReactNode
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
   onOpenActions: () => void
@@ -1290,7 +1291,7 @@ function OptionsInline({
   onArrow: (id: string, dir: 'up' | 'down') => void
   // Выход из списка (Enter в пустом последнем варианте): новая текстовая строка
   // после всей группы choice-блока.
-  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string; inside?: boolean }) => void
+  onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   // Cmd+Shift+Backspace на варианте — явное удаление всего choice-блока (§3.4).
   onDeleteBlock: (id: string) => void
   // Backspace в пустом «призраке», когда вариантов нет: блок уходит, каретка — на

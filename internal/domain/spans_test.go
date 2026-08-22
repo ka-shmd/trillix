@@ -69,6 +69,11 @@ func TestValidateSpans(t *testing.T) {
 			spans: []Span{{T: "а", M: []Mark{MarkBold, MarkItalic, MarkUnderline, MarkStrike}}},
 		},
 		{name: "цвет и фон", spans: []Span{{T: "а", Color: "#c026d3", BG: "#ffff00"}}},
+		// Перенос строки внутри блока (Shift+Enter на полотне, 2026-08-22): в модели он
+		// живёт символом в тексте куска, а не тегом. Проверка здесь затем, что запрет
+		// управляющих символов «на всякий случай» сломал бы автосейв молча — 422 на
+		// форму, которую автор правит прямо сейчас.
+		{name: "перенос строки внутри куска", spans: []Span{{T: "а\nб"}}},
 		{name: "ссылка", spans: []Span{{T: "а", Href: "https://trillix.ru/p"}}},
 		{name: "ссылка http тоже годится", spans: []Span{{T: "а", Href: "http://a.ru"}}},
 

@@ -183,10 +183,19 @@ describe('инлайн-слеш (§3.5) на новой поверхности',
 })
 
 describe('поток строки фазы 13 цел', () => {
-  it('Enter зовёт «новый блок после группы», а не печатает перенос', () => {
+  it('Enter зовёт «новый блок ниже», а не печатает перенос', () => {
     const { handlers } = reactiveRow('Текст')
     fireEvent.keyDown(line(), { key: 'Enter', code: 'Enter' })
-    expect(handlers.onAddBelow).toHaveBeenCalledWith('t', { inside: false })
+    expect(handlers.onAddBelow).toHaveBeenCalledWith('t')
+  })
+
+  // Обратная половина (2026-08-22): перенос печатает Shift+Enter, и полотна он не
+  // касается вовсе. Пока `chords.enter` был голым, он забирал этот аккорд себе.
+  it('Shift+Enter печатает перенос в текст и блока не зовёт', () => {
+    const { store, handlers } = reactiveRow('Текст')
+    fireEvent.keyDown(line(), { key: 'Enter', code: 'Enter', shiftKey: true })
+    expect(handlers.onAddBelow).not.toHaveBeenCalled()
+    expect(plainText(store.getState().blocks[0]!.text)).toBe('Текст\n')
   })
 
   it('Backspace в начале строки схлопывает блок, а не удаляет символ', () => {

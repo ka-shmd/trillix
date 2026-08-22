@@ -48,8 +48,11 @@ export function FormTitleRow({ block, onEnter }: { block: Block; onEnter: () => 
   }, [])
 
   function onKeyDown(e: KeyboardEvent<HTMLElement>) {
-    // Enter не заводит перевод строки: заголовок логически однострочный (переносится
-    // визуально при отрисовке). Enter и ↓ уводят на первый блок формы.
+    // Enter и ↓ уводят на первый блок формы. Перенос строки заголовку разрешён
+    // (решение владельца 2026-08-22) и живёт на Shift+Enter — он до сюда не доходит:
+    // `chords.enter` исключает Shift, а сам перенос вставляет RichLine. Следствие
+    // принято явно: перенос уезжает в зеркало `forms.title`, то есть в <title>
+    // страницы, og:title и письмо о новом ответе.
     if (chords.enter(e) || chords.arrowDown(e)) {
       e.preventDefault()
       onEnter()
