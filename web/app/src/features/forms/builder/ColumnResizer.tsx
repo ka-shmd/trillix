@@ -18,6 +18,9 @@ import { nextWidths, pxToWidths } from './columnResize'
 //
 // Escape отменяет начатое перетаскивание — доли возвращаются к тем, что были в DOM до
 // захвата (у ряда без долей это пустая строка, то есть «поровну из CSS»).
+// Сколько хит-области заходит ВНУТРЬ своей колонки, поверх её содержимого (px).
+const GRAB_INSIDE = 8
+
 export function ColumnResizer({
   index,
   gutter,
@@ -71,11 +74,21 @@ export function ColumnResizer({
     <div
       ref={ref}
       aria-hidden="true"
-      // Хит-область — весь жёлоб (как у зоны драга), видимая линия внутри тоньше:
-      // попасть в 2px мышью нельзя, а обещать 2px — можно.
+      // Хит-область — весь жёлоб (как у зоны драга) ПЛЮС левый край своей колонки,
+      // видимая линия внутри тоньше: попасть в 2px мышью нельзя, а обещать 2px — можно.
+      //
+      // Край колонки в области не роскошь: жёлоб у ручки отбирает кластер значков
+      // (`CLUSTER_BACKDROP` в `BlockRow`) — он висит слева от своего блока, шире жёлоба
+      // и лежит выше (`z-20`), поэтому у строки, которую правят (`focus-within` держит
+      // кластер поднятым), от жёлоба не остаётся ничего. А край блока кластеру не
+      // достаётся никогда: он снаружи бокса колонки, внутрь не заходит. Цена — первые
+      // GRAB_INSIDE пикселей строки не ставят каретку и не начинают выделение (жест
+      // гасит событие), поэтому число маленькое: край, а не поле.
       data-rf-resizer=""
-      className="group absolute top-0 bottom-0 z-10 -translate-x-1/2 cursor-col-resize touch-none"
-      style={{ left: -gutter / 2, width: gutter }}
+      // z-30 на время жеста поднимает линию НАД кластером: тащат обычно правимую
+      // строку, у которой кластер поднят и накрывает жёлоб вместе с линией.
+      className={`group absolute top-0 bottom-0 ${active ? 'z-30' : 'z-10'} cursor-col-resize touch-none`}
+      style={{ left: -gutter, width: gutter + GRAB_INSIDE }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         const handle = ref.current
@@ -114,12 +127,15 @@ export function ColumnResizer({
       onPointerUp={() => finish(true)}
       onPointerCancel={() => finish(false)}
     >
-      {/* Линия видна по наведению НА ЖЁЛОБ и на всё время жеста: в покое полотно не
+      {/* Линия видна по наведению НА ХИТ-ОБЛАСТЬ (жёлоб плюс край колонки) и на всё время жеста: в покое полотно не
           показывает органов управления, которых автор не спрашивал. Наведение ловит
           хит-область (group), а не сама линия: попасть мышью в 2px нельзя. Вес и цвет
           — те же, что у рейла зоны драга: это одна и та же граница ряда. */}
       <span
-        className={`pointer-events-none absolute inset-y-0 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-primary transition-opacity ${
+        // Линия стоит по центру ЖЁЛОБА, а не по центру хит-области: граница колонок
+        // видна там, где она есть, и от расширения области вправо не съезжает.
+        style={{ left: gutter / 2 }}
+        className={`pointer-events-none absolute inset-y-0 w-0.5 -translate-x-1/2 rounded-full bg-primary transition-opacity ${
           active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
         }`}
       />
