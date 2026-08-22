@@ -58,7 +58,7 @@ export function FormRow({ form }: { form: Form }) {
 
   return (
     <li
-      className="group relative flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-accent focus-within:bg-accent"
+      className="group relative flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-accent focus-within:bg-accent has-[[data-state=open]]:bg-accent"
       aria-busy={remove.isPending || duplicate.isPending}
     >
       <Link
@@ -73,11 +73,14 @@ export function FormRow({ form }: { form: Form }) {
         {label}
       </Link>
 
-      <span className="shrink-0 text-xs text-muted-foreground transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+      <span className="shrink-0 text-xs text-muted-foreground transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0">
         {rowMeta(form)}
       </span>
 
-      <span className="absolute right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      {/* group-has-[[data-state=open]] держит кнопки видимыми, пока раскрыто меню:
+          его содержимое порталится наружу, фокус уезжает из строки, и без этого
+          условия меню висело бы над невидимой кнопкой, которая его открыла. */}
+      <span className="absolute right-2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 group-has-[[data-state=open]]:opacity-100">
         <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2" asChild>
           <Link to="/forms/$slug/edit" params={{ slug: form.slug }}>
             <Pencil className="size-3.5" />
