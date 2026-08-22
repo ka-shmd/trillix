@@ -10,6 +10,12 @@ import './fieldWrap.css'
 // снимает голубое кольцо фокуса fields.css и добавляет тень на hover (fieldWrap.css).
 export const FIELD_CLS = 'rf-input rf-input-typed canvas-field'
 
+// PLACEHOLDER_CLS — поле, В КОТОРОМ АВТОР НАБИРАЕТ ПЛЕЙСХОЛДЕР (AnswerField). Автор
+// вводит его как обычный текст инпута, а респондент читает его как `::placeholder`, то
+// есть приглушённым, — и на полотне цвет обязан быть тем же (WYSIWYG). Отдельный класс,
+// а не правка FIELD_CLS: тот же FIELD_CLS носит превью даты, где приглушать нечего.
+export const PLACEHOLDER_CLS = `${FIELD_CLS} canvas-ph`
+
 // FieldWrap — обёртка поля: якорь глифа типа. Ширину берёт из .rf-field-wrap (index.css),
 // где стоит тот же потолок --rf-input-max, что у поля. Просвет подпись→поле (12px) даёт
 // групповой контейнер (зазор внутреннего ряда в GroupRow) — свой mt тут не нужен (был бы двойным

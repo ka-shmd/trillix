@@ -40,7 +40,7 @@ import { filterMenuItems, type MenuItem } from './blockTypes'
 import { ColumnResizer } from './ColumnResizer'
 import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
-import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
+import { FieldWrap, PLACEHOLDER_CLS } from './kinds/fieldWrap'
 import {
   canvasSorting,
   DRAG_ACTIVATION_DISTANCE,
@@ -1233,7 +1233,7 @@ function AnswerField({
         placeholder={hint}
         // block: убрать базлайн-просвет inline-block textarea (см. подпись выше) —
         // иначе под длинным полем копится ~7px и ритм 13.3 расходится.
-        className={`block ${FIELD_CLS}`}
+        className={`block ${PLACEHOLDER_CLS}`}
         {...focusProps}
       />,
       true,
@@ -1248,7 +1248,7 @@ function AnswerField({
       onChange={(e) => setPh(e.target.value)}
       onKeyDown={onFieldKeyDown}
       placeholder={hint}
-      className={FIELD_CLS}
+      className={PLACEHOLDER_CLS}
       {...focusProps}
     />,
   )
