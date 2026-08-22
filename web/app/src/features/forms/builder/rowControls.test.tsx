@@ -424,6 +424,17 @@ describe('звёздочка обязательности', () => {
     expect(row('bare').getByLabelText(STAR).closest('.rf-field-wrap')).toBeTruthy()
   })
 
+  // БЕЙДЖ В УГЛУ, А НЕ ХВОСТ СПРАВА (решение владельца 2026-08-22). Прежнее место
+  // (`left-full`) лежало за правым краем якоря: у поля в ряду это жёлоб с ручкой
+  // ширины, у объектной остановки — вовсе соседняя колонка.
+  it('у голого поля звёздочка висит бейджем в правом верхнем углу блока', () => {
+    setup(REQUIRED)
+    const marks = row('bare').getByLabelText(STAR).parentElement!
+    expect(marks.className).toContain('absolute')
+    expect(marks.className).toContain('right-1')
+    expect(marks.className).not.toContain('left-full')
+  })
+
   it('у вопроса с подписью кластер инлайн, в обёртку поля не уезжает', () => {
     setup(REQUIRED)
     expect(row('cap').getByLabelText(STAR).closest('.rf-field-wrap')).toBeNull()
