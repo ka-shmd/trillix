@@ -1,7 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Plus } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { ChevronRight, House, Plus } from 'lucide-react'
 import { workspacesQueryOptions, useCreateWorkspace } from '../../features/workspaces/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { FormRow } from '../../features/forms/FormRow'
@@ -9,6 +10,7 @@ import { formsListQueryOptions } from '../../features/forms/queries'
 import { DEFAULT_FORMS_SORT } from '../../entities/form'
 import type { Workspace } from '../../entities/workspace'
 import { ApiError } from '../../shared/api/errors'
+import { useHeaderSlot } from '../../shared/headerSlot'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -31,6 +33,7 @@ function WorkspacesPage() {
   const workspaces = useQuery(workspacesQueryOptions)
   const create = useCreateWorkspace()
   const [name, setName] = useState('')
+  const headerSlot = useHeaderSlot()
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -41,10 +44,13 @@ function WorkspacesPage() {
 
   return (
     <div className="mx-auto w-full max-w-3xl p-6">
-      <h1 className="mb-1 text-2xl font-semibold tracking-tight">Пространства</h1>
-      <p className="mb-8 text-sm text-muted-foreground">
-        Формы принадлежат пространству. Личное заводится вместе с аккаунтом, остальные — вы сами.
-      </p>
+      {/* Название страницы живёт крошкой в верхней шапке — там же, где крошки
+          редактора. Портал сохраняет React-контекст, несмотря на другое место в DOM. */}
+      {headerSlot && createPortal(<HeaderCrumbs />, headerSlot)}
+      {/* Заголовок остаётся в разметке, но не на экране: без него страница
+          начиналась бы с h2 названий пространств, и структура документа
+          рассыпалась бы. Видимое имя страницы — крошка выше. */}
+      <h1 className="sr-only">Пространства</h1>
 
       {workspaces.isPending && (
         <div className="space-y-6">
@@ -98,6 +104,27 @@ function WorkspacesPage() {
         )}
       </form>
     </div>
+  )
+}
+
+// Крошки страницы: дом → «Пространства». Тот же вид, что у крошек редактора
+// (BuilderScreen): один верхний бар — один способ назвать текущее место.
+function HeaderCrumbs() {
+  return (
+    <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1 text-sm">
+      <Link
+        to="/forms"
+        search={(prev) => prev}
+        aria-label="Дом"
+        className="flex shrink-0 items-center text-muted-foreground hover:text-foreground"
+      >
+        <House className="size-4" />
+      </Link>
+      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
+      <span className="min-w-0 truncate font-medium" aria-current="page">
+        Пространства
+      </span>
+    </nav>
   )
 }
 
