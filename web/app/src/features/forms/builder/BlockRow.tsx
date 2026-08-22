@@ -35,8 +35,9 @@ import {
   type Span,
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
-import { cellVars, optionRowWidths, packOptionRows } from '@fields/groups'
+import { optionRowWidths, packOptionRows } from '@fields/groups'
 import { filterMenuItems, type MenuItem } from './blockTypes'
+import { ColumnResizer } from './ColumnResizer'
 import { type FormIdSource } from './mediaUpload'
 import { rowFacts, textIsBold } from './kinds/index'
 import { FIELD_CLS, FieldWrap } from './kinds/fieldWrap'
@@ -1270,6 +1271,7 @@ function OptionsInline({
   const addOptionAfter = useBuilderStore((s) => s.addOptionAfter)
   const moveOption = useBuilderStore((s) => s.moveOption)
   const placeOptionInRow = useBuilderStore((s) => s.placeOptionInRow)
+  const setOptionRowWidths = useBuilderStore((s) => s.setOptionRowWidths)
   const takeOptionOwnRow = useBuilderStore((s) => s.takeOptionOwnRow)
   const moveOptionAfter = useBuilderStore((s) => s.moveOptionAfter)
   const removeOption = useBuilderStore((s) => s.removeOption)
@@ -1692,8 +1694,24 @@ function OptionsInline({
                     className={`rf-cell relative self-start${
                       cols === 1 ? ' [align-items:var(--rf-align-items)]' : ''
                     }`}
-                    style={cellVars(widths, i)}
+                    // Доля — inline flex-grow, а не переменной, как у респондента: то
+                    // же свойство правит жест ширины, и два способа записи на одной
+                    // ячейке разъехались бы на первом же перетаскивании.
+                    style={{ flexGrow: widths?.[i] }}
+                    data-rf-cell=""
                   >
+                    {/* Ручка ширины — тот же жест, что у вопросов; жёлоб списка 12px.
+                        Во время драга вариантов не рисуется: список в этот момент
+                        показывает свои три отклика и наведение не обслуживает. */}
+                    {i > 0 && optDrag === null && (
+                      <ColumnResizer
+                        index={i}
+                        gutter={OPT_GUTTER}
+                        onCommit={(next) =>
+                          setOptionRowWidths(block.id, row[0]![0]!.id, next)
+                        }
+                      />
+                    )}
                     {zones && i > 0 && canAdd && (
                       <GapDropZone
                         id={optionZoneId(inviteId!, i + 1, true)}

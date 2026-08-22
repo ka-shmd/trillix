@@ -50,6 +50,7 @@ import {
 import { type PageNav, pageNavPlan } from './pageNav'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import { captionLoss, needsCaptionFor, planBlockDrop, rowPosition } from './store'
+import { ColumnResizer } from './ColumnResizer'
 import { inviteRowId } from './rowZones'
 import { type Box, type DropTarget, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
@@ -141,6 +142,7 @@ export function SlashEditor({
   const updateBlock = useBuilderStore((s) => s.updateBlock)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
   const removeGroup = useBuilderStore((s) => s.removeGroup)
+  const setRowWidths = useBuilderStore((s) => s.setRowWidths)
   const changeBlockType = useBuilderStore((s) => s.changeBlockType)
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
@@ -1149,7 +1151,21 @@ export function SlashEditor({
                           // вопросы (mt-7 у li в GroupRow), как .rf-cell у превью.
                           className="relative flex min-w-0 flex-1 flex-col self-start"
                           style={{ flexGrow: widths?.[i] }}
+                          // Ячейка ряда для жеста ширины: по этой метке ручка находит
+                          // колонки своего ряда, не считая соседями зоны драга.
+                          data-rf-cell=""
                         >
+                          {/* Ручка ширины — в жёлобе слева от колонки; у первой её нет
+                              (границы слева от ряда не существует). Во время драга не
+                              рисуется вовсе: полотно в этот момент не отвечает на
+                              наведение (§5), и линия обещала бы жест, которого нет. */}
+                          {i > 0 && drag === null && (
+                            <ColumnResizer
+                              index={i}
+                              gutter={ROW_GUTTER}
+                              onCommit={(next) => setRowWidths(row[0]![0]!.blocks[0]!.id, next)}
+                            />
+                          )}
                           {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
                               жёлобе слева от неё, подвал — под ней. Первая колонка
                               границы не показывает: слева от неё внешняя полоса, у
@@ -1315,6 +1331,9 @@ const ROW_PAD = 6
 const ROW_GAP = 7
 // Жёлоб между колонками ряда вопросов (gap-7 у контейнера ряда).
 const ROW_GUTTER = 28
+// Жёлоб ряда ВНУТРИ вопроса — 14px: ритм внутри вопроса (.rf-group > .rf-row в
+// fields.css), а не между вопросами.
+const INNER_GUTTER = 14
 
 // hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
 // (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес
@@ -1525,6 +1544,8 @@ const GroupRow = memo(function GroupRow({
   // `{ attributes, listeners }` пересоздавался на каждый рендер группы и в одиночку
   // отменял memo у подписи: одна такая строка на вопрос — это половина строк формы.
   const groupHandle = useMemo(() => ({ attributes, listeners }), [attributes, listeners])
+  // Жест ширины внутреннего ряда: команда стора стабильна, memo группы она не ломает.
+  const setRowWidths = useBuilderStore((s) => s.setRowWidths)
   // Есть ли в группе контрол ответа: от этого зависит, работает ли Mod+Enter из
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
@@ -1677,9 +1698,19 @@ const GroupRow = memo(function GroupRow({
                   // даёт колонке ужаться и ломает 50/50.
                   <div
                     key={cell[0]!.id}
-                    className={pair ? 'min-w-0 flex-1' : 'contents'}
+                    className={pair ? 'relative min-w-0 flex-1' : 'contents'}
                     style={pair ? { flexGrow: innerWidths?.[i] } : undefined}
+                    {...(pair ? { 'data-rf-cell': '' } : {})}
                   >
+                    {/* Тот же жест на втором уровне рядов: жёлоб здесь 14px — ритм
+                        внутри вопроса, а не между вопросами. */}
+                    {pair && i > 0 && (
+                      <ColumnResizer
+                        index={i}
+                        gutter={INNER_GUTTER}
+                        onCommit={(next) => setRowWidths(innerRow[0]![0]!.id, next)}
+                      />
+                    )}
                     {cell.map(render)}
                   </div>
                 ))}

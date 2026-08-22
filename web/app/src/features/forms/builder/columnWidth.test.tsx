@@ -112,3 +112,39 @@ describe('доли колонок доезжают до разметки', () =>
     ])
   })
 })
+
+// РУЧКА ЖЕСТА в разметке полотна: где она есть и где её нет. Само перетаскивание в
+// vitest не воспроизводится — его арифметика проверена в columnResize.test.ts.
+describe('ручка ширины на полотне', () => {
+  const handles = (container: Element) => container.querySelectorAll('[data-rf-resizer]')
+
+  it('у ряда из двух колонок ручка одна — на их границе', () => {
+    const container = canvas(schema(wide('a', 1), wide('b', 2)))
+    expect(handles(container)).toHaveLength(1)
+  })
+
+  it('у ряда из четырёх колонок ручек три: границ на одну меньше, чем колонок', () => {
+    const container = canvas(schema(wide('a', 1), wide('b', 2), wide('c', 3), wide('d', 4)))
+    expect(handles(container)).toHaveLength(3)
+  })
+
+  it('полноширинные вопросы ручек не имеют — делить нечего', () => {
+    const container = canvas(
+      schema(
+        { id: 'a', groupId: 'a', type: 'short_text' },
+        { id: 'b', groupId: 'b', type: 'email' },
+      ),
+    )
+    expect(handles(container)).toHaveLength(0)
+  })
+
+  it('ряд внутри вопроса несёт свою ручку', () => {
+    const container = canvas(
+      schema(
+        { id: 't', groupId: 'g', type: 'title', text: textFromString('Индекс') },
+        { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 2 } },
+      ),
+    )
+    expect(handles(container)).toHaveLength(1)
+  })
+})
