@@ -3,6 +3,7 @@ import { workspaceKeys } from './keys'
 import {
   acceptInvitation,
   createWorkspace,
+  deleteWorkspace,
   inviteMember,
   leaveWorkspace,
   listMembers,
@@ -38,6 +39,17 @@ export function useRenameWorkspace(workspaceId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (name: string) => renameWorkspace(workspaceId, name),
+    onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
+  })
+}
+
+// Удаление пространства инвалидирует список пространств. Списки форм чистит
+// ВЫЗЫВАЮЩИЙ: формы удалённого ушли вместе с ним, но ключи форм принадлежат
+// чужой фиче, а импорт фичи из фичи запрещён (web/CLAUDE.md).
+export function useDeleteWorkspace(workspaceId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => deleteWorkspace(workspaceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
   })
 }

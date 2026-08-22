@@ -819,6 +819,26 @@ func (q *Queries) DeleteTOTP(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
+const deleteWorkspace = `-- name: DeleteWorkspace :execrows
+DELETE FROM workspaces WHERE id = $1 AND personal_user_id IS NULL
+`
+
+// Удаление пространства со всем содержимым: формы, версии, ответы, визиты,
+// участники и приглашения уносит каскад (все FK на workspaces — ON DELETE
+// CASCADE). Объекты в бакете каскад не видит — их сносит сервис ДО этого
+// запроса.
+//
+// personal_user_id IS NULL — сторож ЛИЧНОГО пространства на уровне запроса, а не
+// только в Go: человеку негде было бы жить, а формы и подписка остались бы без
+// места. Тот же приём, что «role <> 'owner'» в DeleteMember.
+func (q *Queries) DeleteWorkspace(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspace, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const emailTaken = `-- name: EmailTaken :one
 SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken
 `
@@ -2637,6 +2657,47 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 			&i.CreatedAt,
 			&i.FormVersion,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
+SELECT id, object_key
+FROM submission_files
+WHERE workspace_id = $1
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListWorkspaceFileKeysParams struct {
+	WorkspaceID uuid.UUID
+	Limit       int32
+}
+
+type ListWorkspaceFileKeysRow struct {
+	ID        uuid.UUID
+	ObjectKey string
+}
+
+// То же для ВСЕГО пространства: удаление пространства уносит каскадом формы, а с
+// ними строки загрузок вместе с ключами — объекты после этого не найдёт никто.
+// Порция ограничена по той же причине, что и у формы.
+func (q *Queries) ListWorkspaceFileKeys(ctx context.Context, arg ListWorkspaceFileKeysParams) ([]ListWorkspaceFileKeysRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceFileKeys, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceFileKeysRow
+	for rows.Next() {
+		var i ListWorkspaceFileKeysRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { MoreHorizontal, Pencil, Trash2 } from 'lucide-react'
+import { Copy, MessageSquareText, MoreHorizontal, Pencil, TextCursorInput, Trash2 } from 'lucide-react'
 import { type Form, displayFormName } from '../../entities/form'
 import { formatDate, pluralAnswers } from '../../shared/format'
 import { RenameForm } from './RenameForm'
@@ -107,14 +107,19 @@ export function FormRow({ form }: { form: Form }) {
           <DropdownMenuContent align="end">
             <DropdownMenuItem asChild>
               <Link to="/forms/$slug/responses" params={{ slug: form.slug }}>
+                <MessageSquareText className="size-4" />
                 Ответы ({form.submissionCount})
               </Link>
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setEditing(true)}>Переименовать</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setEditing(true)}>
+              <TextCursorInput className="size-4" />
+              Переименовать
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => duplicate.mutate(form.id)}
               disabled={duplicate.isPending}
             >
+              <Copy className="size-4" />
               {duplicate.isPending ? 'Дублируем…' : 'Дублировать'}
             </DropdownMenuItem>
           </DropdownMenuContent>

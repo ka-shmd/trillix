@@ -40,6 +40,11 @@ const (
 	// переименование. Отдельно от ActionMemberManage намеренно: состав и
 	// вывеска — разные вещи, и разрешать их вместе значит запретить их порознь.
 	ActionWorkspaceManage Action = "workspace.manage"
+	// ActionWorkspaceDelete — удалить пространство со всеми его формами и
+	// ответами. Отдельно от ActionWorkspaceManage по той же причине, по которой
+	// form.delete отделён от form.write: это необратимо, и запретить его
+	// персонально захотят раньше всего остального.
+	ActionWorkspaceDelete Action = "workspace.delete"
 )
 
 // Действия без потребителя здесь НЕ заводятся (PROCESS §2): объявленное, но не

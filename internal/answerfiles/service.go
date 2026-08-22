@@ -47,6 +47,7 @@ type Store interface {
 	BySubmissions(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) ([]File, error)
 	ByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]File, error)
 	KeysByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]File, error)
+	KeysByWorkspace(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]File, error)
 	Get(ctx context.Context, db postgres.DBTX, id uuid.UUID) (File, error)
 	Orphans(ctx context.Context, db postgres.DBTX, olderThan time.Time, limit int32) ([]File, error)
 	Delete(ctx context.Context, db postgres.DBTX, ids []uuid.UUID) error

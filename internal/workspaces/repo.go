@@ -67,6 +67,17 @@ func (Repo) Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name str
 	return Workspace{ID: row.ID, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
 }
 
+// Delete сносит пространство со всем содержимым (каскад по FK). Личное не
+// удаляется — сторож стоит в самом запросе; ноль строк означает «не удалили», и
+// разбирает это сервис.
+func (Repo) Delete(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteWorkspace(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("delete workspace %s: %w", id, err)
+	}
+	return n, nil
+}
+
 // AddOwner делает пользователя владельцем пространства. Владелец ровно один —
 // «не больше одного» держит уникальный индекс (0016), поэтому повторный вызов
 // на том же пространстве вернёт ошибку БД, а не создаст второго плательщика.

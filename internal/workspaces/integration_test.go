@@ -1151,3 +1151,98 @@ func TestWorkspaces_FormCountInList(t *testing.T) {
 			got.Workspaces[0].FormCount, got.Workspaces[1].FormCount)
 	}
 }
+
+// Удаление пространства уносит его формы каскадом и убирает его из списка.
+// Редактор удалять не может, личное не удаляется вовсе.
+func TestDeleteWorkspace_CascadesAndRefusesPersonal(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 SELECT $1, id, 'editor' FROM users WHERE email = 'bob@example.com'`, team.ID); err != nil {
+		t.Fatalf("добавить участника: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO forms (id, workspace_id, slug) VALUES ($1, $2, 'del-1')`,
+		uuid.New(), team.ID); err != nil {
+		t.Fatalf("вставить форму: %v", err)
+	}
+
+	// Редактору нельзя: пространство остаётся на месте.
+	bob := loginUser(t, srv, "bob@example.com")
+	r := del(t, bob, srv, "/api/v1/workspaces/"+team.ID)
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("статус у редактора = %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Личное не удаляется — 422, а не молчаливое «удалено».
+	var list listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &list)
+	r = del(t, alice, srv, "/api/v1/workspaces/"+list.Workspaces[0].ID)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус на личном = %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Владелец сносит командное — вместе с формами.
+	r = del(t, alice, srv, "/api/v1/workspaces/"+team.ID)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("статус = %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var after listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &after)
+	if len(after.Workspaces) != 1 || !after.Workspaces[0].IsPersonal {
+		t.Fatalf("после удаления осталось %+v, ждали одно личное", after.Workspaces)
+	}
+	var forms int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM forms WHERE workspace_id = $1`, team.ID).Scan(&forms); err != nil {
+		t.Fatalf("count forms: %v", err)
+	}
+	if forms != 0 {
+		t.Errorf("форм осталось %d — каскад не сработал", forms)
+	}
+}
+
+// Чужому пространству не подтверждают даже существования: не участник получает
+// 404, а не 403 (инвариант безопасности 5).
+func TestDeleteWorkspace_StrangerGetsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	bob := loginUser(t, srv, "bob@example.com")
+	r := del(t, bob, srv, "/api/v1/workspaces/"+team.ID)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус = %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Без CSRF-заголовка снос не проходит.
+func TestDeleteWorkspace_RequiresCSRF(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, c, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	r := doBody(t, c, http.MethodDelete, srv.URL+"/api/v1/workspaces/"+team.ID, "")
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("статус = %d, ожидалось 403 (нет CSRF-заголовка)", r.StatusCode)
+	}
+	closeBody(t, r)
+}

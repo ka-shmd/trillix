@@ -34,6 +34,12 @@ export function renameWorkspace(workspaceId: string, name: string): Promise<Work
   })
 }
 
+// deleteWorkspace сносит пространство со всем содержимым: формы, ответы и файлы
+// уходят вместе с ним и не восстанавливаются. Личное сервер удалить не даст (422).
+export function deleteWorkspace(workspaceId: string): Promise<void> {
+  return apiRequest(`/workspaces/${workspaceId}`, { method: 'DELETE' })
+}
+
 export function listMembers(workspaceId: string): Promise<MembersState> {
   return apiRequest(`/workspaces/${workspaceId}/members`, { schema: membersResponseSchema })
 }

@@ -43,6 +43,17 @@ SET name = $2
 WHERE id = $1
 RETURNING id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal;
 
+-- name: DeleteWorkspace :execrows
+-- Удаление пространства со всем содержимым: формы, версии, ответы, визиты,
+-- участники и приглашения уносит каскад (все FK на workspaces — ON DELETE
+-- CASCADE). Объекты в бакете каскад не видит — их сносит сервис ДО этого
+-- запроса.
+--
+-- personal_user_id IS NULL — сторож ЛИЧНОГО пространства на уровне запроса, а не
+-- только в Go: человеку негде было бы жить, а формы и подписка остались бы без
+-- места. Тот же приём, что «role <> 'owner'» в DeleteMember.
+DELETE FROM workspaces WHERE id = $1 AND personal_user_id IS NULL;
+
 -- name: GetMemberRole :one
 -- Роль участника: основа проверки прав (Can). Нет строки → не участник, и это
 -- 404, а не 403 — существование чужого пространства не раскрывается.

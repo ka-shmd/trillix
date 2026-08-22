@@ -119,6 +119,32 @@ func (s *Service) RemoveByForm(ctx context.Context, formID uuid.UUID) error {
 	}
 }
 
+// RemoveByWorkspace сносит объекты и строки загрузок ВСЕГО пространства. Зовётся
+// ДО удаления самого пространства: каскад уносит формы, а с ними строки загрузок
+// вместе с ключами — и объекты после этого не найдёт ни чистка сирот (она
+// смотрит в ту же таблицу), ни человек (ListObjects в blob сознательно не
+// написан). Цена промаха здесь выше, чем у формы: в бакете остались бы файлы
+// респондентов всех форм пространства без единой записи о них.
+//
+// Порциями по той же причине, что RemoveByForm.
+func (s *Service) RemoveByWorkspace(ctx context.Context, workspaceID uuid.UUID) error {
+	for {
+		files, err := s.repo.KeysByWorkspace(ctx, s.db, workspaceID, removeBatch)
+		if err != nil {
+			return err
+		}
+		if len(files) == 0 {
+			return nil
+		}
+		if err := s.remove(ctx, files, s.repo.Delete); err != nil {
+			return err
+		}
+		if len(files) < removeBatch {
+			return nil
+		}
+	}
+}
+
 // InfoByForm — имена и размеры ВСЕХ файлов формы (id → файл), для выгрузки.
 // Одним запросом: построчный дал бы поездку на каждый ответ, а объём результата
 // ограничен квотой хранилища пространства.

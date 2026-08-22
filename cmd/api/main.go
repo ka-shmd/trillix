@@ -378,6 +378,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// доступ, forms зовёт answerfiles при удалении формы. Обратный импорт замкнул
 	// бы цикл.
 	formsSvc.WithFiles(filesSvc)
+	// Пространству файлы нужны по той же причине: его удаление уносит каскадом
+	// формы, а с ними — записи о загрузках вместе с ключами объектов.
+	workspacesSvc.WithFiles(filesSvc)
 	filesHandler := answerfiles.NewHandler(filesSvc, authHandler.RequireAuth)
 	uploadLimiter := ratelimit.NewTokenBucket(uploadRatePerSec, uploadBurst)
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,

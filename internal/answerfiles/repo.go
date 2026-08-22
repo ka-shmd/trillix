@@ -219,6 +219,24 @@ func (Repo) KeysByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 	return out, nil
 }
 
+// KeysByWorkspace — ключи файлов всего пространства порцией (снос при удалении
+// пространства). Отдельно от KeysByForm: удаление пространства уносит каскадом
+// все его формы разом, и обходить их по одной значило бы держать список форм
+// ради того, что одним запросом видно по workspace_id.
+func (Repo) KeysByWorkspace(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]File, error) {
+	rows, err := postgres.New(db).ListWorkspaceFileKeys(ctx, postgres.ListWorkspaceFileKeysParams{
+		WorkspaceID: workspaceID, Limit: limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list file keys of workspace %s: %w", workspaceID, err)
+	}
+	out := make([]File, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, File{ID: r.ID, ObjectKey: r.ObjectKey})
+	}
+	return out, nil
+}
+
 // ByForm — все заявленные файлы формы (имя и размер), для выгрузки.
 func (Repo) ByForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]File, error) {
 	rows, err := postgres.New(db).ListFormFiles(ctx, formID)
