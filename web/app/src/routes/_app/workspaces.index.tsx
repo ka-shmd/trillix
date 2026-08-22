@@ -122,7 +122,7 @@ function WorkspacesPage() {
       )}
 
       {workspaces.data && (
-        <div className="space-y-8">
+        <div className="space-y-4">
           {workspaces.data.map((ws) => (
             <WorkspaceSection key={ws.id} workspace={ws} />
           ))}
