@@ -36,8 +36,16 @@ const (
 	ActionMemberRead Action = "member.read"
 	// ActionMemberManage — приглашать, отзывать доступ, менять роли.
 	ActionMemberManage Action = "member.manage"
+	// ActionWorkspaceManage — править само пространство: пока это только
+	// переименование. Отдельно от ActionMemberManage намеренно: состав и
+	// вывеска — разные вещи, и разрешать их вместе значит запретить их порознь.
+	ActionWorkspaceManage Action = "workspace.manage"
+	// ActionWorkspaceDelete — удалить пространство со всеми его формами и
+	// ответами. Отдельно от ActionWorkspaceManage по той же причине, по которой
+	// form.delete отделён от form.write: это необратимо, и запретить его
+	// персонально захотят раньше всего остального.
+	ActionWorkspaceDelete Action = "workspace.delete"
 )
 
-// Действия без потребителя здесь НЕ заводятся (PROCESS §2). Так отсюда уехало
-// workspace.manage: переименования и удаления пространства в продукте нет, а
-// объявленное, но не спрашиваемое право — обещание, которого система не держит.
+// Действия без потребителя здесь НЕ заводятся (PROCESS §2): объявленное, но не
+// спрашиваемое право — обещание, которого система не держит.

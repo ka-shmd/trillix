@@ -38,14 +38,27 @@ export function formsListQueryOptions(params: {
   sort: FormsSort
   // workspaceId: '' означает личное пространство (параметр не уходит на сервер).
   workspaceId: string
+  // limit — размер страницы; не задан = умолчание сервера (50). Обзор пространств
+  // просит короткие страницы: под каждым пространством видно первую десятку.
+  limit?: number
 }) {
   // Пробелы по краям сервер всё равно срезает, поэтому нормализуем и здесь: иначе
   // « анкета » и «анкета» — две записи кэша с заведомо одинаковым содержимым.
   const q = params.q.trim()
   return infiniteQueryOptions({
-    queryKey: formKeys.listWith({ workspaceId: params.workspaceId, q, sort: params.sort }),
+    queryKey: formKeys.listWith({
+      workspaceId: params.workspaceId,
+      q,
+      sort: params.sort,
+      limit: params.limit,
+    }),
     queryFn: ({ pageParam }) =>
-      listForms(pageParam, { q, sort: params.sort, workspaceId: params.workspaceId || undefined }),
+      listForms(pageParam, {
+        q,
+        sort: params.sort,
+        workspaceId: params.workspaceId || undefined,
+        limit: params.limit,
+      }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })

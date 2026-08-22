@@ -31,6 +31,8 @@ type Middleware = func(http.Handler) http.Handler
 type workspaceService interface {
 	ListForUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error)
 	Create(ctx context.Context, userID uuid.UUID, name string) (Workspace, error)
+	Rename(ctx context.Context, userID, workspaceID uuid.UUID, name string) (Workspace, error)
+	Delete(ctx context.Context, userID, workspaceID uuid.UUID) error
 	Invite(ctx context.Context, inviterID, workspaceID uuid.UUID, email string, role Role) error
 	PreviewInvitation(ctx context.Context, rawToken string) (Invitation, error)
 	AcceptInvitation(ctx context.Context, userID uuid.UUID, userEmail, rawToken string) (Workspace, error)
@@ -66,6 +68,8 @@ func NewHandler(svc workspaceService, inviteLimiter RateLimiter, requireAuth, re
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/workspaces", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/workspaces", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.create))))
+	mux.Handle("PATCH /api/v1/workspaces/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.rename))))
+	mux.Handle("DELETE /api/v1/workspaces/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.remove))))
 	mux.Handle("POST /api/v1/workspaces/{id}/invitations", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.invite))))
 	// Просмотр приглашения — БЕЗ RequireAuth намеренно: аккаунта у приглашённого
 	// может ещё не быть, а понять, куда его зовут, он должен до регистрации.
@@ -290,6 +294,10 @@ type workspaceResponse struct {
 	// isPersonal — личное пространство спрашивающего: кабинет помечает его в
 	// списке и не показывает у него действий «покинуть»/«удалить».
 	IsPersonal bool `json:"isPersonal"`
+	// formCount — сколько форм в пространстве (подпись рядом с названием в
+	// обзоре). Точен на СПИСКЕ; у ответов мутаций всегда 0 — они отвечают самой
+	// вывеской, а число кабинет перечитает списком.
+	FormCount int64 `json:"formCount"`
 }
 
 type listResponse struct {
@@ -342,6 +350,46 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusCreated, toResponse(ws))
 }
 
+type renameRequest struct {
+	Name string `json:"name"`
+}
+
+// rename правит название пространства. Кривой id — 404, а не 422: чужое
+// существование не обсуждается (тем же занят userAndWorkspace, который здесь и
+// разбирает адрес).
+func (h *Handler) rename(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	var req renameRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	ws, err := h.svc.Rename(r.Context(), u.ID, workspaceID, req.Name)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toResponse(ws))
+}
+
+// remove сносит пространство со всем содержимым. Ответ — 204: удалять уже
+// удалённое нечего, и тела у этого исхода нет.
+func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.Delete(r.Context(), u.ID, workspaceID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func toResponse(ws Workspace) workspaceResponse {
-	return workspaceResponse{ID: ws.ID.String(), Name: ws.Name, IsPersonal: ws.IsPersonal}
+	return workspaceResponse{
+		ID: ws.ID.String(), Name: ws.Name, IsPersonal: ws.IsPersonal, FormCount: ws.FormCount,
+	}
 }

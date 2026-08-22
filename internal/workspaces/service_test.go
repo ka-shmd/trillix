@@ -23,6 +23,11 @@ type fakeStore struct {
 
 	createdName     string
 	createErr       error
+	renamedName     string
+	renameErr       error
+	deletedWS       int64
+	deleteWSRows    int64
+	deleteWSErr     error
 	ownerAdded      bool
 	addOwnerErr     error
 	ownerUserID     uuid.UUID
@@ -36,6 +41,16 @@ type fakeStore struct {
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
 	f.gotUserID = userID
 	return f.workspaces, f.err
+}
+
+func (f *fakeStore) Rename(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+	f.renamedName = name
+	return Workspace{ID: id, Name: name}, f.renameErr
+}
+
+func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int64, error) {
+	f.deletedWS++
+	return f.deleteWSRows, f.deleteWSErr
 }
 
 // MemberRole фейку списка не нужен — права проверяет отдельный набор
@@ -282,5 +297,139 @@ func TestCreate_OwnerFailureAborts(t *testing.T) {
 
 	if _, err := svc.Create(context.Background(), uuid.New(), "Команда"); !errors.Is(err, wantErr) {
 		t.Fatalf("err = %v, ждали %v", err, wantErr)
+	}
+}
+
+// Переименование спрашивает право ДО записи: id пространства в адресе правом не
+// является (инвариант безопасности 1). Роль без workspace.manage не должна
+// доехать до репозитория вовсе.
+func TestRename_ForbiddenRoleDoesNotWrite(t *testing.T) {
+	store := &roleStore{role: string(RoleEditor)}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+
+	_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "Новое имя")
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("err = %v, ждали domain.ErrForbidden", err)
+	}
+	if store.renamedName != "" {
+		t.Errorf("в репозиторий ушло имя %q, хотя права нет", store.renamedName)
+	}
+}
+
+// Имя проверяется тем же кодом, что у создания: разъехавшись, две проверки
+// дадут пространство, которое нельзя завести, но можно получить
+// переименованием.
+func TestRename_NameValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"пустое", ""},
+		{"из одних пробелов", "   \t\n"},
+		{"длиннее потолка", strings.Repeat("я", MaxNameLen+1)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &roleStore{role: string(RoleOwner)}
+			svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+			_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), tc.in)
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("err = %v, ждали domain.ErrValidation", err)
+			}
+			if store.renamedName != "" {
+				t.Errorf("невалидное имя %q всё равно записано", store.renamedName)
+			}
+		})
+	}
+}
+
+// Пробелы по краям срезаются, как и при создании.
+func TestRename_TrimsName(t *testing.T) {
+	store := &roleStore{role: string(RoleOwner)}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+
+	ws, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "  Отдел маркетинга  ")
+	if err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if ws.Name != "Отдел маркетинга" || store.renamedName != "Отдел маркетинга" {
+		t.Errorf("имя = %q (в репозиторий ушло %q), ждали обрезанное", ws.Name, store.renamedName)
+	}
+}
+
+// fakeFiles — снос объектов ответов глазами удаления пространства.
+type fakeFiles struct {
+	calls int
+	err   error
+}
+
+func (f *fakeFiles) RemoveByWorkspace(_ context.Context, _ uuid.UUID) error {
+	f.calls++
+	return f.err
+}
+
+// Порядок сноса обязателен: файлы уходят ДО строк. Каскад БД уносит записи о
+// загрузках вместе с ключами объектов, и оставшееся в бакете не найдёт никто.
+func TestDelete_RemovesFilesBeforeRows(t *testing.T) {
+	store := &roleStore{role: string(RoleOwner)}
+	store.deleteWSRows = 1
+	files := &fakeFiles{}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+		WithFiles(files)
+
+	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if files.calls != 1 {
+		t.Errorf("снос файлов вызван %d раз, ждали 1", files.calls)
+	}
+	if store.deletedWS != 1 {
+		t.Errorf("удалений строки = %d, ждали 1", store.deletedWS)
+	}
+}
+
+// Сбой сноса объектов ОСТАНАВЛИВАЕТ удаление: лучше отказать владельцу, чем
+// оставить в бакете файлы респондентов без единой записи о них.
+func TestDelete_FileFailureAbortsRowDelete(t *testing.T) {
+	wantErr := errors.New("bucket down")
+	store := &roleStore{role: string(RoleOwner)}
+	store.deleteWSRows = 1
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+		WithFiles(&fakeFiles{err: wantErr})
+
+	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, wantErr) {
+		t.Fatalf("err = %v, ждали %v", err, wantErr)
+	}
+	if store.deletedWS != 0 {
+		t.Error("строку пространства снесли, хотя файлы удалить не удалось")
+	}
+}
+
+// Роль без workspace.delete не доходит ни до файлов, ни до строк.
+func TestDelete_ForbiddenRoleTouchesNothing(t *testing.T) {
+	store := &roleStore{role: string(RoleEditor)}
+	files := &fakeFiles{}
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+		WithFiles(files)
+
+	err := svc.Delete(context.Background(), uuid.New(), uuid.New())
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("err = %v, ждали domain.ErrForbidden", err)
+	}
+	if files.calls != 0 || store.deletedWS != 0 {
+		t.Error("без права всё равно пошли удалять")
+	}
+}
+
+// Личное не удаляется: сторож стоит в SQL (ноль строк), и сервис обязан назвать
+// этот исход ошибкой, а не молча ответить «удалено».
+func TestDelete_PersonalRefused(t *testing.T) {
+	store := &roleStore{role: string(RoleOwner)}
+	store.deleteWSRows = 0
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+		WithFiles(&fakeFiles{})
+
+	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, ждали domain.ErrValidation", err)
 	}
 }

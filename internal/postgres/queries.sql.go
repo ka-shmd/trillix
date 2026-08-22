@@ -819,6 +819,26 @@ func (q *Queries) DeleteTOTP(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
+const deleteWorkspace = `-- name: DeleteWorkspace :execrows
+DELETE FROM workspaces WHERE id = $1 AND personal_user_id IS NULL
+`
+
+// Удаление пространства со всем содержимым: формы, версии, ответы, визиты,
+// участники и приглашения уносит каскад (все FK на workspaces — ON DELETE
+// CASCADE). Объекты в бакете каскад не видит — их сносит сервис ДО этого
+// запроса.
+//
+// personal_user_id IS NULL — сторож ЛИЧНОГО пространства на уровне запроса, а не
+// только в Go: человеку негде было бы жить, а формы и подписка остались бы без
+// места. Тот же приём, что «role <> 'owner'» в DeleteMember.
+func (q *Queries) DeleteWorkspace(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspace, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const emailTaken = `-- name: EmailTaken :one
 SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken
 `
@@ -2647,6 +2667,47 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
+const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
+SELECT id, object_key
+FROM submission_files
+WHERE workspace_id = $1
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListWorkspaceFileKeysParams struct {
+	WorkspaceID uuid.UUID
+	Limit       int32
+}
+
+type ListWorkspaceFileKeysRow struct {
+	ID        uuid.UUID
+	ObjectKey string
+}
+
+// То же для ВСЕГО пространства: удаление пространства уносит каскадом формы, а с
+// ними строки загрузок вместе с ключами — объекты после этого не найдёт никто.
+// Порция ограничена по той же причине, что и у формы.
+func (q *Queries) ListWorkspaceFileKeys(ctx context.Context, arg ListWorkspaceFileKeysParams) ([]ListWorkspaceFileKeysRow, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceFileKeys, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListWorkspaceFileKeysRow
+	for rows.Next() {
+		var i ListWorkspaceFileKeysRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceMembers = `-- name: ListWorkspaceMembers :many
 SELECT m.user_id, u.email, u.first_name, u.last_name, u.avatar_key, m.role, m.created_at
 FROM workspace_members m
@@ -2701,7 +2762,8 @@ func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUI
 const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
 SELECT w.id, w.name, w.created_at,
-       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal
+       (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
+       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -2713,6 +2775,7 @@ type ListWorkspacesByUserRow struct {
 	Name       string
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
+	FormCount  int64
 }
 
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
@@ -2726,6 +2789,11 @@ type ListWorkspacesByUserRow struct {
 // кабинету важно «личное ли оно ДЛЯ МЕНЯ», а не чьё оно вообще. IS NOT DISTINCT
 // FROM, а не «=»: у неличного пространства personal_user_id равен NULL, и
 // обычное сравнение дало бы NULL вместо false — то есть непустой bool в Go.
+//
+// form_count — сколько форм в пространстве (подпись рядом с названием в обзоре).
+// Подзапрос, а не второй поход в forms: обзор рисует ВСЕ пространства разом, и
+// отдельный запрос на каждое был бы N+1 ради одного числа. Мягкого удаления у
+// форм нет — считаются все строки, включая черновики.
 func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
@@ -2740,6 +2808,7 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 			&i.Name,
 			&i.CreatedAt,
 			&i.IsPersonal,
+			&i.FormCount,
 		); err != nil {
 			return nil, err
 		}
@@ -2943,6 +3012,39 @@ func (q *Queries) PurgeExpiredInvitations(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const renameWorkspace = `-- name: RenameWorkspace :one
+UPDATE workspaces
+SET name = $2
+WHERE id = $1
+RETURNING id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+`
+
+type RenameWorkspaceParams struct {
+	ID   uuid.UUID
+	Name string
+}
+
+type RenameWorkspaceRow struct {
+	ID         uuid.UUID
+	Name       string
+	CreatedAt  pgtype.Timestamptz
+	IsPersonal bool
+}
+
+// Переименование пространства. Право спрашивает сервис (ActionWorkspaceManage);
+// запрос никого не охраняет и адресует пространство одним id.
+func (q *Queries) RenameWorkspace(ctx context.Context, arg RenameWorkspaceParams) (RenameWorkspaceRow, error) {
+	row := q.db.QueryRow(ctx, renameWorkspace, arg.ID, arg.Name)
+	var i RenameWorkspaceRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.IsPersonal,
+	)
+	return i, err
 }
 
 const revealHiddenSubmissions = `-- name: RevealHiddenSubmissions :execrows

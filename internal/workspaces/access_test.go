@@ -48,6 +48,8 @@ func TestCan_Matrix(t *testing.T) {
 			domain.ActionBillingView:      true,
 			domain.ActionMemberRead:       true,
 			domain.ActionMemberManage:     true,
+			domain.ActionWorkspaceManage:  true,
+			domain.ActionWorkspaceDelete:  true,
 		},
 		RoleEditor: {
 			domain.ActionFormRead:         true,
@@ -57,6 +59,8 @@ func TestCan_Matrix(t *testing.T) {
 			domain.ActionBillingView:      false,
 			domain.ActionMemberRead:       true,
 			domain.ActionMemberManage:     false,
+			domain.ActionWorkspaceManage:  false,
+			domain.ActionWorkspaceDelete:  false,
 		},
 	}
 

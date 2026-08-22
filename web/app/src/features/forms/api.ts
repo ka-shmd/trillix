@@ -17,15 +17,19 @@ import {
 // поэтому листать с ним другую сортировку сервер не даст (422).
 // workspaceId — в каком пространстве смотрим; не передан = личное (сервер
 // подставляет его сам, поэтому старые ссылки без параметра работают как раньше).
+// limit — размер страницы; не передан = умолчание сервера.
 export function listForms(
   cursor?: string,
-  opts?: { q?: string; sort?: FormsSort; workspaceId?: string },
+  opts?: { q?: string; sort?: FormsSort; workspaceId?: string; limit?: number },
 ): Promise<FormsPage> {
   const params = new URLSearchParams()
   if (cursor) params.set('cursor', cursor)
   if (opts?.q) params.set('q', opts.q)
   if (opts?.sort && opts.sort !== 'updated') params.set('sort', opts.sort)
   if (opts?.workspaceId) params.set('workspaceId', opts.workspaceId)
+  // limit не передан = размер страницы сервера (forms.DefaultPageLimit); свой
+  // сервер зажимает в [1, MaxPageLimit].
+  if (opts?.limit) params.set('limit', String(opts.limit))
   const query = params.toString()
   return apiRequest(`/forms${query ? `?${query}` : ''}`, { schema: formsPageSchema })
 }
