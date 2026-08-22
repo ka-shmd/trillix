@@ -9,7 +9,7 @@ import {
 } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
-import { textIsBold } from './kinds/index'
+import { editorKind, textIsBold } from './kinds/index'
 import { applyDefaultMarks, BOLD_MARKS } from './richText'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
@@ -158,8 +158,8 @@ function sampleBlock(type: BlockType): Block {
   const text = carriesText(type)
     ? type === 'text'
       ? 'Пример пояснительного текста для респондента.'
-      : type === 'heading'
-        ? 'Заголовок раздела'
+      : type.startsWith('heading')
+        ? editorKind(type).label
         : type === 'consent'
           ? 'Соглашаюсь с условиями'
           : 'Ваш вопрос'

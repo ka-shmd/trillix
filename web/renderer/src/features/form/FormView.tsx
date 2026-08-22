@@ -28,6 +28,7 @@ import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
+import { groupClass } from '@fields/space'
 import { StepBar } from '@fields/stepBar'
 
 import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
@@ -577,12 +578,15 @@ export function FormView({
             aria-label={multi ? `Шаг ${page + 1} из ${pages.length}` : undefined}
           >
             {packRows(groupBlocks(pageBlocks)).map((row) => {
-              // Вопрос — обёртка .rf-group: блоки одной группы стоят тесно (14px), между
-              // группами простор (28px) — единый ритм с превью и редактором (этап 13.3).
+              // Вопрос — обёртка .rf-group: и внутри группы, и между группами шаг один,
+              // 12px — единый ритм с превью и редактором (этап 13.3, число сведено к
+              // одному 2026-08-22). Ступень воздуха ПЕРЕД вопросом добавляет тот же
+              // groupClass по типу первого блока (@fields/space) — заголовок раздела
+              // отбивается сильнее вопроса.
               // Вопрос с column='right' едет одним рядом .rf-row с предыдущим (фаза 13.6,
               // спека §5); обёртка ряда — только у ряда из двоих.
               const renderGroup = (group: (typeof row)[number][number]) => (
-                <div key={group.id} className="rf-group">
+                <div key={group.id} className={groupClass(group.blocks)}>
                   {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
                   бок той же обёрткой .rf-row, что и два вопроса. Ряд из одного
                   остаётся прямым ребёнком .rf-group. */}

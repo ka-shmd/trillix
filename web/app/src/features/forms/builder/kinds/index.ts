@@ -9,6 +9,8 @@ import { email } from './email'
 import { file } from './file'
 import { formTitle } from './formTitle'
 import { heading } from './heading'
+import { heading2 } from './heading2'
+import { heading3 } from './heading3'
 import { image } from './image'
 import { label } from './label'
 import { logic } from './logic'
@@ -42,6 +44,8 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   title,
   label,
   heading,
+  heading_2: heading2,
+  heading_3: heading3,
   text,
   image,
   page_break: pageBreak,

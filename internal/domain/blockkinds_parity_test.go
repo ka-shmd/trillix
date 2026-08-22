@@ -40,8 +40,11 @@ type tsBlockKind struct {
 }
 
 var (
-	reBlockTypes  = regexp.MustCompile(`(?s)BLOCK_TYPES = \[(.*?)\] as const`)
-	reQuoted      = regexp.MustCompile(`'([a-z_]+)'`)
+	reBlockTypes = regexp.MustCompile(`(?s)BLOCK_TYPES = \[(.*?)\] as const`)
+	// Цифра в имени типа законна (heading_2/heading_3, 2026-08-22): без неё разбор
+	// молча пропускал бы такой тип, и паритет ловил бы «есть в Go, нет на фронте» на
+	// ровном месте.
+	reQuoted      = regexp.MustCompile(`'([a-z0-9_]+)'`)
 	reKindConst   = regexp.MustCompile(`(?s)export const (\w+): BlockKindContract = \{(.*?)\n\}`)
 	reFamily      = regexp.MustCompile(`family:\s*'(answer|caption|content)'`)
 	reCarriesText = regexp.MustCompile(`carriesText:\s*(true|false)`)
@@ -49,7 +52,7 @@ var (
 	reChoice      = regexp.MustCompile(`choice:\s*'(single|multi)'`)
 	// Реестр в index.ts: и полная запись (`short_text: shortText,`), и сокращённая
 	// (`email,` — имя типа совпадает с именем константы).
-	reRegistryFull  = regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*(\w+),$`)
+	reRegistryFull  = regexp.MustCompile(`(?m)^\s{2}([a-z0-9_]+):\s*(\w+),$`)
 	reRegistryShort = regexp.MustCompile(`(?m)^\s{2}(\w+),$`)
 )
 

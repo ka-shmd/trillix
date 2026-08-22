@@ -106,9 +106,19 @@ export function BlockControl({ block }: { block: Block }) {
   return <FieldControl block={block} label={aria} disabled={true} invalid={false} />
 }
 
+// Три уровня заголовка раздела (2026-08-22): различаются кеглем и заглушкой пустого,
+// всё остальное у них общее — поэтому таблица, а не три ветки. Первый уровень зовётся
+// 'heading' и не переименован в 'heading_1': тип лежит в опубликованных формах.
+// Заглушка — то же имя, что у пункта меню: автор видит на полотне, что именно вставил.
+const HEADINGS: Partial<Record<Block['type'], { cls: string; hint: string }>> = {
+  heading: { cls: 'rf-heading', hint: 'Заголовок 1' },
+  heading_2: { cls: 'rf-heading rf-heading--2', hint: 'Заголовок 2' },
+  heading_3: { cls: 'rf-heading rf-heading--3', hint: 'Заголовок 3' },
+}
+
 // ContentBlock — неотвечаемый блок: подпись группы (title крупная / label мелкая),
-// заголовок раздела (heading), абзац (text) или картинка (image). Звёздочку
-// обязательности несёт подпись, если у поля группы стоит required.
+// заголовок раздела любого из трёх уровней, абзац (text) или картинка (image).
+// Звёздочку обязательности несёт подпись, если у поля группы стоит required.
 function ContentBlock({
   block,
   required,
@@ -165,14 +175,11 @@ function ContentBlock({
       </div>
     )
   }
-  if (block.type === 'heading') {
+  const heading = HEADINGS[block.type]
+  if (heading) {
     return (
-      <div className={cx('rf-heading', own)}>
-        {text ? (
-          <RichText spans={block.text} inert={inert} carrier={block.id} />
-        ) : (
-          'Заголовок раздела'
-        )}
+      <div className={cx(heading.cls, own)}>
+        {text ? <RichText spans={block.text} inert={inert} carrier={block.id} /> : heading.hint}
       </div>
     )
   }
