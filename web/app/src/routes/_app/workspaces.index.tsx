@@ -3,6 +3,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ChevronDown,
   ChevronRight,
   House,
   MoreHorizontal,
@@ -251,6 +252,12 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   const [membersOpen, setMembersOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // Свёрнутость живёт в useState, а не в адресе и не в localStorage: она не
+  // переживает перезагрузку намеренно — состояние экрана, а не выбор человека.
+  const [collapsed, setCollapsed] = useState(false)
+  // id списка нужен шеврону: без aria-controls кнопка объявляет, что она что-то
+  // разворачивает, но не говорит что.
+  const listId = `workspace-forms-${workspace.id}`
   // Права берутся из ответа состава — того же, что уже читает кластер кружков
   // (общий ключ кэша, лишнего запроса нет). Матрица прав живёт на сервере, и
   // кабинет не повторяет её на TypeScript: спрашиваем действие, а не роль.
@@ -313,6 +320,25 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
             {/* Число форм — с сервера (formCount), а не длина загруженного списка:
                 под пространством видна первая десятка, и счёт по ней врал бы. */}
             <span className="shrink-0 text-sm text-muted-foreground">{workspace.formCount}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 shrink-0 text-muted-foreground"
+              onClick={() => setCollapsed((prev) => !prev)}
+              aria-expanded={!collapsed}
+              aria-controls={listId}
+            >
+              {/* Один глиф с поворотом, а не два разных: направление шеврона и
+                  есть состояние, и анимация показывает переход между ними. */}
+              <ChevronDown
+                className={`size-4 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+              />
+              <span className="sr-only">
+                {collapsed
+                  ? `Показать формы пространства «${workspace.name}»`
+                  : `Свернуть формы пространства «${workspace.name}»`}
+              </span>
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="size-7 shrink-0">
@@ -383,40 +409,45 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
         }
       />
 
-      {query.isPending ? (
-        <div className="space-y-1 py-1" aria-hidden="true">
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-full" />
-        </div>
-      ) : query.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-          <p className="mb-3 text-sm">{formsErrorText(query.error)}</p>
-          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
-            Повторить
-          </Button>
-        </div>
-      ) : forms.length === 0 ? (
-        <p className="px-3 py-2 text-sm text-muted-foreground">Пока нет форм.</p>
-      ) : (
-        <>
-          <ul className="space-y-1.5">
-            {forms.map((form) => (
-              <FormRow key={form.id} form={form} />
-            ))}
-          </ul>
-          {query.hasNextPage && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-1 mt-1 text-muted-foreground"
-              onClick={() => query.fetchNextPage()}
-              disabled={query.isFetchingNextPage}
-            >
-              {query.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+      <div id={listId} hidden={collapsed}>
+        {query.isPending ? (
+          <div className="space-y-1 py-1" aria-hidden="true">
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ) : query.isError ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/40 bg-destructive/5 p-4"
+          >
+            <p className="mb-3 text-sm">{formsErrorText(query.error)}</p>
+            <Button variant="outline" size="sm" onClick={() => query.refetch()}>
+              Повторить
             </Button>
-          )}
-        </>
-      )}
+          </div>
+        ) : forms.length === 0 ? (
+          <p className="px-3 py-2 text-sm text-muted-foreground">Пока нет форм.</p>
+        ) : (
+          <>
+            <ul className="space-y-1.5">
+              {forms.map((form) => (
+                <FormRow key={form.id} form={form} />
+              ))}
+            </ul>
+            {query.hasNextPage && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-1 mt-1 text-muted-foreground"
+                onClick={() => query.fetchNextPage()}
+                disabled={query.isFetchingNextPage}
+              >
+                {query.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
     </section>
   )
 }
