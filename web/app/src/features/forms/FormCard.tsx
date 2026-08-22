@@ -1,14 +1,14 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { MoreHorizontal } from 'lucide-react'
 import { type Form, displayFormName } from '../../entities/form'
 import { formatDate } from '../../shared/format'
 import { FormStats } from './FormStats'
+import { RenameForm } from './RenameForm'
 import { useDeleteForm, useDuplicateForm, useUpdateFormName } from './queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -155,50 +155,5 @@ export function FormCard({ form }: { form: Form }) {
         </AlertDialogContent>
       </AlertDialog>
     </Card>
-  )
-}
-
-// RenameForm — инлайн-редактор названия. Пустое название не отправляем (совпадает
-// с серверной валидацией: title обязателен).
-function RenameForm({
-  initial,
-  pending,
-  onSubmit,
-  onCancel,
-}: {
-  initial: string
-  pending: boolean
-  onSubmit: (title: string) => void
-  onCancel: () => void
-}) {
-  const [title, setTitle] = useState(initial)
-  const trimmed = title.trim()
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    if (trimmed) onSubmit(trimmed)
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
-      <label htmlFor={`rename-${initial}`} className="sr-only">
-        Название формы
-      </label>
-      <Input
-        id={`rename-${initial}`}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        autoFocus
-        maxLength={200}
-      />
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={pending || !trimmed}>
-          {pending ? 'Сохраняем…' : 'Сохранить'}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={pending}>
-          Отмена
-        </Button>
-      </div>
-    </form>
   )
 }
