@@ -1,3 +1,5 @@
+import { type FormSchema } from '@entities/formSchema'
+
 import { DEFAULT_FORM_TITLE, type FormDetail } from '../../entities/form'
 
 // Ленивое создание формы: кнопка «Новая форма» НИЧЕГО не создаёт на сервере, а
@@ -11,6 +13,17 @@ import { DEFAULT_FORM_TITLE, type FormDetail } from '../../entities/form'
 // Столкнуться с настоящим slug сентинел не может: сервер выдаёт ровно
 // domain.SlugLen = 10 символов, здесь их три.
 export const NEW_FORM_SLUG = 'new'
+
+// Черновик пустой формы, каким его отдаёт СЕРВЕР: строка заголовка на полотне — это
+// блок документа, и у формы, которая о заголовке ещё не говорила, его дописывает
+// чтение (`domain.EnsureFormTitle`, `CanonicalDraftV4`), а не хранит база. Пустой
+// `blocks: []` дал бы полотно без первой строки — заголовок формы просто исчез бы.
+// Id зеркалит серверный (`ft_<id формы>`), но id формы здесь ещё нет: сентинел стоит
+// на его месте и таким в документе и остаётся — уникальность нужна только внутри
+// документа, а второй раз заголовок никто не синтезирует.
+const NEW_FORM_SCHEMA: FormSchema = {
+  blocks: [{ id: 'ft_new', groupId: 'g_ft_new', type: 'form_title', text: [] }],
+}
 
 // Деталь несозданной формы: редактору она нужна вся (гидрирует стор, рисует шапку и
 // страницу настроек) за минуту до того, как форма появится. Поля повторяют то, чем
@@ -32,7 +45,7 @@ export function newFormDetail(): FormDetail {
     submissionCount: 0,
     visitCount: 0,
     visitSubmittedCount: 0,
-    draftSchema: { blocks: [] },
+    draftSchema: NEW_FORM_SCHEMA,
     closeAt: null,
     responseLimit: null,
     closedMessage: null,
