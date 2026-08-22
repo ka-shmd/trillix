@@ -323,7 +323,16 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
           // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
           // стороны кластер получил подложку (CLUSTER_BACKDROP) и слой поверх соседа.
-          className={`${CLUSTER_BACKDROP} absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100`}
+          //
+          // МИНА: погашенный кластер обязан быть ПРОЗРАЧЕН ДЛЯ УКАЗАТЕЛЯ. Он лежит вне
+          // бокса строки (right-full), но остаётся её потомком, поэтому наведение на
+          // ЕГО площадь — это group-hover строки: без pointer-events-none кластер
+          // зажигает сам себя, стоит курсору попасть в левое поле, где его ещё нет.
+          // Кроме вранья («навёлся на пустое место — появились чужие значки») это
+          // отбирает жёлоб у ручки ширины: 72px кластера шире 28px жёлоба.
+          // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
+          // hover, ушедший со строки на кластер, гасил бы его под курсором.
+          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -2048,7 +2057,9 @@ function OptionCard({
           они, у списка получилось бы два этажа управления, различающихся парой
           пикселей. */}
       <div
-        className={`${CLUSTER_BACKDROP} absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:opacity-100`}
+        // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
+        // у кластера строки: иначе он зажигается от собственной площади в левом поле.
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
       >
         <button
           type="button"

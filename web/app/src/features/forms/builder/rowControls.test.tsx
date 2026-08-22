@@ -125,6 +125,19 @@ const QUESTION: FormSchema = {
 }
 
 describe('кластер значков строки', () => {
+  // ПОГАШЕННЫЙ КЛАСТЕР ПРОЗРАЧЕН ДЛЯ УКАЗАТЕЛЯ (2026-08-22, жалоба владельца: «значки
+  // появляются, когда наводишь на место, где они должны быть»). Кластер лежит ВНЕ бокса
+  // строки, оставаясь её потомком, поэтому без этого класса он сам себе делает
+  // group-hover — и заодно отбирает жёлоб у ручки ширины. Проверяется классом: :hover в
+  // happy-dom не считается, а правило здесь чисто CSS'ное.
+  it('невидимый кластер не ловит указатель, показанный — ловит', () => {
+    setup(QUESTION)
+    const cluster = row('inp').getByLabelText('Удалить блок').parentElement!
+    expect(cluster.className).toContain('pointer-events-none')
+    expect(cluster.className).toContain('group-hover:pointer-events-auto')
+    expect(cluster.className).toContain('group-focus-within:pointer-events-auto')
+  })
+
   it('у строки ответа в вопросе значки есть — её можно унести отдельно (фаза 15)', () => {
     setup(QUESTION)
     expect(controls('inp')).toContain('Удалить блок')
