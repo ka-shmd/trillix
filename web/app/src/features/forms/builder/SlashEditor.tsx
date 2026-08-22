@@ -77,7 +77,7 @@ import {
   SourceSlot,
 } from './dragChrome'
 import { measureLine, measureSlot, measureUnion, type Rect, setRect } from './dragMeasure'
-import { BlockRow, CLUSTER_BACKDROP, CLUSTER_BRIDGE, ICON_BTN } from './BlockRow'
+import { BlockRow, CLUSTER_BACKDROP, GAP_BRIDGE, ICON_BTN } from './BlockRow'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
@@ -1795,7 +1795,8 @@ function PageNavRow({ nav, breakId }: { nav: PageNav; breakId?: string }) {
 // клик молча пропадает. Отсюда же кластерные правила строки, которые тут повторены
 // один в один: погашенный — pointer-events-none (иначе зажигает сам себя от пустого
 // левого поля), показанный — снова ловит события, а просвет между ним и кнопкой закрыт
-// полосой CLUSTER_BRIDGE (без неё курсор, идущий к значку, гасит его на полпути).
+// полосой GAP_BRIDGE — псевдоэлементом самой группы во всю её высоту (без неё курсор,
+// идущий к значку, гасит его на полпути).
 // Пока поповер открыт, значок виден и нажимаем при любом положении курсора
 // (data-[state=open]) — иначе он исчезал бы под собственным поповером.
 function StepButtonEditor({
@@ -1819,7 +1820,7 @@ function StepButtonEditor({
   onChange: (next: string) => void
 }) {
   return (
-    <span className="group/btn relative">
+    <span className={`group/btn ${GAP_BRIDGE} relative`}>
       <span className={className}>{label}</span>
       <Popover>
         <PopoverTrigger asChild>
@@ -1830,7 +1831,7 @@ function StepButtonEditor({
             tabIndex={-1}
             aria-label={`Изменить текст кнопки «${label}»`}
             title="Изменить текст кнопки"
-            className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} ${ICON_BTN} pointer-events-none absolute top-1/2 right-full mr-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/btn:pointer-events-auto group-hover/btn:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100`}
+            className={`${CLUSTER_BACKDROP} ${ICON_BTN} pointer-events-none absolute top-1/2 right-full mr-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/btn:pointer-events-auto group-hover/btn:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:opacity-100`}
           >
             <Settings className="size-4" />
           </button>

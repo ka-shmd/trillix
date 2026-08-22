@@ -279,7 +279,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
-      className={`group relative rounded-md py-1.5 -mb-1.5 ${
+      className={`group ${GAP_BRIDGE} relative rounded-md py-1.5 -mb-1.5 ${
         firstInGroup ? '-mt-1.5' : 'mt-[calc(0.75rem*var(--rf-density)_-_0.375rem)]'
       } ${isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''}`}
     >
@@ -332,7 +332,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // отбирает жёлоб у ручки ширины: 72px кластера шире 12px жёлоба.
           // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
           // hover, ушедший со строки на кластер, гасил бы его под курсором.
-          className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
+          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
         >
           <button
             type="button"
@@ -432,17 +432,24 @@ export const ICON_BTN =
 // годится по той же причине.
 export const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
 
-// CLUSTER_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к правому краю кластера
-// и закрывающая просвет между ним и блоком.
+// GAP_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к ЛЕВОМУ краю строки
+// (или карточки варианта) и закрывающая просвет между ней и её кластером значков.
 //
 // МИНА: без неё до значков не доехать мышью. Курсор, идущий от текста влево, на этих 4px
 // оказывается вне и строки, и кластера: `group-hover` гаснет, кластеру возвращается
 // `pointer-events-none`, и зажечь его снова уже нечем — погашенный он для указателя
-// прозрачен, то есть наведением на себя не восстанавливается. Полоса — псевдоэлемент
-// кластера, значит наведение на неё есть наведение на потомка строки (`group-hover`
-// держится), а `pointer-events` наследуется, и у погашенного кластера она прозрачна так же,
-// как он сам.
-export const CLUSTER_BRIDGE = 'after:absolute after:inset-y-0 after:left-full after:w-1'
+// прозрачен, то есть наведением на себя не восстанавливается.
+//
+// Полоса — псевдоэлемент САМОЙ ГРУППЫ, а не кластера, и это второй заход (первый повесил
+// её на кластер): у кластера своя высота — строка текста, у варианта и вовсе 20px, — и
+// просвет оставался мёртвым выше и ниже этой полосы, то есть ровно там, где курсор идёт к
+// значкам по диагонали от соседней строки. `inset-y-0` группы кроет её ВСЮ.
+//
+// Наведение на полосу = наведение на группу, поэтому она и держит поднятый кластер, и
+// поднимает погашенный. Второе — осознанное послабление к мине «кластер не зажигает сам
+// себя»: запрет был про его собственные 72px в левом поле, а 4px вплотную к блоку — это
+// его же край.
+export const GAP_BRIDGE = 'before:absolute before:inset-y-0 before:right-full before:w-1'
 
 // Опции сенсора списка вариантов — МОДУЛЬНАЯ КОНСТАНТА, по той же причине, что у
 // полотна (см. POINTER_OPTIONS в SlashEditor): `useSensor` мемоизирует дескриптор по
@@ -2064,7 +2071,7 @@ function OptionCard({
       // Перетаскиваемая карточка — ТЕНЬ, а не карточка (dnd.ts, там же довод): тусклее
       // покоя, книзу растворяется маской, у инпута внутри гаснут фон и тень. Наведение на
       // время жеста гасится у всех, кроме неё.
-      className={`group/opt relative flex items-center ${
+      className={`group/opt ${GAP_BRIDGE} relative flex items-center ${
         isDragging
           ? `z-10 pointer-events-auto ${DRAGGED_LOOK}`
           : dragging
@@ -2083,7 +2090,7 @@ function OptionCard({
       <div
         // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
         // у кластера строки: иначе он зажигается от собственной площади в левом поле.
-        className={`${CLUSTER_BACKDROP} ${CLUSTER_BRIDGE} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
       >
         <button
           type="button"
