@@ -1,4 +1,6 @@
+import { type CSSProperties } from 'react'
 import {
+  COLUMN_WIDTH_TOTAL,
   type Block,
   type BlockType,
   canShareRow,
@@ -325,7 +327,7 @@ function packCells<T>(
 // «встань в эту колонку ряда внутри моего вопроса». Один ключ, один раскладчик,
 // два уровня — не новая сущность, а снятие ограничения со старой.
 type ColumnBit = number
-type RowCell = { type: BlockType; settings?: { column?: ColumnBit } }
+type RowCell = { type: BlockType; settings?: { column?: ColumnBit; columnWidth?: number } }
 
 const bitOfBlock = (b: RowCell | undefined): ColumnBit | undefined => b?.settings?.column
 
@@ -406,6 +408,52 @@ export function packOptionRows<T extends { column?: ColumnBit }>(options: T[]): 
     (o) => o.column,
     () => true,
   )
+}
+
+// ШИРИНЫ КОЛОНОК РЯДА (2026-08-22, ADR §10) — доли ряда в процентах либо null, если
+// доли не действуют и ряд делится поровну, как делился до этой даты.
+//
+// ПРАВИЛО ДЕЙСТВИЯ ОДНО И ЖИВЁТ ЗДЕСЬ: доля обязана стоять у ПЕРВОГО элемента каждой
+// колонки, и сумма по ряду — ровно COLUMN_WIDTH_TOTAL. Из него бесплатно выходит
+// сброс в равные при смене состава ряда, ради которого иначе пришлось бы заводить
+// проверку в каждой команде ряда: колонка пришла — у неё доли нет (дыра), колонка
+// ушла — сумма не сходится. Стор потом снимет недействующие ключи как инертные
+// (normalizeColumns), но раскладка не ждёт уборки: несходящийся ряд рисуется поровну
+// уже в том кадре, где состав изменился.
+//
+// Первый элемент колонки, а не любой: колонка — стопка, доля у неё одна, и носителем
+// назначен тот, кто колонку открыл (канон раздаёт её всем участникам, но читатель
+// один — иначе стопка с расходящимися долями значила бы что-то неопределённое).
+//
+// Ряд из одной колонки долей не имеет вовсе: делить нечего, ключ инертен.
+export function rowWidths<T>(row: Row<T>, widthOf: (item: T) => number | undefined): number[] | null {
+  if (row.length < 2) return null
+  const widths: number[] = []
+  for (const cell of row) {
+    const w = widthOf(cell[0]!)
+    if (w === undefined) return null
+    widths.push(w)
+  }
+  return widths.reduce((a, b) => a + b, 0) === COLUMN_WIDTH_TOTAL ? widths : null
+}
+
+// Те же три обёртки, что у упаковки, и по тому же доводу: разъедься носитель ключа с
+// раскладчиком — и поверхность нарисовала бы доли не того ряда, который собрала.
+export const groupRowWidths = <T extends { blocks: RowCell[] }>(row: Row<T>): number[] | null =>
+  rowWidths(row, (g) => g.blocks[0]?.settings?.columnWidth)
+
+export const blockRowWidths = <T extends RowCell>(row: Row<T>): number[] | null =>
+  rowWidths(row, (b) => b.settings?.columnWidth)
+
+export const optionRowWidths = <T extends { columnWidth?: number }>(row: Row<T>): number[] | null =>
+  rowWidths(row, (o) => o.columnWidth)
+
+// Доля колонки — в CSS-переменную, а не в flex-grow напрямую: у ячейки есть мобильное
+// правило (ряд разваливается в стек), и оно обязано перебивать долю, а inline-стиль
+// перебить нельзя. Незаданное не печатается вовсе — дефолт `1` живёт в fields.css,
+// тот же контракт, что у переменных хрома страницы (chromeVars).
+export function cellVars(widths: number[] | null, i: number): CSSProperties | undefined {
+  return widths === null ? undefined : ({ '--rf-cell-grow': widths[i] } as CSSProperties)
 }
 
 // required — множество ФАКТИЧЕСКИ обязательных блоков из плана (фаза 21): у поля может
