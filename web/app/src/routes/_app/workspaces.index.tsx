@@ -29,6 +29,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -57,22 +65,30 @@ export const Route = createFileRoute('/_app/workspaces/')({
 
 function WorkspacesPage() {
   const workspaces = useQuery(workspacesQueryOptions)
-  const create = useCreateWorkspace()
-  const [name, setName] = useState('')
   const headerSlot = useHeaderSlot()
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    const trimmed = name.trim()
-    if (trimmed === '') return
-    create.mutate(trimmed, { onSuccess: () => setName('') })
-  }
+  const [creating, setCreating] = useState(false)
 
   return (
     <div className="mx-auto w-full max-w-5xl p-6">
-      {/* Название страницы живёт крошкой в верхней шапке — там же, где крошки
+      {/* Название страницы и создание живут в верхней шапке — там же, где крошки
           редактора. Портал сохраняет React-контекст, несмотря на другое место в DOM. */}
-      {headerSlot && createPortal(<HeaderCrumbs />, headerSlot)}
+      {headerSlot &&
+        createPortal(
+          <>
+            <HeaderCrumbs />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="ml-auto size-8"
+              onClick={() => setCreating(true)}
+              aria-label="Новое пространство"
+              title="Новое пространство"
+            >
+              <Plus className="size-4" />
+            </Button>
+          </>,
+          headerSlot,
+        )}
       {/* Заголовок остаётся в разметке, но не на экране: без него страница
           начиналась бы с h2 названий пространств, и структура документа
           рассыпалась бы. Видимое имя страницы — крошка выше. */}
@@ -102,34 +118,91 @@ function WorkspacesPage() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="mt-10 border-t pt-6">
-        <Label htmlFor="workspace-name" className="mb-2 block">
-          Новое пространство
-        </Label>
-        <div className="flex gap-2">
-          <Input
-            id="workspace-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Например, «Отдел маркетинга»"
-            maxLength={MAX_WORKSPACE_NAME_LEN}
-          />
-          <Button type="submit" disabled={name.trim() === '' || create.isPending}>
-            <Plus className="size-4" />
-            {create.isPending ? 'Создаём…' : 'Создать'}
-          </Button>
-        </div>
-        {create.isError && (
-          <p role="alert" className="mt-2 text-sm text-destructive">
-            {/* Ветвимся по code, а не по тексту (web/CLAUDE.md): plan_required —
-                не поломка, а упёрлись в тариф, и сказать это надо словами. */}
-            {create.error instanceof ApiError && create.error.code === 'plan_required'
-              ? 'На текущем тарифе больше пространств завести нельзя.'
-              : 'Не удалось создать пространство. Попробуйте ещё раз.'}
-          </p>
-        )}
-      </form>
+      <CreateWorkspaceDialog open={creating} onOpenChange={setCreating} />
     </div>
+  )
+}
+
+// Создание пространства — диалогом из шапки, а не формой в подвале страницы:
+// список пространств растёт вниз, и кнопка «создать» уезжала бы от глаз тем
+// дальше, чем больше их становится.
+function CreateWorkspaceDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const create = useCreateWorkspace()
+  const [name, setName] = useState('')
+  const trimmed = name.trim()
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (trimmed === '') return
+    create.mutate(trimmed, {
+      onSuccess: () => {
+        setName('')
+        onOpenChange(false)
+      },
+    })
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Набранное не переживает закрытие, как и отказ: следующее открытие
+        // должно начинаться с чистого поля, а не с прошлой попытки.
+        if (!next) {
+          setName('')
+          create.reset()
+        }
+        onOpenChange(next)
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Новое пространство</DialogTitle>
+          <DialogDescription>
+            Формы принадлежат пространству. Создатель становится его владельцем и может позвать
+            коллег.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <Label htmlFor="workspace-name" className="mb-2 block">
+              Название
+            </Label>
+            <Input
+              id="workspace-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Например, «Отдел маркетинга»"
+              maxLength={MAX_WORKSPACE_NAME_LEN}
+              autoFocus
+            />
+            {create.isError && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {/* Ветвимся по code, а не по тексту (web/CLAUDE.md): plan_required —
+                    не поломка, а упёрлись в тариф, и сказать это надо словами. */}
+                {create.error instanceof ApiError && create.error.code === 'plan_required'
+                  ? 'На текущем тарифе больше пространств завести нельзя.'
+                  : 'Не удалось создать пространство. Попробуйте ещё раз.'}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" disabled={trimmed === '' || create.isPending}>
+              {create.isPending ? 'Создаём…' : 'Создать'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
