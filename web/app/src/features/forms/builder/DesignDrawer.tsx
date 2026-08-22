@@ -326,7 +326,9 @@ export function DesignDrawer({
               <NumberRow
                 id="design-radius"
                 value={design?.controls?.radius}
-                fallback={8}
+                // Зеркалит --rf-radius в fields.css: незаданное скругление панель
+                // показывает тем же числом, которое рисует полотно.
+                fallback={4}
                 min={MIN_RADIUS}
                 max={MAX_RADIUS}
                 onChange={(n) => set('controls', 'radius', n)}
