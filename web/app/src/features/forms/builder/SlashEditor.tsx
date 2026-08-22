@@ -422,7 +422,7 @@ export function SlashEditor({
     // группу полноширинной (groupCanShareRow = «внутреннего ряда нет»), то есть дроп
     // молча развалил бы секцию, в которой вопрос стоит, — обещание зоны и её
     // последствие разошлись бы. Заодно снаружи такого вопроса нет поля полотна: зона
-    // легла бы в 16px-жёлоб и наехала на соседнюю колонку.
+    // легла бы в 12px-жёлоб и наехала на соседнюю колонку.
     if (inSection.has(g.id)) return null
     const caption = g.blocks.find((x) => isCaptionType(x.type))
     if (!caption || caption.id === b.id) return null
@@ -1208,13 +1208,13 @@ export function SlashEditor({
                         респондента ряд разваливается.
                         mt — интервал ПЕРЕД рядом (28px, .rf-form у превью); у первого
                         ряда его нет, начало полотна задаёт отступ ol от заголовка формы.
-                        gap здесь — зазор между КОЛОНКАМИ, 16px, как .rf-row; на
+                        gap здесь — зазор между КОЛОНКАМИ, 12px, как .rf-row; на
                         мобильном ряд разваливается в стек, и зазор возвращается к 28px
                         — там он снова интервал МЕЖДУ ВОПРОСАМИ (то же правило и тот же
                         брейкпоинт, что у .rf-row в fields.css). Оба множатся на
                         --rf-density, как и там. */}
                         <div
-                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row sm:gap-[calc(1rem*var(--rf-density))] ${
+                          className={`relative flex flex-col gap-[calc(1.75rem*var(--rf-density))] sm:flex-row sm:gap-[calc(0.75rem*var(--rf-density))] ${
                             rowIndex === 0 ? '' : 'mt-[calc(1.75rem*var(--rf-density))]'
                           }`}
                         >
@@ -1335,9 +1335,9 @@ const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat(
 const ROW_PAD = 6
 const ROW_GAP = 7
 // Жёлоб между колонками ряда вопросов (gap-7 у контейнера ряда).
-// Жёлоб между колонками ряда вопросов — 16px (.rf-row в fields.css, там же довод):
+// Жёлоб между колонками ряда вопросов — 12px (.rf-row в fields.css, там же довод):
 // по горизонтали интервал колонки СОБИРАЕТ, поэтому он теснее вертикальных 28px.
-const ROW_GUTTER = 16
+const ROW_GUTTER = 12
 // Жёлоб ряда ВНУТРИ вопроса — 14px: ритм внутри вопроса (.rf-group > .rf-row в
 // fields.css), а не между вопросами.
 const INNER_GUTTER = 14

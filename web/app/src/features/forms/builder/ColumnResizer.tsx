@@ -25,7 +25,7 @@ export function ColumnResizer({
 }: {
   // Индекс СВОЕЙ колонки: ручка стоит на границе между index-1 и index.
   index: number
-  // Ширина жёлоба слоя: 16px между вопросами, 14px внутри вопроса, 12px у вариантов.
+  // Ширина жёлоба слоя: 12px между вопросами, 14px внутри вопроса, 12px у вариантов.
   gutter: number
   onCommit: (widths: number[]) => void
 }) {
