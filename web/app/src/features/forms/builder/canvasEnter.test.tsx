@@ -90,7 +90,7 @@ describe('Enter — новая строка сразу под текущей', (
 
     const fresh = store.getState().blocks[1]!.id
     const line = document.querySelector(`[data-block-id="${fresh}"] [data-rich-line]`)
-    expect(line?.getAttribute('aria-label')).toBe('Текст, или «/» для поля')
+    expect(line?.getAttribute('aria-label')).toBe('Напечатайте «/», чтобы выбрать блок')
   })
 
   it('с последней строки группы — под ней же (одиночкой)', () => {

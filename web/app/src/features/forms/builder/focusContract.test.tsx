@@ -107,9 +107,9 @@ describe('контракт фокус-целей строк (§2.1)', () => {
     expect(named('Заголовок вопроса')).not.toBeNull()
     expect(named('Текст согласия')).not.toBeNull()
     // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
-    expect(named('Текст, или «/» для поля')).not.toBeNull()
+    expect(named('Напечатайте «/», чтобы выбрать блок')).not.toBeNull()
     engine.focusBlock('para', 'end')
-    expect(el().getAttribute('aria-label')).toBe('Текст, или «/» для поля')
+    expect(el().getAttribute('aria-label')).toBe('Напечатайте «/», чтобы выбрать блок')
   })
 
   it('край каретки: start → в начало, end → в конец текста', () => {
