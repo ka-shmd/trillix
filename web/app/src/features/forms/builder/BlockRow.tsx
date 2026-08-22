@@ -2090,7 +2090,15 @@ function OptionCard({
       <div
         // Погашенный кластер прозрачен для указателя — то же правило и та же мина, что
         // у кластера строки: иначе он зажигается от собственной площади в левом поле.
-        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100`}
+        //
+        // ФОКУС ДЕРЖИТ КЛАСТЕР ПОДНЯТЫМ — как у строки (group-focus-within выше), и это
+        // не украшение, а единственное, что делает значки достижимыми мышью. Наведением
+        // одним они держатся ровно пока курсор внутри карточки, а карточка обнимает свой
+        // текст: у короткого варианта это 120px, и дорога к значкам идёт снаружи неё.
+        // Пока каретка в варианте — а она там всегда, когда автор собрался его удалить
+        // или утащить, — кластер стоит независимо от курсора, и вести к нему можно как
+        // угодно. Просвет (GAP_BRIDGE на карточке) остаётся для случая без каретки.
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100`}
       >
         <button
           type="button"
