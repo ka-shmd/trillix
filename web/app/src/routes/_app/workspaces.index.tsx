@@ -2,10 +2,11 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, House, Plus } from 'lucide-react'
+import { ChevronRight, House, MoreHorizontal, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { workspacesQueryOptions, useCreateWorkspace } from '../../features/workspaces/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
+import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { FormRow } from '../../features/forms/FormRow'
 import { formsListQueryOptions, useCreateForm } from '../../features/forms/queries'
 import { DEFAULT_FORMS_SORT } from '../../entities/form'
@@ -13,6 +14,12 @@ import type { Workspace } from '../../entities/workspace'
 import { ApiError } from '../../shared/api/errors'
 import { useHeaderSlot } from '../../shared/headerSlot'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -135,6 +142,9 @@ function HeaderCrumbs() {
 function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   const navigate = useNavigate()
   const create = useCreateForm()
+  // Диалог состава принадлежит секции, а не кластеру кружков: открыть его могут
+  // двое — кластер и меню «…», а два владельца одного состояния дали бы два окна.
+  const [membersOpen, setMembersOpen] = useState(false)
   // Личное адресуем его настоящим id, а не пустой строкой: на этом экране
   // пространства равны, и разбирать «пусто = личное» здесь незачем — сервер
   // одинаково принимает workspaceId любого, где ты состоишь.
@@ -178,21 +188,36 @@ function WorkspaceSection({ workspace }: { workspace: Workspace }) {
   return (
     <section>
       <div className="mb-2 flex items-center gap-2">
-        <h2 className="min-w-0 flex-1 truncate text-lg font-bold tracking-tight">
+        <h2 className="min-w-0 max-w-full truncate text-lg font-bold tracking-tight">
           {workspace.name}
         </h2>
-        <MemberCluster workspace={workspace} />
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 shrink-0"
-          onClick={handleCreateForm}
-          disabled={create.isPending}
-        >
-          <Plus className="size-4" />
-          <span className="sr-only">Новая форма в пространстве «{workspace.name}»</span>
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="size-7 shrink-0">
+              <MoreHorizontal className="size-4" />
+              <span className="sr-only">Действия с пространством «{workspace.name}»</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuItem onClick={() => setMembersOpen(true)}>Участники</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div className="ml-auto flex items-center gap-1">
+          <MemberCluster workspace={workspace} onOpen={() => setMembersOpen(true)} />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0"
+            onClick={handleCreateForm}
+            disabled={create.isPending}
+          >
+            <Plus className="size-4" />
+            <span className="sr-only">Новая форма в пространстве «{workspace.name}»</span>
+          </Button>
+        </div>
       </div>
+
+      <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
 
       {query.isPending ? (
         <div className="space-y-1 py-1" aria-hidden="true">
