@@ -34,8 +34,10 @@ type Store interface {
 	Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error)
 	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
-	GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error)
-	DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
+	ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]FormLink, error)
+	EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error)
+	DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
+	UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
 	StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error
 	FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
@@ -295,12 +297,14 @@ type Forms interface {
 }
 
 // FormStatus — всё, что нужно табу «Интеграции» одной поездкой: состояние
-// аккаунта пространства и привязка этой формы.
+// аккаунта пространства и СПИСОК связок этой формы.
 type FormStatus struct {
 	WorkspaceID uuid.UUID
 	Account     Status
-	Linked      bool
-	Link        FormLink
+	// Connections — подключённые связки, в порядке подключения. Их сколько
+	// угодно, в том числе в одну и ту же книгу: интеграция это правило доставки,
+	// а не состояние формы.
+	Connections []FormLink
 }
 
 // FormStatus читает состояние интеграций формы. Право — ActionFormRead внутри
@@ -315,18 +319,12 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 	if err != nil {
 		return FormStatus{}, err
 	}
-	out := FormStatus{WorkspaceID: form.WorkspaceID, Account: account}
-
-	link, err := s.repo.GetLink(ctx, s.db, formID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Форма не привязана — штатное состояние экрана.
-		return out, nil
-	}
+	links, err := s.repo.ListLinks(ctx, s.db, formID)
 	if err != nil {
 		return FormStatus{}, fmt.Errorf("form integration status: %w", err)
 	}
-	out.Linked, out.Link = true, link
-	return out, nil
+	// Пустой список — штатное состояние экрана: у формы просто нет связок.
+	return FormStatus{WorkspaceID: form.WorkspaceID, Account: account, Connections: links}, nil
 }
 
 // ConnectOptions — то, что человек назвал в окне подключения. Настройки
@@ -375,15 +373,6 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 	}
 	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
 		return FormLink{}, err
-	}
-
-	// Уже привязана — это не «перепривязать молча»: у формы одна таблица, и
-	// вторая кнопка должна сначала отвязать первую (иначе созданная таблица
-	// осталась бы висеть в Диске сиротой).
-	if _, err := s.repo.GetLink(ctx, s.db, formID); err == nil {
-		return FormLink{}, fmt.Errorf("%w: форма уже привязана к таблице", domain.ErrConflict)
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return FormLink{}, fmt.Errorf("connect form: %w", err)
 	}
 
 	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
@@ -441,8 +430,10 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 	}
 
 	return FormLink{
+		ID:             link.ID,
 		FormID:         formID,
 		AccountID:      conn.ID,
+		Enabled:        true,
 		WorkspaceID:    form.WorkspaceID,
 		AccountEmail:   conn.Email,
 		SpreadsheetID:  sheet.ID,
@@ -634,24 +625,16 @@ func sheetTitleForForm(form forms.Form) string {
 // после ретрая, строки, удалённые автором руками, колонки, отставшие от формы,
 // и интеграцию, простоявшую сломанной. Формат листа (ширина колонок, закрепление
 // шапки) переживает чистку — чистятся значения, а не лист.
-func (s *Service) RefillForm(ctx context.Context, userID, formID uuid.UUID) error {
+func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error {
 	if !s.Enabled() {
 		return domain.ErrNotFound
 	}
-	form, err := s.forms.Get(ctx, userID, formID)
-	if err != nil {
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
 		return err
 	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
-		return err
-	}
-
-	link, err := s.repo.GetLink(ctx, s.db, formID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("%w: форма не привязана к таблице", domain.ErrValidation)
-	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
 	if err != nil {
-		return fmt.Errorf("refill form: %w", err)
+		return err
 	}
 
 	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
@@ -701,18 +684,71 @@ func mergeColumns(known, actual []domain.SheetColumn) []domain.SheetColumn {
 	return out
 }
 
-// DisconnectForm отвязывает форму. Таблица в Диске автора остаётся со всеми
+// DisconnectForm удаляет ОДНУ связку. Таблица в Диске автора остаётся со всеми
 // строками: продукт не удаляет чужие файлы — ни за человека, ни «прибираясь».
-func (s *Service) DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error {
+func (s *Service) DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error {
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	// Ноль строк — связки нет либо она чужой формы. Одинаковый ответ на оба
+	// случая: существование чужого не раскрывается даже отказом (инвариант 5).
+	n, err := s.repo.DeleteLink(ctx, s.db, linkID, formID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// UpdateConnection правит подпись связки и её тумблер.
+//
+// Выключенная связка сохраняет таблицу, колонки и историю: «выключить на время»
+// и «удалить навсегда» — разные намерения, и подменять первое вторым нельзя.
+func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, name string, enabled bool) error {
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
+		return fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
+	}
+
+	n, err := s.repo.UpdateLinkSettings(ctx, s.db, linkID, formID, name, enabled)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// canEditForm — общее начало операций над связками: форма видна спрашивающему
+// (иначе 404) и он вправе её править.
+func (s *Service) canEditForm(ctx context.Context, userID, formID uuid.UUID) error {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
 		return err
 	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
-		return err
+	return s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite)
+}
+
+// linkOfForm читает связку, убеждаясь, что она принадлежит названной форме: id
+// связки приезжает из адреса, и правом доступа сам по себе не является.
+func (s *Service) linkOfForm(ctx context.Context, formID, linkID uuid.UUID) (FormLink, error) {
+	link, err := s.repo.GetLinkByID(ctx, s.db, linkID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FormLink{}, domain.ErrNotFound
 	}
-	// Идемпотентно: отвязывать нечего — тоже успех (вторая вкладка не краснеет).
-	return s.repo.DeleteLink(ctx, s.db, formID)
+	if err != nil {
+		return FormLink{}, err
+	}
+	if link.FormID != formID {
+		return FormLink{}, domain.ErrNotFound
+	}
+	return link, nil
 }
 
 // columnLabels — подписи колонок в порядке листа (шапка).

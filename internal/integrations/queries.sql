@@ -38,28 +38,46 @@ INSERT INTO form_integrations (
     id, form_id, account_id, name, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
 
--- name: GetFormIntegration :one
--- Привязка формы. workspace_id приезжает джойном из аккаунта: он нужен, чтобы
--- спросить право, а второй запрос за ним означал бы окно между проверкой и
--- действием.
+-- name: ListFormIntegrations :many
+-- Связки формы — их сколько угодно (интеграция это правило доставки, а не
+-- состояние формы). Порядок по id: UUIDv7 монотонен по времени, значит в списке
+-- они идут в порядке подключения и не прыгают при перерисовке.
+--
+-- workspace_id приезжает джойном из аккаунта: он нужен, чтобы спросить право, а
+-- второй запрос за ним означал бы окно между проверкой и действием.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
        fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
-WHERE fi.form_id = $1;
+WHERE fi.form_id = $1
+ORDER BY fi.id;
 
--- name: DeleteFormIntegration :exec
--- Отвязка формы. Сама таблица в Диске автора остаётся: продукт не трогает чужие
--- файлы, и уж тем более не удаляет их за человека.
-DELETE FROM form_integrations WHERE form_id = $1;
+-- name: ListEnabledFormIntegrations :many
+-- Кому доставлять принятый ответ. Выключенные связки пропускаются здесь, а не
+-- в диспетчере: событие, которое некому доставить, лучше не заводить вовсе.
+SELECT id FROM form_integrations WHERE form_id = $1 AND enabled;
+
+-- name: DeleteFormIntegration :execrows
+-- Удаление ОДНОЙ связки. form_id в условии не украшение: id связки приезжает из
+-- адреса, и связка обязана принадлежать той форме, к которой спрашивают доступ
+-- (инвариант 1: id из URL правом доступа не является).
+--
+-- Сама таблица в Диске автора остаётся: продукт не трогает чужие файлы и уж тем
+-- более не удаляет их за человека.
+DELETE FROM form_integrations WHERE id = $1 AND form_id = $2;
+
+-- name: UpdateFormIntegrationSettings :execrows
+-- Правка связки: подпись и тумблер. Тем же запросом, что и проверка
+-- принадлежности форме.
+UPDATE form_integrations SET name = $3, enabled = $4 WHERE id = $1 AND form_id = $2;
 
 -- name: GetFormIntegrationByID :one
 -- Привязка по своему id — путь фоновой доставки: событие несёт id привязки, а не
 -- формы, поэтому отвязка и повторная привязка не заставят старое событие писать
 -- в новую таблицу.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
        fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id

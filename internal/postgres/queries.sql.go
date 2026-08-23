@@ -682,15 +682,27 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
-const deleteFormIntegration = `-- name: DeleteFormIntegration :exec
-DELETE FROM form_integrations WHERE form_id = $1
+const deleteFormIntegration = `-- name: DeleteFormIntegration :execrows
+DELETE FROM form_integrations WHERE id = $1 AND form_id = $2
 `
 
-// Отвязка формы. Сама таблица в Диске автора остаётся: продукт не трогает чужие
-// файлы, и уж тем более не удаляет их за человека.
-func (q *Queries) DeleteFormIntegration(ctx context.Context, formID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, deleteFormIntegration, formID)
-	return err
+type DeleteFormIntegrationParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Удаление ОДНОЙ связки. form_id в условии не украшение: id связки приезжает из
+// адреса, и связка обязана принадлежать той форме, к которой спрашивают доступ
+// (инвариант 1: id из URL правом доступа не является).
+//
+// Сама таблица в Диске автора остаётся: продукт не трогает чужие файлы и уж тем
+// более не удаляет их за человека.
+func (q *Queries) DeleteFormIntegration(ctx context.Context, arg DeleteFormIntegrationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFormIntegration, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteIdentity = `-- name: DeleteIdentity :execrows
@@ -1456,62 +1468,9 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
-const getFormIntegration = `-- name: GetFormIntegration :one
-SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
-FROM form_integrations fi
-JOIN integration_accounts ia ON ia.id = fi.account_id
-WHERE fi.form_id = $1
-`
-
-type GetFormIntegrationRow struct {
-	ID              uuid.UUID
-	FormID          uuid.UUID
-	AccountID       uuid.UUID
-	Name            string
-	SpreadsheetID   string
-	SpreadsheetUrl  string
-	SheetID         int32
-	SheetTitle      string
-	Columns         []byte
-	Status          string
-	BackfillBefore  pgtype.Timestamptz
-	LastError       pgtype.Text
-	LastDeliveredAt pgtype.Timestamptz
-	WorkspaceID     uuid.UUID
-	ExternalEmail   string
-}
-
-// Привязка формы. workspace_id приезжает джойном из аккаунта: он нужен, чтобы
-// спросить право, а второй запрос за ним означал бы окно между проверкой и
-// действием.
-func (q *Queries) GetFormIntegration(ctx context.Context, formID uuid.UUID) (GetFormIntegrationRow, error) {
-	row := q.db.QueryRow(ctx, getFormIntegration, formID)
-	var i GetFormIntegrationRow
-	err := row.Scan(
-		&i.ID,
-		&i.FormID,
-		&i.AccountID,
-		&i.Name,
-		&i.SpreadsheetID,
-		&i.SpreadsheetUrl,
-		&i.SheetID,
-		&i.SheetTitle,
-		&i.Columns,
-		&i.Status,
-		&i.BackfillBefore,
-		&i.LastError,
-		&i.LastDeliveredAt,
-		&i.WorkspaceID,
-		&i.ExternalEmail,
-	)
-	return i, err
-}
-
 const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
        fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
@@ -1528,6 +1487,7 @@ type GetFormIntegrationByIDRow struct {
 	SheetID         int32
 	SheetTitle      string
 	Columns         []byte
+	Enabled         bool
 	Status          string
 	BackfillBefore  pgtype.Timestamptz
 	LastError       pgtype.Text
@@ -1552,6 +1512,7 @@ func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (Get
 		&i.SheetID,
 		&i.SheetTitle,
 		&i.Columns,
+		&i.Enabled,
 		&i.Status,
 		&i.BackfillBefore,
 		&i.LastError,
@@ -2279,6 +2240,32 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 	return err
 }
 
+const listEnabledFormIntegrations = `-- name: ListEnabledFormIntegrations :many
+SELECT id FROM form_integrations WHERE form_id = $1 AND enabled
+`
+
+// Кому доставлять принятый ответ. Выключенные связки пропускаются здесь, а не
+// в диспетчере: событие, которое некому доставить, лучше не заводить вовсе.
+func (q *Queries) ListEnabledFormIntegrations(ctx context.Context, formID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listEnabledFormIntegrations, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormFileKeys = `-- name: ListFormFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -2346,6 +2333,78 @@ func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFo
 	for rows.Next() {
 		var i ListFormFilesRow
 		if err := rows.Scan(&i.ID, &i.OriginalName, &i.SizeBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFormIntegrations = `-- name: ListFormIntegrations :many
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.form_id = $1
+ORDER BY fi.id
+`
+
+type ListFormIntegrationsRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	Name            string
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Enabled         bool
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	WorkspaceID     uuid.UUID
+	ExternalEmail   string
+}
+
+// Связки формы — их сколько угодно (интеграция это правило доставки, а не
+// состояние формы). Порядок по id: UUIDv7 монотонен по времени, значит в списке
+// они идут в порядке подключения и не прыгают при перерисовке.
+//
+// workspace_id приезжает джойном из аккаунта: он нужен, чтобы спросить право, а
+// второй запрос за ним означал бы окно между проверкой и действием.
+func (q *Queries) ListFormIntegrations(ctx context.Context, formID uuid.UUID) ([]ListFormIntegrationsRow, error) {
+	rows, err := q.db.Query(ctx, listFormIntegrations, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormIntegrationsRow
+	for rows.Next() {
+		var i ListFormIntegrationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FormID,
+			&i.AccountID,
+			&i.Name,
+			&i.SpreadsheetID,
+			&i.SpreadsheetUrl,
+			&i.SheetID,
+			&i.SheetTitle,
+			&i.Columns,
+			&i.Enabled,
+			&i.Status,
+			&i.BackfillBefore,
+			&i.LastError,
+			&i.LastDeliveredAt,
+			&i.WorkspaceID,
+			&i.ExternalEmail,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3746,6 +3805,32 @@ type UpdateFormIntegrationColumnsParams struct {
 func (q *Queries) UpdateFormIntegrationColumns(ctx context.Context, arg UpdateFormIntegrationColumnsParams) error {
 	_, err := q.db.Exec(ctx, updateFormIntegrationColumns, arg.ID, arg.Columns)
 	return err
+}
+
+const updateFormIntegrationSettings = `-- name: UpdateFormIntegrationSettings :execrows
+UPDATE form_integrations SET name = $3, enabled = $4 WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormIntegrationSettingsParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Name    string
+	Enabled bool
+}
+
+// Правка связки: подпись и тумблер. Тем же запросом, что и проверка
+// принадлежности форме.
+func (q *Queries) UpdateFormIntegrationSettings(ctx context.Context, arg UpdateFormIntegrationSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormIntegrationSettings,
+		arg.ID,
+		arg.FormID,
+		arg.Name,
+		arg.Enabled,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateFormName = `-- name: UpdateFormName :one

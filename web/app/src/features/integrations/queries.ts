@@ -9,6 +9,7 @@ import {
   listSpreadsheets,
   refillSheet,
   unlinkSheet,
+  updateConnection,
   type ConnectOptions,
 } from './api'
 
@@ -22,8 +23,10 @@ export function formIntegrationsQueryOptions(formId: string) {
   return queryOptions({
     queryKey: integrationKeys.form(formId),
     queryFn: () => getFormIntegrations(formId),
+    // Опрашиваем, пока хоть одна связка переносит накопленные ответы: перенос
+    // идёт пачками в фоне, и без опроса экран висел бы на «переносим» до F5.
     refetchInterval: (query) =>
-      query.state.data?.sheet?.status === 'backfilling' ? 3000 : false,
+      query.state.data?.connections.some((c) => c.status === 'backfilling') ? 3000 : false,
   })
 }
 
@@ -60,7 +63,7 @@ export function useCreateSheet(formId: string) {
 export function useRefillSheet(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => refillSheet(formId),
+    mutationFn: (connectionId: string) => refillSheet(formId, connectionId),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
@@ -68,7 +71,16 @@ export function useRefillSheet(formId: string) {
 export function useUnlinkSheet(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => unlinkSheet(formId),
+    mutationFn: (connectionId: string) => unlinkSheet(formId, connectionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+export function useUpdateConnection(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (vars: { id: string; name: string; enabled: boolean }) =>
+      updateConnection(formId, vars.id, { name: vars.name, enabled: vars.enabled }),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

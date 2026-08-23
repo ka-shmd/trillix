@@ -3,24 +3,43 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import type { FormIntegrations } from '../../entities/integration'
+import type { FormIntegrations, FormSheet } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
 import { integrationKeys } from './keys'
 
-// Экран интеграций — список плюс окно настроек, и оба говорят человеку РАЗНОЕ
-// про одно и то же: «не настроено на контуре» ≠ «не подключено» ≠ «подключено,
-// но форма не привязана». Спутать их значит советовать нажать кнопку, которой у
-// человека не появится, — поэтому состояния проверяются по видимому тексту.
+// Экран интеграций — два блока и оверлей настроек. Проверяется то, что человек
+// видит и на что жмёт: состояния говорят РАЗНОЕ про одно и то же («не настроено
+// на контуре» ≠ «не подключено» ≠ «подключено, но связок нет»), и спутать их
+// значит советовать нажать кнопку, которой не появится.
 
 afterEach(cleanup)
 
 const FORM_ID = 'form-1'
 
+const CONNECTED = {
+  enabled: true,
+  pickerEnabled: true,
+  connected: true,
+  canManage: true,
+  email: 'author@gmail.com',
+}
+
+// conn — связка в состоянии «работает», если не сказано иное.
+function conn(patch: Partial<FormSheet> = {}): FormSheet {
+  return {
+    id: 'conn-1',
+    url: 'https://docs.google.com/spreadsheets/d/x/edit',
+    enabled: true,
+    status: 'live',
+    ...patch,
+  }
+}
+
 function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
   return {
     workspaceId: 'ws-1',
     account: { enabled: true, pickerEnabled: false, connected: false, canManage: true },
-    sheet: null,
+    connections: [],
     ...patch,
   }
 }
@@ -36,12 +55,10 @@ function newTestClient() {
   })
 }
 
-// Данные кладём прямо в кеш: экран проверяется по состоянию, а не по транспорту,
-// и мок fetch добавил бы к каждому кейсу асинхронность, которой в нём нет.
+// Данные кладём прямо в кеш: экран проверяется по состоянию, а не по транспорту.
 function renderView(data: FormIntegrations) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
-  // Список таблиц — тоже из кеша: иначе окно ушло бы в сеть за выбором.
   qc.setQueryData([...integrationKeys.form(FORM_ID), 'spreadsheets'], [
     { id: 'ss-old', name: 'Прошлая форма' },
   ])
@@ -52,54 +69,68 @@ function renderView(data: FormIntegrations) {
   )
 }
 
-// openDialog — тот самый жест: клик по строке интеграции открывает её настройки.
-function openDialog() {
-  fireEvent.click(screen.getByRole('button', { name: /google таблицы/i }))
+// Два входа в оверлей: из каталога — подключить ещё одну связку, из строки
+// списка — настроить существующую.
+function openSetup() {
+  fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
 }
 
-const CONNECTED = {
-  enabled: true,
-  pickerEnabled: true,
-  connected: true,
-  canManage: true,
-  email: 'author@gmail.com',
+function openConnection() {
+  fireEvent.click(screen.getByRole('button', { name: 'Настроить подключение' }))
 }
 
-describe('список интеграций', () => {
-  it('провайдер не настроен на контуре — так и написано в строке', () => {
+describe('два блока экрана', () => {
+  it('связок нет — блока «Мои подключения» тоже нет', () => {
+    renderView(state({ account: CONNECTED }))
+
+    expect(screen.queryByText('Мои подключения')).toBeNull()
+    expect(screen.getByText('Доступные интеграции')).toBeTruthy()
+  })
+
+  it('связки показаны отдельным блоком, каталог остаётся на месте', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ name: 'Архив' })] }))
+
+    expect(screen.getByText('Мои подключения')).toBeTruthy()
+    expect(screen.getByText('Архив')).toBeTruthy()
+    // Каталог не исчезает: подключить вторую связку — законное действие.
+    expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
+  })
+
+  it('провайдер не настроен на контуре — так и написано в каталоге', () => {
     renderView(state({ account: { enabled: false, pickerEnabled: false, connected: false, canManage: true } }))
 
-    expect(screen.getByRole('button', { name: /google таблицы/i }).textContent).toContain(
-      'На этом контуре интеграция не настроена',
-    )
+    expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('привязанная форма показывает статус значком', () => {
-    renderView(
-      state({
-        account: CONNECTED,
-        sheet: { url: 'https://docs.google.com/spreadsheets/d/x/edit', status: 'backfilling' },
-      }),
-    )
+  it('состояние связки видно точкой и подписью', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
-    expect(screen.getByText('Переносим')).toBeTruthy()
+    expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
+    expect(screen.getByText(/переносим накопленные ответы/i)).toBeTruthy()
   })
 
-  it('настройки живут в оверлее: до клика полей нет', () => {
-    renderView(state())
+  it('выключенная связка помечена и не притворяется работающей', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ enabled: false })] }))
 
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
+    expect(screen.getByLabelText('Выключено')).toBeTruthy()
+    expect(screen.getByRole('switch', { name: 'Включить подключение' })).toBeTruthy()
+  })
+
+  it('удаление спрашивает подтверждение и обещает сохранить таблицу', () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить подключение' }))
+
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    expect(screen.getByText(/останутся на вашем google диске/i)).toBeTruthy()
   })
 })
 
 describe('оверлей настройки Google Таблиц', () => {
-  it('клик по строке открывает оверлей с настройками подключения', () => {
+  it('кнопка каталога открывает оверлей с настройками подключения', () => {
     renderView(state({ account: CONNECTED }))
-    openDialog()
+    openSetup()
 
-    const dialog = screen.getByRole('dialog')
-    expect(dialog).toBeTruthy()
+    expect(screen.getByRole('dialog')).toBeTruthy()
     // Те самые решения, которые принимаются ДО первой записи в чужие данные.
     expect(screen.getByLabelText(/название подключения/i)).toBeTruthy()
     expect(screen.getByLabelText(/таблица/i)).toBeTruthy()
@@ -109,7 +140,7 @@ describe('оверлей настройки Google Таблиц', () => {
 
   it('аккаунт не подключён — только рассказ и согласие, настроек ещё нет', () => {
     renderView(state())
-    openDialog()
+    openSetup()
 
     expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
     // Про вывоз персональных данных оверлей говорит ДО подключения, а не после.
@@ -117,13 +148,12 @@ describe('оверлей настройки Google Таблиц', () => {
     // Поля, которые всё равно заперты, — обещание работы, которой человек ещё
     // не может сделать: их здесь нет вовсе.
     expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
-    expect(screen.queryByLabelText(/таблица/i)).toBeNull()
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
   it('редактор видит интеграцию, но подключает аккаунт владелец', () => {
     renderView(state({ account: { enabled: true, pickerEnabled: false, connected: false, canManage: false } }))
-    openDialog()
+    openSetup()
 
     expect(screen.getByText(/подключить google может владелец/i)).toBeTruthy()
     expect(screen.queryByRole('link', { name: /подключить google$/i })).toBeNull()
@@ -131,7 +161,7 @@ describe('оверлей настройки Google Таблиц', () => {
 
   it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {
     renderView(state({ account: CONNECTED }))
-    openDialog()
+    openSetup()
     fireEvent.click(screen.getByLabelText('Таблица'))
 
     // Три способа ответить на один вопрос «какая таблица» живут в одном списке,
@@ -143,17 +173,24 @@ describe('оверлей настройки Google Таблиц', () => {
 
   it('окно выбора не настроено на контуре — пункта «выбрать на Диске» нет', () => {
     renderView(state({ account: { ...CONNECTED, pickerEnabled: false } }))
-    openDialog()
+    openSetup()
     fireEvent.click(screen.getByLabelText('Таблица'))
 
     expect(screen.getByRole('option', { name: /создать новую таблицу/i })).toBeTruthy()
     expect(screen.queryByRole('option', { name: /выбрать на google диске/i })).toBeNull()
   })
 
+  it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    expect(screen.queryByLabelText('Лист')).toBeNull()
+  })
+
   it('Google отказал в списке таблиц — экран метит поле значком, а не абзацем', async () => {
     // Пустой список читается как «у меня нет таблиц», хотя на деле отказал
-    // провайдер, — и человек чинит не то. Список здесь не кладём в кеш: пусть
-    // запрос сходит в сеть и получит отказ, как оно и было на живом контуре.
+    // провайдер, — и человек чинит не то. Но и объяснять ему нечего: причина в
+    // настройках нашего проекта Google Cloud.
     vi.stubGlobal('fetch', () => Promise.reject(new Error('403')))
     const qc = newTestClient()
     qc.setQueryData(integrationKeys.form(FORM_ID), state({ account: CONNECTED }))
@@ -162,10 +199,8 @@ describe('оверлей настройки Google Таблиц', () => {
         <IntegrationsView formId={FORM_ID} />
       </QueryClientProvider>,
     )
-    openDialog()
+    openSetup()
 
-    // Значок, а не абзац: причина отказа почти всегда наша (настройки проекта
-    // Google Cloud), и человеку с ней делать нечего.
     await waitFor(() => expect(screen.getByLabelText('Не удалось загрузить')).toBeTruthy())
     vi.unstubAllGlobals()
   })
@@ -173,10 +208,10 @@ describe('оверлей настройки Google Таблиц', () => {
   it('на время выбора файла оверлей перестаёт запирать страницу', async () => {
     // Мина: окно Picker'а Google рисуется своим узлом в body, а модальный
     // диалог гасит pointer-events у всего, что вне его содержимого. Окно видно —
-    // и оно мёртвое. Проверяем именно снятие замка, а не сам Picker.
+    // и оно мёртвое.
     vi.stubGlobal('fetch', () => new Promise(() => {}))
     renderView(state({ account: CONNECTED }))
-    openDialog()
+    openSetup()
     expect(document.body.style.pointerEvents).toBe('none')
 
     fireEvent.click(screen.getByLabelText('Таблица'))
@@ -187,12 +222,12 @@ describe('оверлей настройки Google Таблиц', () => {
   })
 
   it('открытие окна выбора не сбрасывает уже набранные настройки', async () => {
-    // На время выбора оверлей меняет модальность, а Radix при этом
-    // перемонтирует поддерево — вместе с локальным стейтом формы. Снаружи это
-    // выглядит как «оверлей перезагрузился, выбор ничего не дал».
+    // Смена модальности перемонтирует поддерево Radix вместе с локальным
+    // стейтом — снаружи это выглядело как «оверлей перезагрузился, выбор ничего
+    // не дал».
     vi.stubGlobal('fetch', () => new Promise(() => {}))
     renderView(state({ account: CONNECTED }))
-    openDialog()
+    openSetup()
     fireEvent.change(screen.getByLabelText(/название подключения/i), {
       target: { value: 'Заявки с лендинга' },
     })
@@ -207,21 +242,9 @@ describe('оверлей настройки Google Таблиц', () => {
     vi.unstubAllGlobals()
   })
 
-  it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {
-    renderView(state({ account: CONNECTED }))
-    openDialog()
-
-    expect(screen.queryByLabelText('Лист')).toBeNull()
-  })
-
-  it('идёт перенос — «Перезалить всё» недоступно, чтобы не запустить второй', () => {
-    renderView(
-      state({
-        account: CONNECTED,
-        sheet: { url: 'https://docs.google.com/spreadsheets/d/x/edit', status: 'backfilling' },
-      }),
-    )
-    openDialog()
+  it('карандаш открывает существующую связку: перезалив заперт на время переноса', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    openConnection()
 
     expect(screen.getByText(/переносим ответы/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /перезалить всё/i }).hasAttribute('disabled')).toBe(
@@ -229,21 +252,21 @@ describe('оверлей настройки Google Таблиц', () => {
     )
   })
 
-  it('сломанная интеграция показывает причину, а не молчит', () => {
+  it('сломанная связка показывает причину, а не молчит', () => {
     renderView(
       state({
         account: CONNECTED,
-        sheet: {
-          url: 'https://docs.google.com/spreadsheets/d/x/edit',
-          status: 'broken',
-          lastError: 'Google больше не принимает записи в эту таблицу.',
-        },
+        connections: [
+          conn({ status: 'broken', lastError: 'Google больше не принимает записи в эту таблицу.' }),
+        ],
       }),
     )
-    openDialog()
+    openConnection()
 
-    expect(screen.getByRole('alert').textContent).toContain('больше не принимает записи')
-    // Отвязка остаётся доступной: это способ выйти из поломки.
+    expect(
+      screen.getAllByRole('alert').some((el) => /больше не принимает записи/i.test(el.textContent ?? '')),
+    ).toBe(true)
+    // Удаление остаётся доступным: это способ выйти из поломки.
     expect(screen.getByRole('button', { name: /отвязать форму/i })).toBeTruthy()
   })
 })

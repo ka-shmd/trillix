@@ -48,6 +48,10 @@ CREATE TABLE form_integrations (
     -- подписей: сопоставление «колонка ↔ вопрос» по подписи разъехалось бы при
     -- первом же переименовании вопроса. Колонка только добавляется (спека §8).
     columns           JSONB NOT NULL,
+    -- enabled — тумблер связки. Выключенная не получает новых ответов, но
+    -- сохраняет таблицу, колонки и историю: «выключить на время» и «удалить
+    -- навсегда» — разные намерения, и подменять первое вторым нельзя.
+    enabled           BOOLEAN NOT NULL DEFAULT true,
     status            TEXT NOT NULL,                         -- backfilling | live | broken
     backfill_before   TIMESTAMPTZ,                           -- отсечка догрузки; NULL, когда догрузка кончилась
     last_error        TEXT,                                  -- человеческая причина для экрана; не секрет
@@ -56,9 +60,15 @@ CREATE TABLE form_integrations (
     CONSTRAINT form_integrations_status_check CHECK (status IN ('backfilling', 'live', 'broken'))
 );
 
--- Одна таблица на форму (рамка MVP) — и он же индекс горячего запроса
+-- Связок у формы СКОЛЬКО УГОДНО, в том числе в одну и ту же книгу.
+--
+-- Интеграция — не состояние формы, а правило доставки: одну форму льют и в
+-- рабочую таблицу, и в архивную; в таблицу продаж и в таблицу маркетинга.
+-- Запрет дублей пришлось бы определять («одинаковые» — это та же книга? тот же
+-- лист?), он всё равно обходится вторым листом, а цена ошибки — лишние строки,
+-- которые автор видит сам. Индекс обычный: он обслуживает горячий вопрос
 -- «куда доставлять ответ этой формы».
-CREATE UNIQUE INDEX idx_form_integrations_form ON form_integrations (form_id);
+CREATE INDEX idx_form_integrations_form ON form_integrations (form_id);
 
 -- Запрос экрана пространства «какие формы уже привязаны» и каскад отключения.
 CREATE INDEX idx_form_integrations_account ON form_integrations (account_id);

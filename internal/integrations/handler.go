@@ -55,8 +55,9 @@ type integrationsService interface {
 	Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error)
 	Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsheetID string) ([]SheetRef, error)
 	Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error)
-	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
-	RefillForm(ctx context.Context, userID, formID uuid.UUID) error
+	DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
+	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
+	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, name string, enabled bool) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error
 	Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error
@@ -110,9 +111,13 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(http.HandlerFunc(h.picker)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
-	mux.Handle("POST /api/v1/forms/{id}/integrations/google/refill",
+	// Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько
+	// угодно, и «отвязать интеграцию формы» перестало быть однозначным.
+	mux.Handle("PATCH /api/v1/forms/{id}/integrations/{connectionId}",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.updateConnection))))
+	mux.Handle("POST /api/v1/forms/{id}/integrations/{connectionId}/refill",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.refillForm))))
-	mux.Handle("DELETE /api/v1/forms/{id}/integrations/google",
+	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 	mux.Handle("GET /api/v1/workspaces/{id}/integrations/google/start",
 		h.requireAuth(http.HandlerFunc(h.start)))
@@ -140,7 +145,9 @@ type accountResponse struct {
 // аккаунтом), потому что это два независимых состояния: аккаунт может быть
 // подключён без единой привязанной формы, и экран показывает разные вещи.
 type sheetResponse struct {
+	ID              string  `json:"id"`
 	URL             string  `json:"url"`
+	Enabled         bool    `json:"enabled"`
 	Name            string  `json:"name,omitempty"`
 	Status          string  `json:"status"`
 	LastError       string  `json:"lastError,omitempty"`
@@ -150,8 +157,9 @@ type sheetResponse struct {
 type formStatusResponse struct {
 	WorkspaceID string          `json:"workspaceId"`
 	Account     accountResponse `json:"account"`
-	// Sheet == null — форма не привязана; это не ошибка, а состояние экрана.
-	Sheet *sheetResponse `json:"sheet"`
+	// Connections — подключённые связки формы. Пустой список — не ошибка, а
+	// состояние экрана: у формы просто нет интеграций.
+	Connections []sheetResponse `json:"connections"`
 }
 
 func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
@@ -180,8 +188,9 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 		at := st.Account.ConnectedAt.UTC().Format(time.RFC3339)
 		resp.Account.ConnectedAt = &at
 	}
-	if st.Linked {
-		resp.Sheet = toSheetResponse(st.Link)
+	resp.Connections = make([]sheetResponse, 0, len(st.Connections))
+	for _, link := range st.Connections {
+		resp.Connections = append(resp.Connections, *toSheetResponse(link))
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
@@ -301,14 +310,59 @@ func (h *Handler) spreadsheets(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, map[string][]spreadsheetResponse{"spreadsheets": out})
 }
 
-// refillForm перезаливает лист заново. 202, а не 204: работа начата, а не
-// сделана — перенос идёт пачками в фоне, и экран показывает его статусом.
-func (h *Handler) refillForm(w http.ResponseWriter, r *http.Request) {
-	user, formID, ok := h.userAndForm(w, r)
+// connectionRequest — правка связки: подпись и тумблер.
+type connectionRequest struct {
+	Name    string `json:"name"`
+	Enabled *bool  `json:"enabled"`
+}
+
+func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
+	user, formID, linkID, ok := h.userFormConnection(w, r)
 	if !ok {
 		return
 	}
-	if err := h.svc.RefillForm(r.Context(), user.ID, formID); err != nil {
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req connectionRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	// Тумблер не назван — связка остаётся включённой: правка подписи не должна
+	// исподтишка что-то выключать.
+	enabled := req.Enabled == nil || *req.Enabled
+
+	if err := h.svc.UpdateConnection(r.Context(), user.ID, formID, linkID, req.Name, enabled); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// userFormConnection достаёт спрашивающего, форму и связку из адреса.
+func (h *Handler) userFormConnection(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, uuid.UUID, bool) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return auth.User{}, uuid.Nil, uuid.Nil, false
+	}
+	linkID, err := uuid.Parse(r.PathValue("connectionId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return auth.User{}, uuid.Nil, uuid.Nil, false
+	}
+	return user, formID, linkID, true
+}
+
+// refillForm перезаливает лист заново. 202, а не 204: работа начата, а не
+// сделана — перенос идёт пачками в фоне, и экран показывает его статусом.
+func (h *Handler) refillForm(w http.ResponseWriter, r *http.Request) {
+	user, formID, linkID, ok := h.userFormConnection(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RefillForm(r.Context(), user.ID, formID, linkID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
@@ -316,11 +370,11 @@ func (h *Handler) refillForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {
-	user, formID, ok := h.userAndForm(w, r)
+	user, formID, linkID, ok := h.userFormConnection(w, r)
 	if !ok {
 		return
 	}
-	if err := h.svc.DisconnectForm(r.Context(), user.ID, formID); err != nil {
+	if err := h.svc.DisconnectForm(r.Context(), user.ID, formID, linkID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
@@ -328,7 +382,14 @@ func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func toSheetResponse(l FormLink) *sheetResponse {
-	out := &sheetResponse{URL: l.SpreadsheetURL, Name: l.Name, Status: l.Status, LastError: l.LastError}
+	out := &sheetResponse{
+		ID:        l.ID.String(),
+		URL:       l.SpreadsheetURL,
+		Enabled:   l.Enabled,
+		Name:      l.Name,
+		Status:    l.Status,
+		LastError: l.LastError,
+	}
 	if !l.LastDeliveredAt.IsZero() {
 		at := l.LastDeliveredAt.UTC().Format(time.RFC3339)
 		out.LastDeliveredAt = &at

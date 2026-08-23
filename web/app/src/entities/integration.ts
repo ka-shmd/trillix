@@ -26,7 +26,13 @@ export const integrationAccountSchema = z.object({
 export const sheetStatusSchema = z.enum(['backfilling', 'live', 'broken'])
 
 export const formSheetSchema = z.object({
+  // id связки: операции над ней адресуются им, а не формой — связок у формы
+  // сколько угодно, в том числе в одну и ту же книгу.
+  id: z.string(),
   url: z.string(),
+  // enabled — тумблер. Выключенная связка сохраняет таблицу, колонки и историю:
+  // «выключить на время» и «удалить навсегда» — разные намерения.
+  enabled: z.boolean(),
   // name — подпись связки, которую человек дал в окне подключения. Пусто —
   // экран показывает имя провайдера.
   name: z.string().optional(),
@@ -38,8 +44,8 @@ export const formSheetSchema = z.object({
 export const formIntegrationsSchema = z.object({
   workspaceId: z.string(),
   account: integrationAccountSchema,
-  // null — форма не привязана. Это состояние экрана, а не ошибка.
-  sheet: formSheetSchema.nullable(),
+  // Пустой список — состояние экрана, а не ошибка: у формы просто нет связок.
+  connections: z.array(formSheetSchema),
 })
 
 // Таблица, куда можно положить ответы: под scope drive.file это ТОЛЬКО файлы,

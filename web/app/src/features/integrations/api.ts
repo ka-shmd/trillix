@@ -77,12 +77,24 @@ export async function listSpreadsheets(formId: string): Promise<SpreadsheetRef[]
   return res.spreadsheets
 }
 
-export function refillSheet(formId: string): Promise<void> {
-  return apiRequest(`/forms/${formId}/integrations/google/refill`, { method: 'POST' })
+// Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.
+export function refillSheet(formId: string, connectionId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/integrations/${connectionId}/refill`, { method: 'POST' })
 }
 
-export function unlinkSheet(formId: string): Promise<void> {
-  return apiRequest(`/forms/${formId}/integrations/google`, { method: 'DELETE' })
+export function unlinkSheet(formId: string, connectionId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/integrations/${connectionId}`, { method: 'DELETE' })
+}
+
+export function updateConnection(
+  formId: string,
+  connectionId: string,
+  patch: { name: string; enabled: boolean },
+): Promise<void> {
+  return apiRequest(`/forms/${formId}/integrations/${connectionId}`, {
+    method: 'PATCH',
+    body: patch,
+  })
 }
 
 export function disconnectAccount(workspaceId: string): Promise<void> {

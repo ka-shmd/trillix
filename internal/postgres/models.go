@@ -53,6 +53,7 @@ type FormIntegration struct {
 	SheetID         int32
 	SheetTitle      string
 	Columns         []byte
+	Enabled         bool
 	Status          string
 	BackfillBefore  pgtype.Timestamptz
 	LastError       pgtype.Text

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertCircle, ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
 
-import type { FormIntegrations, SpreadsheetRef } from '../../entities/integration'
+import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
 import { pickSpreadsheet } from './picker'
@@ -59,10 +59,13 @@ const NEW_SHEET = '__new_sheet__'
 export function GoogleSheetsOverlay({
   formId,
   state,
+  connection,
   onClose,
 }: {
   formId: string
   state: FormIntegrations
+  // connection — правим существующую связку; null — подключаем ещё одну.
+  connection: FormSheet | null
   onClose: () => void
 }) {
   // pickerOpen — открыто ли окно выбора файла Google.
@@ -100,8 +103,13 @@ export function GoogleSheetsOverlay({
             </p>
           </header>
 
-          {state.sheet ? (
-            <ConnectedBody formId={formId} state={state} onDone={onClose} />
+          {connection ? (
+            <ConnectedBody
+              formId={formId}
+              state={state}
+              connection={connection}
+              onDone={onClose}
+            />
           ) : (
             <SetupBody
               formId={formId}
@@ -546,17 +554,19 @@ function ConnectedAccountField({
 function ConnectedBody({
   formId,
   state,
+  connection,
   onDone,
 }: {
   formId: string
   state: FormIntegrations
+  connection: FormSheet
   onDone: () => void
 }) {
-  const { account, sheet, workspaceId } = state
+  const { account, workspaceId } = state
+  const sheet = connection
   const refill = useRefillSheet(formId)
   const unlink = useUnlinkSheet(formId)
   const disconnect = useDisconnectAccount(workspaceId)
-  if (!sheet) return null
 
   return (
     <div className="flex flex-col gap-4">
@@ -592,7 +602,7 @@ function ConnectedBody({
           size="sm"
           className="gap-1.5"
           disabled={refill.isPending || sheet.status === 'backfilling'}
-          onClick={() => refill.mutate()}
+          onClick={() => refill.mutate(sheet.id)}
         >
           <RefreshCw className="size-4" /> Перезалить всё
         </Button>
@@ -601,7 +611,7 @@ function ConnectedBody({
           size="sm"
           className="gap-1.5"
           disabled={unlink.isPending}
-          onClick={() => unlink.mutate(undefined, { onSuccess: onDone })}
+          onClick={() => unlink.mutate(sheet.id, { onSuccess: onDone })}
         >
           <Unlink className="size-4" /> Отвязать форму
         </Button>

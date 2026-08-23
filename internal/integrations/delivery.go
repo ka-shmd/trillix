@@ -83,19 +83,23 @@ func (s *Service) EnqueueSubmission(ctx context.Context, formID, submissionID uu
 	if !s.Enabled() || s.outbox == nil {
 		return nil
 	}
-	link, err := s.repo.GetLink(ctx, s.db, formID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
+	// Событие на КАЖДУЮ включённую связку: их у формы сколько угодно, и каждая
+	// доставляется, ретраится и ломается сама по себе. Выключенные отсеиваются
+	// здесь — событие, которое некому доставить, лучше не заводить вовсе.
+	ids, err := s.repo.EnabledLinkIDs(ctx, s.db, formID)
 	if err != nil {
 		return fmt.Errorf("enqueue submission delivery: %w", err)
 	}
-
-	payload, err := json.Marshal(sheetsPayload{LinkID: link.ID, SubmissionID: submissionID})
-	if err != nil {
-		return fmt.Errorf("marshal sheets payload: %w", err)
+	for _, id := range ids {
+		payload, err := json.Marshal(sheetsPayload{LinkID: id, SubmissionID: submissionID})
+		if err != nil {
+			return fmt.Errorf("marshal sheets payload: %w", err)
+		}
+		if err := s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload); err != nil {
+			return err
+		}
 	}
-	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+	return nil
 }
 
 // Deliver — транспорт канала gsheets (mail.Transport). Ошибка означает «попробуй
@@ -118,6 +122,12 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	}
 	if err != nil {
 		return err
+	}
+	if !link.Enabled {
+		// Связку выключили, пока событие ждало. Тумблер — это «не доставлять»,
+		// а не «доставить позже»: копить события до его возврата значит однажды
+		// вывалить в таблицу всё разом.
+		return nil
 	}
 	if link.Status == StatusBroken {
 		// Интеграция уже помечена сломанной: причина показана человеку, лечение —

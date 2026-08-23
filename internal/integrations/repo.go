@@ -112,6 +112,7 @@ type FormLink struct {
 	SheetID         int32
 	SheetTitle      string
 	Columns         []domain.SheetColumn
+	Enabled         bool
 	Status          string
 	BackfillBefore  time.Time
 	LastError       string
@@ -155,26 +156,66 @@ func (Repo) InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) err
 	return nil
 }
 
-func (Repo) GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error) {
-	row, err := postgres.New(db).GetFormIntegration(ctx, formID)
+// ListLinks — связки формы. Их сколько угодно: интеграция это правило доставки,
+// а не состояние формы.
+func (Repo) ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]FormLink, error) {
+	rows, err := postgres.New(db).ListFormIntegrations(ctx, formID)
 	if err != nil {
-		// pgx.ErrNoRows — «форма не привязана», штатное состояние экрана.
-		return FormLink{}, err
+		return nil, fmt.Errorf("list form integrations: %w", err)
 	}
-	return toFormLink(formIntegrationRow{
-		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-		ExternalEmail: row.ExternalEmail, Name: row.Name, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
-		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
-		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
-		LastDeliveredAt: row.LastDeliveredAt.Time,
-	})
+	out := make([]FormLink, 0, len(rows))
+	for _, row := range rows {
+		link, err := toFormLink(formIntegrationRow{
+			ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
+			ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled,
+			SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+			SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
+			BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
+			LastDeliveredAt: row.LastDeliveredAt.Time,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, link)
+	}
+	return out, nil
 }
 
-func (Repo) DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error {
-	if err := postgres.New(db).DeleteFormIntegration(ctx, formID); err != nil {
-		return fmt.Errorf("delete form integration: %w", err)
+// EnabledLinkIDs — кому доставлять принятый ответ. Только id: на горячем пути
+// приёма ничего больше не нужно, а полные строки стоили бы джойна на каждый ответ.
+func (Repo) EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error) {
+	ids, err := postgres.New(db).ListEnabledFormIntegrations(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled form integrations: %w", err)
 	}
-	return nil
+	return ids, nil
+}
+
+// DeleteLink удаляет ОДНУ связку формы. Ноль строк — связки нет либо она чужой
+// формы; вызывающий разбирает это как 404, не различая случаи (инвариант 5).
+func (Repo) DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteFormIntegration(ctx, postgres.DeleteFormIntegrationParams{
+		ID:     id,
+		FormID: formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete form integration: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateLinkSettings правит подпись и тумблер связки.
+func (Repo) UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error) {
+	n, err := postgres.New(db).UpdateFormIntegrationSettings(ctx, postgres.UpdateFormIntegrationSettingsParams{
+		ID:      id,
+		FormID:  formID,
+		Name:    name,
+		Enabled: enabled,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form integration settings: %w", err)
+	}
+	return n, nil
 }
 
 func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error) {
@@ -184,7 +225,7 @@ func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Fo
 	}
 	return toFormLink(formIntegrationRow{
 		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-		ExternalEmail: row.ExternalEmail, Name: row.Name, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
 		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
 		LastDeliveredAt: row.LastDeliveredAt.Time,
@@ -246,6 +287,7 @@ func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, caus
 type formIntegrationRow struct {
 	ID, FormID, AccountID, WorkspaceID uuid.UUID
 	ExternalEmail, Name                string
+	Enabled                            bool
 	SpreadsheetID, SpreadsheetUrl      string
 	SheetID                            int32
 	SheetTitle, Status, LastError      string
@@ -270,6 +312,7 @@ func toFormLink(row formIntegrationRow) (FormLink, error) {
 		SheetID:         row.SheetID,
 		SheetTitle:      row.SheetTitle,
 		Columns:         columns,
+		Enabled:         row.Enabled,
 		Status:          row.Status,
 		BackfillBefore:  row.BackfillBefore,
 		LastError:       row.LastError,

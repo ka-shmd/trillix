@@ -113,14 +113,17 @@ type accountDTO struct {
 }
 
 type sheetDTO struct {
-	URL    string `json:"url"`
-	Status string `json:"status"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
 }
 
 type formStatusDTO struct {
 	WorkspaceID string     `json:"workspaceId"`
 	Account     accountDTO `json:"account"`
-	Sheet       *sheetDTO  `json:"sheet"`
+	Connections []sheetDTO `json:"connections"`
 }
 
 // formStatus читает состояние интеграций формы — то, что рисует таб.
@@ -162,8 +165,8 @@ func TestIntegrations_OwnerSeesManageable(t *testing.T) {
 	if !got.Account.Enabled || got.Account.Connected || !got.Account.CanManage {
 		t.Fatalf("аккаунт = %+v, ожидалось «настроено, не подключено, управляемо»", got.Account)
 	}
-	if got.Sheet != nil {
-		t.Fatalf("привязка = %+v, ожидалась пустая", got.Sheet)
+	if len(got.Connections) != 0 {
+		t.Fatalf("связки = %+v, ожидался пустой список", got.Connections)
 	}
 	if got.WorkspaceID != wsID {
 		t.Fatalf("пространство формы = %q, ожидалось %q", got.WorkspaceID, wsID)
@@ -344,26 +347,30 @@ func TestIntegrations_LinkFormToSheet(t *testing.T) {
 	}
 
 	got := formStatus(t, owner, srv, formID)
-	if got.Sheet == nil || got.Sheet.URL != sheet.URL {
-		t.Fatalf("состояние формы = %+v, ожидалась привязка", got.Sheet)
+	if len(got.Connections) != 1 || got.Connections[0].URL != sheet.URL {
+		t.Fatalf("состояние формы = %+v, ожидалась одна связка", got.Connections)
 	}
 
-	// Вторая привязка — конфликт: иначе первая таблица осталась бы в Диске
-	// автора сиротой, о которой он не узнает.
+	// Вторая связка законна — в том числе в ту же книгу: интеграция это правило
+	// доставки, а не состояние формы.
 	r = postWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
-	if r.StatusCode != http.StatusConflict {
-		t.Fatalf("повторная привязка: статус %d, ожидалось 409", r.StatusCode)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("вторая связка: статус %d, ожидалось 201", r.StatusCode)
 	}
 	closeBody(t, r)
+	if got := formStatus(t, owner, srv, formID); len(got.Connections) != 2 {
+		t.Fatalf("связок = %d, ожидалось две", len(got.Connections))
+	}
 
-	r = deleteWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r = deleteWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID)
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("отвязка: статус %d, ожидалось 204", r.StatusCode)
 	}
 	closeBody(t, r)
 
-	if got := formStatus(t, owner, srv, formID); got.Sheet != nil {
-		t.Fatalf("после отвязки осталась привязка: %+v", got.Sheet)
+	// Удалили одну — вторая осталась: связки живут своей жизнью.
+	if got := formStatus(t, owner, srv, formID); len(got.Connections) != 1 {
+		t.Fatalf("после удаления одной связок = %d, ожидалась одна", len(got.Connections))
 	}
 }
 
@@ -749,9 +756,8 @@ func TestIntegrations_BackfillOnConnect(t *testing.T) {
 		t.Fatalf("порядок строк = %v", [][]string{provider.appended[0], provider.appended[1]})
 	}
 
-	got := formStatus(t, owner, srv, formID)
-	if got.Sheet == nil || got.Sheet.Status != "live" {
-		t.Fatalf("после переноса статус = %+v, ожидался live", got.Sheet)
+	if got := formStatus(t, owner, srv, formID); len(got.Connections) != 1 || got.Connections[0].Status != "live" {
+		t.Fatalf("после переноса состояние = %+v, ожидался live", got.Connections)
 	}
 
 	// Дальше работает живая доставка — тем же листом и теми же колонками.
@@ -780,13 +786,14 @@ func TestIntegrations_Refill(t *testing.T) {
 	newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
 
 	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
-	closeBody(t, r)
+	var sheet sheetDTO
+	decode(t, r, &sheet)
 	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	before := len(provider.appended)
 
-	r = postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google/refill")
+	r = postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID+"/refill")
 	if r.StatusCode != http.StatusAccepted {
 		t.Fatalf("перезалив: статус %d, ожидалось 202", r.StatusCode)
 	}
@@ -890,4 +897,128 @@ func TestIntegrations_ListSpreadsheetsWithoutAccount(t *testing.T) {
 	if len(got.Spreadsheets) != 0 {
 		t.Fatalf("список = %+v, ожидался пустой", got.Spreadsheets)
 	}
+}
+
+// Тумблер связки: выключенная не получает новых ответов, но сохраняет таблицу,
+// колонки и историю — «выключить на время» и «удалить навсегда» разные
+// намерения.
+func TestIntegrations_ToggleConnection(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-toggle")
+	versionID := publishVersion(t, formID)
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		`{"name":"","spreadsheetId":"","sheetId":null,"backfill":false}`)
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID,
+		`{"name":"Архив","enabled":false}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("правка связки: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	got := formStatus(t, owner, srv, formID)
+	if len(got.Connections) != 1 || got.Connections[0].Enabled || got.Connections[0].Name != "Архив" {
+		t.Fatalf("связка = %+v", got.Connections)
+	}
+
+	// Ответ выключенной связке события не порождает — не «заводим и гасим», а
+	// не заводим вовсе: копить их до возврата тумблера значит однажды вывалить
+	// в таблицу всё разом.
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	var queued int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE channel = $1`, integrations.ChannelSheets).Scan(&queued); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if queued != 0 {
+		t.Fatalf("выключенной связке заведено %d событий", queued)
+	}
+
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("выключенная связка получила ответ: %v", provider.appended)
+	}
+}
+
+// Две связки одной формы получают КАЖДАЯ свою копию ответа: правил доставки
+// может быть сколько угодно, и они не мешают друг другу.
+func TestIntegrations_TwoConnectionsBothDeliver(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-two")
+	versionID := publishVersion(t, formID)
+	for range 2 {
+		r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+			`{"name":"","spreadsheetId":"","sheetId":null,"backfill":false}`)
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("связка: статус %d, ожидалось 201", r.StatusCode)
+		}
+		closeBody(t, r)
+	}
+
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 2 {
+		t.Fatalf("строк дописано %d, ожидалось две (по одной на связку)", len(provider.appended))
+	}
+}
+
+// Связка чужой формы не трогается и не раскрывается: 404 на обе операции.
+func TestIntegrations_ConnectionOfAnotherForm(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-mine")
+	otherID := newForm(t, wsID, "f-other")
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	// id связки чужой формы в адресе своей — 404, а не «получилось».
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/forms/"+otherID+"/integrations/"+sheet.ID)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("удаление чужой связки: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+otherID+"/integrations/"+sheet.ID, `{"name":"чужое"}`)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("правка чужой связки: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+func patchWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPatch, srv.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", http.MethodPatch, path, err)
+	}
+	return resp
 }

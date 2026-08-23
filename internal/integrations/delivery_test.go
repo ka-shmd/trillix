@@ -63,6 +63,7 @@ func linkedSheet() integrations.FormLink {
 		FormID:        testForm,
 		SpreadsheetID: "ss-1",
 		SheetTitle:    "Ответы",
+		Enabled:       true,
 		Status:        integrations.StatusLive,
 		Columns:       []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
 	}
@@ -229,11 +230,11 @@ func TestEnqueueSubmission_LinkedForm(t *testing.T) {
 	}
 }
 
-// Форма не привязана — события нет вовсе: приём ответа не платит за интеграцию,
+// У формы нет связок — события нет вовсе: приём ответа не платит за интеграцию,
 // которой у формы не заведено.
 func TestEnqueueSubmission_UnlinkedForm(t *testing.T) {
 	out := &fakeOutbox{}
-	svc := deliveryService(&fakeStore{linkErr: pgx.ErrNoRows}, &fakeProvider{}, &fakeSubmissions{}, out)
+	svc := deliveryService(&fakeStore{}, &fakeProvider{}, &fakeSubmissions{}, out)
 
 	if err := svc.EnqueueSubmission(context.Background(), testForm, testSubmission); err != nil {
 		t.Fatalf("enqueue: %v", err)
@@ -362,4 +363,36 @@ func backfillPayload(t *testing.T, linkID, after uuid.UUID) []byte {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	return raw
+}
+
+// Выключенная связка событий не получает: тумблер — это «не доставлять», а не
+// «доставить позже».
+func TestEnqueueSubmission_DisabledConnection(t *testing.T) {
+	link := linkedSheet()
+	link.Enabled = false
+	out := &fakeOutbox{}
+	svc := deliveryService(&fakeStore{link: link}, &fakeProvider{}, &fakeSubmissions{}, out)
+
+	if err := svc.EnqueueSubmission(context.Background(), testForm, testSubmission); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if out.channel != "" {
+		t.Fatal("событие поставлено выключенной связке")
+	}
+}
+
+// Событие, доехавшее до выключенной связки (выключили, пока оно ждало), гасится:
+// копить их до возврата тумблера значит однажды вывалить в таблицу всё разом.
+func TestDeliver_DisabledConnectionDropsEvent(t *testing.T) {
+	link := linkedSheet()
+	link.Enabled = false
+	provider := &fakeProvider{}
+	svc := deliveryService(&fakeStore{link: link}, provider, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("событие ушло на ретрай: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("в таблицу записано при выключенной связке: %v", provider.appended)
+	}
 }

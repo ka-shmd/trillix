@@ -63,6 +63,7 @@ type fakeStore struct {
 	columnsSet   []domain.SheetColumn
 	delivered    bool
 	brokenWith   string
+	settings     *linkSettings
 	backfillFrom *time.Time
 	backfillDone bool
 	sheetCleared bool
@@ -92,16 +93,34 @@ func (f *fakeStore) InsertLink(_ context.Context, _ postgres.DBTX, l integration
 	return nil
 }
 
-func (f *fakeStore) GetLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (integrations.FormLink, error) {
+func (f *fakeStore) ListLinks(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]integrations.FormLink, error) {
 	if f.linkErr != nil {
-		return integrations.FormLink{}, f.linkErr
+		return nil, f.linkErr
 	}
-	return f.link, nil
+	if f.link.ID == uuid.Nil {
+		return nil, nil
+	}
+	return []integrations.FormLink{f.link}, nil
 }
 
-func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+func (f *fakeStore) EnabledLinkIDs(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]uuid.UUID, error) {
+	if f.linkErr != nil {
+		return nil, f.linkErr
+	}
+	if f.link.ID == uuid.Nil || !f.link.Enabled {
+		return nil, nil
+	}
+	return []uuid.UUID{f.link.ID}, nil
+}
+
+func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
 	f.unlinked = true
-	return nil
+	return 1, nil
+}
+
+func (f *fakeStore) UpdateLinkSettings(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, name string, enabled bool) (int64, error) {
+	f.settings = &linkSettings{name: name, enabled: enabled}
+	return 1, nil
 }
 
 func (f *fakeStore) GetAccountByID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (integrations.Connection, error) {
@@ -144,6 +163,12 @@ func (f *fakeStore) MarkBroken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, 
 }
 
 // fakeForms — коллаборатор forms: авторизует доступ к форме и отдаёт версии.
+// linkSettings — то, что записали правкой связки.
+type linkSettings struct {
+	name    string
+	enabled bool
+}
+
 type fakeForms struct {
 	form    forms.Form
 	getErr  error
@@ -477,15 +502,37 @@ func TestConnectForm_WithoutAccount(t *testing.T) {
 	}
 }
 
-// Вторая привязка — конфликт, а не молчаливая перезапись: иначе первая таблица
-// осталась бы висеть в Диске автора сиротой, и он бы про неё не узнал.
-func TestConnectForm_AlreadyLinked(t *testing.T) {
-	store := &fakeStore{conn: sealedConn(t)}
+// Вторая связка для той же формы — законна, в том числе в ту же книгу.
+// Интеграция это ПРАВИЛО ДОСТАВКИ, а не состояние формы: одну форму льют и в
+// рабочую таблицу, и в архивную.
+func TestConnectForm_SecondConnectionAllowed(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
+
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
+	if err != nil {
+		t.Fatalf("вторая связка отклонена: %v", err)
+	}
+	if store.insertedLnk == nil || link.SpreadsheetURL == "" {
+		t.Fatal("вторая связка не записана")
+	}
+}
+
+// Правка связки: подпись и тумблер. Выключенная связка сохраняет таблицу и
+// колонки — «выключить на время» и «удалить навсегда» разные намерения.
+func TestUpdateConnection(t *testing.T) {
+	store := &fakeStore{link: linkedSheet()}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("ошибка = %v, ожидалась ErrConflict", err)
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, store.link.ID, "  Архив  ", false)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if store.settings == nil || store.settings.name != "Архив" || store.settings.enabled {
+		t.Fatalf("настройки = %+v", store.settings)
+	}
+	if store.unlinked {
+		t.Error("выключение удалило связку")
 	}
 }
 
@@ -506,11 +553,11 @@ func TestConnectForm_StrangerGetsNotFound(t *testing.T) {
 // Отвязка формы НЕ трогает таблицу в Диске автора: продукт не удаляет чужие
 // файлы. Проверяется тем, что провайдера не дёргали вовсе.
 func TestDisconnectForm_KeepsSpreadsheet(t *testing.T) {
-	store := &fakeStore{link: integrations.FormLink{SpreadsheetID: "sheet-id"}}
+	store := &fakeStore{link: integrations.FormLink{ID: uuid.New(), SpreadsheetID: "sheet-id"}}
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
 
-	if err := svc.DisconnectForm(context.Background(), testUser, testForm); err != nil {
+	if err := svc.DisconnectForm(context.Background(), testUser, testForm, store.link.ID); err != nil {
 		t.Fatalf("disconnect form: %v", err)
 	}
 	if !store.unlinked {
@@ -554,7 +601,7 @@ func TestRefillForm(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
 
-	if err := svc.RefillForm(context.Background(), testUser, testForm); err != nil {
+	if err := svc.RefillForm(context.Background(), testUser, testForm, link.ID); err != nil {
 		t.Fatalf("refill: %v", err)
 	}
 	if provider.cleared != "sheet-id" {
@@ -573,14 +620,15 @@ func TestRefillForm(t *testing.T) {
 	}
 }
 
-// Непривязанной форме перезаливать нечего — 422 с человеческим текстом, а не 500.
-func TestRefillForm_NotLinked(t *testing.T) {
+// Связки с таким id у формы нет — 404, и одинаково для «нет вовсе» и «чужая»
+// (инвариант 5).
+func TestRefillForm_UnknownConnection(t *testing.T) {
 	store := &fakeStore{linkErr: pgx.ErrNoRows}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	err := svc.RefillForm(context.Background(), testUser, testForm)
-	if !errors.Is(err, domain.ErrValidation) {
-		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	err := svc.RefillForm(context.Background(), testUser, testForm, uuid.New())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
 }
 
