@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, ExternalLink, RefreshCw, Table2 } from 'lucide-react'
+import { AlertCircle, Table2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
@@ -10,8 +10,6 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
-  useDisconnectAccount,
-  useRefillSheet,
   useUpdateConnection,
 } from './queries'
 import { ApiError } from '../../shared/api/errors'
@@ -208,8 +206,6 @@ function SetupBody({
   const { account, workspaceId } = state
   const create = useCreateSheet(formId)
   const update = useUpdateConnection(formId)
-  const disconnect = useDisconnectAccount(workspaceId)
-  const refill = useRefillSheet(formId)
   const saving = create.isPending || update.isPending
   const failed = create.isError || update.isError
   const failure = create.error ?? update.error
@@ -296,43 +292,6 @@ function SetupBody({
         {connection ? 'Сохранить' : 'Подключить Google Таблицы'}
       </Button>
 
-      {connection && (
-        <div className="flex flex-wrap items-center gap-2 border-t pt-4">
-          <Button asChild variant="outline" size="sm" className="gap-1.5">
-            <a href={connection.url} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-4" /> Открыть таблицу
-            </a>
-          </Button>
-          {/* Перезалив — отдельное действие, а не тумблер сверху: он ЧИСТИТ лист
-              и наполняет заново, и путать его с «перенести историю в новый лист»
-              нельзя. */}
-          <Button
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={refill.isPending || connection.status === 'backfilling'}
-            onClick={() => refill.mutate(connection.id)}
-          >
-            <RefreshCw className="size-4" /> Перезалить всё
-          </Button>
-        </div>
-      )}
-
-      {account.canManage && (
-        <div className="border-t pt-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={disconnect.isPending}
-            onClick={() => disconnect.mutate(undefined, { onSuccess: onDone })}
-          >
-            Отключить Google от пространства
-          </Button>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Снимет все подключения всех форм пространства.
-          </p>
-        </div>
-      )}
     </div>
   )
 

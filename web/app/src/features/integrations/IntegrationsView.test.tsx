@@ -256,14 +256,37 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
-  it('перезалив заперт на время переноса', () => {
+  it('состояние связки видно на экране правки первым делом', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
 
+    // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
+    // что он видит, это что с ней сейчас.
     expect(screen.getByText(/переносим ответы/i)).toBeTruthy()
-    expect(screen.getByRole('button', { name: /перезалить всё/i }).hasAttribute('disabled')).toBe(
-      true,
-    )
+  })
+
+  it('сохранение правки несёт ВЫБРАННУЮ таблицу, а не только подпись', async () => {
+    // Мина: хук правки легко написать так, что он отправит name и enabled, а
+    // выбранную цель молча выбросит — и переезд в другой лист тихо не сработает.
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+    renderView(state({ account: CONNECTED, connections: [conn({ name: 'Архив' })] }))
+    openConnection()
+
+    // Меняем цель на «создать новую таблицу» и сохраняем.
+    fireEvent.click(screen.getByLabelText('Таблица'))
+    fireEvent.click(screen.getByRole('option', { name: /создать новую таблицу/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(calls.some((c) => c.init?.method === 'PATCH')).toBe(true))
+    const patch = calls.find((c) => c.init?.method === 'PATCH')!
+    const body = JSON.parse(String(patch.init?.body))
+    expect(body.name).toBe('Архив')
+    expect(body).toHaveProperty('spreadsheetId')
+    vi.unstubAllGlobals()
   })
 
   it('сломанная связка показывает причину, а не молчит', () => {
@@ -280,7 +303,7 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(
       screen.getAllByRole('alert').some((el) => /больше не принимает записи/i.test(el.textContent ?? '')),
     ).toBe(true)
-    // И перезалив рядом: это способ выйти из поломки, когда доступ вернут.
-    expect(screen.getByRole('button', { name: /перезалить всё/i })).toBeTruthy()
+    // Экран правки при этом остаётся формой: сохранить исправленное можно.
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
   })
 })

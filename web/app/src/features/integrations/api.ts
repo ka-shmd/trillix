@@ -78,27 +78,32 @@ export async function listSpreadsheets(formId: string): Promise<SpreadsheetRef[]
 }
 
 // Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.
-export function refillSheet(formId: string, connectionId: string): Promise<void> {
-  return apiRequest(`/forms/${formId}/integrations/${connectionId}/refill`, { method: 'POST' })
-}
-
+//
+// Перезалива листа и отключения аккаунта пространства здесь нет: ручки на бэке
+// есть (API.md), а входа в интерфейсе им пока не нашли — решение владельца
+// 2026-08-23, места для них записаны в BACKLOG. Держать мёртвый клиент в бандле
+// ради будущей кнопки незачем.
 export function unlinkSheet(formId: string, connectionId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/integrations/${connectionId}`, { method: 'DELETE' })
 }
 
+// updateConnection шлёт ровно то, что дали: поля цели необязательны, и их
+// отсутствие в теле означает «цель не трогать» (так шлёт тумблер из списка).
 export function updateConnection(
   formId: string,
   connectionId: string,
-  patch: { name: string; enabled: boolean },
+  patch: {
+    name: string
+    enabled: boolean
+    spreadsheetId?: string
+    sheetId?: number | null
+    backfill?: boolean
+  },
 ): Promise<void> {
   return apiRequest(`/forms/${formId}/integrations/${connectionId}`, {
     method: 'PATCH',
     body: patch,
   })
-}
-
-export function disconnectAccount(workspaceId: string): Promise<void> {
-  return apiRequest(`/workspaces/${workspaceId}/integrations/google`, { method: 'DELETE' })
 }
 
 // startUrl — адрес, с которого начинается поход за согласием Google. Это не
