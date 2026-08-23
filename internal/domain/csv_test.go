@@ -257,3 +257,51 @@ func TestCSV_FileNamesInsteadOfIDs(t *testing.T) {
 		t.Fatalf("без имён ячейка = %q, ждали пустую", cell)
 	}
 }
+
+// Ключи колонок идут в том же порядке, что подписи, и метаколонки в них —
+// стабильные идентификаторы, а не человеческий текст. По ним интеграция
+// сопоставляет колонку внешней таблицы с вопросом: по подписи нельзя —
+// переименование вопроса перемешало бы данные.
+func TestCSVBuilder_ColumnsMirrorHeader(t *testing.T) {
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1,
+			grp("Имя", Block{ID: "b1", Type: BlockShortText}),
+			grp("Почта", Block{ID: "b2", Type: BlockEmail}),
+		),
+	})
+
+	cols := bld.Columns()
+	if len(cols) != len(bld.Header()) {
+		t.Fatalf("ключей %d, подписей %d — колонки разъехались", len(cols), len(bld.Header()))
+	}
+	want := []string{"_id", "_submitted_at", "_form_version", "b1", "b2"}
+	for i, w := range want {
+		if cols[i] != w {
+			t.Errorf("колонка %d = %q, ожидалась %q", i, cols[i], w)
+		}
+	}
+}
+
+// Строка для внешней таблицы идёт БЕЗ CSV-заглушки: там значения кладутся
+// режимом, который их не разбирает, и апостроф остался бы видимым символом.
+// Тот же ввод в CSV по-прежнему экранируется — обе защиты живут рядом.
+func TestCSVBuilder_SheetRowKeepsRawValues(t *testing.T) {
+	bld := NewCSVBuilder([]VersionedSchema{
+		vsg(1, grp("=опасная подпись", Block{ID: "b1", Type: BlockShortText})),
+	})
+
+	if got := bld.SheetHeader()[3]; got != "=опасная подпись" {
+		t.Errorf("подпись для таблицы = %q, ожидалась без префикса", got)
+	}
+	if got := bld.Header()[3]; got != "'=опасная подпись" {
+		t.Errorf("подпись для CSV = %q, ожидалась с префиксом", got)
+	}
+
+	answers := ans(map[string]any{"b1": "=1+1"})
+	if got := bld.SheetRow("018f", time.Now(), 1, answers)[3]; got != "=1+1" {
+		t.Errorf("ячейка для таблицы = %q, ожидалась без префикса", got)
+	}
+	if got := bld.Row("018f", time.Now(), 1, answers)[3]; got != "'=1+1" {
+		t.Errorf("ячейка для CSV = %q, ожидалась с префиксом", got)
+	}
+}

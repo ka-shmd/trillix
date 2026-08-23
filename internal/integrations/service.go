@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -28,6 +30,9 @@ type Store interface {
 	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) error
 	Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) (Connection, error)
 	Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error)
+	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
+	GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error)
+	DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
 }
 
 var _ Store = Repo{}
@@ -42,6 +47,12 @@ type Provider interface {
 	Refresh(ctx context.Context, refresh string) (Tokens, error)
 	Account(ctx context.Context, accessToken string) (Account, error)
 	Revoke(ctx context.Context, refresh string) error
+
+	// Операции с таблицами живут в том же интерфейсе, а не в отдельном:
+	// провайдер сегодня один, и делить его надвое стоит тогда, когда появится
+	// второй, у которого таблиц нет (YAGNI, PROCESS §2).
+	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
+	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
 }
 
 // Service — подключение внешних аккаунтов к пространству.
@@ -49,6 +60,7 @@ type Service struct {
 	db     postgres.DBTX
 	repo   Store
 	access Access
+	forms  Forms
 	google Provider
 	// key — общий секрет приложения (FORM_TOKEN_SECRET). Из него HKDF выводит
 	// ключ шифрования refresh-токенов; сам он здесь не используется ни для чего
@@ -56,8 +68,8 @@ type Service struct {
 	key []byte
 }
 
-func NewService(db postgres.DBTX, repo Store, access Access, google Provider, key []byte) *Service {
-	return &Service{db: db, repo: repo, access: access, google: google, key: key}
+func NewService(db postgres.DBTX, repo Store, access Access, f Forms, google Provider, key []byte) *Service {
+	return &Service{db: db, repo: repo, access: access, forms: f, google: google, key: key}
 }
 
 // Enabled отвечает, настроен ли провайдер на этом контуре. Не настроен (нет
@@ -219,4 +231,214 @@ func (s *Service) Disconnect(ctx context.Context, userID, workspaceID uuid.UUID)
 			slog.String("error", err.Error()))
 	}
 	return nil
+}
+
+// Статусы привязки формы (колонка form_integrations.status).
+const (
+	// StatusBackfilling — идёт перенос накопленных ответов (слайс D): живые
+	// строки ждут в outbox, чтобы не лечь поверх старых.
+	StatusBackfilling = "backfilling"
+	// StatusLive — доставка идёт.
+	StatusLive = "live"
+	// StatusBroken — доставка сломалась (доступ отозван, таблица удалена);
+	// причина лежит в last_error и показывается человеку.
+	StatusBroken = "broken"
+)
+
+// sheetTitle — имя листа, который заводим. Русское и человеческое: таблицу
+// открывает автор, а не машина.
+const sheetTitle = "Ответы"
+
+// Forms — коллаборатор из модуля forms (модули общаются интерфейсами сервисов).
+// Get авторизует доступ (чужая или несуществующая → ErrNotFound, инвариант 5),
+// Versions отдаёт снапшоты опубликованных версий.
+type Forms interface {
+	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
+	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+}
+
+// FormStatus — всё, что нужно табу «Интеграции» одной поездкой: состояние
+// аккаунта пространства и привязка этой формы.
+type FormStatus struct {
+	WorkspaceID uuid.UUID
+	Account     Status
+	Linked      bool
+	Link        FormLink
+}
+
+// FormStatus читает состояние интеграций формы. Право — ActionFormRead внутри
+// forms.Get: кто видит форму и её ответы, тот вправе знать, куда они уезжают.
+func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return FormStatus{}, err
+	}
+
+	account, err := s.Status(ctx, userID, form.WorkspaceID)
+	if err != nil {
+		return FormStatus{}, err
+	}
+	out := FormStatus{WorkspaceID: form.WorkspaceID, Account: account}
+
+	link, err := s.repo.GetLink(ctx, s.db, formID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Форма не привязана — штатное состояние экрана.
+		return out, nil
+	}
+	if err != nil {
+		return FormStatus{}, fmt.Errorf("form integration status: %w", err)
+	}
+	out.Linked, out.Link = true, link
+	return out, nil
+}
+
+// ConnectForm заводит таблицу в Диске подключённого аккаунта и привязывает к ней
+// форму.
+//
+// Право — ActionFormWrite, а не ActionIntegrationManage: решение «вывозить ли
+// ответы наружу» уже принято владельцем при подключении аккаунта, а выбрать, для
+// какой формы завести таблицу, вправе тот, кто эти формы и правит.
+func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (FormLink, error) {
+	if !s.Enabled() {
+		return FormLink{}, domain.ErrNotFound
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return FormLink{}, err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return FormLink{}, err
+	}
+
+	// Уже привязана — это не «перепривязать молча»: у формы одна таблица, и
+	// вторая кнопка должна сначала отвязать первую (иначе созданная таблица
+	// осталась бы висеть в Диске сиротой).
+	if _, err := s.repo.GetLink(ctx, s.db, formID); err == nil {
+		return FormLink{}, fmt.Errorf("%w: форма уже привязана к таблице", domain.ErrConflict)
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return FormLink{}, fmt.Errorf("connect form: %w", err)
+	}
+
+	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return FormLink{}, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
+	}
+	if err != nil {
+		return FormLink{}, fmt.Errorf("connect form: %w", err)
+	}
+
+	builder, err := s.columnModel(ctx, userID, formID)
+	if err != nil {
+		return FormLink{}, err
+	}
+
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return FormLink{}, err
+	}
+	sheet, err := s.google.CreateSpreadsheet(ctx, token, spreadsheetTitle(form), sheetTitle)
+	if err != nil {
+		return FormLink{}, err
+	}
+	// Шапка пишется сразу: таблица без заголовков — это таблица, в которой
+	// человек не поймёт, что за колонки, ещё до первого ответа.
+	if err := s.google.WriteHeader(ctx, token, sheet, builder.SheetHeader()); err != nil {
+		return FormLink{}, err
+	}
+
+	link := NewFormLink{
+		ID:             domain.NewID(),
+		FormID:         formID,
+		AccountID:      conn.ID,
+		SpreadsheetID:  sheet.ID,
+		SpreadsheetURL: sheet.URL,
+		SheetID:        sheet.SheetID,
+		SheetTitle:     sheet.Title,
+		Columns:        builder.Columns(),
+		Status:         StatusLive,
+	}
+	if err := s.repo.InsertLink(ctx, s.db, link); err != nil {
+		return FormLink{}, err
+	}
+
+	return FormLink{
+		FormID:         formID,
+		AccountID:      conn.ID,
+		WorkspaceID:    form.WorkspaceID,
+		AccountEmail:   conn.Email,
+		SpreadsheetID:  sheet.ID,
+		SpreadsheetURL: sheet.URL,
+		SheetID:        sheet.SheetID,
+		SheetTitle:     sheet.Title,
+		Columns:        link.Columns,
+		Status:         StatusLive,
+	}, nil
+}
+
+// DisconnectForm отвязывает форму. Таблица в Диске автора остаётся со всеми
+// строками: продукт не удаляет чужие файлы — ни за человека, ни «прибираясь».
+func (s *Service) DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return err
+	}
+	// Идемпотентно: отвязывать нечего — тоже успех (вторая вкладка не краснеет).
+	return s.repo.DeleteLink(ctx, s.db, formID)
+}
+
+// spreadsheetTitle — имя файла в Диске автора. Внутреннее имя формы (если задано)
+// человеку роднее публичного заголовка: в Диске он ищет глазами то же, что видит
+// в дашборде.
+func spreadsheetTitle(form forms.Form) string {
+	name := form.Title
+	if form.Name != nil && *form.Name != "" {
+		name = *form.Name
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Форма"
+	}
+	return name + " — ответы"
+}
+
+// columnModel строит модель колонок формы — ту же, что у выгрузки CSV, сводки и
+// воронки (domain.QuestionOrder). Колонки таблицы обязаны совпадать с колонками
+// выгрузки: иначе два ответа на вопрос «какие у формы вопросы».
+//
+// Близнец — versionedSchemas в internal/submissions: там она приватная, и
+// вытаскивать её в общий пакет ради одного второго потребителя рано.
+func (s *Service) columnModel(ctx context.Context, userID, formID uuid.UUID) (*domain.CSVBuilder, error) {
+	versions, err := s.forms.Versions(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	vs := make([]domain.VersionedSchema, 0, len(versions))
+	for _, v := range versions {
+		schema, e := domain.ValidateSchema(v.Schema)
+		if e != nil {
+			// Опубликованный снапшот обязан быть валиден (проверен при
+			// публикации). %v, а не %w: сентинел ErrValidation в цепочке дал бы
+			// 422 с внутренним текстом вместо честной 500.
+			return nil, fmt.Errorf("parse version %d schema of form %s: %v", v.Number, formID, e)
+		}
+		vs = append(vs, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
+	}
+	return domain.NewCSVBuilder(vs), nil
+}
+
+// accessToken отдаёт свежий access-токен подключения: расшифровать refresh и
+// обменять его. ЕДИНСТВЕННОЕ место расшифровки — всё, что ходит к провайдеру от
+// имени человека, идёт через него.
+func (s *Service) accessToken(ctx context.Context, conn Connection) (string, error) {
+	refresh, err := openToken(s.key, conn.RefreshSealed)
+	if err != nil {
+		return "", err
+	}
+	tokens, err := s.google.Refresh(ctx, refresh)
+	if err != nil {
+		return "", err
+	}
+	return tokens.Access, nil
 }

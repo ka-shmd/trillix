@@ -3,6 +3,7 @@ package integrations_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -18,6 +20,7 @@ var (
 	testKey  = []byte("form-token-secret-of-decent-length")
 	testUser = uuid.MustParse("00000000-0000-7000-8000-000000000001")
 	testWS   = uuid.MustParse("00000000-0000-7000-8000-000000000002")
+	testForm = uuid.MustParse("00000000-0000-7000-8000-000000000003")
 )
 
 // fakeAccess — права как ответ на ДЕЙСТВИЕ: ровно то, что спрашивает сервис.
@@ -49,6 +52,11 @@ type fakeStore struct {
 	upserted  *integrations.NewConnection
 	deleted   []byte
 	deleteErr error
+
+	link        integrations.FormLink
+	linkErr     error
+	insertedLnk *integrations.NewFormLink
+	unlinked    bool
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) error {
@@ -70,10 +78,50 @@ func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ st
 	return f.deleted, nil
 }
 
+func (f *fakeStore) InsertLink(_ context.Context, _ postgres.DBTX, l integrations.NewFormLink) error {
+	f.insertedLnk = &l
+	return nil
+}
+
+func (f *fakeStore) GetLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (integrations.FormLink, error) {
+	if f.linkErr != nil {
+		return integrations.FormLink{}, f.linkErr
+	}
+	return f.link, nil
+}
+
+func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.unlinked = true
+	return nil
+}
+
+// fakeForms — коллаборатор forms: авторизует доступ к форме и отдаёт версии.
+type fakeForms struct {
+	form    forms.Form
+	getErr  error
+	version json.RawMessage
+}
+
+func (f fakeForms) Get(_ context.Context, _, _ uuid.UUID) (forms.Form, error) {
+	if f.getErr != nil {
+		return forms.Form{}, f.getErr
+	}
+	return f.form, nil
+}
+
+func (f fakeForms) Versions(_ context.Context, _, _ uuid.UUID) ([]forms.Version, error) {
+	if f.version == nil {
+		return nil, nil
+	}
+	return []forms.Version{{Number: 1, Schema: f.version}}, nil
+}
+
 type fakeProvider struct {
-	exchanged  bool
-	revoked    string
-	exchangeFn func() (integrations.Tokens, error)
+	exchanged    bool
+	revoked      string
+	createdTitle string
+	header       []string
+	exchangeFn   func() (integrations.Tokens, error)
 }
 
 func (f *fakeProvider) Provider() string { return "google" }
@@ -103,8 +151,27 @@ func (f *fakeProvider) Revoke(_ context.Context, refresh string) error {
 	return nil
 }
 
+func (f *fakeProvider) CreateSpreadsheet(_ context.Context, _, title, sheetTitle string) (integrations.Spreadsheet, error) {
+	f.createdTitle = title
+	return integrations.Spreadsheet{
+		ID:      "sheet-id",
+		URL:     "https://docs.google.com/spreadsheets/d/sheet-id/edit",
+		SheetID: 7,
+		Title:   sheetTitle,
+	}, nil
+}
+
+func (f *fakeProvider) WriteHeader(_ context.Context, _ string, _ integrations.Spreadsheet, header []string) error {
+	f.header = header
+	return nil
+}
+
 func newService(access integrations.Access, store integrations.Store, p integrations.Provider) *integrations.Service {
-	return integrations.NewService(nil, store, access, p, testKey)
+	return newFormService(access, store, fakeForms{}, p)
+}
+
+func newFormService(access integrations.Access, store integrations.Store, f integrations.Forms, p integrations.Provider) *integrations.Service {
+	return integrations.NewService(nil, store, access, f, p, testKey)
 }
 
 // Редактор видит состояние, но кнопки управления не получает. Проверяется
@@ -235,5 +302,123 @@ func TestDisabledProvider(t *testing.T) {
 	}
 	if err := svc.Disconnect(context.Background(), testUser, testWS); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Disconnect = %v, ожидалась ErrNotFound", err)
+	}
+}
+
+// схема одной версии с одним вопросом — минимум, на котором видно колонки.
+const oneQuestionSchema = `{"schemaVersion":1,"blocks":[
+	{"id":"t1","groupId":"g1","type":"title","text":[{"t":"=опасная подпись"}],"settings":{}},
+	{"id":"b1","groupId":"g1","type":"short_text","settings":{}}
+]}`
+
+func linkedForm() forms.Form {
+	return forms.Form{ID: testForm, WorkspaceID: testWS, Title: "Опрос"}
+}
+
+// Привязка формы заводит таблицу, пишет шапку и запоминает КЛЮЧИ колонок.
+// Ключи, а не подписи: по подписи сопоставление разъехалось бы при первом
+// переименовании вопроса.
+func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	if err != nil {
+		t.Fatalf("connect form: %v", err)
+	}
+	if link.SpreadsheetURL == "" || link.Status != integrations.StatusLive {
+		t.Fatalf("привязка = %+v", link)
+	}
+	if provider.createdTitle != "Опрос — ответы" {
+		t.Errorf("имя таблицы = %q", provider.createdTitle)
+	}
+	if store.insertedLnk == nil {
+		t.Fatal("привязка не записана")
+	}
+	cols := store.insertedLnk.Columns
+	if len(cols) != 4 || cols[0] != "_id" || cols[3] != "b1" {
+		t.Fatalf("колонки = %v, ожидались метаколонки + id вопроса", cols)
+	}
+	// Шапка уезжает БЕЗ CSV-заглушки: в таблицу значения кладутся режимом,
+	// который их не разбирает, и апостроф был бы виден в ячейке.
+	if len(provider.header) != 4 || provider.header[3] != "=опасная подпись" {
+		t.Fatalf("шапка = %v, ожидалась без апострофа", provider.header)
+	}
+}
+
+// Аккаунт не подключён — просить таблицу рано: 422 с человеческим текстом,
+// а не 500 и не молчаливое «создали, но не привязали».
+func TestConnectForm_WithoutAccount(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, getErr: pgx.ErrNoRows}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
+
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.insertedLnk != nil {
+		t.Error("привязка записана без подключённого аккаунта")
+	}
+}
+
+// Вторая привязка — конфликт, а не молчаливая перезапись: иначе первая таблица
+// осталась бы висеть в Диске автора сиротой, и он бы про неё не узнал.
+func TestConnectForm_AlreadyLinked(t *testing.T) {
+	store := &fakeStore{conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
+
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ошибка = %v, ожидалась ErrConflict", err)
+	}
+}
+
+// Чужая форма не раскрывается даже отказом: forms.Get отвечает 404, и до
+// провайдера дело не доходит.
+func TestConnectForm_StrangerGetsNotFound(t *testing.T) {
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, &fakeStore{}, fakeForms{getErr: domain.ErrNotFound}, provider)
+
+	if _, err := svc.ConnectForm(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
+	}
+	if provider.createdTitle != "" {
+		t.Error("таблица создана для чужой формы")
+	}
+}
+
+// Отвязка формы НЕ трогает таблицу в Диске автора: продукт не удаляет чужие
+// файлы. Проверяется тем, что провайдера не дёргали вовсе.
+func TestDisconnectForm_KeepsSpreadsheet(t *testing.T) {
+	store := &fakeStore{link: integrations.FormLink{SpreadsheetID: "sheet-id"}}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	if err := svc.DisconnectForm(context.Background(), testUser, testForm); err != nil {
+		t.Fatalf("disconnect form: %v", err)
+	}
+	if !store.unlinked {
+		t.Error("привязка не удалена")
+	}
+	if provider.revoked != "" || provider.createdTitle != "" {
+		t.Error("отвязка формы полезла к провайдеру")
+	}
+}
+
+// sealedConn — подключение с настоящим шифротекстом токена: путь расшифровки
+// при обращении к провайдеру должен проверяться целиком.
+func sealedConn(t *testing.T) integrations.Connection {
+	t.Helper()
+	store := &fakeStore{}
+	if err := newService(fakeAccess{}, store, &fakeProvider{}).
+		Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+		t.Fatalf("подготовка подключения: %v", err)
+	}
+	return integrations.Connection{
+		ID:            store.upserted.ID,
+		WorkspaceID:   testWS,
+		Email:         store.upserted.Email,
+		RefreshSealed: store.upserted.RefreshSealed,
 	}
 }

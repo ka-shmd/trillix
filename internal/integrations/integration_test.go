@@ -26,6 +26,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/entitlements"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -52,7 +53,7 @@ const appOrigin = "http://localhost:5173"
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, integration_accounts CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, forms, integration_accounts CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -69,7 +70,9 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
 		pgtest.MailService(testPool), appOrigin)
 
-	svc := integrations.NewService(testPool, integrations.Repo{}, wsSvc, provider, testKey)
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
+
+	svc := integrations.NewService(testPool, integrations.Repo{}, wsSvc, formsSvc, provider, testKey)
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey)
 
 	mux := http.NewServeMux()
@@ -80,12 +83,50 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 	return srv
 }
 
-type statusDTO struct {
+type accountDTO struct {
 	Enabled     bool   `json:"enabled"`
 	Connected   bool   `json:"connected"`
 	Email       string `json:"email"`
 	ConnectedAt string `json:"connectedAt"`
 	CanManage   bool   `json:"canManage"`
+}
+
+type sheetDTO struct {
+	URL    string `json:"url"`
+	Status string `json:"status"`
+}
+
+type formStatusDTO struct {
+	WorkspaceID string     `json:"workspaceId"`
+	Account     accountDTO `json:"account"`
+	Sheet       *sheetDTO  `json:"sheet"`
+}
+
+// formStatus читает состояние интеграций формы — то, что рисует таб.
+func formStatus(t *testing.T, c *http.Client, srv *httptest.Server, formID string) formStatusDTO {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations")
+	if r.StatusCode != http.StatusOK {
+		closeBody(t, r)
+		t.Fatalf("состояние формы: статус %d, ожидалось 200", r.StatusCode)
+	}
+	var got formStatusDTO
+	decode(t, r, &got)
+	return got
+}
+
+// newForm заводит форму в пространстве напрямую: проходить билдер ради проверки
+// интеграций значило бы тестировать не то.
+func newForm(t *testing.T, wsID, slug string) string {
+	t.Helper()
+	id := uuid.New().String()
+	_, err := testPool.Exec(context.Background(),
+		`INSERT INTO forms (id, workspace_id, slug, title) VALUES ($1, $2, $3, 'Опрос')`,
+		id, wsID, slug)
+	if err != nil {
+		t.Fatalf("insert form: %v", err)
+	}
+	return id
 }
 
 // Владелец видит настроенный, но не подключённый провайдер — и кнопку.
@@ -95,15 +136,16 @@ func TestIntegrations_OwnerSeesManageable(t *testing.T) {
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 
-	var got statusDTO
-	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations")
-	if r.StatusCode != http.StatusOK {
-		t.Fatalf("статус = %d, ожидалось 200", r.StatusCode)
-	}
-	decode(t, r, &got)
+	got := formStatus(t, owner, srv, newForm(t, wsID, "f-owner"))
 
-	if !got.Enabled || got.Connected || !got.CanManage {
-		t.Fatalf("состояние = %+v, ожидалось «настроено, не подключено, управляемо»", got)
+	if !got.Account.Enabled || got.Account.Connected || !got.Account.CanManage {
+		t.Fatalf("аккаунт = %+v, ожидалось «настроено, не подключено, управляемо»", got.Account)
+	}
+	if got.Sheet != nil {
+		t.Fatalf("привязка = %+v, ожидалась пустая", got.Sheet)
+	}
+	if got.WorkspaceID != wsID {
+		t.Fatalf("пространство формы = %q, ожидалось %q", got.WorkspaceID, wsID)
 	}
 }
 
@@ -116,10 +158,9 @@ func TestIntegrations_EditorSeesButCannotManage(t *testing.T) {
 	editor := registerUser(t, srv, "editor@example.com")
 	addMember(t, wsID, "editor@example.com", "editor")
 
-	var got statusDTO
-	decode(t, do(t, editor, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations"), &got)
-	if !got.Enabled || got.CanManage {
-		t.Fatalf("состояние редактора = %+v, ожидалось «видит, но не управляет»", got)
+	got := formStatus(t, editor, srv, newForm(t, wsID, "f-editor"))
+	if !got.Account.Enabled || got.Account.CanManage {
+		t.Fatalf("аккаунт глазами редактора = %+v, ожидалось «видит, но не управляет»", got.Account)
 	}
 
 	// Ручка подключения — не «кнопка спрятана», а отказ на сервере.
@@ -145,7 +186,7 @@ func TestIntegrations_StrangerGetsNotFound(t *testing.T) {
 	wsID := personalWorkspace(t)
 	stranger := registerUser(t, srv, "stranger@example.com")
 
-	r := do(t, stranger, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations")
+	r := do(t, stranger, http.MethodGet, srv.URL+"/api/v1/forms/"+newForm(t, wsID, "f-stranger")+"/integrations")
 	if r.StatusCode != http.StatusNotFound {
 		t.Fatalf("статус = %d, ожидалось 404", r.StatusCode)
 	}
@@ -159,7 +200,7 @@ func TestIntegrations_RequiresSession(t *testing.T) {
 	registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 
-	r := do(t, newClient(t), http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations")
+	r := do(t, newClient(t), http.MethodGet, srv.URL+"/api/v1/forms/"+newForm(t, wsID, "f-anon")+"/integrations")
 	if r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("статус = %d, ожидалось 401", r.StatusCode)
 	}
@@ -194,8 +235,7 @@ func TestIntegrations_ConnectFlow(t *testing.T) {
 		t.Errorf("строка = %q/%q", email, provider)
 	}
 
-	var got statusDTO
-	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations"), &got)
+	got := formStatus(t, owner, srv, newForm(t, wsID, "f-connected")).Account
 	if !got.Connected || got.Email != "author@gmail.com" || got.ConnectedAt == "" {
 		t.Fatalf("состояние после подключения = %+v", got)
 	}
@@ -254,6 +294,123 @@ func TestIntegrations_CallbackWithoutIntent(t *testing.T) {
 
 	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/integrations/google/callback?code=c&state=s")
 	assertOutcome(t, r, "integration_expired")
+}
+
+// Привязка формы: таблица создаётся, строка ложится в БД, состояние формы
+// показывает ссылку. Редактор это МОЖЕТ — право на привязку идёт под правкой
+// форм, а не под управлением аккаунтом.
+func TestIntegrations_LinkFormToSheet(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+	formID := newForm(t, wsID, "f-link")
+
+	r := postWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка редактором: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+	if sheet.URL == "" || sheet.Status != "live" {
+		t.Fatalf("привязка = %+v", sheet)
+	}
+
+	got := formStatus(t, owner, srv, formID)
+	if got.Sheet == nil || got.Sheet.URL != sheet.URL {
+		t.Fatalf("состояние формы = %+v, ожидалась привязка", got.Sheet)
+	}
+
+	// Вторая привязка — конфликт: иначе первая таблица осталась бы в Диске
+	// автора сиротой, о которой он не узнает.
+	r = postWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("повторная привязка: статус %d, ожидалось 409", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = deleteWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("отвязка: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	if got := formStatus(t, owner, srv, formID); got.Sheet != nil {
+		t.Fatalf("после отвязки осталась привязка: %+v", got.Sheet)
+	}
+}
+
+// Без подключённого аккаунта таблицу просить рано — 422 с человеческим текстом.
+func TestIntegrations_LinkWithoutAccount(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+newForm(t, wsID, "f-noacc")+"/integrations/google")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус = %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Отключение аккаунта уносит привязки форм каскадом — иначе форма осталась бы
+// «привязанной» к таблице, писать в которую больше нечем.
+func TestIntegrations_DisconnectCascadesToForms(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+	formID := newForm(t, wsID, "f-cascade")
+
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/workspaces/"+wsID+"/integrations/google")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("отключение аккаунта: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var left int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM form_integrations WHERE form_id = $1`, formID).Scan(&left); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if left != 0 {
+		t.Fatalf("привязок формы осталось %d — каскад не сработал", left)
+	}
+}
+
+// connectAccount проходит поход за согласием целиком: старт, колбэк, проверка
+// исхода. Дальше тесты работают с подключённым пространством.
+func connectAccount(t *testing.T, c *http.Client, srv *httptest.Server, wsID string) {
+	t.Helper()
+	state := startFlow(t, c, srv, wsID)
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/integrations/google/callback?code=auth-code&state="+state)
+	assertOutcome(t, r, "integration_ok")
+}
+
+func postWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", http.MethodPost, path, err)
+	}
+	return resp
 }
 
 // startFlow проходит первый шаг и отдаёт state, который сервер положил в cookie

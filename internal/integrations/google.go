@@ -1,6 +1,7 @@
 package integrations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ const (
 	googleTokenURL    = "https://oauth2.googleapis.com/token"
 	googleRevokeURL   = "https://oauth2.googleapis.com/revoke"
 	googleUserInfoURL = "https://openidconnect.googleapis.com/v1/userinfo"
+	googleSheetsURL   = "https://sheets.googleapis.com/v4/spreadsheets"
 )
 
 // ScopeDriveFile — доступ ТОЛЬКО к файлам, созданным этим приложением. Ради него
@@ -84,6 +86,7 @@ type Google struct {
 	tokenURL    string
 	revokeURL   string
 	userInfoURL string
+	sheetsURL   string
 
 	http *http.Client
 }
@@ -97,6 +100,7 @@ func NewGoogle(clientID, clientSecret, redirectURI string) *Google {
 		tokenURL:     googleTokenURL,
 		revokeURL:    googleRevokeURL,
 		userInfoURL:  googleUserInfoURL,
+		sheetsURL:    googleSheetsURL,
 		http:         &http.Client{Timeout: requestTimeout},
 	}
 }
@@ -258,6 +262,92 @@ func (g *Google) do(req *http.Request, out any) error {
 		return fmt.Errorf("разбор ответа: %w", err)
 	}
 	return nil
+}
+
+// Spreadsheet — таблица, созданная продуктом в Диске человека.
+type Spreadsheet struct {
+	ID  string
+	URL string
+	// SheetID — gid листа. Храним его, а не имя: имя автор волен переименовать,
+	// и запись «по имени» после этого пошла бы мимо (или завела бы новый лист).
+	SheetID int32
+	// Title — имя листа на момент создания. Нужно для адресации диапазона
+	// (A1-нотация оперирует именем), поэтому перед записью сверяется с gid.
+	Title string
+}
+
+// CreateSpreadsheet заводит таблицу в Диске человека. Создаём мы, а не выбирает
+// автор, — из-за scope drive.file: он даёт доступ ровно к созданным нами файлам
+// и потому не требует проверки приложения в Google (ADR §10).
+func (g *Google) CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error) {
+	body := map[string]any{
+		"properties": map[string]any{"title": title},
+		"sheets":     []any{map[string]any{"properties": map[string]any{"title": sheetTitle}}},
+	}
+	var out struct {
+		SpreadsheetID  string `json:"spreadsheetId"`
+		SpreadsheetURL string `json:"spreadsheetUrl"`
+		Sheets         []struct {
+			Properties struct {
+				SheetID int32  `json:"sheetId"`
+				Title   string `json:"title"`
+			} `json:"properties"`
+		} `json:"sheets"`
+	}
+	if err := g.apiJSON(ctx, http.MethodPost, g.sheetsURL, accessToken, body, &out); err != nil {
+		return Spreadsheet{}, fmt.Errorf("integrations google: create spreadsheet: %w", err)
+	}
+	if out.SpreadsheetID == "" || len(out.Sheets) == 0 {
+		return Spreadsheet{}, fmt.Errorf("integrations google: create spreadsheet: пустой ответ")
+	}
+	return Spreadsheet{
+		ID:      out.SpreadsheetID,
+		URL:     out.SpreadsheetURL,
+		SheetID: out.Sheets[0].Properties.SheetID,
+		Title:   out.Sheets[0].Properties.Title,
+	}, nil
+}
+
+// WriteHeader кладёт строку заголовков в первую строку листа.
+//
+// valueInputOption=RAW обязателен и здесь, и при доставке ответов: USER_ENTERED
+// разбирает «=…» как формулу, то есть подпись вопроса (её пишет автор) или
+// ответ респондента исполнялись бы в чужой таблице.
+func (g *Google) WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error {
+	values := make([]any, 0, len(header))
+	for _, h := range header {
+		values = append(values, h)
+	}
+	body := map[string]any{"values": []any{values}}
+
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A1")) + "?valueInputOption=RAW"
+	if err := g.apiJSON(ctx, http.MethodPut, u, accessToken, body, nil); err != nil {
+		return fmt.Errorf("integrations google: write header: %w", err)
+	}
+	return nil
+}
+
+// a1Range собирает адрес диапазона с именем листа. Апостроф в имени удваивается:
+// имя листа задаём мы, но правило A1-нотации соблюдается там, где строится адрес,
+// а не там, где надеются на аккуратность вызывающего.
+func a1Range(sheetTitle, cells string) string {
+	return "'" + strings.ReplaceAll(sheetTitle, "'", "''") + "'!" + cells
+}
+
+// apiJSON — запрос к API провайдера с телом JSON и bearer-токеном.
+func (g *Google) apiJSON(ctx context.Context, method, u, accessToken string, body, out any) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	return g.do(req, out)
 }
 
 // HasScope отвечает, есть ли scope в выданном провайдером списке. Список —

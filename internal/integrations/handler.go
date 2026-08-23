@@ -46,7 +46,9 @@ type Middleware = func(http.Handler) http.Handler
 
 // integrationsService — то, что транспорту нужно от сервиса.
 type integrationsService interface {
-	Status(ctx context.Context, userID, workspaceID uuid.UUID) (Status, error)
+	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
+	ConnectForm(ctx context.Context, userID, formID uuid.UUID) (FormLink, error)
+	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error
 	Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error
@@ -78,8 +80,16 @@ func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, ap
 // форме: подключённый аккаунт принадлежит пространству (ADR §10), и адрес по
 // форме означал бы, что отключение одной формы гасит интеграцию у соседних.
 func (h *Handler) Routes(mux *http.ServeMux) {
-	mux.Handle("GET /api/v1/workspaces/{id}/integrations",
-		h.requireAuth(http.HandlerFunc(h.status)))
+	// Экран интеграций живёт у ФОРМЫ, поэтому и читается одной поездкой по её
+	// адресу: пространство формы резолвит сервер. Иначе кабинет обязан был бы
+	// сначала узнать, в каком пространстве лежит форма, — второй запрос ради
+	// того, что сервер и так знает.
+	mux.Handle("GET /api/v1/forms/{id}/integrations",
+		h.requireAuth(http.HandlerFunc(h.formStatus)))
+	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
+	mux.Handle("DELETE /api/v1/forms/{id}/integrations/google",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 	mux.Handle("GET /api/v1/workspaces/{id}/integrations/google/start",
 		h.requireAuth(http.HandlerFunc(h.start)))
 	// Колбэк без RequireAuth: сюда возвращается браузер по редиректу Google, и
@@ -91,7 +101,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnect))))
 }
 
-type statusResponse struct {
+type accountResponse struct {
 	Enabled     bool    `json:"enabled"`
 	Connected   bool    `json:"connected"`
 	Email       string  `json:"email,omitempty"`
@@ -99,24 +109,87 @@ type statusResponse struct {
 	CanManage   bool    `json:"canManage"`
 }
 
-func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
-	user, wsID, ok := h.userAndWorkspace(w, r)
+// sheetResponse — привязка формы. Отдельным объектом (а не полями вперемешку с
+// аккаунтом), потому что это два независимых состояния: аккаунт может быть
+// подключён без единой привязанной формы, и экран показывает разные вещи.
+type sheetResponse struct {
+	URL             string  `json:"url"`
+	Status          string  `json:"status"`
+	LastError       string  `json:"lastError,omitempty"`
+	LastDeliveredAt *string `json:"lastDeliveredAt,omitempty"`
+}
+
+type formStatusResponse struct {
+	WorkspaceID string          `json:"workspaceId"`
+	Account     accountResponse `json:"account"`
+	// Sheet == null — форма не привязана; это не ошибка, а состояние экрана.
+	Sheet *sheetResponse `json:"sheet"`
+}
+
+func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
 	if !ok {
 		return
 	}
 
-	st, err := h.svc.Status(r.Context(), user.ID, wsID)
+	st, err := h.svc.FormStatus(r.Context(), user.ID, formID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
-	resp := statusResponse{Enabled: st.Enabled, Connected: st.Connected, Email: st.Email, CanManage: st.CanManage}
-	if st.Connected {
-		at := st.ConnectedAt.UTC().Format(time.RFC3339)
-		resp.ConnectedAt = &at
+	resp := formStatusResponse{
+		WorkspaceID: st.WorkspaceID.String(),
+		Account: accountResponse{
+			Enabled:   st.Account.Enabled,
+			Connected: st.Account.Connected,
+			Email:     st.Account.Email,
+			CanManage: st.Account.CanManage,
+		},
+	}
+	if st.Account.Connected {
+		at := st.Account.ConnectedAt.UTC().Format(time.RFC3339)
+		resp.Account.ConnectedAt = &at
+	}
+	if st.Linked {
+		resp.Sheet = toSheetResponse(st.Link)
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+
+	link, err := h.svc.ConnectForm(r.Context(), user.ID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, toSheetResponse(link))
+}
+
+func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DisconnectForm(r.Context(), user.ID, formID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func toSheetResponse(l FormLink) *sheetResponse {
+	out := &sheetResponse{URL: l.SpreadsheetURL, Status: l.Status, LastError: l.LastError}
+	if !l.LastDeliveredAt.IsZero() {
+		at := l.LastDeliveredAt.UTC().Format(time.RFC3339)
+		out.LastDeliveredAt = &at
+	}
+	return out
 }
 
 func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +301,23 @@ func (h *Handler) userAndWorkspace(w http.ResponseWriter, r *http.Request) (auth
 		return auth.User{}, uuid.Nil, false
 	}
 	return user, wsID, true
+}
+
+// userAndForm — то же для адресов по форме. Неразбираемый id → 404: право на
+// форму всё равно проверяет сервис, и «битый uuid» не заслуживает отдельного
+// ответа, по которому можно отличать существующие формы от несуществующих.
+func (h *Handler) userAndForm(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, bool) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return auth.User{}, uuid.Nil, false
+	}
+	formID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return auth.User{}, uuid.Nil, false
+	}
+	return user, formID, true
 }
 
 // outcome — чем кончился поход за согласием. Перечень закрытый и зеркалится

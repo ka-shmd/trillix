@@ -30,3 +30,26 @@ WHERE workspace_id = $1 AND provider = $2;
 DELETE FROM integration_accounts
 WHERE workspace_id = $1 AND provider = $2
 RETURNING refresh_token;
+
+-- name: InsertFormIntegration :exec
+-- Привязка формы к созданной таблице. Уникальный индекс по form_id держит рамку
+-- «одна таблица на форму»: повторная привязка — это сначала отвязка.
+INSERT INTO form_integrations (
+    id, form_id, account_id, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+
+-- name: GetFormIntegration :one
+-- Привязка формы. workspace_id приезжает джойном из аккаунта: он нужен, чтобы
+-- спросить право, а второй запрос за ним означал бы окно между проверкой и
+-- действием.
+SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.form_id = $1;
+
+-- name: DeleteFormIntegration :exec
+-- Отвязка формы. Сама таблица в Диске автора остаётся: продукт не трогает чужие
+-- файлы, и уж тем более не удаляет их за человека.
+DELETE FROM form_integrations WHERE form_id = $1;

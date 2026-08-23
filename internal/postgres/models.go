@@ -50,6 +50,7 @@ type FormIntegration struct {
 	SpreadsheetID   string
 	SpreadsheetUrl  string
 	SheetID         int32
+	SheetTitle      string
 	Columns         []byte
 	Status          string
 	BackfillBefore  pgtype.Timestamptz

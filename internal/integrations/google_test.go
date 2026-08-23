@@ -3,6 +3,7 @@ package integrations
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,11 @@ type fakeGoogle struct {
 	tokenForm  url.Values
 	authHeader string
 	revokeForm url.Values
+
+	sheetsBody  string
+	valuesURL   string
+	valuesBody  string
+	valuesToken string
 
 	tokenStatus int
 	tokenBody   string
@@ -53,6 +59,22 @@ func newFakeGoogle(t *testing.T, f *fakeGoogle) *Google {
 		w.WriteHeader(f.infoStatus)
 		_, _ = w.Write([]byte(f.infoBody))
 	})
+	mux.HandleFunc("POST /sheets", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		f.sheetsBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"spreadsheetId":"ss-1",` +
+			`"spreadsheetUrl":"https://docs.google.com/spreadsheets/d/ss-1/edit",` +
+			`"sheets":[{"properties":{"sheetId":42,"title":"Ответы"}}]}`))
+	})
+	mux.HandleFunc("PUT /sheets/{id}/values/{rng}", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		f.valuesBody = string(body)
+		f.valuesURL = r.URL.String()
+		f.valuesToken = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
 	mux.HandleFunc("/revoke", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		f.revokeForm = r.PostForm
@@ -65,6 +87,7 @@ func newFakeGoogle(t *testing.T, f *fakeGoogle) *Google {
 	g.tokenURL = srv.URL + "/token"
 	g.userInfoURL = srv.URL + "/userinfo"
 	g.revokeURL = srv.URL + "/revoke"
+	g.sheetsURL = srv.URL + "/sheets"
 	return g
 }
 
@@ -204,5 +227,57 @@ func TestHasScope(t *testing.T) {
 		if got := HasScope(c.granted, ScopeDriveFile); got != c.want {
 			t.Errorf("HasScope(%q) = %v, ожидалось %v", c.granted, got, c.want)
 		}
+	}
+}
+
+// Таблица заводится с нужным именем и листом, а из ответа берётся gid — не имя:
+// имя автор волен переименовать, gid нет.
+func TestGoogle_CreateSpreadsheet(t *testing.T) {
+	f := &fakeGoogle{}
+	g := newFakeGoogle(t, f)
+
+	sheet, err := g.CreateSpreadsheet(context.Background(), "at", "Опрос — ответы", "Ответы")
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if sheet.ID != "ss-1" || sheet.SheetID != 42 || sheet.Title != "Ответы" {
+		t.Fatalf("таблица = %+v", sheet)
+	}
+	if !strings.Contains(f.sheetsBody, `"title":"Опрос — ответы"`) {
+		t.Errorf("тело создания = %s", f.sheetsBody)
+	}
+}
+
+// Шапка кладётся режимом RAW: USER_ENTERED исполнил бы «=…» из подписи вопроса
+// формулой в чужой таблице. Это безопасность, а не оптимизация.
+func TestGoogle_WriteHeader(t *testing.T) {
+	f := &fakeGoogle{}
+	g := newFakeGoogle(t, f)
+
+	sheet := Spreadsheet{ID: "ss-1", SheetID: 42, Title: "Ответы"}
+	if err := g.WriteHeader(context.Background(), "at", sheet, []string{"ID ответа", "=не формула"}); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+
+	if !strings.Contains(f.valuesURL, "valueInputOption=RAW") {
+		t.Errorf("адрес записи = %q, ожидался RAW", f.valuesURL)
+	}
+	if !strings.Contains(f.valuesURL, url.PathEscape(a1Range("Ответы", "A1"))) {
+		t.Errorf("адрес записи = %q, ожидался диапазон листа", f.valuesURL)
+	}
+	if !strings.Contains(f.valuesBody, `"=не формула"`) {
+		t.Errorf("тело записи = %s", f.valuesBody)
+	}
+	if f.valuesToken != "Bearer at" {
+		t.Errorf("Authorization = %q", f.valuesToken)
+	}
+}
+
+// Имя листа с апострофом не ломает адрес диапазона: A1-нотация требует его
+// удвоения, и правило соблюдается там, где адрес строится.
+func TestA1Range_EscapesApostrophe(t *testing.T) {
+	want := "'Ответы ''за март'''" + "!A1"
+	if got := a1Range("Ответы 'за март'", "A1"); got != want {
+		t.Fatalf("диапазон = %q, ожидался %q", got, want)
 	}
 }

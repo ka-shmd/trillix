@@ -732,7 +732,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `account_id` | `UUID` | `NOT NULL`, FK → `integration_accounts(id)` `ON DELETE CASCADE` |
 | `spreadsheet_id` | `TEXT` | `NOT NULL` |
 | `spreadsheet_url` | `TEXT` | `NOT NULL` — показывается ссылкой; собирать её в UI значит однажды собрать неверно |
-| `sheet_id` | `INT` | `NOT NULL` — gid листа (имя автор волен переименовать, gid — нет) |
+| `sheet_id` | `INT` | `NOT NULL` — gid листа: он и есть личность листа |
+| `sheet_title` | `TEXT` | `NOT NULL` — имя листа на момент создания. Не личность (её держит `sheet_id`), но A1-нотация адресует диапазон именем; переименовал автор — имя переспрашивается по gid |
 | `columns` | `JSONB` | `NOT NULL` — порядок **ключей** колонок (метаколонки + id вопросов). Не подписей: сопоставление по подписи разъехалось бы при первом переименовании вопроса |
 | `status` | `TEXT` | `NOT NULL`, `CHECK IN ('backfilling','live','broken')` |
 | `backfill_before` | `TIMESTAMPTZ` | отсечка догрузки; `NULL`, когда догрузка кончилась |

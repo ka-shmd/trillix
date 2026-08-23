@@ -682,6 +682,17 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteFormIntegration = `-- name: DeleteFormIntegration :exec
+DELETE FROM form_integrations WHERE form_id = $1
+`
+
+// Отвязка формы. Сама таблица в Диске автора остаётся: продукт не трогает чужие
+// файлы, и уж тем более не удаляет их за человека.
+func (q *Queries) DeleteFormIntegration(ctx context.Context, formID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteFormIntegration, formID)
+	return err
+}
+
 const deleteIdentity = `-- name: DeleteIdentity :execrows
 DELETE FROM user_identities WHERE user_id = $1 AND provider = $2
 `
@@ -1433,6 +1444,57 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getFormIntegration = `-- name: GetFormIntegration :one
+SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.form_id = $1
+`
+
+type GetFormIntegrationRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	WorkspaceID     uuid.UUID
+	ExternalEmail   string
+}
+
+// Привязка формы. workspace_id приезжает джойном из аккаунта: он нужен, чтобы
+// спросить право, а второй запрос за ним означал бы окно между проверкой и
+// действием.
+func (q *Queries) GetFormIntegration(ctx context.Context, formID uuid.UUID) (GetFormIntegrationRow, error) {
+	row := q.db.QueryRow(ctx, getFormIntegration, formID)
+	var i GetFormIntegrationRow
+	err := row.Scan(
+		&i.ID,
+		&i.FormID,
+		&i.AccountID,
+		&i.SpreadsheetID,
+		&i.SpreadsheetUrl,
+		&i.SheetID,
+		&i.SheetTitle,
+		&i.Columns,
+		&i.Status,
+		&i.BackfillBefore,
+		&i.LastError,
+		&i.LastDeliveredAt,
+		&i.WorkspaceID,
+		&i.ExternalEmail,
+	)
+	return i, err
+}
+
 const getIntegrationAccount = `-- name: GetIntegrationAccount :one
 SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
 FROM integration_accounts
@@ -1923,6 +1985,41 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 		&i.IsPersonal,
 	)
 	return i, err
+}
+
+const insertFormIntegration = `-- name: InsertFormIntegration :exec
+INSERT INTO form_integrations (
+    id, form_id, account_id, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertFormIntegrationParams struct {
+	ID             uuid.UUID
+	FormID         uuid.UUID
+	AccountID      uuid.UUID
+	SpreadsheetID  string
+	SpreadsheetUrl string
+	SheetID        int32
+	SheetTitle     string
+	Columns        []byte
+	Status         string
+}
+
+// Привязка формы к созданной таблице. Уникальный индекс по form_id держит рамку
+// «одна таблица на форму»: повторная привязка — это сначала отвязка.
+func (q *Queries) InsertFormIntegration(ctx context.Context, arg InsertFormIntegrationParams) error {
+	_, err := q.db.Exec(ctx, insertFormIntegration,
+		arg.ID,
+		arg.FormID,
+		arg.AccountID,
+		arg.SpreadsheetID,
+		arg.SpreadsheetUrl,
+		arg.SheetID,
+		arg.SheetTitle,
+		arg.Columns,
+		arg.Status,
+	)
+	return err
 }
 
 const insertFormVersion = `-- name: InsertFormVersion :one

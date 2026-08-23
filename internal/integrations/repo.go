@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -93,4 +94,93 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID,
 		return nil, err
 	}
 	return sealed, nil
+}
+
+// FormLink — привязка формы к таблице (с полями аккаунта, нужными экрану и
+// доставке: за ними иначе пришлось бы ехать вторым запросом).
+type FormLink struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	WorkspaceID     uuid.UUID
+	AccountEmail    string
+	SpreadsheetID   string
+	SpreadsheetURL  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []string
+	Status          string
+	BackfillBefore  time.Time
+	LastError       string
+	LastDeliveredAt time.Time
+}
+
+// NewFormLink — что нужно записать при привязке.
+type NewFormLink struct {
+	ID             uuid.UUID
+	FormID         uuid.UUID
+	AccountID      uuid.UUID
+	SpreadsheetID  string
+	SpreadsheetURL string
+	SheetID        int32
+	SheetTitle     string
+	Columns        []string
+	Status         string
+}
+
+func (Repo) InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error {
+	columns, err := json.Marshal(l.Columns)
+	if err != nil {
+		return fmt.Errorf("marshal columns: %w", err)
+	}
+	err = postgres.New(db).InsertFormIntegration(ctx, postgres.InsertFormIntegrationParams{
+		ID:             l.ID,
+		FormID:         l.FormID,
+		AccountID:      l.AccountID,
+		SpreadsheetID:  l.SpreadsheetID,
+		SpreadsheetUrl: l.SpreadsheetURL,
+		SheetID:        l.SheetID,
+		SheetTitle:     l.SheetTitle,
+		Columns:        columns,
+		Status:         l.Status,
+	})
+	if err != nil {
+		return fmt.Errorf("insert form integration: %w", err)
+	}
+	return nil
+}
+
+func (Repo) GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error) {
+	row, err := postgres.New(db).GetFormIntegration(ctx, formID)
+	if err != nil {
+		// pgx.ErrNoRows — «форма не привязана», штатное состояние экрана.
+		return FormLink{}, err
+	}
+	var columns []string
+	if err := json.Unmarshal(row.Columns, &columns); err != nil {
+		return FormLink{}, fmt.Errorf("unmarshal columns of form %s: %w", formID, err)
+	}
+	return FormLink{
+		ID:              row.ID,
+		FormID:          row.FormID,
+		AccountID:       row.AccountID,
+		WorkspaceID:     row.WorkspaceID,
+		AccountEmail:    row.ExternalEmail,
+		SpreadsheetID:   row.SpreadsheetID,
+		SpreadsheetURL:  row.SpreadsheetUrl,
+		SheetID:         row.SheetID,
+		SheetTitle:      row.SheetTitle,
+		Columns:         columns,
+		Status:          row.Status,
+		BackfillBefore:  row.BackfillBefore.Time,
+		LastError:       row.LastError.String,
+		LastDeliveredAt: row.LastDeliveredAt.Time,
+	}, nil
+}
+
+func (Repo) DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error {
+	if err := postgres.New(db).DeleteFormIntegration(ctx, formID); err != nil {
+		return fmt.Errorf("delete form integration: %w", err)
+	}
+	return nil
 }

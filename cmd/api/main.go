@@ -340,6 +340,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
+	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
 	// считал бы себя настроенным. Отсюда объявление переменной интерфейсного
@@ -352,13 +355,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			cfg.AppOrigin+"/api/v1/integrations/google/callback",
 		)
 	}
-	integrationsSvc := integrations.NewService(pool, integrations.Repo{}, workspacesSvc, googleProvider, cfg.FormTokenSecret)
+	integrationsSvc := integrations.NewService(pool, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
 
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
-	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
 	if err != nil {
 		return fmt.Errorf("init public forms handler: %w", err)
