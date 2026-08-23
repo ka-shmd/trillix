@@ -49,6 +49,7 @@ type integrationsService interface {
 	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
 	ConnectForm(ctx context.Context, userID, formID uuid.UUID) (FormLink, error)
 	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
+	RefillForm(ctx context.Context, userID, formID uuid.UUID) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error
 	Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error
@@ -88,6 +89,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(http.HandlerFunc(h.formStatus)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
+	mux.Handle("POST /api/v1/forms/{id}/integrations/google/refill",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.refillForm))))
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 	mux.Handle("GET /api/v1/workspaces/{id}/integrations/google/start",
@@ -169,6 +172,20 @@ func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, toSheetResponse(link))
+}
+
+// refillForm перезаливает лист заново. 202, а не 204: работа начата, а не
+// сделана — перенос идёт пачками в фоне, и экран показывает его статусом.
+func (h *Handler) refillForm(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RefillForm(r.Context(), user.ID, formID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {

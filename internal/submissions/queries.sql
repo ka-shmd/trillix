@@ -102,3 +102,21 @@ SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
+
+-- name: ListSubmissionsForBackfill :many
+-- Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+--
+-- Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
+-- ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
+-- Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
+--
+-- created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
+-- живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at < $2
+  AND s.id > sqlc.arg(after)::uuid
+ORDER BY s.id
+LIMIT $3;

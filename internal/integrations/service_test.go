@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -58,9 +59,12 @@ type fakeStore struct {
 	insertedLnk *integrations.NewFormLink
 	unlinked    bool
 
-	columnsSet []domain.SheetColumn
-	delivered  bool
-	brokenWith string
+	columnsSet   []domain.SheetColumn
+	delivered    bool
+	brokenWith   string
+	backfillFrom *time.Time
+	backfillDone bool
+	sheetCleared bool
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) error {
@@ -123,6 +127,16 @@ func (f *fakeStore) MarkDelivered(_ context.Context, _ postgres.DBTX, _ uuid.UUI
 	return nil
 }
 
+func (f *fakeStore) StartBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID, before time.Time) error {
+	f.backfillFrom = &before
+	return nil
+}
+
+func (f *fakeStore) FinishBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.backfillDone = true
+	return nil
+}
+
 func (f *fakeStore) MarkBroken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, cause string) error {
 	f.brokenWith = cause
 	return nil
@@ -155,6 +169,8 @@ type fakeProvider struct {
 	createdTitle string
 	header       []string
 	appended     [][]string
+	appendCalls  int
+	cleared      string
 	appendErr    error
 	exchangeFn   func() (integrations.Tokens, error)
 }
@@ -201,11 +217,21 @@ func (f *fakeProvider) WriteHeader(_ context.Context, _ string, _ integrations.S
 	return nil
 }
 
-func (f *fakeProvider) AppendRow(_ context.Context, _ string, _ integrations.Spreadsheet, row []string) error {
+func (f *fakeProvider) AppendRow(ctx context.Context, token string, s integrations.Spreadsheet, row []string) error {
+	return f.AppendRows(ctx, token, s, [][]string{row})
+}
+
+func (f *fakeProvider) AppendRows(_ context.Context, _ string, _ integrations.Spreadsheet, rows [][]string) error {
 	if f.appendErr != nil {
 		return f.appendErr
 	}
-	f.appended = append(f.appended, row)
+	f.appendCalls++
+	f.appended = append(f.appended, rows...)
+	return nil
+}
+
+func (f *fakeProvider) ClearSheet(_ context.Context, _ string, s integrations.Spreadsheet) error {
+	f.cleared = s.ID
 	return nil
 }
 
@@ -370,8 +396,13 @@ func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
-	if link.SpreadsheetURL == "" || link.Status != integrations.StatusLive {
-		t.Fatalf("привязка = %+v", link)
+	// Сразу после привязки идёт перенос накопленных ответов: таблица создана
+	// нами и пуста, а пустая таблица читается как «не заработало».
+	if link.SpreadsheetURL == "" || link.Status != integrations.StatusBackfilling {
+		t.Fatalf("привязка = %+v, ожидался статус переноса", link)
+	}
+	if store.backfillFrom == nil {
+		t.Error("перенос не начат")
 	}
 	if provider.createdTitle != "Опрос — ответы" {
 		t.Errorf("имя таблицы = %q", provider.createdTitle)
@@ -466,5 +497,51 @@ func sealedConn(t *testing.T) integrations.Connection {
 		WorkspaceID:   testWS,
 		Email:         store.upserted.Email,
 		RefreshSealed: store.upserted.RefreshSealed,
+	}
+}
+
+// «Перезалить всё» чистит лист, пишет свежую шапку и запускает перенос заново.
+// Это лечение всего, что накопилось: дубль после ретрая, удалённые руками
+// строки, отставшие колонки, простоявшая сломанной интеграция.
+func TestRefillForm(t *testing.T) {
+	link := integrations.FormLink{
+		ID:            uuid.New(),
+		FormID:        testForm,
+		SpreadsheetID: "sheet-id",
+		SheetTitle:    "Ответы",
+		Status:        integrations.StatusBroken,
+		Columns:       []domain.SheetColumn{{Key: "_id", Label: "ID ответа"}},
+	}
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	if err := svc.RefillForm(context.Background(), testUser, testForm); err != nil {
+		t.Fatalf("refill: %v", err)
+	}
+	if provider.cleared != "sheet-id" {
+		t.Error("лист не вычищен перед перезаливом")
+	}
+	if len(provider.header) == 0 {
+		t.Error("шапка не переписана")
+	}
+	if store.backfillFrom == nil {
+		t.Fatal("перенос не начат")
+	}
+	// Колонка, которой в листе ещё не было, дописана; прежняя осталась первой —
+	// автор мог свести таблицу формулами справа.
+	if len(store.columnsSet) < 2 || store.columnsSet[0].Key != "_id" {
+		t.Fatalf("колонки = %+v", store.columnsSet)
+	}
+}
+
+// Непривязанной форме перезаливать нечего — 422 с человеческим текстом, а не 500.
+func TestRefillForm_NotLinked(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
+
+	err := svc.RefillForm(context.Background(), testUser, testForm)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
 }

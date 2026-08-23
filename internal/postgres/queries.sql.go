@@ -977,6 +977,18 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 	return i, err
 }
 
+const finishFormIntegrationBackfill = `-- name: FinishFormIntegrationBackfill :exec
+UPDATE form_integrations
+SET status = 'live', backfill_before = NULL
+WHERE id = $1
+`
+
+// Догрузка кончилась: отсечка больше не нужна, доставка становится живой.
+func (q *Queries) FinishFormIntegrationBackfill(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, finishFormIntegrationBackfill, id)
+	return err
+}
+
 const getAccessContext = `-- name: GetAccessContext :one
 SELECT m.role,
        (w.personal_user_id IS NOT NULL)::bool AS is_personal,
@@ -2926,6 +2938,69 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
+const listSubmissionsForBackfill = `-- name: ListSubmissionsForBackfill :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at < $2
+  AND s.id > $4::uuid
+ORDER BY s.id
+LIMIT $3
+`
+
+type ListSubmissionsForBackfillParams struct {
+	FormID    uuid.UUID
+	CreatedAt pgtype.Timestamptz
+	Limit     int32
+	After     uuid.UUID
+}
+
+type ListSubmissionsForBackfillRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+//
+// Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
+// ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
+// Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
+//
+// created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
+// живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
+func (q *Queries) ListSubmissionsForBackfill(ctx context.Context, arg ListSubmissionsForBackfillParams) ([]ListSubmissionsForBackfillRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsForBackfill,
+		arg.FormID,
+		arg.CreatedAt,
+		arg.Limit,
+		arg.After,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsForBackfillRow
+	for rows.Next() {
+		var i ListSubmissionsForBackfillRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -3159,7 +3234,12 @@ func (q *Queries) MarkFormIntegrationBroken(ctx context.Context, arg MarkFormInt
 
 const markFormIntegrationDelivered = `-- name: MarkFormIntegrationDelivered :exec
 UPDATE form_integrations
-SET last_delivered_at = now(), last_error = NULL, status = 'live'
+SET last_delivered_at = now(), last_error = NULL,
+    -- Статус возвращается в live только из broken: сломанная интеграция, которая
+    -- заработала, обязана перестать краснеть в кабинете. Идущий ПЕРЕНОС этой
+    -- пометкой не сбивается — иначе первая же доставленная пачка объявила бы
+    -- догрузку законченной, и остальные ответы не доехали бы никогда.
+    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
 WHERE id = $1
 `
 
@@ -3504,6 +3584,24 @@ type SetUserPasswordParams struct {
 // достижим паролем, вход через провайдера при этом сохраняется).
 func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
 	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const startFormIntegrationBackfill = `-- name: StartFormIntegrationBackfill :exec
+UPDATE form_integrations
+SET status = 'backfilling', backfill_before = $2, last_error = NULL
+WHERE id = $1
+`
+
+type StartFormIntegrationBackfillParams struct {
+	ID             uuid.UUID
+	BackfillBefore pgtype.Timestamptz
+}
+
+// Начало догрузки: статус backfilling и отсечка. Всё, что пришло ДО неё, кладёт
+// догрузка; всё, что после, — живая очередь. Границы не пересекаются.
+func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
+	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
 }
 

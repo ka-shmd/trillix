@@ -35,6 +35,8 @@ type Store interface {
 	GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
+	StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error
+	FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	UpdateLinkColumns(ctx context.Context, db postgres.DBTX, id uuid.UUID, columns []domain.SheetColumn) error
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
@@ -59,6 +61,8 @@ type Provider interface {
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
 	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
+	AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error
+	ClearSheet(ctx context.Context, accessToken string, s Spreadsheet) error
 }
 
 // Service — подключение внешних аккаунтов к пространству.
@@ -371,6 +375,14 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 	if err := s.repo.InsertLink(ctx, s.db, link); err != nil {
 		return FormLink{}, err
 	}
+	// Догрузка накопленных ответов начинается сразу: таблица создана нами и
+	// пуста, значит затирать нечего и дублировать нечего, а пустая таблица
+	// после подключения читается как «не заработало» — это первый вопрос в
+	// поддержку. Событий может не быть вовсе (форма без ответов) — тогда первая
+	// же пачка окажется пустой и перенос закончится, не начавшись.
+	if err := s.startBackfill(ctx, link.ID); err != nil {
+		return FormLink{}, err
+	}
 
 	return FormLink{
 		FormID:         formID,
@@ -382,8 +394,82 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 		SheetID:        sheet.SheetID,
 		SheetTitle:     sheet.Title,
 		Columns:        link.Columns,
-		Status:         StatusLive,
+		Status:         StatusBackfilling,
 	}, nil
+}
+
+// RefillForm перезаливает лист с нуля: чистит значения, пишет свежую шапку и
+// заново переносит все ответы.
+//
+// Кнопка нужна независимо от догрузки и лечит всё, что накопилось между: дубль
+// после ретрая, строки, удалённые автором руками, колонки, отставшие от формы,
+// и интеграцию, простоявшую сломанной. Формат листа (ширина колонок, закрепление
+// шапки) переживает чистку — чистятся значения, а не лист.
+func (s *Service) RefillForm(ctx context.Context, userID, formID uuid.UUID) error {
+	if !s.Enabled() {
+		return domain.ErrNotFound
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return err
+	}
+
+	link, err := s.repo.GetLink(ctx, s.db, formID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: форма не привязана к таблице", domain.ErrValidation)
+	}
+	if err != nil {
+		return fmt.Errorf("refill form: %w", err)
+	}
+
+	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	if err != nil {
+		return fmt.Errorf("refill form: %w", err)
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return err
+	}
+
+	// Шапка пересобирается по СЕГОДНЯШНЕЙ форме: в ней могли появиться вопросы,
+	// а колонки листа отстать. Прежние ключи при этом остаются на своих местах —
+	// колонка только добавляется (спека §8).
+	builder, err := s.columnModel(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+	columns := mergeColumns(link.Columns, builder.SheetColumns())
+
+	if err := s.google.ClearSheet(ctx, token, spreadsheetOf(link)); err != nil {
+		return err
+	}
+	if err := s.google.WriteHeader(ctx, token, spreadsheetOf(link), columnLabels(columns)); err != nil {
+		return err
+	}
+	if err := s.repo.UpdateLinkColumns(ctx, s.db, link.ID, columns); err != nil {
+		return err
+	}
+	return s.startBackfill(ctx, link.ID)
+}
+
+// mergeColumns дописывает к колонкам листа те, которых в нём ещё нет. Порядок
+// прежних не меняется: автор мог свести их формулами справа, и перестановка
+// сломала бы его таблицу молча.
+func mergeColumns(known, actual []domain.SheetColumn) []domain.SheetColumn {
+	seen := make(map[string]bool, len(known))
+	for _, c := range known {
+		seen[c.Key] = true
+	}
+	out := known
+	for _, c := range actual {
+		if !seen[c.Key] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // DisconnectForm отвязывает форму. Таблица в Диске автора остаётся со всеми

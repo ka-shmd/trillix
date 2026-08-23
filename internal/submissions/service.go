@@ -124,6 +124,7 @@ type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
+	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
 	// жёсткому капу формы, у которого своя семантика.
@@ -487,6 +488,62 @@ func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) 
 		Columns: builder.SheetColumns(),
 		Row:     builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
 	}, nil
+}
+
+// SheetPage — пачка накопленных ответов для догрузки: колонки один раз и строки
+// со своими id (id — курсор следующей пачки, а не украшение).
+type SheetPage struct {
+	Columns []domain.SheetColumn
+	Rows    []SheetRow
+}
+
+// SheetRow — одна строка пачки.
+type SheetRow struct {
+	ID     uuid.UUID
+	Values []string
+}
+
+// SheetRows отдаёт пачку ответов формы для догрузки во внешнюю таблицу: строго
+// до отсечки before, после курсора after (uuid.Nil — с начала), старые сверху.
+//
+// ⚠ Прав НЕ проверяет — по тем же основаниям, что SheetRow: у фоновой догрузки
+// нет пользователя, а форма приезжает из своей строки form_integrations.
+func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) (SheetPage, error) {
+	versions, err := s.forms.PublishedVersions(ctx, formID)
+	if err != nil {
+		return SheetPage{}, err
+	}
+	vs, err := parseVersions(formID, versions)
+	if err != nil {
+		return SheetPage{}, err
+	}
+
+	subs, err := s.repo.ListForBackfill(ctx, s.db, formID, before, after, limit)
+	if err != nil {
+		return SheetPage{}, err
+	}
+
+	builder := domain.NewCSVBuilder(vs)
+	if s.files != nil && hasFileBlock(vs) {
+		files, err := s.files.InfoByForm(ctx, formID)
+		if err != nil {
+			return SheetPage{}, err
+		}
+		builder.WithFiles(files)
+	}
+
+	page := SheetPage{Columns: builder.SheetColumns(), Rows: make([]SheetRow, 0, len(subs))}
+	for _, sub := range subs {
+		var answers map[string]json.RawMessage
+		if err := json.Unmarshal(sub.Answers, &answers); err != nil {
+			return SheetPage{}, fmt.Errorf("unmarshal answers of submission %s: %w", sub.ID, err)
+		}
+		page.Rows = append(page.Rows, SheetRow{
+			ID:     sub.ID,
+			Values: builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		})
+	}
+	return page, nil
 }
 
 // notifyOwner ставит владельцу письмо-дайджест о новом ответе — коалесцирующим

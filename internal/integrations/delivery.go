@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -30,7 +31,25 @@ const ChannelSheets = "gsheets"
 type sheetsPayload struct {
 	LinkID       uuid.UUID `json:"linkId"`
 	SubmissionID uuid.UUID `json:"submissionId"`
+	// Backfill — событие догрузки накопленных ответов (слайс D), а не одного
+	// нового. Одно событие = одна пачка: обойти двадцать тысяч ответов внутри
+	// одного Deliver значило бы занять диспетчер, общий с почтой, на минуты.
+	Backfill bool `json:"backfill,omitempty"`
+	// After — курсор пачки (id последнего доставленного ответа). Прогресс живёт
+	// в очереди, а не в памяти: перезапуск процесса не начинает догрузку заново.
+	After uuid.UUID `json:"after,omitempty"`
 }
+
+// BackfillBatch — сколько ответов уезжает одним запросом к провайдеру. Пачками,
+// потому что у Google 60 запросов в минуту на пользователя; не больше, потому
+// что тело запроса и время его обработки растут вместе с пачкой, а диспетчер
+// общий с почтой.
+const BackfillBatch = 200
+
+// errBackfillPending — живое событие пришло, пока идёт догрузка. Ошибка (то есть
+// ретрай по общему бэкоффу), а не потеря: новые строки обязаны лечь ПОСЛЕ
+// старых, иначе в листе получится перевёрнутая хронология.
+var errBackfillPending = errors.New("integrations: идёт перенос накопленных ответов")
 
 // Outbox — очередь надёжной доставки наружу (internal/mail). Интерфейс на
 // стороне потребителя: интеграциям нужен один метод из всего модуля почты.
@@ -42,6 +61,9 @@ type Outbox interface {
 // колонок одна на выгрузку, сводку и таблицу, и живёт она там же, где ответы.
 type Submissions interface {
 	SheetRow(ctx context.Context, formID, submissionID uuid.UUID) (submissions.SheetRecord, error)
+	// SheetRows — пачка накопленных ответов для догрузки: строго до отсечки,
+	// после курсора, старые сверху.
+	SheetRows(ctx context.Context, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) (submissions.SheetPage, error)
 }
 
 // WithDelivery подключает доставку ответов. Отдельным сеттером: submissions
@@ -102,6 +124,12 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 		// переподключение и перезалив. Копить события до тех пор незачем.
 		return nil
 	}
+	if p.Backfill {
+		return s.deliverBackfill(ctx, link, p.After)
+	}
+	if link.Status == StatusBackfilling {
+		return errBackfillPending
+	}
 
 	record, err := s.submissions.SheetRow(ctx, link.FormID, p.SubmissionID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -134,6 +162,76 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	return s.repo.MarkDelivered(ctx, s.db, link.ID)
 }
 
+// startBackfill помечает привязку переносящейся и ставит первое событие пачки.
+// Отсечка — момент старта: всё, что придёт после неё, доставит живая очередь.
+func (s *Service) startBackfill(ctx context.Context, linkID uuid.UUID) error {
+	if err := s.repo.StartBackfill(ctx, s.db, linkID, time.Now()); err != nil {
+		return err
+	}
+	return s.enqueueBackfill(ctx, linkID, uuid.Nil)
+}
+
+func (s *Service) enqueueBackfill(ctx context.Context, linkID, after uuid.UUID) error {
+	if s.outbox == nil {
+		return nil
+	}
+	payload, err := json.Marshal(sheetsPayload{LinkID: linkID, Backfill: true, After: after})
+	if err != nil {
+		return fmt.Errorf("marshal backfill payload: %w", err)
+	}
+	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+}
+
+// deliverBackfill доставляет ОДНУ пачку накопленных ответов и ставит следующую.
+// Пачка кончилась раньше лимита — перенос завершён, доставка становится живой, и
+// ждавшие в очереди новые ответы поедут своим чередом.
+func (s *Service) deliverBackfill(ctx context.Context, link FormLink, after uuid.UUID) error {
+	if link.Status != StatusBackfilling {
+		// Перенос уже кончился (или перезалив начали заново, и это событие от
+		// прошлого захода): гасим, иначе строки лягут дважды.
+		return nil
+	}
+
+	page, err := s.submissions.SheetRows(ctx, link.FormID, link.BackfillBefore, after, BackfillBatch)
+	if err != nil {
+		return err
+	}
+
+	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	if err != nil {
+		return err
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return s.deliveryFailed(ctx, link, err)
+	}
+
+	columns, err := s.reconcileColumns(ctx, token, link, page.Columns)
+	if err != nil {
+		return s.deliveryFailed(ctx, link, err)
+	}
+
+	if len(page.Rows) > 0 {
+		rows := make([][]string, 0, len(page.Rows))
+		for _, r := range page.Rows {
+			rows = append(rows, alignRow(columns, submissions.SheetRecord{Columns: page.Columns, Row: r.Values}))
+		}
+		if err := s.google.AppendRows(ctx, token, spreadsheetOf(link), rows); err != nil {
+			return s.deliveryFailed(ctx, link, err)
+		}
+		if err := s.repo.MarkDelivered(ctx, s.db, link.ID); err != nil {
+			return err
+		}
+	}
+
+	// Неполная пачка = ответы кончились. Полная — ставим следующую с курсором
+	// последней строки: прогресс живёт в очереди, а не в памяти процесса.
+	if len(page.Rows) < BackfillBatch {
+		return s.repo.FinishBackfill(ctx, s.db, link.ID)
+	}
+	return s.enqueueBackfill(ctx, link.ID, page.Rows[len(page.Rows)-1].ID)
+}
+
 // deliveryFailed разбирает отказ: окончательный помечает интеграцию сломанной и
 // ГАСИТ событие (nil), временный уходит на ретрай.
 func (s *Service) deliveryFailed(ctx context.Context, link FormLink, cause error) error {
@@ -161,17 +259,8 @@ func brokenReason(error) string {
 // ответы прошлых версий), а сдвиг разъехался бы с тем, что автор уже свёл
 // формулами справа.
 func (s *Service) reconcileColumns(ctx context.Context, token string, link FormLink, actual []domain.SheetColumn) ([]domain.SheetColumn, error) {
-	known := make(map[string]bool, len(link.Columns))
-	for _, c := range link.Columns {
-		known[c.Key] = true
-	}
-	columns, added := link.Columns, false
-	for _, c := range actual {
-		if !known[c.Key] {
-			columns, added = append(columns, c), true
-		}
-	}
-	if !added {
+	columns := mergeColumns(link.Columns, actual)
+	if len(columns) == len(link.Columns) {
 		return link.Columns, nil
 	}
 

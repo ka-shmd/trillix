@@ -80,10 +80,28 @@ UPDATE form_integrations SET columns = $2 WHERE id = $1;
 -- Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
 -- интеграция, которая заработала, обязана перестать краснеть в кабинете.
 UPDATE form_integrations
-SET last_delivered_at = now(), last_error = NULL, status = 'live'
+SET last_delivered_at = now(), last_error = NULL,
+    -- Статус возвращается в live только из broken: сломанная интеграция, которая
+    -- заработала, обязана перестать краснеть в кабинете. Идущий ПЕРЕНОС этой
+    -- пометкой не сбивается — иначе первая же доставленная пачка объявила бы
+    -- догрузку законченной, и остальные ответы не доехали бы никогда.
+    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
 WHERE id = $1;
 
 -- name: MarkFormIntegrationBroken :exec
 -- Доставка невозможна без человека (доступ отозван, таблица удалена). Причина
 -- показывается в кабинете; ретраить такое до конца времён смысла нет.
 UPDATE form_integrations SET status = 'broken', last_error = $2 WHERE id = $1;
+
+-- name: StartFormIntegrationBackfill :exec
+-- Начало догрузки: статус backfilling и отсечка. Всё, что пришло ДО неё, кладёт
+-- догрузка; всё, что после, — живая очередь. Границы не пересекаются.
+UPDATE form_integrations
+SET status = 'backfilling', backfill_before = $2, last_error = NULL
+WHERE id = $1;
+
+-- name: FinishFormIntegrationBackfill :exec
+-- Догрузка кончилась: отсечка больше не нужна, доставка становится живой.
+UPDATE form_integrations
+SET status = 'live', backfill_before = NULL
+WHERE id = $1;

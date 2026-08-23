@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/integrations"
@@ -336,7 +337,9 @@ func TestIntegrations_LinkFormToSheet(t *testing.T) {
 	}
 	var sheet sheetDTO
 	decode(t, r, &sheet)
-	if sheet.URL == "" || sheet.Status != "live" {
+	// Сразу после привязки идёт перенос накопленных ответов (у этой формы их
+	// нет — перенос закроется первой же пустой пачкой).
+	if sheet.URL == "" || sheet.Status != "backfilling" {
 		t.Fatalf("привязка = %+v", sheet)
 	}
 
@@ -686,7 +689,9 @@ func publishVersion(t *testing.T, formID string) string {
 
 func newSubmission(t *testing.T, formID, versionID, answers string) string {
 	t.Helper()
-	id := uuid.New().String()
+	// UUIDv7, как в проде (domain.NewID): порядок переноса — по id, и случайный
+	// uuid.New() перемешал бы хронологию, которую тест как раз и проверяет.
+	id := domain.NewID().String()
 	_, err := testPool.Exec(context.Background(),
 		`INSERT INTO submissions (id, form_id, form_version_id, answers) VALUES ($1, $2, $3, $4::jsonb)`,
 		id, formID, versionID, answers)
@@ -694,4 +699,95 @@ func newSubmission(t *testing.T, formID, versionID, answers string) string {
 		t.Fatalf("insert submission: %v", err)
 	}
 	return id
+}
+
+// Подключение формы, у которой уже есть ответы: они переносятся в лист сами,
+// в хронологическом порядке, и только потом доставка становится живой.
+func TestIntegrations_BackfillOnConnect(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-backfill")
+	versionID := publishVersion(t, formID)
+	first := newSubmission(t, formID, versionID, `{"b1":"Первый"}`)
+	second := newSubmission(t, formID, versionID, `{"b1":"Второй"}`)
+
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+	if sheet.Status != "backfilling" {
+		t.Fatalf("статус сразу после привязки = %q, ожидался перенос", sheet.Status)
+	}
+
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 2 {
+		t.Fatalf("перенесено строк: %d, ожидалось 2", len(provider.appended))
+	}
+	// Старые сверху: в лист строки ложатся дописыванием, и обратный порядок дал
+	// бы автору перевёрнутую хронологию.
+	if provider.appended[0][0] != first || provider.appended[1][0] != second {
+		t.Fatalf("порядок строк = %v", [][]string{provider.appended[0], provider.appended[1]})
+	}
+
+	got := formStatus(t, owner, srv, formID)
+	if got.Sheet == nil || got.Sheet.Status != "live" {
+		t.Fatalf("после переноса статус = %+v, ожидался live", got.Sheet)
+	}
+
+	// Дальше работает живая доставка — тем же листом и теми же колонками.
+	third := newSubmission(t, formID, versionID, `{"b1":"Третий"}`)
+	enqueueDelivery(t, srv, formID, third)
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 3 || provider.appended[2][0] != third {
+		t.Fatalf("живая доставка после переноса = %v", provider.appended)
+	}
+}
+
+// «Перезалить всё» чистит лист и переносит ответы заново — это лечение дублей и
+// ручных правок, поэтому оно доступно и редактору (право — правка форм).
+func TestIntegrations_Refill(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-refill")
+	versionID := publishVersion(t, formID)
+	newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
+
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	closeBody(t, r)
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	before := len(provider.appended)
+
+	r = postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google/refill")
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("перезалив: статус %d, ожидалось 202", r.StatusCode)
+	}
+	closeBody(t, r)
+	if provider.cleared == "" {
+		t.Error("лист не вычищен")
+	}
+
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != before+1 {
+		t.Fatalf("после перезалива строк дописано %d, ожидалась одна", len(provider.appended)-before)
+	}
 }

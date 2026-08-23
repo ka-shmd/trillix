@@ -272,3 +272,21 @@ func toFormLink(row formIntegrationRow) (FormLink, error) {
 		LastDeliveredAt: row.LastDeliveredAt,
 	}, nil
 }
+
+func (Repo) StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error {
+	err := postgres.New(db).StartFormIntegrationBackfill(ctx, postgres.StartFormIntegrationBackfillParams{
+		ID:             id,
+		BackfillBefore: pgtype.Timestamptz{Time: before, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("start backfill: %w", err)
+	}
+	return nil
+}
+
+func (Repo) FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).FinishFormIntegrationBackfill(ctx, id); err != nil {
+		return fmt.Errorf("finish backfill: %w", err)
+	}
+	return nil
+}

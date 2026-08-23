@@ -347,17 +347,42 @@ func (g *Google) WriteHeader(ctx context.Context, accessToken string, s Spreadsh
 // вычисленный индекс однажды затёр бы чужие данные. Ключа идемпотентности у
 // append нет — доставка at-least-once, дубль лечится перезаливом (ADR §10).
 func (g *Google) AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error {
-	values := make([]any, 0, len(row))
-	for _, v := range row {
-		values = append(values, v)
+	return g.AppendRows(ctx, accessToken, s, [][]string{row})
+}
+
+// AppendRows дописывает пачку строк одним запросом. Догрузка накопленных
+// ответов идёт пачками, а не по строке: у Google 60 запросов в минуту на
+// пользователя, и форма с двадцатью тысячами ответов упёрлась бы в лимит.
+func (g *Google) AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error {
+	values := make([]any, 0, len(rows))
+	for _, row := range rows {
+		cells := make([]any, 0, len(row))
+		for _, v := range row {
+			cells = append(cells, v)
+		}
+		values = append(values, cells)
 	}
-	body := map[string]any{"values": []any{values}}
+	body := map[string]any{"values": values}
 
 	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
 		url.PathEscape(a1Range(s.Title, "A1")) +
 		":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
 	if err := g.apiJSON(ctx, http.MethodPost, u, accessToken, body, nil); err != nil {
-		return fmt.Errorf("integrations google: append row: %w", err)
+		return fmt.Errorf("integrations google: append rows: %w", err)
+	}
+	return nil
+}
+
+// ClearSheet вычищает лист целиком — перезалив начинается с пустого листа,
+// иначе он удваивал бы то, что уже доехало.
+//
+// Чистятся ЗНАЧЕНИЯ, а не лист: формат, ширина колонок и закрепление шапки,
+// которые автор настроил, остаются. Шапку после чистки пишет вызывающий.
+func (g *Google) ClearSheet(ctx context.Context, accessToken string, s Spreadsheet) error {
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A:ZZZ")) + ":clear"
+	if err := g.apiJSON(ctx, http.MethodPost, u, accessToken, map[string]any{}, nil); err != nil {
+		return fmt.Errorf("integrations google: clear sheet: %w", err)
 	}
 	return nil
 }
