@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
+import { AlertCircle, ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
 
 import type { FormIntegrations, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
@@ -114,6 +114,23 @@ export function GoogleSheetsOverlay({
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// LoadFailed — значок «не загрузилось» у подписи поля.
+//
+// Не абзац с объяснением: причина отказа — почти всегда наша (настройки проекта
+// Google Cloud, доступность провайдера), и человеку нечего с ней делать. Экран
+// показывает, что здесь не всё в порядке, и оставляет рабочий путь рядом;
+// разбор — в логе, у того, кто может починить.
+//
+// Значок не немой: у него есть подпись для скринридера и подсказка на наведении —
+// иначе для части людей он просто не существует.
+function LoadFailed() {
+  return (
+    <span role="alert" aria-label="Не удалось загрузить" title="Не удалось загрузить">
+      <AlertCircle className="size-3.5 text-destructive" aria-hidden />
+    </span>
   )
 }
 
@@ -295,12 +312,10 @@ function SheetField({
 
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor="integration-sheet">Лист</Label>
-      {sheets.isError && (
-        <p role="alert" className="text-xs text-destructive">
-          Не удалось получить листы этой таблицы. Новый лист создать всё равно можно.
-        </p>
-      )}
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="integration-sheet">Лист</Label>
+        {sheets.isError && <LoadFailed />}
+      </div>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger id="integration-sheet" className="w-full">
           <SelectValue />
@@ -345,11 +360,11 @@ function SpreadsheetField({
   pickerEnabled: boolean
   onPickerOpenChange: (open: boolean) => void
 }) {
-  const [pickerError, setPickerError] = useState('')
+  const [pickerFailed, setPickerFailed] = useState(false)
   const [opening, setOpening] = useState(false)
 
   async function openPicker() {
-    setPickerError('')
+    setPickerFailed(false)
     setOpening(true)
     // Снимаем модальность ДО показа окна Google: иначе оно откроется поверх
     // диалога, у которого погашены pointer-events снаружи, и окажется мёртвым.
@@ -363,7 +378,7 @@ function SpreadsheetField({
         setup.setSpreadsheet(chosen.id)
       }
     } catch {
-      setPickerError('Не удалось открыть окно выбора. Попробуйте ещё раз.')
+      setPickerFailed(true)
     } finally {
       setOpening(false)
       onPickerOpenChange(false)
@@ -375,7 +390,10 @@ function SpreadsheetField({
 
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor="integration-spreadsheet">Таблица</Label>
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="integration-spreadsheet">Таблица</Label>
+        {(listFailed || pickerFailed) && <LoadFailed />}
+      </div>
       <Select
         value={setup.spreadsheet}
         onValueChange={(next) => {
@@ -413,27 +431,10 @@ function SpreadsheetField({
           )}
         </SelectContent>
       </Select>
-      {pickerError && (
-        <p role="alert" className="text-xs text-destructive">
-          {pickerError}
-        </p>
-      )}
-      {/* Отказ провайдера НЕ прячем: пустой список читается как «у меня нет
-          таблиц», хотя на деле Google отказал.
-          Но и ЧИНИТЬ его человеку не предлагаем: причина отказа — в настройках
-          НАШЕГО проекта Google Cloud, автор формы до них не дотянется. Текст
-          говорит, что случилось и куда идти дальше; разбор — в лог. */}
-      {listFailed ? (
-        <p role="alert" className="text-xs text-destructive">
-          Не удалось получить список ваших таблиц. Можно создать новую или выбрать таблицу на
-          Google Диске.
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет.
-          Любую другую свою выберите на Google Диске.
-        </p>
-      )}
+      <p className="text-xs text-muted-foreground">
+        В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет.
+        Любую другую свою выберите на Google Диске.
+      </p>
     </div>
   )
 }
