@@ -174,6 +174,22 @@ describe('оверлей настройки Google Таблиц', () => {
     vi.unstubAllGlobals()
   })
 
+  it('на время выбора файла оверлей перестаёт запирать страницу', async () => {
+    // Мина: окно Picker'а Google рисуется своим узлом в body, а модальный
+    // диалог гасит pointer-events у всего, что вне его содержимого. Окно видно —
+    // и оно мёртвое. Проверяем именно снятие замка, а не сам Picker.
+    vi.stubGlobal('fetch', () => new Promise(() => {}))
+    renderView(state({ account: CONNECTED }))
+    openDialog()
+    expect(document.body.style.pointerEvents).toBe('none')
+
+    fireEvent.click(screen.getByLabelText('Таблица'))
+    fireEvent.click(screen.getByRole('option', { name: /выбрать на google диске/i }))
+
+    await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
+    vi.unstubAllGlobals()
+  })
+
   it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {
     renderView(state({ account: CONNECTED }))
     openDialog()

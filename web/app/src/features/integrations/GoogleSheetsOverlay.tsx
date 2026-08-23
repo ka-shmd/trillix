@@ -65,11 +65,23 @@ export function GoogleSheetsOverlay({
   state: FormIntegrations
   onClose: () => void
 }) {
+  // pickerOpen — открыто ли окно выбора файла Google.
+  //
+  // Мина: окно Picker'а Google рисует СВОИМ узлом в body, а модальный диалог
+  // Radix на время своей жизни гасит pointer-events у всего, что вне его
+  // содержимого, и держит фокус внутри. Окно выбора при этом видно — и оно
+  // полностью мёртвое: ни клика, ни ввода. Поэтому на время выбора диалог
+  // перестаёт быть модальным, а закрытие по клику мимо и по Escape гасится:
+  // «мимо» теперь — это как раз окно Google.
+  const [pickerOpen, setPickerOpen] = useState(false)
+
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         className="flex h-svh max-h-svh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto rounded-none border-none p-0 sm:max-w-none"
         style={{ top: 0, left: 0 }}
+        onInteractOutside={(e) => pickerOpen && e.preventDefault()}
+        onEscapeKeyDown={(e) => pickerOpen && e.preventDefault()}
       >
         <div className="mx-auto flex w-full max-w-lg flex-col gap-8 px-6 py-16">
           <header className="flex flex-col items-center gap-3 text-center">
@@ -83,7 +95,12 @@ export function GoogleSheetsOverlay({
           {state.sheet ? (
             <ConnectedBody formId={formId} state={state} onDone={onClose} />
           ) : (
-            <SetupBody formId={formId} state={state} onDone={onClose} />
+            <SetupBody
+              formId={formId}
+              state={state}
+              onDone={onClose}
+              onPickerOpenChange={setPickerOpen}
+            />
           )}
         </div>
       </DialogContent>
@@ -98,10 +115,12 @@ function SetupBody({
   formId,
   state,
   onDone,
+  onPickerOpenChange,
 }: {
   formId: string
   state: FormIntegrations
   onDone: () => void
+  onPickerOpenChange: (open: boolean) => void
 }) {
   const { account, workspaceId } = state
   const [name, setName] = useState('')
@@ -152,6 +171,7 @@ function SetupBody({
         options={sheets.data ?? []}
         listFailed={sheets.isError}
         pickerEnabled={account.pickerEnabled}
+        onPickerOpenChange={onPickerOpenChange}
       />
 
       {/* Лист спрашиваем только у существующей книги: у новой он один и
@@ -261,6 +281,7 @@ function SpreadsheetField({
   options,
   listFailed,
   pickerEnabled,
+  onPickerOpenChange,
 }: {
   formId: string
   value: string
@@ -268,6 +289,7 @@ function SpreadsheetField({
   options: SpreadsheetRef[]
   listFailed: boolean
   pickerEnabled: boolean
+  onPickerOpenChange: (open: boolean) => void
 }) {
   // picked — выбранная на Диске книга: её нет в списке созданных нами, поэтому
   // она добавляется отдельным пунктом, иначе Select не смог бы её показать.
@@ -278,6 +300,9 @@ function SpreadsheetField({
   async function openPicker() {
     setPickerError('')
     setOpening(true)
+    // Снимаем модальность ДО показа окна Google: иначе оно откроется поверх
+    // диалога, у которого погашены pointer-events снаружи, и окажется мёртвым.
+    onPickerOpenChange(true)
     try {
       const chosen = await pickSpreadsheet(await getPickerCredentials(formId))
       // null — окно закрыли, ничего не выбрав. Это не ошибка и не повод что-то
@@ -290,6 +315,7 @@ function SpreadsheetField({
       setPickerError('Не удалось открыть окно выбора. Попробуйте ещё раз.')
     } finally {
       setOpening(false)
+      onPickerOpenChange(false)
     }
   }
 
