@@ -150,6 +150,7 @@ function SetupBody({
           setSheet(NEW_SHEET)
         }}
         options={sheets.data ?? []}
+        listFailed={sheets.isError}
         pickerEnabled={account.pickerEnabled}
       />
 
@@ -219,6 +220,11 @@ function SheetField({
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="integration-sheet">Лист</Label>
+      {sheets.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          Не удалось получить листы этой таблицы. Новый лист создать всё равно можно.
+        </p>
+      )}
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger id="integration-sheet" className="w-full">
           <SelectValue />
@@ -253,12 +259,14 @@ function SpreadsheetField({
   value,
   onChange,
   options,
+  listFailed,
   pickerEnabled,
 }: {
   formId: string
   value: string
   onChange: (value: string) => void
   options: SpreadsheetRef[]
+  listFailed: boolean
   pickerEnabled: boolean
 }) {
   // picked — выбранная на Диске книга: её нет в списке созданных нами, поэтому
@@ -330,6 +338,19 @@ function SpreadsheetField({
       {pickerError && (
         <p role="alert" className="text-xs text-destructive">
           {pickerError}
+        </p>
+      )}
+      {/* Отказ провайдера НЕ прячем: пустой список читается как «у меня нет
+          таблиц», хотя на деле Google отказал — и человек чинит не то. */}
+      {listFailed ? (
+        <p role="alert" className="text-xs text-destructive">
+          Не удалось получить список ваших таблиц Google. Проверьте, что в проекте включены
+          Google Drive API и Google Sheets API; выбрать таблицу на Диске можно и без списка.
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет.
+          Любую другую свою выберите на Google Диске.
         </p>
       )}
     </div>

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { FormIntegrations } from '../../entities/integration'
@@ -25,12 +25,21 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
   }
 }
 
+// newTestClient — клиент, который НЕ перезапрашивает посеянное: иначе в кейсе с
+// отказом сети падает и само состояние экрана, и проверяется не то, что нужно.
+function newTestClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: Infinity, refetchOnMount: false },
+      mutations: { retry: false },
+    },
+  })
+}
+
 // Данные кладём прямо в кеш: экран проверяется по состоянию, а не по транспорту,
 // и мок fetch добавил бы к каждому кейсу асинхронность, которой в нём нет.
 function renderView(data: FormIntegrations) {
-  const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  })
+  const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
   // Список таблиц — тоже из кеша: иначе окно ушло бы в сеть за выбором.
   qc.setQueryData([...integrationKeys.form(FORM_ID), 'spreadsheets'], [
@@ -139,6 +148,30 @@ describe('оверлей настройки Google Таблиц', () => {
 
     expect(screen.getByRole('option', { name: /создать новую таблицу/i })).toBeTruthy()
     expect(screen.queryByRole('option', { name: /выбрать на google диске/i })).toBeNull()
+  })
+
+  it('Google отказал в списке таблиц — экран говорит об этом, а не молчит', async () => {
+    // Пустой список читается как «у меня нет таблиц», хотя на деле отказал
+    // провайдер, — и человек чинит не то. Список здесь не кладём в кеш: пусть
+    // запрос сходит в сеть и получит отказ, как оно и было на живом контуре.
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('403')))
+    const qc = newTestClient()
+    qc.setQueryData(integrationKeys.form(FORM_ID), state({ account: CONNECTED }))
+    render(
+      <QueryClientProvider client={qc}>
+        <IntegrationsView formId={FORM_ID} />
+      </QueryClientProvider>,
+    )
+    openDialog()
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByRole('alert')
+          .some((el) => /не удалось получить список/i.test(el.textContent ?? '')),
+      ).toBe(true),
+    )
+    vi.unstubAllGlobals()
   })
 
   it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {

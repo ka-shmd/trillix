@@ -281,3 +281,47 @@ func TestA1Range_EscapesApostrophe(t *testing.T) {
 		t.Fatalf("диапазон = %q, ожидался %q", got, want)
 	}
 }
+
+// Отказ ручки ДАННЫХ несёт причину: без неё в логе остаётся трёхзначное число,
+// и человек за логом гадает, что именно выключено у него в консоли Google.
+func TestGoogle_APIErrorCarriesReason(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drive", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":{"code":403,"status":"SERVICE_DISABLED",` +
+			`"message":"Google Drive API has not been used in project 44227 before or it is disabled."}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	g := NewGoogle("id", "secret", "https://app.example/cb")
+	g.driveURL = srv.URL + "/drive"
+
+	_, err := g.ListSpreadsheets(context.Background(), "at")
+	if err == nil {
+		t.Fatal("отказ проглочен")
+	}
+	if !errors.Is(err, ErrPermanent) {
+		t.Errorf("403 не признан окончательным: %v", err)
+	}
+	if !strings.Contains(err.Error(), "SERVICE_DISABLED") ||
+		!strings.Contains(err.Error(), "has not been used in project") {
+		t.Fatalf("ошибка без причины: %v", err)
+	}
+}
+
+// А вот ручка ТОКЕНА причину не раскрывает: в её теле лежит токен.
+func TestGoogle_TokenErrorStaysSilent(t *testing.T) {
+	g := newFakeGoogle(t, &fakeGoogle{
+		tokenStatus: http.StatusBadRequest,
+		tokenBody:   `{"error":"invalid_grant","access_token":"secret-ish"}`,
+	})
+
+	_, err := g.Refresh(context.Background(), "rt")
+	if err == nil {
+		t.Fatal("отказ проглочен")
+	}
+	if strings.Contains(err.Error(), "secret-ish") || strings.Contains(err.Error(), "invalid_grant") {
+		t.Fatalf("тело ответа токен-ручки утекло: %v", err)
+	}
+}

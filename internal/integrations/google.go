@@ -255,9 +255,27 @@ func (g *Google) token(ctx context.Context, form url.Values) (Tokens, error) {
 	}, nil
 }
 
+// doAPI — то же, что do, но для ручек ДАННЫХ (Диск, Таблицы): текст отказа из
+// тела уходит в ошибку.
+//
+// У do тело намеренно не раскрывается — там эндпоинты токена и профиля, в теле
+// которых лежит токен и адрес человека. Здесь тела другие: «Google Drive API has
+// not been used in project … or it is disabled», «The caller does not have
+// permission». Без них отладка сводится к трёхзначному числу, и человек за
+// логом гадает, что именно выключено у него в консоли.
+func (g *Google) doAPI(req *http.Request, out any) error {
+	return g.request(req, out, true)
+}
+
 // do выполняет запрос и разбирает JSON-ответ (out == nil — тело не нужно).
-// Тело читается через LimitReader: потолок общий для всех ответов провайдера.
+// Тело ответа наружу не отдаётся: это ручки токена и профиля.
 func (g *Google) do(req *http.Request, out any) error {
+	return g.request(req, out, false)
+}
+
+// request — общий транспорт. Тело читается через LimitReader: потолок общий для
+// всех ответов провайдера.
+func (g *Google) request(req *http.Request, out any, explain bool) error {
 	resp, err := g.http.Do(req)
 	if err != nil {
 		return err
@@ -268,16 +286,18 @@ func (g *Google) do(req *http.Request, out any) error {
 	if err != nil {
 		return fmt.Errorf("read body: %w", err)
 	}
-	// Тело ответа наружу не отдаём и в лог не пишем: в нём лежат токены и адрес
-	// человека. Наверх едет только статус.
 	if resp.StatusCode != http.StatusOK {
+		reason := ""
+		if explain {
+			reason = ": " + apiErrorMessage(data)
+		}
 		// 401/403 — доступ отозван или его не выдавали; 404 — таблицы больше
 		// нет. Ждать и повторять тут нечего: нужен человек.
 		switch resp.StatusCode {
 		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-			return fmt.Errorf("%w: статус %d", ErrPermanent, resp.StatusCode)
+			return fmt.Errorf("%w: статус %d%s", ErrPermanent, resp.StatusCode, reason)
 		}
-		return fmt.Errorf("статус %d", resp.StatusCode)
+		return fmt.Errorf("статус %d%s", resp.StatusCode, reason)
 	}
 	if out == nil {
 		return nil
@@ -370,7 +390,7 @@ func (g *Google) ListSpreadsheets(ctx context.Context, accessToken string) ([]Sp
 			Name string `json:"name"`
 		} `json:"files"`
 	}
-	if err := g.do(req, &body); err != nil {
+	if err := g.doAPI(req, &body); err != nil {
 		return nil, fmt.Errorf("integrations google: list spreadsheets: %w", err)
 	}
 	out := make([]SpreadsheetRef, 0, len(body.Files))
@@ -404,7 +424,7 @@ func (g *Google) ListSheets(ctx context.Context, accessToken, spreadsheetID stri
 			} `json:"properties"`
 		} `json:"sheets"`
 	}
-	if err := g.do(req, &body); err != nil {
+	if err := g.doAPI(req, &body); err != nil {
 		return nil, fmt.Errorf("integrations google: list sheets: %w", err)
 	}
 	out := make([]SheetRef, 0, len(body.Sheets))
@@ -431,7 +451,7 @@ func (g *Google) FirstRowEmpty(ctx context.Context, accessToken string, s Spread
 	var body struct {
 		Values [][]any `json:"values"`
 	}
-	if err := g.do(req, &body); err != nil {
+	if err := g.doAPI(req, &body); err != nil {
 		return false, fmt.Errorf("integrations google: read first row: %w", err)
 	}
 	for _, row := range body.Values {
@@ -494,7 +514,7 @@ func (g *Google) SpreadsheetURL(ctx context.Context, accessToken, spreadsheetID 
 	var body struct {
 		SpreadsheetURL string `json:"spreadsheetUrl"`
 	}
-	if err := g.do(req, &body); err != nil {
+	if err := g.doAPI(req, &body); err != nil {
 		return "", fmt.Errorf("integrations google: spreadsheet meta: %w", err)
 	}
 	return body.SpreadsheetURL, nil
@@ -586,7 +606,37 @@ func (g *Google) apiJSON(ctx context.Context, method, u, accessToken string, bod
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	return g.do(req, out)
+	return g.doAPI(req, out)
+}
+
+// apiErrorMessage достаёт человеческую причину из тела ошибки Google. Не
+// разобралось — отдаём обрезанное тело как есть: неизвестный формат лучше
+// пустоты, а обрезка держит лог читаемым.
+func apiErrorMessage(body []byte) string {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Status  string `json:"status"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error.Message != "" {
+		if parsed.Error.Status != "" {
+			return parsed.Error.Status + ": " + parsed.Error.Message
+		}
+		return parsed.Error.Message
+	}
+	return truncate(string(body), maxErrorTextLen)
+}
+
+// maxErrorTextLen — потолок неразобранного текста ошибки в логе.
+const maxErrorTextLen = 300
+
+func truncate(s string, max int) string {
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 // HasScope отвечает, есть ли scope в выданном провайдером списке. Список —
