@@ -700,6 +700,27 @@ func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) 
 	return result.RowsAffected(), nil
 }
 
+const deleteIntegrationAccount = `-- name: DeleteIntegrationAccount :one
+DELETE FROM integration_accounts
+WHERE workspace_id = $1 AND provider = $2
+RETURNING refresh_token
+`
+
+type DeleteIntegrationAccountParams struct {
+	WorkspaceID uuid.UUID
+	Provider    string
+}
+
+// Отключение. RETURNING отдаёт токен на отзыв у провайдера: прочитать его
+// отдельным запросом ДО удаления значит открыть окно, в котором строка уже
+// прочитана, но ещё жива. Формы, привязанные к этому аккаунту, уносит каскад.
+func (q *Queries) DeleteIntegrationAccount(ctx context.Context, arg DeleteIntegrationAccountParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	var refresh_token []byte
+	err := row.Scan(&refresh_token)
+	return refresh_token, err
+}
+
 const deleteMember = `-- name: DeleteMember :execrows
 DELETE FROM workspace_members
 WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
@@ -1408,6 +1429,36 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyOnSubmission,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getIntegrationAccount = `-- name: GetIntegrationAccount :one
+SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+FROM integration_accounts
+WHERE workspace_id = $1 AND provider = $2
+`
+
+type GetIntegrationAccountParams struct {
+	WorkspaceID uuid.UUID
+	Provider    string
+}
+
+// Подключение пространства. refresh_token едет шифротекстом и наружу модуля не
+// выходит: расшифровывает его только сервис, и только чтобы сходить к провайдеру.
+func (q *Queries) GetIntegrationAccount(ctx context.Context, arg GetIntegrationAccountParams) (IntegrationAccount, error) {
+	row := q.db.QueryRow(ctx, getIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	var i IntegrationAccount
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.ExternalAccountID,
+		&i.ExternalEmail,
+		&i.RefreshToken,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.ConnectedAt,
 	)
 	return i, err
 }
@@ -3541,6 +3592,50 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.LastBlockID,
 		arg.Seq,
 		arg.Meta,
+	)
+	return err
+}
+
+const upsertIntegrationAccount = `-- name: UpsertIntegrationAccount :exec
+
+INSERT INTO integration_accounts (
+    id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (workspace_id, provider) DO UPDATE SET
+    external_account_id = EXCLUDED.external_account_id,
+    external_email      = EXCLUDED.external_email,
+    refresh_token       = EXCLUDED.refresh_token,
+    scopes              = EXCLUDED.scopes,
+    connected_by        = EXCLUDED.connected_by,
+    connected_at        = now()
+`
+
+type UpsertIntegrationAccountParams struct {
+	ID                uuid.UUID
+	WorkspaceID       uuid.UUID
+	Provider          string
+	ExternalAccountID string
+	ExternalEmail     string
+	RefreshToken      []byte
+	Scopes            string
+	ConnectedBy       uuid.UUID
+}
+
+// Запросы модуля integrations. Схема — migrations/0029_integrations. Генерация: `make sqlc`.
+// Подключение аккаунта. Повторное подключение (сменил аккаунт Google, отозвал
+// доступ, переподключается после ротации ключа) ЗАМЕНЯЕТ строку, а не плодит
+// вторую: одно подключение на провайдера в пространстве — рамка MVP, и она же
+// уникальный индекс, служащий здесь арбитром ON CONFLICT.
+func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegrationAccountParams) error {
+	_, err := q.db.Exec(ctx, upsertIntegrationAccount,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Provider,
+		arg.ExternalAccountID,
+		arg.ExternalEmail,
+		arg.RefreshToken,
+		arg.Scopes,
+		arg.ConnectedBy,
 	)
 	return err
 }

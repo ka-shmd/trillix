@@ -233,6 +233,15 @@ MAIL_SMTP_PASSWORD=__POSTBOX_API_KEY_SECRET__
 # Из доступов нужен только «Адрес электронной почты».
 YANDEX_OAUTH_CLIENT_ID=__YANDEX_PROD_CLIENT_ID__
 YANDEX_OAUTH_CLIENT_SECRET=__YANDEX_PROD_CLIENT_SECRET__
+
+# --- интеграция с Google Таблицами (фаза 25) ---
+# Приложение в Google Cloud, OAuth-клиент типа «Web application».
+# Redirect URI обязан совпасть байт в байт:
+#   https://app.trillix.ru/api/v1/integrations/google/callback
+# Scope: openid, email, https://www.googleapis.com/auth/drive.file.
+# Обе строки пустые = интеграция выключена (кабинет работает как раньше).
+GOOGLE_OAUTH_CLIENT_ID=__GOOGLE_PROD_CLIENT_ID__
+GOOGLE_OAUTH_CLIENT_SECRET=__GOOGLE_PROD_CLIENT_SECRET__
 EOF
 chmod 600 .env
 ```

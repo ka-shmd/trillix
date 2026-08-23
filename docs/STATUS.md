@@ -28,11 +28,11 @@
 
 ## Состав системы
 
-- **Go-API** — один бинарник, Go 1.26, 19 модулей в `internal/`
+- **Go-API** — один бинарник, Go 1.26, 20 модулей в `internal/`
   (`answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `httpserver`,
   `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`, `submissions`,
   `token`, `visits`, `workspaces`).
-- **PostgreSQL 16** — 28 миграций (`0001`…`0028_user_avatar`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 29 миграций (`0001`…`0029_integrations`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
   38.54). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59),
@@ -53,6 +53,18 @@
 (`design`) — необязательные поля, версию не поднимают**. Контракт API — [`API.md`](API.md).
 
 ## Где находится разработка
+
+**Фаза 25 `DEV-PLAN`: интеграция с Google Таблицами — ИДЁТ.** Продуктовый запрос владельца
+2026-08-23: у формы появляется пятый таб «Интеграции», первая интеграция — Google Таблицы.
+Спека согласована до кода — [`design/integrations-gsheets.md`](design/integrations-gsheets.md),
+критерий приёмки её §12, пять строк ADR внесены. Слайсы: **0 (документы) — закрыт**,
+**A (подключение аккаунта Google к пространству) — идёт**; дальше B (таблица у формы),
+C (живая доставка), D (догрузка), E (экран), F (справочник и e2e).
+
+**За владельцем — два внешних блокера, без них фаза не доедет до прода:** проверить
+исходящий доступ к `googleapis.com` с прода и завести приложение в Google Cloud
+(OAuth-клиент, redirect URI трёх контуров). Пока ключей нет в env, интеграция выключена
+на контуре и кабинет работает как раньше.
 
 **Клавиатура полотна: Enter и Shift+Enter** (задача вне плана, влита в `main`
 [#135](https://github.com/ka-shmd/trillix/pull/135), тегом не закрыта). Жест «Shift+Enter —

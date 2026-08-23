@@ -13,6 +13,7 @@ sql:
       - "internal/mail/queries.sql"
       - "internal/entitlements/queries.sql"
       - "internal/answerfiles/queries.sql"
+      - "internal/integrations/queries.sql"
     gen:
       go:
         # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).

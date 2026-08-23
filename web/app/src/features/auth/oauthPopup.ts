@@ -19,6 +19,13 @@ export const oauthOutcomeSchema = z.enum([
   'link_conflict',
   'link_expired',
   'link_failed',
+  // Подключение интеграции (фаза 25) ходит тем же окном и тем же экраном
+  // /oauth/done: перечень зеркалит outcome в internal/integrations/handler.go.
+  'integration_ok',
+  'integration_denied',
+  'integration_expired',
+  'integration_forbidden',
+  'integration_failed',
 ])
 
 export type OAuthOutcome = z.infer<typeof oauthOutcomeSchema>

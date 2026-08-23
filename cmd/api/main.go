@@ -18,6 +18,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
 	"github.com/ka-shmd/trillix/internal/oauth"
@@ -339,6 +340,23 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
+	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
+	// считал бы себя настроенным. Отсюда объявление переменной интерфейсного
+	// типа и присваивание только при заданных ключах.
+	var googleProvider integrations.Provider
+	if cfg.GoogleOAuthEnabled() {
+		googleProvider = integrations.NewGoogle(
+			cfg.GoogleOAuthClientID,
+			cfg.GoogleOAuthClientSecret,
+			cfg.AppOrigin+"/api/v1/integrations/google/callback",
+		)
+	}
+	integrationsSvc := integrations.NewService(pool, integrations.Repo{}, workspacesSvc, googleProvider, cfg.FormTokenSecret)
+	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
+		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
+	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
+
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
@@ -403,7 +421,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
-		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
+		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
+		integrationsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
