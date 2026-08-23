@@ -5,7 +5,7 @@ import {
   OAUTH_MESSAGE_SOURCE,
   oauthOutcomeSchema,
   type OAuthOutcome,
-} from '../features/auth/oauthPopup'
+} from '../shared/oauthPopup'
 
 // Служебный экран отдельного окна входа. Колбэк бэка возвращает браузер сюда,
 // когда поход был начат из окна (?mode=popup): рисовать кабинет в окне 560×680
