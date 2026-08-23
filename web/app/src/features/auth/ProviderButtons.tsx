@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { adoptPopupSession, providersQueryOptions } from './queries'
 import { providerStartUrl } from './api'
-import { useOAuthPopup, type OAuthOutcome } from './oauthPopup'
+import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { OAuthWaitingDialog } from './OAuthWaitingDialog'
 import { Button } from '@/components/ui/button'
 

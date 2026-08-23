@@ -120,7 +120,14 @@
 	# Зато САМ кабинет фреймит рендерер — на экране «Встроить» (предпросмотр вставки):
 	# отсюда загрузчик в script-src и страница формы в frame-src, оба с путём. Это
 	# разрешение НАРУЖУ, а не внутрь: незафреймливаемость кабинета им не затрагивается.
-	import secheaders * "'none'" "'self' https://{$RENDERER_DOMAIN}/embed/" "'self' https://{$RENDERER_DOMAIN}/r/" "'self'"
+	#
+	# Второе разрешение наружу — окно выбора файла на Google Диске (фаза 25):
+	# скрипт Picker'а с apis.google.com и его фрейм с docs.google.com. Под scope
+	# drive.file «вставьте ссылку на таблицу» не работает в принципе (сервер не
+	# видит файл, которого не создавал), а Picker рисует сам Google — своим
+	# скриптом в нашем документе. Плата названа в ADR §10: это ТРЕТЬЯ СТОРОНА в
+	# origin, где живёт cookie сессии.
+	import secheaders * "'none'" "'self' https://{$RENDERER_DOMAIN}/embed/ https://apis.google.com" "'self' https://{$RENDERER_DOMAIN}/r/ https://docs.google.com" "'self' https://apis.google.com"
 	header * X-Frame-Options DENY
 
 	# Приватный API кабинета — тот же origin, поэтому CORS не нужен, cookie

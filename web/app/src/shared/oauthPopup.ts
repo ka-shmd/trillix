@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { z } from 'zod'
 
-// Исход похода к провайдеру. Перечень зеркалит oauthOutcome в
-// internal/auth/handler_oauth.go: бэк кладёт код в адрес служебного экрана
+// Поход к внешнему провайдеру в отдельном окне. Живёт в shared, а не в фиче
+// входа: тем же окном и тем же служебным экраном /oauth/done ходит подключение
+// интеграций (фаза 25), а импорт одной фичи из другой запрещён (web/CLAUDE.md).
+//
+// Исход похода. Перечень зеркалит oauthOutcome в
+// internal/auth/handler_oauth.go и internal/integrations/handler.go: бэк кладёт код в адрес служебного экрана
 // /oauth/done, окно передаёт его вкладке-опекуну, вкладка выбирает по нему
 // экран. Разъедутся перечни — вход тихо начнёт заканчиваться «не удалось».
 export const oauthOutcomeSchema = z.enum([
@@ -19,6 +23,13 @@ export const oauthOutcomeSchema = z.enum([
   'link_conflict',
   'link_expired',
   'link_failed',
+  // Подключение интеграции (фаза 25) ходит тем же окном и тем же экраном
+  // /oauth/done: перечень зеркалит outcome в internal/integrations/handler.go.
+  'integration_ok',
+  'integration_denied',
+  'integration_expired',
+  'integration_forbidden',
+  'integration_failed',
 ])
 
 export type OAuthOutcome = z.infer<typeof oauthOutcomeSchema>

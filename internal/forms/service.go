@@ -648,6 +648,17 @@ func (s *Service) ShowBadge(ctx context.Context, workspaceID uuid.UUID, design *
 // Versions возвращает все опубликованные версии формы (снапшоты схем) для её автора.
 // Авторизация как у остальных операций по ресурсу (чужая/нет формы → 404). Пустой
 // срез — форму ещё не публиковали. Нужен CSV-экспорту (модуль submissions).
+// PublishedVersions отдаёт снапшоты версий формы БЕЗ проверки прав.
+//
+// ⚠ Единственный законный вызывающий — фоновая доставка (internal/integrations,
+// фаза 25): там нет пользователя, чьё право можно спросить, а id формы взят не
+// из URL, а из СВОЕЙ строки form_integrations, которую завёл человек с правом.
+// Из обработчика приватного API этот метод не зовут — там есть Versions, и она
+// авторизует (инвариант 1: id из запроса правом доступа не является).
+func (s *Service) PublishedVersions(ctx context.Context, formID uuid.UUID) ([]Version, error) {
+	return s.repo.ListFormVersions(ctx, s.db, formID)
+}
+
 func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID) ([]Version, error) {
 	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormRead)
 	if err != nil {

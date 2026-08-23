@@ -43,6 +43,24 @@ type Form struct {
 	NotifyOnSubmission bool
 }
 
+type FormIntegration struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	Name            string
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Enabled         bool
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+}
+
 type FormVersion struct {
 	ID        uuid.UUID
 	FormID    uuid.UUID
@@ -60,6 +78,18 @@ type FormVisit struct {
 	Submitted     bool
 	Meta          []byte
 	CreatedAt     pgtype.Timestamptz
+}
+
+type IntegrationAccount struct {
+	ID                uuid.UUID
+	WorkspaceID       uuid.UUID
+	Provider          string
+	ExternalAccountID string
+	ExternalEmail     string
+	RefreshToken      []byte
+	Scopes            string
+	ConnectedBy       uuid.UUID
+	ConnectedAt       pgtype.Timestamptz
 }
 
 type Invitation struct {

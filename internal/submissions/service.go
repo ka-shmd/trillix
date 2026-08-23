@@ -50,6 +50,9 @@ type Forms interface {
 	// Versions авторизует доступ (как Get) и отдаёт все опубликованные версии
 	// формы — их схемы нужны CSV-экспорту для объединения колонок и подписей опций.
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
+	// PublishedVersions — то же БЕЗ проверки прав: у фоновой доставки (фаза 25)
+	// нет пользователя, чьё право можно спросить, а форма приезжает не из URL.
+	PublishedVersions(ctx context.Context, formID uuid.UUID) ([]forms.Version, error)
 	// SubmissionOwner — адресат уведомления о новом ответе (email владельца + имя
 	// формы). Форма уже резолвнута по slug, членство не проверяется (это адресат, а
 	// не доступ пользователя). Слайс D.
@@ -120,6 +123,8 @@ type AnswerFiles interface {
 type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
+	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
+	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
 	// жёсткому капу формы, у которого своя семантика.
@@ -194,6 +199,9 @@ type Service struct {
 	// коллабораторов, и девятый позиционный аргумент — это способ однажды
 	// перепутать два соседних интерфейса местами.
 	files AnswerFiles
+	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
+	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
+	integrations Integrations
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
 	appBaseURL string
@@ -202,6 +210,26 @@ type Service struct {
 
 func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
 	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, plans: plans, repo: repo, appBaseURL: appBaseURL, now: time.Now}
+}
+
+// Integrations — доставка принятого ответа во внешние системы (фаза 25).
+// Интерфейс объявлен здесь и оперирует только id: модуль интеграций импортирует
+// submissions (ему нужна строка ответа), и обратный импорт замкнул бы цикл.
+//
+// Реализация может отсутствовать (nil): интеграции — не обязательная часть
+// приёма, и форма без них не платит за них ничем.
+type Integrations interface {
+	// EnqueueSubmission ставит доставку ответа, если форма привязана к таблице.
+	// Не привязана — не ошибка и не работа: метод молча ничего не делает.
+	EnqueueSubmission(ctx context.Context, formID, submissionID uuid.UUID) error
+}
+
+// WithIntegrations подключает доставку во внешние системы. Отдельным вызовом, а
+// не аргументом конструктора: интеграции читают строку ответа через этот же
+// сервис, и в конструктор его передать было бы нечем.
+func (s *Service) WithIntegrations(i Integrations) *Service {
+	s.integrations = i
+	return s
 }
 
 // WithFiles подключает модуль файлов ответов. Без него форма с блоком file
@@ -384,7 +412,142 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	if inserted && pf.NotifyOnSubmission {
 		s.notifyOwner(ctx, pf.FormID, slug)
 	}
+	if inserted {
+		s.enqueueIntegration(ctx, pf.FormID, id)
+	}
 	return nil
+}
+
+// enqueueIntegration ставит доставку ответа во внешнюю таблицу — ПОСЛЕ приёма и
+// best-effort, по тем же основаниям, что markVisitSubmitted и notifyOwner:
+// вторичный эффект не имеет права уронить уже принятый ответ.
+//
+// Цена названа вслух: краш в узком окне между коммитом ответа и постановкой
+// теряет ОДНУ строку в чужой таблице. Данные целы (ответ в базе и в выгрузке),
+// лечение — кнопка «Перезалить всё» в табе интеграций. Атомарность здесь стоила
+// бы транзакции на самом горячем пути продукта (ARCHITECTURE §4.7), а на пути
+// без лимита и файлов её сегодня нет вовсе — приём это одна вставка.
+func (s *Service) enqueueIntegration(ctx context.Context, formID, submissionID uuid.UUID) {
+	if s.integrations == nil {
+		return
+	}
+	if err := s.integrations.EnqueueSubmission(ctx, formID, submissionID); err != nil {
+		httpserver.LoggerFrom(ctx).Warn("submission delivery not enqueued",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// SheetRecord — ответ, приведённый к строке внешней таблицы: колонки (ключ +
+// подпись) и значения в их порядке.
+type SheetRecord struct {
+	Columns []domain.SheetColumn
+	Row     []string
+	// CreatedAt — когда ответ принят. Доставке нужно, чтобы отличить ответ,
+	// который уже положила догрузка, от того, что пришёл после неё.
+	CreatedAt time.Time
+}
+
+// SheetRow строит строку одного ответа для внешней таблицы — той же моделью
+// колонок, что выгрузка CSV и сводка (иначе у вопроса «какие у формы вопросы»
+// стало бы два ответа).
+//
+// ⚠ Прав НЕ проверяет: у фоновой доставки нет пользователя, чьё право можно
+// спросить. Безопасность держится на том, ОТКУДА приходят id: форма — из строки
+// form_integrations, которую завёл человек с правом на неё, ответ — из события,
+// которое поставили мы сами. Из обработчика приватного API этот метод не зовут.
+//
+// pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором или скрыт
+// тарифом. Вызывающий гасит событие, а не ретраит его вечно.
+func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) (SheetRecord, error) {
+	versions, err := s.forms.PublishedVersions(ctx, formID)
+	if err != nil {
+		return SheetRecord{}, err
+	}
+	vs, err := parseVersions(formID, versions)
+	if err != nil {
+		return SheetRecord{}, err
+	}
+
+	sub, err := s.repo.GetForDelivery(ctx, s.db, formID, submissionID)
+	if err != nil {
+		return SheetRecord{}, err
+	}
+	var answers map[string]json.RawMessage
+	if err := json.Unmarshal(sub.Answers, &answers); err != nil {
+		return SheetRecord{}, fmt.Errorf("unmarshal answers of submission %s: %w", submissionID, err)
+	}
+
+	builder := domain.NewCSVBuilder(vs)
+	// Имена файлов — только если у формы вообще есть вопрос-файл: та же
+	// экономия, что в выгрузке.
+	if s.files != nil && hasFileBlock(vs) {
+		files, err := s.files.InfoByForm(ctx, formID)
+		if err != nil {
+			return SheetRecord{}, err
+		}
+		builder.WithFiles(files)
+	}
+	return SheetRecord{
+		Columns:   builder.SheetColumns(),
+		Row:       builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		CreatedAt: sub.CreatedAt,
+	}, nil
+}
+
+// SheetPage — пачка накопленных ответов для догрузки: колонки один раз и строки
+// со своими id (id — курсор следующей пачки, а не украшение).
+type SheetPage struct {
+	Columns []domain.SheetColumn
+	Rows    []SheetRow
+}
+
+// SheetRow — одна строка пачки.
+type SheetRow struct {
+	ID     uuid.UUID
+	Values []string
+}
+
+// SheetRows отдаёт пачку ответов формы для догрузки во внешнюю таблицу: строго
+// до отсечки before, после курсора after (uuid.Nil — с начала), старые сверху.
+//
+// ⚠ Прав НЕ проверяет — по тем же основаниям, что SheetRow: у фоновой догрузки
+// нет пользователя, а форма приезжает из своей строки form_integrations.
+func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) (SheetPage, error) {
+	versions, err := s.forms.PublishedVersions(ctx, formID)
+	if err != nil {
+		return SheetPage{}, err
+	}
+	vs, err := parseVersions(formID, versions)
+	if err != nil {
+		return SheetPage{}, err
+	}
+
+	subs, err := s.repo.ListForBackfill(ctx, s.db, formID, before, after, limit)
+	if err != nil {
+		return SheetPage{}, err
+	}
+
+	builder := domain.NewCSVBuilder(vs)
+	if s.files != nil && hasFileBlock(vs) {
+		files, err := s.files.InfoByForm(ctx, formID)
+		if err != nil {
+			return SheetPage{}, err
+		}
+		builder.WithFiles(files)
+	}
+
+	page := SheetPage{Columns: builder.SheetColumns(), Rows: make([]SheetRow, 0, len(subs))}
+	for _, sub := range subs {
+		var answers map[string]json.RawMessage
+		if err := json.Unmarshal(sub.Answers, &answers); err != nil {
+			return SheetPage{}, fmt.Errorf("unmarshal answers of submission %s: %w", sub.ID, err)
+		}
+		page.Rows = append(page.Rows, SheetRow{
+			ID:     sub.ID,
+			Values: builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		})
+	}
+	return page, nil
 }
 
 // notifyOwner ставит владельцу письмо-дайджест о новом ответе — коалесцирующим
@@ -503,6 +666,13 @@ func (s *Service) versionedSchemas(ctx context.Context, userID, formID uuid.UUID
 		return nil, err
 	}
 
+	return parseVersions(formID, versions)
+}
+
+// parseVersions разбирает снапшоты версий в типы домена. Общее у авторизованного
+// чтения (выгрузка, сводка) и у фоновой доставки — разница между ними в том, кто
+// и с какой проверкой прав добыл versions, а не в том, как их читать.
+func parseVersions(formID uuid.UUID, versions []forms.Version) ([]domain.VersionedSchema, error) {
 	vs := make([]domain.VersionedSchema, 0, len(versions))
 	for _, v := range versions {
 		schema, e := domain.ValidateSchema(v.Schema)

@@ -108,6 +108,49 @@ func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, 
 	return out, nil
 }
 
+// GetForDelivery — один ответ формы для фоновой доставки во внешнюю таблицу.
+// pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором либо скрыт
+// тарифом (over_quota). Оба случая штатны и разбираются вызывающим.
+func (Repo) GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error) {
+	row, err := postgres.New(db).GetSubmissionForDelivery(ctx, postgres.GetSubmissionForDeliveryParams{
+		ID:     id,
+		FormID: formID,
+	})
+	if err != nil {
+		return Submission{}, err
+	}
+	return Submission{
+		ID:          row.ID,
+		FormVersion: row.FormVersion,
+		Answers:     json.RawMessage(row.Answers),
+		CreatedAt:   row.CreatedAt.Time,
+	}, nil
+}
+
+// ListForBackfill — пачка ответов формы для догрузки во внешнюю таблицу:
+// старые сверху, строго до отсечки, после курсора after (uuid.Nil — с начала).
+func (Repo) ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error) {
+	rows, err := postgres.New(db).ListSubmissionsForBackfill(ctx, postgres.ListSubmissionsForBackfillParams{
+		FormID:    formID,
+		CreatedAt: pgtype.Timestamptz{Time: before, Valid: true},
+		After:     after,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list submissions for backfill: %w", err)
+	}
+	out := make([]Submission, len(rows))
+	for i, r := range rows {
+		out[i] = Submission{
+			ID:          r.ID,
+			FormVersion: r.FormVersion,
+			Answers:     json.RawMessage(r.Answers),
+			CreatedAt:   r.CreatedAt.Time,
+		}
+	}
+	return out, nil
+}
+
 // DeleteSubmission удаляет один ответ в пределах формы; возвращает число удалённых
 // строк (0 → ответа нет или он принадлежит другой форме).
 func (Repo) DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {

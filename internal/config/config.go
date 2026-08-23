@@ -96,6 +96,18 @@ type Config struct {
 	YandexOAuthClientID     string
 	YandexOAuthClientSecret string
 
+	// GoogleOAuth* — приложение Google Cloud для интеграции с Таблицами
+	// (фаза 25). Не вход: этим приложением продукт ходит в чужой Диск от имени
+	// человека, поэтому у него другой набор scope и другой экран согласия.
+	// Пусто — интеграция выключена на контуре, кабинет работает как раньше.
+	GoogleOAuthClientID     string
+	GoogleOAuthClientSecret string
+	// GooglePickerAPIKey — браузерный ключ Google Cloud для окна выбора файла
+	// (Google Picker). Отдельный от OAuth-клиента: Picker требует именно API-key,
+	// а не секрет приложения. Пусто — кнопка «Выбрать на Google Диске» не
+	// показывается, остальная интеграция работает как раньше.
+	GooglePickerAPIKey string
+
 	// Mail* — исходящая транзакционная почта (почтовая фаза). Транспорт — смысловой
 	// флаг контура (не имя окружения): dev/prod-local пишут письма в лог (провайдер
 	// не нужен), прод отдаёт их провайдеру. MailFrom — адрес отправителя в письмах;
@@ -113,6 +125,11 @@ type Config struct {
 	MailSMTPUsername string
 	MailSMTPPassword string
 	MailSMTPTLS      string // starttls | implicit | none (см. MailSMTPTLS* ниже)
+}
+
+// GoogleOAuthEnabled — задано ли приложение Google для интеграций.
+func (c Config) GoogleOAuthEnabled() bool {
+	return c.GoogleOAuthClientID != "" && c.GoogleOAuthClientSecret != ""
 }
 
 // YandexOAuthEnabled — заданы ли обе половины приложения Яндекс ID.
@@ -188,6 +205,10 @@ func Load() (Config, error) {
 	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
 	cfg.YandexOAuthClientID = os.Getenv("YANDEX_OAUTH_CLIENT_ID")
 	cfg.YandexOAuthClientSecret = os.Getenv("YANDEX_OAUTH_CLIENT_SECRET")
+	// Опциональные (нет проекта в Google Cloud — интеграция просто выключена).
+	cfg.GoogleOAuthClientID = os.Getenv("GOOGLE_OAUTH_CLIENT_ID")
+	cfg.GoogleOAuthClientSecret = os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+	cfg.GooglePickerAPIKey = os.Getenv("GOOGLE_PICKER_API_KEY")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -241,6 +262,13 @@ func Load() (Config, error) {
 	// кнопка входа просто исчезла бы с экрана без единой строки в логе.
 	if (cfg.YandexOAuthClientID == "") != (cfg.YandexOAuthClientSecret == "") {
 		return Config{}, fmt.Errorf("YANDEX_OAUTH_CLIENT_ID and YANDEX_OAUTH_CLIENT_SECRET: set both or neither")
+	}
+
+	// Половина приложения Google — тот же довод: молча выключенная интеграция
+	// не оставляет в логе ни строки, а человек видит «не настроено» и идёт
+	// искать причину в консоли Google, где всё в порядке.
+	if (cfg.GoogleOAuthClientID == "") != (cfg.GoogleOAuthClientSecret == "") {
+		return Config{}, fmt.Errorf("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET: set both or neither")
 	}
 
 	// Транспорт почты валидируется по явному списку: неизвестное значение — почти

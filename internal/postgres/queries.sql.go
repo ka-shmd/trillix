@@ -682,6 +682,29 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteFormIntegration = `-- name: DeleteFormIntegration :execrows
+DELETE FROM form_integrations WHERE id = $1 AND form_id = $2
+`
+
+type DeleteFormIntegrationParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Удаление ОДНОЙ связки. form_id в условии не украшение: id связки приезжает из
+// адреса, и связка обязана принадлежать той форме, к которой спрашивают доступ
+// (инвариант 1: id из URL правом доступа не является).
+//
+// Сама таблица в Диске автора остаётся: продукт не трогает чужие файлы и уж тем
+// более не удаляет их за человека.
+func (q *Queries) DeleteFormIntegration(ctx context.Context, arg DeleteFormIntegrationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFormIntegration, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteIdentity = `-- name: DeleteIdentity :execrows
 DELETE FROM user_identities WHERE user_id = $1 AND provider = $2
 `
@@ -698,6 +721,27 @@ func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteIntegrationAccount = `-- name: DeleteIntegrationAccount :one
+DELETE FROM integration_accounts
+WHERE workspace_id = $1 AND provider = $2
+RETURNING refresh_token
+`
+
+type DeleteIntegrationAccountParams struct {
+	WorkspaceID uuid.UUID
+	Provider    string
+}
+
+// Отключение. RETURNING отдаёт токен на отзыв у провайдера: прочитать его
+// отдельным запросом ДО удаления значит открыть окно, в котором строка уже
+// прочитана, но ещё жива. Формы, привязанные к этому аккаунту, уносит каскад.
+func (q *Queries) DeleteIntegrationAccount(ctx context.Context, arg DeleteIntegrationAccountParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	var refresh_token []byte
+	err := row.Scan(&refresh_token)
+	return refresh_token, err
 }
 
 const deleteMember = `-- name: DeleteMember :execrows
@@ -943,6 +987,23 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.AvatarKey,
 	)
 	return i, err
+}
+
+const finishFormIntegrationBackfill = `-- name: FinishFormIntegrationBackfill :exec
+UPDATE form_integrations
+SET status = 'live'
+WHERE id = $1
+`
+
+// Догрузка кончилась: доставка становится живой.
+//
+// Отсечка НЕ гасится и остаётся границей переноса навсегда. Она нужна и после:
+// живое событие, поставленное до старта переноса и доехавшее после его конца,
+// относится к ответу, который перенос уже положил в лист, — без границы он лёг
+// бы туда вторым разом.
+func (q *Queries) FinishFormIntegrationBackfill(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, finishFormIntegrationBackfill, id)
+	return err
 }
 
 const getAccessContext = `-- name: GetAccessContext :one
@@ -1412,6 +1473,114 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.id = $1
+`
+
+type GetFormIntegrationByIDRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	Name            string
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Enabled         bool
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	WorkspaceID     uuid.UUID
+	ExternalEmail   string
+}
+
+// Привязка по своему id — путь фоновой доставки: событие несёт id привязки, а не
+// формы, поэтому отвязка и повторная привязка не заставят старое событие писать
+// в новую таблицу.
+func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (GetFormIntegrationByIDRow, error) {
+	row := q.db.QueryRow(ctx, getFormIntegrationByID, id)
+	var i GetFormIntegrationByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.FormID,
+		&i.AccountID,
+		&i.Name,
+		&i.SpreadsheetID,
+		&i.SpreadsheetUrl,
+		&i.SheetID,
+		&i.SheetTitle,
+		&i.Columns,
+		&i.Enabled,
+		&i.Status,
+		&i.BackfillBefore,
+		&i.LastError,
+		&i.LastDeliveredAt,
+		&i.WorkspaceID,
+		&i.ExternalEmail,
+	)
+	return i, err
+}
+
+const getIntegrationAccount = `-- name: GetIntegrationAccount :one
+SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+FROM integration_accounts
+WHERE workspace_id = $1 AND provider = $2
+`
+
+type GetIntegrationAccountParams struct {
+	WorkspaceID uuid.UUID
+	Provider    string
+}
+
+// Подключение пространства. refresh_token едет шифротекстом и наружу модуля не
+// выходит: расшифровывает его только сервис, и только чтобы сходить к провайдеру.
+func (q *Queries) GetIntegrationAccount(ctx context.Context, arg GetIntegrationAccountParams) (IntegrationAccount, error) {
+	row := q.db.QueryRow(ctx, getIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	var i IntegrationAccount
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.ExternalAccountID,
+		&i.ExternalEmail,
+		&i.RefreshToken,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.ConnectedAt,
+	)
+	return i, err
+}
+
+const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
+SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+FROM integration_accounts
+WHERE id = $1
+`
+
+func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (IntegrationAccount, error) {
+	row := q.db.QueryRow(ctx, getIntegrationAccountByID, id)
+	var i IntegrationAccount
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.ExternalAccountID,
+		&i.ExternalEmail,
+		&i.RefreshToken,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.ConnectedAt,
+	)
+	return i, err
+}
+
 const getInvitation = `-- name: GetInvitation :one
 SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
 FROM invitations i
@@ -1695,6 +1864,43 @@ func (q *Queries) GetSubmissionFileForAnswer(ctx context.Context, arg GetSubmiss
 	return i, err
 }
 
+const getSubmissionForDelivery = `-- name: GetSubmissionForDelivery :one
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota
+`
+
+type GetSubmissionForDeliveryParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetSubmissionForDeliveryRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Один ответ для фоновой доставки во внешнюю таблицу (фаза 25). form_id в
+// условии не украшение: id ответа приезжает из outbox, и связка «этот ответ
+// принадлежит этой форме» проверяется здесь, а не подразумевается.
+//
+// NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
+// до оплаты, не должен всплыть у него же в Google Таблице.
+func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissionForDeliveryParams) (GetSubmissionForDeliveryRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionForDelivery, arg.ID, arg.FormID)
+	var i GetSubmissionForDeliveryRow
+	err := row.Scan(
+		&i.ID,
+		&i.Answers,
+		&i.CreatedAt,
+		&i.FormVersion,
+	)
+	return i, err
+}
+
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
 SELECT u.email, coalesce(f.name, f.title) AS title
 FROM forms f
@@ -1874,6 +2080,43 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 	return i, err
 }
 
+const insertFormIntegration = `-- name: InsertFormIntegration :exec
+INSERT INTO form_integrations (
+    id, form_id, account_id, name, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+`
+
+type InsertFormIntegrationParams struct {
+	ID             uuid.UUID
+	FormID         uuid.UUID
+	AccountID      uuid.UUID
+	Name           string
+	SpreadsheetID  string
+	SpreadsheetUrl string
+	SheetID        int32
+	SheetTitle     string
+	Columns        []byte
+	Status         string
+}
+
+// Привязка формы к созданной таблице. Уникальный индекс по form_id держит рамку
+// «одна таблица на форму»: повторная привязка — это сначала отвязка.
+func (q *Queries) InsertFormIntegration(ctx context.Context, arg InsertFormIntegrationParams) error {
+	_, err := q.db.Exec(ctx, insertFormIntegration,
+		arg.ID,
+		arg.FormID,
+		arg.AccountID,
+		arg.Name,
+		arg.SpreadsheetID,
+		arg.SpreadsheetUrl,
+		arg.SheetID,
+		arg.SheetTitle,
+		arg.Columns,
+		arg.Status,
+	)
+	return err
+}
+
 const insertFormVersion = `-- name: InsertFormVersion :one
 INSERT INTO form_versions (id, form_id, version, schema)
 VALUES ($1, $2, $3, $4)
@@ -2002,6 +2245,32 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 	return err
 }
 
+const listEnabledFormIntegrations = `-- name: ListEnabledFormIntegrations :many
+SELECT id FROM form_integrations WHERE form_id = $1 AND enabled
+`
+
+// Кому доставлять принятый ответ. Выключенные связки пропускаются здесь, а не
+// в диспетчере: событие, которое некому доставить, лучше не заводить вовсе.
+func (q *Queries) ListEnabledFormIntegrations(ctx context.Context, formID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listEnabledFormIntegrations, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormFileKeys = `-- name: ListFormFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -2069,6 +2338,78 @@ func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFo
 	for rows.Next() {
 		var i ListFormFilesRow
 		if err := rows.Scan(&i.ID, &i.OriginalName, &i.SizeBytes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFormIntegrations = `-- name: ListFormIntegrations :many
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.form_id = $1
+ORDER BY fi.id
+`
+
+type ListFormIntegrationsRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	Name            string
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Enabled         bool
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	WorkspaceID     uuid.UUID
+	ExternalEmail   string
+}
+
+// Связки формы — их сколько угодно (интеграция это правило доставки, а не
+// состояние формы). Порядок по id: UUIDv7 монотонен по времени, значит в списке
+// они идут в порядке подключения и не прыгают при перерисовке.
+//
+// workspace_id приезжает джойном из аккаунта: он нужен, чтобы спросить право, а
+// второй запрос за ним означал бы окно между проверкой и действием.
+func (q *Queries) ListFormIntegrations(ctx context.Context, formID uuid.UUID) ([]ListFormIntegrationsRow, error) {
+	rows, err := q.db.Query(ctx, listFormIntegrations, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormIntegrationsRow
+	for rows.Next() {
+		var i ListFormIntegrationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FormID,
+			&i.AccountID,
+			&i.Name,
+			&i.SpreadsheetID,
+			&i.SpreadsheetUrl,
+			&i.SheetID,
+			&i.SheetTitle,
+			&i.Columns,
+			&i.Enabled,
+			&i.Status,
+			&i.BackfillBefore,
+			&i.LastError,
+			&i.LastDeliveredAt,
+			&i.WorkspaceID,
+			&i.ExternalEmail,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2667,6 +3008,69 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
+const listSubmissionsForBackfill = `-- name: ListSubmissionsForBackfill :many
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at < $2
+  AND s.id > $4::uuid
+ORDER BY s.id
+LIMIT $3
+`
+
+type ListSubmissionsForBackfillParams struct {
+	FormID    uuid.UUID
+	CreatedAt pgtype.Timestamptz
+	Limit     int32
+	After     uuid.UUID
+}
+
+type ListSubmissionsForBackfillRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+//
+// Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
+// ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
+// Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
+//
+// created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
+// живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
+func (q *Queries) ListSubmissionsForBackfill(ctx context.Context, arg ListSubmissionsForBackfillParams) ([]ListSubmissionsForBackfillRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsForBackfill,
+		arg.FormID,
+		arg.CreatedAt,
+		arg.Limit,
+		arg.After,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmissionsForBackfillRow
+	for rows.Next() {
+		var i ListSubmissionsForBackfillRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Answers,
+			&i.CreatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -2879,6 +3283,40 @@ UPDATE users SET email_verified_at = now() WHERE id = $1
 // подтверждение просто переставит время (но токен одноразовый — не дойдёт).
 func (q *Queries) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markEmailVerified, id)
+	return err
+}
+
+const markFormIntegrationBroken = `-- name: MarkFormIntegrationBroken :exec
+UPDATE form_integrations SET status = 'broken', last_error = $2 WHERE id = $1
+`
+
+type MarkFormIntegrationBrokenParams struct {
+	ID        uuid.UUID
+	LastError pgtype.Text
+}
+
+// Доставка невозможна без человека (доступ отозван, таблица удалена). Причина
+// показывается в кабинете; ретраить такое до конца времён смысла нет.
+func (q *Queries) MarkFormIntegrationBroken(ctx context.Context, arg MarkFormIntegrationBrokenParams) error {
+	_, err := q.db.Exec(ctx, markFormIntegrationBroken, arg.ID, arg.LastError)
+	return err
+}
+
+const markFormIntegrationDelivered = `-- name: MarkFormIntegrationDelivered :exec
+UPDATE form_integrations
+SET last_delivered_at = now(), last_error = NULL,
+    -- Статус возвращается в live только из broken: сломанная интеграция, которая
+    -- заработала, обязана перестать краснеть в кабинете. Идущий ПЕРЕНОС этой
+    -- пометкой не сбивается — иначе первая же доставленная пачка объявила бы
+    -- догрузку законченной, и остальные ответы не доехали бы никогда.
+    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+WHERE id = $1
+`
+
+// Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
+// интеграция, которая заработала, обязана перестать краснеть в кабинете.
+func (q *Queries) MarkFormIntegrationDelivered(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markFormIntegrationDelivered, id)
 	return err
 }
 
@@ -3219,6 +3657,24 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 	return err
 }
 
+const startFormIntegrationBackfill = `-- name: StartFormIntegrationBackfill :exec
+UPDATE form_integrations
+SET status = 'backfilling', backfill_before = $2, last_error = NULL
+WHERE id = $1
+`
+
+type StartFormIntegrationBackfillParams struct {
+	ID             uuid.UUID
+	BackfillBefore pgtype.Timestamptz
+}
+
+// Начало догрузки: статус backfilling и отсечка. Всё, что пришло ДО неё, кладёт
+// догрузка; всё, что после, — живая очередь. Границы не пересекаются.
+func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
+	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
+	return err
+}
+
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one
 UPDATE forms
 SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
@@ -3337,6 +3793,87 @@ func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraft
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateFormIntegrationColumns = `-- name: UpdateFormIntegrationColumns :exec
+UPDATE form_integrations SET columns = $2 WHERE id = $1
+`
+
+type UpdateFormIntegrationColumnsParams struct {
+	ID      uuid.UUID
+	Columns []byte
+}
+
+// Колонки листа изменились (в форме появился новый вопрос). Только добавление:
+// удалённый вопрос свою колонку не теряет, иначе данные прошлых версий уехали бы
+// под чужие заголовки.
+func (q *Queries) UpdateFormIntegrationColumns(ctx context.Context, arg UpdateFormIntegrationColumnsParams) error {
+	_, err := q.db.Exec(ctx, updateFormIntegrationColumns, arg.ID, arg.Columns)
+	return err
+}
+
+const updateFormIntegrationSettings = `-- name: UpdateFormIntegrationSettings :execrows
+UPDATE form_integrations SET name = $3, enabled = $4 WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormIntegrationSettingsParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Name    string
+	Enabled bool
+}
+
+// Правка связки: подпись и тумблер. Тем же запросом, что и проверка
+// принадлежности форме.
+func (q *Queries) UpdateFormIntegrationSettings(ctx context.Context, arg UpdateFormIntegrationSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormIntegrationSettings,
+		arg.ID,
+		arg.FormID,
+		arg.Name,
+		arg.Enabled,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateFormIntegrationTarget = `-- name: UpdateFormIntegrationTarget :execrows
+UPDATE form_integrations
+SET spreadsheet_id = $3, spreadsheet_url = $4, sheet_id = $5, sheet_title = $6,
+    columns = $7, status = $8, backfill_before = NULL, last_error = NULL
+WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormIntegrationTargetParams struct {
+	ID             uuid.UUID
+	FormID         uuid.UUID
+	SpreadsheetID  string
+	SpreadsheetUrl string
+	SheetID        int32
+	SheetTitle     string
+	Columns        []byte
+	Status         string
+}
+
+// Связка переезжает в другой лист (правка на том же экране, что и подключение).
+// Строки, уже доставленные в прежний лист, остаются там: продукт не убирает за
+// человеком в его же таблице.
+func (q *Queries) UpdateFormIntegrationTarget(ctx context.Context, arg UpdateFormIntegrationTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormIntegrationTarget,
+		arg.ID,
+		arg.FormID,
+		arg.SpreadsheetID,
+		arg.SpreadsheetUrl,
+		arg.SheetID,
+		arg.SheetTitle,
+		arg.Columns,
+		arg.Status,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateFormName = `-- name: UpdateFormName :one
@@ -3541,6 +4078,50 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.LastBlockID,
 		arg.Seq,
 		arg.Meta,
+	)
+	return err
+}
+
+const upsertIntegrationAccount = `-- name: UpsertIntegrationAccount :exec
+
+INSERT INTO integration_accounts (
+    id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (workspace_id, provider) DO UPDATE SET
+    external_account_id = EXCLUDED.external_account_id,
+    external_email      = EXCLUDED.external_email,
+    refresh_token       = EXCLUDED.refresh_token,
+    scopes              = EXCLUDED.scopes,
+    connected_by        = EXCLUDED.connected_by,
+    connected_at        = now()
+`
+
+type UpsertIntegrationAccountParams struct {
+	ID                uuid.UUID
+	WorkspaceID       uuid.UUID
+	Provider          string
+	ExternalAccountID string
+	ExternalEmail     string
+	RefreshToken      []byte
+	Scopes            string
+	ConnectedBy       uuid.UUID
+}
+
+// Запросы модуля integrations. Схема — migrations/0029_integrations. Генерация: `make sqlc`.
+// Подключение аккаунта. Повторное подключение (сменил аккаунт Google, отозвал
+// доступ, переподключается после ротации ключа) ЗАМЕНЯЕТ строку, а не плодит
+// вторую: одно подключение на провайдера в пространстве — рамка MVP, и она же
+// уникальный индекс, служащий здесь арбитром ON CONFLICT.
+func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegrationAccountParams) error {
+	_, err := q.db.Exec(ctx, upsertIntegrationAccount,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Provider,
+		arg.ExternalAccountID,
+		arg.ExternalEmail,
+		arg.RefreshToken,
+		arg.Scopes,
+		arg.ConnectedBy,
 	)
 	return err
 }

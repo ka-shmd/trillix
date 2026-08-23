@@ -29,6 +29,7 @@
 | [`mentions.md`](mentions.md) | задача вне плана, подстановка ответов в тексте формы (`@`) | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §17 (пишется) |
 | [`thankyou-page.md`](thankyou-page.md) | задача вне плана, страница «Спасибо» блоком полотна и имена страниц | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §6.2, [`SCHEMA.md`](../SCHEMA.md) |
 | [`answer-files.md`](answer-files.md) | фаза 24 `DEV-PLAN` (= 17 `POST-MVP`), загрузка файлов в ответах: блок «файл», приватный бакет, presigned-поток | **не закрыта** — спека живая | [`S3.md`](../S3.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
+| [`integrations-gsheets.md`](integrations-gsheets.md) | фаза 25 `DEV-PLAN` (= часть фазы 15 `POST-MVP`), интеграции формы и первая из них — Google Таблицы | **не закрыта** — спека живая | [`INTEGRATIONS.md`](../INTEGRATIONS.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`account-settings.md`](account-settings.md) | фаза 23 `DEV-PLAN`, настройки аккаунта: профиль, пароль, email, второй фактор, способы входа, удаление | **не закрыта** — спека живая | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md), [`WORKSPACES.md`](../WORKSPACES.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается

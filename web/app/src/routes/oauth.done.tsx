@@ -5,7 +5,7 @@ import {
   OAUTH_MESSAGE_SOURCE,
   oauthOutcomeSchema,
   type OAuthOutcome,
-} from '../features/auth/oauthPopup'
+} from '../shared/oauthPopup'
 
 // Служебный экран отдельного окна входа. Колбэк бэка возвращает браузер сюда,
 // когда поход был начат из окна (?mode=popup): рисовать кабинет в окне 560×680
@@ -42,6 +42,15 @@ function screenFor(outcome: OAuthOutcome): string {
     case 'link_expired':
     case 'link_failed':
       return '/settings/account?link=' + outcome.slice('link_'.length)
+    case 'integration_ok':
+    case 'integration_denied':
+    case 'integration_expired':
+    case 'integration_forbidden':
+    case 'integration_failed':
+      // Опекуна нет, а какая форма подключалась — знала только вкладка,
+      // открывшая окно. Список форм — ближайший честный экран; исход человек
+      // увидит в табе «Интеграции», когда откроет форму.
+      return '/forms'
     default:
       return '/login?oauth=' + outcome
   }

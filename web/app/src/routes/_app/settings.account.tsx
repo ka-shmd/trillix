@@ -20,7 +20,7 @@ import {
   useDeleteAvatar,
 } from '../../features/auth/queries'
 import { identityLinkUrl } from '../../features/auth/api'
-import { useOAuthPopup, type OAuthOutcome } from '../../features/auth/oauthPopup'
+import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { OAuthWaitingDialog } from '../../features/auth/OAuthWaitingDialog'
 import { providerTitle } from '../../entities/identity'
 import { formatDate } from '../../shared/format'

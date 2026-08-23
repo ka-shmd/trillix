@@ -28,6 +28,12 @@ type VersionedSchema struct {
 // Метаколонки идут перед вопросами: id ответа, время, версия формы.
 var csvMetaHeader = []string{"ID ответа", "Отправлен", "Версия формы"}
 
+// csvMetaColumns — КЛЮЧИ тех же метаколонок. Ключ и подпись — разные вещи:
+// подпись человек читает, по ключу интеграция сопоставляет колонку чужой
+// таблицы со своей моделью (docs/design/integrations-gsheets.md §8). Подчерк
+// впереди отделяет их от id блоков (UUIDv7) навсегда.
+var csvMetaColumns = []string{"_id", "_submitted_at", "_form_version"}
+
 // blockView — то, что нужно от блока при выгрузке: тип, подпись и карта опций
 // (id → label) для резолва choice-ответов.
 type blockView struct {
@@ -85,21 +91,61 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 		b.columns = append(b.columns, q.ID)
 		b.headers = append(b.headers, q.Label)
 	}
-	// Заголовки — тоже пользовательский ввод (label'ы): защищаем от formula injection
-	// единообразно с ячейками ответов (мета-константы структурно безопасны — no-op).
-	for i := range b.headers {
-		b.headers[i] = sanitizeCSVField(b.headers[i])
-	}
 	return b
 }
 
 // Header — строка заголовков CSV (метаколонки + подписи вопросов).
-func (b *CSVBuilder) Header() []string { return b.headers }
+//
+// Заголовки — тоже пользовательский ввод (label'ы), поэтому защищаются от
+// formula injection единообразно с ячейками ответов. Защита живёт ЗДЕСЬ, а не в
+// конструкторе: у выгрузки и у Google Таблиц она разная (там режим вставки RAW,
+// и апостроф остался бы видимым символом в ячейке) — см. SheetHeader.
+func (b *CSVBuilder) Header() []string { return sanitizeRecord(b.headers) }
 
-// Row собирает строку CSV для одного ответа: метаданные + значение каждого вопроса.
+// SheetColumn — колонка внешней таблицы: стабильный ключ и подпись, которую
+// видит человек. Пара, а не два списка: интеграция хранит порядок колонок листа
+// и обязана знать подпись даже для вопроса, которого в форме уже нет (колонка
+// удалённого вопроса остаётся — в ней живут ответы прошлых версий).
+type SheetColumn struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+// SheetColumns — колонки для внешней таблицы: метаколонки, затем вопросы в
+// порядке общей модели. Подписи идут БЕЗ CSV-санитайзинга: значения кладутся
+// режимом, который их не разбирает, и апостроф остался бы видимым в ячейке.
+//
+// Сопоставлять колонку с вопросом по ПОДПИСИ нельзя — первое же переименование
+// перемешало бы данные, поэтому ключ здесь несущий, а подпись — оформление.
+func (b *CSVBuilder) SheetColumns() []SheetColumn {
+	out := make([]SheetColumn, 0, len(csvMetaColumns)+len(b.columns))
+	for i, key := range csvMetaColumns {
+		out = append(out, SheetColumn{Key: key, Label: csvMetaHeader[i]})
+	}
+	for i, key := range b.columns {
+		out = append(out, SheetColumn{Key: key, Label: b.headers[len(csvMetaHeader)+i]})
+	}
+	return out
+}
+
+// Row — строка CSV для одного ответа. Защита от CSV formula injection: ответы
+// респондента недоверенны, и открытые в Excel «=…» исполнились бы формулой.
+// Мета-ячейки (id, время, версия) структурно безопасны — проход по ним no-op.
+func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers map[string]json.RawMessage) []string {
+	return sanitizeRecord(b.row(id, createdAt, version, answers))
+}
+
+// SheetRow — та же строка БЕЗ CSV-санитайзинга: во внешнюю таблицу значения
+// кладутся режимом вставки, который их не разбирает (valueInputOption=RAW), и
+// апостроф-заглушка осталась бы там видимым символом в ячейке.
+func (b *CSVBuilder) SheetRow(id string, createdAt time.Time, version int, answers map[string]json.RawMessage) []string {
+	return b.row(id, createdAt, version, answers)
+}
+
+// row собирает строку для одного ответа: метаданные + значение каждого вопроса.
 // Ячейка пуста, если блока нет в версии ответа или на него не ответили. answers —
 // разобранная карта block_id → сырое значение (как хранится в submissions.answers).
-func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers map[string]json.RawMessage) []string {
+func (b *CSVBuilder) row(id string, createdAt time.Time, version int, answers map[string]json.RawMessage) []string {
 	row := make([]string, 0, len(csvMetaHeader)+len(b.columns))
 	row = append(row, id, createdAt.UTC().Format(time.RFC3339), strconv.Itoa(version))
 
@@ -113,11 +159,6 @@ func (b *CSVBuilder) Row(id string, createdAt time.Time, version int, answers ma
 		}
 		view.files = b.files
 		row = append(row, formatCell(view, raw))
-	}
-	// Защита от CSV formula injection: ответы респондента недоверенны. Мета-ячейки
-	// (id, время, версия) структурно безопасны — проход по ним no-op.
-	for i := range row {
-		row[i] = sanitizeCSVField(row[i])
 	}
 	return row
 }
@@ -195,6 +236,15 @@ func optionLabel(options map[string]string, id string) string {
 // БАЙТ: все триггеры — ASCII, а первый байт многобайтного UTF-8 всегда >= 0x80,
 // поэтому кириллица и прочий не-ASCII не затрагиваются. Идемпотентно: результат
 // начинается с ', который сам не триггер.
+// sanitizeRecord прогоняет запись через защиту от formula injection.
+func sanitizeRecord(record []string) []string {
+	out := make([]string, len(record))
+	for i, f := range record {
+		out[i] = sanitizeCSVField(f)
+	}
+	return out
+}
+
 func sanitizeCSVField(s string) string {
 	if s == "" {
 		return s

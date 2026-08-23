@@ -90,3 +90,33 @@ WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota;
 -- предела). Ключ — хеш form_id (коллизия хешей лишь изредка сериализует две разные
 -- формы — безвредно). xact-версия сама снимается на commit/rollback.
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
+
+-- name: GetSubmissionForDelivery :one
+-- Один ответ для фоновой доставки во внешнюю таблицу (фаза 25). form_id в
+-- условии не украшение: id ответа приезжает из outbox, и связка «этот ответ
+-- принадлежит этой форме» проверяется здесь, а не подразумевается.
+--
+-- NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
+-- до оплаты, не должен всплыть у него же в Google Таблице.
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
+
+-- name: ListSubmissionsForBackfill :many
+-- Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+--
+-- Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
+-- ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
+-- Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
+--
+-- created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
+-- живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at < $2
+  AND s.id > sqlc.arg(after)::uuid
+ORDER BY s.id
+LIMIT $3;

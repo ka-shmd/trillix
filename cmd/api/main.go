@@ -18,6 +18,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
 	"github.com/ka-shmd/trillix/internal/oauth"
@@ -341,6 +342,25 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
+	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
+	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
+	// считал бы себя настроенным. Отсюда объявление переменной интерфейсного
+	// типа и присваивание только при заданных ключах.
+	var googleProvider integrations.Provider
+	if cfg.GoogleOAuthEnabled() {
+		googleProvider = integrations.NewGoogle(
+			cfg.GoogleOAuthClientID,
+			cfg.GoogleOAuthClientSecret,
+			cfg.AppOrigin+"/api/v1/integrations/google/callback",
+		)
+	}
+	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
+		WithPicker(cfg.GooglePickerAPIKey)
+	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
+		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
+	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
+
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
 	if err != nil {
 		return fmt.Errorf("init public forms handler: %w", err)
@@ -395,6 +415,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
 		WithFiles(filesSvc)
+	// Доставка ответов в таблицы (слайс C): пара «submissions ↔ integrations»
+	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
+	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
+	// периодической задачи, иначе канал без транспорта копил бы ретраи.
+	submissionsSvc = submissionsSvc.WithIntegrations(integrationsSvc)
+	integrationsSvc = integrationsSvc.WithDelivery(mailSvc, submissionsSvc)
+	mailSvc = mailSvc.WithTransport(integrations.ChannelSheets, integrationsSvc)
+
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -403,7 +431,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
-		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes)
+		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
+		integrationsHandler.Routes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

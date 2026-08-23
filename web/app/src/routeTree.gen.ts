@@ -33,6 +33,7 @@ import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slu
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
 import { Route as AppFormsSlugManageShareRouteImport } from './routes/_app/forms.$slug._manage.share'
 import { Route as AppFormsSlugManageResponsesRouteImport } from './routes/_app/forms.$slug._manage.responses'
+import { Route as AppFormsSlugManageIntegrationsRouteImport } from './routes/_app/forms.$slug._manage.integrations'
 import { Route as AppFormsSlugManageFunnelRouteImport } from './routes/_app/forms.$slug._manage.funnel'
 
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
@@ -155,6 +156,12 @@ const AppFormsSlugManageResponsesRoute =
     path: '/responses',
     getParentRoute: () => AppFormsSlugManageRoute,
   } as any)
+const AppFormsSlugManageIntegrationsRoute =
+  AppFormsSlugManageIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
+    getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
 const AppFormsSlugManageFunnelRoute =
   AppFormsSlugManageFunnelRouteImport.update({
     id: '/funnel',
@@ -183,6 +190,7 @@ export interface FileRoutesByFullPath {
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
+  '/forms/$slug/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
@@ -208,6 +216,7 @@ export interface FileRoutesByTo {
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
+  '/forms/$slug/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
@@ -236,6 +245,7 @@ export interface FileRoutesById {
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/_app/forms/$slug/_manage/funnel': typeof AppFormsSlugManageFunnelRoute
+  '/_app/forms/$slug/_manage/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/_app/forms/$slug/_manage/responses': typeof AppFormsSlugManageResponsesRoute
   '/_app/forms/$slug/_manage/share': typeof AppFormsSlugManageShareRoute
   '/_app/forms/$slug/_manage/summary': typeof AppFormsSlugManageSummaryRoute
@@ -263,6 +273,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
     | '/forms/$slug/funnel'
+    | '/forms/$slug/integrations'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
     | '/forms/$slug/summary'
@@ -288,6 +299,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
     | '/forms/$slug/funnel'
+    | '/forms/$slug/integrations'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
     | '/forms/$slug/summary'
@@ -315,6 +327,7 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/embed'
     | '/_app/forms/$slug/_manage/funnel'
+    | '/_app/forms/$slug/_manage/integrations'
     | '/_app/forms/$slug/_manage/responses'
     | '/_app/forms/$slug/_manage/share'
     | '/_app/forms/$slug/_manage/summary'
@@ -499,6 +512,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageResponsesRouteImport
       parentRoute: typeof AppFormsSlugManageRoute
     }
+    '/_app/forms/$slug/_manage/integrations': {
+      id: '/_app/forms/$slug/_manage/integrations'
+      path: '/integrations'
+      fullPath: '/forms/$slug/integrations'
+      preLoaderRoute: typeof AppFormsSlugManageIntegrationsRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
     '/_app/forms/$slug/_manage/funnel': {
       id: '/_app/forms/$slug/_manage/funnel'
       path: '/funnel'
@@ -511,6 +531,7 @@ declare module '@tanstack/react-router' {
 
 interface AppFormsSlugManageRouteChildren {
   AppFormsSlugManageFunnelRoute: typeof AppFormsSlugManageFunnelRoute
+  AppFormsSlugManageIntegrationsRoute: typeof AppFormsSlugManageIntegrationsRoute
   AppFormsSlugManageResponsesRoute: typeof AppFormsSlugManageResponsesRoute
   AppFormsSlugManageShareRoute: typeof AppFormsSlugManageShareRoute
   AppFormsSlugManageSummaryRoute: typeof AppFormsSlugManageSummaryRoute
@@ -518,6 +539,7 @@ interface AppFormsSlugManageRouteChildren {
 
 const AppFormsSlugManageRouteChildren: AppFormsSlugManageRouteChildren = {
   AppFormsSlugManageFunnelRoute: AppFormsSlugManageFunnelRoute,
+  AppFormsSlugManageIntegrationsRoute: AppFormsSlugManageIntegrationsRoute,
   AppFormsSlugManageResponsesRoute: AppFormsSlugManageResponsesRoute,
   AppFormsSlugManageShareRoute: AppFormsSlugManageShareRoute,
   AppFormsSlugManageSummaryRoute: AppFormsSlugManageSummaryRoute,

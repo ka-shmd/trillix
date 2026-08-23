@@ -56,6 +56,9 @@ x-app-env: &app-env
   # добавленная сюда, не доезжает до контейнера, сколько её ни клади в .env.
   YANDEX_OAUTH_CLIENT_ID: ${YANDEX_OAUTH_CLIENT_ID:-}
   YANDEX_OAUTH_CLIENT_SECRET: ${YANDEX_OAUTH_CLIENT_SECRET:-}
+  GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+  GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+  GOOGLE_PICKER_API_KEY: ${GOOGLE_PICKER_API_KEY:-}
 
 # Ротация docker-логов (фаза 10, шаг 4). Без неё json-file-логи растут безгранично и
 # со временем забивают диск VPS — Postgres перестаёт писать, прод ложится, причём
