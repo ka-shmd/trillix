@@ -102,6 +102,11 @@ type Config struct {
 	// Пусто — интеграция выключена на контуре, кабинет работает как раньше.
 	GoogleOAuthClientID     string
 	GoogleOAuthClientSecret string
+	// GooglePickerAPIKey — браузерный ключ Google Cloud для окна выбора файла
+	// (Google Picker). Отдельный от OAuth-клиента: Picker требует именно API-key,
+	// а не секрет приложения. Пусто — кнопка «Выбрать на Google Диске» не
+	// показывается, остальная интеграция работает как раньше.
+	GooglePickerAPIKey string
 
 	// Mail* — исходящая транзакционная почта (почтовая фаза). Транспорт — смысловой
 	// флаг контура (не имя окружения): dev/prod-local пишут письма в лог (провайдер
@@ -203,6 +208,7 @@ func Load() (Config, error) {
 	// Опциональные (нет проекта в Google Cloud — интеграция просто выключена).
 	cfg.GoogleOAuthClientID = os.Getenv("GOOGLE_OAUTH_CLIENT_ID")
 	cfg.GoogleOAuthClientSecret = os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")
+	cfg.GooglePickerAPIKey = os.Getenv("GOOGLE_PICKER_API_KEY")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))

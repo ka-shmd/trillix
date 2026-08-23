@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 import { apiRequest } from '../../shared/api/client'
 import {
   formIntegrationsSchema,
@@ -10,6 +12,15 @@ import {
 
 // Транспорт интеграций. Ответы парсятся Zod-схемой на границе — непровалидированный
 // any внутрь приложения не проходит (web/CLAUDE.md).
+
+// Зеркалит pickerResponse в internal/integrations/handler.go.
+const pickerCredentialsSchema = z.object({
+  accessToken: z.string(),
+  developerKey: z.string(),
+  appId: z.string(),
+})
+
+export type PickerCredentials = z.infer<typeof pickerCredentialsSchema>
 
 export function getFormIntegrations(formId: string): Promise<FormIntegrations> {
   return apiRequest(`/forms/${formId}/integrations`, { schema: formIntegrationsSchema })
@@ -29,6 +40,13 @@ export function createSheet(formId: string, opts: ConnectOptions): Promise<FormS
     body: { name: opts.name, spreadsheetId: opts.spreadsheetId, backfill: opts.backfill },
     schema: formSheetSchema,
   })
+}
+
+// Credentials окна выбора файла: живой токен Google на час. Запрашиваются по
+// нажатию кнопки, а не при показе экрана, — токен не должен лежать в стейте
+// страницы просто так.
+export function getPickerCredentials(formId: string): Promise<PickerCredentials> {
+  return apiRequest(`/forms/${formId}/integrations/google/picker`, { schema: pickerCredentialsSchema })
 }
 
 // Таблицы для выбора в окне. Запрашиваются при его открытии: список живёт у

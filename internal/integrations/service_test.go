@@ -180,6 +180,8 @@ type fakeProvider struct {
 
 func (f *fakeProvider) Provider() string { return "google" }
 
+func (f *fakeProvider) AppID() string { return "442272803444" }
+
 func (f *fakeProvider) AuthURL(state, _ string) string {
 	return "https://provider.example/auth?state=" + state
 }
@@ -630,5 +632,63 @@ func TestConnectForm_NameTooLong(t *testing.T) {
 	}
 	if store.insertedLnk != nil {
 		t.Error("связка записана с недопустимой подписью")
+	}
+}
+
+// Окно выбора файла на Диске: браузер получает живой токен Google — и только по
+// нажатию кнопки, только при подключённом аккаунте и только с правом на правку
+// формы. Номер проекта берётся из client_id, а не из отдельной переменной.
+func TestPicker(t *testing.T) {
+	store := &fakeStore{conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithPicker("browser-api-key")
+
+	cred, err := svc.Picker(context.Background(), testUser, testForm)
+	if err != nil {
+		t.Fatalf("picker: %v", err)
+	}
+	if cred.AccessToken != "at" || cred.DeveloperKey != "browser-api-key" {
+		t.Fatalf("credentials = %+v", cred)
+	}
+	if cred.AppID != "442272803444" {
+		t.Errorf("номер проекта = %q", cred.AppID)
+	}
+}
+
+// Ключ окна выбора не задан на контуре — ручки нет вовсе, и экран кнопку не
+// рисует: обещать выбор, который не откроется, нельзя.
+func TestPicker_NotConfigured(t *testing.T) {
+	svc := newFormService(fakeAccess{}, &fakeStore{conn: sealedConn(t)}, fakeForms{form: linkedForm()}, &fakeProvider{})
+
+	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
+	}
+	st, err := svc.Status(context.Background(), testUser, testWS)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if st.PickerEnabled {
+		t.Error("экран обещает выбор файла без ключа")
+	}
+}
+
+// Без подключённого аккаунта выбирать нечем — 422 с человеческим текстом, а не
+// пустой токен.
+func TestPicker_WithoutAccount(t *testing.T) {
+	svc := newFormService(fakeAccess{}, &fakeStore{getErr: pgx.ErrNoRows}, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithPicker("browser-api-key")
+
+	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+}
+
+// Чужая форма не раскрывается: 404 и никакого токена.
+func TestPicker_StrangerGetsNotFound(t *testing.T) {
+	svc := newFormService(fakeAccess{}, &fakeStore{}, fakeForms{getErr: domain.ErrNotFound}, &fakeProvider{}).
+		WithPicker("browser-api-key")
+
+	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
 }

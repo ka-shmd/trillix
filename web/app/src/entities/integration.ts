@@ -10,6 +10,10 @@ export const integrationAccountSchema = z.object({
   // подключена» — разные экраны, и путать их значит советовать человеку нажать
   // кнопку, которой у него не появится.
   enabled: z.boolean(),
+  // pickerEnabled — настроено ли окно выбора файла на Диске (нужен отдельный
+  // ключ). Отдельно от enabled: интеграция работает и без него — просто без
+  // «выбрать существующую чужую таблицу».
+  pickerEnabled: z.boolean().default(false),
   connected: z.boolean(),
   email: z.string().optional(),
   connectedAt: z.string().optional(),

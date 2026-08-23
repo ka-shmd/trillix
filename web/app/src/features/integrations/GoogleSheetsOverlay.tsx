@@ -2,9 +2,10 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
 
-import type { FormIntegrations } from '../../entities/integration'
+import type { FormIntegrations, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
-import { startUrl } from './api'
+import { getPickerCredentials, startUrl } from './api'
+import { pickSpreadsheet } from './picker'
 import {
   spreadsheetsQueryOptions,
   useCreateSheet,
@@ -127,25 +128,13 @@ function SetupBody({
 
       <ConnectedAccountField workspaceId={workspaceId} account={account} />
 
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="integration-spreadsheet">Таблица</Label>
-        <Select value={spreadsheet} onValueChange={setSpreadsheet}>
-          <SelectTrigger id="integration-spreadsheet" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
-            {(sheets.data ?? []).map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          У выбранной книги появится отдельный лист для этой формы.
-        </p>
-      </div>
+      <SpreadsheetField
+        formId={formId}
+        value={spreadsheet}
+        onChange={setSpreadsheet}
+        options={sheets.data ?? []}
+        pickerEnabled={account.pickerEnabled}
+      />
 
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -180,6 +169,89 @@ function SetupBody({
       >
         Подключить Google Таблицы
       </Button>
+    </div>
+  )
+}
+
+// SpreadsheetField — куда класть ответы: новая книга, одна из созданных нами
+// или любая своя таблица через окно выбора Google.
+//
+// Выбор с Диска нужен потому, что под scope drive.file «вставьте ссылку на свою
+// таблицу» не работает в принципе: сервер не видит файл, которого не создавал.
+// Picker — единственный способ дать выбрать свой файл, не прося доступ ко всему
+// Диску (ADR §10).
+function SpreadsheetField({
+  formId,
+  value,
+  onChange,
+  options,
+  pickerEnabled,
+}: {
+  formId: string
+  value: string
+  onChange: (value: string) => void
+  options: SpreadsheetRef[]
+  pickerEnabled: boolean
+}) {
+  // picked — выбранная на Диске книга: её нет в списке созданных нами, поэтому
+  // она добавляется отдельным пунктом, иначе Select не смог бы её показать.
+  const [picked, setPicked] = useState<SpreadsheetRef | null>(null)
+  const [pickerError, setPickerError] = useState('')
+  const [opening, setOpening] = useState(false)
+
+  async function openPicker() {
+    setPickerError('')
+    setOpening(true)
+    try {
+      const chosen = await pickSpreadsheet(await getPickerCredentials(formId))
+      // null — окно закрыли, ничего не выбрав. Это не ошибка и не повод что-то
+      // менять на экране.
+      if (chosen) {
+        setPicked(chosen)
+        onChange(chosen.id)
+      }
+    } catch {
+      setPickerError('Не удалось открыть окно выбора. Попробуйте ещё раз.')
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="integration-spreadsheet">Таблица</Label>
+      <div className="flex gap-2">
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger id="integration-spreadsheet" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
+            {options.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+            {picked && !options.some((s) => s.id === picked.id) && (
+              <SelectItem value={picked.id}>{picked.name}</SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+        {pickerEnabled && (
+          <Button variant="outline" disabled={opening} onClick={openPicker}>
+            {opening ? 'Открываем…' : 'Выбрать на Диске'}
+          </Button>
+        )}
+      </div>
+      {pickerError && (
+        <p role="alert" className="text-xs text-destructive">
+          {pickerError}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        У выбранной книги появится отдельный лист для этой формы. В списке — таблицы, созданные
+        Trillix; любую другую свою можно выбрать на Диске.
+      </p>
     </div>
   )
 }

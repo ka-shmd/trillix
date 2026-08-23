@@ -53,6 +53,7 @@ type integrationsService interface {
 	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
 	ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error)
 	Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error)
+	Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error)
 	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID uuid.UUID) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
@@ -96,6 +97,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// поэтому чужих файлов Диска он не раскрывает.
 	mux.Handle("GET /api/v1/forms/{id}/integrations/google/spreadsheets",
 		h.requireAuth(http.HandlerFunc(h.spreadsheets)))
+	// Credentials окна выбора файла на Диске. Отдельной ручкой, а не в состоянии:
+	// в ответе живой access-токен Google, и раздавать его на каждый показ таба
+	// нельзя — только по нажатию кнопки выбора.
+	mux.Handle("GET /api/v1/forms/{id}/integrations/google/picker",
+		h.requireAuth(http.HandlerFunc(h.picker)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google/refill",
@@ -114,11 +120,14 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 }
 
 type accountResponse struct {
-	Enabled     bool    `json:"enabled"`
-	Connected   bool    `json:"connected"`
-	Email       string  `json:"email,omitempty"`
-	ConnectedAt *string `json:"connectedAt,omitempty"`
-	CanManage   bool    `json:"canManage"`
+	Enabled bool `json:"enabled"`
+	// PickerEnabled — настроено ли окно выбора файла на Диске (нужен отдельный
+	// API-key). Экран рисует по нему кнопку выбора.
+	PickerEnabled bool    `json:"pickerEnabled"`
+	Connected     bool    `json:"connected"`
+	Email         string  `json:"email,omitempty"`
+	ConnectedAt   *string `json:"connectedAt,omitempty"`
+	CanManage     bool    `json:"canManage"`
 }
 
 // sheetResponse — привязка формы. Отдельным объектом (а не полями вперемешку с
@@ -154,10 +163,11 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	resp := formStatusResponse{
 		WorkspaceID: st.WorkspaceID.String(),
 		Account: accountResponse{
-			Enabled:   st.Account.Enabled,
-			Connected: st.Account.Connected,
-			Email:     st.Account.Email,
-			CanManage: st.Account.CanManage,
+			Enabled:       st.Account.Enabled,
+			PickerEnabled: st.Account.PickerEnabled,
+			Connected:     st.Account.Connected,
+			Email:         st.Account.Email,
+			CanManage:     st.Account.CanManage,
 		},
 	}
 	if st.Account.Connected {
@@ -208,6 +218,30 @@ func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, toSheetResponse(link))
+}
+
+type pickerResponse struct {
+	AccessToken  string `json:"accessToken"`
+	DeveloperKey string `json:"developerKey"`
+	AppID        string `json:"appId"`
+}
+
+func (h *Handler) picker(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+
+	cred, err := h.svc.Picker(r.Context(), user.ID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Учётные данные: промежуточный кэш, сохранивший ответ, раздавал бы чужой
+	// токен (тот же довод, что у подписи скачивания файла ответа).
+	w.Header().Set("Cache-Control", "no-store")
+	// Конверсия, а не сборка по полю: DTO намеренно повторяет тип сервиса.
+	httpserver.WriteJSON(w, r, http.StatusOK, pickerResponse(cred))
 }
 
 type spreadsheetResponse struct {

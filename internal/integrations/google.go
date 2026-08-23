@@ -118,6 +118,14 @@ func NewGoogle(clientID, clientSecret, redirectURI string) *Google {
 // Provider — имя в колонке integration_accounts.provider и в адресах.
 func (g *Google) Provider() string { return "google" }
 
+// AppID — номер проекта Google Cloud. Он же префикс client_id
+// («442272803444-xxxx.apps.googleusercontent.com»), поэтому отдельной
+// переменной окружения не заводим: два источника одного числа однажды разойдутся.
+func (g *Google) AppID() string {
+	id, _, _ := strings.Cut(g.clientID, "-")
+	return id
+}
+
 // AuthURL — ссылка на экран согласия.
 //
 // access_type=offline и prompt=consent — не перестраховка: без offline

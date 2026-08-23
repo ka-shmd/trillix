@@ -242,6 +242,10 @@ YANDEX_OAUTH_CLIENT_SECRET=__YANDEX_PROD_CLIENT_SECRET__
 # Обе строки пустые = интеграция выключена (кабинет работает как раньше).
 GOOGLE_OAUTH_CLIENT_ID=__GOOGLE_PROD_CLIENT_ID__
 GOOGLE_OAUTH_CLIENT_SECRET=__GOOGLE_PROD_CLIENT_SECRET__
+# Браузерный API-key того же проекта — окно выбора файла на Диске.
+# Требует включённого Google Picker API; в консоли ограничить по HTTP-referrer
+# (https://app.trillix.ru/*) и по API. Пусто = кнопки выбора нет.
+GOOGLE_PICKER_API_KEY=__GOOGLE_PICKER_API_KEY__
 EOF
 chmod 600 .env
 ```

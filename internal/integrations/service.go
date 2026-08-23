@@ -62,6 +62,8 @@ type Provider interface {
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
 	AddSheet(ctx context.Context, accessToken, spreadsheetID, title string) (Spreadsheet, error)
 	ListSpreadsheets(ctx context.Context, accessToken string) ([]SpreadsheetRef, error)
+	// AppID — номер проекта Google Cloud (для окна выбора файла).
+	AppID() string
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
 	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
 	AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error
@@ -78,7 +80,9 @@ type Service struct {
 	// WithDelivery; nil означает «сборка без доставки» (её нет в тестах привязки).
 	outbox      Outbox
 	submissions Submissions
-	google      Provider
+	// pickerKey — браузерный ключ для окна выбора файла (см. WithPicker).
+	pickerKey string
+	google    Provider
 	// key — общий секрет приложения (FORM_TOKEN_SECRET). Из него HKDF выводит
 	// ключ шифрования refresh-токенов; сам он здесь не используется ни для чего
 	// другого и наружу не отдаётся.
@@ -87,6 +91,14 @@ type Service struct {
 
 func NewService(db postgres.DBTX, repo Store, access Access, f Forms, google Provider, key []byte) *Service {
 	return &Service{db: db, repo: repo, access: access, forms: f, google: google, key: key}
+}
+
+// WithPicker включает окно выбора файла на Google Диске. Ключ — браузерный
+// API-key из того же проекта Google Cloud; пусто = кнопки выбора нет, и
+// интеграция работает как раньше (создать новую или взять созданную нами).
+func (s *Service) WithPicker(apiKey string) *Service {
+	s.pickerKey = apiKey
+	return s
 }
 
 // Enabled отвечает, настроен ли провайдер на этом контуре. Не настроен (нет
@@ -100,11 +112,13 @@ type Status struct {
 	// от Connected: «интеграции здесь нет вовсе» и «есть, но не подключена» —
 	// разные экраны, и путать их значит советовать человеку нажать кнопку,
 	// которой у него не появится.
-	Enabled     bool
-	Connected   bool
-	Email       string
-	ConnectedBy uuid.UUID
-	ConnectedAt time.Time
+	Enabled bool
+	// PickerEnabled — настроено ли окно выбора файла на Диске (WithPicker).
+	PickerEnabled bool
+	Connected     bool
+	Email         string
+	ConnectedBy   uuid.UUID
+	ConnectedAt   time.Time
 	// CanManage — может ли спрашивающий подключать и отключать. Экран рисует
 	// кнопку по нему, а не по роли: роль вне internal/workspaces не спрашивают.
 	CanManage bool
@@ -125,22 +139,24 @@ func (s *Service) Status(ctx context.Context, userID, workspaceID uuid.UUID) (St
 	if !s.Enabled() {
 		return Status{CanManage: canManage}, nil
 	}
+	picker := s.PickerAvailable()
 
 	conn, err := s.repo.Get(ctx, s.db, workspaceID, s.google.Provider())
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Нет подключения — штатное состояние экрана, а не ошибка.
-		return Status{Enabled: true, CanManage: canManage}, nil
+		return Status{Enabled: true, PickerEnabled: picker, CanManage: canManage}, nil
 	}
 	if err != nil {
 		return Status{}, fmt.Errorf("integration status: %w", err)
 	}
 	return Status{
-		Enabled:     true,
-		Connected:   true,
-		Email:       conn.Email,
-		ConnectedBy: conn.ConnectedBy,
-		ConnectedAt: conn.ConnectedAt,
-		CanManage:   canManage,
+		Enabled:       true,
+		PickerEnabled: picker,
+		Connected:     true,
+		Email:         conn.Email,
+		ConnectedBy:   conn.ConnectedBy,
+		ConnectedAt:   conn.ConnectedAt,
+		CanManage:     canManage,
 	}, nil
 }
 
@@ -438,6 +454,58 @@ func (s *Service) newSheet(ctx context.Context, token string, form forms.Form, s
 		return s.google.CreateSpreadsheet(ctx, token, spreadsheetTitle(form), sheetTitle)
 	}
 	return s.google.AddSheet(ctx, token, spreadsheetID, sheetTitleForForm(form))
+}
+
+// PickerCredentials — то, чем браузер открывает окно выбора файла Google.
+//
+// AccessToken уезжает В БРАУЗЕР — единственное место, где мы это делаем.
+// Причина: окно выбора рисует сам Google, и токен ему нужен на стороне клиента.
+// Плата названа в ADR §10; смягчение — короткий срок (час) и узкий scope
+// drive.file, то есть токен не открывает ничего, кроме файлов, которые и так
+// создало это приложение для этого же человека.
+type PickerCredentials struct {
+	AccessToken  string
+	DeveloperKey string
+	// AppID — номер проекта Google Cloud. Picker обязан его знать, чтобы выбранный
+	// файл был выдан ИМЕННО НАШЕМУ приложению по scope drive.file. Берётся из
+	// client_id (его префикс до дефиса) — отдельной переменной окружения этот
+	// номер не заслуживает.
+	AppID string
+}
+
+// PickerAvailable — настроено ли окно выбора файла на этом контуре.
+func (s *Service) PickerAvailable() bool { return s.Enabled() && s.pickerKey != "" }
+
+// Picker выдаёт браузеру credentials окна выбора. Право — ActionFormWrite: тот
+// же порог, что у привязки формы к таблице, ради которой окно и открывают.
+func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error) {
+	if !s.PickerAvailable() {
+		return PickerCredentials{}, domain.ErrNotFound
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return PickerCredentials{}, err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return PickerCredentials{}, err
+	}
+
+	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PickerCredentials{}, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
+	}
+	if err != nil {
+		return PickerCredentials{}, fmt.Errorf("picker credentials: %w", err)
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return PickerCredentials{}, err
+	}
+	return PickerCredentials{
+		AccessToken:  token,
+		DeveloperKey: s.pickerKey,
+		AppID:        s.google.AppID(),
+	}, nil
 }
 
 // Spreadsheets — таблицы, куда можно положить ответы этой формы: те, что мы уже

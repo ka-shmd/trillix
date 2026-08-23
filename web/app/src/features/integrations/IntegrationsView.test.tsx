@@ -19,7 +19,7 @@ const FORM_ID = 'form-1'
 function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
   return {
     workspaceId: 'ws-1',
-    account: { enabled: true, connected: false, canManage: true },
+    account: { enabled: true, pickerEnabled: false, connected: false, canManage: true },
     sheet: null,
     ...patch,
   }
@@ -48,11 +48,17 @@ function openDialog() {
   fireEvent.click(screen.getByRole('button', { name: /google таблицы/i }))
 }
 
-const CONNECTED = { enabled: true, connected: true, canManage: true, email: 'author@gmail.com' }
+const CONNECTED = {
+  enabled: true,
+  pickerEnabled: true,
+  connected: true,
+  canManage: true,
+  email: 'author@gmail.com',
+}
 
 describe('список интеграций', () => {
   it('провайдер не настроен на контуре — так и написано в строке', () => {
-    renderView(state({ account: { enabled: false, connected: false, canManage: true } }))
+    renderView(state({ account: { enabled: false, pickerEnabled: false, connected: false, canManage: true } }))
 
     expect(screen.getByRole('button', { name: /google таблицы/i }).textContent).toContain(
       'На этом контуре интеграция не настроена',
@@ -107,11 +113,26 @@ describe('оверлей настройки Google Таблиц', () => {
   })
 
   it('редактор видит интеграцию, но подключает аккаунт владелец', () => {
-    renderView(state({ account: { enabled: true, connected: false, canManage: false } }))
+    renderView(state({ account: { enabled: true, pickerEnabled: false, connected: false, canManage: false } }))
     openDialog()
 
     expect(screen.getByText(/подключить google может владелец/i)).toBeTruthy()
     expect(screen.queryByRole('link', { name: /подключить google$/i })).toBeNull()
+  })
+
+  it('окно выбора файла на Диске не обещается, если оно не настроено на контуре', () => {
+    renderView(state({ account: { ...CONNECTED, pickerEnabled: false } }))
+    openDialog()
+
+    expect(screen.getByLabelText(/таблица/i)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /выбрать на диске/i })).toBeNull()
+  })
+
+  it('окно выбора настроено — кнопка рядом со списком созданных нами таблиц', () => {
+    renderView(state({ account: CONNECTED }))
+    openDialog()
+
+    expect(screen.getByRole('button', { name: /выбрать на диске/i })).toBeTruthy()
   })
 
   it('идёт перенос — «Перезалить всё» недоступно, чтобы не запустить второй', () => {
