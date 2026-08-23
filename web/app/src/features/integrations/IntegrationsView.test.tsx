@@ -190,6 +190,27 @@ describe('оверлей настройки Google Таблиц', () => {
     vi.unstubAllGlobals()
   })
 
+  it('открытие окна выбора не сбрасывает уже набранные настройки', async () => {
+    // На время выбора оверлей меняет модальность, а Radix при этом
+    // перемонтирует поддерево — вместе с локальным стейтом формы. Снаружи это
+    // выглядит как «оверлей перезагрузился, выбор ничего не дал».
+    vi.stubGlobal('fetch', () => new Promise(() => {}))
+    renderView(state({ account: CONNECTED }))
+    openDialog()
+    fireEvent.change(screen.getByLabelText(/название подключения/i), {
+      target: { value: 'Заявки с лендинга' },
+    })
+
+    fireEvent.click(screen.getByLabelText('Таблица'))
+    fireEvent.click(screen.getByRole('option', { name: /выбрать на google диске/i }))
+    await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'))
+
+    expect((screen.getByLabelText(/название подключения/i) as HTMLInputElement).value).toBe(
+      'Заявки с лендинга',
+    )
+    vi.unstubAllGlobals()
+  })
+
   it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {
     renderView(state({ account: CONNECTED }))
     openDialog()

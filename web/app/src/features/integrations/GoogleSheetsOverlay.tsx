@@ -74,6 +74,14 @@ export function GoogleSheetsOverlay({
   // перестаёт быть модальным, а закрытие по клику мимо и по Escape гасится:
   // «мимо» теперь — это как раз окно Google.
   const [pickerOpen, setPickerOpen] = useState(false)
+  // Настройки формы живут ЗДЕСЬ, а не внутри диалога.
+  //
+  // Мина: смена модальности меняет дерево Radix, и содержимое диалога
+  // ПЕРЕМОНТИРУЕТСЯ вместе со всем локальным стейтом. Снаружи это выглядело как
+  // «выбрал файл на Диске — оверлей перезагрузился, и ничего не произошло»:
+  // выбранная книга и набранное имя исчезали ровно в тот момент, когда
+  // возвращалась модальность.
+  const setup = useSetupState()
 
   return (
     <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
@@ -98,6 +106,7 @@ export function GoogleSheetsOverlay({
             <SetupBody
               formId={formId}
               state={state}
+              setup={setup}
               onDone={onClose}
               onPickerOpenChange={setPickerOpen}
             />
@@ -108,25 +117,65 @@ export function GoogleSheetsOverlay({
   )
 }
 
+// SetupState — набранные настройки подключения. Отдельным хуком, чтобы поля
+// перечислялись один раз, а не расползались по сигнатурам компонентов.
+interface SetupState {
+  name: string
+  setName: (value: string) => void
+  spreadsheet: string
+  setSpreadsheet: (value: string) => void
+  sheet: string
+  setSheet: (value: string) => void
+  backfill: boolean
+  setBackfill: (value: boolean) => void
+  // picked — книга, выбранная в окне Google: её нет в списке созданных нами, и
+  // без неё Select не смог бы показать выбранное.
+  picked: SpreadsheetRef | null
+  setPicked: (value: SpreadsheetRef | null) => void
+}
+
+function useSetupState(): SetupState {
+  const [name, setName] = useState('')
+  const [spreadsheet, setSpreadsheetValue] = useState(NEW_SPREADSHEET)
+  const [sheet, setSheet] = useState(NEW_SHEET)
+  const [backfill, setBackfill] = useState(true)
+  const [picked, setPicked] = useState<SpreadsheetRef | null>(null)
+
+  return {
+    name,
+    setName,
+    spreadsheet,
+    setSpreadsheet: (value: string) => {
+      setSpreadsheetValue(value)
+      // Сменили книгу — выбранный лист относился к прежней.
+      setSheet(NEW_SHEET)
+    },
+    sheet,
+    setSheet,
+    backfill,
+    setBackfill,
+    picked,
+    setPicked,
+  }
+}
+
 // SetupBody — путь подключения. До подключённого аккаунта настраивать нечего:
 // показываем только рассказ и кнопку согласия. Поля, которые всё равно
 // заперты, — это обещание работы, которой человек ещё не может сделать.
 function SetupBody({
   formId,
   state,
+  setup,
   onDone,
   onPickerOpenChange,
 }: {
   formId: string
   state: FormIntegrations
+  setup: SetupState
   onDone: () => void
   onPickerOpenChange: (open: boolean) => void
 }) {
   const { account, workspaceId } = state
-  const [name, setName] = useState('')
-  const [spreadsheet, setSpreadsheet] = useState(NEW_SPREADSHEET)
-  const [sheet, setSheet] = useState(NEW_SHEET)
-  const [backfill, setBackfill] = useState(true)
   const create = useCreateSheet(formId)
 
   // Список таблиц имеет смысл только у подключённого аккаунта: это поход к
@@ -151,10 +200,10 @@ function SetupBody({
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
           id="integration-name"
-          value={name}
+          value={setup.name}
           maxLength={80}
           placeholder="Необязательно — чтобы отличать связки друг от друга"
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setup.setName(e.target.value)}
         />
       </div>
 
@@ -162,12 +211,7 @@ function SetupBody({
 
       <SpreadsheetField
         formId={formId}
-        value={spreadsheet}
-        onChange={(value) => {
-          setSpreadsheet(value)
-          // Сменили книгу — выбранный лист относился к прежней.
-          setSheet(NEW_SHEET)
-        }}
+        setup={setup}
         options={sheets.data ?? []}
         listFailed={sheets.isError}
         pickerEnabled={account.pickerEnabled}
@@ -176,8 +220,13 @@ function SetupBody({
 
       {/* Лист спрашиваем только у существующей книги: у новой он один и
           заводится вместе с ней. */}
-      {spreadsheet !== NEW_SPREADSHEET && (
-        <SheetField formId={formId} spreadsheetId={spreadsheet} value={sheet} onChange={setSheet} />
+      {setup.spreadsheet !== NEW_SPREADSHEET && (
+        <SheetField
+          formId={formId}
+          spreadsheetId={setup.spreadsheet}
+          value={setup.sheet}
+          onChange={setup.setSheet}
+        />
       )}
 
       <div className="flex items-start justify-between gap-4">
@@ -188,7 +237,11 @@ function SetupBody({
             ответов перенос займёт время.
           </p>
         </div>
-        <Switch id="integration-backfill" checked={backfill} onCheckedChange={setBackfill} />
+        <Switch
+          id="integration-backfill"
+          checked={setup.backfill}
+          onCheckedChange={setup.setBackfill}
+        />
       </div>
 
       {create.isError && (
@@ -205,10 +258,13 @@ function SetupBody({
         onClick={() =>
           create.mutate(
             {
-              name,
-              spreadsheetId: spreadsheet === NEW_SPREADSHEET ? '' : spreadsheet,
-              sheetId: spreadsheet === NEW_SPREADSHEET || sheet === NEW_SHEET ? null : Number(sheet),
-              backfill,
+              name: setup.name,
+              spreadsheetId: setup.spreadsheet === NEW_SPREADSHEET ? '' : setup.spreadsheet,
+              sheetId:
+                setup.spreadsheet === NEW_SPREADSHEET || setup.sheet === NEW_SHEET
+                  ? null
+                  : Number(setup.sheet),
+              backfill: setup.backfill,
             },
             { onSuccess: onDone },
           )
@@ -276,24 +332,19 @@ function SheetField({
 // Диску (ADR §10).
 function SpreadsheetField({
   formId,
-  value,
-  onChange,
+  setup,
   options,
   listFailed,
   pickerEnabled,
   onPickerOpenChange,
 }: {
   formId: string
-  value: string
-  onChange: (value: string) => void
+  setup: SetupState
   options: SpreadsheetRef[]
   listFailed: boolean
   pickerEnabled: boolean
   onPickerOpenChange: (open: boolean) => void
 }) {
-  // picked — выбранная на Диске книга: её нет в списке созданных нами, поэтому
-  // она добавляется отдельным пунктом, иначе Select не смог бы её показать.
-  const [picked, setPicked] = useState<SpreadsheetRef | null>(null)
   const [pickerError, setPickerError] = useState('')
   const [opening, setOpening] = useState(false)
 
@@ -308,8 +359,8 @@ function SpreadsheetField({
       // null — окно закрыли, ничего не выбрав. Это не ошибка и не повод что-то
       // менять на экране.
       if (chosen) {
-        setPicked(chosen)
-        onChange(chosen.id)
+        setup.setPicked(chosen)
+        setup.setSpreadsheet(chosen.id)
       }
     } catch {
       setPickerError('Не удалось открыть окно выбора. Попробуйте ещё раз.')
@@ -319,13 +370,14 @@ function SpreadsheetField({
     }
   }
 
+  const picked = setup.picked
   const known = picked && !options.some((s) => s.id === picked.id) ? [...options, picked] : options
 
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="integration-spreadsheet">Таблица</Label>
       <Select
-        value={value}
+        value={setup.spreadsheet}
         onValueChange={(next) => {
           // «Выбрать на Диске» — действие, а не значение: выбор остаётся
           // прежним, пока человек не укажет файл в окне Google.
@@ -333,7 +385,7 @@ function SpreadsheetField({
             void openPicker()
             return
           }
-          onChange(next)
+          setup.setSpreadsheet(next)
         }}
       >
         <SelectTrigger id="integration-spreadsheet" className="w-full">
