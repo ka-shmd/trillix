@@ -242,6 +242,12 @@ YANDEX_OAUTH_CLIENT_SECRET=__YANDEX_PROD_CLIENT_SECRET__
 # Обе строки пустые = интеграция выключена (кабинет работает как раньше).
 GOOGLE_OAUTH_CLIENT_ID=__GOOGLE_PROD_CLIENT_ID__
 GOOGLE_OAUTH_CLIENT_SECRET=__GOOGLE_PROD_CLIENT_SECRET__
+# ⚠ В проекте Google Cloud должны быть ВКЛЮЧЕНЫ три API (APIs & Services →
+# Library): Google Sheets API (создание таблицы, шапка, дописывание строк),
+# Google Drive API (список созданных нами таблиц) и Google Picker API (окно
+# выбора файла). Это разовая настройка ПРОЕКТА ПРОДУКТА, а не действие
+# пользователя: клиенты про неё не знают и знать не должны. Выключенный API
+# отдаёт 403 SERVICE_DISABLED на каждый запрос — причина видна в логе api.
 # Браузерный API-key того же проекта — окно выбора файла на Диске.
 # Требует включённого Google Picker API; в консоли ограничить по HTTP-referrer
 # (https://app.trillix.ru/*) и по API. Пусто = кнопки выбора нет.
