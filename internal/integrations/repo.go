@@ -106,6 +106,7 @@ type FormLink struct {
 	AccountID       uuid.UUID
 	WorkspaceID     uuid.UUID
 	AccountEmail    string
+	Name            string
 	SpreadsheetID   string
 	SpreadsheetURL  string
 	SheetID         int32
@@ -122,6 +123,7 @@ type NewFormLink struct {
 	ID             uuid.UUID
 	FormID         uuid.UUID
 	AccountID      uuid.UUID
+	Name           string
 	SpreadsheetID  string
 	SpreadsheetURL string
 	SheetID        int32
@@ -139,6 +141,7 @@ func (Repo) InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) err
 		ID:             l.ID,
 		FormID:         l.FormID,
 		AccountID:      l.AccountID,
+		Name:           l.Name,
 		SpreadsheetID:  l.SpreadsheetID,
 		SpreadsheetUrl: l.SpreadsheetURL,
 		SheetID:        l.SheetID,
@@ -160,7 +163,7 @@ func (Repo) GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Fo
 	}
 	return toFormLink(formIntegrationRow{
 		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-		ExternalEmail: row.ExternalEmail, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		ExternalEmail: row.ExternalEmail, Name: row.Name, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
 		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
 		LastDeliveredAt: row.LastDeliveredAt.Time,
@@ -181,7 +184,7 @@ func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Fo
 	}
 	return toFormLink(formIntegrationRow{
 		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-		ExternalEmail: row.ExternalEmail, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		ExternalEmail: row.ExternalEmail, Name: row.Name, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
 		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
 		LastDeliveredAt: row.LastDeliveredAt.Time,
@@ -242,7 +245,7 @@ func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, caus
 // по id): sqlc генерирует им разные типы, а собирается FormLink из них одинаково.
 type formIntegrationRow struct {
 	ID, FormID, AccountID, WorkspaceID uuid.UUID
-	ExternalEmail                      string
+	ExternalEmail, Name                string
 	SpreadsheetID, SpreadsheetUrl      string
 	SheetID                            int32
 	SheetTitle, Status, LastError      string
@@ -261,6 +264,7 @@ func toFormLink(row formIntegrationRow) (FormLink, error) {
 		AccountID:       row.AccountID,
 		WorkspaceID:     row.WorkspaceID,
 		AccountEmail:    row.ExternalEmail,
+		Name:            row.Name,
 		SpreadsheetID:   row.SpreadsheetID,
 		SpreadsheetURL:  row.SpreadsheetUrl,
 		SheetID:         row.SheetID,

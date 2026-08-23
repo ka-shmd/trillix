@@ -1,7 +1,15 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { integrationKeys } from './keys'
-import { createSheet, disconnectAccount, getFormIntegrations, refillSheet, unlinkSheet } from './api'
+import {
+  createSheet,
+  disconnectAccount,
+  getFormIntegrations,
+  listSpreadsheets,
+  refillSheet,
+  unlinkSheet,
+  type ConnectOptions,
+} from './api'
 
 // Состояние интеграций формы одной поездкой: аккаунт пространства и привязка
 // формы приезжают вместе — экран показывает их как одно целое.
@@ -20,10 +28,20 @@ export function formIntegrationsQueryOptions(formId: string) {
 
 // Мутации инвалидируют состояние формы: забытая инвалидация — баг, а не мелочь
 // (web/CLAUDE.md). Тронуть тут нужно ровно один ключ — состояние этой формы.
+// Список таблиц запрашивается только когда окно открыто и аккаунт подключён:
+// это поход к провайдеру, и делать его на каждый показ таба незачем.
+export function spreadsheetsQueryOptions(formId: string) {
+  return queryOptions({
+    queryKey: [...integrationKeys.form(formId), 'spreadsheets'] as const,
+    queryFn: () => listSpreadsheets(formId),
+    staleTime: 30_000,
+  })
+}
+
 export function useCreateSheet(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: () => createSheet(formId),
+    mutationFn: (opts: ConnectOptions) => createSheet(formId, opts),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

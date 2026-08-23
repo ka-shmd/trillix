@@ -1,5 +1,12 @@
 import { apiRequest } from '../../shared/api/client'
-import { formIntegrationsSchema, formSheetSchema, type FormIntegrations, type FormSheet } from '../../entities/integration'
+import {
+  formIntegrationsSchema,
+  formSheetSchema,
+  spreadsheetListSchema,
+  type FormIntegrations,
+  type FormSheet,
+  type SpreadsheetRef,
+} from '../../entities/integration'
 
 // Транспорт интеграций. Ответы парсятся Zod-схемой на границе — непровалидированный
 // any внутрь приложения не проходит (web/CLAUDE.md).
@@ -8,11 +15,29 @@ export function getFormIntegrations(formId: string): Promise<FormIntegrations> {
   return apiRequest(`/forms/${formId}/integrations`, { schema: formIntegrationsSchema })
 }
 
-export function createSheet(formId: string): Promise<FormSheet> {
+// ConnectOptions — то, что человек назвал в окне подключения.
+export interface ConnectOptions {
+  name: string
+  // Пусто — заводим новую книгу; иначе новый лист в уже созданной нами.
+  spreadsheetId: string
+  backfill: boolean
+}
+
+export function createSheet(formId: string, opts: ConnectOptions): Promise<FormSheet> {
   return apiRequest(`/forms/${formId}/integrations/google`, {
     method: 'POST',
+    body: { name: opts.name, spreadsheetId: opts.spreadsheetId, backfill: opts.backfill },
     schema: formSheetSchema,
   })
+}
+
+// Таблицы для выбора в окне. Запрашиваются при его открытии: список живёт у
+// провайдера и устаревает, кэшировать его надолго нечестно.
+export async function listSpreadsheets(formId: string): Promise<SpreadsheetRef[]> {
+  const res = await apiRequest(`/forms/${formId}/integrations/google/spreadsheets`, {
+    schema: spreadsheetListSchema,
+  })
+  return res.spreadsheets
 }
 
 export function refillSheet(formId: string): Promise<void> {

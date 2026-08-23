@@ -423,10 +423,21 @@ func connectAccount(t *testing.T, c *http.Client, srv *httptest.Server, wsID str
 }
 
 func postWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.Response {
+	return postBodyWithCSRF(t, c, srv, path, "")
+}
+
+func postBodyWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, body string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+path, nil)
+	var rdr io.Reader
+	if body != "" {
+		rdr = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, rdr)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("X-CSRF-Token", csrf(t, c, srv.URL))
 	resp, err := c.Do(req)
@@ -789,5 +800,94 @@ func TestIntegrations_Refill(t *testing.T) {
 	}
 	if len(provider.appended) != before+1 {
 		t.Fatalf("после перезалива строк дописано %d, ожидалась одна", len(provider.appended)-before)
+	}
+}
+
+// Настройки из окна подключения доезжают до базы: подпись связки сохранена, а
+// выключенный тумблер переноса означает сразу живую доставку — накопленные
+// ответы в таблицу не едут.
+func TestIntegrations_ConnectWithOptions(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-options")
+	versionID := publishVersion(t, formID)
+	newSubmission(t, formID, versionID, `{"b1":"Старый ответ"}`)
+
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		`{"name":"Заявки с лендинга","spreadsheetId":"","backfill":false}`)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+	if sheet.Status != "live" {
+		t.Fatalf("статус = %q, ожидался живой (перенос выключен)", sheet.Status)
+	}
+
+	var name, status string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT name, status FROM form_integrations WHERE form_id = $1`, formID).Scan(&name, &status); err != nil {
+		t.Fatalf("привязка не записана: %v", err)
+	}
+	if name != "Заявки с лендинга" {
+		t.Errorf("подпись связки = %q", name)
+	}
+
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("накопленные ответы уехали вопреки выключенному тумблеру: %v", provider.appended)
+	}
+}
+
+// Список таблиц для окна отдаёт то, что вернул провайдер: под scope drive.file
+// это только созданные нами файлы, чужих документов Диска там нет.
+func TestIntegrations_ListSpreadsheets(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+	formID := newForm(t, wsID, "f-list")
+
+	var got struct {
+		Spreadsheets []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"spreadsheets"`
+	}
+	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations/google/spreadsheets"), &got)
+
+	if len(got.Spreadsheets) != 1 || got.Spreadsheets[0].ID != "ss-old" {
+		t.Fatalf("список таблиц = %+v", got.Spreadsheets)
+	}
+}
+
+// Аккаунт не подключён — окно всё равно открывается, и список приходит пустым,
+// а не ошибкой: выбирать пока не из чего, но это не сбой.
+func TestIntegrations_ListSpreadsheetsWithoutAccount(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	formID := newForm(t, wsID, "f-list-empty")
+
+	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations/google/spreadsheets")
+	if r.StatusCode != http.StatusOK {
+		closeBody(t, r)
+		t.Fatalf("статус = %d, ожидалось 200", r.StatusCode)
+	}
+	var got struct {
+		Spreadsheets []struct{} `json:"spreadsheets"`
+	}
+	decode(t, r, &got)
+	if len(got.Spreadsheets) != 0 {
+		t.Fatalf("список = %+v, ожидался пустой", got.Spreadsheets)
 	}
 }

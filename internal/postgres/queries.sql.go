@@ -1457,7 +1457,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 }
 
 const getFormIntegration = `-- name: GetFormIntegration :one
-SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
        fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
 FROM form_integrations fi
@@ -1469,6 +1469,7 @@ type GetFormIntegrationRow struct {
 	ID              uuid.UUID
 	FormID          uuid.UUID
 	AccountID       uuid.UUID
+	Name            string
 	SpreadsheetID   string
 	SpreadsheetUrl  string
 	SheetID         int32
@@ -1492,6 +1493,7 @@ func (q *Queries) GetFormIntegration(ctx context.Context, formID uuid.UUID) (Get
 		&i.ID,
 		&i.FormID,
 		&i.AccountID,
+		&i.Name,
 		&i.SpreadsheetID,
 		&i.SpreadsheetUrl,
 		&i.SheetID,
@@ -1508,7 +1510,7 @@ func (q *Queries) GetFormIntegration(ctx context.Context, formID uuid.UUID) (Get
 }
 
 const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
-SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
        fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
 FROM form_integrations fi
@@ -1520,6 +1522,7 @@ type GetFormIntegrationByIDRow struct {
 	ID              uuid.UUID
 	FormID          uuid.UUID
 	AccountID       uuid.UUID
+	Name            string
 	SpreadsheetID   string
 	SpreadsheetUrl  string
 	SheetID         int32
@@ -1543,6 +1546,7 @@ func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (Get
 		&i.ID,
 		&i.FormID,
 		&i.AccountID,
+		&i.Name,
 		&i.SpreadsheetID,
 		&i.SpreadsheetUrl,
 		&i.SheetID,
@@ -2112,14 +2116,15 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 
 const insertFormIntegration = `-- name: InsertFormIntegration :exec
 INSERT INTO form_integrations (
-    id, form_id, account_id, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    id, form_id, account_id, name, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 `
 
 type InsertFormIntegrationParams struct {
 	ID             uuid.UUID
 	FormID         uuid.UUID
 	AccountID      uuid.UUID
+	Name           string
 	SpreadsheetID  string
 	SpreadsheetUrl string
 	SheetID        int32
@@ -2135,6 +2140,7 @@ func (q *Queries) InsertFormIntegration(ctx context.Context, arg InsertFormInteg
 		arg.ID,
 		arg.FormID,
 		arg.AccountID,
+		arg.Name,
 		arg.SpreadsheetID,
 		arg.SpreadsheetUrl,
 		arg.SheetID,

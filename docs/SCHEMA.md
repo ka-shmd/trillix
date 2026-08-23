@@ -730,6 +730,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `id` | `UUID` | PK (UUIDv7) |
 | `form_id` | `UUID` | `NOT NULL`, FK → `forms(id)` `ON DELETE CASCADE` |
 | `account_id` | `UUID` | `NOT NULL`, FK → `integration_accounts(id)` `ON DELETE CASCADE` |
+| `name` | `TEXT` | `NOT NULL DEFAULT ''` — необязательная подпись связки; пусто = экран показывает имя провайдера |
 | `spreadsheet_id` | `TEXT` | `NOT NULL` |
 | `spreadsheet_url` | `TEXT` | `NOT NULL` — показывается ссылкой; собирать её в UI значит однажды собрать неверно |
 | `sheet_id` | `INT` | `NOT NULL` — gid листа: он и есть личность листа |

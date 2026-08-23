@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,8 @@ type fakeProvider struct {
 	exchanged    bool
 	revoked      string
 	createdTitle string
+	addedTo      string
+	addedTitle   string
 	header       []string
 	appended     [][]string
 	appendCalls  int
@@ -228,6 +231,20 @@ func (f *fakeProvider) AppendRows(_ context.Context, _ string, _ integrations.Sp
 	f.appendCalls++
 	f.appended = append(f.appended, rows...)
 	return nil
+}
+
+func (f *fakeProvider) AddSheet(_ context.Context, _, spreadsheetID, title string) (integrations.Spreadsheet, error) {
+	f.addedTo, f.addedTitle = spreadsheetID, title
+	return integrations.Spreadsheet{
+		ID:      spreadsheetID,
+		URL:     "https://docs.google.com/spreadsheets/d/" + spreadsheetID + "/edit",
+		SheetID: 12,
+		Title:   title,
+	}, nil
+}
+
+func (f *fakeProvider) ListSpreadsheets(_ context.Context, _ string) ([]integrations.SpreadsheetRef, error) {
+	return []integrations.SpreadsheetRef{{ID: "ss-old", Name: "Прошлая форма"}}, nil
 }
 
 func (f *fakeProvider) ClearSheet(_ context.Context, _ string, s integrations.Spreadsheet) error {
@@ -374,6 +391,12 @@ func TestDisabledProvider(t *testing.T) {
 	}
 }
 
+// defaultOptions — то, с чем окно настроек приходит по умолчанию: новая книга и
+// перенос накопленных ответов включён.
+func defaultOptions() integrations.ConnectOptions {
+	return integrations.ConnectOptions{Backfill: true}
+}
+
 // схема одной версии с одним вопросом — минимум, на котором видно колонки.
 const oneQuestionSchema = `{"schemaVersion":1,"blocks":[
 	{"id":"t1","groupId":"g1","type":"title","text":[{"t":"=опасная подпись"}],"settings":{}},
@@ -392,7 +415,7 @@ func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
 
-	link, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
@@ -430,7 +453,7 @@ func TestConnectForm_WithoutAccount(t *testing.T) {
 	store := &fakeStore{linkErr: pgx.ErrNoRows, getErr: pgx.ErrNoRows}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	_, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
@@ -445,7 +468,7 @@ func TestConnectForm_AlreadyLinked(t *testing.T) {
 	store := &fakeStore{conn: sealedConn(t)}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	_, err := svc.ConnectForm(context.Background(), testUser, testForm)
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("ошибка = %v, ожидалась ErrConflict", err)
 	}
@@ -457,7 +480,7 @@ func TestConnectForm_StrangerGetsNotFound(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, &fakeStore{}, fakeForms{getErr: domain.ErrNotFound}, provider)
 
-	if _, err := svc.ConnectForm(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions()); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
 	if provider.createdTitle != "" {
@@ -543,5 +566,69 @@ func TestRefillForm_NotLinked(t *testing.T) {
 	err := svc.RefillForm(context.Background(), testUser, testForm)
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+}
+
+// Тумблер «перенести накопленные ответы» выключен: связка сразу живая, перенос
+// не начинается. Это выбор человека — у формы может быть двадцать тысяч
+// ответов, которые ему в новой таблице не нужны.
+func TestConnectForm_WithoutBackfill(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
+
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{Backfill: false})
+	if err != nil {
+		t.Fatalf("connect form: %v", err)
+	}
+	if link.Status != integrations.StatusLive {
+		t.Fatalf("статус = %q, ожидался живой", link.Status)
+	}
+	if store.backfillFrom != nil {
+		t.Error("перенос начат вопреки выключенному тумблеру")
+	}
+}
+
+// Выбрана уже созданная нами книга: заводим в ней НОВЫЙ ЛИСТ, а не новую книгу.
+// Имя листа несёт slug формы — Google запрещает две вкладки с одинаковым именем,
+// а форм с одинаковым названием у автора сколько угодно.
+func TestConnectForm_IntoExistingSpreadsheet(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	form := linkedForm()
+	form.Slug = "abc123"
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: form, version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{Name: "Заявки с лендинга", SpreadsheetID: "ss-old", Backfill: true})
+	if err != nil {
+		t.Fatalf("connect form: %v", err)
+	}
+	if provider.createdTitle != "" {
+		t.Error("заведена новая книга вместо листа в существующей")
+	}
+	if provider.addedTo != "ss-old" {
+		t.Fatalf("лист заведён в %q", provider.addedTo)
+	}
+	if !strings.Contains(provider.addedTitle, "abc123") {
+		t.Errorf("имя листа = %q, ожидался slug формы в нём", provider.addedTitle)
+	}
+	if link.Name != "Заявки с лендинга" || store.insertedLnk.Name != "Заявки с лендинга" {
+		t.Errorf("подпись связки потеряна: %q / %q", link.Name, store.insertedLnk.Name)
+	}
+}
+
+// Слишком длинная подпись отбивается на бэке независимо от фронта (инвариант 3).
+func TestConnectForm_NameTooLong(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
+
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{Name: strings.Repeat("я", integrations.MaxConnectionNameLen+1)})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.insertedLnk != nil {
+		t.Error("связка записана с недопустимой подписью")
 	}
 }

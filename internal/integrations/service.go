@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -59,6 +60,8 @@ type Provider interface {
 	// провайдер сегодня один, и делить его надвое стоит тогда, когда появится
 	// второй, у которого таблиц нет (YAGNI, PROCESS §2).
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
+	AddSheet(ctx context.Context, accessToken, spreadsheetID, title string) (Spreadsheet, error)
+	ListSpreadsheets(ctx context.Context, accessToken string) ([]SpreadsheetRef, error)
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
 	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
 	AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error
@@ -306,15 +309,41 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 	return out, nil
 }
 
+// ConnectOptions — то, что человек назвал в окне подключения. Настройки
+// спрашиваются ДО первой записи в чужие данные и приезжают одним объектом:
+// подключение — одно осознанное действие, а не цепочка кнопок, каждая из
+// которых уже что-то поменяла.
+type ConnectOptions struct {
+	// Name — необязательная подпись связки. Пусто — экран показывает имя
+	// провайдера.
+	Name string
+	// SpreadsheetID пуст — заводим новую книгу. Иначе кладём НОВЫЙ ЛИСТ в
+	// названную: под scope drive.file доступны только созданные нами файлы,
+	// поэтому чужую книгу сюда не подставить при всём желании.
+	SpreadsheetID string
+	// Backfill — переносить ли уже накопленные ответы. Выбор человека, а не
+	// наше умолчание: у формы может быть пятьдесят тысяч ответов, которые ему в
+	// новой таблице не нужны.
+	Backfill bool
+}
+
+// MaxConnectionNameLen — потолок длины подписи связки. Ввод валидируется на
+// бэке независимо от фронта (инвариант 3).
+const MaxConnectionNameLen = 80
+
 // ConnectForm заводит таблицу в Диске подключённого аккаунта и привязывает к ней
 // форму.
 //
 // Право — ActionFormWrite, а не ActionIntegrationManage: решение «вывозить ли
 // ответы наружу» уже принято владельцем при подключении аккаунта, а выбрать, для
 // какой формы завести таблицу, вправе тот, кто эти формы и правит.
-func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (FormLink, error) {
+func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error) {
 	if !s.Enabled() {
 		return FormLink{}, domain.ErrNotFound
+	}
+	opts.Name = strings.TrimSpace(opts.Name)
+	if utf8.RuneCountInString(opts.Name) > MaxConnectionNameLen {
+		return FormLink{}, fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
 	}
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
@@ -350,7 +379,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 	if err != nil {
 		return FormLink{}, err
 	}
-	sheet, err := s.google.CreateSpreadsheet(ctx, token, spreadsheetTitle(form), sheetTitle)
+	sheet, err := s.newSheet(ctx, token, form, opts.SpreadsheetID)
 	if err != nil {
 		return FormLink{}, err
 	}
@@ -365,6 +394,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 		ID:             domain.NewID(),
 		FormID:         formID,
 		AccountID:      conn.ID,
+		Name:           opts.Name,
 		SpreadsheetID:  sheet.ID,
 		SpreadsheetURL: sheet.URL,
 		SheetID:        sheet.SheetID,
@@ -375,13 +405,15 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 	if err := s.repo.InsertLink(ctx, s.db, link); err != nil {
 		return FormLink{}, err
 	}
-	// Догрузка накопленных ответов начинается сразу: таблица создана нами и
-	// пуста, значит затирать нечего и дублировать нечего, а пустая таблица
-	// после подключения читается как «не заработало» — это первый вопрос в
-	// поддержку. Событий может не быть вовсе (форма без ответов) — тогда первая
-	// же пачка окажется пустой и перенос закончится, не начавшись.
-	if err := s.startBackfill(ctx, link.ID); err != nil {
-		return FormLink{}, err
+	// Перенос накопленных ответов — по выбору человека (тумблер в окне). Лист
+	// заведён нами и пуст, поэтому затирать и дублировать нечего; но у формы
+	// может быть двадцать тысяч ответов, которые ему в новой таблице не нужны.
+	status := StatusLive
+	if opts.Backfill {
+		if err := s.startBackfill(ctx, link.ID); err != nil {
+			return FormLink{}, err
+		}
+		status = StatusBackfilling
 	}
 
 	return FormLink{
@@ -394,8 +426,61 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 		SheetID:        sheet.SheetID,
 		SheetTitle:     sheet.Title,
 		Columns:        link.Columns,
-		Status:         StatusBackfilling,
+		Name:           opts.Name,
+		Status:         status,
 	}, nil
+}
+
+// newSheet отдаёт лист, в который поедут ответы: новая книга либо новая вкладка
+// в уже созданной нами.
+func (s *Service) newSheet(ctx context.Context, token string, form forms.Form, spreadsheetID string) (Spreadsheet, error) {
+	if spreadsheetID == "" {
+		return s.google.CreateSpreadsheet(ctx, token, spreadsheetTitle(form), sheetTitle)
+	}
+	return s.google.AddSheet(ctx, token, spreadsheetID, sheetTitleForForm(form))
+}
+
+// Spreadsheets — таблицы, куда можно положить ответы этой формы: те, что мы уже
+// создавали для этого пространства. Чужих файлов Диска здесь нет и быть не
+// может (scope drive.file), поэтому список безопасно показывать целиком.
+func (s *Service) Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error) {
+	if !s.Enabled() {
+		return nil, domain.ErrNotFound
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return nil, err
+	}
+
+	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Аккаунт не подключён — выбирать не из чего. Пустой список, а не
+		// ошибка: окно настроек открывается и до подключения.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list spreadsheets: %w", err)
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	return s.google.ListSpreadsheets(ctx, token)
+}
+
+// sheetTitleForForm — имя ВКЛАДКИ в чужой книге. Google запрещает две вкладки с
+// одинаковым именем, а форм с одинаковым названием у автора сколько угодно —
+// поэтому к названию добавляется slug формы, уникальный по определению.
+func sheetTitleForForm(form forms.Form) string {
+	name := []rune(spreadsheetTitle(form))
+	// Потолок имени листа у Google — 100 символов; оставляем запас под slug.
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return strings.TrimSuffix(string(name), " — ответы") + " · " + form.Slug
 }
 
 // RefillForm перезаливает лист с нуля: чистит значения, пишет свежую шапку и

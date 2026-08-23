@@ -47,6 +47,7 @@ type FormIntegration struct {
 	ID              uuid.UUID
 	FormID          uuid.UUID
 	AccountID       uuid.UUID
+	Name            string
 	SpreadsheetID   string
 	SpreadsheetUrl  string
 	SheetID         int32

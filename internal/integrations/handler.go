@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,6 +39,9 @@ const (
 	intentLabel = "integration-connect:"
 	// Человек уходит к провайдеру и возвращается — это минуты, не часы.
 	flowTTL = 15 * time.Minute
+	// maxBodyBytes — потолок тела запроса настроек (инвариант 3: MaxBytesReader
+	// на каждом эндпоинте с телом). Там имя связки и id таблицы — сотни байт.
+	maxBodyBytes = 4 << 10
 )
 
 // Middleware — HTTP-обёртка (RequireAuth/RequireCSRF из auth), инжектируемая в
@@ -47,7 +51,8 @@ type Middleware = func(http.Handler) http.Handler
 // integrationsService — то, что транспорту нужно от сервиса.
 type integrationsService interface {
 	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
-	ConnectForm(ctx context.Context, userID, formID uuid.UUID) (FormLink, error)
+	ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error)
+	Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error)
 	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID uuid.UUID) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
@@ -87,6 +92,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// того, что сервер и так знает.
 	mux.Handle("GET /api/v1/forms/{id}/integrations",
 		h.requireAuth(http.HandlerFunc(h.formStatus)))
+	// Список таблиц для окна настроек: только созданные нами (scope drive.file),
+	// поэтому чужих файлов Диска он не раскрывает.
+	mux.Handle("GET /api/v1/forms/{id}/integrations/google/spreadsheets",
+		h.requireAuth(http.HandlerFunc(h.spreadsheets)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google/refill",
@@ -117,6 +126,7 @@ type accountResponse struct {
 // подключён без единой привязанной формы, и экран показывает разные вещи.
 type sheetResponse struct {
 	URL             string  `json:"url"`
+	Name            string  `json:"name,omitempty"`
 	Status          string  `json:"status"`
 	LastError       string  `json:"lastError,omitempty"`
 	LastDeliveredAt *string `json:"lastDeliveredAt,omitempty"`
@@ -160,18 +170,69 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
+// connectRequest — настройки из окна подключения. Тело необязательно: без него
+// работают умолчания (новая таблица, перенос включён) — так же, как в окне.
+type connectRequest struct {
+	Name string `json:"name"`
+	// SpreadsheetID пуст — новая книга; иначе новый лист в уже созданной нами.
+	SpreadsheetID string `json:"spreadsheetId"`
+	// Backfill — указатель, чтобы отличить «выключил тумблер» от «поля нет».
+	Backfill *bool `json:"backfill"`
+}
+
 func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 	user, formID, ok := h.userAndForm(w, r)
 	if !ok {
 		return
 	}
 
-	link, err := h.svc.ConnectForm(r.Context(), user.ID, formID)
+	opts := ConnectOptions{Backfill: true}
+	if r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		var req connectRequest
+		if err := dec.Decode(&req); err != nil {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+			return
+		}
+		opts.Name, opts.SpreadsheetID = req.Name, req.SpreadsheetID
+		if req.Backfill != nil {
+			opts.Backfill = *req.Backfill
+		}
+	}
+
+	link, err := h.svc.ConnectForm(r.Context(), user.ID, formID, opts)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, toSheetResponse(link))
+}
+
+type spreadsheetResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (h *Handler) spreadsheets(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+
+	list, err := h.svc.Spreadsheets(r.Context(), user.ID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Конверсия, а не сборка по полю: DTO намеренно повторяет тип сервиса, и
+	// компилятор ловит расхождение в тот момент, когда оно появится.
+	out := make([]spreadsheetResponse, 0, len(list))
+	for _, s := range list {
+		out = append(out, spreadsheetResponse(s))
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string][]spreadsheetResponse{"spreadsheets": out})
 }
 
 // refillForm перезаливает лист заново. 202, а не 204: работа начата, а не
@@ -201,7 +262,7 @@ func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {
 }
 
 func toSheetResponse(l FormLink) *sheetResponse {
-	out := &sheetResponse{URL: l.SpreadsheetURL, Status: l.Status, LastError: l.LastError}
+	out := &sheetResponse{URL: l.SpreadsheetURL, Name: l.Name, Status: l.Status, LastError: l.LastError}
 	if !l.LastDeliveredAt.IsZero() {
 		at := l.LastDeliveredAt.UTC().Format(time.RFC3339)
 		out.LastDeliveredAt = &at

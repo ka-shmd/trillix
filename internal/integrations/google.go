@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 	googleRevokeURL   = "https://oauth2.googleapis.com/revoke"
 	googleUserInfoURL = "https://openidconnect.googleapis.com/v1/userinfo"
 	googleSheetsURL   = "https://sheets.googleapis.com/v4/spreadsheets"
+	googleDriveURL    = "https://www.googleapis.com/drive/v3/files"
 )
 
 // ScopeDriveFile — доступ ТОЛЬКО к файлам, созданным этим приложением. Ради него
@@ -93,6 +95,7 @@ type Google struct {
 	revokeURL   string
 	userInfoURL string
 	sheetsURL   string
+	driveURL    string
 
 	http *http.Client
 }
@@ -107,6 +110,7 @@ func NewGoogle(clientID, clientSecret, redirectURI string) *Google {
 		revokeURL:    googleRevokeURL,
 		userInfoURL:  googleUserInfoURL,
 		sheetsURL:    googleSheetsURL,
+		driveURL:     googleDriveURL,
 		http:         &http.Client{Timeout: requestTimeout},
 	}
 }
@@ -318,6 +322,110 @@ func (g *Google) CreateSpreadsheet(ctx context.Context, accessToken, title, shee
 		SheetID: out.Sheets[0].Properties.SheetID,
 		Title:   out.Sheets[0].Properties.Title,
 	}, nil
+}
+
+// SpreadsheetRef — таблица в списке выбора: то немногое, что нужно человеку,
+// чтобы её узнать.
+type SpreadsheetRef struct {
+	ID   string
+	Name string
+}
+
+// listLimit — сколько таблиц показываем в выборе. Список — не файловый менеджер:
+// это наши же прежние таблицы, свежие сверху, и полсотни с запасом покрывают
+// «положи рядом с прошлой формой».
+const listLimit = 50
+
+// ListSpreadsheets отдаёт таблицы, к которым у приложения есть доступ.
+//
+// Под scope drive.file это ровно те файлы, которые СОЗДАЛИ МЫ, — чужие документы
+// человека в список не попадают и попасть не могут. Поэтому выбор «положить в
+// существующую» не требует ни Picker'а, ни сенситивного scope (ADR §10): он
+// работает для того случая, ради которого и нужен, — сложить ответы нескольких
+// форм в одну книгу.
+func (g *Google) ListSpreadsheets(ctx context.Context, accessToken string) ([]SpreadsheetRef, error) {
+	q := url.Values{
+		"q":        {"mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"},
+		"fields":   {"files(id,name)"},
+		"orderBy":  {"modifiedTime desc"},
+		"pageSize": {strconv.Itoa(listLimit)},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.driveURL+"?"+q.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("integrations google: build list request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		Files []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"files"`
+	}
+	if err := g.do(req, &body); err != nil {
+		return nil, fmt.Errorf("integrations google: list spreadsheets: %w", err)
+	}
+	out := make([]SpreadsheetRef, 0, len(body.Files))
+	for _, f := range body.Files {
+		out = append(out, SpreadsheetRef{ID: f.ID, Name: f.Name})
+	}
+	return out, nil
+}
+
+// AddSheet заводит НОВЫЙ ЛИСТ в существующей таблице — путь «положить ответы
+// рядом с прошлой формой». Каждая форма получает свой лист: одна книга, разные
+// вкладки, и колонки одной формы не мешаются с колонками другой.
+func (g *Google) AddSheet(ctx context.Context, accessToken, spreadsheetID, title string) (Spreadsheet, error) {
+	body := map[string]any{
+		"requests": []any{
+			map[string]any{"addSheet": map[string]any{
+				"properties": map[string]any{"title": title},
+			}},
+		},
+	}
+	var out struct {
+		Replies []struct {
+			AddSheet struct {
+				Properties struct {
+					SheetID int32  `json:"sheetId"`
+					Title   string `json:"title"`
+				} `json:"properties"`
+			} `json:"addSheet"`
+		} `json:"replies"`
+	}
+	u := g.sheetsURL + "/" + url.PathEscape(spreadsheetID) + ":batchUpdate"
+	if err := g.apiJSON(ctx, http.MethodPost, u, accessToken, body, &out); err != nil {
+		return Spreadsheet{}, fmt.Errorf("integrations google: add sheet: %w", err)
+	}
+	if len(out.Replies) == 0 {
+		return Spreadsheet{}, fmt.Errorf("integrations google: add sheet: пустой ответ")
+	}
+
+	// Адрес книги спрашиваем у провайдера, а не собираем строкой: собранный
+	// однажды разойдётся с настоящим и уведёт человека в никуда.
+	meta, err := g.spreadsheetURL(ctx, accessToken, spreadsheetID)
+	if err != nil {
+		return Spreadsheet{}, err
+	}
+	props := out.Replies[0].AddSheet.Properties
+	return Spreadsheet{ID: spreadsheetID, URL: meta, SheetID: props.SheetID, Title: props.Title}, nil
+}
+
+func (g *Google) spreadsheetURL(ctx context.Context, accessToken, spreadsheetID string) (string, error) {
+	u := g.sheetsURL + "/" + url.PathEscape(spreadsheetID) + "?fields=spreadsheetUrl"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", fmt.Errorf("integrations google: build meta request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		SpreadsheetURL string `json:"spreadsheetUrl"`
+	}
+	if err := g.do(req, &body); err != nil {
+		return "", fmt.Errorf("integrations google: spreadsheet meta: %w", err)
+	}
+	return body.SpreadsheetURL, nil
 }
 
 // WriteHeader кладёт строку заголовков в первую строку листа.

@@ -23,6 +23,9 @@ export const sheetStatusSchema = z.enum(['backfilling', 'live', 'broken'])
 
 export const formSheetSchema = z.object({
   url: z.string(),
+  // name — подпись связки, которую человек дал в окне подключения. Пусто —
+  // экран показывает имя провайдера.
+  name: z.string().optional(),
   status: sheetStatusSchema,
   lastError: z.string().optional(),
   lastDeliveredAt: z.string().optional(),
@@ -35,6 +38,18 @@ export const formIntegrationsSchema = z.object({
   sheet: formSheetSchema.nullable(),
 })
 
+// Таблица, куда можно положить ответы: под scope drive.file это ТОЛЬКО файлы,
+// созданные нами, — чужих документов Диска в списке нет и быть не может.
+export const spreadsheetRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+})
+
+export const spreadsheetListSchema = z.object({
+  spreadsheets: z.array(spreadsheetRefSchema),
+})
+
+export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>
 export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>

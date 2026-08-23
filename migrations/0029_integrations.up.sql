@@ -32,6 +32,10 @@ CREATE TABLE form_integrations (
     id                UUID PRIMARY KEY,
     form_id           UUID NOT NULL REFERENCES forms(id) ON DELETE CASCADE,
     account_id        UUID NOT NULL REFERENCES integration_accounts(id) ON DELETE CASCADE,
+    -- name — необязательная подпись связки («Заявки с лендинга»). Нужна, когда
+    -- интеграций у формы станет несколько: в списке они иначе различаются только
+    -- значком провайдера. Пусто — экран показывает имя провайдера.
+    name              TEXT NOT NULL DEFAULT '',
     spreadsheet_id    TEXT NOT NULL,
     spreadsheet_url   TEXT NOT NULL,                         -- показываем ссылкой; собирать её строкой в UI значит однажды собрать неверно
     sheet_id          INT NOT NULL,                          -- gid листа: он и есть личность листа — имя автор волен переименовать
