@@ -57,6 +57,10 @@ type fakeStore struct {
 	linkErr     error
 	insertedLnk *integrations.NewFormLink
 	unlinked    bool
+
+	columnsSet []domain.SheetColumn
+	delivered  bool
+	brokenWith string
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) error {
@@ -95,6 +99,35 @@ func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) 
 	return nil
 }
 
+func (f *fakeStore) GetAccountByID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (integrations.Connection, error) {
+	if f.getErr != nil {
+		return integrations.Connection{}, f.getErr
+	}
+	return f.conn, nil
+}
+
+func (f *fakeStore) GetLinkByID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (integrations.FormLink, error) {
+	if f.linkErr != nil {
+		return integrations.FormLink{}, f.linkErr
+	}
+	return f.link, nil
+}
+
+func (f *fakeStore) UpdateLinkColumns(_ context.Context, _ postgres.DBTX, _ uuid.UUID, columns []domain.SheetColumn) error {
+	f.columnsSet = columns
+	return nil
+}
+
+func (f *fakeStore) MarkDelivered(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.delivered = true
+	return nil
+}
+
+func (f *fakeStore) MarkBroken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, cause string) error {
+	f.brokenWith = cause
+	return nil
+}
+
 // fakeForms — коллаборатор forms: авторизует доступ к форме и отдаёт версии.
 type fakeForms struct {
 	form    forms.Form
@@ -121,6 +154,8 @@ type fakeProvider struct {
 	revoked      string
 	createdTitle string
 	header       []string
+	appended     [][]string
+	appendErr    error
 	exchangeFn   func() (integrations.Tokens, error)
 }
 
@@ -163,6 +198,14 @@ func (f *fakeProvider) CreateSpreadsheet(_ context.Context, _, title, sheetTitle
 
 func (f *fakeProvider) WriteHeader(_ context.Context, _ string, _ integrations.Spreadsheet, header []string) error {
 	f.header = header
+	return nil
+}
+
+func (f *fakeProvider) AppendRow(_ context.Context, _ string, _ integrations.Spreadsheet, row []string) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
+	f.appended = append(f.appended, row)
 	return nil
 }
 
@@ -337,8 +380,11 @@ func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
 		t.Fatal("привязка не записана")
 	}
 	cols := store.insertedLnk.Columns
-	if len(cols) != 4 || cols[0] != "_id" || cols[3] != "b1" {
-		t.Fatalf("колонки = %v, ожидались метаколонки + id вопроса", cols)
+	if len(cols) != 4 || cols[0].Key != "_id" || cols[3].Key != "b1" {
+		t.Fatalf("колонки = %+v, ожидались метаколонки + id вопроса", cols)
+	}
+	if cols[3].Label != "=опасная подпись" {
+		t.Errorf("подпись колонки = %q — подпись вопроса потеряна", cols[3].Label)
 	}
 	// Шапка уезжает БЕЗ CSV-заглушки: в таблицу значения кладутся режимом,
 	// который их не разбирает, и апостроф был бы виден в ячейке.

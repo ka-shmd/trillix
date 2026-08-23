@@ -1,0 +1,250 @@
+package integrations_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/integrations"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/submissions"
+)
+
+type fakeOutbox struct {
+	channel string
+	payload []byte
+}
+
+func (f *fakeOutbox) Enqueue(_ context.Context, _ postgres.DBTX, channel string, payload []byte) error {
+	f.channel, f.payload = channel, payload
+	return nil
+}
+
+type fakeSubmissions struct {
+	record submissions.SheetRecord
+	err    error
+}
+
+func (f fakeSubmissions) SheetRow(_ context.Context, _, _ uuid.UUID) (submissions.SheetRecord, error) {
+	if f.err != nil {
+		return submissions.SheetRecord{}, f.err
+	}
+	return f.record, nil
+}
+
+func col(key, label string) domain.SheetColumn {
+	return domain.SheetColumn{Key: key, Label: label}
+}
+
+// linkedSheet — привязка с тремя колонками: метаколонка и два вопроса.
+func linkedSheet() integrations.FormLink {
+	return integrations.FormLink{
+		ID:            uuid.New(),
+		FormID:        testForm,
+		SpreadsheetID: "ss-1",
+		SheetTitle:    "Ответы",
+		Status:        integrations.StatusLive,
+		Columns:       []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+	}
+}
+
+func deliveryService(store *fakeStore, provider *fakeProvider, subs fakeSubmissions, out *fakeOutbox) *integrations.Service {
+	return newFormService(fakeAccess{}, store, fakeForms{}, provider).WithDelivery(out, subs)
+}
+
+// Ответ доезжает строкой в порядке КОЛОНОК ЛИСТА, и привязка помечается
+// доставленной.
+func TestDeliver_AppendsRow(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+		Row:     []string{"018f", "Ирина", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("дописано строк: %d, ожидалась одна", len(provider.appended))
+	}
+	got := provider.appended[0]
+	if len(got) != 3 || got[1] != "Ирина" || got[2] != "i@example.com" {
+		t.Fatalf("строка = %v", got)
+	}
+	if !store.delivered {
+		t.Error("привязка не помечена доставленной")
+	}
+}
+
+// В форме появился новый вопрос: колонка добавляется в конец, шапка листа
+// переписывается, порядок прежних колонок не меняется.
+func TestDeliver_AddsColumnForNewQuestion(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта"), col("b3", "Телефон")},
+		Row:     []string{"018f", "Ирина", "i@example.com", "+7"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(store.columnsSet) != 4 || store.columnsSet[3].Key != "b3" {
+		t.Fatalf("колонки = %+v, ожидалась дописанная b3", store.columnsSet)
+	}
+	if len(provider.header) != 4 || provider.header[3] != "Телефон" {
+		t.Fatalf("шапка = %v", provider.header)
+	}
+	if got := provider.appended[0]; len(got) != 4 || got[3] != "+7" {
+		t.Fatalf("строка = %v", got)
+	}
+}
+
+// Вопрос удалён из формы: его колонка ОСТАЁТСЯ на месте с пустой ячейкой.
+// Иначе значения уехали бы на одну влево — под чужой заголовок, и увидел бы это
+// автор, а не мы.
+func TestDeliver_KeepsColumnOfDeletedQuestion(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b2", "Почта")},
+		Row:     []string{"018f", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	got := provider.appended[0]
+	if len(got) != 3 || got[1] != "" || got[2] != "i@example.com" {
+		t.Fatalf("строка = %v, ожидалась пустая ячейка на месте удалённого вопроса", got)
+	}
+	if store.columnsSet != nil {
+		t.Errorf("колонки переписаны: %+v — удалённый вопрос не должен их менять", store.columnsSet)
+	}
+}
+
+// Окончательный отказ провайдера (доступ отозван) помечает интеграцию сломанной
+// и ГАСИТ событие: у outbox нет dead-letter, и ретрай тут вечен.
+func TestDeliver_PermanentFailureMarksBroken(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{appendErr: integrations.ErrPermanent}
+	svc := deliveryService(store, provider, fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("окончательный отказ ушёл на ретрай: %v", err)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("интеграция не помечена сломанной")
+	}
+	if store.delivered {
+		t.Error("сломанная доставка помечена успешной")
+	}
+}
+
+// Временный отказ уходит на ретрай — и НЕ ломает интеграцию: провайдер полежит
+// и встанет, а красный статус в кабинете напугал бы автора зря.
+func TestDeliver_TransientFailureRetries(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{appendErr: errors.New("статус 503")}
+	svc := deliveryService(store, provider, fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err == nil {
+		t.Fatal("временный отказ проглочен — событие потеряно")
+	}
+	if store.brokenWith != "" {
+		t.Errorf("интеграция помечена сломанной из-за временного отказа: %q", store.brokenWith)
+	}
+}
+
+// События, которые доставлять не надо, гасятся: сломанная интеграция, отвязанная
+// форма, удалённый (или скрытый тарифом) ответ.
+func TestDeliver_DropsHopelessEvents(t *testing.T) {
+	cases := []struct {
+		name  string
+		store *fakeStore
+		subs  fakeSubmissions
+	}{
+		{"сломанная интеграция", &fakeStore{link: brokenLink()}, fakeSubmissions{}},
+		{"форму отвязали", &fakeStore{linkErr: pgx.ErrNoRows}, fakeSubmissions{}},
+		{"ответа больше нет", &fakeStore{link: linkedSheet()}, fakeSubmissions{err: pgx.ErrNoRows}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			provider := &fakeProvider{}
+			svc := deliveryService(c.store, provider, c.subs, &fakeOutbox{})
+
+			if err := svc.Deliver(context.Background(), payload(t, uuid.New())); err != nil {
+				t.Fatalf("событие ушло на ретрай: %v", err)
+			}
+			if len(provider.appended) != 0 {
+				t.Fatalf("в таблицу что-то записано: %v", provider.appended)
+			}
+		})
+	}
+}
+
+// Постановка события: привязанная форма даёт строку в канал таблиц, и адресуется
+// она id ПРИВЯЗКИ — отвязка и новая привязка не должны получить старое событие.
+func TestEnqueueSubmission_LinkedForm(t *testing.T) {
+	store := &fakeStore{link: linkedSheet()}
+	out := &fakeOutbox{}
+	svc := deliveryService(store, &fakeProvider{}, fakeSubmissions{}, out)
+
+	if err := svc.EnqueueSubmission(context.Background(), testForm, testSubmission); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if out.channel != integrations.ChannelSheets {
+		t.Fatalf("канал = %q", out.channel)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(out.payload, &got); err != nil {
+		t.Fatalf("payload не разбирается: %v", err)
+	}
+	if got["linkId"] != store.link.ID.String() || got["submissionId"] != testSubmission.String() {
+		t.Fatalf("payload = %v", got)
+	}
+}
+
+// Форма не привязана — события нет вовсе: приём ответа не платит за интеграцию,
+// которой у формы не заведено.
+func TestEnqueueSubmission_UnlinkedForm(t *testing.T) {
+	out := &fakeOutbox{}
+	svc := deliveryService(&fakeStore{linkErr: pgx.ErrNoRows}, &fakeProvider{}, fakeSubmissions{}, out)
+
+	if err := svc.EnqueueSubmission(context.Background(), testForm, testSubmission); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if out.channel != "" {
+		t.Fatalf("событие поставлено для непривязанной формы: %q", out.channel)
+	}
+}
+
+func brokenLink() integrations.FormLink {
+	l := linkedSheet()
+	l.Status = integrations.StatusBroken
+	l.LastError = "доступ отозван"
+	return l
+}
+
+func payload(t *testing.T, linkID uuid.UUID) []byte {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{
+		"linkId":       linkID.String(),
+		"submissionId": testSubmission.String(),
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return raw
+}
+
+var testSubmission = uuid.MustParse("00000000-0000-7000-8000-000000000004")

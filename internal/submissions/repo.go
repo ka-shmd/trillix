@@ -108,6 +108,25 @@ func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, 
 	return out, nil
 }
 
+// GetForDelivery — один ответ формы для фоновой доставки во внешнюю таблицу.
+// pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором либо скрыт
+// тарифом (over_quota). Оба случая штатны и разбираются вызывающим.
+func (Repo) GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error) {
+	row, err := postgres.New(db).GetSubmissionForDelivery(ctx, postgres.GetSubmissionForDeliveryParams{
+		ID:     id,
+		FormID: formID,
+	})
+	if err != nil {
+		return Submission{}, err
+	}
+	return Submission{
+		ID:          row.ID,
+		FormVersion: row.FormVersion,
+		Answers:     json.RawMessage(row.Answers),
+		CreatedAt:   row.CreatedAt.Time,
+	}, nil
+}
+
 // DeleteSubmission удаляет один ответ в пределах формы; возвращает число удалённых
 // строк (0 → ответа нет или он принадлежит другой форме).
 func (Repo) DeleteSubmission(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {

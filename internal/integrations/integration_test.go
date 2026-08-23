@@ -28,13 +28,23 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/integrations"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 var testPool *pgxpool.Pool
+
+// testOutbox — диспетчер очереди последней собранной вертикали: тест доставки
+// гоняет его руками, как это делает periodic-задача в проде.
+var testOutbox *mail.Service
+
+// testIntegrations — сервис последней собранной вертикали: постановку события
+// делает он же, что и в проде (submissions зовёт его после коммита).
+var testIntegrations *integrations.Service
 
 func TestMain(m *testing.M) {
 	ctx := context.Background()
@@ -53,7 +63,7 @@ const appOrigin = "http://localhost:5173"
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, forms, integration_accounts CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, forms, integration_accounts, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -74,6 +84,16 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 
 	svc := integrations.NewService(testPool, integrations.Repo{}, wsSvc, formsSvc, provider, testKey)
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey)
+
+	// Доставка: настоящий outbox (mail) как очередь, настоящий submissions как
+	// источник строки. Провайдер подставной — живой поход в Google означал бы
+	// тест, зелёный только при интернете.
+	outbox := pgtest.MailService(testPool)
+	subsSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, nil,
+		outbox, plans, submissions.Repo{}, appOrigin)
+	svc = svc.WithDelivery(outbox, subsSvc)
+	outbox.WithTransport(integrations.ChannelSheets, svc)
+	testOutbox, testIntegrations = outbox, svc
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -563,4 +583,115 @@ func closeBody(t *testing.T, r *http.Response) {
 	if err := r.Body.Close(); err != nil {
 		t.Errorf("close body: %v", err)
 	}
+}
+
+// Полный путь доставки против настоящей БД: ответ ставится в очередь, диспетчер
+// (тот же, что шлёт письма) отдаёт его транспорту таблиц, строка уезжает в лист,
+// строка очереди помечается отправленной.
+func TestIntegrations_DeliverSubmission(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	connectAccount(t, owner, srv, wsID)
+
+	formID := newForm(t, wsID, "f-deliver")
+	versionID := publishVersion(t, formID)
+	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	subID := newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
+	enqueueDelivery(t, srv, formID, subID)
+
+	// В очереди рядом лежит письмо-подтверждение регистрации: диспетчер один на
+	// все каналы, и это ровно то, что проверяется, — таблицы и почта едут вместе.
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("в лист дописано %d строк", len(provider.appended))
+	}
+	// Порядок колонок листа: id ответа, время, версия, затем вопрос.
+	if got := provider.appended[0]; len(got) != 4 || got[0] != subID || got[3] != "Ирина" {
+		t.Fatalf("строка = %v", got)
+	}
+
+	var pending int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE sent_at IS NULL AND channel = $1`,
+		integrations.ChannelSheets).Scan(&pending); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("в очереди осталось %d недоставленных строк", pending)
+	}
+}
+
+// Ответ формы, которая ни к чему не привязана, событий не порождает: приём не
+// платит за интеграцию, которой у формы нет.
+func TestIntegrations_NoEventForUnlinkedForm(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	formID := newForm(t, wsID, "f-nolink")
+	versionID := publishVersion(t, formID)
+
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{}`))
+
+	var queued int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE channel = $1`, integrations.ChannelSheets).Scan(&queued); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if queued != 0 {
+		t.Fatalf("в очереди %d строк для непривязанной формы", queued)
+	}
+}
+
+// enqueueDelivery ставит событие доставки так же, как это делает приём ответа
+// после коммита. Через HTTP это шло бы публичной ручкой с антиспам-токеном —
+// тест про доставку, а не про приём.
+func enqueueDelivery(t *testing.T, _ *httptest.Server, formID, subID string) {
+	t.Helper()
+	if err := testIntegrations.EnqueueSubmission(context.Background(),
+		uuid.MustParse(formID), uuid.MustParse(subID)); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+}
+
+// publishVersion добавляет форме опубликованную версию с одним вопросом: без
+// версии у ответа нет схемы, а у таблицы — колонок.
+func publishVersion(t *testing.T, formID string) string {
+	t.Helper()
+	id := uuid.New().String()
+	_, err := testPool.Exec(context.Background(),
+		`INSERT INTO form_versions (id, form_id, version, schema) VALUES ($1, $2, 1, $3::jsonb)`,
+		id, formID, `{"schemaVersion":1,"blocks":[
+			{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Имя"}],"settings":{}},
+			{"id":"b1","groupId":"g1","type":"short_text","settings":{}}]}`)
+	if err != nil {
+		t.Fatalf("insert form version: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET published_version_id = $1, status = 'published' WHERE id = $2`, id, formID); err != nil {
+		t.Fatalf("publish form: %v", err)
+	}
+	return id
+}
+
+func newSubmission(t *testing.T, formID, versionID, answers string) string {
+	t.Helper()
+	id := uuid.New().String()
+	_, err := testPool.Exec(context.Background(),
+		`INSERT INTO submissions (id, form_id, form_version_id, answers) VALUES ($1, $2, $3, $4::jsonb)`,
+		id, formID, versionID, answers)
+	if err != nil {
+		t.Fatalf("insert submission: %v", err)
+	}
+	return id
 }

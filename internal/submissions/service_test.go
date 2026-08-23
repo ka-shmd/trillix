@@ -40,6 +40,10 @@ func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Vers
 	return nil, domain.ErrNotFound
 }
 
+func (f fakeForms) PublishedVersions(context.Context, uuid.UUID) ([]forms.Version, error) {
+	return nil, domain.ErrNotFound
+}
+
 func (f fakeForms) SubmissionOwner(context.Context, uuid.UUID) (forms.Owner, error) {
 	return f.owner, nil
 }

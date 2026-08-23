@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -108,7 +110,7 @@ type FormLink struct {
 	SpreadsheetURL  string
 	SheetID         int32
 	SheetTitle      string
-	Columns         []string
+	Columns         []domain.SheetColumn
 	Status          string
 	BackfillBefore  time.Time
 	LastError       string
@@ -124,7 +126,7 @@ type NewFormLink struct {
 	SpreadsheetURL string
 	SheetID        int32
 	SheetTitle     string
-	Columns        []string
+	Columns        []domain.SheetColumn
 	Status         string
 }
 
@@ -156,9 +158,102 @@ func (Repo) GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Fo
 		// pgx.ErrNoRows — «форма не привязана», штатное состояние экрана.
 		return FormLink{}, err
 	}
-	var columns []string
+	return toFormLink(formIntegrationRow{
+		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
+		ExternalEmail: row.ExternalEmail, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
+		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
+		LastDeliveredAt: row.LastDeliveredAt.Time,
+	})
+}
+
+func (Repo) DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error {
+	if err := postgres.New(db).DeleteFormIntegration(ctx, formID); err != nil {
+		return fmt.Errorf("delete form integration: %w", err)
+	}
+	return nil
+}
+
+func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error) {
+	row, err := postgres.New(db).GetFormIntegrationByID(ctx, id)
+	if err != nil {
+		return FormLink{}, err
+	}
+	return toFormLink(formIntegrationRow{
+		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
+		ExternalEmail: row.ExternalEmail, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
+		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
+		LastDeliveredAt: row.LastDeliveredAt.Time,
+	})
+}
+
+func (Repo) GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error) {
+	row, err := postgres.New(db).GetIntegrationAccountByID(ctx, id)
+	if err != nil {
+		return Connection{}, err
+	}
+	return Connection{
+		ID:            row.ID,
+		WorkspaceID:   row.WorkspaceID,
+		Provider:      row.Provider,
+		ExternalID:    row.ExternalAccountID,
+		Email:         row.ExternalEmail,
+		RefreshSealed: row.RefreshToken,
+		Scopes:        row.Scopes,
+		ConnectedBy:   row.ConnectedBy,
+		ConnectedAt:   row.ConnectedAt.Time,
+	}, nil
+}
+
+func (Repo) UpdateLinkColumns(ctx context.Context, db postgres.DBTX, id uuid.UUID, columns []domain.SheetColumn) error {
+	raw, err := json.Marshal(columns)
+	if err != nil {
+		return fmt.Errorf("marshal columns: %w", err)
+	}
+	if err := postgres.New(db).UpdateFormIntegrationColumns(ctx, postgres.UpdateFormIntegrationColumnsParams{
+		ID:      id,
+		Columns: raw,
+	}); err != nil {
+		return fmt.Errorf("update form integration columns: %w", err)
+	}
+	return nil
+}
+
+func (Repo) MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).MarkFormIntegrationDelivered(ctx, id); err != nil {
+		return fmt.Errorf("mark form integration delivered: %w", err)
+	}
+	return nil
+}
+
+func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error {
+	err := postgres.New(db).MarkFormIntegrationBroken(ctx, postgres.MarkFormIntegrationBrokenParams{
+		ID:        id,
+		LastError: pgtype.Text{String: cause, Valid: cause != ""},
+	})
+	if err != nil {
+		return fmt.Errorf("mark form integration broken: %w", err)
+	}
+	return nil
+}
+
+// formIntegrationRow — общий вид строки привязки для двух запросов (по форме и
+// по id): sqlc генерирует им разные типы, а собирается FormLink из них одинаково.
+type formIntegrationRow struct {
+	ID, FormID, AccountID, WorkspaceID uuid.UUID
+	ExternalEmail                      string
+	SpreadsheetID, SpreadsheetUrl      string
+	SheetID                            int32
+	SheetTitle, Status, LastError      string
+	Columns                            []byte
+	BackfillBefore, LastDeliveredAt    time.Time
+}
+
+func toFormLink(row formIntegrationRow) (FormLink, error) {
+	var columns []domain.SheetColumn
 	if err := json.Unmarshal(row.Columns, &columns); err != nil {
-		return FormLink{}, fmt.Errorf("unmarshal columns of form %s: %w", formID, err)
+		return FormLink{}, fmt.Errorf("unmarshal columns of form %s: %w", row.FormID, err)
 	}
 	return FormLink{
 		ID:              row.ID,
@@ -172,15 +267,8 @@ func (Repo) GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Fo
 		SheetTitle:      row.SheetTitle,
 		Columns:         columns,
 		Status:          row.Status,
-		BackfillBefore:  row.BackfillBefore.Time,
-		LastError:       row.LastError.String,
-		LastDeliveredAt: row.LastDeliveredAt.Time,
+		BackfillBefore:  row.BackfillBefore,
+		LastError:       row.LastError,
+		LastDeliveredAt: row.LastDeliveredAt,
 	}, nil
-}
-
-func (Repo) DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error {
-	if err := postgres.New(db).DeleteFormIntegration(ctx, formID); err != nil {
-		return fmt.Errorf("delete form integration: %w", err)
-	}
-	return nil
 }

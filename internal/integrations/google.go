@@ -50,6 +50,12 @@ const (
 // ровно час, а потом молча умирает.
 var ErrNoRefreshToken = errors.New("integrations: провайдер не отдал refresh_token")
 
+// ErrPermanent — провайдер отказал так, что ретраить бессмысленно: доступ
+// отозван, таблица удалена, аккаунт закрыт. Отличать это от «полежал и встал»
+// обязательно: у outbox нет dead-letter, и безнадёжная строка иначе дёргала бы
+// чужой API до конца времён.
+var ErrPermanent = errors.New("integrations: провайдер отказал окончательно")
+
 // ErrScopeDenied — человек снял на экране согласия галочку доступа к Диску.
 // Обычный исход, а не сбой: ему нужен человеческий текст, а не «ошибка 500».
 var ErrScopeDenied = errors.New("integrations: доступ к Google Диску не выдан")
@@ -253,6 +259,12 @@ func (g *Google) do(req *http.Request, out any) error {
 	// Тело ответа наружу не отдаём и в лог не пишем: в нём лежат токены и адрес
 	// человека. Наверх едет только статус.
 	if resp.StatusCode != http.StatusOK {
+		// 401/403 — доступ отозван или его не выдавали; 404 — таблицы больше
+		// нет. Ждать и повторять тут нечего: нужен человек.
+		switch resp.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return fmt.Errorf("%w: статус %d", ErrPermanent, resp.StatusCode)
+		}
 		return fmt.Errorf("статус %d", resp.StatusCode)
 	}
 	if out == nil {
@@ -324,6 +336,28 @@ func (g *Google) WriteHeader(ctx context.Context, accessToken string, s Spreadsh
 		url.PathEscape(a1Range(s.Title, "A1")) + "?valueInputOption=RAW"
 	if err := g.apiJSON(ctx, http.MethodPut, u, accessToken, body, nil); err != nil {
 		return fmt.Errorf("integrations google: write header: %w", err)
+	}
+	return nil
+}
+
+// AppendRow дописывает строку в конец листа.
+//
+// values.append, а не запись в вычисленную строку: номер следующей строки нам
+// неизвестен (автор мог дописать своё руками, отсортировать, вставить строку), и
+// вычисленный индекс однажды затёр бы чужие данные. Ключа идемпотентности у
+// append нет — доставка at-least-once, дубль лечится перезаливом (ADR §10).
+func (g *Google) AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error {
+	values := make([]any, 0, len(row))
+	for _, v := range row {
+		values = append(values, v)
+	}
+	body := map[string]any{"values": []any{values}}
+
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A1")) +
+		":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
+	if err := g.apiJSON(ctx, http.MethodPost, u, accessToken, body, nil); err != nil {
+		return fmt.Errorf("integrations google: append row: %w", err)
 	}
 	return nil
 }

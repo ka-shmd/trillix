@@ -414,6 +414,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
 		WithFiles(filesSvc)
+	// Доставка ответов в таблицы (слайс C): пара «submissions ↔ integrations»
+	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
+	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
+	// периодической задачи, иначе канал без транспорта копил бы ретраи.
+	submissionsSvc = submissionsSvc.WithIntegrations(integrationsSvc)
+	integrationsSvc = integrationsSvc.WithDelivery(mailSvc, submissionsSvc)
+	mailSvc = mailSvc.WithTransport(integrations.ChannelSheets, integrationsSvc)
+
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 

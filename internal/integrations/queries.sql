@@ -53,3 +53,37 @@ WHERE fi.form_id = $1;
 -- Отвязка формы. Сама таблица в Диске автора остаётся: продукт не трогает чужие
 -- файлы, и уж тем более не удаляет их за человека.
 DELETE FROM form_integrations WHERE form_id = $1;
+
+-- name: GetFormIntegrationByID :one
+-- Привязка по своему id — путь фоновой доставки: событие несёт id привязки, а не
+-- формы, поэтому отвязка и повторная привязка не заставят старое событие писать
+-- в новую таблицу.
+SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.id = $1;
+
+-- name: GetIntegrationAccountByID :one
+SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+FROM integration_accounts
+WHERE id = $1;
+
+-- name: UpdateFormIntegrationColumns :exec
+-- Колонки листа изменились (в форме появился новый вопрос). Только добавление:
+-- удалённый вопрос свою колонку не теряет, иначе данные прошлых версий уехали бы
+-- под чужие заголовки.
+UPDATE form_integrations SET columns = $2 WHERE id = $1;
+
+-- name: MarkFormIntegrationDelivered :exec
+-- Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
+-- интеграция, которая заработала, обязана перестать краснеть в кабинете.
+UPDATE form_integrations
+SET last_delivered_at = now(), last_error = NULL, status = 'live'
+WHERE id = $1;
+
+-- name: MarkFormIntegrationBroken :exec
+-- Доставка невозможна без человека (доступ отозван, таблица удалена). Причина
+-- показывается в кабинете; ретраить такое до конца времён смысла нет.
+UPDATE form_integrations SET status = 'broken', last_error = $2 WHERE id = $1;

@@ -2,7 +2,6 @@ package domain
 
 import (
 	"encoding/json"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -103,17 +102,30 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 // и апостроф остался бы видимым символом в ячейке) — см. SheetHeader.
 func (b *CSVBuilder) Header() []string { return sanitizeRecord(b.headers) }
 
-// SheetHeader — те же подписи БЕЗ CSV-санитайзинга: для внешней таблицы, куда
-// значения кладутся режимом, который их не разбирает.
-func (b *CSVBuilder) SheetHeader() []string { return slices.Clone(b.headers) }
+// SheetColumn — колонка внешней таблицы: стабильный ключ и подпись, которую
+// видит человек. Пара, а не два списка: интеграция хранит порядок колонок листа
+// и обязана знать подпись даже для вопроса, которого в форме уже нет (колонка
+// удалённого вопроса остаётся — в ней живут ответы прошлых версий).
+type SheetColumn struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
 
-// Columns — ключи колонок в том же порядке, что подписи: метаколонки, затем id
-// блоков-вопросов. Нужны интеграции: сопоставлять колонку внешней таблицы с
-// вопросом по ПОДПИСИ нельзя — первое же переименование перемешало бы данные.
-func (b *CSVBuilder) Columns() []string {
-	out := make([]string, 0, len(csvMetaColumns)+len(b.columns))
-	out = append(out, csvMetaColumns...)
-	return append(out, b.columns...)
+// SheetColumns — колонки для внешней таблицы: метаколонки, затем вопросы в
+// порядке общей модели. Подписи идут БЕЗ CSV-санитайзинга: значения кладутся
+// режимом, который их не разбирает, и апостроф остался бы видимым в ячейке.
+//
+// Сопоставлять колонку с вопросом по ПОДПИСИ нельзя — первое же переименование
+// перемешало бы данные, поэтому ключ здесь несущий, а подпись — оформление.
+func (b *CSVBuilder) SheetColumns() []SheetColumn {
+	out := make([]SheetColumn, 0, len(csvMetaColumns)+len(b.columns))
+	for i, key := range csvMetaColumns {
+		out = append(out, SheetColumn{Key: key, Label: csvMetaHeader[i]})
+	}
+	for i, key := range b.columns {
+		out = append(out, SheetColumn{Key: key, Label: b.headers[len(csvMetaHeader)+i]})
+	}
+	return out
 }
 
 // Row — строка CSV для одного ответа. Защита от CSV formula injection: ответы

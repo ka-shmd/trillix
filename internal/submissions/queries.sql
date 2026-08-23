@@ -90,3 +90,15 @@ WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota;
 -- предела). Ключ — хеш form_id (коллизия хешей лишь изредка сериализует две разные
 -- формы — безвредно). xact-версия сама снимается на commit/rollback.
 SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
+
+-- name: GetSubmissionForDelivery :one
+-- Один ответ для фоновой доставки во внешнюю таблицу (фаза 25). form_id в
+-- условии не украшение: id ответа приезжает из outbox, и связка «этот ответ
+-- принадлежит этой форме» проверяется здесь, а не подразумевается.
+--
+-- NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
+-- до оплаты, не должен всплыть у него же в Google Таблице.
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;

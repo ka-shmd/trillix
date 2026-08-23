@@ -270,14 +270,20 @@ func TestCSVBuilder_ColumnsMirrorHeader(t *testing.T) {
 		),
 	})
 
-	cols := bld.Columns()
+	cols := bld.SheetColumns()
 	if len(cols) != len(bld.Header()) {
-		t.Fatalf("ключей %d, подписей %d — колонки разъехались", len(cols), len(bld.Header()))
+		t.Fatalf("колонок %d, подписей %d — они разъехались", len(cols), len(bld.Header()))
 	}
-	want := []string{"_id", "_submitted_at", "_form_version", "b1", "b2"}
+	want := []SheetColumn{
+		{Key: "_id", Label: "ID ответа"},
+		{Key: "_submitted_at", Label: "Отправлен"},
+		{Key: "_form_version", Label: "Версия формы"},
+		{Key: "b1", Label: "Имя"},
+		{Key: "b2", Label: "Почта"},
+	}
 	for i, w := range want {
 		if cols[i] != w {
-			t.Errorf("колонка %d = %q, ожидалась %q", i, cols[i], w)
+			t.Errorf("колонка %d = %+v, ожидалась %+v", i, cols[i], w)
 		}
 	}
 }
@@ -290,7 +296,7 @@ func TestCSVBuilder_SheetRowKeepsRawValues(t *testing.T) {
 		vsg(1, grp("=опасная подпись", Block{ID: "b1", Type: BlockShortText})),
 	})
 
-	if got := bld.SheetHeader()[3]; got != "=опасная подпись" {
+	if got := bld.SheetColumns()[3].Label; got != "=опасная подпись" {
 		t.Errorf("подпись для таблицы = %q, ожидалась без префикса", got)
 	}
 	if got := bld.Header()[3]; got != "'=опасная подпись" {

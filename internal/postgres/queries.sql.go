@@ -1495,6 +1495,57 @@ func (q *Queries) GetFormIntegration(ctx context.Context, formID uuid.UUID) (Get
 	return i, err
 }
 
+const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
+SELECT fi.id, fi.form_id, fi.account_id, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.status, fi.backfill_before,
+       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+WHERE fi.id = $1
+`
+
+type GetFormIntegrationByIDRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	AccountID       uuid.UUID
+	SpreadsheetID   string
+	SpreadsheetUrl  string
+	SheetID         int32
+	SheetTitle      string
+	Columns         []byte
+	Status          string
+	BackfillBefore  pgtype.Timestamptz
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	WorkspaceID     uuid.UUID
+	ExternalEmail   string
+}
+
+// Привязка по своему id — путь фоновой доставки: событие несёт id привязки, а не
+// формы, поэтому отвязка и повторная привязка не заставят старое событие писать
+// в новую таблицу.
+func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (GetFormIntegrationByIDRow, error) {
+	row := q.db.QueryRow(ctx, getFormIntegrationByID, id)
+	var i GetFormIntegrationByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.FormID,
+		&i.AccountID,
+		&i.SpreadsheetID,
+		&i.SpreadsheetUrl,
+		&i.SheetID,
+		&i.SheetTitle,
+		&i.Columns,
+		&i.Status,
+		&i.BackfillBefore,
+		&i.LastError,
+		&i.LastDeliveredAt,
+		&i.WorkspaceID,
+		&i.ExternalEmail,
+	)
+	return i, err
+}
+
 const getIntegrationAccount = `-- name: GetIntegrationAccount :one
 SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
 FROM integration_accounts
@@ -1510,6 +1561,29 @@ type GetIntegrationAccountParams struct {
 // выходит: расшифровывает его только сервис, и только чтобы сходить к провайдеру.
 func (q *Queries) GetIntegrationAccount(ctx context.Context, arg GetIntegrationAccountParams) (IntegrationAccount, error) {
 	row := q.db.QueryRow(ctx, getIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	var i IntegrationAccount
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.ExternalAccountID,
+		&i.ExternalEmail,
+		&i.RefreshToken,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.ConnectedAt,
+	)
+	return i, err
+}
+
+const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
+SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+FROM integration_accounts
+WHERE id = $1
+`
+
+func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (IntegrationAccount, error) {
+	row := q.db.QueryRow(ctx, getIntegrationAccountByID, id)
 	var i IntegrationAccount
 	err := row.Scan(
 		&i.ID,
@@ -1804,6 +1878,43 @@ func (q *Queries) GetSubmissionFileForAnswer(ctx context.Context, arg GetSubmiss
 		&i.SizeBytes,
 		&i.ContentType,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSubmissionForDelivery = `-- name: GetSubmissionForDelivery :one
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota
+`
+
+type GetSubmissionForDeliveryParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetSubmissionForDeliveryRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Один ответ для фоновой доставки во внешнюю таблицу (фаза 25). form_id в
+// условии не украшение: id ответа приезжает из outbox, и связка «этот ответ
+// принадлежит этой форме» проверяется здесь, а не подразумевается.
+//
+// NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
+// до оплаты, не должен всплыть у него же в Google Таблице.
+func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissionForDeliveryParams) (GetSubmissionForDeliveryRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionForDelivery, arg.ID, arg.FormID)
+	var i GetSubmissionForDeliveryRow
+	err := row.Scan(
+		&i.ID,
+		&i.Answers,
+		&i.CreatedAt,
+		&i.FormVersion,
 	)
 	return i, err
 }
@@ -3030,6 +3141,35 @@ func (q *Queries) MarkEmailVerified(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markFormIntegrationBroken = `-- name: MarkFormIntegrationBroken :exec
+UPDATE form_integrations SET status = 'broken', last_error = $2 WHERE id = $1
+`
+
+type MarkFormIntegrationBrokenParams struct {
+	ID        uuid.UUID
+	LastError pgtype.Text
+}
+
+// Доставка невозможна без человека (доступ отозван, таблица удалена). Причина
+// показывается в кабинете; ретраить такое до конца времён смысла нет.
+func (q *Queries) MarkFormIntegrationBroken(ctx context.Context, arg MarkFormIntegrationBrokenParams) error {
+	_, err := q.db.Exec(ctx, markFormIntegrationBroken, arg.ID, arg.LastError)
+	return err
+}
+
+const markFormIntegrationDelivered = `-- name: MarkFormIntegrationDelivered :exec
+UPDATE form_integrations
+SET last_delivered_at = now(), last_error = NULL, status = 'live'
+WHERE id = $1
+`
+
+// Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
+// интеграция, которая заработала, обязана перестать краснеть в кабинете.
+func (q *Queries) MarkFormIntegrationDelivered(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markFormIntegrationDelivered, id)
+	return err
+}
+
 const markOutboxFailed = `-- name: MarkOutboxFailed :exec
 UPDATE outbox
 SET attempts = $2, next_attempt_at = $3, last_error = $4
@@ -3485,6 +3625,23 @@ func (q *Queries) UpdateFormDraftSchema(ctx context.Context, arg UpdateFormDraft
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateFormIntegrationColumns = `-- name: UpdateFormIntegrationColumns :exec
+UPDATE form_integrations SET columns = $2 WHERE id = $1
+`
+
+type UpdateFormIntegrationColumnsParams struct {
+	ID      uuid.UUID
+	Columns []byte
+}
+
+// Колонки листа изменились (в форме появился новый вопрос). Только добавление:
+// удалённый вопрос свою колонку не теряет, иначе данные прошлых версий уехали бы
+// под чужие заголовки.
+func (q *Queries) UpdateFormIntegrationColumns(ctx context.Context, arg UpdateFormIntegrationColumnsParams) error {
+	_, err := q.db.Exec(ctx, updateFormIntegrationColumns, arg.ID, arg.Columns)
+	return err
 }
 
 const updateFormName = `-- name: UpdateFormName :one

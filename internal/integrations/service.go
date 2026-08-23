@@ -30,9 +30,14 @@ type Store interface {
 	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) error
 	Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) (Connection, error)
 	Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error)
+	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
 	GetLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (FormLink, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, formID uuid.UUID) error
+	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
+	UpdateLinkColumns(ctx context.Context, db postgres.DBTX, id uuid.UUID, columns []domain.SheetColumn) error
+	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
 }
 
 var _ Store = Repo{}
@@ -53,6 +58,7 @@ type Provider interface {
 	// второй, у которого таблиц нет (YAGNI, PROCESS §2).
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
+	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
 }
 
 // Service — подключение внешних аккаунтов к пространству.
@@ -61,7 +67,11 @@ type Service struct {
 	repo   Store
 	access Access
 	forms  Forms
-	google Provider
+	// outbox и submissions — доставка ответов (слайс C). Подключаются сеттером
+	// WithDelivery; nil означает «сборка без доставки» (её нет в тестах привязки).
+	outbox      Outbox
+	submissions Submissions
+	google      Provider
 	// key — общий секрет приложения (FORM_TOKEN_SECRET). Из него HKDF выводит
 	// ключ шифрования refresh-токенов; сам он здесь не используется ни для чего
 	// другого и наружу не отдаётся.
@@ -342,7 +352,8 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 	}
 	// Шапка пишется сразу: таблица без заголовков — это таблица, в которой
 	// человек не поймёт, что за колонки, ещё до первого ответа.
-	if err := s.google.WriteHeader(ctx, token, sheet, builder.SheetHeader()); err != nil {
+	columns := builder.SheetColumns()
+	if err := s.google.WriteHeader(ctx, token, sheet, columnLabels(columns)); err != nil {
 		return FormLink{}, err
 	}
 
@@ -354,7 +365,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID) (Fo
 		SpreadsheetURL: sheet.URL,
 		SheetID:        sheet.SheetID,
 		SheetTitle:     sheet.Title,
-		Columns:        builder.Columns(),
+		Columns:        columns,
 		Status:         StatusLive,
 	}
 	if err := s.repo.InsertLink(ctx, s.db, link); err != nil {
@@ -387,6 +398,15 @@ func (s *Service) DisconnectForm(ctx context.Context, userID, formID uuid.UUID) 
 	}
 	// Идемпотентно: отвязывать нечего — тоже успех (вторая вкладка не краснеет).
 	return s.repo.DeleteLink(ctx, s.db, formID)
+}
+
+// columnLabels — подписи колонок в порядке листа (шапка).
+func columnLabels(columns []domain.SheetColumn) []string {
+	out := make([]string, len(columns))
+	for i, c := range columns {
+		out[i] = c.Label
+	}
+	return out
 }
 
 // spreadsheetTitle — имя файла в Диске автора. Внутреннее имя формы (если задано)

@@ -50,6 +50,19 @@ func (b Backoff) delay(attempts int32) time.Duration {
 	return d
 }
 
+// Transport — доставка payload одного канала. Интерфейс появился со вторым
+// каналом (таблицы, фаза 25): диспетчер по-прежнему тупой релей — он не знает
+// ни про Google, ни про формы, а зовёт транспорт своего канала и ретраит его
+// сбои по общему бэкоффу.
+//
+// Ошибка транспорта = «попробуй позже». Событие, которое доставлять НЕ надо
+// (интеграция отключена, помечена сломанной), транспорт гасит сам, возвращая
+// nil: у outbox нет dead-letter, и вечный ретрай безнадёжной строки — это
+// строка, которая раз в час дёргает чужой API до конца времён.
+type Transport interface {
+	Deliver(ctx context.Context, payload []byte) error
+}
+
 // Service — диспетчеризация outbox и запись намерений доставки.
 type Service struct {
 	db      postgres.DBTX // пул: выборка готовых и пометки исхода в диспетчере
@@ -58,11 +71,36 @@ type Service struct {
 	log     *slog.Logger
 	batch   int32
 	backoff Backoff
-	now     func() time.Time // подменяется в тестах
+	// transports — каналы сверх почты (channel → транспорт). Почта осталась
+	// отдельным полем: она была здесь первой и живёт своим интерфейсом Mailer
+	// с шаблонами, а не сырым payload.
+	transports map[string]Transport
+	now        func() time.Time // подменяется в тестах
 }
 
 func NewService(db postgres.DBTX, repo Store, mailer Mailer, log *slog.Logger, batch int32, backoff Backoff) *Service {
-	return &Service{db: db, repo: repo, mailer: mailer, log: log, batch: batch, backoff: backoff, now: time.Now}
+	return &Service{
+		db: db, repo: repo, mailer: mailer, log: log, batch: batch, backoff: backoff,
+		transports: map[string]Transport{}, now: time.Now,
+	}
+}
+
+// WithTransport подключает транспорт канала. Вызывается при сборке приложения
+// ДО старта диспетчера: канал, у которого транспорта нет, даёт ошибку доставки
+// и копит ретраи — молча терять строки нельзя.
+func (s *Service) WithTransport(channel string, t Transport) *Service {
+	s.transports[channel] = t
+	return s
+}
+
+// Enqueue пишет намерение доставки в произвольный канал. Для почты есть
+// EnqueueEmail с её шаблонами; здесь payload — дело канала, и диспетчер в него
+// не заглядывает. db — исполнитель продюсера.
+func (s *Service) Enqueue(ctx context.Context, db postgres.DBTX, channel string, payload []byte) error {
+	if channel == "" {
+		return fmt.Errorf("enqueue outbox: empty channel")
+	}
+	return s.repo.Enqueue(ctx, db, domain.NewID(), channel, payload)
 }
 
 // EnqueueEmail пишет письмо в outbox через переданный исполнитель. db — транзакция
@@ -142,7 +180,11 @@ func (s *Service) deliver(ctx context.Context, p Pending) error {
 		}
 		return s.mailer.Send(ctx, msg)
 	default:
-		return fmt.Errorf("unknown outbox channel %q", p.Channel)
+		t, ok := s.transports[p.Channel]
+		if !ok {
+			return fmt.Errorf("unknown outbox channel %q", p.Channel)
+		}
+		return t.Deliver(ctx, p.Payload)
 	}
 }
 
