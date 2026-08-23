@@ -130,6 +130,8 @@ npm test
 `FORM_TOKEN_SECRET`, `PUBLIC_RENDERER_BASE_URL`/`_INDEX_PATH`, `OG_IMAGE_URL`,
 `APP_ORIGIN` (CSRF), домены Caddy `APP_DOMAIN`/`RENDERER_DOMAIN`, build-time `VITE_PUBLIC_BASE_URL`
 и опциональные `YANDEX_OAUTH_CLIENT_ID`/`_SECRET` (вход через Яндекс ID; не заданы — провайдер
-выключен, кнопка не рисуется).
+выключен, кнопка не рисуется), `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` и `GOOGLE_PICKER_API_KEY`
+(интеграция формы с Google Таблицами; не заданы — таб «Интеграции» живёт, но говорит, что на
+этом контуре она не настроена).
 Различия контуров живут только в значениях: `.env.dev` (http, localhost) vs `.env.prod-local`
 (https, `*.localhost`, `COOKIE_SECURE=true`) — приложение одно, ветвления по контуру в коде нет.
