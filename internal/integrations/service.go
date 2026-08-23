@@ -38,6 +38,7 @@ type Store interface {
 	EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
+	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error)
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
 	StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error
 	FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
@@ -702,27 +703,113 @@ func (s *Service) DisconnectForm(ctx context.Context, userID, formID, linkID uui
 	return nil
 }
 
-// UpdateConnection правит подпись связки и её тумблер.
+// ConnectionPatch — правка связки с того же экрана, на котором её подключали.
+//
+// Тот же экран не прихоть: подключение и правка отвечают на одни и те же
+// вопросы («куда лить, под каким именем, переносить ли историю»), и второй
+// экран с другой раскладкой заставлял бы человека заново искать, где что.
+type ConnectionPatch struct {
+	Name    string
+	Enabled bool
+	// Target — куда лить. Совпал с текущим — связка остаётся на месте, и мы не
+	// трогаем ни лист, ни колонки. Отличается — связка ПЕРЕЕЗЖАЕТ: в новом
+	// листе пишется шапка, колонки собираются заново.
+	Target ConnectOptions
+	// RetargetOnly — правка пришла без выбора цели (например, только тумблер из
+	// списка). Тогда цель не трогаем вовсе.
+	KeepTarget bool
+}
+
+// UpdateConnection правит подпись, тумблер и цель связки.
 //
 // Выключенная связка сохраняет таблицу, колонки и историю: «выключить на время»
 // и «удалить навсегда» — разные намерения, и подменять первое вторым нельзя.
-func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, name string, enabled bool) error {
+func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error {
 	if err := s.canEditForm(ctx, userID, formID); err != nil {
 		return err
 	}
-	name = strings.TrimSpace(name)
+	name := strings.TrimSpace(patch.Name)
 	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
 		return fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
 	}
 
-	n, err := s.repo.UpdateLinkSettings(ctx, s.db, linkID, formID, name, enabled)
+	n, err := s.repo.UpdateLinkSettings(ctx, s.db, linkID, formID, name, patch.Enabled)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return domain.ErrNotFound
 	}
+	if patch.KeepTarget {
+		return nil
+	}
+	return s.retarget(ctx, userID, formID, linkID, patch.Target)
+}
+
+// retarget переносит связку в другой лист, если человек выбрал другой.
+//
+// Строки, уже доставленные в прежний лист, остаются там: убирать за человеком в
+// его же таблице — не наше дело, и «переехали» не значит «сотрите прошлое».
+func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID, target ConnectOptions) error {
+	if !s.Enabled() {
+		return domain.ErrNotFound
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return err
+	}
+	if sameTarget(link, target) {
+		return nil
+	}
+
+	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	if err != nil {
+		return fmt.Errorf("retarget connection: %w", err)
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return err
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+
+	sheet, err := s.newSheet(ctx, token, form, target)
+	if err != nil {
+		return err
+	}
+	builder, err := s.columnModel(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+	columns := builder.SheetColumns()
+	if err := s.google.WriteHeader(ctx, token, sheet, columnLabels(columns)); err != nil {
+		return err
+	}
+
+	// Колонки собираются ЗАНОВО, а не переносятся: новый лист пуст, и держать в
+	// нём колонки вопросов, которых в форме уже нет, незачем.
+	status := StatusLive
+	if target.Backfill {
+		status = StatusBackfilling
+	}
+	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, linkID, formID, sheet, columns, status); err != nil {
+		return err
+	}
+	if target.Backfill {
+		return s.startBackfill(ctx, linkID)
+	}
 	return nil
+}
+
+// sameTarget отвечает, указывает ли правка на тот же лист, что уже привязан.
+// Пустой SpreadsheetID означает «завести новую книгу» — это всегда переезд.
+func sameTarget(link FormLink, target ConnectOptions) bool {
+	if target.SpreadsheetID == "" || target.SpreadsheetID != link.SpreadsheetID {
+		return false
+	}
+	return target.SheetID != nil && *target.SheetID == link.SheetID
 }
 
 // canEditForm — общее начало операций над связками: форма видна спрашивающему

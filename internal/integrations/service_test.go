@@ -60,13 +60,15 @@ type fakeStore struct {
 	insertedLnk *integrations.NewFormLink
 	unlinked    bool
 
-	columnsSet   []domain.SheetColumn
-	delivered    bool
-	brokenWith   string
-	settings     *linkSettings
-	backfillFrom *time.Time
-	backfillDone bool
-	sheetCleared bool
+	columnsSet     []domain.SheetColumn
+	delivered      bool
+	brokenWith     string
+	settings       *linkSettings
+	retargeted     *integrations.Spreadsheet
+	retargetStatus string
+	backfillFrom   *time.Time
+	backfillDone   bool
+	sheetCleared   bool
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) error {
@@ -115,6 +117,13 @@ func (f *fakeStore) EnabledLinkIDs(_ context.Context, _ postgres.DBTX, _ uuid.UU
 
 func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
 	f.unlinked = true
+	return 1, nil
+}
+
+func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+	f.retargeted = &sheet
+	f.columnsSet = columns
+	f.retargetStatus = status
 	return 1, nil
 }
 
@@ -524,7 +533,8 @@ func TestUpdateConnection(t *testing.T) {
 	store := &fakeStore{link: linkedSheet()}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	err := svc.UpdateConnection(context.Background(), testUser, testForm, store.link.ID, "  Архив  ", false)
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, store.link.ID,
+		integrations.ConnectionPatch{Name: "  Архив  ", Enabled: false, KeepTarget: true})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -808,5 +818,60 @@ func TestConnectForm_UnknownSheet(t *testing.T) {
 		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+}
+
+// Правка с тем же листом ничего не переносит: человек поменял только подпись, и
+// трогать чужую таблицу из-за этого нельзя.
+func TestUpdateConnection_SameTargetKeepsSheet(t *testing.T) {
+	link := linkedSheet()
+	link.SpreadsheetID, link.SheetID = "ss-old", 5
+	store := &fakeStore{link: link}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	sheetID := int32(5)
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name:   "Архив",
+			Target: integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID},
+		})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if store.retargeted != nil {
+		t.Fatalf("связка переехала без нужды: %+v", store.retargeted)
+	}
+	if provider.header != nil {
+		t.Error("шапка переписана без переезда")
+	}
+}
+
+// Выбран другой лист — связка переезжает: в новом листе пишется шапка, колонки
+// собираются заново, статус зависит от тумблера переноса.
+func TestUpdateConnection_Retarget(t *testing.T) {
+	link := linkedSheet()
+	link.SpreadsheetID, link.SheetID = "ss-old", 5
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name:   "Новый лист",
+			Target: integrations.ConnectOptions{SpreadsheetID: "", Backfill: true},
+		})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if store.retargeted == nil {
+		t.Fatal("связка не переехала")
+	}
+	if len(provider.header) == 0 {
+		t.Error("шапка в новом листе не написана")
+	}
+	if store.retargetStatus != integrations.StatusBackfilling || store.backfillFrom == nil {
+		t.Errorf("перенос не начат: статус %q", store.retargetStatus)
 	}
 }

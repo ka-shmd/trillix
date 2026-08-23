@@ -57,7 +57,7 @@ type integrationsService interface {
 	Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error)
 	DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
-	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, name string, enabled bool) error
+	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error
 	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error
 	Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error
@@ -145,8 +145,12 @@ type accountResponse struct {
 // аккаунтом), потому что это два независимых состояния: аккаунт может быть
 // подключён без единой привязанной формы, и экран показывает разные вещи.
 type sheetResponse struct {
-	ID              string  `json:"id"`
-	URL             string  `json:"url"`
+	ID  string `json:"id"`
+	URL string `json:"url"`
+	// SpreadsheetID и SheetID — текущая цель. Экран правки открывается тем же
+	// окном, что и подключение, и обязан показать в полях то, что уже выбрано.
+	SpreadsheetID   string  `json:"spreadsheetId"`
+	SheetID         int32   `json:"sheetId"`
 	Enabled         bool    `json:"enabled"`
 	Name            string  `json:"name,omitempty"`
 	Status          string  `json:"status"`
@@ -310,10 +314,17 @@ func (h *Handler) spreadsheets(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, map[string][]spreadsheetResponse{"spreadsheets": out})
 }
 
-// connectionRequest — правка связки: подпись и тумблер.
+// connectionRequest — правка связки с того же экрана, на котором её подключали:
+// подпись, тумблер и цель.
+//
+// spreadsheetId отсутствует в теле — цель не трогаем вовсе (так шлёт тумблер из
+// списка). Присутствует и отличается от текущей — связка переезжает.
 type connectionRequest struct {
-	Name    string `json:"name"`
-	Enabled *bool  `json:"enabled"`
+	Name          string  `json:"name"`
+	Enabled       *bool   `json:"enabled"`
+	SpreadsheetID *string `json:"spreadsheetId"`
+	SheetID       *int32  `json:"sheetId"`
+	Backfill      *bool   `json:"backfill"`
 }
 
 func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
@@ -332,9 +343,20 @@ func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	// Тумблер не назван — связка остаётся включённой: правка подписи не должна
 	// исподтишка что-то выключать.
-	enabled := req.Enabled == nil || *req.Enabled
+	patch := ConnectionPatch{
+		Name:       req.Name,
+		Enabled:    req.Enabled == nil || *req.Enabled,
+		KeepTarget: req.SpreadsheetID == nil,
+	}
+	if req.SpreadsheetID != nil {
+		patch.Target = ConnectOptions{
+			SpreadsheetID: *req.SpreadsheetID,
+			SheetID:       req.SheetID,
+			Backfill:      req.Backfill != nil && *req.Backfill,
+		}
+	}
 
-	if err := h.svc.UpdateConnection(r.Context(), user.ID, formID, linkID, req.Name, enabled); err != nil {
+	if err := h.svc.UpdateConnection(r.Context(), user.ID, formID, linkID, patch); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
@@ -383,12 +405,14 @@ func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {
 
 func toSheetResponse(l FormLink) *sheetResponse {
 	out := &sheetResponse{
-		ID:        l.ID.String(),
-		URL:       l.SpreadsheetURL,
-		Enabled:   l.Enabled,
-		Name:      l.Name,
-		Status:    l.Status,
-		LastError: l.LastError,
+		ID:            l.ID.String(),
+		URL:           l.SpreadsheetURL,
+		SpreadsheetID: l.SpreadsheetID,
+		SheetID:       l.SheetID,
+		Enabled:       l.Enabled,
+		Name:          l.Name,
+		Status:        l.Status,
+		LastError:     l.LastError,
 	}
 	if !l.LastDeliveredAt.IsZero() {
 		at := l.LastDeliveredAt.UTC().Format(time.RFC3339)

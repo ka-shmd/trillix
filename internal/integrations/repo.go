@@ -337,3 +337,26 @@ func (Repo) FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 	}
 	return nil
 }
+
+// UpdateLinkTarget переносит связку в другой лист: адрес, колонки и статус
+// меняются разом, прошлая ошибка гасится.
+func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+	raw, err := json.Marshal(columns)
+	if err != nil {
+		return 0, fmt.Errorf("marshal columns: %w", err)
+	}
+	n, err := postgres.New(db).UpdateFormIntegrationTarget(ctx, postgres.UpdateFormIntegrationTargetParams{
+		ID:             id,
+		FormID:         formID,
+		SpreadsheetID:  sheet.ID,
+		SpreadsheetUrl: sheet.URL,
+		SheetID:        sheet.SheetID,
+		SheetTitle:     sheet.Title,
+		Columns:        raw,
+		Status:         status,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form integration target: %w", err)
+	}
+	return n, nil
+}

@@ -67,6 +67,15 @@ SELECT id FROM form_integrations WHERE form_id = $1 AND enabled;
 -- более не удаляет их за человека.
 DELETE FROM form_integrations WHERE id = $1 AND form_id = $2;
 
+-- name: UpdateFormIntegrationTarget :execrows
+-- Связка переезжает в другой лист (правка на том же экране, что и подключение).
+-- Строки, уже доставленные в прежний лист, остаются там: продукт не убирает за
+-- человеком в его же таблице.
+UPDATE form_integrations
+SET spreadsheet_id = $3, spreadsheet_url = $4, sheet_id = $5, sheet_title = $6,
+    columns = $7, status = $8, backfill_before = NULL, last_error = NULL
+WHERE id = $1 AND form_id = $2;
+
 -- name: UpdateFormIntegrationSettings :execrows
 -- Правка связки: подпись и тумблер. Тем же запросом, что и проверка
 -- принадлежности форме.

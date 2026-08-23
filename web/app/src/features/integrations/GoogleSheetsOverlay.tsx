@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
+import { AlertCircle, ExternalLink, RefreshCw, Table2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
@@ -12,7 +12,7 @@ import {
   useCreateSheet,
   useDisconnectAccount,
   useRefillSheet,
-  useUnlinkSheet,
+  useUpdateConnection,
 } from './queries'
 import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
@@ -84,7 +84,7 @@ export function GoogleSheetsOverlay({
   // «выбрал файл на Диске — оверлей перезагрузился, и ничего не произошло»:
   // выбранная книга и набранное имя исчезали ровно в тот момент, когда
   // возвращалась модальность.
-  const setup = useSetupState()
+  const setup = useSetupState(connection)
 
   return (
     <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
@@ -103,22 +103,14 @@ export function GoogleSheetsOverlay({
             </p>
           </header>
 
-          {connection ? (
-            <ConnectedBody
-              formId={formId}
-              state={state}
-              connection={connection}
-              onDone={onClose}
-            />
-          ) : (
-            <SetupBody
-              formId={formId}
-              state={state}
-              setup={setup}
-              onDone={onClose}
-              onPickerOpenChange={setPickerOpen}
-            />
-          )}
+          <SetupBody
+            formId={formId}
+            state={state}
+            connection={connection}
+            setup={setup}
+            onDone={onClose}
+            onPickerOpenChange={setPickerOpen}
+          />
         </div>
       </DialogContent>
     </Dialog>
@@ -159,12 +151,23 @@ interface SetupState {
   setPicked: (value: SpreadsheetRef | null) => void
 }
 
-function useSetupState(): SetupState {
-  const [name, setName] = useState('')
-  const [spreadsheet, setSpreadsheetValue] = useState(NEW_SPREADSHEET)
-  const [sheet, setSheet] = useState(NEW_SHEET)
-  const [backfill, setBackfill] = useState(true)
-  const [picked, setPicked] = useState<SpreadsheetRef | null>(null)
+// Правка открывается ТЕМ ЖЕ окном, что и подключение, и поля в нём —
+// сегодняшние значения связки. Второй экран с другой раскладкой заставлял бы
+// человека заново искать, где что: вопросы-то одни и те же.
+function useSetupState(connection: FormSheet | null): SetupState {
+  const [name, setName] = useState(connection?.name ?? '')
+  const [spreadsheet, setSpreadsheetValue] = useState(
+    connection ? connection.spreadsheetId : NEW_SPREADSHEET,
+  )
+  const [sheet, setSheet] = useState(connection ? String(connection.sheetId) : NEW_SHEET)
+  // При правке перенос по умолчанию ВЫКЛЮЧЕН: связка уже работает, и молча
+  // залить историю второй раз значит удвоить строки в чужой таблице.
+  const [backfill, setBackfill] = useState(connection === null)
+  const [picked, setPicked] = useState<SpreadsheetRef | null>(
+    // Книга связки может быть не из нашего списка (выбрана на Диске) — тогда
+    // без этого пункта Select не смог бы показать выбранное.
+    connection ? { id: connection.spreadsheetId, name: connection.name || 'Текущая таблица' } : null,
+  )
 
   return {
     name,
@@ -190,18 +193,26 @@ function useSetupState(): SetupState {
 function SetupBody({
   formId,
   state,
+  connection,
   setup,
   onDone,
   onPickerOpenChange,
 }: {
   formId: string
   state: FormIntegrations
+  connection: FormSheet | null
   setup: SetupState
   onDone: () => void
   onPickerOpenChange: (open: boolean) => void
 }) {
   const { account, workspaceId } = state
   const create = useCreateSheet(formId)
+  const update = useUpdateConnection(formId)
+  const disconnect = useDisconnectAccount(workspaceId)
+  const refill = useRefillSheet(formId)
+  const saving = create.isPending || update.isPending
+  const failed = create.isError || update.isError
+  const failure = create.error ?? update.error
 
   // Список таблиц имеет смысл только у подключённого аккаунта: это поход к
   // провайдеру его токеном.
@@ -221,6 +232,10 @@ function SetupBody({
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Состояние существующей связки — первым делом: человек открыл её, скорее
+          всего, потому что что-то не так. */}
+      {connection && <ConnectionState connection={connection} />}
+
       <div className="flex flex-col gap-2">
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
@@ -269,36 +284,79 @@ function SetupBody({
         />
       </div>
 
-      {create.isError && (
+      {failed && (
         <p role="alert" className="text-sm text-destructive">
-          {create.error instanceof ApiError && create.error.code === 'validation_failed'
-            ? create.error.message
-            : 'Не удалось подключить таблицу. Попробуйте ещё раз.'}
+          {failure instanceof ApiError && failure.code === 'validation_failed'
+            ? failure.message
+            : 'Не удалось сохранить. Попробуйте ещё раз.'}
         </p>
       )}
 
-      <Button
-        size="lg"
-        disabled={create.isPending}
-        onClick={() =>
-          create.mutate(
-            {
-              name: setup.name,
-              spreadsheetId: setup.spreadsheet === NEW_SPREADSHEET ? '' : setup.spreadsheet,
-              sheetId:
-                setup.spreadsheet === NEW_SPREADSHEET || setup.sheet === NEW_SHEET
-                  ? null
-                  : Number(setup.sheet),
-              backfill: setup.backfill,
-            },
-            { onSuccess: onDone },
-          )
-        }
-      >
-        Подключить Google Таблицы
+      <Button size="lg" disabled={saving} onClick={() => save()}>
+        {connection ? 'Сохранить' : 'Подключить Google Таблицы'}
       </Button>
+
+      {connection && (
+        <div className="flex flex-wrap items-center gap-2 border-t pt-4">
+          <Button asChild variant="outline" size="sm" className="gap-1.5">
+            <a href={connection.url} target="_blank" rel="noreferrer">
+              <ExternalLink className="size-4" /> Открыть таблицу
+            </a>
+          </Button>
+          {/* Перезалив — отдельное действие, а не тумблер сверху: он ЧИСТИТ лист
+              и наполняет заново, и путать его с «перенести историю в новый лист»
+              нельзя. */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={refill.isPending || connection.status === 'backfilling'}
+            onClick={() => refill.mutate(connection.id)}
+          >
+            <RefreshCw className="size-4" /> Перезалить всё
+          </Button>
+        </div>
+      )}
+
+      {account.canManage && (
+        <div className="border-t pt-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={disconnect.isPending}
+            onClick={() => disconnect.mutate(undefined, { onSuccess: onDone })}
+          >
+            Отключить Google от пространства
+          </Button>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Снимет все подключения всех форм пространства.
+          </p>
+        </div>
+      )}
     </div>
   )
+
+  // save — одна кнопка на оба случая: подключаем новую связку либо сохраняем
+  // правку существующей. Тумблер связки правкой не трогается: он живёт в
+  // списке, и подменять его сохранением настроек нельзя.
+  function save() {
+    const target = {
+      spreadsheetId: setup.spreadsheet === NEW_SPREADSHEET ? '' : setup.spreadsheet,
+      sheetId:
+        setup.spreadsheet === NEW_SPREADSHEET || setup.sheet === NEW_SHEET
+          ? null
+          : Number(setup.sheet),
+      backfill: setup.backfill,
+    }
+    if (connection) {
+      update.mutate(
+        { id: connection.id, name: setup.name, enabled: connection.enabled, ...target },
+        { onSuccess: onDone },
+      )
+      return
+    }
+    create.mutate({ name: setup.name, ...target }, { onSuccess: onDone })
+  }
 }
 
 // SheetField — второй шаг выбора: в какой лист книги класть ответы. Существующий
@@ -447,6 +505,41 @@ function SpreadsheetField({
   )
 }
 
+// ConnectionState — что сейчас со связкой. Причина поломки здесь единственное
+// место, где её видно: это не техническая деталь провайдера, а состояние того,
+// что человек настроил, и починка — в его руках (переподключить аккаунт).
+function ConnectionState({ connection }: { connection: FormSheet }) {
+  if (connection.status === 'broken') {
+    return (
+      <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+        {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
+      </p>
+    )
+  }
+  if (connection.status === 'backfilling') {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
+      </p>
+    )
+  }
+  return (
+    <p className="text-sm text-muted-foreground">
+      {connection.lastDeliveredAt
+        ? `Последний ответ уехал в таблицу ${formatMoment(connection.lastDeliveredAt)}.`
+        : 'Ответы будут попадать в таблицу сразу после отправки.'}
+    </p>
+  )
+}
+
+// formatMoment — «23 августа, 14:05» человеку понятнее ISO-строки, а точность до
+// минуты здесь всё, что нужно.
+function formatMoment(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return 'недавно'
+  return at.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+}
+
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
 function ConnectAccount({
   workspaceId,
@@ -550,95 +643,6 @@ function ConnectedAccountField({
   )
 }
 
-// ConnectedBody — форма уже привязана: оверлей показывает состояние и действия.
-function ConnectedBody({
-  formId,
-  state,
-  connection,
-  onDone,
-}: {
-  formId: string
-  state: FormIntegrations
-  connection: FormSheet
-  onDone: () => void
-}) {
-  const { account, workspaceId } = state
-  const sheet = connection
-  const refill = useRefillSheet(formId)
-  const unlink = useUnlinkSheet(formId)
-  const disconnect = useDisconnectAccount(workspaceId)
-
-  return (
-    <div className="flex flex-col gap-4">
-      {sheet.name && <p className="text-sm">{sheet.name}</p>}
-      <p className="text-sm text-muted-foreground">
-        Подключено как <span className="text-foreground">{account.email}</span>
-      </p>
-
-      {sheet.status === 'broken' ? (
-        <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
-          {sheet.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
-        </p>
-      ) : sheet.status === 'backfilling' ? (
-        <p className="text-sm text-muted-foreground">
-          Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
-        </p>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          {sheet.lastDeliveredAt
-            ? `Последний ответ уехал в таблицу ${formatMoment(sheet.lastDeliveredAt)}.`
-            : 'Ответы будут попадать в таблицу сразу после отправки.'}
-        </p>
-      )}
-
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm" className="gap-1.5">
-          <a href={sheet.url} target="_blank" rel="noreferrer">
-            <ExternalLink className="size-4" /> Открыть таблицу
-          </a>
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="gap-1.5"
-          disabled={refill.isPending || sheet.status === 'backfilling'}
-          onClick={() => refill.mutate(sheet.id)}
-        >
-          <RefreshCw className="size-4" /> Перезалить всё
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="gap-1.5"
-          disabled={unlink.isPending}
-          onClick={() => unlink.mutate(sheet.id, { onSuccess: onDone })}
-        >
-          <Unlink className="size-4" /> Отвязать форму
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Отвязка не удаляет таблицу: строки, которые уже уехали, останутся на вашем Диске.
-      </p>
-
-      {account.canManage && (
-        <div className="border-t pt-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={disconnect.isPending}
-            onClick={() => disconnect.mutate(undefined, { onSuccess: onDone })}
-          >
-            Отключить Google от пространства
-          </Button>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Отключение снимет привязки всех форм пространства.
-          </p>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // WaitingNote — ожидание согласия. Не второй модальный слой поверх первого:
 // диалог в диалоге уводит фокус и запирает человека между двумя оверлеями, а
 // окно провайдера и так сверху.
@@ -664,12 +668,4 @@ function connectFailureText(outcome: OAuthOutcome): string {
     default:
       return 'Не удалось подключить Google. Попробуйте ещё раз.'
   }
-}
-
-// formatMoment — «23 августа, 14:05» человеку понятнее ISO-строки, а точность до
-// минуты здесь всё, что нужно.
-function formatMoment(iso: string): string {
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return 'недавно'
-  return at.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
 }

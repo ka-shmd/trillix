@@ -29,6 +29,8 @@ function conn(patch: Partial<FormSheet> = {}): FormSheet {
   return {
     id: 'conn-1',
     url: 'https://docs.google.com/spreadsheets/d/x/edit',
+    spreadsheetId: 'ss-old',
+    sheetId: 0,
     enabled: true,
     status: 'live',
     ...patch,
@@ -242,7 +244,19 @@ describe('оверлей настройки Google Таблиц', () => {
     vi.unstubAllGlobals()
   })
 
-  it('карандаш открывает существующую связку: перезалив заперт на время переноса', () => {
+  it('карандаш открывает ТОТ ЖЕ экран, что и подключение, — с подставленными значениями', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ name: 'Архив' })] }))
+    openConnection()
+
+    // Те же поля, что при подключении, и в них — сегодняшние значения связки.
+    expect((screen.getByLabelText(/название подключения/i) as HTMLInputElement).value).toBe('Архив')
+    expect(screen.getByLabelText('Таблица')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
+    // Отдельного «второго меню» больше нет: кнопка подключения не показывается.
+    expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
+  })
+
+  it('перезалив заперт на время переноса', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
 
@@ -266,7 +280,7 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(
       screen.getAllByRole('alert').some((el) => /больше не принимает записи/i.test(el.textContent ?? '')),
     ).toBe(true)
-    // Удаление остаётся доступным: это способ выйти из поломки.
-    expect(screen.getByRole('button', { name: /отвязать форму/i })).toBeTruthy()
+    // И перезалив рядом: это способ выйти из поломки, когда доступ вернут.
+    expect(screen.getByRole('button', { name: /перезалить всё/i })).toBeTruthy()
   })
 })

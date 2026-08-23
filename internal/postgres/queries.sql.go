@@ -3833,6 +3833,44 @@ func (q *Queries) UpdateFormIntegrationSettings(ctx context.Context, arg UpdateF
 	return result.RowsAffected(), nil
 }
 
+const updateFormIntegrationTarget = `-- name: UpdateFormIntegrationTarget :execrows
+UPDATE form_integrations
+SET spreadsheet_id = $3, spreadsheet_url = $4, sheet_id = $5, sheet_title = $6,
+    columns = $7, status = $8, backfill_before = NULL, last_error = NULL
+WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormIntegrationTargetParams struct {
+	ID             uuid.UUID
+	FormID         uuid.UUID
+	SpreadsheetID  string
+	SpreadsheetUrl string
+	SheetID        int32
+	SheetTitle     string
+	Columns        []byte
+	Status         string
+}
+
+// Связка переезжает в другой лист (правка на том же экране, что и подключение).
+// Строки, уже доставленные в прежний лист, остаются там: продукт не убирает за
+// человеком в его же таблице.
+func (q *Queries) UpdateFormIntegrationTarget(ctx context.Context, arg UpdateFormIntegrationTargetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormIntegrationTarget,
+		arg.ID,
+		arg.FormID,
+		arg.SpreadsheetID,
+		arg.SpreadsheetUrl,
+		arg.SheetID,
+		arg.SheetTitle,
+		arg.Columns,
+		arg.Status,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateFormName = `-- name: UpdateFormName :one
 UPDATE forms
 SET name = $3, updated_at = now()
