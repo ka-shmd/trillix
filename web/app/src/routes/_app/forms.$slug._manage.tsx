@@ -7,14 +7,15 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
-// Оболочка трёх экранов одной формы: «Поделиться», «Ответы», «Сводка». Pathless-
-// группа (`_manage` в имени файла не попадает в URL, как `_auth`/`_app`) — адреса
-// остаются /forms/{slug}/share|responses|summary, поэтому ссылка на сводку
-// по-прежнему сохраняется в закладки, F5 не сбрасывает, «Назад» браузера работает.
-// Табы обязаны быть маршрутами, а не локальным стейтом, именно поэтому.
+// Оболочка экранов одной формы: «Поделиться», «Ответы», «Сводка», «Воронка»,
+// «Интеграции». Pathless-группа (`_manage` в имени файла не попадает в URL, как
+// `_auth`/`_app`) — адреса остаются /forms/{slug}/share|responses|summary|…,
+// поэтому ссылка на сводку по-прежнему сохраняется в закладки, F5 не сбрасывает,
+// «Назад» браузера работает. Табы обязаны быть маршрутами, а не локальным
+// стейтом, именно поэтому.
 //
 // Общая шапка (назад, название, статус, «Редактировать») живёт здесь: до этого
-// каждый из трёх экранов рисовал свою, почти такую же. Редактор в группу не входит —
+// каждый экран рисовал свою, почти такую же. Редактор в группу не входит —
 // это другой режим, во всю ширину полотна и со своей шапкой.
 export const Route = createFileRoute('/_app/forms/$slug/_manage')({
   component: ManageLayout,
@@ -142,6 +143,16 @@ function FormTabs({ slug }: { slug: string }) {
         inactiveProps={inactive}
       >
         Воронка
+      </Link>
+      <Link
+        to="/forms/$slug/integrations"
+        search={(prev) => prev}
+                params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
+        Интеграции
       </Link>
     </nav>
   )
