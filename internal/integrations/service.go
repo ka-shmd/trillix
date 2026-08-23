@@ -77,9 +77,16 @@ type Provider interface {
 	ClearSheet(ctx context.Context, accessToken string, s Spreadsheet) error
 }
 
+// Transactor открывает транзакцию (postgres.TxRunner). Нужен ровно в одном
+// месте — при подключении связки, где три записи обязаны лечь вместе.
+type Transactor interface {
+	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
+}
+
 // Service — подключение внешних аккаунтов к пространству.
 type Service struct {
 	db     postgres.DBTX
+	tx     Transactor
 	repo   Store
 	access Access
 	forms  Forms
@@ -96,8 +103,8 @@ type Service struct {
 	key []byte
 }
 
-func NewService(db postgres.DBTX, repo Store, access Access, f Forms, google Provider, key []byte) *Service {
-	return &Service{db: db, repo: repo, access: access, forms: f, google: google, key: key}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, f Forms, google Provider, key []byte) *Service {
+	return &Service{db: db, tx: tx, repo: repo, access: access, forms: f, google: google, key: key}
 }
 
 // WithPicker включает окно выбора файла на Google Диске. Ключ — браузерный
@@ -416,18 +423,28 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		Columns:        columns,
 		Status:         StatusLive,
 	}
-	if err := s.repo.InsertLink(ctx, s.db, link); err != nil {
-		return FormLink{}, err
-	}
-	// Перенос накопленных ответов — по выбору человека (тумблер в окне). Лист
-	// заведён нами и пуст, поэтому затирать и дублировать нечего; но у формы
-	// может быть двадцать тысяч ответов, которые ему в новой таблице не нужны.
+	// Связка и старт переноса ложатся ОДНОЙ транзакцией.
+	//
+	// Иначе сбой между ними (обрыв к БД, отменённый контекст запроса) отдаёт
+	// человеку ошибку при уже созданной связке: он жмёт «Подключить» второй раз,
+	// в Диске появляется вторая книга, и каждый ответ с этого момента уезжает в
+	// две таблицы — обе выглядят рабочими. Таблица в Диске, впрочем, останется
+	// висеть в любом случае: её создание чужому откату не подлежит.
 	status := StatusLive
 	if opts.Backfill {
-		if err := s.startBackfill(ctx, link.ID); err != nil {
-			return FormLink{}, err
-		}
 		status = StatusBackfilling
+	}
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.InsertLink(ctx, tx, link); err != nil {
+			return err
+		}
+		if !opts.Backfill {
+			return nil
+		}
+		return s.startBackfill(ctx, tx, link.ID)
+	})
+	if err != nil {
+		return FormLink{}, err
 	}
 
 	return FormLink{
@@ -506,6 +523,9 @@ func (s *Service) Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsh
 	if err != nil {
 		return nil, err
 	}
+	// Листы КОНКРЕТНОЙ книги — под правкой форм: сама книга уже названа, и
+	// перечисление её вкладок не раскрывает ничего за пределами того, что
+	// редактор и так собирается использовать.
 	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
 		return nil, err
 	}
@@ -544,8 +564,14 @@ type PickerCredentials struct {
 // PickerAvailable — настроено ли окно выбора файла на этом контуре.
 func (s *Service) PickerAvailable() bool { return s.Enabled() && s.pickerKey != "" }
 
-// Picker выдаёт браузеру credentials окна выбора. Право — ActionFormWrite: тот
-// же порог, что у привязки формы к таблице, ради которой окно и открывают.
+// Picker выдаёт браузеру credentials окна выбора.
+//
+// Право — ActionIntegrationManage, то есть ВЛАДЕЛЕЦ, а не всякий, кто правит
+// формы. Причина в том, что именно уезжает в браузер: access-токен со scope
+// drive.file — это полный доступ (чтение, запись, удаление) ко ВСЕМ файлам,
+// созданным приложением в этом аккаунте Google, безотносительно пространства.
+// Редактор командного пространства с таким токеном прочитал бы и стёр таблицы
+// ответов из личного пространства владельца, где он не участник.
 func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error) {
 	if !s.PickerAvailable() {
 		return PickerCredentials{}, domain.ErrNotFound
@@ -554,7 +580,7 @@ func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerC
 	if err != nil {
 		return PickerCredentials{}, err
 	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionIntegrationManage); err != nil {
 		return PickerCredentials{}, err
 	}
 
@@ -576,9 +602,12 @@ func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerC
 	}, nil
 }
 
-// Spreadsheets — таблицы, куда можно положить ответы этой формы: те, что мы уже
-// создавали для этого пространства. Чужих файлов Диска здесь нет и быть не
-// может (scope drive.file), поэтому список безопасно показывать целиком.
+// Spreadsheets — таблицы, которые приложение создавало в этом аккаунте Google.
+//
+// Право — ActionIntegrationManage, как у окна выбора, и по той же причине:
+// список НЕ ограничен пространством. Чужих файлов человека в нём нет (scope
+// drive.file), но есть таблицы других пространств того же аккаунта — имена форм
+// и клиентов, которых редактор этого пространства видеть не должен.
 func (s *Service) Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error) {
 	if !s.Enabled() {
 		return nil, domain.ErrNotFound
@@ -587,7 +616,7 @@ func (s *Service) Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([
 	if err != nil {
 		return nil, err
 	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionIntegrationManage); err != nil {
 		return nil, err
 	}
 
@@ -665,7 +694,7 @@ func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UU
 	if err := s.repo.UpdateLinkColumns(ctx, s.db, link.ID, columns); err != nil {
 		return err
 	}
-	return s.startBackfill(ctx, link.ID)
+	return s.startBackfill(ctx, s.db, link.ID)
 }
 
 // mergeColumns дописывает к колонкам листа те, которых в нём ещё нет. Порядок
@@ -798,7 +827,7 @@ func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID
 		return err
 	}
 	if target.Backfill {
-		return s.startBackfill(ctx, linkID)
+		return s.startBackfill(ctx, s.db, linkID)
 	}
 	return nil
 }

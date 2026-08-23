@@ -396,3 +396,78 @@ func TestDeliver_DisabledConnectionDropsEvent(t *testing.T) {
 		t.Fatalf("в таблицу записано при выключенной связке: %v", provider.appended)
 	}
 }
+
+// Перенос, начатый на ВЫКЛЮЧЕННОЙ связке (правка цели или перезалив — оба
+// явные действия человека), доезжает до конца.
+//
+// Мина, ради которой тест написан: если гасить события выключенной связки до
+// разбора вида события, перенос погаснет молча и оставит статус backfilling
+// навсегда — а живые события после включения будут вечно ждать переноса,
+// которого больше никто не начнёт.
+func TestDeliverBackfill_RunsOnDisabledConnection(t *testing.T) {
+	link := linkedSheet()
+	link.Enabled = false
+	link.Status = integrations.StatusBackfilling
+	link.BackfillBefore = time.Now()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := &fakeSubmissions{page: submissions.SheetPage{
+		Columns: linkedSheet().Columns,
+		Rows:    []submissions.SheetRow{{ID: uuid.New(), Values: []string{"018f", "Ирина", "i@example.com"}}},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("перенос не доехал: дописано %d строк", len(provider.appended))
+	}
+	if !store.backfillDone {
+		t.Fatal("перенос не закрыт — статус остался бы backfilling навсегда")
+	}
+}
+
+// Живое событие ответа, который уже положила догрузка, гасится.
+//
+// Мина: событие могло быть поставлено ДО старта переноса и доехать после его
+// конца — без границы переноса та же строка легла бы в лист дважды, а лечение
+// (перезалив) из интерфейса сейчас недоступно.
+func TestDeliver_DropsSubmissionCoveredByBackfill(t *testing.T) {
+	link := linkedSheet()
+	link.BackfillBefore = time.Now()
+	provider := &fakeProvider{}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns:   linkedSheet().Columns,
+		Row:       []string{"018f", "Ирина", "i@example.com"},
+		CreatedAt: link.BackfillBefore.Add(-time.Minute),
+	}}
+	svc := deliveryService(&fakeStore{link: link, conn: sealedConn(t)}, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("ответ, уже перенесённый догрузкой, лёг в лист вторым разом: %v", provider.appended)
+	}
+}
+
+// А ответ, пришедший ПОСЛЕ границы, доставляется как обычно.
+func TestDeliver_DeliversSubmissionAfterBackfill(t *testing.T) {
+	link := linkedSheet()
+	link.BackfillBefore = time.Now().Add(-time.Hour)
+	provider := &fakeProvider{}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns:   linkedSheet().Columns,
+		Row:       []string{"018f", "Ирина", "i@example.com"},
+		CreatedAt: time.Now(),
+	}}
+	svc := deliveryService(&fakeStore{link: link, conn: sealedConn(t)}, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("свежий ответ не доставлен: %v", provider.appended)
+	}
+}

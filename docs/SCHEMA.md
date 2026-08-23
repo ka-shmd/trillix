@@ -738,7 +738,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `columns` | `JSONB` | `NOT NULL` — порядок **ключей** колонок (метаколонки + id вопросов). Не подписей: сопоставление по подписи разъехалось бы при первом переименовании вопроса |
 | `enabled` | `BOOLEAN` | `NOT NULL DEFAULT true` — тумблер связки: выключенная не получает новых ответов, но сохраняет таблицу, колонки и историю |
 | `status` | `TEXT` | `NOT NULL`, `CHECK IN ('backfilling','live','broken')` |
-| `backfill_before` | `TIMESTAMPTZ` | отсечка догрузки; `NULL`, когда догрузка кончилась |
+| `backfill_before` | `TIMESTAMPTZ` | граница переноса: всё, что старше, кладёт догрузка, что новее — живая очередь. **После конца переноса НЕ гасится** — запоздавшее живое событие ответа, уже перенесённого догрузкой, иначе легло бы в лист вторым разом |
 | `last_error` | `TEXT` | причина поломки для экрана; не секрет |
 | `last_delivered_at` | `TIMESTAMPTZ` | nullable |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |

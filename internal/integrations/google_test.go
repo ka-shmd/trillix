@@ -310,18 +310,43 @@ func TestGoogle_APIErrorCarriesReason(t *testing.T) {
 	}
 }
 
-// А вот ручка ТОКЕНА причину не раскрывает: в её теле лежит токен.
-func TestGoogle_TokenErrorStaysSilent(t *testing.T) {
+// А вот тело ручки ТОКЕНА наружу не идёт: в нём лежит сам токен. Наружу
+// выходит только структурный КОД отказа — он не секрет, а без него нельзя
+// отличить «согласия больше нет» от «провайдер полежал».
+func TestGoogle_TokenErrorKeepsBodySecret(t *testing.T) {
 	g := newFakeGoogle(t, &fakeGoogle{
 		tokenStatus: http.StatusBadRequest,
-		tokenBody:   `{"error":"invalid_grant","access_token":"secret-ish"}`,
+		tokenBody:   `{"error":"unsupported_grant_type","access_token":"secret-ish","refresh_token":"secret-too"}`,
 	})
 
 	_, err := g.Refresh(context.Background(), "rt")
 	if err == nil {
 		t.Fatal("отказ проглочен")
 	}
-	if strings.Contains(err.Error(), "secret-ish") || strings.Contains(err.Error(), "invalid_grant") {
+	if strings.Contains(err.Error(), "secret-ish") || strings.Contains(err.Error(), "secret-too") {
 		t.Fatalf("тело ответа токен-ручки утекло: %v", err)
+	}
+	// И код чужого отказа тоже не выдаём за окончательный: ретрай тут уместен.
+	if errors.Is(err, ErrPermanent) {
+		t.Fatalf("временный отказ признан окончательным: %v", err)
+	}
+}
+
+// Отзыв согласия человеком приходит как 400 invalid_grant, а НЕ как 401/403 —
+// и обязан считаться окончательным. Иначе безнадёжная доставка ретраится вечно,
+// а связка никогда не краснеет в кабинете.
+func TestGoogle_RefreshRevokedIsPermanent(t *testing.T) {
+	g := newFakeGoogle(t, &fakeGoogle{
+		tokenStatus: http.StatusBadRequest,
+		tokenBody:   `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`,
+	})
+
+	_, err := g.Refresh(context.Background(), "rt")
+	if !errors.Is(err, ErrPermanent) {
+		t.Fatalf("ошибка = %v, ожидался окончательный отказ", err)
+	}
+	// Человеческое описание отказа наружу не уходит: в теле токен-ручки токены.
+	if strings.Contains(err.Error(), "expired or revoked") {
+		t.Fatalf("тело токен-ручки утекло в ошибку: %v", err)
 	}
 }

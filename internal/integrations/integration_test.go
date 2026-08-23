@@ -83,7 +83,8 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
 
-	svc := integrations.NewService(testPool, integrations.Repo{}, wsSvc, formsSvc, provider, testKey)
+	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
+		wsSvc, formsSvc, provider, testKey)
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey)
 
 	// Доставка: настоящий outbox (mail) как очередь, настоящий submissions как

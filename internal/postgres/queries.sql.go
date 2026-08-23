@@ -991,11 +991,16 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 
 const finishFormIntegrationBackfill = `-- name: FinishFormIntegrationBackfill :exec
 UPDATE form_integrations
-SET status = 'live', backfill_before = NULL
+SET status = 'live'
 WHERE id = $1
 `
 
-// Догрузка кончилась: отсечка больше не нужна, доставка становится живой.
+// Догрузка кончилась: доставка становится живой.
+//
+// Отсечка НЕ гасится и остаётся границей переноса навсегда. Она нужна и после:
+// живое событие, поставленное до старта переноса и доехавшее после его конца,
+// относится к ответу, который перенос уже положил в лист, — без границы он лёг
+// бы туда вторым разом.
 func (q *Queries) FinishFormIntegrationBackfill(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, finishFormIntegrationBackfill, id)
 	return err

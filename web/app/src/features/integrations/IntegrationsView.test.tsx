@@ -7,6 +7,22 @@ import type { FormIntegrations, FormSheet } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
 import { integrationKeys } from './keys'
 
+// Поход к провайдеру идёт в отдельном окне, которого в happy-dom нет. Подменяем
+// хук окна: он отдаёт наверх исход, а тест решает, каким тот будет.
+const popup = vi.hoisted(() => ({ callbacks: [] as ((outcome: string) => void)[] }))
+
+vi.mock('../../shared/oauthPopup', () => ({
+  useOAuthPopup: (onOutcome: (outcome: string) => void) => {
+    popup.callbacks.push(onOutcome)
+    return { waiting: false, open: () => true, cancel: () => {} }
+  },
+}))
+
+// popupOutcome — окно провайдера вернулось с таким исходом.
+function popupOutcome(outcome: string) {
+  for (const cb of popup.callbacks) cb(outcome)
+}
+
 // Экран интеграций — два блока и оверлей настроек. Проверяется то, что человек
 // видит и на что жмёт: состояния говорят РАЗНОЕ про одно и то же («не настроено
 // на контуре» ≠ «не подключено» ≠ «подключено, но связок нет»), и спутать их
@@ -263,6 +279,33 @@ describe('оверлей настройки Google Таблиц', () => {
     // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
     // что он видит, это что с ней сейчас.
     expect(screen.getByText(/переносим ответы/i)).toBeTruthy()
+  })
+
+  it('после подключения в окне провайдера состояние перезапрашивается', async () => {
+    // Мина: окно провайдера поверх вкладки НЕ переводит документ в hidden, и
+    // refetch по фокусу React Query (он слушает только visibilitychange) не
+    // случится. Без явной инвалидации экран остался бы показывать «Подключить
+    // Google» при уже подключённом аккаунте.
+    const calls: string[] = []
+    vi.stubGlobal('fetch', (url: string) => {
+      calls.push(String(url))
+      return Promise.resolve(
+        new Response(JSON.stringify({ workspaceId: 'ws-1', account: CONNECTED, connections: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+    renderView(state())
+    openSetup()
+    // Само окно провайдера в happy-dom не открыть, да и проверяется здесь не
+    // оно (у хука свои тесты), а НАША реакция на его исход.
+    popupOutcome('integration_ok')
+
+    await waitFor(() =>
+      expect(calls.some((u) => u.endsWith(`/forms/${FORM_ID}/integrations`))).toBe(true),
+    )
+    vi.unstubAllGlobals()
   })
 
   it('сохранение правки несёт ВЫБРАННУЮ таблицу, а не только подпись', async () => {

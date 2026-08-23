@@ -44,6 +44,18 @@ export function sheetsQueryOptions(formId: string, spreadsheetId: string) {
   })
 }
 
+// useRefreshIntegrations — перезапросить состояние после того, что произошло НЕ
+// через наши мутации: подключение аккаунта Google уезжает в отдельное окно, и
+// вернувшись оттуда, кабинет обязан спросить состояние заново. Само оно не
+// обновится: refetch по фокусу React Query слушает только visibilitychange, а
+// окно провайдера поверх вкладки документ в hidden не переводит.
+export function useRefreshIntegrations(formId: string) {
+  const qc = useQueryClient()
+  return () => {
+    void qc.invalidateQueries({ queryKey: integrationKeys.form(formId) })
+  }
+}
+
 // Мутации инвалидируют состояние формы: забытая инвалидация — баг, а не мелочь
 // (web/CLAUDE.md). Тронуть нужно ровно один ключ — состояние этой формы.
 export function useCreateSheet(formId: string) {

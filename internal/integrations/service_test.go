@@ -172,6 +172,12 @@ func (f *fakeStore) MarkBroken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, 
 }
 
 // fakeForms — коллаборатор forms: авторизует доступ к форме и отдаёт версии.
+// directTx — «транзакция», исполняющая функцию как есть: юнит-тестам нужна
+// последовательность вызовов, а не изоляция (её проверяют интеграционные).
+type directTx struct{}
+
+func (directTx) WithTx(ctx context.Context, fn func(pgx.Tx) error) error { return fn(nil) }
+
 // linkSettings — то, что записали правкой связки.
 type linkSettings struct {
 	name    string
@@ -306,7 +312,7 @@ func newService(access integrations.Access, store integrations.Store, p integrat
 }
 
 func newFormService(access integrations.Access, store integrations.Store, f integrations.Forms, p integrations.Provider) *integrations.Service {
-	return integrations.NewService(nil, store, access, f, p, testKey)
+	return integrations.NewService(nil, directTx{}, store, access, f, p, testKey)
 }
 
 // Редактор видит состояние, но кнопки управления не получает. Проверяется
@@ -873,5 +879,29 @@ func TestUpdateConnection_Retarget(t *testing.T) {
 	}
 	if store.retargetStatus != integrations.StatusBackfilling || store.backfillFrom == nil {
 		t.Errorf("перенос не начат: статус %q", store.retargetStatus)
+	}
+}
+
+// Токен окна выбора и список файлов аккаунта — только владельцу.
+//
+// Scope drive.file даёт полный доступ ко ВСЕМ файлам, созданным приложением в
+// этом аккаунте Google, безотносительно пространства: редактор командного
+// пространства с таким токеном прочитал бы и стёр таблицы ответов из личного
+// пространства владельца, где он не участник.
+func TestPickerAndSpreadsheets_OwnerOnly(t *testing.T) {
+	store := &fakeStore{conn: sealedConn(t)}
+	svc := newFormService(editorAccess(), store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithPicker("browser-api-key")
+
+	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("токен окна выбора выдан редактору: %v", err)
+	}
+	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("список файлов аккаунта выдан редактору: %v", err)
+	}
+
+	// Листы КОНКРЕТНОЙ книги редактору по-прежнему доступны: книга уже названа.
+	if _, err := svc.Sheets(context.Background(), testUser, testForm, "ss-old"); err != nil {
+		t.Fatalf("листы книги закрыты для редактора: %v", err)
 	}
 }

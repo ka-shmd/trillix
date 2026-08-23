@@ -10,6 +10,7 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
+  useRefreshIntegrations,
   useUpdateConnection,
 } from './queries'
 import { ApiError } from '../../shared/api/errors'
@@ -223,7 +224,9 @@ function SetupBody({
   }
 
   if (!account.connected) {
-    return <ConnectAccount workspaceId={workspaceId} canManage={account.canManage} />
+    return (
+      <ConnectAccount formId={formId} workspaceId={workspaceId} canManage={account.canManage} />
+    )
   }
 
   return (
@@ -243,7 +246,7 @@ function SetupBody({
         />
       </div>
 
-      <ConnectedAccountField workspaceId={workspaceId} account={account} />
+      <ConnectedAccountField formId={formId} workspaceId={workspaceId} account={account} />
 
       <SpreadsheetField
         formId={formId}
@@ -501,17 +504,22 @@ function formatMoment(iso: string): string {
 
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
 function ConnectAccount({
+  formId,
   workspaceId,
   canManage,
 }: {
+  formId: string
   workspaceId: string
   canManage: boolean
 }) {
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
+  const refresh = useRefreshIntegrations(formId)
   const popup = useOAuthPopup((result) => {
-    // Успех подписи не требует: состояние перезапрошено, и на его месте
-    // появятся настройки.
+    // Успех подписи не требует — но требует ПЕРЕЗАПРОСА: аккаунт подключился в
+    // соседнем окне, и без этого экран остался бы показывать «Подключить
+    // Google» при уже подключённом аккаунте, а человек жал бы кнопку второй раз.
     setOutcome(result === 'integration_ok' ? null : result)
+    if (result === 'integration_ok') refresh()
   })
 
   if (!canManage) {
@@ -565,13 +573,20 @@ function ConnectAccount({
 // ПРОСТРАНСТВА, а не у формы, поэтому здесь оно показывается, а не выбирается:
 // второй аккаунт — отдельная работа (спека §2).
 function ConnectedAccountField({
+  formId,
   workspaceId,
   account,
 }: {
+  formId: string
   workspaceId: string
   account: FormIntegrations['account']
 }) {
-  const popup = useOAuthPopup(() => {})
+  const refresh = useRefreshIntegrations(formId)
+  // Смена аккаунта тоже требует перезапроса — иначе в поле останется прежняя
+  // почта, и человек решит, что смена не сработала.
+  const popup = useOAuthPopup((result) => {
+    if (result === 'integration_ok') refresh()
+  })
 
   return (
     <div className="flex flex-col gap-2">

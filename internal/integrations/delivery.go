@@ -123,19 +123,25 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	if err != nil {
 		return err
 	}
-	if !link.Enabled {
-		// Связку выключили, пока событие ждало. Тумблер — это «не доставлять»,
-		// а не «доставить позже»: копить события до его возврата значит однажды
-		// вывалить в таблицу всё разом.
-		return nil
-	}
 	if link.Status == StatusBroken {
 		// Интеграция уже помечена сломанной: причина показана человеку, лечение —
 		// переподключение и перезалив. Копить события до тех пор незачем.
 		return nil
 	}
+	// Перенос идёт ВЫШЕ проверки тумблера и намеренно: он запускается явным
+	// действием человека (подключение, правка цели, перезалив), а тумблер
+	// говорит про НОВЫЕ ответы. Уроните эту очерёдность — и перенос, начатый на
+	// выключенной связке, погаснет молча, оставив статус backfilling навсегда:
+	// живые события после включения будут вечно ждать переноса, которого больше
+	// никто не начнёт.
 	if p.Backfill {
 		return s.deliverBackfill(ctx, link, p.After)
+	}
+	if !link.Enabled {
+		// Связку выключили, пока событие ждало. Тумблер — это «не доставлять»,
+		// а не «доставить позже»: копить события до его возврата значит однажды
+		// вывалить в таблицу всё разом.
+		return nil
 	}
 	if link.Status == StatusBackfilling {
 		return errBackfillPending
@@ -148,6 +154,16 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	}
 	if err != nil {
 		return err
+	}
+
+	// Ответ старше границы переноса — его уже положила туда догрузка.
+	//
+	// Событие могло быть поставлено ДО старта переноса (например, за секунду до
+	// того, как человек переключил связку на другой лист) и доехать после его
+	// конца: без этой проверки та же строка легла бы в лист дважды, а лечение —
+	// перезалив — из интерфейса сейчас недоступно.
+	if !link.BackfillBefore.IsZero() && record.CreatedAt.Before(link.BackfillBefore) {
+		return nil
 	}
 
 	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
@@ -172,16 +188,19 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	return s.repo.MarkDelivered(ctx, s.db, link.ID)
 }
 
-// startBackfill помечает привязку переносящейся и ставит первое событие пачки.
-// Отсечка — момент старта: всё, что придёт после неё, доставит живая очередь.
-func (s *Service) startBackfill(ctx context.Context, linkID uuid.UUID) error {
-	if err := s.repo.StartBackfill(ctx, s.db, linkID, time.Now()); err != nil {
+// Отсечка переноса — момент старта: всё, что придёт после неё, доставит живая
+// очередь, а всё, что раньше, положит перенос.
+// startBackfill помечает связку переносящейся и ставит первое событие пачки.
+// db — исполнитель вызывающего: при подключении это транзакция, чтобы связка и
+// событие легли вместе.
+func (s *Service) startBackfill(ctx context.Context, db postgres.DBTX, linkID uuid.UUID) error {
+	if err := s.repo.StartBackfill(ctx, db, linkID, time.Now()); err != nil {
 		return err
 	}
-	return s.enqueueBackfill(ctx, linkID, uuid.Nil)
+	return s.enqueueBackfill(ctx, db, linkID, uuid.Nil)
 }
 
-func (s *Service) enqueueBackfill(ctx context.Context, linkID, after uuid.UUID) error {
+func (s *Service) enqueueBackfill(ctx context.Context, db postgres.DBTX, linkID, after uuid.UUID) error {
 	if s.outbox == nil {
 		return nil
 	}
@@ -189,7 +208,7 @@ func (s *Service) enqueueBackfill(ctx context.Context, linkID, after uuid.UUID) 
 	if err != nil {
 		return fmt.Errorf("marshal backfill payload: %w", err)
 	}
-	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+	return s.outbox.Enqueue(ctx, db, ChannelSheets, payload)
 }
 
 // deliverBackfill доставляет ОДНУ пачку накопленных ответов и ставит следующую.
@@ -239,7 +258,7 @@ func (s *Service) deliverBackfill(ctx context.Context, link FormLink, after uuid
 	if len(page.Rows) < BackfillBatch {
 		return s.repo.FinishBackfill(ctx, s.db, link.ID)
 	}
-	return s.enqueueBackfill(ctx, link.ID, page.Rows[len(page.Rows)-1].ID)
+	return s.enqueueBackfill(ctx, s.db, link.ID, page.Rows[len(page.Rows)-1].ID)
 }
 
 // deliveryFailed разбирает отказ: окончательный помечает интеграцию сломанной и

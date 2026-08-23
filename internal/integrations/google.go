@@ -52,6 +52,12 @@ const (
 // ровно час, а потом молча умирает.
 var ErrNoRefreshToken = errors.New("integrations: провайдер не отдал refresh_token")
 
+// errInvalidGrant — код отказа токен-ручки Google, означающий «этого согласия
+// больше нет»: человек отозвал доступ в своём аккаунте либо refresh-токен
+// протух (у приложения в статусе Testing это неделя). Приходит со статусом 400,
+// поэтому под общее правило «401/403/404 — окончательные» не подпадает.
+const errInvalidGrant = "invalid_grant"
+
 // ErrPermanent — провайдер отказал так, что ретраить бессмысленно: доступ
 // отозван, таблица удалена, аккаунт закрыт. Отличать это от «полежал и встал»
 // обязательно: у outbox нет dead-letter, и безнадёжная строка иначе дёргала бы
@@ -240,8 +246,16 @@ func (g *Google) token(ctx context.Context, form url.Values) (Tokens, error) {
 		RefreshToken string `json:"refresh_token"`
 		Scope        string `json:"scope"`
 		ExpiresIn    int    `json:"expires_in"`
+		// Error — код отказа. Единственное поле тела токен-ручки, которое мы
+		// читаем: отзыв согласия человеком приходит сюда как 400 invalid_grant,
+		// а не как 401/403, и без этого кода безнадёжная доставка ретраилась бы
+		// вечно. Текст тела по-прежнему наружу не отдаётся — в нём токены.
+		Error string `json:"error"`
 	}
 	if err := g.do(req, &body); err != nil {
+		if body.Error == errInvalidGrant {
+			return Tokens{}, fmt.Errorf("%w: %s", ErrPermanent, errInvalidGrant)
+		}
 		return Tokens{}, err
 	}
 	if body.AccessToken == "" {
@@ -287,6 +301,13 @@ func (g *Google) request(req *http.Request, out any, explain bool) error {
 		return fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// Разбираем тело и на отказе: вызывающему нужен структурный код ошибки
+		// (invalid_grant у токен-ручки), чтобы отличить «согласия больше нет» от
+		// «провайдер полежал». В текст ошибки и в лог тело при этом всё равно не
+		// уходит, если explain == false, — там токены.
+		if out != nil {
+			_ = json.Unmarshal(data, out)
+		}
 		reason := ""
 		if explain {
 			reason = ": " + apiErrorMessage(data)

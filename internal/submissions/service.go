@@ -442,6 +442,9 @@ func (s *Service) enqueueIntegration(ctx context.Context, formID, submissionID u
 type SheetRecord struct {
 	Columns []domain.SheetColumn
 	Row     []string
+	// CreatedAt — когда ответ принят. Доставке нужно, чтобы отличить ответ,
+	// который уже положила догрузка, от того, что пришёл после неё.
+	CreatedAt time.Time
 }
 
 // SheetRow строит строку одного ответа для внешней таблицы — той же моделью
@@ -485,8 +488,9 @@ func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) 
 		builder.WithFiles(files)
 	}
 	return SheetRecord{
-		Columns: builder.SheetColumns(),
-		Row:     builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		Columns:   builder.SheetColumns(),
+		Row:       builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		CreatedAt: sub.CreatedAt,
 	}, nil
 }
 

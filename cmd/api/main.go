@@ -355,7 +355,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			cfg.AppOrigin+"/api/v1/integrations/google/callback",
 		)
 	}
-	integrationsSvc := integrations.NewService(pool, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
+	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
