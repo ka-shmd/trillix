@@ -7,12 +7,14 @@ import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
 import { pickSpreadsheet } from './picker'
 import {
+  sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
   useDisconnectAccount,
   useRefillSheet,
   useUnlinkSheet,
 } from './queries'
+import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -20,7 +22,9 @@ import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -40,9 +44,17 @@ import { Switch } from '@/components/ui/switch'
 // не дал бы ни одного из трёх, и клавиатура ушла бы гулять по списку под
 // оверлеем.
 //
-// NEW_SPREADSHEET — «завести новую книгу». Значение непустое, потому что пустая
+// Пункты выбора, которые не являются id таблицы. Значения непустые: пустая
 // строка у Select значит «ничего не выбрано» и роняет плейсхолдер.
+//
+// BROWSE — не выбор, а ДЕЙСТВИЕ внутри списка: открыть окно Google. Оно стоит
+// пунктом, а не кнопкой рядом, потому что для человека это третий способ
+// ответить на один и тот же вопрос «какая таблица», и разносить их по разным
+// элементам управления значит делать вид, что вопросов два.
 const NEW_SPREADSHEET = '__new__'
+const BROWSE = '__browse__'
+// NEW_SHEET — «завести новый лист в этой книге».
+const NEW_SHEET = '__new_sheet__'
 
 export function GoogleSheetsOverlay({
   formId,
@@ -94,6 +106,7 @@ function SetupBody({
   const { account, workspaceId } = state
   const [name, setName] = useState('')
   const [spreadsheet, setSpreadsheet] = useState(NEW_SPREADSHEET)
+  const [sheet, setSheet] = useState(NEW_SHEET)
   const [backfill, setBackfill] = useState(true)
   const create = useCreateSheet(formId)
 
@@ -131,10 +144,20 @@ function SetupBody({
       <SpreadsheetField
         formId={formId}
         value={spreadsheet}
-        onChange={setSpreadsheet}
+        onChange={(value) => {
+          setSpreadsheet(value)
+          // Сменили книгу — выбранный лист относился к прежней.
+          setSheet(NEW_SHEET)
+        }}
         options={sheets.data ?? []}
         pickerEnabled={account.pickerEnabled}
       />
+
+      {/* Лист спрашиваем только у существующей книги: у новой он один и
+          заводится вместе с ней. */}
+      {spreadsheet !== NEW_SPREADSHEET && (
+        <SheetField formId={formId} spreadsheetId={spreadsheet} value={sheet} onChange={setSheet} />
+      )}
 
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -149,7 +172,9 @@ function SetupBody({
 
       {create.isError && (
         <p role="alert" className="text-sm text-destructive">
-          Не удалось подключить таблицу. Попробуйте ещё раз.
+          {create.error instanceof ApiError && create.error.code === 'validation_failed'
+            ? create.error.message
+            : 'Не удалось подключить таблицу. Попробуйте ещё раз.'}
         </p>
       )}
 
@@ -161,6 +186,7 @@ function SetupBody({
             {
               name,
               spreadsheetId: spreadsheet === NEW_SPREADSHEET ? '' : spreadsheet,
+              sheetId: spreadsheet === NEW_SPREADSHEET || sheet === NEW_SHEET ? null : Number(sheet),
               backfill,
             },
             { onSuccess: onDone },
@@ -169,6 +195,48 @@ function SetupBody({
       >
         Подключить Google Таблицы
       </Button>
+    </div>
+  )
+}
+
+// SheetField — второй шаг выбора: в какой лист книги класть ответы. Существующий
+// лист годится, только если его первая строка свободна: шапка ложится в A1, и
+// затирать чужую работу мы не станем — сервер об этом скажет человеческим
+// текстом, а рядом всегда есть «создать новый лист».
+function SheetField({
+  formId,
+  spreadsheetId,
+  value,
+  onChange,
+}: {
+  formId: string
+  spreadsheetId: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  const sheets = useQuery(sheetsQueryOptions(formId, spreadsheetId))
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="integration-sheet">Лист</Label>
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger id="integration-sheet" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NEW_SHEET}>Создать новый лист</SelectItem>
+          {(sheets.data ?? []).length > 0 && (
+            <SelectGroup>
+              <SelectLabel>Листы книги</SelectLabel>
+              {(sheets.data ?? []).map((sh) => (
+                <SelectItem key={sh.id} value={String(sh.id)}>
+                  {sh.title}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )}
+        </SelectContent>
+      </Select>
     </div>
   )
 }
@@ -217,41 +285,53 @@ function SpreadsheetField({
     }
   }
 
+  const known = picked && !options.some((s) => s.id === picked.id) ? [...options, picked] : options
+
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="integration-spreadsheet">Таблица</Label>
-      <div className="flex gap-2">
-        <Select value={value} onValueChange={onChange}>
-          <SelectTrigger id="integration-spreadsheet" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
-            {options.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.name}
+      <Select
+        value={value}
+        onValueChange={(next) => {
+          // «Выбрать на Диске» — действие, а не значение: выбор остаётся
+          // прежним, пока человек не укажет файл в окне Google.
+          if (next === BROWSE) {
+            void openPicker()
+            return
+          }
+          onChange(next)
+        }}
+      >
+        <SelectTrigger id="integration-spreadsheet" className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
+          {known.length > 0 && (
+            <SelectGroup>
+              <SelectLabel>Мои таблицы</SelectLabel>
+              {known.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )}
+          {pickerEnabled && (
+            <SelectGroup>
+              <SelectLabel>Добавить таблицу</SelectLabel>
+              <SelectItem value={BROWSE}>
+                {opening ? 'Открываем Google Диск…' : 'Выбрать на Google Диске'}
               </SelectItem>
-            ))}
-            {picked && !options.some((s) => s.id === picked.id) && (
-              <SelectItem value={picked.id}>{picked.name}</SelectItem>
-            )}
-          </SelectContent>
-        </Select>
-        {pickerEnabled && (
-          <Button variant="outline" disabled={opening} onClick={openPicker}>
-            {opening ? 'Открываем…' : 'Выбрать на Диске'}
-          </Button>
-        )}
-      </div>
+            </SelectGroup>
+          )}
+        </SelectContent>
+      </Select>
       {pickerError && (
         <p role="alert" className="text-xs text-destructive">
           {pickerError}
         </p>
       )}
-      <p className="text-xs text-muted-foreground">
-        У выбранной книги появится отдельный лист для этой формы. В списке — таблицы, созданные
-        Trillix; любую другую свою можно выбрать на Диске.
-      </p>
     </div>
   )
 }

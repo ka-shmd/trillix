@@ -4,9 +4,11 @@ import { apiRequest } from '../../shared/api/client'
 import {
   formIntegrationsSchema,
   formSheetSchema,
+  sheetListSchema,
   spreadsheetListSchema,
   type FormIntegrations,
   type FormSheet,
+  type SheetRef,
   type SpreadsheetRef,
 } from '../../entities/integration'
 
@@ -29,17 +31,34 @@ export function getFormIntegrations(formId: string): Promise<FormIntegrations> {
 // ConnectOptions — то, что человек назвал в окне подключения.
 export interface ConnectOptions {
   name: string
-  // Пусто — заводим новую книгу; иначе новый лист в уже созданной нами.
+  // Пусто — заводим новую книгу; иначе работаем в выбранной.
   spreadsheetId: string
+  // Существующий лист книги; null — завести новый. Не 0: у первого листа книги
+  // gid как раз ноль.
+  sheetId: number | null
   backfill: boolean
 }
 
 export function createSheet(formId: string, opts: ConnectOptions): Promise<FormSheet> {
   return apiRequest(`/forms/${formId}/integrations/google`, {
     method: 'POST',
-    body: { name: opts.name, spreadsheetId: opts.spreadsheetId, backfill: opts.backfill },
+    body: {
+      name: opts.name,
+      spreadsheetId: opts.spreadsheetId,
+      sheetId: opts.sheetId,
+      backfill: opts.backfill,
+    },
     schema: formSheetSchema,
   })
+}
+
+// Листы выбранной книги — второй шаг выбора.
+export async function listSheets(formId: string, spreadsheetId: string): Promise<SheetRef[]> {
+  const res = await apiRequest(
+    `/forms/${formId}/integrations/google/sheets?spreadsheetId=${encodeURIComponent(spreadsheetId)}`,
+    { schema: sheetListSchema },
+  )
+  return res.sheets
 }
 
 // Credentials окна выбора файла: живой токен Google на час. Запрашиваются по

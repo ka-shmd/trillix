@@ -53,7 +53,20 @@ export const spreadsheetListSchema = z.object({
   spreadsheets: z.array(spreadsheetRefSchema),
 })
 
+// Лист книги: gid и имя. gid — личность листа (имя автор волен переименовать),
+// и у первого листа он равен нулю — поэтому «не выбрано» здесь не ноль, а
+// отсутствие значения.
+export const sheetRefSchema = z.object({
+  id: z.number().int(),
+  title: z.string(),
+})
+
+export const sheetListSchema = z.object({
+  sheets: z.array(sheetRefSchema),
+})
+
 export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>
+export type SheetRef = z.infer<typeof sheetRefSchema>
 export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>

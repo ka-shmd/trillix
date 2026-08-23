@@ -380,6 +380,70 @@ func (g *Google) ListSpreadsheets(ctx context.Context, accessToken string) ([]Sp
 	return out, nil
 }
 
+// SheetRef — лист книги: gid и имя. gid — личность листа, имя автор волен
+// переименовать.
+type SheetRef struct {
+	ID    int32
+	Title string
+}
+
+// ListSheets отдаёт листы книги — выбор «положить в существующий лист».
+func (g *Google) ListSheets(ctx context.Context, accessToken, spreadsheetID string) ([]SheetRef, error) {
+	u := g.sheetsURL + "/" + url.PathEscape(spreadsheetID) + "?fields=sheets.properties(sheetId,title)"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("integrations google: build sheets request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		Sheets []struct {
+			Properties struct {
+				SheetID int32  `json:"sheetId"`
+				Title   string `json:"title"`
+			} `json:"properties"`
+		} `json:"sheets"`
+	}
+	if err := g.do(req, &body); err != nil {
+		return nil, fmt.Errorf("integrations google: list sheets: %w", err)
+	}
+	out := make([]SheetRef, 0, len(body.Sheets))
+	for _, sh := range body.Sheets {
+		out = append(out, SheetRef{ID: sh.Properties.SheetID, Title: sh.Properties.Title})
+	}
+	return out, nil
+}
+
+// FirstRowEmpty отвечает, свободна ли первая строка листа.
+//
+// Спрашивается перед тем, как писать шапку в ЧУЖОЙ лист: строка заголовков
+// ложится в A1, и лист с данными в первой строке мы бы молча затёрли. Данные
+// ниже первой строки помехой не являются — дописывание идёт после последней.
+func (g *Google) FirstRowEmpty(ctx context.Context, accessToken string, s Spreadsheet) (bool, error) {
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A1:ZZ1"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return false, fmt.Errorf("integrations google: build values request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		Values [][]any `json:"values"`
+	}
+	if err := g.do(req, &body); err != nil {
+		return false, fmt.Errorf("integrations google: read first row: %w", err)
+	}
+	for _, row := range body.Values {
+		for _, cell := range row {
+			if str, ok := cell.(string); !ok || strings.TrimSpace(str) != "" {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 // AddSheet заводит НОВЫЙ ЛИСТ в существующей таблице — путь «положить ответы
 // рядом с прошлой формой». Каждая форма получает свой лист: одна книга, разные
 // вкладки, и колонки одной формы не мешаются с колонками другой.
@@ -409,9 +473,7 @@ func (g *Google) AddSheet(ctx context.Context, accessToken, spreadsheetID, title
 		return Spreadsheet{}, fmt.Errorf("integrations google: add sheet: пустой ответ")
 	}
 
-	// Адрес книги спрашиваем у провайдера, а не собираем строкой: собранный
-	// однажды разойдётся с настоящим и уведёт человека в никуда.
-	meta, err := g.spreadsheetURL(ctx, accessToken, spreadsheetID)
+	meta, err := g.SpreadsheetURL(ctx, accessToken, spreadsheetID)
 	if err != nil {
 		return Spreadsheet{}, err
 	}
@@ -419,7 +481,9 @@ func (g *Google) AddSheet(ctx context.Context, accessToken, spreadsheetID, title
 	return Spreadsheet{ID: spreadsheetID, URL: meta, SheetID: props.SheetID, Title: props.Title}, nil
 }
 
-func (g *Google) spreadsheetURL(ctx context.Context, accessToken, spreadsheetID string) (string, error) {
+// SpreadsheetURL — адрес книги. Спрашиваем у провайдера, а не собираем строкой:
+// собранный однажды разойдётся с настоящим и уведёт человека в никуда.
+func (g *Google) SpreadsheetURL(ctx context.Context, accessToken, spreadsheetID string) (string, error) {
 	u := g.sheetsURL + "/" + url.PathEscape(spreadsheetID) + "?fields=spreadsheetUrl"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

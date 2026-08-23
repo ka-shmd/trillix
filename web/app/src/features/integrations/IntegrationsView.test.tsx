@@ -120,19 +120,32 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('link', { name: /подключить google$/i })).toBeNull()
   })
 
-  it('окно выбора файла на Диске не обещается, если оно не настроено на контуре', () => {
-    renderView(state({ account: { ...CONNECTED, pickerEnabled: false } }))
+  it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {
+    renderView(state({ account: CONNECTED }))
     openDialog()
+    fireEvent.click(screen.getByLabelText('Таблица'))
 
-    expect(screen.getByLabelText(/таблица/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /выбрать на диске/i })).toBeNull()
+    // Три способа ответить на один вопрос «какая таблица» живут в одном списке,
+    // а не растащены по кнопкам рядом с ним.
+    expect(screen.getByRole('option', { name: /создать новую таблицу/i })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /прошлая форма/i })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /выбрать на google диске/i })).toBeTruthy()
   })
 
-  it('окно выбора настроено — кнопка рядом со списком созданных нами таблиц', () => {
+  it('окно выбора не настроено на контуре — пункта «выбрать на Диске» нет', () => {
+    renderView(state({ account: { ...CONNECTED, pickerEnabled: false } }))
+    openDialog()
+    fireEvent.click(screen.getByLabelText('Таблица'))
+
+    expect(screen.getByRole('option', { name: /создать новую таблицу/i })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /выбрать на google диске/i })).toBeNull()
+  })
+
+  it('у новой таблицы выбора листа нет — он заводится вместе с ней', () => {
     renderView(state({ account: CONNECTED }))
     openDialog()
 
-    expect(screen.getByRole('button', { name: /выбрать на диске/i })).toBeTruthy()
+    expect(screen.queryByLabelText('Лист')).toBeNull()
   })
 
   it('идёт перенос — «Перезалить всё» недоступно, чтобы не запустить второй', () => {

@@ -5,6 +5,7 @@ import {
   createSheet,
   disconnectAccount,
   getFormIntegrations,
+  listSheets,
   listSpreadsheets,
   refillSheet,
   unlinkSheet,
@@ -34,6 +35,16 @@ export function spreadsheetsQueryOptions(formId: string) {
   return queryOptions({
     queryKey: [...integrationKeys.form(formId), 'spreadsheets'] as const,
     queryFn: () => listSpreadsheets(formId),
+    staleTime: 30_000,
+  })
+}
+
+// Листы выбранной книги. Ключ несёт id книги: выбрал другую — приехали её листы,
+// а не остались чужие.
+export function sheetsQueryOptions(formId: string, spreadsheetId: string) {
+  return queryOptions({
+    queryKey: [...integrationKeys.form(formId), 'sheets', spreadsheetId] as const,
+    queryFn: () => listSheets(formId, spreadsheetId),
     staleTime: 30_000,
   })
 }

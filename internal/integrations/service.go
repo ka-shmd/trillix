@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -62,6 +63,9 @@ type Provider interface {
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
 	AddSheet(ctx context.Context, accessToken, spreadsheetID, title string) (Spreadsheet, error)
 	ListSpreadsheets(ctx context.Context, accessToken string) ([]SpreadsheetRef, error)
+	ListSheets(ctx context.Context, accessToken, spreadsheetID string) ([]SheetRef, error)
+	SpreadsheetURL(ctx context.Context, accessToken, spreadsheetID string) (string, error)
+	FirstRowEmpty(ctx context.Context, accessToken string, s Spreadsheet) (bool, error)
 	// AppID — номер проекта Google Cloud (для окна выбора файла).
 	AppID() string
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
@@ -333,10 +337,14 @@ type ConnectOptions struct {
 	// Name — необязательная подпись связки. Пусто — экран показывает имя
 	// провайдера.
 	Name string
-	// SpreadsheetID пуст — заводим новую книгу. Иначе кладём НОВЫЙ ЛИСТ в
-	// названную: под scope drive.file доступны только созданные нами файлы,
-	// поэтому чужую книгу сюда не подставить при всём желании.
+	// SpreadsheetID пуст — заводим новую книгу. Иначе работаем в названной: её
+	// человек либо создавал через нас, либо выбрал в окне Google (и тем самым
+	// выдал нам доступ по drive.file).
 	SpreadsheetID string
+	// SheetID — существующий лист выбранной книги. nil = завести новый лист.
+	// Указатель, а не 0: у первого листа книги gid как раз 0, и «ноль» здесь
+	// значил бы «Лист1», а не «не выбрано».
+	SheetID *int32
 	// Backfill — переносить ли уже накопленные ответы. Выбор человека, а не
 	// наше умолчание: у формы может быть пятьдесят тысяч ответов, которые ему в
 	// новой таблице не нужны.
@@ -395,7 +403,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 	if err != nil {
 		return FormLink{}, err
 	}
-	sheet, err := s.newSheet(ctx, token, form, opts.SpreadsheetID)
+	sheet, err := s.newSheet(ctx, token, form, opts)
 	if err != nil {
 		return FormLink{}, err
 	}
@@ -447,13 +455,81 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 	}, nil
 }
 
-// newSheet отдаёт лист, в который поедут ответы: новая книга либо новая вкладка
-// в уже созданной нами.
-func (s *Service) newSheet(ctx context.Context, token string, form forms.Form, spreadsheetID string) (Spreadsheet, error) {
-	if spreadsheetID == "" {
+// newSheet отдаёт лист, в который поедут ответы: новая книга, новая вкладка в
+// существующей или уже существующая вкладка.
+func (s *Service) newSheet(ctx context.Context, token string, form forms.Form, opts ConnectOptions) (Spreadsheet, error) {
+	if opts.SpreadsheetID == "" {
 		return s.google.CreateSpreadsheet(ctx, token, spreadsheetTitle(form), sheetTitle)
 	}
-	return s.google.AddSheet(ctx, token, spreadsheetID, sheetTitleForForm(form))
+	if opts.SheetID == nil {
+		return s.google.AddSheet(ctx, token, opts.SpreadsheetID, sheetTitleForForm(form))
+	}
+	return s.existingSheet(ctx, token, opts.SpreadsheetID, *opts.SheetID)
+}
+
+// existingSheet готовит уже существующий лист под ответы.
+//
+// Первая строка обязана быть свободна: шапка ложится в A1, и лист с данными в
+// первой строке мы бы молча затёрли — чужую работу, которую никто не просил
+// трогать. Отказ здесь человеческий и с выходом: рядом есть «создать новый
+// лист», и он всегда сработает.
+func (s *Service) existingSheet(ctx context.Context, token, spreadsheetID string, sheetID int32) (Spreadsheet, error) {
+	sheets, err := s.google.ListSheets(ctx, token, spreadsheetID)
+	if err != nil {
+		return Spreadsheet{}, err
+	}
+	idx := slices.IndexFunc(sheets, func(sh SheetRef) bool { return sh.ID == sheetID })
+	if idx < 0 {
+		return Spreadsheet{}, fmt.Errorf("%w: лист не найден в этой таблице", domain.ErrValidation)
+	}
+
+	url, err := s.google.SpreadsheetURL(ctx, token, spreadsheetID)
+	if err != nil {
+		return Spreadsheet{}, err
+	}
+	sheet := Spreadsheet{ID: spreadsheetID, URL: url, SheetID: sheetID, Title: sheets[idx].Title}
+
+	empty, err := s.google.FirstRowEmpty(ctx, token, sheet)
+	if err != nil {
+		return Spreadsheet{}, err
+	}
+	if !empty {
+		return Spreadsheet{}, fmt.Errorf(
+			"%w: в первой строке листа «%s» уже есть данные — выберите пустой лист или создайте новый",
+			domain.ErrValidation, sheets[idx].Title)
+	}
+	return sheet, nil
+}
+
+// Sheets — листы выбранной книги: второй шаг выбора («положить в существующий
+// лист или завести новый»).
+func (s *Service) Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsheetID string) ([]SheetRef, error) {
+	if !s.Enabled() {
+		return nil, domain.ErrNotFound
+	}
+	if spreadsheetID == "" {
+		return nil, fmt.Errorf("%w: таблица не выбрана", domain.ErrValidation)
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return nil, err
+	}
+
+	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list sheets: %w", err)
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	return s.google.ListSheets(ctx, token, spreadsheetID)
 }
 
 // PickerCredentials — то, чем браузер открывает окно выбора файла Google.

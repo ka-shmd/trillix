@@ -175,6 +175,7 @@ type fakeProvider struct {
 	appendCalls  int
 	cleared      string
 	appendErr    error
+	firstRowBusy bool
 	exchangeFn   func() (integrations.Tokens, error)
 }
 
@@ -247,6 +248,18 @@ func (f *fakeProvider) AddSheet(_ context.Context, _, spreadsheetID, title strin
 
 func (f *fakeProvider) ListSpreadsheets(_ context.Context, _ string) ([]integrations.SpreadsheetRef, error) {
 	return []integrations.SpreadsheetRef{{ID: "ss-old", Name: "Прошлая форма"}}, nil
+}
+
+func (f *fakeProvider) ListSheets(_ context.Context, _, _ string) ([]integrations.SheetRef, error) {
+	return []integrations.SheetRef{{ID: 0, Title: "Лист1"}, {ID: 5, Title: "Заметки"}}, nil
+}
+
+func (f *fakeProvider) SpreadsheetURL(_ context.Context, _, spreadsheetID string) (string, error) {
+	return "https://docs.google.com/spreadsheets/d/" + spreadsheetID + "/edit", nil
+}
+
+func (f *fakeProvider) FirstRowEmpty(_ context.Context, _ string, _ integrations.Spreadsheet) (bool, error) {
+	return !f.firstRowBusy, nil
 }
 
 func (f *fakeProvider) ClearSheet(_ context.Context, _ string, s integrations.Spreadsheet) error {
@@ -690,5 +703,62 @@ func TestPicker_StrangerGetsNotFound(t *testing.T) {
 
 	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
+	}
+}
+
+// Выбран существующий лист книги: новый не заводим, шапку пишем в него.
+func TestConnectForm_IntoExistingSheet(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	sheetID := int32(5)
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+	if err != nil {
+		t.Fatalf("connect form: %v", err)
+	}
+	if provider.addedTo != "" || provider.createdTitle != "" {
+		t.Error("заведён новый лист вместо выбранного")
+	}
+	if link.SheetID != 5 || link.SheetTitle != "Заметки" {
+		t.Fatalf("привязка = gid %d, лист %q", link.SheetID, link.SheetTitle)
+	}
+	if len(provider.header) == 0 {
+		t.Error("шапка в выбранный лист не написана")
+	}
+}
+
+// Первая строка выбранного листа занята — отказываемся, а не затираем чужую
+// работу: шапка ложится в A1, и молча стереть её содержимое нельзя.
+func TestConnectForm_ExistingSheetNotEmpty(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	provider := &fakeProvider{firstRowBusy: true}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	sheetID := int32(5)
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if len(provider.header) != 0 {
+		t.Error("шапка записана поверх чужих данных")
+	}
+	if store.insertedLnk != nil {
+		t.Error("привязка записана вопреки отказу")
+	}
+}
+
+// Листа с таким gid в книге нет — отказ, а не запись «в никуда».
+func TestConnectForm_UnknownSheet(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: sealedConn(t)}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
+
+	sheetID := int32(999)
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm,
+		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
 }

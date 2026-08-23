@@ -53,6 +53,7 @@ type integrationsService interface {
 	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
 	ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error)
 	Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error)
+	Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsheetID string) ([]SheetRef, error)
 	Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error)
 	DisconnectForm(ctx context.Context, userID, formID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID uuid.UUID) error
@@ -100,6 +101,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// Credentials окна выбора файла на Диске. Отдельной ручкой, а не в состоянии:
 	// в ответе живой access-токен Google, и раздавать его на каждый показ таба
 	// нельзя — только по нажатию кнопки выбора.
+	// Листы выбранной книги — второй шаг выбора. Книга приезжает параметром, а не
+	// сегментом пути: её id — чужая строка произвольного вида, и в пути он
+	// требовал бы экранирования на каждом клиенте.
+	mux.Handle("GET /api/v1/forms/{id}/integrations/google/sheets",
+		h.requireAuth(http.HandlerFunc(h.sheets)))
 	mux.Handle("GET /api/v1/forms/{id}/integrations/google/picker",
 		h.requireAuth(http.HandlerFunc(h.picker)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
@@ -184,8 +190,11 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 // работают умолчания (новая таблица, перенос включён) — так же, как в окне.
 type connectRequest struct {
 	Name string `json:"name"`
-	// SpreadsheetID пуст — новая книга; иначе новый лист в уже созданной нами.
+	// SpreadsheetID пуст — новая книга; иначе работаем в названной.
 	SpreadsheetID string `json:"spreadsheetId"`
+	// SheetID — существующий лист книги; отсутствует = завести новый.
+	// Указатель: у первого листа книги gid равен нулю.
+	SheetID *int32 `json:"sheetId"`
 	// Backfill — указатель, чтобы отличить «выключил тумблер» от «поля нет».
 	Backfill *bool `json:"backfill"`
 }
@@ -206,7 +215,7 @@ func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 			httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
 			return
 		}
-		opts.Name, opts.SpreadsheetID = req.Name, req.SpreadsheetID
+		opts.Name, opts.SpreadsheetID, opts.SheetID = req.Name, req.SpreadsheetID, req.SheetID
 		if req.Backfill != nil {
 			opts.Backfill = *req.Backfill
 		}
@@ -218,6 +227,29 @@ func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, toSheetResponse(link))
+}
+
+type sheetRefResponse struct {
+	ID    int32  `json:"id"`
+	Title string `json:"title"`
+}
+
+func (h *Handler) sheets(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+
+	list, err := h.svc.Sheets(r.Context(), user.ID, formID, r.URL.Query().Get("spreadsheetId"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	out := make([]sheetRefResponse, 0, len(list))
+	for _, sh := range list {
+		out = append(out, sheetRefResponse(sh))
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string][]sheetRefResponse{"sheets": out})
 }
 
 type pickerResponse struct {
