@@ -70,7 +70,7 @@ describe('список интеграций', () => {
     expect(screen.getByText('Переносим')).toBeTruthy()
   })
 
-  it('настройки живут в окне: до клика полей нет', () => {
+  it('настройки живут в оверлее: до клика полей нет', () => {
     renderView(state())
 
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -78,8 +78,8 @@ describe('список интеграций', () => {
   })
 })
 
-describe('окно настройки Google Таблиц', () => {
-  it('клик по строке открывает окно с настройками подключения', () => {
+describe('оверлей настройки Google Таблиц', () => {
+  it('клик по строке открывает оверлей с настройками подключения', () => {
     renderView(state({ account: CONNECTED }))
     openDialog()
 
@@ -92,16 +92,18 @@ describe('окно настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: /подключить google таблицы/i })).toBeTruthy()
   })
 
-  it('аккаунт не подключён — сначала согласие, кнопка подключения таблицы заперта', () => {
+  it('аккаунт не подключён — только рассказ и согласие, настроек ещё нет', () => {
     renderView(state())
     openDialog()
 
     expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
-    // Про вывоз персональных данных окно говорит ДО подключения, а не после.
+    // Про вывоз персональных данных оверлей говорит ДО подключения, а не после.
     expect(screen.getByText(/персональные данные/i)).toBeTruthy()
-    expect(
-      screen.getByRole('button', { name: /подключить google таблицы/i }).hasAttribute('disabled'),
-    ).toBe(true)
+    // Поля, которые всё равно заперты, — обещание работы, которой человек ещё
+    // не может сделать: их здесь нет вовсе.
+    expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
+    expect(screen.queryByLabelText(/таблица/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
   it('редактор видит интеграцию, но подключает аккаунт владелец', () => {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, RefreshCw, Unlink } from 'lucide-react'
+import { ExternalLink, RefreshCw, Table2, Unlink } from 'lucide-react'
 
 import type { FormIntegrations } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
@@ -13,14 +13,7 @@ import {
   useUnlinkSheet,
 } from './queries'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -32,51 +25,62 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
-// Окно настройки интеграции — общий жест продукта: клик по интеграции открывает
-// её настройки, и только кнопка внизу что-то меняет.
+// Настройка интеграции — оверлей во весь экран, а не поля в списке и не карточка
+// посреди страницы.
 //
-// Почему окно, а не поля прямо в списке: у интеграции есть решения, которые
-// принимают ДО первой записи в чужие данные (какой аккаунт, какая таблица,
-// заливать ли историю). В списке они превратились бы в цепочку мелких кнопок,
-// каждая из которых уже что-то поменяла, а сам список — в простыню настроек,
-// где непонятно, что к чему относится. Отмена здесь — Escape, и не произошло
-// ничего.
+// Почему во весь экран: у интеграции есть решения, которые принимают ДО первой
+// записи в чужие данные (какой аккаунт, какая таблица, заливать ли историю). В
+// списке они превратились бы в цепочку мелких кнопок, каждая из которых уже
+// что-то поменяла, а сам список — в простыню настроек. Полноэкранный слой
+// убирает всё лишнее: пока настраиваешь, ничего другого на экране нет.
+//
+// Внутри — Radix Dialog, растянутый на вьюпорт: от него нужны ловушка фокуса,
+// Escape и блокировка прокрутки под слоем. Свой `fixed inset-0` дал бы вид, но
+// не дал бы ни одного из трёх, и клавиатура ушла бы гулять по списку под
+// оверлеем.
 //
 // NEW_SPREADSHEET — «завести новую книгу». Значение непустое, потому что пустая
 // строка у Select значит «ничего не выбрано» и роняет плейсхолдер.
 const NEW_SPREADSHEET = '__new__'
 
-export function GoogleSheetsDialog({
+export function GoogleSheetsOverlay({
   formId,
   state,
-  onOpenChange,
+  onClose,
 }: {
   formId: string
   state: FormIntegrations
-  onOpenChange: (open: boolean) => void
+  onClose: () => void
 }) {
   return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Google Таблицы</DialogTitle>
-          <DialogDescription>
-            Ответы этой формы будут ложиться строками в таблицу на вашем Google Диске.
-          </DialogDescription>
-        </DialogHeader>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="flex h-svh max-h-svh w-screen max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-y-auto rounded-none border-none p-0 sm:max-w-none"
+        style={{ top: 0, left: 0 }}
+      >
+        <div className="mx-auto flex w-full max-w-lg flex-col gap-8 px-6 py-16">
+          <header className="flex flex-col items-center gap-3 text-center">
+            <Table2 className="size-8 text-muted-foreground" aria-hidden />
+            <DialogTitle className="text-2xl">Google Таблицы</DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Ответы этой формы будут ложиться строками в таблицу на вашем Google Диске.
+            </p>
+          </header>
 
-        {state.sheet ? (
-          <ConnectedBody formId={formId} state={state} onDone={() => onOpenChange(false)} />
-        ) : (
-          <SetupBody formId={formId} state={state} onDone={() => onOpenChange(false)} />
-        )}
+          {state.sheet ? (
+            <ConnectedBody formId={formId} state={state} onDone={onClose} />
+          ) : (
+            <SetupBody formId={formId} state={state} onDone={onClose} />
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   )
 }
 
-// SetupBody — форма подключения: те решения, которые принимаются до первой
-// записи в чужие данные.
+// SetupBody — путь подключения. До подключённого аккаунта настраивать нечего:
+// показываем только рассказ и кнопку согласия. Поля, которые всё равно
+// заперты, — это обещание работы, которой человек ещё не может сделать.
 function SetupBody({
   formId,
   state,
@@ -98,14 +102,18 @@ function SetupBody({
 
   if (!account.enabled) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-center text-sm text-muted-foreground">
         На этом контуре интеграция не настроена — обратитесь к администратору.
       </p>
     )
   }
 
+  if (!account.connected) {
+    return <ConnectAccount workspaceId={workspaceId} canManage={account.canManage} />
+  }
+
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-2">
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
@@ -117,16 +125,12 @@ function SetupBody({
         />
       </div>
 
-      <AccountField workspaceId={workspaceId} account={account} />
+      <ConnectedAccountField workspaceId={workspaceId} account={account} />
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="integration-spreadsheet">Таблица</Label>
-        <Select
-          value={spreadsheet}
-          onValueChange={setSpreadsheet}
-          disabled={!account.connected}
-        >
-          <SelectTrigger id="integration-spreadsheet">
+        <Select value={spreadsheet} onValueChange={setSpreadsheet}>
+          <SelectTrigger id="integration-spreadsheet" className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -139,8 +143,7 @@ function SetupBody({
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
-          В списке — только таблицы, созданные Trillix: доступа к остальным файлам Диска у нас
-          нет. У выбранной книги появится отдельный лист для этой формы.
+          У выбранной книги появится отдельный лист для этой формы.
         </p>
       </div>
 
@@ -152,12 +155,7 @@ function SetupBody({
             ответов перенос займёт время.
           </p>
         </div>
-        <Switch
-          id="integration-backfill"
-          checked={backfill}
-          onCheckedChange={setBackfill}
-          disabled={!account.connected}
-        />
+        <Switch id="integration-backfill" checked={backfill} onCheckedChange={setBackfill} />
       </div>
 
       {create.isError && (
@@ -166,94 +164,77 @@ function SetupBody({
         </p>
       )}
 
-      <DialogFooter>
-        <Button
-          disabled={!account.connected || create.isPending}
-          onClick={() =>
-            create.mutate(
-              {
-                name,
-                spreadsheetId: spreadsheet === NEW_SPREADSHEET ? '' : spreadsheet,
-                backfill,
-              },
-              { onSuccess: onDone },
-            )
-          }
-        >
-          Подключить Google Таблицы
-        </Button>
-      </DialogFooter>
+      <Button
+        size="lg"
+        disabled={create.isPending}
+        onClick={() =>
+          create.mutate(
+            {
+              name,
+              spreadsheetId: spreadsheet === NEW_SPREADSHEET ? '' : spreadsheet,
+              backfill,
+            },
+            { onSuccess: onDone },
+          )
+        }
+      >
+        Подключить Google Таблицы
+      </Button>
     </div>
   )
 }
 
-// AccountField — аккаунт, от имени которого пишем. Подключение живёт у
-// ПРОСТРАНСТВА, а не у формы, поэтому здесь оно показывается, а не выбирается:
-// второй аккаунт — отдельная работа (спека §2).
-function AccountField({
+// ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
+function ConnectAccount({
   workspaceId,
-  account,
+  canManage,
 }: {
   workspaceId: string
-  account: FormIntegrations['account']
+  canManage: boolean
 }) {
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
   const popup = useOAuthPopup((result) => {
+    // Успех подписи не требует: состояние перезапрошено, и на его месте
+    // появятся настройки.
     setOutcome(result === 'integration_ok' ? null : result)
   })
 
+  if (!canManage) {
+    return (
+      <p className="text-center text-sm text-muted-foreground">
+        Подключить Google может владелец пространства.
+      </p>
+    )
+  }
+
   return (
-    <div className="flex flex-col gap-2">
-      <Label>Аккаунт Google</Label>
-      {account.connected ? (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
-          <span className="text-sm">{account.email}</span>
-          {account.canManage && (
-            <Button
-              asChild
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-7 text-xs"
-              title="Заменит подключение пространства: таблицы, созданные прежним аккаунтом, перестанут наполняться"
-            >
-              <a
-                href={startUrl(workspaceId)}
-                onClick={(e) => {
-                  if (popup.open(startUrl(workspaceId))) e.preventDefault()
-                }}
-              >
-                Сменить аккаунт
-              </a>
-            </Button>
-          )}
-        </div>
-      ) : account.canManage ? (
-        <>
-          <p className="text-sm text-muted-foreground">
-            Мы попросим доступ только к таблицам, которые создадим сами, — остальные файлы Диска
-            останутся закрытыми. Ответы, включая персональные данные респондентов, будут
-            передаваться в сервис Google.
-          </p>
-          {/* Именно <a>, а не onClick+fetch: нужен полноценный переход браузера —
-              XHR за редиректом на домен Google не пойдёт. Клик пробует открыть
-              отдельное окно и гасит переход, только если это удалось. */}
-          <Button asChild className="self-start">
-            <a
-              href={startUrl(workspaceId)}
-              onClick={(e) => {
-                setOutcome(null)
-                if (popup.open(startUrl(workspaceId))) e.preventDefault()
-              }}
-            >
-              Подключить Google
-            </a>
-          </Button>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Подключить Google может владелец пространства.
-        </p>
-      )}
+    <div className="flex flex-col gap-5">
+      <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
+        <li>• Каждый ответ ложится строкой в таблицу — через секунды после отправки.</li>
+        <li>• Уже накопленные ответы можно перенести сразу.</li>
+        <li>
+          • Мы попросим доступ только к таблицам, которые создадим сами, — остальные файлы Диска
+          останутся закрытыми.
+        </li>
+        <li>
+          • Ответы, включая персональные данные респондентов, будут передаваться в сервис Google.
+        </li>
+      </ul>
+
+      {/* Именно <a>, а не onClick+fetch: нужен полноценный переход браузера —
+          XHR за редиректом на домен Google не пойдёт. Клик пробует открыть
+          отдельное окно и гасит переход, только если это удалось. */}
+      <Button asChild size="lg">
+        <a
+          href={startUrl(workspaceId)}
+          onClick={(e) => {
+            setOutcome(null)
+            if (popup.open(startUrl(workspaceId))) e.preventDefault()
+          }}
+        >
+          Подключить Google
+        </a>
+      </Button>
 
       {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
       {outcome && (
@@ -265,7 +246,48 @@ function AccountField({
   )
 }
 
-// ConnectedBody — форма уже привязана: окно показывает состояние и действия.
+// ConnectedAccountField — от чьего имени пишем. Подключение живёт у
+// ПРОСТРАНСТВА, а не у формы, поэтому здесь оно показывается, а не выбирается:
+// второй аккаунт — отдельная работа (спека §2).
+function ConnectedAccountField({
+  workspaceId,
+  account,
+}: {
+  workspaceId: string
+  account: FormIntegrations['account']
+}) {
+  const popup = useOAuthPopup(() => {})
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>Аккаунт Google</Label>
+      <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
+        <span className="text-sm">{account.email}</span>
+        {account.canManage && (
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-7 text-xs"
+            title="Заменит подключение пространства: таблицы, созданные прежним аккаунтом, перестанут наполняться"
+          >
+            <a
+              href={startUrl(workspaceId)}
+              onClick={(e) => {
+                if (popup.open(startUrl(workspaceId))) e.preventDefault()
+              }}
+            >
+              Сменить аккаунт
+            </a>
+          </Button>
+        )}
+      </div>
+      {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
+    </div>
+  )
+}
+
+// ConnectedBody — форма уже привязана: оверлей показывает состояние и действия.
 function ConnectedBody({
   formId,
   state,
@@ -352,9 +374,9 @@ function ConnectedBody({
   )
 }
 
-// WaitingNote — ожидание согласия. Не второе модальное окно поверх первого:
-// диалог в диалоге Radix уводит фокус и оставляет человека в ловушке из двух
-// оверлеев, а окно провайдера и так сверху.
+// WaitingNote — ожидание согласия. Не второй модальный слой поверх первого:
+// диалог в диалоге уводит фокус и запирает человека между двумя оверлеями, а
+// окно провайдера и так сверху.
 function WaitingNote({ onCancel }: { onCancel: () => void }) {
   return (
     <p className="flex items-center gap-2 text-sm text-muted-foreground">

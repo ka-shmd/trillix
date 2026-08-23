@@ -3,15 +3,16 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, Table2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet } from '../../entities/integration'
-import { GoogleSheetsDialog } from './GoogleSheetsDialog'
+import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
 import { formIntegrationsQueryOptions } from './queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
 // Экран «Интеграции» формы — СПИСОК, а не простыня настроек: интеграций будет
 // много (вебхук, Telegram), у каждой свои поля, и инлайн они превратили бы экран
-// в кашу. Настройки живут в окне, которое открывается кликом по строке, — это
-// общий жест продукта для всех интеграций, а не особенность Таблиц.
+// в кашу. Настройки живут в полноэкранном оверлее, который открывается кликом по
+// строке, — это общий жест продукта для всех интеграций, а не особенность
+// Таблиц.
 //
 // Заглушек «скоро будет» здесь нет: они обещают срок, которого никто не давал.
 export function IntegrationsView({ formId }: { formId: string }) {
@@ -61,7 +62,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
       </ul>
 
       {open && (
-        <GoogleSheetsDialog formId={formId} state={state.data} onOpenChange={setOpen} />
+        <GoogleSheetsOverlay formId={formId} state={state.data} onClose={() => setOpen(false)} />
       )}
     </section>
   )
