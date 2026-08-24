@@ -321,25 +321,3 @@ func TestLoad(t *testing.T) {
 		}
 	})
 }
-
-// Секрет ключа посетителя опционален: контур без него поднимается и просто не
-// считает уникальных. Требовать его значило бы уронить все существующие контуры,
-// включая прод, на первом же деплое.
-func TestLoad_VisitorSecretOptional(t *testing.T) {
-	setValidEnv(t)
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("контур без ANALYTICS_VISITOR_SECRET не поднялся: %v", err)
-	}
-	if len(cfg.AnalyticsVisitorSecret) != 0 {
-		t.Fatalf("секрет = %q, ждали пустой", cfg.AnalyticsVisitorSecret)
-	}
-
-	// Заданный, но короткий — ошибка старта: короткий секрет делает ключ
-	// посетителя вычислимым перебором.
-	t.Setenv("ANALYTICS_VISITOR_SECRET", "short")
-	if _, err := Load(); err == nil {
-		t.Fatal("короткий ANALYTICS_VISITOR_SECRET обязан валить старт")
-	}
-}

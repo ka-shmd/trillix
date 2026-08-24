@@ -102,18 +102,19 @@ type Service struct {
 	plans Plans
 	repo  Store
 	geo   Geo
-	// visitorSecret — из него выводится суточная соль ключа посетителя. Пустой
-	// секрет означает «уникальных не считаем»: ключи не пишутся, карточка пуста.
-	// Молчаливого фолбэка на общую соль нет и быть не может — ключи всех контуров
-	// совпали бы (ADR §10).
+	// visitorSecret — из него выводится суточная соль ключа посетителя. Не читается
+	// из окружения: выводится из секрета токена формы с меткой назначения
+	// (deriveVisitorSecret) — своей переменной у аналитики нет намеренно.
 	visitorSecret []byte
 	now           func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo, visitorSecret []byte) *Service {
+// NewService принимает секрет токена формы (тот же, что у публичных ручек): из него
+// выводится ключ аналитики. Пустой секрет означает «уникальных не считаем».
+func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo, formTokenSecret []byte) *Service {
 	return &Service{
 		db: db, forms: forms, plans: plans, repo: repo, geo: geoSvc,
-		visitorSecret: visitorSecret, now: time.Now,
+		visitorSecret: deriveVisitorSecret(formTokenSecret), now: time.Now,
 	}
 }
 

@@ -77,17 +77,6 @@ type Config struct {
 	// S3PathStyle — path-style адресация (endpoint/bucket/key). MinIO и часть
 	// РФ-провайдеров требуют true; AWS virtual-hosted — false.
 	S3PathStyle bool
-	// AnalyticsVisitorSecret — секрет, из которого выводится СУТОЧНАЯ соль ключа
-	// посетителя (ADR §10). ОПЦИОНАЛЬНАЯ; задана — минимум 16 байт, как у токена
-	// формы (короткий секрет делает ключ вычислимым перебором).
-	//
-	// Пустая означает «уникальных не считаем»: ключи не пишутся, карточка пуста.
-	// Это НЕ молчаливый фолбэк на общую соль — такого фолбэка нет и быть не может,
-	// он сделал бы ключи всех контуров одинаковыми. Требовать её на старте нельзя
-	// по цене отказа: контур без переменной (а это все существующие) переставал бы
-	// подниматься — и живой прод в том числе, на первом же деплое.
-	AnalyticsVisitorSecret []byte
-
 	// GeoDBPath — путь к файлу справочника Sypex Geo («диапазон адресов → город»),
 	// из которого аналитика визитов выводит страну и город (ADR §10). Пустой путь —
 	// законное состояние: гео на контуре нет, блок стран и городов не рисуется.
@@ -199,9 +188,6 @@ func Load() (Config, error) {
 	logLevelRaw := required("LOG_LEVEL")
 	cookieSecureRaw := required("COOKIE_SECURE")
 	formTokenSecret := required("FORM_TOKEN_SECRET")
-	// Не required: см. комментарий у поля — контур без секрета просто не считает
-	// уникальных, как контур без справочника не показывает стран.
-	visitorSecret := os.Getenv("ANALYTICS_VISITOR_SECRET")
 	cfg.PublicRendererBaseURL = required("PUBLIC_RENDERER_BASE_URL")
 	cfg.OGImageURL = required("OG_IMAGE_URL")
 	cfg.AppOrigin = strings.TrimRight(required("APP_ORIGIN"), "/")
@@ -261,14 +247,6 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("FORM_TOKEN_SECRET too short: want >= %d bytes", minFormTokenSecretLen)
 	}
 	cfg.FormTokenSecret = []byte(formTokenSecret)
-
-	// Порог проверяется только у ЗАДАННОГО секрета: тот же, что у токена формы —
-	// ключ посетителя выводится через HMAC, и короткий секрет делает его вычислимым
-	// перебором. Пустой — законное «не считаем уникальных».
-	if visitorSecret != "" && len(visitorSecret) < minFormTokenSecretLen {
-		return Config{}, fmt.Errorf("ANALYTICS_VISITOR_SECRET too short: want >= %d bytes", minFormTokenSecretLen)
-	}
-	cfg.AnalyticsVisitorSecret = []byte(visitorSecret)
 
 	// og:url и src SPA-скрипта — абсолютные ссылки, отдаваемые краулерам/браузеру;
 	// относительный base превратил бы их в битые, поэтому проверяем схему при старте.

@@ -24,9 +24,6 @@ x-app-env: &app-env
   DATABASE_URL: ${DATABASE_URL}
   COOKIE_SECURE: ${COOKIE_SECURE}
   FORM_TOKEN_SECRET: ${FORM_TOKEN_SECRET}
-  # Опциональная (`:-`): без неё уникальные посетители не считаются, но контур
-  # поднимается. Требовать её значило бы уронить прод на первом же деплое.
-  ANALYTICS_VISITOR_SECRET: ${ANALYTICS_VISITOR_SECRET:-}
   PUBLIC_RENDERER_BASE_URL: ${PUBLIC_RENDERER_BASE_URL}
   OG_IMAGE_URL: ${OG_IMAGE_URL}
   PUBLIC_RENDERER_INDEX_PATH: ${PUBLIC_RENDERER_INDEX_PATH:-} # опциональна (пусто в dev)

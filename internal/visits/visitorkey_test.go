@@ -96,3 +96,35 @@ func TestVisitorKey_IsOpaque(t *testing.T) {
 		t.Fatalf("в ключе видны исходные данные: %x", key)
 	}
 }
+
+// Секрет аналитики выводится из секрета токена формы, но им НЕ является: метка
+// назначения разводит два применения, и знание одного ключа не даёт другого.
+// Своей переменной окружения у аналитики нет — это и есть причина вывода.
+func TestDeriveVisitorSecret(t *testing.T) {
+	formSecret := []byte("form-token-secret-16+")
+
+	derived := deriveVisitorSecret(formSecret)
+	if len(derived) == 0 {
+		t.Fatal("вывод дал пустой секрет")
+	}
+	if bytes.Equal(derived, formSecret) {
+		t.Fatal("секрет аналитики совпал с секретом токена формы — метка назначения не работает")
+	}
+
+	// Детерминированность: тот же секрет контура — тот же ключ, иначе уникальные
+	// обнулялись бы при каждом рестарте.
+	if !bytes.Equal(derived, deriveVisitorSecret(formSecret)) {
+		t.Fatal("вывод недетерминирован")
+	}
+
+	// Разные контуры — разные ключи, потому что FORM_TOKEN_SECRET у них разный.
+	if bytes.Equal(derived, deriveVisitorSecret([]byte("другой секрет контура"))) {
+		t.Fatal("разные секреты контуров дали один ключ аналитики")
+	}
+
+	// Пустой секрет контура — пустой ключ: уникальные не считаются, а не считаются
+	// по общей соли.
+	if got := deriveVisitorSecret(nil); got != nil {
+		t.Fatalf("вывод из пустого секрета = %x, ждали nil", got)
+	}
+}
