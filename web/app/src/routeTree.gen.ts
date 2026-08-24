@@ -38,6 +38,7 @@ import { Route as AppFormsSlugManageIntegrationsRouteImport } from './routes/_ap
 import { Route as AppFormsSlugManageInsightsRouteImport } from './routes/_app/forms.$slug._manage.insights'
 import { Route as AppFormsSlugManageFunnelRouteImport } from './routes/_app/forms.$slug._manage.funnel'
 import { Route as AppFormsSlugManageInsightsIndexRouteImport } from './routes/_app/forms.$slug._manage.insights.index'
+import { Route as AppFormsSlugManageInsightsVisitsRouteImport } from './routes/_app/forms.$slug._manage.insights.visits'
 import { Route as AppFormsSlugManageInsightsDropOffsRouteImport } from './routes/_app/forms.$slug._manage.insights.drop-offs'
 import { Route as AppFormsSlugManageInsightsAnswersRouteImport } from './routes/_app/forms.$slug._manage.insights.answers'
 
@@ -191,6 +192,12 @@ const AppFormsSlugManageInsightsIndexRoute =
     path: '/',
     getParentRoute: () => AppFormsSlugManageInsightsRoute,
   } as any)
+const AppFormsSlugManageInsightsVisitsRoute =
+  AppFormsSlugManageInsightsVisitsRouteImport.update({
+    id: '/visits',
+    path: '/visits',
+    getParentRoute: () => AppFormsSlugManageInsightsRoute,
+  } as any)
 const AppFormsSlugManageInsightsDropOffsRoute =
   AppFormsSlugManageInsightsDropOffsRouteImport.update({
     id: '/drop-offs',
@@ -233,6 +240,7 @@ export interface FileRoutesByFullPath {
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
   '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/forms/$slug/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/forms/$slug/insights/': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -263,6 +271,7 @@ export interface FileRoutesByTo {
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
   '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/forms/$slug/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/forms/$slug/insights': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRoutesById {
@@ -297,6 +306,7 @@ export interface FileRoutesById {
   '/_app/forms/$slug/_manage/summary': typeof AppFormsSlugManageSummaryRoute
   '/_app/forms/$slug/_manage/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/_app/forms/$slug/_manage/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/_app/forms/$slug/_manage/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/_app/forms/$slug/_manage/insights/': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRouteTypes {
@@ -330,6 +340,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/summary'
     | '/forms/$slug/insights/answers'
     | '/forms/$slug/insights/drop-offs'
+    | '/forms/$slug/insights/visits'
     | '/forms/$slug/insights/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -360,6 +371,7 @@ export interface FileRouteTypes {
     | '/forms/$slug/summary'
     | '/forms/$slug/insights/answers'
     | '/forms/$slug/insights/drop-offs'
+    | '/forms/$slug/insights/visits'
     | '/forms/$slug/insights'
   id:
     | '__root__'
@@ -393,6 +405,7 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/_manage/summary'
     | '/_app/forms/$slug/_manage/insights/answers'
     | '/_app/forms/$slug/_manage/insights/drop-offs'
+    | '/_app/forms/$slug/_manage/insights/visits'
     | '/_app/forms/$slug/_manage/insights/'
   fileRoutesById: FileRoutesById
 }
@@ -610,6 +623,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageInsightsIndexRouteImport
       parentRoute: typeof AppFormsSlugManageInsightsRoute
     }
+    '/_app/forms/$slug/_manage/insights/visits': {
+      id: '/_app/forms/$slug/_manage/insights/visits'
+      path: '/visits'
+      fullPath: '/forms/$slug/insights/visits'
+      preLoaderRoute: typeof AppFormsSlugManageInsightsVisitsRouteImport
+      parentRoute: typeof AppFormsSlugManageInsightsRoute
+    }
     '/_app/forms/$slug/_manage/insights/drop-offs': {
       id: '/_app/forms/$slug/_manage/insights/drop-offs'
       path: '/drop-offs'
@@ -630,6 +650,7 @@ declare module '@tanstack/react-router' {
 interface AppFormsSlugManageInsightsRouteChildren {
   AppFormsSlugManageInsightsAnswersRoute: typeof AppFormsSlugManageInsightsAnswersRoute
   AppFormsSlugManageInsightsDropOffsRoute: typeof AppFormsSlugManageInsightsDropOffsRoute
+  AppFormsSlugManageInsightsVisitsRoute: typeof AppFormsSlugManageInsightsVisitsRoute
   AppFormsSlugManageInsightsIndexRoute: typeof AppFormsSlugManageInsightsIndexRoute
 }
 
@@ -639,6 +660,8 @@ const AppFormsSlugManageInsightsRouteChildren: AppFormsSlugManageInsightsRouteCh
       AppFormsSlugManageInsightsAnswersRoute,
     AppFormsSlugManageInsightsDropOffsRoute:
       AppFormsSlugManageInsightsDropOffsRoute,
+    AppFormsSlugManageInsightsVisitsRoute:
+      AppFormsSlugManageInsightsVisitsRoute,
     AppFormsSlugManageInsightsIndexRoute: AppFormsSlugManageInsightsIndexRoute,
   }
 

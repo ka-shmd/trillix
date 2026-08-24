@@ -93,3 +93,69 @@ func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, pe
 		MedianDurationSec: row.MedianDurationSec,
 	}, nil
 }
+
+// Timeseries — ряд визитов по времени. Отдаются только непустые корзины: дыры
+// достраивает домен, у которого есть границы периода.
+func (Repo) Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitTimeseries(ctx, postgres.VisitTimeseriesParams{
+		FormID: formID,
+		Step:   string(step),
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("visit timeseries: %w", err)
+	}
+	out := make([]domain.TimeBucket, len(rows))
+	for i, r := range rows {
+		out[i] = domain.TimeBucket{
+			At:        r.Bucket.Time,
+			Visits:    int(r.Visits),
+			Submitted: int(r.Submitted),
+		}
+	}
+	return out, nil
+}
+
+// Sources — сгруппированные метки происхождения. Что из них считать источником,
+// решает домен: здесь только тройки и счётчики.
+func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitSources(ctx, postgres.VisitSourcesParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("visit sources: %w", err)
+	}
+	out := make([]domain.SourceRow, len(rows))
+	for i, r := range rows {
+		out[i] = domain.SourceRow{
+			Referer:   r.Referer,
+			UTMSource: r.UtmSource,
+			UTMMedium: r.UtmMedium,
+			Visits:    int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
+// UserAgents — сгруппированные строки user-agent. Разбор — в домене.
+func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitUserAgents(ctx, postgres.VisitUserAgentsParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("visit user agents: %w", err)
+	}
+	out := make([]domain.UserAgentRow, len(rows))
+	for i, r := range rows {
+		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits)}
+	}
+	return out, nil
+}

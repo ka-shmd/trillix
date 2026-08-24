@@ -93,3 +93,52 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz;
+
+-- name: VisitTimeseries :many
+-- Ряд визитов по времени для вкладки «Визиты» (спека design/analytics-tally.md §8).
+-- Шаг корзины приходит параметром и уезжает прямо в date_trunc: выбор шага —
+-- решение сервера (domain.StepFor), потому что от него зависят и запрос, и подписи
+-- оси, а две копии этого выбора разъезжаются молча.
+--
+-- Отдаются ТОЛЬКО непустые корзины: дыры достраивает Go (domain.FillBuckets).
+-- Генерировать пустые в SQL значило бы завести здесь generate_series по границам
+-- периода — то есть вторую копию правила «что такое период».
+SELECT date_trunc(sqlc.arg(step)::text, created_at)::timestamptz AS bucket,
+       count(*)::bigint                                          AS visits,
+       count(*) FILTER (WHERE submitted)::bigint                 AS submitted
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+GROUP BY bucket
+ORDER BY bucket;
+
+-- name: VisitSources :many
+-- Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+-- перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
+-- (domain.FoldSources) — здесь только группировка.
+--
+-- Различных троек у формы десятки, а не по одной на визит: разбирать их на чтении
+-- дёшево, а хранить разобранное колонкой значило бы, что улучшенное правило чинит
+-- только будущие визиты.
+SELECT coalesce(meta->>'referer', '')::text    AS referer,
+       coalesce(meta->>'utm_source', '')::text AS utm_source,
+       coalesce(meta->>'utm_medium', '')::text AS utm_medium,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+GROUP BY 1, 2, 3;
+
+-- name: VisitUserAgents :many
+-- Сырьё списков «устройства / браузеры / ОС»: сгруппированные строки user-agent.
+-- Разбор — в Go (domain.ParseUserAgent): здесь нет и не должно быть знания о том,
+-- что Edge представляется Chrome'ом.
+SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+GROUP BY 1;

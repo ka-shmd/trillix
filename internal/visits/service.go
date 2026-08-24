@@ -55,6 +55,9 @@ type Store interface {
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
 	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
+	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
+	Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error)
+	UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error)
 }
 
 var _ Store = Repo{}
@@ -219,6 +222,55 @@ func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period
 		return domain.VisitInsights{}, err
 	}
 	return s.repo.Insights(ctx, s.db, formID, period)
+}
+
+// Breakdown — вкладка «Визиты» целиком: ряд по времени, источники, устройства,
+// браузеры, ОС (спека design/analytics-tally.md §8).
+//
+// Гейт стоит на ОДНОЙ секции, а не на всей вкладке: 402 на весь запрос закрыл бы
+// заодно график и устройства, которые платными не объявлялись. Источники приезжают
+// пустым списком с флагом и настоящим числом визитов, у которых источник известен, —
+// плашка обязана показывать число владельца, а не рекламировать пустоту (ADR §10).
+func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitsBreakdown, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	// Тариф спрашивается ПОСЛЕ авторизации: иначе код ответа рассказывал бы
+	// постороннему и о существовании формы, и о плане чужого воркспейса.
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSources)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+
+	step := domain.StepFor(period)
+	buckets, err := s.repo.Timeseries(ctx, s.db, formID, period, step)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	sources, err := s.repo.Sources(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	agents, err := s.repo.UserAgents(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+
+	devices, browsers, systems := domain.FoldUserAgents(agents)
+	out := domain.VisitsBreakdown{
+		Step:          step,
+		Timeseries:    domain.FillBuckets(buckets, step, period.From, period.To),
+		SourcesLocked: !d.Allowed,
+		KnownSources:  domain.CountKnownSources(sources),
+		Devices:       devices,
+		Browsers:      browsers,
+		Systems:       systems,
+	}
+	if d.Allowed {
+		out.Sources = domain.FoldSources(sources)
+	}
+	return out, nil
 }
 
 // truncate режет строку по границе рун: обрезка по байтам оставила бы хвост битой

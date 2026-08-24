@@ -4280,3 +4280,162 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 	)
 	return i, err
 }
+
+const visitSources = `-- name: VisitSources :many
+SELECT coalesce(meta->>'referer', '')::text    AS referer,
+       coalesce(meta->>'utm_source', '')::text AS utm_source,
+       coalesce(meta->>'utm_medium', '')::text AS utm_medium,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+GROUP BY 1, 2, 3
+`
+
+type VisitSourcesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitSourcesRow struct {
+	Referer   string
+	UtmSource string
+	UtmMedium string
+	Visits    int64
+}
+
+// Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+// перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
+// (domain.FoldSources) — здесь только группировка.
+//
+// Различных троек у формы десятки, а не по одной на визит: разбирать их на чтении
+// дёшево, а хранить разобранное колонкой значило бы, что улучшенное правило чинит
+// только будущие визиты.
+func (q *Queries) VisitSources(ctx context.Context, arg VisitSourcesParams) ([]VisitSourcesRow, error) {
+	rows, err := q.db.Query(ctx, visitSources, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitSourcesRow
+	for rows.Next() {
+		var i VisitSourcesRow
+		if err := rows.Scan(
+			&i.Referer,
+			&i.UtmSource,
+			&i.UtmMedium,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitTimeseries = `-- name: VisitTimeseries :many
+SELECT date_trunc($2::text, created_at)::timestamptz AS bucket,
+       count(*)::bigint                                          AS visits,
+       count(*) FILTER (WHERE submitted)::bigint                 AS submitted
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
+GROUP BY bucket
+ORDER BY bucket
+`
+
+type VisitTimeseriesParams struct {
+	FormID uuid.UUID
+	Step   string
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitTimeseriesRow struct {
+	Bucket    pgtype.Timestamptz
+	Visits    int64
+	Submitted int64
+}
+
+// Ряд визитов по времени для вкладки «Визиты» (спека design/analytics-tally.md §8).
+// Шаг корзины приходит параметром и уезжает прямо в date_trunc: выбор шага —
+// решение сервера (domain.StepFor), потому что от него зависят и запрос, и подписи
+// оси, а две копии этого выбора разъезжаются молча.
+//
+// Отдаются ТОЛЬКО непустые корзины: дыры достраивает Go (domain.FillBuckets).
+// Генерировать пустые в SQL значило бы завести здесь generate_series по границам
+// периода — то есть вторую копию правила «что такое период».
+func (q *Queries) VisitTimeseries(ctx context.Context, arg VisitTimeseriesParams) ([]VisitTimeseriesRow, error) {
+	rows, err := q.db.Query(ctx, visitTimeseries,
+		arg.FormID,
+		arg.Step,
+		arg.FromTs,
+		arg.ToTs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitTimeseriesRow
+	for rows.Next() {
+		var i VisitTimeseriesRow
+		if err := rows.Scan(&i.Bucket, &i.Visits, &i.Submitted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitUserAgents = `-- name: VisitUserAgents :many
+SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+GROUP BY 1
+`
+
+type VisitUserAgentsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitUserAgentsRow struct {
+	UserAgent string
+	Visits    int64
+}
+
+// Сырьё списков «устройства / браузеры / ОС»: сгруппированные строки user-agent.
+// Разбор — в Go (domain.ParseUserAgent): здесь нет и не должно быть знания о том,
+// что Edge представляется Chrome'ом.
+func (q *Queries) VisitUserAgents(ctx context.Context, arg VisitUserAgentsParams) ([]VisitUserAgentsRow, error) {
+	rows, err := q.db.Query(ctx, visitUserAgents, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitUserAgentsRow
+	for rows.Next() {
+		var i VisitUserAgentsRow
+		if err := rows.Scan(&i.UserAgent, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

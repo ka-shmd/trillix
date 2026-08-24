@@ -59,6 +59,10 @@ type fakeStore struct {
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
 	insights    domain.VisitInsights
+	buckets     []domain.TimeBucket
+	sources     []domain.SourceRow
+	agents      []domain.UserAgentRow
+	step        domain.BucketStep
 	period      domain.Period // окно наблюдения, с которым сервис пришёл в стор
 	upsetErr    error
 }
@@ -81,6 +85,22 @@ func (s *fakeStore) CountByLastBlock(_ context.Context, _ postgres.DBTX, _ uuid.
 func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
 	s.period = period
 	return s.insights, nil
+}
+
+func (s *fakeStore) Timeseries(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error) {
+	s.period = period
+	s.step = step
+	return s.buckets, nil
+}
+
+func (s *fakeStore) Sources(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
+	s.period = period
+	return s.sources, nil
+}
+
+func (s *fakeStore) UserAgents(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error) {
+	s.period = period
+	return s.agents, nil
 }
 
 var now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -422,4 +442,81 @@ func TestPeriodReachesStore(t *testing.T) {
 			t.Fatalf("период в сторе = %+v, ждали %+v", store.period, period)
 		}
 	})
+}
+
+// Гейт источников закрывает ОДНУ секцию, а не всю вкладку: 402 на весь запрос
+// унёс бы заодно график и устройства, которые платными не объявлялись. Число
+// визитов с известным источником при этом настоящее — плашка обязана показывать
+// число владельца, а не рекламировать пустоту.
+func TestBreakdown_LockedSourcesKeepRestOfTab(t *testing.T) {
+	store := &fakeStore{
+		sources: []domain.SourceRow{
+			{UTMSource: "newsletter", Visits: 7},
+			{Visits: 3},
+		},
+		agents: []domain.UserAgentRow{
+			{UserAgent: "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0.0.0 Safari/537.36", Visits: 10},
+		},
+	}
+	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store)
+
+	b, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if !b.SourcesLocked || len(b.Sources) != 0 {
+		t.Errorf("источники = %+v (locked=%v), ждали пустые и закрытые", b.Sources, b.SourcesLocked)
+	}
+	if b.KnownSources != 7 {
+		t.Errorf("визитов с источником = %d, ждали 7 — число показывается и под замком", b.KnownSources)
+	}
+	if len(b.Browsers) == 0 || len(b.Devices) == 0 {
+		t.Error("браузеры и устройства обязаны остаться: платными объявлялись только источники")
+	}
+}
+
+// На открытом плане секция источников приезжает свёрнутой доменом.
+func TestBreakdown_OpenPlanFoldsSources(t *testing.T) {
+	store := &fakeStore{sources: []domain.SourceRow{
+		{Referer: "https://vk.com/wall", Visits: 5},
+		{Referer: "https://www.vk.com/feed", Visits: 3},
+	}}
+	svc := NewService(nil, fakeForms{}, openPlans(), store)
+
+	b, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if b.SourcesLocked {
+		t.Fatal("на открытом плане источники не закрываются")
+	}
+	if len(b.Sources) != 1 || b.Sources[0].Source != "vk.com" || b.Sources[0].Visits != 8 {
+		t.Fatalf("источники = %+v, ждали одну строку vk.com на 8 визитов", b.Sources)
+	}
+}
+
+// Вкладка чужой формы недоступна — и это проверяется ДО тарифа: иначе код ответа
+// рассказывал бы постороннему о существовании формы.
+func TestBreakdown_ForeignFormIsNotFound(t *testing.T) {
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{})
+
+	_, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
+	}
+}
+
+// Шаг ряда выбирает сервер и передаёт его в запрос: сутки смотрят часами, длинные
+// окна — сутками. Без этого график за месяц состоял бы из тысяч точек.
+func TestBreakdown_StepFollowsPeriod(t *testing.T) {
+	store := &fakeStore{}
+	svc := NewService(nil, fakeForms{}, openPlans(), store)
+	day := domain.Period{From: time.Now().Add(-24 * time.Hour)}
+
+	if _, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), day); err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if store.step != domain.StepHour {
+		t.Errorf("шаг = %q, ждали %q", store.step, domain.StepHour)
+	}
 }

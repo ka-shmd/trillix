@@ -1,0 +1,44 @@
+import { z } from 'zod'
+
+// Вкладка «Визиты» (спека design/analytics-tally.md §8). Зеркалит
+// breakdownResponse из internal/visits/handler.go.
+
+// Шаг ряда выбирает СЕРВЕР (domain.StepFor): от него зависит и запрос, и подписи
+// оси, а вторая копия этого выбора на клиенте разъехалась бы молча.
+export const bucketStepSchema = z.enum(['hour', 'day'])
+export type BucketStep = z.infer<typeof bucketStepSchema>
+
+export const timeBucketSchema = z.object({
+  at: z.string(),
+  visits: z.number().int(),
+  submitted: z.number().int(),
+})
+export type TimeBucket = z.infer<typeof timeBucketSchema>
+
+export const sourceCountSchema = z.object({
+  source: z.string(),
+  medium: z.string(),
+  visits: z.number().int(),
+})
+export type SourceCount = z.infer<typeof sourceCountSchema>
+
+export const labelCountSchema = z.object({
+  label: z.string(),
+  visits: z.number().int(),
+})
+export type LabelCount = z.infer<typeof labelCountSchema>
+
+// sources пуст при sourcesLocked — разбивка закрыта тарифом. knownSources при этом
+// настоящий: визиты собираются у всех планов, платным стал показ (docs/ANALYTICS.md
+// §9), и плашка обязана показывать число владельца, а не рекламировать пустоту.
+export const visitsBreakdownSchema = z.object({
+  step: bucketStepSchema,
+  timeseries: z.array(timeBucketSchema),
+  sources: z.array(sourceCountSchema),
+  sourcesLocked: z.boolean(),
+  knownSources: z.number().int(),
+  devices: z.array(labelCountSchema),
+  browsers: z.array(labelCountSchema),
+  systems: z.array(labelCountSchema),
+})
+export type VisitsBreakdown = z.infer<typeof visitsBreakdownSchema>

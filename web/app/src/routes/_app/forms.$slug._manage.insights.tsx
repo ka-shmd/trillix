@@ -64,6 +64,16 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
         Сводка
       </Link>
       <Link
+        to="/forms/$slug/insights/visits"
+        params={{ slug }}
+        search={{ period }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
+        Визиты
+      </Link>
+      <Link
         to="/forms/$slug/insights/drop-offs"
         params={{ slug }}
         search={{ period }}

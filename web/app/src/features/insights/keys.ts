@@ -8,4 +8,6 @@ import { type Period } from '../../shared/period'
 export const insightsKeys = {
   all: () => ['insights'] as const,
   visits: (formId: string, period: Period) => ['insights', 'visits', formId, period] as const,
+  breakdown: (formId: string, period: Period) =>
+    ['insights', 'breakdown', formId, period] as const,
 }

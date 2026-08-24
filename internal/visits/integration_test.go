@@ -344,22 +344,33 @@ func funnelService() *visits.Service {
 // UPDATE, каким владелец включит гейт на проде (гейты приезжают выключенными).
 func setFunnelGate(t *testing.T, slug string, allowed bool) {
 	t.Helper()
+	setGate(t, slug, "analytics_funnel", allowed)
+}
+
+// setSourcesGate — то же для источников трафика.
+func setSourcesGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	setGate(t, slug, "analytics_sources", allowed)
+}
+
+func setGate(t *testing.T, slug, key string, allowed bool) {
+	t.Helper()
 	value := "false"
 	if allowed {
 		value = "true"
 	}
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', $1::jsonb)
+		`UPDATE plans SET limits = jsonb_set(limits, array[$3::text], $1::jsonb)
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
 		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
 		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
-		value, slug); err != nil {
-		t.Fatalf("set funnel gate: %v", err)
+		value, slug, key); err != nil {
+		t.Fatalf("set gate %s: %v", key, err)
 	}
 	t.Cleanup(func() {
 		if _, err := testPool.Exec(context.Background(),
-			`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', 'true')`); err != nil {
-			t.Fatalf("reset funnel gate: %v", err)
+			`UPDATE plans SET limits = jsonb_set(limits, array[$1::text], 'true')`, key); err != nil {
+			t.Fatalf("reset gate %s: %v", key, err)
 		}
 	})
 }
@@ -605,5 +616,124 @@ func TestInsights_EmptyFormIsZeroWithoutData(t *testing.T) {
 	}
 	if in.Visits != 0 || in.TimedVisits != 0 || in.MedianDurationSec != 0 {
 		t.Fatalf("карточки пустой формы = %+v, ждали нули", in)
+	}
+}
+
+// beaconWith шлёт бикон с заголовками и метками источника — тем же путём, каким их
+// шлёт рендерер. Обычный beacon их не несёт: заголовков у него нет, и в мете
+// оказывались бы только пустые строки.
+func beaconWith(t *testing.T, srv *httptest.Server, slug, visitID, userAgent, referer string, utm map[string]string) {
+	t.Helper()
+	utmJSON, err := json.Marshal(utm)
+	if err != nil {
+		t.Fatalf("marshal utm: %v", err)
+	}
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() +
+		`","version":1,"seq":0,"last_block_id":null,"utm":` + string(utmJSON) + `}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/visits", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post visit: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("бикон: статус %d, ждали 204", resp.StatusCode)
+	}
+}
+
+// Вкладка «Визиты» целиком на настоящих данных: что записал бикон, то и читает
+// разбивка. Юнитами это не покрыть — между ними лежат JSONB-мета, group by по
+// выражениям и date_trunc.
+func TestBreakdown_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+		"https://vk.com/wall-1", nil)
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+		"", map[string]string{"utm_source": "newsletter", "utm_medium": "email"})
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+
+	if len(b.Timeseries) != 1 || b.Timeseries[0].Visits != 2 {
+		t.Errorf("ряд = %+v, ждали одну корзину на 2 визита", b.Timeseries)
+	}
+	if b.Step != domain.StepDay {
+		t.Errorf("шаг = %q, ждали сутки для «всего времени»", b.Step)
+	}
+	if b.KnownSources != 2 {
+		t.Errorf("визитов с источником = %d, ждали 2 (vk.com и newsletter)", b.KnownSources)
+	}
+	if !hasSource(b.Sources, "newsletter", "email", 1) || !hasSource(b.Sources, "vk.com", "Нет", 1) {
+		t.Errorf("источники = %+v, ждали newsletter/email и vk.com", b.Sources)
+	}
+	if !hasLabel(b.Devices, "Компьютер", 1) || !hasLabel(b.Devices, "Телефон", 1) {
+		t.Errorf("устройства = %+v, ждали компьютер и телефон", b.Devices)
+	}
+	if !hasLabel(b.Browsers, "Chrome", 1) || !hasLabel(b.Browsers, "Safari", 1) {
+		t.Errorf("браузеры = %+v, ждали Chrome и Safari", b.Browsers)
+	}
+	if !hasLabel(b.Systems, "Windows", 1) || !hasLabel(b.Systems, "iOS", 1) {
+		t.Errorf("ОС = %+v, ждали Windows и iOS", b.Systems)
+	}
+}
+
+func hasSource(rows []domain.SourceCount, source, medium string, visits int) bool {
+	for _, r := range rows {
+		if r.Source == source && r.Medium == medium && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLabel(rows []domain.LabelCount, label string, visits int) bool {
+	for _, r := range rows {
+		if r.Label == label && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+// Гейт источников закрывает секцию, но не вкладку — и визиты продолжают
+// собираться: платным стал показ разбивки, а не запись (ADR §10).
+func TestBreakdown_SourcesClosedByPlan(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (Windows NT 10.0) Chrome/140.0.0.0 Safari/537.36", "https://vk.com/x", nil)
+
+	setSourcesGate(t, slug, false)
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+	if !b.SourcesLocked || len(b.Sources) != 0 {
+		t.Errorf("источники = %+v (locked=%v), ждали закрытые", b.Sources, b.SourcesLocked)
+	}
+	if b.KnownSources != 1 {
+		t.Errorf("визитов с источником = %d, ждали 1: число показывается и под замком", b.KnownSources)
+	}
+	if len(b.Browsers) == 0 {
+		t.Error("браузеры обязаны остаться — платными объявлялись только источники")
 	}
 }
