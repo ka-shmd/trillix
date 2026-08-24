@@ -3,19 +3,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { act, cleanup, render, screen } from '@testing-library/react'
 
-import { PartialToggle } from './PartialToggle'
+import { InstantSwitch } from './InstantSwitch'
 
 afterEach(cleanup)
 
 // Дефект, из-за которого тест и написан: у НОВОЙ формы за одним кликом стоят два
-// запроса подряд — создание самой формы и PATCH тумблера. Пока они идут,
+// запроса подряд — создание самой формы и PATCH настройки. Пока они идут,
 // контролируемый серверным значением переключатель оставался в старом положении, и
-// клик выглядел несработавшим.
-describe('тумблер сбора незавершённых', () => {
+// клик выглядел несработавшим. Так вели себя ОБА тумблера страницы настроек.
+describe('мгновенный тумблер настройки формы', () => {
   it('переключается сразу, не дожидаясь сервера', async () => {
     // Обещание, которое НИКОГДА не разрешается, — модель медленной сети.
     const onToggle = vi.fn(() => new Promise<void>(() => {}))
-    render(<PartialToggle checked={false} onToggle={onToggle} />)
+    render(<InstantSwitch id="t" label="Настройка" checked={false} onToggle={onToggle} />)
 
     const toggle = screen.getByRole('switch')
     await act(async () => {
@@ -27,10 +27,10 @@ describe('тумблер сбора незавершённых', () => {
   })
 
   it('на ошибке возвращается в серверное положение', async () => {
-    // Тумблер не имеет права врать про сбор, которого нет: отказ тарифа обязан
-    // вернуть его выключенным.
+    // Тумблер не имеет права показывать настройку, которой на сервере нет: отказ
+    // (тариф, сеть) обязан вернуть его в прежнее положение.
     const onToggle = vi.fn(() => Promise.reject(new Error('plan_required')))
-    render(<PartialToggle checked={false} onToggle={onToggle} />)
+    render(<InstantSwitch id="t" label="Настройка" checked={false} onToggle={onToggle} />)
 
     const toggle = screen.getByRole('switch')
     await act(async () => {
@@ -46,7 +46,7 @@ describe('тумблер сбора незавершённых', () => {
     // моргнул бы обратно.
     let resolve = () => {}
     const onToggle = vi.fn(() => new Promise<void>((r) => (resolve = r)))
-    render(<PartialToggle checked={false} onToggle={onToggle} />)
+    render(<InstantSwitch id="t" label="Настройка" checked={false} onToggle={onToggle} />)
 
     const toggle = screen.getByRole('switch')
     await act(async () => {
