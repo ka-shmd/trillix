@@ -1,4 +1,4 @@
-import { createFileRoute, Link, Outlet } from '@tanstack/react-router'
+import { createFileRoute, Link, Outlet, useNavigate } from '@tanstack/react-router'
 
 import { periodLabels, periodSchema, type Period } from '../../shared/period'
 import {
@@ -85,14 +85,20 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
 }
 
 function PeriodSelect() {
-  const navigate = Route.useNavigate()
+  // navigate РОУТЕРА, а не маршрута (Route.useNavigate). Разница несущая: у
+  // маршрутного navigate базой служит сам маршрут, то есть оболочка раздела, и
+  // переход без `to` уходил на /forms/{slug}/insights — а его index редиректит на
+  // «Сводку». Со стороны это выглядело так: меняешь период на вкладке «Визиты» и
+  // оказываешься на «Сводке». Роутерный navigate базой берёт ТЕКУЩИЙ адрес,
+  // поэтому вкладка остаётся той же, какой была.
+  const navigate = useNavigate()
   const { period } = Route.useSearch()
 
   return (
     <Select
       value={period}
       onValueChange={(value) =>
-        void navigate({ search: (prev) => ({ ...prev, period: periodSchema.parse(value) }) })
+        void navigate({ to: '.', search: (prev) => ({ ...prev, period: periodSchema.parse(value) }) })
       }
     >
       <SelectTrigger className="w-[150px]" aria-label="Период">
