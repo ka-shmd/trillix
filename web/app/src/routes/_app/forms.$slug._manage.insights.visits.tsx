@@ -182,8 +182,7 @@ function Places({ title, rows, unknown }: { title: string; rows: PlaceCount[]; u
       <section>
         <h2 className="mb-3 font-medium">{title}</h2>
         <p className="text-sm text-muted-foreground">
-          Место не определено ни у одного визита за период. Так и будет, пока форму
-          открывают с этой же машины: у локальных адресов страны нет.
+          Место не определено ни у одного визита за период.
         </p>
       </section>
     )
