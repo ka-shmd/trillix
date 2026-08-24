@@ -7,6 +7,7 @@ import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
 import { ApiError } from '../../../shared/api/errors'
 import { useUpdateCloseSettings, useUpdateCollectPartial, useUpdateNotifyOnSubmission } from '../queries'
 
+import { PartialToggle } from './PartialToggle'
 import { useBuilderStore } from './storeContext'
 import { type FormRef } from './useAutosave'
 import {
@@ -335,28 +336,28 @@ export function FormSettings({
         {/* Единственный тумблер продукта, который включает СБОР данных, а не их
             показ, — поэтому он и предупреждение живут от одного флага, и включить
             сбор молча нельзя. Отказ тарифа (402) приходит из мутации: показываем
-            тост со ссылкой на тариф и оставляем тумблер выключенным. */}
-        <div className="mt-4 flex items-center gap-3">
-          <Switch
-            id="collect-partial"
-            checked={detail.collectPartial}
-            disabled={updatePartial.isPending}
-            onCheckedChange={(enabled) =>
-              void ensureForm()
-                .then(({ id, slug }) => updatePartial.mutateAsync({ id, slug, enabled }))
-                .catch((e: unknown) =>
-                  toast.error(
-                    e instanceof ApiError && e.code === 'plan_required'
-                      ? 'Сбор незавершённых ответов доступен на платном тарифе'
-                      : CREATE_FAILED,
-                  ),
+            тост со ссылкой на тариф, а тумблер возвращается в выключенное положение
+            сам (PartialToggle сбрасывает своё состояние на ошибке).
+
+            У НОВОЙ формы за одним кликом стоят два запроса — создание формы и PATCH
+            тумблера, — поэтому положение держит сам компонент, а не серверное
+            значение: иначе клик выглядел бы несработавшим. */}
+        <PartialToggle
+          checked={detail.collectPartial}
+          onToggle={(enabled) =>
+            ensureForm()
+              .then(({ id, slug }) => updatePartial.mutateAsync({ id, slug, enabled }))
+              .then(() => undefined)
+              .catch((e: unknown) => {
+                toast.error(
+                  e instanceof ApiError && e.code === 'plan_required'
+                    ? 'Сбор незавершённых ответов доступен на платном тарифе'
+                    : CREATE_FAILED,
                 )
-            }
-          />
-          <Label htmlFor="collect-partial" className="text-sm font-normal">
-            Собирать незавершённые ответы
-          </Label>
-        </div>
+                throw e
+              })
+          }
+        />
       </section>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
