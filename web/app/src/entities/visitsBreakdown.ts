@@ -56,5 +56,10 @@ export const visitsBreakdownSchema = z.object({
   countries: z.array(placeCountSchema),
   cities: z.array(placeCountSchema),
   unknownPlace: z.number().int(),
+  // geoConfigured отличает «справочника на контуре нет» (блок прячем) от «есть, но
+  // мест не определили» (блок с объяснением). Пустые списки в обоих случаях
+  // одинаковы, а означают разное — без этого флага выключенное гео неотличимо от
+  // ненаписанной функции.
+  geoConfigured: z.boolean(),
 })
 export type VisitsBreakdown = z.infer<typeof visitsBreakdownSchema>

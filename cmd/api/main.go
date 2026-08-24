@@ -213,8 +213,10 @@ func runCommand(args []string, cfg config.Config, log *slog.Logger) error {
 		return runSeed(cfg, log)
 	case "seed-user":
 		return runSeedUser(args[1:], cfg, log)
+	case "seed-visits":
+		return runSeedVisits(args[1:], cfg, log)
 	default:
-		return fmt.Errorf("unknown command %q (known: migrate, seed, seed-user)", args[0])
+		return fmt.Errorf("unknown command %q (known: migrate, seed, seed-user, seed-visits)", args[0])
 	}
 }
 

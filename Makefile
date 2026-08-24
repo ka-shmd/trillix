@@ -50,7 +50,7 @@ migrate-up: ## Применить все миграции
 migrate-down: ## Откатить последнюю миграцию (спросит, если откат уносит данные; FORCE=1 — молча)
 	go run ./cmd/api migrate down $(if $(FORCE),--force)
 
-seed: ## Наполнить БД демо-данными (demo@trillix.local / demo-password + 60 форм + CSV-демо с 2 версиями и 10k ответов)
+seed: ## Наполнить БД демо-данными (demo@trillix.local / demo-password + 60 форм + CSV-демо с 2 версиями, 10k ответов и визитами для аналитики)
 	go run ./cmd/api seed
 	@echo "seed готов: вход demo@trillix.local / demo-password"
 
@@ -61,6 +61,9 @@ geo-fetch: ## Скачать справочник геолокации Sypex Geo
 	@cd geo && unzip -o -q SxGeoCity.zip && rm -f SxGeoCity.zip
 	@echo "готово: geo/SxGeoCity.dat"
 	@echo "пропишите в .env: GEO_DB_PATH=geo/SxGeoCity.dat (на проде — /srv/geo/SxGeoCity.dat)"
+
+seed-visits: ## Досыпать визиты для аналитики в уже существующую форму (SLUG=... — в конкретную)
+	go run ./cmd/api seed-visits $(SLUG)
 
 sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
 	go tool sqlc generate

@@ -208,6 +208,8 @@ type breakdownResponse struct {
 	Countries    []placeResponse `json:"countries"`
 	Cities       []placeResponse `json:"cities"`
 	UnknownPlace int             `json:"unknownPlace"`
+	// geoConfigured отличает «справочника нет» от «есть, но мест не определили».
+	GeoConfigured bool `json:"geoConfigured"`
 }
 
 // breakdown отдаёт вкладку «Визиты»: ряд по времени, источники, устройства,
@@ -261,6 +263,7 @@ func (h *Handler) breakdown(w http.ResponseWriter, r *http.Request) {
 		Countries:     places(b.Countries),
 		Cities:        places(b.Cities),
 		UnknownPlace:  b.UnknownPlace,
+		GeoConfigured: b.GeoConfigured,
 		Timeseries:    series,
 		Sources:       sources,
 		SourcesLocked: b.SourcesLocked,

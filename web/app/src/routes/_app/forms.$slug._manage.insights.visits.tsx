@@ -66,13 +66,19 @@ function VisitsPage() {
       <div className="grid gap-8 sm:grid-cols-2">
         <Sources data={data} />
         <Breakdown title="Устройства" rows={data.devices} />
-        {/* Блок гео исчезает целиком, когда справочника на контуре нет: пустой
-            список с нулями выглядел бы как «посетителей не было», а это неправда —
-            мы просто не знаем, откуда они. */}
-        {data.countries.length > 0 && (
+        {/* Три состояния, и их нельзя схлопывать в два. ЕСТЬ данные — рисуем
+            всегда, даже если справочник сейчас отключён: собранные страны никуда
+            не делись и остаются правдой. НЕТ данных, но справочник подключён —
+            рисуем с объяснением. НЕТ данных и справочника нет — блок исчезает
+            целиком, потому что рассказывать не о чем. Без среднего случая
+            выключенное гео неотличимо от ненаписанной функции — ровно так оно и
+            выглядело владельцу. */}
+        {(data.countries.length > 0 || data.geoConfigured) && (
           <Places title="Страны" rows={data.countries} unknown={data.unknownPlace} />
         )}
-        {data.cities.length > 0 && <Places title="Города" rows={data.cities} />}
+        {(data.cities.length > 0 || data.geoConfigured) && (
+          <Places title="Города" rows={data.cities} />
+        )}
         <Breakdown title="Браузеры" rows={data.browsers} />
         <Breakdown title="Операционные системы" rows={data.systems} />
       </div>
@@ -171,6 +177,17 @@ function Sources({ data }: { data: VisitsBreakdown }) {
 // есть две буквы кода, сдвинутые в свой блок Unicode. Ни картинок, ни спрайта, ни
 // зависимости — и в списке видно страну, не читая названия.
 function Places({ title, rows, unknown }: { title: string; rows: PlaceCount[]; unknown?: number }) {
+  if (rows.length === 0) {
+    return (
+      <section>
+        <h2 className="mb-3 font-medium">{title}</h2>
+        <p className="text-sm text-muted-foreground">
+          Место не определено ни у одного визита за период. Так и будет, пока форму
+          открывают с этой же машины: у локальных адресов страны нет.
+        </p>
+      </section>
+    )
+  }
   return (
     <div>
       <Breakdown

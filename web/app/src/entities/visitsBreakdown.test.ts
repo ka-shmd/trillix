@@ -33,6 +33,7 @@ const realResponse = {
   ],
   cities: [{ name: 'Москва', countryCode: 'RU', visits: 4 }],
   unknownPlace: 2,
+  geoConfigured: true,
 }
 
 describe('контракт вкладки «Визиты»', () => {
@@ -55,9 +56,10 @@ describe('контракт вкладки «Визиты»', () => {
       countries: [],
       cities: [],
       unknownPlace: 5,
+      geoConfigured: false,
     })
     expect(noGeo.countries).toEqual([])
-    expect(noGeo.unknownPlace).toBe(5)
+    expect(noGeo.geoConfigured).toBe(false)
   })
 
   it('принимает закрытую тарифом секцию источников', () => {

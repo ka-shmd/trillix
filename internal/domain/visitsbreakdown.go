@@ -267,6 +267,11 @@ type VisitsBreakdown struct {
 	Countries    []PlaceCount
 	Cities       []PlaceCount
 	UnknownPlace int
+	// GeoConfigured — открыт ли справочник на контуре. Без него блок стран не
+	// рисуется вовсе; с ним, но без единого определённого места, рисуется с
+	// объяснением. Иначе выключенное гео и гео без данных выглядят одинаково —
+	// как отсутствующая функция.
+	GeoConfigured bool
 }
 
 // CountKnownSources — сколько визитов пришло не «прямым заходом». Считается до

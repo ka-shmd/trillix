@@ -55,6 +55,10 @@ type Plans interface {
 // отдаёт пустое место, поэтому ветки «а настроено ли гео» здесь нет.
 type Geo interface {
 	Lookup(ip string) geo.Place
+	// Configured отличает «справочника на контуре нет» от «есть, но ни одного
+	// места не определили». Списки в обоих случаях пустые, а означают разное:
+	// первое прячет блок, второе объясняет пустоту.
+	Configured() bool
 }
 
 // Store — доступ к данным visits, объявленный на стороне потребителя.
@@ -312,6 +316,7 @@ func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, perio
 		Countries:     countries,
 		Cities:        cities,
 		UnknownPlace:  total - withPlace,
+		GeoConfigured: s.geo != nil && s.geo.Configured(),
 	}
 	if d.Allowed {
 		out.Sources = domain.FoldSources(sources)

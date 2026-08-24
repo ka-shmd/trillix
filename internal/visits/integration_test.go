@@ -767,6 +767,8 @@ func TestBreakdown_SourcesClosedByPlan(t *testing.T) {
 // когда файл на машине есть).
 type testGeoService struct{}
 
+func (testGeoService) Configured() bool { return true }
+
 func (testGeoService) Lookup(ip string) geo.Place {
 	switch ip {
 	case "77.94.1.1":

@@ -80,6 +80,8 @@ func (s *fakeStore) UpsertVisit(_ context.Context, _ postgres.DBTX, id, formID, 
 // даёт пустое место — как настоящий на IPv6 и приватных адресах.
 type fakeGeo struct{}
 
+func (fakeGeo) Configured() bool { return true }
+
 func (fakeGeo) Lookup(ip string) geo.Place {
 	if ip == "77.94.1.1" {
 		return geo.Place{CountryCode: "RU", Country: "Россия", City: "Москва"}
