@@ -198,12 +198,47 @@ func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UU
 	return i, err
 }
 
+const countSubmissionsInPeriod = `-- name: CountSubmissionsInPeriod :one
+SELECT count(*)::bigint FROM submissions
+WHERE form_id = $1 AND NOT over_quota
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+`
+
+type CountSubmissionsInPeriodParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+// Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
+// то же число, что стоит в таблице ответов: расхождение между соседними экранами
+// читалось бы как баг, а не как разница определений.
+//
+// Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
+// множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
+// однажды поделить одно на другое.
+func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsInPeriod, arg.FormID, arg.FromTs, arg.ToTs)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
 GROUP BY last_block_id, submitted
 `
+
+type CountVisitsByLastBlockParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
 
 type CountVisitsByLastBlockRow struct {
 	LastBlockID pgtype.Text
@@ -229,8 +264,11 @@ type CountVisitsByLastBlockRow struct {
 // последнем вопросе», и воронка обвиняла бы вопрос, который на самом деле работает.
 // «Дошёл до вопроса» считается по всем визитам, «отвалился здесь» — только по
 // неотправившим.
-func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) ([]CountVisitsByLastBlockRow, error) {
-	rows, err := q.db.Query(ctx, countVisitsByLastBlock, formID)
+// Границы периода приходят всегда: «всё время» — это ±бесконечность, а не
+// отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
+// ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
+func (q *Queries) CountVisitsByLastBlock(ctx context.Context, arg CountVisitsByLastBlockParams) ([]CountVisitsByLastBlockRow, error) {
+	rows, err := q.db.Query(ctx, countVisitsByLastBlock, arg.FormID, arg.FromTs, arg.ToTs)
 	if err != nil {
 		return nil, err
 	}
@@ -2913,6 +2951,8 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
+  AND s.created_at >= $4::timestamptz
+  AND s.created_at <  $5::timestamptz
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -2921,6 +2961,8 @@ type ListSubmissionsAfterParams struct {
 	FormID   uuid.UUID
 	Limit    int32
 	CursorID uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
 }
 
 type ListSubmissionsAfterRow struct {
@@ -2933,7 +2975,13 @@ type ListSubmissionsAfterRow struct {
 // Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
 // стабильно, ответы иммутабельны. Тот же индекс и порядок.
 func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsAfterParams) ([]ListSubmissionsAfterRow, error) {
-	rows, err := q.db.Query(ctx, listSubmissionsAfter, arg.FormID, arg.Limit, arg.CursorID)
+	rows, err := q.db.Query(ctx, listSubmissionsAfter,
+		arg.FormID,
+		arg.Limit,
+		arg.CursorID,
+		arg.FromTs,
+		arg.ToTs,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2962,6 +3010,8 @@ SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at >= $3::timestamptz
+  AND s.created_at <  $4::timestamptz
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -2969,6 +3019,8 @@ LIMIT $2
 type ListSubmissionsFirstPageParams struct {
 	FormID uuid.UUID
 	Limit  int32
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
 }
 
 type ListSubmissionsFirstPageRow struct {
@@ -2983,8 +3035,17 @@ type ListSubmissionsFirstPageRow struct {
 // form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
 // NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
 // понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+// Границы периода приходят всегда: у листинга ответов селектора периода нет и он
+// шлёт ±бесконечность, у сводки — выбранное владельцем окно (спека
+// design/analytics-tally.md §4). Одна форма запроса вместо двух: копия отличалась
+// бы одной строкой WHERE, а расходиться начала бы во всём остальном.
 func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissionsFirstPageParams) ([]ListSubmissionsFirstPageRow, error) {
-	rows, err := q.db.Query(ctx, listSubmissionsFirstPage, arg.FormID, arg.Limit)
+	rows, err := q.db.Query(ctx, listSubmissionsFirstPage,
+		arg.FormID,
+		arg.Limit,
+		arg.FromTs,
+		arg.ToTs,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4053,7 +4114,8 @@ INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
-    seq           = EXCLUDED.seq
+    seq           = EXCLUDED.seq,
+    updated_at    = now()
 WHERE form_visits.form_id = EXCLUDED.form_id
   AND form_visits.seq < EXCLUDED.seq
 `
@@ -4072,7 +4134,8 @@ type UpsertFormVisitParams struct {
 // Запись визита биконом рендерера. id генерирует клиент (UUIDv7), поэтому второй
 // бикон того же визита упирается в PK и становится UPDATE'ом.
 //
-// Обновляются РОВНО два поля. Не обновляются намеренно:
+// Обновляются РОВНО три поля (updated_at приехал с 0030 — это вторая граница
+// длительности визита; первая — created_at). Не обновляются намеренно:
 //
 //	submitted       — его ставит только приём ответа; иначе поздний бикон затирал бы
 //	                  уже засчитанную конверсию обратно в false;
@@ -4161,4 +4224,59 @@ type UpsertTOTPSecretParams struct {
 func (q *Queries) UpsertTOTPSecret(ctx context.Context, arg UpsertTOTPSecretParams) error {
 	_, err := q.db.Exec(ctx, upsertTOTPSecret, arg.UserID, arg.Secret)
 	return err
+}
+
+const visitInsights = `-- name: VisitInsights :one
+SELECT count(*)::bigint                                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
+       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE updated_at > created_at),
+       0)::float8                                              AS median_duration_sec
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+`
+
+type VisitInsightsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitInsightsRow struct {
+	Visits            int64
+	Submitted         int64
+	TimedVisits       int64
+	MedianDurationSec float64
+}
+
+// Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
+// отправило, и медианная длительность визита (спека design/analytics-tally.md §5).
+//
+// МЕДИАНА, а не среднее: вкладка, забытая открытой на сутки, сдвигает среднее на
+// порядок и делает карточку бесполезной ровно в тот день, когда такой посетитель
+// случился. Медиана переживает это без единой строки кода.
+//
+// FILTER (WHERE updated_at > created_at) отбрасывает визиты, от которых доехал
+// ровно один бикон: у них updated_at = created_at, то есть «ноль секунд», и без
+// фильтра потерянный pagehide занижал бы медиану тем сильнее, чем хуже связь у
+// респондентов. Их число отдаётся отдельной колонкой (timed_visits) — экран обязан
+// отличать «данных нет» от «ноль секунд», а знаменатель метрики надо показывать.
+//
+// Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
+// второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
+func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (VisitInsightsRow, error) {
+	row := q.db.QueryRow(ctx, visitInsights, arg.FormID, arg.FromTs, arg.ToTs)
+	var i VisitInsightsRow
+	err := row.Scan(
+		&i.Visits,
+		&i.Submitted,
+		&i.TimedVisits,
+		&i.MedianDurationSec,
+	)
+	return i, err
 }

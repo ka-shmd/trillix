@@ -17,24 +17,26 @@ import (
 // visits не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
 
-// funnelService — часть сервиса, нужная приватному транспорту.
-type funnelService interface {
-	Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.Funnel, error)
+// analyticsService — часть сервиса, нужная приватному транспорту.
+type analyticsService interface {
+	Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Funnel, error)
+	Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
 }
 
 // Handler — приватный транспорт модуля visits: автор смотрит воронку своей формы.
 // Только чтение, поэтому CSRF не нужен (как у листинга и сводки ответов).
 type Handler struct {
-	svc         funnelService
+	svc         analyticsService
 	requireAuth Middleware
 }
 
-func NewHandler(svc funnelService, requireAuth Middleware) *Handler {
+func NewHandler(svc analyticsService, requireAuth Middleware) *Handler {
 	return &Handler{svc: svc, requireAuth: requireAuth}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/funnel", h.requireAuth(http.HandlerFunc(h.funnel)))
+	mux.Handle("GET /api/v1/forms/{id}/insights", h.requireAuth(http.HandlerFunc(h.insights)))
 }
 
 type funnelStepResponse struct {
@@ -72,8 +74,14 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
 	start := time.Now()
-	f, err := h.svc.Funnel(r.Context(), u.ID, formID)
+	f, err := h.svc.Funnel(r.Context(), u.ID, formID, period)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -101,5 +109,55 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 		Submitted:       f.Submitted,
 		LeftBeforeFirst: f.LeftBeforeFirst,
 		Steps:           steps,
+	})
+}
+
+// insightsResponse — карточки над вкладками Insights в части визитов.
+//
+// timedVisits отдаётся наружу намеренно: это знаменатель медианы, и без него
+// «0 секунд» на экране неотличимо от «данных ещё нет».
+type insightsResponse struct {
+	Visits            int     `json:"visits"`
+	Submitted         int     `json:"submitted"`
+	TimedVisits       int     `json:"timedVisits"`
+	MedianDurationSec float64 `json:"medianDurationSec"`
+}
+
+// insights отдаёт счётчики визитов за период. Число ответов формы сюда не входит —
+// это другое множество и другой модуль (ANALYTICS.md §1); кабинет берёт его своим
+// запросом и рисует соседней карточкой.
+func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	formID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	start := time.Now()
+	in, err := h.svc.Insights(r.Context(), u.ID, formID, period)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.LoggerFrom(r.Context()).Info("visits insights",
+		slog.String("form_id", formID.String()),
+		slog.Int("visits", in.Visits),
+		slog.Duration("duration", time.Since(start)),
+	)
+	httpserver.WriteJSON(w, r, http.StatusOK, insightsResponse{
+		Visits:            in.Visits,
+		Submitted:         in.Submitted,
+		TimedVisits:       in.TimedVisits,
+		MedianDurationSec: in.MedianDurationSec,
 	})
 }

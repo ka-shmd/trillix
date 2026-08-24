@@ -27,7 +27,8 @@ type Middleware = func(http.Handler) http.Handler
 type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
-	Summary(ctx context.Context, userID, formID uuid.UUID) (domain.Summary, error)
+	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
+	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 }
 
@@ -62,6 +63,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary", h.requireAuth(http.HandlerFunc(h.summary)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 }
 
@@ -188,8 +190,14 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
 	start := time.Now()
-	sum, err := h.svc.Summary(r.Context(), userID, formID)
+	sum, err := h.svc.Summary(r.Context(), userID, formID, period)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -223,6 +231,37 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		blocks[i] = item
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks})
+}
+
+// countResponse — карточка «Ответы» над вкладками Insights.
+type countResponse struct {
+	Submissions int `json:"submissions"`
+}
+
+// count отдаёт число ответов за период. Отдельная ручка, а не поле в счётчиках
+// визитов: это второе независимое множество (ANALYTICS.md §1) и чужой модуль, а
+// сведение их в один ответ рано или поздно кончилось бы делением одного на другое.
+// Запрос дешёвый — count по индексу (form_id, over_quota).
+func (h *Handler) count(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	n, err := h.svc.CountInPeriod(r.Context(), userID, formID, period)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, countResponse{Submissions: n})
 }
 
 // export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).

@@ -5,7 +5,8 @@
 -- Запись визита биконом рендерера. id генерирует клиент (UUIDv7), поэтому второй
 -- бикон того же визита упирается в PK и становится UPDATE'ом.
 --
--- Обновляются РОВНО два поля. Не обновляются намеренно:
+-- Обновляются РОВНО три поля (updated_at приехал с 0030 — это вторая граница
+-- длительности визита; первая — created_at). Не обновляются намеренно:
 --   submitted       — его ставит только приём ответа; иначе поздний бикон затирал бы
 --                     уже засчитанную конверсию обратно в false;
 --   form_version_id — визит принадлежит той версии, на которой открыт; переиздание
@@ -22,7 +23,8 @@ INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
-    seq           = EXCLUDED.seq
+    seq           = EXCLUDED.seq,
+    updated_at    = now()
 WHERE form_visits.form_id = EXCLUDED.form_id
   AND form_visits.seq < EXCLUDED.seq;
 
@@ -53,7 +55,41 @@ WHERE id = $1 AND form_id = $2;
 -- последнем вопросе», и воронка обвиняла бы вопрос, который на самом деле работает.
 -- «Дошёл до вопроса» считается по всем визитам, «отвалился здесь» — только по
 -- неотправившим.
+-- Границы периода приходят всегда: «всё время» — это ±бесконечность, а не
+-- отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
+-- ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
 GROUP BY last_block_id, submitted;
+
+-- name: VisitInsights :one
+-- Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
+-- отправило, и медианная длительность визита (спека design/analytics-tally.md §5).
+--
+-- МЕДИАНА, а не среднее: вкладка, забытая открытой на сутки, сдвигает среднее на
+-- порядок и делает карточку бесполезной ровно в тот день, когда такой посетитель
+-- случился. Медиана переживает это без единой строки кода.
+--
+-- FILTER (WHERE updated_at > created_at) отбрасывает визиты, от которых доехал
+-- ровно один бикон: у них updated_at = created_at, то есть «ноль секунд», и без
+-- фильтра потерянный pagehide занижал бы медиану тем сильнее, чем хуже связь у
+-- респондентов. Их число отдаётся отдельной колонкой (timed_visits) — экран обязан
+-- отличать «данных нет» от «ноль секунд», а знаменатель метрики надо показывать.
+--
+-- Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
+-- второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
+SELECT count(*)::bigint                                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
+       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE updated_at > created_at),
+       0)::float8                                              AS median_duration_sec
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz;

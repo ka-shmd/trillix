@@ -53,7 +53,8 @@ type Plans interface {
 type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
-	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error)
+	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
+	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
 }
 
 var _ Store = Repo{}
@@ -160,7 +161,7 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 //
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
-func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.Funnel, error) {
+func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Funnel, error) {
 	// Порядок обязателен: сначала АВТОРИЗАЦИЯ (чужая форма → 404, приватное не
 	// раскрывается), только потом тариф (→ 402). Наоборот — и посторонний узнавал
 	// бы по коду ответа, существует ли форма и какой у чужого воркспейса план.
@@ -199,11 +200,25 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.
 
 	// Один счётный запрос на всю воронку: верх (визиты и конверсия) выводится из той
 	// же разбивки, что и шаги, — см. BuildFunnel.
-	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID)
+	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID, period)
 	if err != nil {
 		return domain.Funnel{}, err
 	}
 	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts), nil
+}
+
+// Insights — счётчики визитов за период для карточек над вкладками Insights.
+//
+// Гейта тарифа здесь НЕТ, и это не упущение: карточки — первое, что владелец видит
+// после публикации формы, и замок на них рекламировал бы Pro вместо продукта.
+// Платным остаётся разбор (воронка, источники), а не сам факт «сколько людей».
+func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+	// Авторизация — тем же способом, что у воронки: чужая или несуществующая форма
+	// даёт 404 (инвариант 1, id из URL правом доступа не является).
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return domain.VisitInsights{}, err
+	}
+	return s.repo.Insights(ctx, s.db, formID, period)
 }
 
 // truncate режет строку по границе рун: обрезка по байтам оставила бы хвост битой

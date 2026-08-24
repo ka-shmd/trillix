@@ -122,10 +122,11 @@ type AnswerFiles interface {
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
-	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
+	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
 	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
-	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
+	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
+	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
 	// жёсткому капу формы, у которого своя семантика.
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
@@ -621,9 +622,9 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 	fetch := int32(limit + 1)
 	var rows []Submission
 	if after == nil {
-		rows, err = s.repo.ListSubmissions(ctx, s.db, formID, fetch)
+		rows, err = s.repo.ListSubmissions(ctx, s.db, formID, fetch, domain.Period{})
 	} else {
-		rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, fetch)
+		rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, fetch, domain.Period{})
 	}
 	if err != nil {
 		return Page{}, err
@@ -695,7 +696,7 @@ func parseVersions(formID uuid.UUID, versions []forms.Version) ([]domain.Version
 //
 // Авторизацию НЕ делает: вызывающий обязан сделать её сам (versionedSchemas или
 // forms.Get) — id формы из URL правом доступа не является (инвариант 1).
-func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
+func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, period domain.Period, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
 	var after *Cursor
 	for {
 		if err := ctx.Err(); err != nil {
@@ -704,9 +705,9 @@ func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, fn func(
 		var rows []Submission
 		var err error
 		if after == nil {
-			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, streamBatch)
+			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, streamBatch, period)
 		} else {
-			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, streamBatch)
+			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, streamBatch, period)
 		}
 		if err != nil {
 			return err
@@ -750,7 +751,9 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	if err := emit(builder.Header()); err != nil {
 		return err
 	}
-	return s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
+	// Выгрузка периодом не режется: CSV — документ «все ответы формы», и молчаливое
+	// урезание его окном экрана владелец заметил бы уже в чужой таблице.
+	return s.eachSubmission(ctx, formID, domain.Period{}, func(sub Submission, answers map[string]json.RawMessage) error {
 		return emit(builder.Row(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers))
 	})
 }
@@ -762,20 +765,34 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 //
 // Стоимость линейна по числу ответов формы: см. строку лога в handler.go — по ней
 // видно, во что она обходится на реальных данных.
-func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID) (domain.Summary, error) {
+func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Summary{}, err
 	}
 
 	builder := domain.NewSummaryBuilder(vs)
-	if err := s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
+	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 		builder.Add(int(sub.FormVersion), answers)
 		return nil
 	}); err != nil {
 		return domain.Summary{}, err
 	}
 	return builder.Result(), nil
+}
+
+// CountInPeriod — сколько видимых ответов пришло за окно наблюдения. Карточка
+// «Ответы» над вкладками Insights; гейта тарифа нет (счётчик своих же ответов
+// платным быть не может), авторизация — та же, что у листинга.
+func (s *Service) CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error) {
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return 0, err
+	}
+	n, err := s.repo.CountInPeriod(ctx, s.db, formID, period)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация

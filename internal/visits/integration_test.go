@@ -378,7 +378,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 		beacon(t, srv, slug, domain.NewID().String(), 0, "")
 	}
 
-	_, err := funnelService().Funnel(context.Background(), userID, formID)
+	_, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
 	}
@@ -394,7 +394,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 
 	// Открыли тариф — те же данные показываются, ничего не потеряно.
 	setFunnelGate(t, slug, true)
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel после открытия тарифа: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestFunnel_EndToEnd(t *testing.T) {
 		t.Fatalf("приём ответа: статус %d, ждали 201", code)
 	}
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	// Владелец другой формы — посторонний для этой.
 	_, strangerID := formOwner(t, publishedForm(t))
 
-	if _, err := funnelService().Funnel(context.Background(), strangerID, formID); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := funnelService().Funnel(context.Background(), strangerID, formID, domain.Period{}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
 }
@@ -479,7 +479,7 @@ func TestFunnel_NoVisits(t *testing.T) {
 	slug := publishedForm(t)
 	formID, userID := formOwner(t, slug)
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -491,5 +491,119 @@ func TestFunnel_NoVisits(t *testing.T) {
 	}
 	if f.Steps[0].Reached != 0 || f.Steps[0].DroppedHere != 0 {
 		t.Errorf("шаг не нулевой: %+v", f.Steps[0])
+	}
+}
+
+// ageVisit отодвигает визит в прошлое: created_at и updated_at сдвигаются на d
+// назад, разница между ними сохраняется. Иначе окно наблюдения нечем проверить —
+// тест не может ждать сутки.
+func ageVisit(t *testing.T, id string, d time.Duration) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`UPDATE form_visits SET created_at = created_at - $2::interval,
+		                        updated_at = updated_at - $2::interval
+		 WHERE id = $1`, id, d.String())
+	if err != nil {
+		t.Fatalf("age visit %s: %v", id, err)
+	}
+}
+
+// Окно наблюдения режет и карточки, и воронку — по created_at визита. Проверяется
+// на настоящем SQL: границы едут в запрос как ±бесконечность или как времена, и
+// перепутанная граница (>= вместо <) юнитом не ловится вовсе.
+func TestInsights_PeriodCutsOldVisits(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	old := domain.NewID().String()
+	beacon(t, srv, slug, old, 0, "")
+	beacon(t, srv, slug, old, 1, "b1")
+	ageVisit(t, old, 10*24*time.Hour)
+
+	fresh := domain.NewID().String()
+	beacon(t, srv, slug, fresh, 0, "")
+	beacon(t, srv, slug, fresh, 1, "b1")
+
+	svc := funnelService()
+	ctx := context.Background()
+
+	all, err := svc.Insights(ctx, userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights (всё время): %v", err)
+	}
+	if all.Visits != 2 {
+		t.Errorf("визитов за всё время = %d, ждали 2", all.Visits)
+	}
+
+	window := domain.Period{From: time.Now().Add(-48 * time.Hour)}
+	recent, err := svc.Insights(ctx, userID, formID, window)
+	if err != nil {
+		t.Fatalf("Insights (48 часов): %v", err)
+	}
+	if recent.Visits != 1 {
+		t.Errorf("визитов за 48 часов = %d, ждали 1: старый визит должен выпасть", recent.Visits)
+	}
+
+	f, err := svc.Funnel(ctx, userID, formID, window)
+	if err != nil {
+		t.Fatalf("Funnel (48 часов): %v", err)
+	}
+	if f.Visits != 1 {
+		t.Errorf("воронка за 48 часов = %d визитов, ждали 1", f.Visits)
+	}
+}
+
+// Длительность визита считается по двум биконам, а визит с одним биконом в медиану
+// не входит — иначе потерянный pagehide занижал бы её тем сильнее, чем хуже связь
+// у респондентов. TimedVisits — знаменатель, который экран показывает рядом.
+func TestInsights_DurationCountsOnlyVisitsWithTwoBeacons(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	// Визит с одним биконом: updated_at == created_at.
+	beacon(t, srv, slug, domain.NewID().String(), 0, "")
+
+	// Визит с двумя биконами, разведёнными во времени: 30 секунд.
+	timed := domain.NewID().String()
+	beacon(t, srv, slug, timed, 0, "")
+	beacon(t, srv, slug, timed, 1, "b1")
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE form_visits SET updated_at = created_at + interval '30 seconds' WHERE id = $1`, timed); err != nil {
+		t.Fatalf("set duration: %v", err)
+	}
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 2 {
+		t.Fatalf("визитов = %d, ждали 2", in.Visits)
+	}
+	if in.TimedVisits != 1 {
+		t.Errorf("TimedVisits = %d, ждали 1: визит с одним биконом в медиану не входит", in.TimedVisits)
+	}
+	if in.MedianDurationSec != 30 {
+		t.Errorf("медиана = %v с, ждали 30", in.MedianDurationSec)
+	}
+}
+
+// Пустая форма отдаёт нули, и ноль медианы при нулевом TimedVisits означает «данных
+// нет», а не «визиты длиной ноль» — экран обязан различать это, поэтому знаменатель
+// приезжает наружу.
+func TestInsights_EmptyFormIsZeroWithoutData(t *testing.T) {
+	resetDB(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 0 || in.TimedVisits != 0 || in.MedianDurationSec != 0 {
+		t.Fatalf("карточки пустой формы = %+v, ждали нули", in)
 	}
 }

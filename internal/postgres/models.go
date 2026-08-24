@@ -78,6 +78,7 @@ type FormVisit struct {
 	Submitted     bool
 	Meta          []byte
 	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type IntegrationAccount struct {

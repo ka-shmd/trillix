@@ -35,10 +35,16 @@ SELECT one FROM ins;
 -- form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
 -- NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
 -- понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+-- Границы периода приходят всегда: у листинга ответов селектора периода нет и он
+-- шлёт ±бесконечность, у сводки — выбранное владельцем окно (спека
+-- design/analytics-tally.md §4). Одна форма запроса вместо двух: копия отличалась
+-- бы одной строкой WHERE, а расходиться начала бы во всём остальном.
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at >= sqlc.arg(from_ts)::timestamptz
+  AND s.created_at <  sqlc.arg(to_ts)::timestamptz
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -50,6 +56,8 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < sqlc.arg(cursor_id)::uuid
+  AND s.created_at >= sqlc.arg(from_ts)::timestamptz
+  AND s.created_at <  sqlc.arg(to_ts)::timestamptz
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -73,6 +81,19 @@ SELECT count(*) FROM submissions WHERE form_id = $1;
 SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
        count(*) FILTER (WHERE over_quota)::bigint AS hidden
 FROM submissions WHERE form_id = $1;
+
+-- name: CountSubmissionsInPeriod :one
+-- Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
+-- то же число, что стоит в таблице ответов: расхождение между соседними экранами
+-- читалось бы как баг, а не как разница определений.
+--
+-- Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
+-- множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
+-- однажды поделить одно на другое.
+SELECT count(*)::bigint FROM submissions
+WHERE form_id = $1 AND NOT over_quota
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz;
 
 -- name: RevealHiddenSubmissions :execrows
 -- Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,

@@ -58,6 +58,8 @@ type fakeStore struct {
 	upserts     []upsertCall
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
+	insights    domain.VisitInsights
+	period      domain.Period // окно наблюдения, с которым сервис пришёл в стор
 	upsetErr    error
 }
 
@@ -71,8 +73,14 @@ func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid
 	return 0, nil
 }
 
-func (s *fakeStore) CountByLastBlock(context.Context, postgres.DBTX, uuid.UUID) ([]domain.LastBlockCount, error) {
+func (s *fakeStore) CountByLastBlock(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error) {
+	s.period = period
 	return s.byLastBlock, nil
+}
+
+func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+	s.period = period
+	return s.insights, nil
 }
 
 var now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -290,7 +298,7 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	store := &fakeStore{byLastBlock: []domain.LastBlockCount{{BlockID: "b1", Visits: 5}}}
 	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store)
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
@@ -311,7 +319,7 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":false,"settings":{}}]}`),
 	}}}, openPlans(), store)
 
-	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -338,7 +346,7 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
 	}}}, fakePlans{allowed: false}, &fakeStore{})
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
 	}
@@ -350,8 +358,68 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
 	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{})
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrNotFound (гейт тарифа не должен опережать авторизацию)", err)
 	}
+}
+
+// Карточки чужой формы недоступны так же, как воронка: forms.Get проверяет членство
+// и отдаёт ErrNotFound, сервис обязан пропустить её наружу нетронутой (инвариант 1).
+func TestInsights_ForeignFormIsNotFound(t *testing.T) {
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), &fakeStore{})
+
+	_, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
+	}
+}
+
+// Карточки НЕ гейтятся тарифом: «сколько людей пришло» — первое, что владелец видит
+// после публикации, и замок на этом рекламировал бы Pro вместо продукта. Платным
+// остаётся разбор (воронка, источники). Тест держит это решение: закрытый план
+// обязан отдать числа.
+func TestInsights_NotGatedByPlan(t *testing.T) {
+	store := &fakeStore{insights: domain.VisitInsights{Visits: 7, Submitted: 2}}
+	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store)
+
+	in, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if in.Visits != 7 || in.Submitted != 2 {
+		t.Fatalf("карточки = %+v, ждали 7 визитов и 2 ответа", in)
+	}
+}
+
+// Окно наблюдения доезжает до стора неизменным — и у карточек, и у воронки. Без
+// этого селектор периода молча показывал бы «всё время»: экран остался бы рабочим,
+// а числа — неверными.
+func TestPeriodReachesStore(t *testing.T) {
+	period := domain.Period{
+		From: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC),
+	}
+
+	t.Run("карточки", func(t *testing.T) {
+		store := &fakeStore{}
+		svc := NewService(nil, fakeForms{}, openPlans(), store)
+		if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), period); err != nil {
+			t.Fatalf("неожиданная ошибка: %v", err)
+		}
+		if store.period != period {
+			t.Fatalf("период в сторе = %+v, ждали %+v", store.period, period)
+		}
+	})
+
+	t.Run("воронка", func(t *testing.T) {
+		store := &fakeStore{}
+		svc := NewService(nil, fakeForms{}, openPlans(), store)
+		if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), period); err != nil {
+			t.Fatalf("неожиданная ошибка: %v", err)
+		}
+		if store.period != period {
+			t.Fatalf("период в сторе = %+v, ждали %+v", store.period, period)
+		}
+	})
 }

@@ -52,8 +52,13 @@ func (Repo) MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid
 
 // CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
 // Пустой BlockID — визиты, не тронувшие ни одного вопроса (last_block_id IS NULL).
-func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error) {
-	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, formID)
+func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("count visits by last block: %w", err)
 	}
@@ -66,4 +71,25 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 		}
 	}
 	return out, nil
+}
+
+// Insights — счётчики визитов для карточек над вкладками Insights: сколько пришло,
+// сколько отправило, медианная длительность и её знаменатель (сколько визитов в
+// медиану вошло — экран обязан отличать «данных нет» от «ноль секунд»).
+func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+	from, to := postgres.PeriodBounds(period)
+	row, err := postgres.New(db).VisitInsights(ctx, postgres.VisitInsightsParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return domain.VisitInsights{}, fmt.Errorf("visit insights: %w", err)
+	}
+	return domain.VisitInsights{
+		Visits:            int(row.Visits),
+		Submitted:         int(row.Submitted),
+		TimedVisits:       int(row.TimedVisits),
+		MedianDurationSec: row.MedianDurationSec,
+	}, nil
 }

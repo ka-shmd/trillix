@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -66,10 +67,13 @@ func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmis
 }
 
 // ListSubmissions — первая страница ответов формы (новые сверху).
-func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error) {
+func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error) {
+	from, to := postgres.PeriodBounds(period)
 	rows, err := postgres.New(db).ListSubmissionsFirstPage(ctx, postgres.ListSubmissionsFirstPageParams{
 		FormID: formID,
 		Limit:  limit,
+		FromTs: from,
+		ToTs:   to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list submissions: %w", err)
@@ -87,11 +91,14 @@ func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.U
 }
 
 // ListSubmissionsAfter — следующая страница одноколоночным курсором (id).
-func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error) {
+func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error) {
+	from, to := postgres.PeriodBounds(period)
 	rows, err := postgres.New(db).ListSubmissionsAfter(ctx, postgres.ListSubmissionsAfterParams{
 		FormID:   formID,
 		CursorID: cursorID,
 		Limit:    limit,
+		FromTs:   from,
+		ToTs:     to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list submissions after cursor: %w", err)
@@ -204,4 +211,20 @@ func (Repo) LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid
 		return fmt.Errorf("lock form for submit: %w", err)
 	}
 	return nil
+}
+
+// CountInPeriod — сколько ВИДИМЫХ ответов пришло за окно наблюдения (карточка
+// «Ответы» над вкладками Insights). Сверхлимитные не считаются — так же, как их
+// не показывает таблица ответов.
+func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error) {
+	from, to := postgres.PeriodBounds(period)
+	n, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count submissions in period: %w", err)
+	}
+	return n, nil
 }
