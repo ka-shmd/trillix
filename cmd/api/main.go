@@ -217,28 +217,6 @@ func runCommand(args []string, cfg config.Config, log *slog.Logger) error {
 	}
 }
 
-func runMigrate(args []string, cfg config.Config, log *slog.Logger) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: api migrate up|down")
-	}
-	switch args[0] {
-	case "up":
-		if err := postgres.MigrateUp(cfg.DatabaseURL); err != nil {
-			return err
-		}
-		log.Info("migrations applied")
-		return nil
-	case "down":
-		if err := postgres.MigrateDown(cfg.DatabaseURL); err != nil {
-			return err
-		}
-		log.Info("migration reverted", slog.Int("steps", 1))
-		return nil
-	default:
-		return fmt.Errorf("unknown migrate direction %q (up|down)", args[0])
-	}
-}
-
 func runServer(cfg config.Config, log *slog.Logger) error {
 	pool, err := postgres.NewPool(context.Background(), cfg.DatabaseURL)
 	if err != nil {

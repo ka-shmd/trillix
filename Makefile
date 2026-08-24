@@ -47,8 +47,8 @@ db-down: ## Погасить Postgres (данные остаются в volume)
 migrate-up: ## Применить все миграции
 	go run ./cmd/api migrate up
 
-migrate-down: ## Откатить последнюю миграцию
-	go run ./cmd/api migrate down
+migrate-down: ## Откатить последнюю миграцию (спросит, если откат уносит данные; FORCE=1 — молча)
+	go run ./cmd/api migrate down $(if $(FORCE),--force)
 
 seed: ## Наполнить БД демо-данными (demo@trillix.local / demo-password + 60 форм + CSV-демо с 2 версиями и 10k ответов)
 	go run ./cmd/api seed
