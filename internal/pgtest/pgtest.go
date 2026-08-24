@@ -31,10 +31,10 @@ func MailService(pool postgres.DBTX) *mail.Service {
 		discard, 50, mail.Backoff{Base: time.Minute, Max: time.Hour})
 }
 
-// Start запускает контейнер Postgres 16, прогоняет миграции и возвращает пул к
-// свежей базе вместе с функцией остановки. Предназначен для вызова из TestMain:
-// один контейнер на пакет, тесты изолируются очисткой данных между собой.
-func Start(ctx context.Context) (pool *pgxpool.Pool, stop func(), err error) {
+// StartDSN поднимает пустой контейнер Postgres 16 и отдаёт DSN — БЕЗ миграций.
+// Нужен тому единственному тесту, который сам решает, что накатывать и что
+// откатывать (обратимость миграций); всем остальным нужен Start.
+func StartDSN(ctx context.Context) (dsn string, stop func(), err error) {
 	container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
 		tcpostgres.WithDatabase("trillix"),
 		tcpostgres.WithUsername("test"),
@@ -45,15 +45,25 @@ func Start(ctx context.Context) (pool *pgxpool.Pool, stop func(), err error) {
 				WithStartupTimeout(60*time.Second)),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("start postgres container: %w", err)
+		return "", nil, fmt.Errorf("start postgres container: %w", err)
 	}
-
 	terminate := func() { _ = testcontainers.TerminateContainer(container) }
 
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	dsn, err = container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
 		terminate()
-		return nil, nil, fmt.Errorf("connection string: %w", err)
+		return "", nil, fmt.Errorf("connection string: %w", err)
+	}
+	return dsn, terminate, nil
+}
+
+// Start запускает контейнер Postgres 16, прогоняет миграции и возвращает пул к
+// свежей базе вместе с функцией остановки. Предназначен для вызова из TestMain:
+// один контейнер на пакет, тесты изолируются очисткой данных между собой.
+func Start(ctx context.Context) (pool *pgxpool.Pool, stop func(), err error) {
+	dsn, terminate, err := StartDSN(ctx)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	if err := postgres.MigrateUp(dsn); err != nil {

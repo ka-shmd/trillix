@@ -82,7 +82,7 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make dev`      | Поднять Postgres и запустить API                       |
 | `make db-up`    | Поднять только Postgres в Docker                       |
 | `make db-down`  | Погасить Postgres (данные остаются в volume `pg_data`) |
-| `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю |
+| `make migrate-up` / `make migrate-down` | Применить все миграции / откатить последнюю (спросит подтверждения, если откат удаляет данные; `FORCE=1` — молча) |
 | `make test`     | Go (`-race`, вкл. интеграционные в testcontainers) + vitest обоих фронтов |
 | `make lint`     | `golangci-lint run` + eslint/tsc обоих фронтов          |
 | `make seed`     | Демо-данные: пользователь `demo@trillix.local` / `demo-password` + 60 форм |
@@ -91,7 +91,8 @@ cd web/renderer && npm install && npm run dev   # рендерер: http://local
 | `make prod-local-trust` | Доверить локальный CA Caddy — настоящий «замочек» (sudo) |
 
 Раннер миграций встроен в бинарник: `api migrate up` / `api migrate down` (в проде — та же
-init-команда). Остановка сервера — SIGINT/SIGTERM (Ctrl+C): активные запросы дорабатываются
+init-команда). Откат печатает, какую миграцию снимает, и без `--force` не снимает ту, что
+удаляет данные: повторный накат вернёт пустые таблицы, а не содержимое. Остановка сервера — SIGINT/SIGTERM (Ctrl+C): активные запросы дорабатываются
 (потолок 15 с).
 
 ### Прод-контур и e2e
