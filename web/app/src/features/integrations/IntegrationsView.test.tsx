@@ -36,6 +36,7 @@ const CONNECTED = {
   enabled: true,
   pickerEnabled: true,
   connected: true,
+  needsReconnect: false,
   canManage: true,
   email: 'author@gmail.com',
 }
@@ -56,7 +57,13 @@ function conn(patch: Partial<FormSheet> = {}): FormSheet {
 function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
   return {
     workspaceId: 'ws-1',
-    account: { enabled: true, pickerEnabled: false, connected: false, canManage: true },
+    account: {
+      enabled: true,
+      pickerEnabled: false,
+      connected: false,
+      needsReconnect: false,
+      canManage: true,
+    },
     connections: [],
     ...patch,
   }
@@ -77,9 +84,10 @@ function newTestClient() {
 function renderView(data: FormIntegrations) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
-  qc.setQueryData([...integrationKeys.form(FORM_ID), 'spreadsheets'], [
-    { id: 'ss-old', name: 'Прошлая форма' },
-  ])
+  qc.setQueryData(
+    [...integrationKeys.form(FORM_ID), 'spreadsheets'],
+    [{ id: 'ss-old', name: 'Прошлая форма' }],
+  )
   render(
     <QueryClientProvider client={qc}>
       <IntegrationsView formId={FORM_ID} />
@@ -114,8 +122,35 @@ describe('два блока экрана', () => {
     expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
   })
 
+  // Ключ контура сменился — подключение осталось строкой в базе, но работать им
+  // нельзя. Экран обязан сказать это до того, как человек потеряет ответ.
+  it('доступ к аккаунту потерян — каталог и строка связки говорят «заново»', () => {
+    renderView(
+      state({
+        account: { ...CONNECTED, needsReconnect: true },
+        connections: [conn({ name: 'Архив' })],
+      }),
+    )
+
+    expect(screen.getByText(/Доступ к аккаунту .* потерян/)).toBeTruthy()
+    expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
+    // Связка живая по своему статусу, но точка обязана быть красной: чинится
+    // аккаунт, а не она.
+    expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
+  })
+
   it('провайдер не настроен на контуре — так и написано в каталоге', () => {
-    renderView(state({ account: { enabled: false, pickerEnabled: false, connected: false, canManage: true } }))
+    renderView(
+      state({
+        account: {
+          enabled: false,
+          pickerEnabled: false,
+          connected: false,
+          needsReconnect: false,
+          canManage: true,
+        },
+      }),
+    )
 
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
@@ -170,7 +205,17 @@ describe('оверлей настройки Google Таблиц', () => {
   })
 
   it('редактор видит интеграцию, но подключает аккаунт владелец', () => {
-    renderView(state({ account: { enabled: true, pickerEnabled: false, connected: false, canManage: false } }))
+    renderView(
+      state({
+        account: {
+          enabled: true,
+          pickerEnabled: false,
+          connected: false,
+          needsReconnect: false,
+          canManage: false,
+        },
+      }),
+    )
     openSetup()
 
     expect(screen.getByText(/подключить google может владелец/i)).toBeTruthy()
@@ -344,7 +389,9 @@ describe('оверлей настройки Google Таблиц', () => {
     openConnection()
 
     expect(
-      screen.getAllByRole('alert').some((el) => /больше не принимает записи/i.test(el.textContent ?? '')),
+      screen
+        .getAllByRole('alert')
+        .some((el) => /больше не принимает записи/i.test(el.textContent ?? '')),
     ).toBe(true)
     // Экран правки при этом остаётся формой: сохранить исправленное можно.
     expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()

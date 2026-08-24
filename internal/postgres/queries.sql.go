@@ -3967,6 +3967,23 @@ func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFo
 	return i, err
 }
 
+const updateIntegrationAccountToken = `-- name: UpdateIntegrationAccountToken :exec
+UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1
+`
+
+type UpdateIntegrationAccountTokenParams struct {
+	ID           uuid.UUID
+	RefreshToken []byte
+}
+
+// Провайдер прислал новый refresh взамен использованного. Меняется ТОЛЬКО
+// токен: connected_at и connected_by остаются прежними — ротация на стороне
+// провайдера не является новым подключением и не должна выглядеть им на экране.
+func (q *Queries) UpdateIntegrationAccountToken(ctx context.Context, arg UpdateIntegrationAccountTokenParams) error {
+	_, err := q.db.Exec(ctx, updateIntegrationAccountToken, arg.ID, arg.RefreshToken)
+	return err
+}
+
 const updateUserEmail = `-- name: UpdateUserEmail :one
 UPDATE users
    SET email = $2, email_verified_at = now()

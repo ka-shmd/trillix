@@ -54,6 +54,8 @@ type fakeStore struct {
 	upserted  *integrations.NewConnection
 	deleted   []byte
 	deleteErr error
+	// tokenUpdated — шифротекст, перезаписанный после ротации у провайдера.
+	tokenUpdated []byte
 
 	link        integrations.FormLink
 	linkErr     error
@@ -81,6 +83,11 @@ func (f *fakeStore) Get(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ strin
 		return integrations.Connection{}, f.getErr
 	}
 	return f.conn, nil
+}
+
+func (f *fakeStore) UpdateToken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, sealed []byte) error {
+	f.tokenUpdated = sealed
+	return nil
 }
 
 func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) ([]byte, error) {
@@ -216,7 +223,10 @@ type fakeProvider struct {
 	cleared      string
 	appendErr    error
 	firstRowBusy bool
-	exchangeFn   func() (integrations.Tokens, error)
+	// rotated — refresh-токен, который провайдер отдаёт взамен использованного.
+	// Пусто — как у Google: тот старый токен не меняет.
+	rotated    string
+	exchangeFn func() (integrations.Tokens, error)
 }
 
 func (f *fakeProvider) Provider() string { return "google" }
@@ -236,7 +246,7 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (integrations.To
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens, error) {
-	return integrations.Tokens{Access: "at"}, nil
+	return integrations.Tokens{Access: "at", Refresh: f.rotated}, nil
 }
 
 func (f *fakeProvider) Account(_ context.Context, _ string) (integrations.Account, error) {
@@ -904,4 +914,83 @@ func TestPickerAndSpreadsheets_OwnerOnly(t *testing.T) {
 	if _, err := svc.Sheets(context.Background(), testUser, testForm, "ss-old"); err != nil {
 		t.Fatalf("листы книги закрыты для редактора: %v", err)
 	}
+}
+
+// Ключ контура сменился (ротация FORM_TOKEN_SECRET): строка подключения на
+// месте, но шифротекст ею больше не открывается. Экран обязан сказать
+// «подключите заново», а не рисовать зелёное «подключено» — иначе человек
+// узнаёт о беде из потерянного ответа респондента.
+func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
+	sealed := sealedRefreshToken(t)
+
+	live := newService(fakeAccess{}, &fakeStore{
+		conn: integrations.Connection{Email: "author@gmail.com", RefreshSealed: sealed},
+	}, &fakeProvider{})
+	st, err := live.Status(context.Background(), testUser, testWS)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !st.Connected || st.NeedsReconnect {
+		t.Errorf("рабочее подключение = %+v, ожидалось connected без переподключения", st)
+	}
+
+	// Тот же шифротекст, но открывать его нечем: так выглядит строка, пережившая
+	// смену секрета.
+	stale := newService(fakeAccess{}, &fakeStore{
+		conn: integrations.Connection{Email: "author@gmail.com", RefreshSealed: append([]byte{0}, sealed...)},
+	}, &fakeProvider{})
+	st, err = stale.Status(context.Background(), testUser, testWS)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !st.NeedsReconnect {
+		t.Error("нерасшифровываемый токен не потребовал переподключения")
+	}
+	if !st.Connected {
+		t.Error("строка подключения есть — Connected обязан остаться true, лечение отличает NeedsReconnect")
+	}
+}
+
+// Провайдер вправе прислать новый refresh взамен использованного. Выброшенный
+// новый токен означает подключение, которое умрёт, когда провайдер погасит
+// старый.
+func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
+	store := &fakeStore{conn: integrations.Connection{RefreshSealed: sealedRefreshToken(t)}}
+	store.link = integrations.FormLink{ID: uuid.New(), FormID: testForm, SpreadsheetID: "ss-1"}
+	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: "rt-2"})
+
+	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); err != nil {
+		t.Fatalf("spreadsheets: %v", err)
+	}
+	if store.tokenUpdated == nil {
+		t.Fatal("новый refresh-токен провайдера не сохранён")
+	}
+	if bytes.Contains(store.tokenUpdated, []byte("rt-2")) {
+		t.Error("новый токен записан открытым текстом")
+	}
+}
+
+// Google новый refresh не присылает — лишней записи в базу быть не должно.
+func TestAccessToken_UnchangedRefreshIsNotRewritten(t *testing.T) {
+	store := &fakeStore{conn: integrations.Connection{RefreshSealed: sealedRefreshToken(t)}}
+	svc := newService(fakeAccess{}, store, &fakeProvider{})
+
+	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); err != nil {
+		t.Fatalf("spreadsheets: %v", err)
+	}
+	if store.tokenUpdated != nil {
+		t.Error("токен переписан, хотя провайдер прислал тот же самый")
+	}
+}
+
+// sealedRefreshToken — шифротекст, запечатанный ТЕМ ЖЕ ключом, что у сервиса:
+// собрать его руками нельзя (sealToken приватен), поэтому берём из подключения.
+func sealedRefreshToken(t *testing.T) []byte {
+	t.Helper()
+	store := &fakeStore{}
+	svc := newService(fakeAccess{}, store, &fakeProvider{})
+	if err := svc.Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	return store.upserted.RefreshSealed
 }

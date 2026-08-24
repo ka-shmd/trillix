@@ -32,6 +32,7 @@ type Store interface {
 	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) error
 	Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) (Connection, error)
 	Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error)
+	UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sealed []byte) error
 	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
 	ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]FormLink, error)
@@ -130,9 +131,17 @@ type Status struct {
 	// PickerEnabled — настроено ли окно выбора файла на Диске (WithPicker).
 	PickerEnabled bool
 	Connected     bool
-	Email         string
-	ConnectedBy   uuid.UUID
-	ConnectedAt   time.Time
+	// NeedsReconnect — строка подключения есть, но refresh-токен ею больше не
+	// расшифровывается: ключ шифрования выведен из FORM_TOKEN_SECRET, и его
+	// ротация оставляет за собой шифротекст, которым нельзя пользоваться
+	// (secretbox.go). Отдельно от Connected, потому что лечение другое: не
+	// «подключите», а «подключите ЗАНОВО», и до этого ни одна связка работать не
+	// будет. Без этого поля экран показывал бы зелёное «подключено», а падало бы
+	// всё подряд — молча, до первого ответа респондента.
+	NeedsReconnect bool
+	Email          string
+	ConnectedBy    uuid.UUID
+	ConnectedAt    time.Time
 	// CanManage — может ли спрашивающий подключать и отключать. Экран рисует
 	// кнопку по нему, а не по роли: роль вне internal/workspaces не спрашивают.
 	CanManage bool
@@ -163,14 +172,19 @@ func (s *Service) Status(ctx context.Context, userID, workspaceID uuid.UUID) (St
 	if err != nil {
 		return Status{}, fmt.Errorf("integration status: %w", err)
 	}
+	// Расшифровка — не поход к провайдеру, а AES-GCM над сотней байт: платить
+	// за неё показом таба дешевле, чем врать про рабочее подключение.
+	_, tokenErr := openToken(s.key, conn.RefreshSealed)
+
 	return Status{
-		Enabled:       true,
-		PickerEnabled: picker,
-		Connected:     true,
-		Email:         conn.Email,
-		ConnectedBy:   conn.ConnectedBy,
-		ConnectedAt:   conn.ConnectedAt,
-		CanManage:     canManage,
+		Enabled:        true,
+		PickerEnabled:  picker,
+		Connected:      true,
+		NeedsReconnect: tokenErr != nil,
+		Email:          conn.Email,
+		ConnectedBy:    conn.ConnectedBy,
+		ConnectedAt:    conn.ConnectedAt,
+		CanManage:      canManage,
 	}, nil
 }
 
@@ -927,5 +941,28 @@ func (s *Service) accessToken(ctx context.Context, conn Connection) (string, err
 	if err != nil {
 		return "", err
 	}
+	s.keepRotatedToken(ctx, conn, refresh, tokens.Refresh)
 	return tokens.Access, nil
+}
+
+// keepRotatedToken сохраняет refresh-токен, если провайдер прислал новый взамен
+// использованного. Google так не делает, но поле в ответе есть у всех, а
+// выброшенный новый токен означает подключение, которое перестанет работать в
+// момент, когда провайдер погасит старый.
+//
+// Неудача записи НЕ роняет операцию: access-токен на руках и действителен, а
+// цена несохранённой ротации — один поход к провайдеру заново.
+func (s *Service) keepRotatedToken(ctx context.Context, conn Connection, used, fresh string) {
+	if fresh == "" || fresh == used {
+		return
+	}
+	sealed, err := sealToken(s.key, fresh)
+	if err == nil {
+		err = s.repo.UpdateToken(ctx, s.db, conn.ID, sealed)
+	}
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("rotated refresh token not stored",
+			slog.String("workspace_id", conn.WorkspaceID.String()),
+			slog.String("error", err.Error()))
+	}
 }

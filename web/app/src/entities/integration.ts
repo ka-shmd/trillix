@@ -15,6 +15,11 @@ export const integrationAccountSchema = z.object({
   // «выбрать существующую чужую таблицу».
   pickerEnabled: z.boolean().default(false),
   connected: z.boolean(),
+  // needsReconnect — подключение есть, но пользоваться им нельзя: refresh-токен
+  // на бэке не расшифровывается (сменился ключ контура). Отдельно от connected,
+  // потому что лечение другое — «подключите ЗАНОВО», и до этого не работает ни
+  // одна связка формы.
+  needsReconnect: z.boolean().default(false),
   email: z.string().optional(),
   connectedAt: z.string().optional(),
   // canManage — может ли СПРАШИВАЮЩИЙ подключать и отключать аккаунт. Кнопка

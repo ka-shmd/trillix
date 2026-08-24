@@ -106,11 +106,12 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 }
 
 type accountDTO struct {
-	Enabled     bool   `json:"enabled"`
-	Connected   bool   `json:"connected"`
-	Email       string `json:"email"`
-	ConnectedAt string `json:"connectedAt"`
-	CanManage   bool   `json:"canManage"`
+	Enabled        bool   `json:"enabled"`
+	Connected      bool   `json:"connected"`
+	NeedsReconnect bool   `json:"needsReconnect"`
+	Email          string `json:"email"`
+	ConnectedAt    string `json:"connectedAt"`
+	CanManage      bool   `json:"canManage"`
 }
 
 type sheetDTO struct {
@@ -138,6 +139,47 @@ func formStatus(t *testing.T, c *http.Client, srv *httptest.Server, formID strin
 	var got formStatusDTO
 	decode(t, r, &got)
 	return got
+}
+
+// Токен, запечатанный ЧУЖИМ ключом (так выглядит строка, пережившая ротацию
+// FORM_TOKEN_SECRET): подключение есть, а работать им нельзя. Экран обязан
+// сказать «заново», а не рисовать зелёное «подключено».
+func TestIntegrations_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	seedAccountWithForeignToken(t, wsID)
+
+	got := formStatus(t, owner, srv, newForm(t, wsID, "f-stale"))
+
+	if !got.Account.Connected {
+		t.Error("строка подключения есть — connected обязан остаться true")
+	}
+	if !got.Account.NeedsReconnect {
+		t.Fatalf("аккаунт = %+v, ожидалось требование переподключиться", got.Account)
+	}
+}
+
+// seedAccountWithForeignToken кладёт подключение с шифротекстом, который ключом
+// контура не открывается. Пройти для этого настоящий OAuth нельзя — он запечатал
+// бы токен правильным ключом.
+func seedAccountWithForeignToken(t *testing.T, wsID string) {
+	t.Helper()
+	var userID string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT personal_user_id FROM workspaces WHERE id = $1`, wsID).Scan(&userID)
+	if err != nil {
+		t.Fatalf("владелец пространства: %v", err)
+	}
+	_, err = testPool.Exec(context.Background(),
+		`INSERT INTO integration_accounts
+		 (id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by)
+		 VALUES ($1, $2, 'google', 'sub-1', 'author@gmail.com', $3, '', $4)`,
+		uuid.New(), wsID, []byte("шифротекст от прошлого секрета"), userID)
+	if err != nil {
+		t.Fatalf("insert integration account: %v", err)
+	}
 }
 
 // newForm заводит форму в пространстве напрямую: проходить билдер ради проверки

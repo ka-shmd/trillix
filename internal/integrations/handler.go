@@ -134,11 +134,15 @@ type accountResponse struct {
 	Enabled bool `json:"enabled"`
 	// PickerEnabled — настроено ли окно выбора файла на Диске (нужен отдельный
 	// API-key). Экран рисует по нему кнопку выбора.
-	PickerEnabled bool    `json:"pickerEnabled"`
-	Connected     bool    `json:"connected"`
-	Email         string  `json:"email,omitempty"`
-	ConnectedAt   *string `json:"connectedAt,omitempty"`
-	CanManage     bool    `json:"canManage"`
+	PickerEnabled bool `json:"pickerEnabled"`
+	Connected     bool `json:"connected"`
+	// NeedsReconnect — подключение есть, но пользоваться им нельзя: refresh-токен
+	// не расшифровывается ключом контура (ротация FORM_TOKEN_SECRET). Экран
+	// обязан сказать «подключите заново», а не рисовать зелёное «подключено».
+	NeedsReconnect bool    `json:"needsReconnect"`
+	Email          string  `json:"email,omitempty"`
+	ConnectedAt    *string `json:"connectedAt,omitempty"`
+	CanManage      bool    `json:"canManage"`
 }
 
 // sheetResponse — привязка формы. Отдельным объектом (а не полями вперемешку с
@@ -181,11 +185,12 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	resp := formStatusResponse{
 		WorkspaceID: st.WorkspaceID.String(),
 		Account: accountResponse{
-			Enabled:       st.Account.Enabled,
-			PickerEnabled: st.Account.PickerEnabled,
-			Connected:     st.Account.Connected,
-			Email:         st.Account.Email,
-			CanManage:     st.Account.CanManage,
+			Enabled:        st.Account.Enabled,
+			PickerEnabled:  st.Account.PickerEnabled,
+			Connected:      st.Account.Connected,
+			NeedsReconnect: st.Account.NeedsReconnect,
+			Email:          st.Account.Email,
+			CanManage:      st.Account.CanManage,
 		},
 	}
 	if st.Account.Connected {

@@ -68,6 +68,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
                 <ConnectionRow
                   formId={formId}
                   connection={connection}
+                  accountLost={state.data.account.needsReconnect}
                   onEdit={() => setOverlay(connection.id)}
                 />
               </li>
@@ -113,10 +114,16 @@ export function IntegrationsView({ formId }: { formId: string }) {
 function ConnectionRow({
   formId,
   connection,
+  accountLost,
   onEdit,
 }: {
   formId: string
   connection: FormSheet
+  // accountLost — аккаунт пространства требует переподключения. Состояние
+  // связки при этом всё ещё live: доставка узнает о беде, только когда придёт
+  // ответ. Строка обязана сказать правду раньше — иначе человек видит зелёное
+  // «синхронизируются» ровно до первого потерянного ответа.
+  accountLost: boolean
   onEdit: () => void
 }) {
   const update = useUpdateConnection(formId)
@@ -129,10 +136,14 @@ function ConnectionRow({
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 font-medium">
           {connection.name || 'Google Таблицы'}
-          <StatusDot status={connection.status} enabled={connection.enabled} />
+          <StatusDot
+            status={connection.status}
+            enabled={connection.enabled}
+            accountLost={accountLost}
+          />
         </p>
         <p className="text-sm text-muted-foreground">
-          {connectionSummary(connection)}{' '}
+          {connectionSummary(connection, accountLost)}{' '}
           <a
             href={connection.url}
             target="_blank"
@@ -192,10 +203,18 @@ function ConnectionRow({
 // StatusDot — точка состояния: зелёная у работающей связки, серая у выключенной,
 // красная у сломанной. Точка, а не текст: в строке списка важен факт «в порядке
 // или нет», а подробности живут в настройках.
-function StatusDot({ status, enabled }: { status: FormSheet['status']; enabled: boolean }) {
+function StatusDot({
+  status,
+  enabled,
+  accountLost,
+}: {
+  status: FormSheet['status']
+  enabled: boolean
+  accountLost: boolean
+}) {
   const [color, label] = !enabled
     ? ['bg-muted-foreground/50', 'Выключено']
-    : status === 'broken'
+    : status === 'broken' || accountLost
       ? ['bg-destructive', 'Сломано']
       : status === 'backfilling'
         ? ['bg-amber-500', 'Переносим ответы']
@@ -204,8 +223,10 @@ function StatusDot({ status, enabled }: { status: FormSheet['status']; enabled: 
   return <span className={`size-2 rounded-full ${color}`} role="img" aria-label={label} />
 }
 
-function connectionSummary(connection: FormSheet): string {
+function connectionSummary(connection: FormSheet, accountLost: boolean): string {
   if (!connection.enabled) return 'Выключено. Ответы не синхронизируются с'
+  // Потерянный аккаунт важнее статуса связки: чинится он, а не она.
+  if (accountLost) return 'Доступ к Google потерян — подключите аккаунт заново; связано с'
   if (connection.status === 'broken') return 'Записать не удаётся — откройте настройки; связано с'
   if (connection.status === 'backfilling') return 'Переносим накопленные ответы в'
   return 'Ответы синхронизируются с'
@@ -215,6 +236,9 @@ function connectionSummary(connection: FormSheet): string {
 // может не сработать: аккаунта ещё нет или интеграция не настроена на контуре.
 function catalogSummary(state: FormIntegrations): string {
   if (!state.account.enabled) return 'На этом контуре интеграция не настроена'
+  if (state.account.needsReconnect) {
+    return `Доступ к аккаунту ${state.account.email} потерян — подключите его заново`
+  }
   if (state.account.connected) return `Подключено как ${state.account.email}`
   return 'Каждый ответ ложится строкой в таблицу на вашем Google Диске'
 }
