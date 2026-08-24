@@ -7,12 +7,18 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 
-// Оболочка экранов одной формы: «Поделиться», «Ответы», «Сводка», «Воронка»,
+// Оболочка экранов одной формы: «Поделиться», «Аналитика», «Ответы»,
 // «Интеграции». Pathless-группа (`_manage` в имени файла не попадает в URL, как
-// `_auth`/`_app`) — адреса остаются /forms/{slug}/share|responses|summary|…,
-// поэтому ссылка на сводку по-прежнему сохраняется в закладки, F5 не сбрасывает,
+// `_auth`/`_app`) — адреса остаются /forms/{slug}/share|submissions|insights/…,
+// поэтому ссылка на экран по-прежнему сохраняется в закладки, F5 не сбрасывает,
 // «Назад» браузера работает. Табы обязаны быть маршрутами, а не локальным
 // стейтом, именно поэтому.
+//
+// «Аналитика» — раздел с собственными вкладками (спека design/analytics-tally.md
+// §3): «Сводка» и «Отвалы» отвечают на разные вопросы об одной форме, и общими у
+// них оказались окно наблюдения и полоса карточек — они живут на оболочке раздела.
+// Старые адреса /summary, /funnel и /responses остались редиректами: на первые два
+// у владельца закладки, на третий ведут уже разосланные письма о новых ответах.
 //
 // Общая шапка (назад, название, статус, «Редактировать») живёт здесь: до этого
 // каждый экран рисовал свою, почти такую же. Редактор в группу не входит —
@@ -114,8 +120,22 @@ function FormTabs({ slug }: { slug: string }) {
       >
         Поделиться
       </Link>
+      {/* Ссылка на РАЗДЕЛ, а не на его вкладку: activeProps роутера подсвечивает
+          предка открытого маршрута, поэтому «Аналитика» остаётся активной и на
+          «Сводке», и на «Отвалах». Ссылка на конкретную вкладку гасла бы на
+          соседней. Сам /insights экрана не имеет — его index редиректит на сводку. */}
       <Link
-        to="/forms/$slug/responses"
+        to="/forms/$slug/insights"
+        search={{ period: 'all' }}
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
+        Аналитика
+      </Link>
+      <Link
+        to="/forms/$slug/submissions"
         search={(prev) => prev}
                 params={{ slug }}
         className={base}
@@ -123,26 +143,6 @@ function FormTabs({ slug }: { slug: string }) {
         inactiveProps={inactive}
       >
         Ответы
-      </Link>
-      <Link
-        to="/forms/$slug/summary"
-        search={(prev) => prev}
-                params={{ slug }}
-        className={base}
-        activeProps={active}
-        inactiveProps={inactive}
-      >
-        Сводка
-      </Link>
-      <Link
-        to="/forms/$slug/funnel"
-        search={(prev) => prev}
-                params={{ slug }}
-        className={base}
-        activeProps={active}
-        inactiveProps={inactive}
-      >
-        Воронка
       </Link>
       <Link
         to="/forms/$slug/integrations"

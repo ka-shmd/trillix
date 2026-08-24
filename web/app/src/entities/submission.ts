@@ -42,3 +42,10 @@ export const submissionsPageSchema = z.object({
 })
 
 export type SubmissionsPage = z.infer<typeof submissionsPageSchema>
+
+// Число ответов за окно наблюдения — карточка «Ответы» над вкладками аналитики.
+// Зеркалит countResponse из internal/submissions/handler.go.
+export const submissionsCountSchema = z.object({
+  submissions: z.number().int(),
+})
+export type SubmissionsCount = z.infer<typeof submissionsCountSchema>

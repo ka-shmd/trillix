@@ -111,27 +111,48 @@ IP не пишется ни в открытом виде, ни в хеше. Cook
 
 ```
 internal/domain/
+  period.go      Period — окно наблюдения [from, to), разбор границ
+  insights.go    VisitInsights — счётчики карточек
   questions.go   QuestionOrder — модель вопросов формы (одна на три экрана)
   summary.go     свёртка ответов: распределения, числа, доля заполнивших
   funnel.go      свёртка визитов: reached / droppedHere по шагам
   csv.go         выгрузка (тот же список вопросов)
 internal/visits/
-  queries.sql    апсерт визита, отметка конверсии, GROUP BY воронки
-  service.go     Record (бикон), MarkSubmitted, Funnel
+  queries.sql    апсерт визита, отметка конверсии, GROUP BY воронки, счётчики карточек
+  service.go     Record (бикон), MarkSubmitted, Funnel, Insights
   public_handler.go  POST /public/v1/forms/{slug}/visits (без авторизации)
-  handler.go     GET /api/v1/forms/{id}/funnel (за RequireAuth)
+  handler.go     GET /api/v1/forms/{id}/funnel, /insights (за RequireAuth)
 internal/submissions/
   service.go     Summary; markVisitSubmitted (после коммита приёма, best-effort)
 web/renderer/src/features/form/
   visits.ts      трекер визита (чистая функция), биконы
   FormView.tsx   монтирование, pagehide/visibilitychange, onFocusCapture
 web/app/src/
-  entities/funnel.ts, entities/summary.ts     Zod-контракты
-  features/funnel/                            api + queries + ключи
-  features/forms/FormStats.tsx                «N просмотров → M ответов (K %)»
-  routes/_app/forms.$slug._manage.funnel.tsx  таб «Воронка»
-  routes/_app/forms.$slug._manage.summary.tsx таб «Сводка»
+  entities/funnel.ts, summary.ts, insights.ts  Zod-контракты
+  shared/period.ts                             окно наблюдения (общее для фич)
+  features/funnel/, features/insights/         api + queries + ключи
+  features/forms/FormStats.tsx                 «N просмотров → M ответов (K %)»
+  routes/_app/forms.$slug._manage.insights.tsx            оболочка раздела: вкладки,
+                                                          период, карточки
+  routes/_app/…insights.answers.tsx / insights.drop-offs.tsx   вкладки «Сводка» / «Отвалы»
+  routes/_app/…summary.tsx / funnel.tsx / responses.tsx        редиректы со старых адресов
 ```
+
+### Окно наблюдения (спека `design/analytics-tally.md` §4)
+
+Экраны аналитики смотрят на период: «всё время» (умолчание), сутки, неделя, месяц.
+Интервал **полуоткрытый** `[from, to)` — иначе визит на границе считался бы дважды.
+Правило одно и живёт в одном месте на каждом слое: разбор — `httpserver.PeriodFromRequest`,
+границы SQL — `postgres.PeriodBounds` (нулевая граница → ±бесконечность, а не отсутствующее
+условие: у запроса остаётся одна форма и один план), клиентский токен периода —
+`web/app/src/shared/period.ts`.
+
+**Период — часть query-ключа** на фронте. Без него переключение окна отдавало бы кеш
+предыдущего: экран остался бы рабочим, а числа — не теми, что выбраны.
+
+**Индекс перестроен под диапазон** (`0030`): `created_at` вошёл в ключ, `updated_at` — в
+`INCLUDE`. Без первого запрос с периодом выпадал в heap-скан молча; второе делает index-only
+запрос карточек. Числа — в `SCHEMA.md` и в комментарии миграции.
 
 ---
 
@@ -250,6 +271,12 @@ CSV и шаг воронки никогда не остаются безымян
 - **У множественного выбора сумма долей больше 100 %** — намеренно: доля от людей, а
   не от галочек. У согласия база — `asked`: снявший галочку и не тронувший вопрос это
   одно и то же осознанное «нет».
+- **Длительность визита считается только по визитам с двумя биконами.** У визита, от
+  которого доехал один бикон, `updated_at = created_at`, то есть «ноль секунд»: включи их
+  в расчёт — и потерянный `pagehide` занижал бы длительность тем сильнее, чем хуже связь у
+  респондентов. Знаменатель (`timedVisits`) уходит наружу и показывается рядом с числом:
+  «ноль секунд» и «данных нет» — разные новости. Мера — **медиана**, а не среднее: одна
+  вкладка, забытая открытой на сутки, сдвигает среднее на порядок.
 - **Ноль просмотров ≠ нулевая конверсия.** «Никто не открывал» и «открывали, но никто
   не отправил» — разные новости; первое рисуется текстом, а не «0 %».
 - **«M ответов» на карточке — это `submissionCount`** (то же число, что в таблице
@@ -331,6 +358,8 @@ CSV и шаг воронки никогда не остаются безымян
 | Сводка по вопросам | `submissions` | Go (`domain/summary.go`) | таб «Сводка» | сделано (8.5 шаг 3) |
 | Просмотры и конверсия | `form_visits` | SQL (подзапросы в списке форм) | карточка, шапка ответов | сделано (8.5 шаг 6) |
 | Воронка по вопросам | `form_visits` | SQL (`GROUP BY`) + Go (свёртка) | таб «Воронка» | сделано (8.5 шаг 6б) |
+| Длительность визита | `form_visits` | SQL (`percentile_cont`) | карточки раздела «Аналитика» | сделано (слайс B `analytics-tally`) |
+| Ответы и визиты за период | оба | SQL (`count`) | карточки раздела «Аналитика» | сделано (слайс B `analytics-tally`) |
 | Источники (`utm_*`) | `form_visits.meta` | — | — | данные собираются, экрана нет; платным станет показ |
 | Колонки ответов в таблице | `submissions` | — | таблица ответов | отложено владельцем (8.5 шаг 3) |
 

@@ -31,10 +31,15 @@ import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
+import { Route as AppFormsSlugManageSubmissionsRouteImport } from './routes/_app/forms.$slug._manage.submissions'
 import { Route as AppFormsSlugManageShareRouteImport } from './routes/_app/forms.$slug._manage.share'
 import { Route as AppFormsSlugManageResponsesRouteImport } from './routes/_app/forms.$slug._manage.responses'
 import { Route as AppFormsSlugManageIntegrationsRouteImport } from './routes/_app/forms.$slug._manage.integrations'
+import { Route as AppFormsSlugManageInsightsRouteImport } from './routes/_app/forms.$slug._manage.insights'
 import { Route as AppFormsSlugManageFunnelRouteImport } from './routes/_app/forms.$slug._manage.funnel'
+import { Route as AppFormsSlugManageInsightsIndexRouteImport } from './routes/_app/forms.$slug._manage.insights.index'
+import { Route as AppFormsSlugManageInsightsDropOffsRouteImport } from './routes/_app/forms.$slug._manage.insights.drop-offs'
+import { Route as AppFormsSlugManageInsightsAnswersRouteImport } from './routes/_app/forms.$slug._manage.insights.answers'
 
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: '/verify-email',
@@ -145,6 +150,12 @@ const AppFormsSlugManageSummaryRoute =
     path: '/summary',
     getParentRoute: () => AppFormsSlugManageRoute,
   } as any)
+const AppFormsSlugManageSubmissionsRoute =
+  AppFormsSlugManageSubmissionsRouteImport.update({
+    id: '/submissions',
+    path: '/submissions',
+    getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
 const AppFormsSlugManageShareRoute = AppFormsSlugManageShareRouteImport.update({
   id: '/share',
   path: '/share',
@@ -162,11 +173,35 @@ const AppFormsSlugManageIntegrationsRoute =
     path: '/integrations',
     getParentRoute: () => AppFormsSlugManageRoute,
   } as any)
+const AppFormsSlugManageInsightsRoute =
+  AppFormsSlugManageInsightsRouteImport.update({
+    id: '/insights',
+    path: '/insights',
+    getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
 const AppFormsSlugManageFunnelRoute =
   AppFormsSlugManageFunnelRouteImport.update({
     id: '/funnel',
     path: '/funnel',
     getParentRoute: () => AppFormsSlugManageRoute,
+  } as any)
+const AppFormsSlugManageInsightsIndexRoute =
+  AppFormsSlugManageInsightsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AppFormsSlugManageInsightsRoute,
+  } as any)
+const AppFormsSlugManageInsightsDropOffsRoute =
+  AppFormsSlugManageInsightsDropOffsRouteImport.update({
+    id: '/drop-offs',
+    path: '/drop-offs',
+    getParentRoute: () => AppFormsSlugManageInsightsRoute,
+  } as any)
+const AppFormsSlugManageInsightsAnswersRoute =
+  AppFormsSlugManageInsightsAnswersRouteImport.update({
+    id: '/answers',
+    path: '/answers',
+    getParentRoute: () => AppFormsSlugManageInsightsRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -190,10 +225,15 @@ export interface FileRoutesByFullPath {
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
+  '/forms/$slug/insights': typeof AppFormsSlugManageInsightsRouteWithChildren
   '/forms/$slug/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
+  '/forms/$slug/submissions': typeof AppFormsSlugManageSubmissionsRoute
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
+  '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
+  '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/forms/$slug/insights/': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
@@ -219,7 +259,11 @@ export interface FileRoutesByTo {
   '/forms/$slug/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/forms/$slug/responses': typeof AppFormsSlugManageResponsesRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
+  '/forms/$slug/submissions': typeof AppFormsSlugManageSubmissionsRoute
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
+  '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
+  '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/forms/$slug/insights': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -245,10 +289,15 @@ export interface FileRoutesById {
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
   '/_app/forms/$slug/_manage/funnel': typeof AppFormsSlugManageFunnelRoute
+  '/_app/forms/$slug/_manage/insights': typeof AppFormsSlugManageInsightsRouteWithChildren
   '/_app/forms/$slug/_manage/integrations': typeof AppFormsSlugManageIntegrationsRoute
   '/_app/forms/$slug/_manage/responses': typeof AppFormsSlugManageResponsesRoute
   '/_app/forms/$slug/_manage/share': typeof AppFormsSlugManageShareRoute
+  '/_app/forms/$slug/_manage/submissions': typeof AppFormsSlugManageSubmissionsRoute
   '/_app/forms/$slug/_manage/summary': typeof AppFormsSlugManageSummaryRoute
+  '/_app/forms/$slug/_manage/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
+  '/_app/forms/$slug/_manage/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
+  '/_app/forms/$slug/_manage/insights/': typeof AppFormsSlugManageInsightsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -273,10 +322,15 @@ export interface FileRouteTypes {
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
     | '/forms/$slug/funnel'
+    | '/forms/$slug/insights'
     | '/forms/$slug/integrations'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
+    | '/forms/$slug/submissions'
     | '/forms/$slug/summary'
+    | '/forms/$slug/insights/answers'
+    | '/forms/$slug/insights/drop-offs'
+    | '/forms/$slug/insights/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -302,7 +356,11 @@ export interface FileRouteTypes {
     | '/forms/$slug/integrations'
     | '/forms/$slug/responses'
     | '/forms/$slug/share'
+    | '/forms/$slug/submissions'
     | '/forms/$slug/summary'
+    | '/forms/$slug/insights/answers'
+    | '/forms/$slug/insights/drop-offs'
+    | '/forms/$slug/insights'
   id:
     | '__root__'
     | '/_app'
@@ -327,10 +385,15 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/embed'
     | '/_app/forms/$slug/_manage/funnel'
+    | '/_app/forms/$slug/_manage/insights'
     | '/_app/forms/$slug/_manage/integrations'
     | '/_app/forms/$slug/_manage/responses'
     | '/_app/forms/$slug/_manage/share'
+    | '/_app/forms/$slug/_manage/submissions'
     | '/_app/forms/$slug/_manage/summary'
+    | '/_app/forms/$slug/_manage/insights/answers'
+    | '/_app/forms/$slug/_manage/insights/drop-offs'
+    | '/_app/forms/$slug/_manage/insights/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -498,6 +561,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageSummaryRouteImport
       parentRoute: typeof AppFormsSlugManageRoute
     }
+    '/_app/forms/$slug/_manage/submissions': {
+      id: '/_app/forms/$slug/_manage/submissions'
+      path: '/submissions'
+      fullPath: '/forms/$slug/submissions'
+      preLoaderRoute: typeof AppFormsSlugManageSubmissionsRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
     '/_app/forms/$slug/_manage/share': {
       id: '/_app/forms/$slug/_manage/share'
       path: '/share'
@@ -519,6 +589,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageIntegrationsRouteImport
       parentRoute: typeof AppFormsSlugManageRoute
     }
+    '/_app/forms/$slug/_manage/insights': {
+      id: '/_app/forms/$slug/_manage/insights'
+      path: '/insights'
+      fullPath: '/forms/$slug/insights'
+      preLoaderRoute: typeof AppFormsSlugManageInsightsRouteImport
+      parentRoute: typeof AppFormsSlugManageRoute
+    }
     '/_app/forms/$slug/_manage/funnel': {
       id: '/_app/forms/$slug/_manage/funnel'
       path: '/funnel'
@@ -526,22 +603,67 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageFunnelRouteImport
       parentRoute: typeof AppFormsSlugManageRoute
     }
+    '/_app/forms/$slug/_manage/insights/': {
+      id: '/_app/forms/$slug/_manage/insights/'
+      path: '/'
+      fullPath: '/forms/$slug/insights/'
+      preLoaderRoute: typeof AppFormsSlugManageInsightsIndexRouteImport
+      parentRoute: typeof AppFormsSlugManageInsightsRoute
+    }
+    '/_app/forms/$slug/_manage/insights/drop-offs': {
+      id: '/_app/forms/$slug/_manage/insights/drop-offs'
+      path: '/drop-offs'
+      fullPath: '/forms/$slug/insights/drop-offs'
+      preLoaderRoute: typeof AppFormsSlugManageInsightsDropOffsRouteImport
+      parentRoute: typeof AppFormsSlugManageInsightsRoute
+    }
+    '/_app/forms/$slug/_manage/insights/answers': {
+      id: '/_app/forms/$slug/_manage/insights/answers'
+      path: '/answers'
+      fullPath: '/forms/$slug/insights/answers'
+      preLoaderRoute: typeof AppFormsSlugManageInsightsAnswersRouteImport
+      parentRoute: typeof AppFormsSlugManageInsightsRoute
+    }
   }
 }
 
+interface AppFormsSlugManageInsightsRouteChildren {
+  AppFormsSlugManageInsightsAnswersRoute: typeof AppFormsSlugManageInsightsAnswersRoute
+  AppFormsSlugManageInsightsDropOffsRoute: typeof AppFormsSlugManageInsightsDropOffsRoute
+  AppFormsSlugManageInsightsIndexRoute: typeof AppFormsSlugManageInsightsIndexRoute
+}
+
+const AppFormsSlugManageInsightsRouteChildren: AppFormsSlugManageInsightsRouteChildren =
+  {
+    AppFormsSlugManageInsightsAnswersRoute:
+      AppFormsSlugManageInsightsAnswersRoute,
+    AppFormsSlugManageInsightsDropOffsRoute:
+      AppFormsSlugManageInsightsDropOffsRoute,
+    AppFormsSlugManageInsightsIndexRoute: AppFormsSlugManageInsightsIndexRoute,
+  }
+
+const AppFormsSlugManageInsightsRouteWithChildren =
+  AppFormsSlugManageInsightsRoute._addFileChildren(
+    AppFormsSlugManageInsightsRouteChildren,
+  )
+
 interface AppFormsSlugManageRouteChildren {
   AppFormsSlugManageFunnelRoute: typeof AppFormsSlugManageFunnelRoute
+  AppFormsSlugManageInsightsRoute: typeof AppFormsSlugManageInsightsRouteWithChildren
   AppFormsSlugManageIntegrationsRoute: typeof AppFormsSlugManageIntegrationsRoute
   AppFormsSlugManageResponsesRoute: typeof AppFormsSlugManageResponsesRoute
   AppFormsSlugManageShareRoute: typeof AppFormsSlugManageShareRoute
+  AppFormsSlugManageSubmissionsRoute: typeof AppFormsSlugManageSubmissionsRoute
   AppFormsSlugManageSummaryRoute: typeof AppFormsSlugManageSummaryRoute
 }
 
 const AppFormsSlugManageRouteChildren: AppFormsSlugManageRouteChildren = {
   AppFormsSlugManageFunnelRoute: AppFormsSlugManageFunnelRoute,
+  AppFormsSlugManageInsightsRoute: AppFormsSlugManageInsightsRouteWithChildren,
   AppFormsSlugManageIntegrationsRoute: AppFormsSlugManageIntegrationsRoute,
   AppFormsSlugManageResponsesRoute: AppFormsSlugManageResponsesRoute,
   AppFormsSlugManageShareRoute: AppFormsSlugManageShareRoute,
+  AppFormsSlugManageSubmissionsRoute: AppFormsSlugManageSubmissionsRoute,
   AppFormsSlugManageSummaryRoute: AppFormsSlugManageSummaryRoute,
 }
 

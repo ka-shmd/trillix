@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { submissionKeys } from './keys'
-import { deleteSubmission, getSummary, listSubmissions } from './api'
+import { deleteSubmission, getSubmissionsCount, getSummary, listSubmissions } from './api'
+import { type Period } from '../../shared/period'
 
 // Ответы формы — серверный стейт с курсорной пагинацией (новые сверху), страницы
 // подгружаются через getNextPageParam; курсор непрозрачен для клиента.
@@ -14,10 +15,18 @@ export function submissionsListQueryOptions(formId: string) {
 }
 
 // Сводка формы — обычный запрос (не пагинируется: сервер отдаёт готовый итог).
-export function submissionsSummaryQueryOptions(formId: string) {
+export function submissionsSummaryQueryOptions(formId: string, period: Period) {
   return queryOptions({
-    queryKey: submissionKeys.summary(formId),
-    queryFn: () => getSummary(formId),
+    queryKey: submissionKeys.summary(formId, period),
+    queryFn: () => getSummary(formId, period),
+  })
+}
+
+// Счётчик ответов за период — карточка над вкладками аналитики.
+export function submissionsCountQueryOptions(formId: string, period: Period) {
+  return queryOptions({
+    queryKey: submissionKeys.count(formId, period),
+    queryFn: () => getSubmissionsCount(formId, period),
   })
 }
 
@@ -32,7 +41,10 @@ export function useDeleteSubmission(formId: string) {
     mutationFn: (submissionId: string) => deleteSubmission(formId, submissionId),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: submissionKeys.list(formId) })
-      void qc.invalidateQueries({ queryKey: submissionKeys.summary(formId) })
+      // По префиксу, без периода: удалённый ответ обязан исчезнуть из всех окон
+      // наблюдения, а не только из открытого сейчас.
+      void qc.invalidateQueries({ queryKey: submissionKeys.summaryAllPeriods(formId) })
+      void qc.invalidateQueries({ queryKey: submissionKeys.countAllPeriods(formId) })
     },
   })
 }

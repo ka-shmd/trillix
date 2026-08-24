@@ -1,0 +1,37 @@
+import { z } from 'zod'
+
+// Окно наблюдения экранов аналитики (спека design/analytics-tally.md §4).
+//
+// Живёт в shared, а не в фиче: период читают и запросы визитов, и запросы ответов
+// — это разные фичи, а импорт одной фичи из другой запрещён (web/CLAUDE.md).
+
+// Значение периода — токен, а не пара дат: в query-ключе TanStack дата менялась бы
+// на каждый рендер (Date.now()), и кеш обнулялся бы сам собой. Даты считаются в
+// момент запроса.
+export const periodSchema = z.enum(['all', '24h', '7d', '30d']).catch('all')
+export type Period = z.infer<typeof periodSchema>
+
+export const periodLabels: Record<Period, string> = {
+  all: 'Всё время',
+  '24h': '24 часа',
+  '7d': '7 дней',
+  '30d': '30 дней',
+}
+
+const periodHours: Record<Exclude<Period, 'all'>, number> = {
+  '24h': 24,
+  '7d': 24 * 7,
+  '30d': 24 * 30,
+}
+
+// periodRange — параметры запроса для выбранного периода. «Всё время» не шлёт
+// границ вовсе: сервер понимает их отсутствие как ±бесконечность, и одно окно
+// наблюдения не должно иметь двух представлений на клиенте.
+//
+// Верхняя граница не ставится сознательно: она была бы «сейчас» на момент сборки
+// запроса, то есть визит, пришедший во время загрузки страницы, выпадал бы из
+// периода без всякой причины.
+export function periodRange(period: Period): Record<string, string> {
+  if (period === 'all') return {}
+  return { from: new Date(Date.now() - periodHours[period] * 3600_000).toISOString() }
+}
