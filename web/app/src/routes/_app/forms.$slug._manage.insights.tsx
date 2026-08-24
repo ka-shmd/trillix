@@ -129,9 +129,18 @@ function Cards({ slug, period }: { slug: string; period: Period }) {
   })
 
   return (
-    <div className="mb-8 grid gap-3 sm:grid-cols-3">
+    <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card title="Визиты" value={visits.data?.visits} pending={visits.isPending} />
       <Card title="Ответы" value={answers.data?.submissions} pending={answers.isPending} />
+      <Card
+        title="Уникальные"
+        value={visits.data?.uniqueVisitors}
+        pending={visits.isPending}
+        // Ключ посетителя ротируется каждые сутки — иначе он был бы вечным
+        // псевдонимом человека, а не счётчиком. Отсюда завышение на длинных
+        // периодах, и читатель обязан видеть его рядом с числом.
+        hint={period === '24h' ? undefined : 'за период длиннее суток число завышено'}
+      />
       <DurationCard data={visits.data} pending={visits.isPending} />
     </div>
   )

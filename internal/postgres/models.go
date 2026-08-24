@@ -82,6 +82,7 @@ type FormVisit struct {
 	CountryCode   pgtype.Text
 	Country       pgtype.Text
 	City          pgtype.Text
+	VisitorKey    []byte
 }
 
 type IntegrationAccount struct {

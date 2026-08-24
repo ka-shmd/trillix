@@ -119,8 +119,11 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 // timedVisits отдаётся наружу намеренно: это знаменатель медианы, и без него
 // «0 секунд» на экране неотличимо от «данных ещё нет».
 type insightsResponse struct {
-	Visits            int     `json:"visits"`
-	Submitted         int     `json:"submitted"`
+	Visits    int `json:"visits"`
+	Submitted int `json:"submitted"`
+	// uniqueVisitors за период длиннее суток ЗАВЫШЕН: ключ посетителя ротируется
+	// ежесуточно. Оговорка живёт на экране рядом с числом.
+	UniqueVisitors    int     `json:"uniqueVisitors"`
 	TimedVisits       int     `json:"timedVisits"`
 	MedianDurationSec float64 `json:"medianDurationSec"`
 }
@@ -159,6 +162,7 @@ func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, insightsResponse{
 		Visits:            in.Visits,
 		Submitted:         in.Submitted,
+		UniqueVisitors:    in.UniqueVisitors,
 		TimedVisits:       in.TimedVisits,
 		MedianDurationSec: in.MedianDurationSec,
 	})

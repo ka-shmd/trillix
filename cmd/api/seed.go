@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -347,15 +348,20 @@ func seedVisits(ctx context.Context, pool *pgxpool.Pool, formID, versionID uuid.
 					meta["utm_medium"] = "email"
 				}
 				metaJSON, _ := json.Marshal(meta)
+				// Ключ посетителя: один и тот же на пару «человек + сутки», как в
+				// бою. Без него карточка «Уникальные» показывала бы ноль при сотнях
+				// визитов — та же ловушка, что была с гео.
+				keySrc := sha256.Sum256([]byte(fmt.Sprintf("seed:%d:%d", day, rand.Intn(len(samples)))))
+				visitorKey := keySrc[:16]
 				_, e := tx.Exec(ctx, `
 					INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq,
 					                         submitted, meta, country_code, country, city,
-					                         created_at, updated_at)
+					                         visitor_key, created_at, updated_at)
 					VALUES ($1, $2, $3, 'b_name', 1, $4, $5,
-					        nullif($6, ''), nullif($7, ''), nullif($8, ''),
-					        $9::timestamptz, $9::timestamptz + $10::interval)`,
+					        nullif($6, ''), nullif($7, ''), nullif($8, ''), $9,
+					        $10::timestamptz, $10::timestamptz + $11::interval)`,
 					domain.NewID(), formID, versionID, rand.Intn(3) == 0, metaJSON,
-					sm.countryCode, sm.country, sm.city, at,
+					sm.countryCode, sm.country, sm.city, visitorKey, at,
 					fmt.Sprintf("%d seconds", 15+rand.Intn(180)))
 				if e != nil {
 					return e

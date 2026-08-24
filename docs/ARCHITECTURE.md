@@ -172,7 +172,8 @@ CREATE INDEX idx_submissions_form_id ON submissions (form_id, id DESC);
 
 -- Визиты публичной формы (фаза 8.5 шаг 6, ADR §10): знаменатель к числу ответов и
 -- фундамент воронки. Строка на визит, а не лог событий: воронке нужно одно число —
--- докуда дошёл человек. IP не пишется; cookie/localStorage рендерер не заводит.
+-- докуда дошёл человек. IP не пишется: он читается на приёме бикона (страна/город и
+-- суточный ключ посетителя) и забывается. Cookie/localStorage рендерер не заводит.
 CREATE TABLE form_visits (
     id              UUID PRIMARY KEY,            -- UUIDv7 клиента → второй бикон визита становится апсертом
     form_id         UUID NOT NULL REFERENCES forms(id) ON DELETE CASCADE,

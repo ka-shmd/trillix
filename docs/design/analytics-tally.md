@@ -151,9 +151,12 @@ daily_salt  = hmac_sha256( ANALYTICS_VISITOR_SECRET, "YYYY-MM-DD" )
 уникальных, то есть завышено. Оговорка стоит рядом с числом (правило `ANALYTICS.md` §8.8:
 погрешность косвенной метрики — на экран, а не в доки).
 
-**Секрет** — новая переменная `ANALYTICS_VISITOR_SECRET` (минимум 16 байт, проверяется в
-`internal/config`, как `FORM_TOKEN_SECRET`). Контур без неё не поднимается: молчаливый
-фолбэк на пустую соль означал бы одинаковые ключи у всех контуров.
+**Секрет** — новая переменная `ANALYTICS_VISITOR_SECRET` (задана — минимум 16 байт,
+как `FORM_TOKEN_SECRET`). **Опциональная, и это поправка к первоначальному замыслу:**
+требовать её на старте значило бы уронить все существующие контуры, включая живой
+прод на первом же деплое. Пустой секрет = ключи не пишутся, уникальные не считаются,
+в лог старта уходит предупреждение. Молчаливого фолбэка на общую соль нет — он сделал
+бы ключи всех контуров одинаковыми.
 
 ## 7. Гео: файл справочника Sypex Geo
 
@@ -322,7 +325,7 @@ CREATE INDEX idx_partial_form ON partial_submissions (form_id, updated_at DESC);
 |---|---|---|
 | `0030_visit_duration` | `form_visits.updated_at` + перестройка покрывающего индекса под период (§4) | B |
 | `0031_visit_geo` | колонки `country_code`/`country`/`city` у визита + частичный индекс под группировку | D |
-| `0032_visitor_key` | `form_visits.visitor_key BYTEA` | E |
+| `0032_visitor_key` | `form_visits.visitor_key BYTEA` + частичный индекс под `count(DISTINCT)` | E |
 | `0033_partial_submissions` | таблица черновиков + индекс листинга | G |
 | `0034_partial_plan_key` | `submissions_partial` в `plans.limits` всех планов | H |
 

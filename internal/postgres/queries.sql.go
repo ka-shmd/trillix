@@ -4111,8 +4111,9 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 const upsertFormVisit = `-- name: UpsertFormVisit :exec
 
 INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta,
-                         country_code, country, city)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                         country_code, country, city, visitor_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+        $10)
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
     seq           = EXCLUDED.seq,
@@ -4131,6 +4132,7 @@ type UpsertFormVisitParams struct {
 	CountryCode   pgtype.Text
 	Country       pgtype.Text
 	City          pgtype.Text
+	VisitorKey    []byte
 }
 
 // Запросы модуля visits. Схема — migrations/0008_form_visits. Генерация:
@@ -4158,6 +4160,8 @@ type UpsertFormVisitParams struct {
 // Гео (country_code/country/city) пишется только этой вставкой и в UPDATE не
 // входит: место определяется по IP ПЕРВОГО бикона, у последующих адрес тот же,
 // зато лишний поиск по справочнику на каждый бикон — нет.
+// Ключ посетителя — там же и по той же причине: он считается от адреса ПЕРВОГО
+// бикона и от даты, и пересчитывать его на каждом биконе незачем.
 func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams) error {
 	_, err := q.db.Exec(ctx, upsertFormVisit,
 		arg.ID,
@@ -4169,6 +4173,7 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.CountryCode,
 		arg.Country,
 		arg.City,
+		arg.VisitorKey,
 	)
 	return err
 }
@@ -4331,6 +4336,7 @@ func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) 
 const visitInsights = `-- name: VisitInsights :one
 SELECT count(*)::bigint                                        AS visits,
        count(*) FILTER (WHERE submitted)::bigint               AS submitted,
+       count(DISTINCT visitor_key)::bigint                     AS unique_visitors,
        count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
@@ -4352,6 +4358,7 @@ type VisitInsightsParams struct {
 type VisitInsightsRow struct {
 	Visits            int64
 	Submitted         int64
+	UniqueVisitors    int64
 	TimedVisits       int64
 	MedianDurationSec float64
 }
@@ -4369,6 +4376,14 @@ type VisitInsightsRow struct {
 // респондентов. Их число отдаётся отдельной колонкой (timed_visits) — экран обязан
 // отличать «данных нет» от «ноль секунд», а знаменатель метрики надо показывать.
 //
+// unique_visitors — count(DISTINCT visitor_key). NULL-ключи (нет адреса, нет
+// секрета) count(DISTINCT ...) не считает вовсе — это ровно то поведение, которое
+// нужно: визит без ключа не человек и не «ещё один человек».
+//
+// Ключ СУТОЧНЫЙ, поэтому за период длиннее суток число завышено: один человек,
+// заходивший три дня подряд, даёт три ключа. Оговорка стоит на экране рядом с
+// числом — метрика косвенная, и её граница есть часть показания.
+//
 // Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 // второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
 func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (VisitInsightsRow, error) {
@@ -4377,6 +4392,7 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 	err := row.Scan(
 		&i.Visits,
 		&i.Submitted,
+		&i.UniqueVisitors,
 		&i.TimedVisits,
 		&i.MedianDurationSec,
 	)

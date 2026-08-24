@@ -43,7 +43,7 @@ func fullStack(t *testing.T) *httptest.Server {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, nil)
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, nil, nil)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
 	subPublic := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)

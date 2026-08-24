@@ -21,7 +21,7 @@ type Repo struct{}
 // ровно last_block_id и seq, и только при большем seq той же формы). Отсутствие
 // эффекта — штатный исход (бикон приехал не по порядку), а не ошибка: отличать их
 // вызывающему незачем, поэтому число строк наружу не отдаётся.
-func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place) error {
+func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error {
 	block := pgtype.Text{}
 	if lastBlockID != nil {
 		block = pgtype.Text{String: *lastBlockID, Valid: true}
@@ -38,6 +38,7 @@ func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versi
 		CountryCode: nullText(place.CountryCode),
 		Country:     nullText(place.Country),
 		City:        nullText(place.City),
+		VisitorKey:  visitorKey, // nil = ключа нет: визит в счёт уникальных не идёт
 	})
 	if err != nil {
 		return fmt.Errorf("upsert form visit: %w", err)
@@ -103,6 +104,7 @@ func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, pe
 	return domain.VisitInsights{
 		Visits:            int(row.Visits),
 		Submitted:         int(row.Submitted),
+		UniqueVisitors:    int(row.UniqueVisitors),
 		TimedVisits:       int(row.TimedVisits),
 		MedianDurationSec: row.MedianDurationSec,
 	}, nil

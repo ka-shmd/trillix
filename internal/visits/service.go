@@ -63,7 +63,7 @@ type Geo interface {
 
 // Store — доступ к данным visits, объявленный на стороне потребителя.
 type Store interface {
-	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place) error
+	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
 	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
@@ -102,11 +102,19 @@ type Service struct {
 	plans Plans
 	repo  Store
 	geo   Geo
-	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
+	// visitorSecret — из него выводится суточная соль ключа посетителя. Пустой
+	// секрет означает «уникальных не считаем»: ключи не пишутся, карточка пуста.
+	// Молчаливого фолбэка на общую соль нет и быть не может — ключи всех контуров
+	// совпали бы (ADR §10).
+	visitorSecret []byte
+	now           func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo) *Service {
-	return &Service{db: db, forms: forms, plans: plans, repo: repo, geo: geoSvc, now: time.Now}
+func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo, visitorSecret []byte) *Service {
+	return &Service{
+		db: db, forms: forms, plans: plans, repo: repo, geo: geoSvc,
+		visitorSecret: visitorSecret, now: time.Now,
+	}
 }
 
 // Record записывает визит. Порядок повторяет приём ответа: резолв формы (черновик/
@@ -156,11 +164,19 @@ func (s *Service) Record(ctx context.Context, slug string, v Visit) error {
 	// Место определяется ТОЛЬКО на первом биконе визита: у следующих адрес тот же,
 	// а строка уже создана — апсерт гео не трогает. Так поиск по справочнику идёт
 	// один раз на визит, а не на каждое переключение вкладки.
-	var place geo.Place
-	if v.Seq == 0 && s.geo != nil {
-		place = s.geo.Lookup(v.IP)
+	// Место и ключ посетителя считаются ТОЛЬКО на первом биконе визита: у следующих
+	// адрес тот же, строка уже создана, и апсерт эти колонки не трогает.
+	var (
+		place geo.Place
+		key   []byte
+	)
+	if v.Seq == 0 {
+		if s.geo != nil {
+			place = s.geo.Lookup(v.IP)
+		}
+		key = visitorKey(s.visitorSecret, pf.FormID, v.IP, v.UserAgent, s.now())
 	}
-	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place)
+	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place, key)
 }
 
 func (s *Service) buildMeta(v Visit) map[string]string {

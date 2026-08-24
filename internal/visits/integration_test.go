@@ -70,7 +70,7 @@ func newServer(t *testing.T) *httptest.Server {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
 
@@ -338,7 +338,7 @@ func funnelService() *visits.Service {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
+	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
 }
 
 // setFunnelGate закрывает/открывает воронку на плане воркспейса формы — тем же
@@ -791,7 +791,7 @@ func newProxiedServer(t *testing.T) *httptest.Server {
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	visitsSvc := visits.NewService(testPool, formsSvc,
-		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
 
 	mux := http.NewServeMux()
 	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, true).Routes(mux)
@@ -856,4 +856,54 @@ func hasPlace(rows []domain.PlaceCount, name string, visits int) bool {
 		}
 	}
 	return false
+}
+
+// Сквозной счёт уникальных: три визита одного человека за сутки — один уникальный,
+// визит другого — второй. Проверяется на настоящем SQL, потому что вся суть в
+// count(DISTINCT ...) и в том, что NULL-ключи он не считает.
+func TestUniqueVisitors_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newProxiedServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	// Один человек, три визита (разные id визита — как три открытия страницы).
+	for i := 0; i < 3; i++ {
+		beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	}
+	// Второй человек.
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "8.8.8.8")
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 4 {
+		t.Fatalf("визитов = %d, ждали 4", in.Visits)
+	}
+	if in.UniqueVisitors != 2 {
+		t.Errorf("уникальных = %d, ждали 2: три визита одного человека — один уникальный",
+			in.UniqueVisitors)
+	}
+
+	// Инвариант: в строке визита лежит ключ, а не адрес и не user-agent, из которых
+	// он собран. Ключ 16 сырых байт и обратно не разворачивается.
+	var keys int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM form_visits WHERE form_id = $1 AND length(visitor_key) = 16`,
+		formID).Scan(&keys); err != nil {
+		t.Fatalf("count keys: %v", err)
+	}
+	if keys != 4 {
+		t.Errorf("ключей = %d, ждали 4 — по одному на визит", keys)
+	}
+	var dump string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(string_agg(to_jsonb(v)::text, ' '), '') FROM form_visits v WHERE form_id = $1`,
+		formID).Scan(&dump); err != nil {
+		t.Fatalf("dump visits: %v", err)
+	}
+	if strings.Contains(dump, "77.94.1.1") || strings.Contains(dump, "8.8.8.8") {
+		t.Fatalf("адрес сохранён в строке визита — нарушение ADR §10:\n%s", dump)
+	}
 }

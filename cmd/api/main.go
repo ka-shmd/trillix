@@ -400,7 +400,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	}
 
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
-	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc)
+	// Секрет ключа посетителя не обязателен, но его отсутствие — не мелочь: карточка
+	// «Уникальные» будет пустой, и знать об этом надо из лога старта, а не из
+	// вопроса «почему ноль».
+	if len(cfg.AnalyticsVisitorSecret) == 0 {
+		log.Warn("ANALYTICS_VISITOR_SECRET не задан: уникальные посетители не считаются")
+	}
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.AnalyticsVisitorSecret)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
