@@ -23,6 +23,12 @@ SELECT id, workspace_id, provider, external_account_id, external_email, refresh_
 FROM integration_accounts
 WHERE workspace_id = $1 AND provider = $2;
 
+-- name: UpdateIntegrationAccountToken :exec
+-- Провайдер прислал новый refresh взамен использованного. Меняется ТОЛЬКО
+-- токен: connected_at и connected_by остаются прежними — ротация на стороне
+-- провайдера не является новым подключением и не должна выглядеть им на экране.
+UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1;
+
 -- name: DeleteIntegrationAccount :one
 -- Отключение. RETURNING отдаёт токен на отзыв у провайдера: прочитать его
 -- отдельным запросом ДО удаления значит открыть окно, в котором строка уже

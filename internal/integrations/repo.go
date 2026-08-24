@@ -86,6 +86,18 @@ func (Repo) Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, pr
 	}, nil
 }
 
+// UpdateToken перезаписывает шифротекст refresh-токена подключения.
+func (Repo) UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sealed []byte) error {
+	err := postgres.New(db).UpdateIntegrationAccountToken(ctx, postgres.UpdateIntegrationAccountTokenParams{
+		ID:           id,
+		RefreshToken: sealed,
+	})
+	if err != nil {
+		return fmt.Errorf("update integration token: %w", err)
+	}
+	return nil
+}
+
 // Delete удаляет подключение и отдаёт шифротекст токена — на отзыв у провайдера.
 func (Repo) Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error) {
 	sealed, err := postgres.New(db).DeleteIntegrationAccount(ctx, postgres.DeleteIntegrationAccountParams{
