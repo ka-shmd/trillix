@@ -126,6 +126,9 @@ type insightsResponse struct {
 	UniqueVisitors    int     `json:"uniqueVisitors"`
 	TimedVisits       int     `json:"timedVisits"`
 	MedianDurationSec float64 `json:"medianDurationSec"`
+	// Карточки вкладки «Отвалы»: длительность ЗАВЕРШЕНИЯ формы и её знаменатель.
+	TimedCompletions      int     `json:"timedCompletions"`
+	CompletionDurationSec float64 `json:"completionDurationSec"`
 }
 
 // insights отдаёт счётчики визитов за период. Число ответов формы сюда не входит —
@@ -160,11 +163,13 @@ func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
 		slog.Duration("duration", time.Since(start)),
 	)
 	httpserver.WriteJSON(w, r, http.StatusOK, insightsResponse{
-		Visits:            in.Visits,
-		Submitted:         in.Submitted,
-		UniqueVisitors:    in.UniqueVisitors,
-		TimedVisits:       in.TimedVisits,
-		MedianDurationSec: in.MedianDurationSec,
+		Visits:                in.Visits,
+		Submitted:             in.Submitted,
+		UniqueVisitors:        in.UniqueVisitors,
+		TimedVisits:           in.TimedVisits,
+		MedianDurationSec:     in.MedianDurationSec,
+		TimedCompletions:      in.TimedCompletions,
+		CompletionDurationSec: in.CompletionDurationSec,
 	})
 }
 

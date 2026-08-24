@@ -1,11 +1,17 @@
 package domain
 
 import (
+	"strconv"
 	"testing"
+	"time"
 )
 
 // Хелперы: vs и ans живут в csv_test.go (тот же пакет) — сводка и выгрузка
 // собираются из одних и тех же версий, помощники общие намеренно.
+
+// sampleTime — время ответа. Сводке оно нужно только для показа последних значений;
+// в тестах распределений роли не играет.
+var sampleTime = time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 
 func scaleBlock(id, label string, min, max int) Block {
 	b := Block{ID: id, Type: BlockScale}
@@ -44,10 +50,10 @@ func TestSummary_SingleChoiceDistribution(t *testing.T) {
 		Option{ID: "o3", Label: "Поиск"},
 	)
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"q": "o1"}))
-	b.Add(1, ans(map[string]any{"q": "o1"}))
-	b.Add(1, ans(map[string]any{"q": "o2"}))
-	b.Add(1, ans(map[string]any{})) // пропустил вопрос
+	b.Add(1, sampleTime, ans(map[string]any{"q": "o1"}))
+	b.Add(1, sampleTime, ans(map[string]any{"q": "o1"}))
+	b.Add(1, sampleTime, ans(map[string]any{"q": "o2"}))
+	b.Add(1, sampleTime, ans(map[string]any{})) // пропустил вопрос
 
 	sum := b.Result()
 	if sum.Total != 4 {
@@ -77,7 +83,7 @@ func TestSummary_DropdownIsDistributionNotFill(t *testing.T) {
 		Option{ID: "spb", Label: "Питер"},
 	)
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"d": "spb"}))
+	b.Add(1, sampleTime, ans(map[string]any{"d": "spb"}))
 
 	bs, counts := bucketsOf(t, b.Result(), "d")
 	if bs.Kind != SummaryDistribution {
@@ -96,8 +102,8 @@ func TestSummary_MultiChoiceCountsEachOption(t *testing.T) {
 		Option{ID: "b", Label: "Скорость"},
 	)
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"m": []string{"a", "b"}}))
-	b.Add(1, ans(map[string]any{"m": []string{"b"}}))
+	b.Add(1, sampleTime, ans(map[string]any{"m": []string{"a", "b"}}))
+	b.Add(1, sampleTime, ans(map[string]any{"m": []string{"b"}}))
 
 	bs, counts := bucketsOf(t, b.Result(), "m")
 	if counts["Цена"] != 1 || counts["Скорость"] != 2 {
@@ -115,9 +121,9 @@ func TestSummary_ScaleBucketsCoverRange(t *testing.T) {
 	narrow := scaleBlock("s", "Оценка", 1, 5)
 
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, nps), vs(2, narrow)})
-	b.Add(1, ans(map[string]any{"s": "9"})) // вне диапазона свежей версии
-	b.Add(2, ans(map[string]any{"s": "5"}))
-	b.Add(2, ans(map[string]any{"s": "5"}))
+	b.Add(1, sampleTime, ans(map[string]any{"s": "9"})) // вне диапазона свежей версии
+	b.Add(2, sampleTime, ans(map[string]any{"s": "5"}))
+	b.Add(2, sampleTime, ans(map[string]any{"s": "5"}))
 
 	bs, counts := bucketsOf(t, b.Result(), "s")
 	if bs.Kind != SummaryDistribution {
@@ -147,9 +153,9 @@ func TestSummary_ScaleBucketsCoverRange(t *testing.T) {
 func TestSummary_ConsentNoCountsUnchecked(t *testing.T) {
 	src := Block{ID: "c", Type: BlockConsent}
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"c": ConsentYes}))
-	b.Add(1, ans(map[string]any{"c": ""})) // снял галочку
-	b.Add(1, ans(map[string]any{}))        // не трогал вовсе
+	b.Add(1, sampleTime, ans(map[string]any{"c": ConsentYes}))
+	b.Add(1, sampleTime, ans(map[string]any{"c": ""})) // снял галочку
+	b.Add(1, sampleTime, ans(map[string]any{}))        // не трогал вовсе
 
 	bs, counts := bucketsOf(t, b.Result(), "c")
 	if counts["Да"] != 1 {
@@ -167,10 +173,10 @@ func TestSummary_ConsentNoCountsUnchecked(t *testing.T) {
 func TestSummary_NumberStats(t *testing.T) {
 	src := Block{ID: "n", Type: BlockNumber}
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"n": "10"}))
-	b.Add(1, ans(map[string]any{"n": "20"}))
-	b.Add(1, ans(map[string]any{"n": "30"}))
-	b.Add(1, ans(map[string]any{})) // пропустил
+	b.Add(1, sampleTime, ans(map[string]any{"n": "10"}))
+	b.Add(1, sampleTime, ans(map[string]any{"n": "20"}))
+	b.Add(1, sampleTime, ans(map[string]any{"n": "30"}))
+	b.Add(1, sampleTime, ans(map[string]any{})) // пропустил
 
 	bs, _ := bucketsOf(t, b.Result(), "n")
 	if bs.Kind != SummaryNumber {
@@ -188,7 +194,7 @@ func TestSummary_NumberStats(t *testing.T) {
 // утверждения, и ноль на экране владельца был бы враньём).
 func TestSummary_NumberWithoutAnswersHasNoStats(t *testing.T) {
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "n", Type: BlockNumber})})
-	b.Add(1, ans(map[string]any{}))
+	b.Add(1, sampleTime, ans(map[string]any{}))
 
 	bs, _ := bucketsOf(t, b.Result(), "n")
 	if bs.Number != nil {
@@ -199,9 +205,9 @@ func TestSummary_NumberWithoutAnswersHasNoStats(t *testing.T) {
 // Свободный текст: только доля заполнивших; пробельный ответ — не ответ.
 func TestSummary_TextIsFillRate(t *testing.T) {
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "t", Type: BlockLongText})})
-	b.Add(1, ans(map[string]any{"t": "всё понравилось"}))
-	b.Add(1, ans(map[string]any{"t": "   "}))
-	b.Add(1, ans(map[string]any{}))
+	b.Add(1, sampleTime, ans(map[string]any{"t": "всё понравилось"}))
+	b.Add(1, sampleTime, ans(map[string]any{"t": "   "}))
+	b.Add(1, sampleTime, ans(map[string]any{}))
 
 	bs, _ := bucketsOf(t, b.Result(), "t")
 	if bs.Kind != SummaryFill {
@@ -219,8 +225,8 @@ func TestSummary_AskedCountsOnlyVersionsWithBlock(t *testing.T) {
 	added := Block{ID: "b", Type: BlockShortText}
 
 	bld := NewSummaryBuilder([]VersionedSchema{vs(1, old), vs(2, old, added)})
-	bld.Add(1, ans(map[string]any{"a": "Аня"}))
-	bld.Add(2, ans(map[string]any{"a": "Боря", "b": "Тверь"}))
+	bld.Add(1, sampleTime, ans(map[string]any{"a": "Аня"}))
+	bld.Add(2, sampleTime, ans(map[string]any{"a": "Боря", "b": "Тверь"}))
 
 	sum := bld.Result()
 	city, _ := bucketsOf(t, sum, "b")
@@ -242,7 +248,7 @@ func TestSummary_KeepsBlocksOfOldVersions(t *testing.T) {
 		vsg(1, grp("Имя v1", Block{ID: "a", Type: BlockShortText}), grp("Телефон", Block{ID: "g", Type: BlockShortText})),
 		vsg(2, grp("Имя v2", Block{ID: "a", Type: BlockShortText}), grp("Город", Block{ID: "n", Type: BlockShortText})),
 	})
-	bld.Add(1, ans(map[string]any{"g": "+79990000000"}))
+	bld.Add(1, sampleTime, ans(map[string]any{"g": "+79990000000"}))
 
 	sum := bld.Result()
 	order := make([]string, 0, len(sum.Blocks))
@@ -276,7 +282,7 @@ func TestSummary_ExcludesContentBlocks(t *testing.T) {
 	name := Block{ID: "n", Type: BlockShortText}
 
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, intro, pic, name)})
-	b.Add(1, ans(map[string]any{"n": "Аня"}))
+	b.Add(1, sampleTime, ans(map[string]any{"n": "Аня"}))
 
 	sum := b.Result()
 	if len(sum.Blocks) != 1 || sum.Blocks[0].BlockID != "n" {
@@ -295,7 +301,7 @@ func TestSummary_UnknownOptionSurvives(t *testing.T) {
 
 	// Опция dropped есть в v1 — она попадёт в объединение с подписью «Убрали».
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, v1), vs(2, v2)})
-	b.Add(1, ans(map[string]any{"q": "dropped"}))
+	b.Add(1, sampleTime, ans(map[string]any{"q": "dropped"}))
 	_, counts := bucketsOf(t, b.Result(), "q")
 	if counts["Убрали"] != 1 {
 		t.Fatalf("ответ по убранному варианту потерян: %v", counts)
@@ -304,7 +310,7 @@ func TestSummary_UnknownOptionSurvives(t *testing.T) {
 	// Опции нет ни в одной версии (рассинхрон) — показываем сырой id, факт ответа
 	// не теряем.
 	b2 := NewSummaryBuilder([]VersionedSchema{vs(1, v2)})
-	b2.Add(1, ans(map[string]any{"q": "ghost"}))
+	b2.Add(1, sampleTime, ans(map[string]any{"q": "ghost"}))
 	_, counts2 := bucketsOf(t, b2.Result(), "q")
 	if counts2["ghost"] != 1 {
 		t.Fatalf("ответ по неизвестному варианту потерян: %v", counts2)
@@ -319,7 +325,7 @@ func TestSummary_IgnoresAnswerAbsentFromItsVersion(t *testing.T) {
 	added := Block{ID: "b", Type: BlockShortText}
 
 	bld := NewSummaryBuilder([]VersionedSchema{vs(1, old), vs(2, old, added)})
-	bld.Add(1, ans(map[string]any{"a": "Аня", "b": "Тверь"})) // b в v1 не было
+	bld.Add(1, sampleTime, ans(map[string]any{"a": "Аня", "b": "Тверь"})) // b в v1 не было
 
 	city, _ := bucketsOf(t, bld.Result(), "b")
 	if city.Asked != 0 || city.Answered != 0 {
@@ -333,9 +339,9 @@ func TestSummary_IgnoresAnswerAbsentFromItsVersion(t *testing.T) {
 func TestSummary_FileCountsAsFilled(t *testing.T) {
 	src := Block{ID: "cv", GroupID: "g", Type: BlockFile, Name: "Резюме"}
 	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, ans(map[string]any{"cv": []string{"u1", "u2"}}))
-	b.Add(1, ans(map[string]any{"cv": []string{}}))
-	b.Add(1, ans(map[string]any{}))
+	b.Add(1, sampleTime, ans(map[string]any{"cv": []string{"u1", "u2"}}))
+	b.Add(1, sampleTime, ans(map[string]any{"cv": []string{}}))
+	b.Add(1, sampleTime, ans(map[string]any{}))
 
 	sum := b.Result()
 	if len(sum.Blocks) != 1 {
@@ -347,5 +353,68 @@ func TestSummary_FileCountsAsFilled(t *testing.T) {
 	}
 	if bs.Asked != 3 || bs.Answered != 1 {
 		t.Fatalf("спросили/ответили = %d/%d, ожидалось 3/1", bs.Asked, bs.Answered)
+	}
+}
+
+// Последние ответы под вопросом — то, ради чего раскладка переехала на формат
+// Tally: у текстового вопроса распределение бессмысленно, а сами ответы ценны.
+func TestSummary_Samples(t *testing.T) {
+	t.Parallel()
+
+	text := Block{ID: "q", Type: BlockShortText}
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, text)})
+
+	// Обход идёт от свежих ответов к старым (листинг сортирует по id DESC),
+	// поэтому первые пришедшие и есть последние по времени.
+	for i := 0; i < SamplesLimit+3; i++ {
+		b.Add(1, sampleTime, ans(map[string]any{"q": "ответ " + strconv.Itoa(i)}))
+	}
+	got := b.Result().Blocks[0]
+
+	if len(got.Samples) != SamplesLimit {
+		t.Fatalf("значений = %d, ждали потолок %d: остальное — через листинг ответов",
+			len(got.Samples), SamplesLimit)
+	}
+	if got.Samples[0].Text != "ответ 0" {
+		t.Errorf("первое значение = %q, ждали самое свежее", got.Samples[0].Text)
+	}
+	if !got.Samples[0].At.Equal(sampleTime) {
+		t.Errorf("время значения = %v, ждали %v", got.Samples[0].At, sampleTime)
+	}
+}
+
+// Значения показываются подписями, а не внутренними id: «Красный», а не «o1».
+func TestSummary_SamplesUseOptionLabels(t *testing.T) {
+	t.Parallel()
+
+	single := choiceBlock("c", "Цвет", BlockSingleChoice, Option{ID: "o1", Label: "Красный"})
+	multi := choiceBlock("m", "Языки", BlockMultiChoice,
+		Option{ID: "m1", Label: "Go"}, Option{ID: "m2", Label: "TypeScript"})
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, single, multi)})
+	b.Add(1, sampleTime, ans(map[string]any{"c": "o1", "m": []string{"m1", "m2"}}))
+
+	blocks := b.Result().Blocks
+	byID := map[string]BlockSummary{}
+	for _, blk := range blocks {
+		byID[blk.BlockID] = blk
+	}
+	if got := byID["c"].Samples; len(got) != 1 || got[0].Text != "Красный" {
+		t.Errorf("значение выбора = %+v, ждали «Красный»", got)
+	}
+	if got := byID["m"].Samples; len(got) != 1 || got[0].Text != "Go, TypeScript" {
+		t.Errorf("значение множественного выбора = %+v, ждали «Go, TypeScript»", got)
+	}
+}
+
+// Пропущенный вопрос значения не даёт: пустая строка это «не ответил», а не ответ.
+func TestSummary_SamplesSkipEmpty(t *testing.T) {
+	t.Parallel()
+
+	b := NewSummaryBuilder([]VersionedSchema{vs(1, Block{ID: "q", Type: BlockShortText})})
+	b.Add(1, sampleTime, ans(map[string]any{"q": "   "}))
+	b.Add(1, sampleTime, ans(map[string]any{}))
+
+	if got := b.Result().Blocks[0].Samples; len(got) != 0 {
+		t.Fatalf("значения = %+v, ждали пусто", got)
 	}
 }

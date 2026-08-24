@@ -50,3 +50,29 @@ export function conversionPercent(submitted: number, visits: number): number | n
   if (visits <= 0) return null
   return Math.round((submitted / visits) * 100)
 }
+
+// Секунды в человеческий вид: 8 с, 2 мин 5 с, 1 ч 4 мин. Дробные секунды не
+// показываем — точность медианы визитов их не заслуживает.
+export function formatDuration(seconds: number): string {
+  const total = Math.round(seconds)
+  if (total < 60) return `${total} с`
+  const minutes = Math.floor(total / 60)
+  if (minutes < 60) return `${minutes} мин ${total % 60} с`
+  return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`
+}
+
+const relativeFmt = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+// «2 минуты назад» по ISO-времени. Через Intl, а не своим склонением: правила
+// множественного числа уже написаны в браузере, и писать их второй раз незачем.
+export function formatRelative(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const seconds = Math.round((d.getTime() - now.getTime()) / 1000)
+  const abs = Math.abs(seconds)
+  if (abs < 60) return relativeFmt.format(Math.round(seconds), 'second')
+  if (abs < 3600) return relativeFmt.format(Math.round(seconds / 60), 'minute')
+  if (abs < 86_400) return relativeFmt.format(Math.round(seconds / 3600), 'hour')
+  if (abs < 2_592_000) return relativeFmt.format(Math.round(seconds / 86_400), 'day')
+  return formatDate(iso)
+}

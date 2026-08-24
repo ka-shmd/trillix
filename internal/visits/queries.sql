@@ -95,6 +95,12 @@ GROUP BY last_block_id, submitted;
 -- заходивший три дня подряд, даёт три ключа. Граница записана в ANALYTICS.md §6 —
 -- на экран она не выносится.
 --
+-- completion_duration_sec — та же медиана, но только по визитам, ЗАКОНЧИВШИМСЯ
+-- ответом: это «сколько занимает заполнить форму», и оно всегда больше общей
+-- длительности визита, в которую входят те, кто ушёл через три секунды. Считается
+-- тем же сканом — отдельный запрос был бы лишним походом за числом из той же
+-- выборки.
+--
 -- Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 -- второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
 SELECT count(*)::bigint                                        AS visits,
@@ -105,7 +111,13 @@ SELECT count(*)::bigint                                        AS visits,
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
            ) FILTER (WHERE updated_at > created_at),
-       0)::float8                                              AS median_duration_sec
+       0)::float8                                              AS median_duration_sec,
+       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE submitted AND updated_at > created_at),
+       0)::float8                                              AS completion_duration_sec
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz

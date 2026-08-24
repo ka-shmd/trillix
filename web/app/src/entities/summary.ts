@@ -31,6 +31,14 @@ export const numberStatsSchema = z.object({
 // asked — сколько человек этот вопрос ВИДЕЛИ (ответы по версиям, где он был), а не
 // сколько ответов у формы всего: вопрос, добавленный в v2, иначе выглядел бы
 // пропущенным у всех, кто отвечал по v1. Знаменатель доли — он.
+// Одно показанное значение ответа: текст уже готов к показу (подписи опций вместо
+// внутренних id), время — для «2 минуты назад».
+export const answerSampleSchema = z.object({
+  text: z.string(),
+  at: z.string(),
+})
+export type AnswerSample = z.infer<typeof answerSampleSchema>
+
 export const blockSummarySchema = z.object({
   blockId: z.string(),
   label: z.string(),
@@ -40,6 +48,9 @@ export const blockSummarySchema = z.object({
   answered: z.number().int(),
   buckets: z.array(summaryBucketSchema).default([]),
   number: numberStatsSchema.nullish(),
+  // Последние значения — не больше десяти: остальное живёт в листинге ответов со
+  // своей пагинацией. Сервер шлёт поле с omitempty, отсюда default.
+  samples: z.array(answerSampleSchema).default([]),
 })
 export type BlockSummary = z.infer<typeof blockSummarySchema>
 

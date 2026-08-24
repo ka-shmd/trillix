@@ -8,6 +8,7 @@ import {
   type VisitsBreakdown,
 } from '../../entities/visitsBreakdown'
 import { formDetailQueryOptions } from '../../features/forms/queries'
+import { VisitCards } from '../../features/insights/Cards'
 import { visitsBreakdownQueryOptions } from '../../features/insights/queries'
 import { pluralViews } from '../../shared/format'
 import { Button } from '@/components/ui/button'
@@ -32,17 +33,27 @@ function VisitsPage() {
     enabled: formId !== undefined,
   })
 
+  const cards = <VisitCards slug={slug} period={period} />
+
   if (breakdown.isPending) {
-    return <p className="text-sm text-muted-foreground">Считаем визиты…</p>
+    return (
+      <>
+        {cards}
+        <p className="text-sm text-muted-foreground">Считаем визиты…</p>
+      </>
+    )
   }
   if (breakdown.isError) {
     return (
-      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-        <p className="mb-3 text-sm">Не удалось загрузить визиты.</p>
-        <Button variant="outline" size="sm" onClick={() => breakdown.refetch()}>
-          Повторить
-        </Button>
-      </div>
+      <>
+        {cards}
+        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+          <p className="mb-3 text-sm">Не удалось загрузить визиты.</p>
+          <Button variant="outline" size="sm" onClick={() => breakdown.refetch()}>
+            Повторить
+          </Button>
+        </div>
+      </>
     )
   }
 
@@ -51,17 +62,21 @@ function VisitsPage() {
   // нулей нельзя: пустое состояние и нулевые данные читаются по-разному.
   if (data.timeseries.length === 0) {
     return (
-      <div className="mx-auto mt-12 max-w-md text-center">
-        <h2 className="text-lg font-medium">Визитов за период нет</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Поделитесь ссылкой на форму — или расширьте период, если визиты были раньше.
-        </p>
-      </div>
+      <>
+        {cards}
+        <div className="mx-auto mt-12 max-w-md text-center">
+          <h2 className="text-lg font-medium">Визитов за период нет</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Поделитесь ссылкой на форму — или расширьте период, если визиты были раньше.
+          </p>
+        </div>
+      </>
     )
   }
 
   return (
     <div className="flex flex-col gap-8">
+      {cards}
       <Timeseries buckets={data.timeseries} step={data.step} />
       <div className="grid gap-8 sm:grid-cols-2">
         <Sources data={data} />

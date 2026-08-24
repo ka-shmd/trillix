@@ -1,10 +1,11 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
 import { type BlockSummary } from '../../entities/summary'
 import { formDetailQueryOptions } from '../../features/forms/queries'
+import { VisitCards } from '../../features/insights/Cards'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
-import { pluralAnswers } from '../../shared/format'
+import { formatRelative, pluralAnswers } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 
 // Вкладка «Сводка» (/forms/$slug/insights/answers): распределения, статистика чисел
@@ -36,6 +37,8 @@ function SummaryPage() {
 
   return (
     <>
+      <VisitCards slug={slug} period={period} />
+
       {summary.isSuccess && (
         <p className="mb-6 text-sm text-muted-foreground">
           {total === 0 ? 'За выбранный период ответов нет' : `${total} ${pluralAnswers(total)}`}
@@ -69,7 +72,7 @@ function SummaryPage() {
       ) : (
         <div className="flex flex-col gap-4">
           {summary.data.blocks.map((b) => (
-            <BlockCard key={b.blockId} block={b} total={total} />
+            <BlockCard key={b.blockId} block={b} total={total} slug={slug} />
           ))}
         </div>
       )}
@@ -77,7 +80,7 @@ function SummaryPage() {
   )
 }
 
-function BlockCard({ block, total }: { block: BlockSummary; total: number }) {
+function BlockCard({ block, total, slug }: { block: BlockSummary; total: number; slug: string }) {
   return (
     <article className="rounded-lg border p-5">
       <h2 className="font-medium">{block.label}</h2>
@@ -95,9 +98,16 @@ function BlockCard({ block, total }: { block: BlockSummary; total: number }) {
         ) : block.kind === 'number' ? (
           <NumberStats block={block} />
         ) : (
-          <FillRate block={block} />
+          <Samples block={block} />
         )}
       </div>
+      {block.samples.length > 0 && block.answered > block.samples.length && (
+        <Button asChild variant="link" size="sm" className="mt-2 h-auto p-0">
+          <Link to="/forms/$slug/submissions" params={{ slug }} search={(prev) => prev}>
+            Все ответы
+          </Link>
+        </Button>
+      )}
     </article>
   )
 }
@@ -127,8 +137,29 @@ function Distribution({ block }: { block: BlockSummary }) {
   )
 }
 
-function FillRate({ block }: { block: BlockSummary }) {
-  return <Bar label="Заполнили" count={block.answered} base={block.asked} />
+// Последние ответы под вопросом — вместо доли заполнивших у текстовых типов.
+// Именно ради них раскладка и переехала: полоска «заполнили 12 из 34» у открытого
+// вопроса не говорит ничего, а сами ответы — говорят всё.
+//
+// Значений не больше десяти (потолок ставит сервер), дальше — ссылка в таблицу
+// ответов со своей пагинацией.
+function Samples({ block }: { block: BlockSummary }) {
+  if (block.samples.length === 0) {
+    return <Bar label="Заполнили" count={block.answered} base={block.asked} />
+  }
+  return (
+    <ul className="flex flex-col">
+      {block.samples.map((s, i) => (
+        <li
+          key={`${s.at}-${i}`}
+          className="flex justify-between gap-4 border-b py-2 text-sm last:border-0"
+        >
+          <span className="min-w-0 break-words">{s.text}</span>
+          <span className="shrink-0 text-muted-foreground">{formatRelative(s.at)}</span>
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 // Один бар: подпись, счётчик с долей и полоска. Полоска декоративна (aria-hidden) —

@@ -4342,7 +4342,13 @@ SELECT count(*)::bigint                                        AS visits,
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
            ) FILTER (WHERE updated_at > created_at),
-       0)::float8                                              AS median_duration_sec
+       0)::float8                                              AS median_duration_sec,
+       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE submitted AND updated_at > created_at),
+       0)::float8                                              AS completion_duration_sec
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -4356,11 +4362,13 @@ type VisitInsightsParams struct {
 }
 
 type VisitInsightsRow struct {
-	Visits            int64
-	Submitted         int64
-	UniqueVisitors    int64
-	TimedVisits       int64
-	MedianDurationSec float64
+	Visits                int64
+	Submitted             int64
+	UniqueVisitors        int64
+	TimedVisits           int64
+	MedianDurationSec     float64
+	TimedCompletions      int64
+	CompletionDurationSec float64
 }
 
 // Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
@@ -4373,16 +4381,22 @@ type VisitInsightsRow struct {
 // FILTER (WHERE updated_at > created_at) отбрасывает визиты, от которых доехал
 // ровно один бикон: у них updated_at = created_at, то есть «ноль секунд», и без
 // фильтра потерянный pagehide занижал бы медиану тем сильнее, чем хуже связь у
-// респондентов. Их число отдаётся отдельной колонкой (timed_visits) — экран обязан
-// отличать «данных нет» от «ноль секунд», а знаменатель метрики надо показывать.
+// респондентов. Их число отдаётся отдельной колонкой (timed_visits): по ней экран
+// отличает «данных нет» от «ноль секунд» — первое рисуется прочерком.
 //
 // unique_visitors — count(DISTINCT visitor_key). NULL-ключи (нет адреса, нет
 // секрета) count(DISTINCT ...) не считает вовсе — это ровно то поведение, которое
 // нужно: визит без ключа не человек и не «ещё один человек».
 //
 // Ключ СУТОЧНЫЙ, поэтому за период длиннее суток число завышено: один человек,
-// заходивший три дня подряд, даёт три ключа. Оговорка стоит на экране рядом с
-// числом — метрика косвенная, и её граница есть часть показания.
+// заходивший три дня подряд, даёт три ключа. Граница записана в ANALYTICS.md §6 —
+// на экран она не выносится.
+//
+// completion_duration_sec — та же медиана, но только по визитам, ЗАКОНЧИВШИМСЯ
+// ответом: это «сколько занимает заполнить форму», и оно всегда больше общей
+// длительности визита, в которую входят те, кто ушёл через три секунды. Считается
+// тем же сканом — отдельный запрос был бы лишним походом за числом из той же
+// выборки.
 //
 // Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 // второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
@@ -4395,6 +4409,8 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 		&i.UniqueVisitors,
 		&i.TimedVisits,
 		&i.MedianDurationSec,
+		&i.TimedCompletions,
+		&i.CompletionDurationSec,
 	)
 	return i, err
 }

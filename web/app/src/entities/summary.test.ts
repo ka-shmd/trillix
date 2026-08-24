@@ -18,7 +18,17 @@ const realServerPayload = {
   total: 1,
   blocks: [
     // Телефон: kind=fill — buckets сервер не шлёт вовсе (omitempty).
-    { blockId: 'tel', label: 'Телефон', type: 'phone', kind: 'fill', asked: 1, answered: 1 },
+    {
+      blockId: 'tel',
+      label: 'Телефон',
+      type: 'phone',
+      kind: 'fill',
+      asked: 1,
+      answered: 1,
+      // У текстовых типов сервер шлёт последние значения — ради них раскладка и
+      // переехала на формат Tally.
+      samples: [{ text: '+7 900 000-00-00', at: '2026-08-24T09:15:00Z' }],
+    },
     {
       blockId: 'city',
       label: 'Город',
@@ -128,5 +138,21 @@ describe('formSummarySchema', () => {
         blocks: [{ blockId: 'x', label: 'X', type: 'short_text', kind: 'sparkline', asked: 1, answered: 1 }],
       }),
     ).toThrow()
+  })
+})
+
+describe('последние ответы в сводке', () => {
+  it('вопрос без значений получает пустой массив, а не undefined', () => {
+    // Сервер шлёт поле с omitempty, поэтому у распределений его нет вовсе, а экран
+    // обязан обходиться без ветки «а есть ли поле».
+    const parsed = formSummarySchema.parse(realServerPayload)
+    expect(blockAt(parsed, 1).samples).toEqual([])
+  })
+
+  it('значения приходят текстом и временем', () => {
+    const parsed = formSummarySchema.parse(realServerPayload)
+    const phone = blockAt(parsed, 0)
+    expect(phone.samples[0]?.text).toBe('+7 900 000-00-00')
+    expect(phone.samples[0]?.at).toBe('2026-08-24T09:15:00Z')
   })
 })

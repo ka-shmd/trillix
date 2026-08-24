@@ -102,11 +102,13 @@ func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, pe
 		return domain.VisitInsights{}, fmt.Errorf("visit insights: %w", err)
 	}
 	return domain.VisitInsights{
-		Visits:            int(row.Visits),
-		Submitted:         int(row.Submitted),
-		UniqueVisitors:    int(row.UniqueVisitors),
-		TimedVisits:       int(row.TimedVisits),
-		MedianDurationSec: row.MedianDurationSec,
+		Visits:                int(row.Visits),
+		Submitted:             int(row.Submitted),
+		UniqueVisitors:        int(row.UniqueVisitors),
+		TimedVisits:           int(row.TimedVisits),
+		MedianDurationSec:     row.MedianDurationSec,
+		TimedCompletions:      int(row.TimedCompletions),
+		CompletionDurationSec: row.CompletionDurationSec,
 	}, nil
 }
 

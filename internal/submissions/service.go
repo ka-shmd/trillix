@@ -773,7 +773,7 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 
 	builder := domain.NewSummaryBuilder(vs)
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
-		builder.Add(int(sub.FormVersion), answers)
+		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		return nil
 	}); err != nil {
 		return domain.Summary{}, err

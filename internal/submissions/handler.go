@@ -157,6 +157,13 @@ type numberStatsResponse struct {
 	Max float64 `json:"max"`
 }
 
+// answerSampleResponse — одно показанное значение ответа. Наружу уходит текст, уже
+// готовый к показу (подписи опций вместо id), и время — экран рисует «2 минуты назад».
+type answerSampleResponse struct {
+	Text string `json:"text"`
+	At   string `json:"at"`
+}
+
 type blockSummaryResponse struct {
 	BlockID  string                  `json:"blockId"`
 	Label    string                  `json:"label"`
@@ -166,6 +173,10 @@ type blockSummaryResponse struct {
 	Answered int                     `json:"answered"`
 	Buckets  []summaryBucketResponse `json:"buckets,omitempty"`
 	Number   *numberStatsResponse    `json:"number,omitempty"`
+	// Samples — до domain.SamplesLimit последних значений, новыми сверху. Потолок
+	// часть контракта: аналитическая ручка отдаёт счётчики и небольшую выборку, всё
+	// остальное — через листинг ответов со своей пагинацией (ADR §10).
+	Samples []answerSampleResponse `json:"samples,omitempty"`
 }
 
 type summaryResponse struct {
@@ -227,6 +238,15 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		if b.Number != nil {
 			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
+		}
+		if len(b.Samples) > 0 {
+			item.Samples = make([]answerSampleResponse, len(b.Samples))
+			for j, sm := range b.Samples {
+				item.Samples[j] = answerSampleResponse{
+					Text: sm.Text,
+					At:   sm.At.UTC().Format(time.RFC3339),
+				}
+			}
 		}
 		blocks[i] = item
 	}

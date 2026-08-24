@@ -16,5 +16,8 @@ export const visitInsightsSchema = z.object({
   // «данных нет», и экран обязан отличать это от «визиты длиной ноль секунд».
   timedVisits: z.number().int(),
   medianDurationSec: z.number(),
+  // Длительность ЗАВЕРШЕНИЯ формы и её знаменатель — карточки вкладки «Отвалы».
+  timedCompletions: z.number().int(),
+  completionDurationSec: z.number(),
 })
 export type VisitInsights = z.infer<typeof visitInsightsSchema>

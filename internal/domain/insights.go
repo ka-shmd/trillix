@@ -27,4 +27,9 @@ type VisitInsights struct {
 	// MedianDurationSec — медианная длительность визита в секундах. Ноль при
 	// TimedVisits == 0 — это «нет данных», а не «нулевая длительность».
 	MedianDurationSec float64
+	// TimedCompletions и CompletionDurationSec — то же самое, но только по визитам,
+	// закончившимся ответом: «сколько занимает заполнить форму». Всегда больше
+	// длительности визита, в которую входят ушедшие через три секунды.
+	TimedCompletions      int
+	CompletionDurationSec float64
 }

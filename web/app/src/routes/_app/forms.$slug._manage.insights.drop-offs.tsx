@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { funnelQueryOptions } from '../../features/funnel/queries'
+import { CompletionCards } from '../../features/insights/Cards'
 import { pluralPeople, pluralViews } from '../../shared/format'
 import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
@@ -34,8 +35,25 @@ function FunnelPage() {
     enabled: formId !== undefined,
   })
 
+  // Карточки здесь СВОИ: вкладка про прохождение формы, а не про трафик. «Начали
+  // отвечать» и «Завершили» — это верх воронки, поэтому они и приезжают из неё.
+  const cards = (
+    <CompletionCards
+      slug={slug}
+      period={period}
+      started={funnel.data ? funnel.data.visits - funnel.data.leftBeforeFirst : undefined}
+      completed={funnel.data?.submitted}
+      pending={funnel.isPending}
+    />
+  )
+
   if (funnel.isPending) {
-    return <p className="text-sm text-muted-foreground">Считаем воронку…</p>
+    return (
+      <>
+        {cards}
+        <p className="text-sm text-muted-foreground">Считаем воронку…</p>
+      </>
+    )
   }
   // Воронка закрыта тарифом. Показываем НАСТОЯЩЕЕ число не дошедших — оно уже
   // загружено вместе с формой (визиты собираются для всех планов, гейт стоит на
@@ -72,17 +90,25 @@ function FunnelPage() {
   }
   if (funnel.data.visits === 0) {
     return (
-      <div className="mx-auto mt-12 max-w-md text-center">
-        <h2 className="text-lg font-medium">Просмотров пока нет</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Поделитесь ссылкой на форму — как только её откроют, здесь появится, на каком
-          вопросе люди уходят.
-        </p>
-      </div>
+      <>
+        {cards}
+        <div className="mx-auto mt-12 max-w-md text-center">
+          <h2 className="text-lg font-medium">Просмотров пока нет</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Поделитесь ссылкой на форму — как только её откроют, здесь появится, на каком
+            вопросе люди уходят.
+          </p>
+        </div>
+      </>
     )
   }
 
-  return <FunnelView funnel={funnel.data} />
+  return (
+    <>
+      {cards}
+      <FunnelView funnel={funnel.data} />
+    </>
+  )
 }
 
 function FunnelView({ funnel }: { funnel: FormFunnel }) {
