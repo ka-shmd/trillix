@@ -31,6 +31,7 @@
 | [`answer-files.md`](answer-files.md) | фаза 24 `DEV-PLAN` (= 17 `POST-MVP`), загрузка файлов в ответах: блок «файл», приватный бакет, presigned-поток | **не закрыта** — спека живая | [`S3.md`](../S3.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`integrations-gsheets.md`](integrations-gsheets.md) | фаза 25 `DEV-PLAN` (= часть фазы 15 `POST-MVP`), интеграции формы и первая из них — Google Таблицы (**отменены**: отказ от Picker'а, «одна таблица на форму», раскладка экрана, e2e) | закрыта 2026-08-23, тегом не закрыта | [`INTEGRATIONS.md`](../INTEGRATIONS.md) |
 | [`account-settings.md`](account-settings.md) | фаза 23 `DEV-PLAN`, настройки аккаунта: профиль, пароль, email, второй фактор, способы входа, удаление | **не закрыта** — спека живая | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md), [`WORKSPACES.md`](../WORKSPACES.md) |
+| [`analytics-tally.md`](analytics-tally.md) | задача вне плана, аналитика формы в формате Tally: разделы Insights и Submissions, гео, уникальные посетители, частичные ответы | **на согласовании** — код не начат | [`ANALYTICS.md`](../ANALYTICS.md), [`BILLING.md`](../BILLING.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).
