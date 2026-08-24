@@ -228,3 +228,124 @@ func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUI
 	}
 	return n, nil
 }
+
+// Partial — черновик ответа в проекции кабинета: id визита, набранное, докуда
+// дошёл человек и время последней правки.
+type Partial struct {
+	VisitID     uuid.UUID
+	FormVersion int32
+	Answers     json.RawMessage
+	LastBlockID string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// UpsertPartial сохраняет черновик визита. Повторное автосохранение перезаписывает
+// содержимое той же строки — черновик это состояние, а не событие.
+func (Repo) UpsertPartial(ctx context.Context, db postgres.DBTX, visitID, formID, versionID uuid.UUID, answers json.RawMessage, lastBlockID *string) error {
+	block := pgtype.Text{}
+	if lastBlockID != nil {
+		block = pgtype.Text{String: *lastBlockID, Valid: true}
+	}
+	err := postgres.New(db).UpsertPartialSubmission(ctx, postgres.UpsertPartialSubmissionParams{
+		VisitID:       visitID,
+		FormID:        formID,
+		FormVersionID: versionID,
+		Answers:       answers,
+		LastBlockID:   block,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert partial submission: %w", err)
+	}
+	return nil
+}
+
+// DeletePartialByVisit убирает черновик, ставший ответом. 0 строк — штатный исход.
+func (Repo) DeletePartialByVisit(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeletePartialByVisit(ctx, postgres.DeletePartialByVisitParams{
+		VisitID: visitID,
+		FormID:  formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete partial by visit: %w", err)
+	}
+	return n, nil
+}
+
+// ListPartials — страница черновиков формы, новыми сверху. after nil = первая.
+func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *PartialCursor) ([]Partial, error) {
+	var (
+		rows []postgres.ListPartialsFirstPageRow
+		err  error
+	)
+	if after == nil {
+		rows, err = postgres.New(db).ListPartialsFirstPage(ctx, postgres.ListPartialsFirstPageParams{
+			FormID: formID,
+			Limit:  limit,
+		})
+	} else {
+		var next []postgres.ListPartialsAfterRow
+		next, err = postgres.New(db).ListPartialsAfter(ctx, postgres.ListPartialsAfterParams{
+			FormID:   formID,
+			CursorAt: pgtype.Timestamptz{Time: after.UpdatedAt, Valid: true},
+			CursorID: after.VisitID,
+			Limit:    limit,
+		})
+		rows = make([]postgres.ListPartialsFirstPageRow, len(next))
+		for i, r := range next {
+			rows[i] = postgres.ListPartialsFirstPageRow(r)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list partials: %w", err)
+	}
+	out := make([]Partial, len(rows))
+	for i, r := range rows {
+		out[i] = Partial{
+			VisitID:     r.VisitID,
+			FormVersion: r.FormVersion,
+			Answers:     json.RawMessage(r.Answers),
+			LastBlockID: r.LastBlockID.String,
+			CreatedAt:   r.CreatedAt.Time,
+			UpdatedAt:   r.UpdatedAt.Time,
+		}
+	}
+	return out, nil
+}
+
+// CountPartials — сколько черновиков у формы. Показывается и под замком тарифа.
+func (Repo) CountPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).CountPartials(ctx, formID)
+	if err != nil {
+		return 0, fmt.Errorf("count partials: %w", err)
+	}
+	return n, nil
+}
+
+// DeletePartial — удаление одного черновика владельцем.
+func (Repo) DeletePartial(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeletePartialSubmission(ctx, postgres.DeletePartialSubmissionParams{
+		VisitID: visitID,
+		FormID:  formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete partial: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteOldPartials — чистка по возрасту (периодическая задача).
+func (Repo) DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteOldPartials(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("delete old partials: %w", err)
+	}
+	return n, nil
+}
+
+// PartialCursor — составной курсор листинга черновиков: черновик меняется, пока
+// человек печатает, поэтому монотонного id (как у ответов) здесь мало.
+type PartialCursor struct {
+	UpdatedAt time.Time
+	VisitID   uuid.UUID
+}

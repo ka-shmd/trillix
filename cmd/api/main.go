@@ -501,6 +501,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			return nil
 		},
 	})
+	// Черновики ответов старше срока хранения (спека §10.5): черновик — наблюдение,
+	// а не документ, и копить чужой неотправленный текст без причины нельзя.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "partial-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := submissionsSvc.CleanupPartials(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("partial submissions purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
 	tasks.Start(ctx, periodic.Task{
 		Name:     "email-change-token-cleanup",
 		Interval: sessionCleanupInterval,

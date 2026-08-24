@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
-import { useUpdateCloseSettings, useUpdateNotifyOnSubmission } from '../queries'
+import { ApiError } from '../../../shared/api/errors'
+import { useUpdateCloseSettings, useUpdateCollectPartial, useUpdateNotifyOnSubmission } from '../queries'
 
 import { useBuilderStore } from './storeContext'
 import { type FormRef } from './useAutosave'
@@ -96,6 +97,7 @@ export function FormSettings({
 
   const updateClose = useUpdateCloseSettings()
   const updateNotify = useUpdateNotifyOnSubmission()
+  const updatePartial = useUpdateCollectPartial()
 
   // Диалог-страховка: уход с несохранёнными правками любой секции — осознанный.
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -320,6 +322,40 @@ export function FormSettings({
               Не удалось сохранить
             </span>
           )}
+        </div>
+      </section>
+
+      <section className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-medium">Незавершённые ответы</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Форма запомнит набранное, даже если человек её не отправит. Респондент
+          увидит об этом предупреждение.
+        </p>
+
+        {/* Единственный тумблер продукта, который включает СБОР данных, а не их
+            показ, — поэтому он и предупреждение живут от одного флага, и включить
+            сбор молча нельзя. Отказ тарифа (402) приходит из мутации: показываем
+            тост со ссылкой на тариф и оставляем тумблер выключенным. */}
+        <div className="mt-4 flex items-center gap-3">
+          <Switch
+            id="collect-partial"
+            checked={detail.collectPartial}
+            disabled={updatePartial.isPending}
+            onCheckedChange={(enabled) =>
+              void ensureForm()
+                .then(({ id, slug }) => updatePartial.mutateAsync({ id, slug, enabled }))
+                .catch((e: unknown) =>
+                  toast.error(
+                    e instanceof ApiError && e.code === 'plan_required'
+                      ? 'Сбор незавершённых ответов доступен на платном тарифе'
+                      : CREATE_FAILED,
+                  ),
+                )
+            }
+          />
+          <Label htmlFor="collect-partial" className="text-sm font-normal">
+            Собирать незавершённые ответы
+          </Label>
         </div>
       </section>
 

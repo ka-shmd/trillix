@@ -163,6 +163,19 @@ func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCo
 	return result.RowsAffected(), nil
 }
 
+const countPartials = `-- name: CountPartials :one
+SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
+`
+
+// Сколько черновиков у формы. Нужен вкладке «Незавершённые» и плашке тарифа:
+// число показывается и тому, кому разбивка закрыта.
+func (q *Queries) CountPartials(ctx context.Context, formID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPartials, formID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -802,6 +815,21 @@ func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteOldPartials = `-- name: DeleteOldPartials :execrows
+DELETE FROM partial_submissions WHERE updated_at < $1
+`
+
+// Чистка по возрасту (периодическая задача partial-cleanup). Срок — 30 дней,
+// константа в коде: черновик это наблюдение, а не документ, и хранить его вечно
+// значит копить чужой неотправленный текст без причины.
+func (q *Queries) DeleteOldPartials(ctx context.Context, updatedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldPartials, updatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOrphanSubmissionFiles = `-- name: DeleteOrphanSubmissionFiles :exec
 DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL
 `
@@ -812,6 +840,45 @@ DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL
 func (q *Queries) DeleteOrphanSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOrphanSubmissionFiles, dollar_1)
 	return err
+}
+
+const deletePartialByVisit = `-- name: DeletePartialByVisit :execrows
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2
+`
+
+type DeletePartialByVisitParams struct {
+	VisitID uuid.UUID
+	FormID  uuid.UUID
+}
+
+// Черновик стал ответом — удаляем. Зовётся ПОСЛЕ коммита приёма и best-effort:
+// 0 строк штатны (черновика не было, visit_id не доехал), ошибка не имеет права
+// отклонить уже принятый ответ.
+func (q *Queries) DeletePartialByVisit(ctx context.Context, arg DeletePartialByVisitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePartialByVisit, arg.VisitID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePartialSubmission = `-- name: DeletePartialSubmission :execrows
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2
+`
+
+type DeletePartialSubmissionParams struct {
+	VisitID uuid.UUID
+	FormID  uuid.UUID
+}
+
+// Удаление одного черновика владельцем (та же гигиена, что у ответа). Ограничено
+// form_id: черновик чужой формы по угаданному id не удалить.
+func (q *Queries) DeletePartialSubmission(ctx context.Context, arg DeletePartialSubmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePartialSubmission, arg.VisitID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
@@ -1375,7 +1442,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1400,6 +1467,7 @@ type GetFormRow struct {
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
+	CollectPartial        bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1428,6 +1496,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1450,7 +1519,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1475,6 +1544,7 @@ type GetFormBySlugRow struct {
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
+	CollectPartial        bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1505,6 +1575,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1739,6 +1810,11 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
+    -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
+    -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
+    -- останавливать сбор, как у бейджа).
+    f.collect_partial,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1761,6 +1837,7 @@ type GetPublicFormBySlugRow struct {
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
 	NotifyOnSubmission bool
+	CollectPartial     bool
 	SubmissionCount    int64
 }
 
@@ -1795,6 +1872,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -2819,6 +2897,118 @@ func (q *Queries) ListOwnedTeamsWithMembers(ctx context.Context, userID uuid.UUI
 	return items, nil
 }
 
+const listPartialsAfter = `-- name: ListPartialsAfter :many
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+  AND (p.updated_at, p.visit_id) < ($3::timestamptz, $4::uuid)
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2
+`
+
+type ListPartialsAfterParams struct {
+	FormID   uuid.UUID
+	Limit    int32
+	CursorAt pgtype.Timestamptz
+	CursorID uuid.UUID
+}
+
+type ListPartialsAfterRow struct {
+	VisitID     uuid.UUID
+	Answers     []byte
+	LastBlockID pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Следующая страница тем же составным курсором.
+func (q *Queries) ListPartialsAfter(ctx context.Context, arg ListPartialsAfterParams) ([]ListPartialsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listPartialsAfter,
+		arg.FormID,
+		arg.Limit,
+		arg.CursorAt,
+		arg.CursorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPartialsAfterRow
+	for rows.Next() {
+		var i ListPartialsAfterRow
+		if err := rows.Scan(
+			&i.VisitID,
+			&i.Answers,
+			&i.LastBlockID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPartialsFirstPage = `-- name: ListPartialsFirstPage :many
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2
+`
+
+type ListPartialsFirstPageParams struct {
+	FormID uuid.UUID
+	Limit  int32
+}
+
+type ListPartialsFirstPageRow struct {
+	VisitID     uuid.UUID
+	Answers     []byte
+	LastBlockID pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Черновики формы, новыми сверху. Курсор СОСТАВНОЙ (updated_at, visit_id), в
+// отличие от листинга ответов: ответ иммутабелен, и там хватает монотонного id, а
+// черновик меняется, пока человек печатает, — по id он бы прыгал в списке.
+func (q *Queries) ListPartialsFirstPage(ctx context.Context, arg ListPartialsFirstPageParams) ([]ListPartialsFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listPartialsFirstPage, arg.FormID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPartialsFirstPageRow
+	for rows.Next() {
+		var i ListPartialsFirstPageRow
+		if err := rows.Scan(
+			&i.VisitID,
+			&i.Answers,
+			&i.LastBlockID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingInvitations = `-- name: ListPendingInvitations :many
 SELECT email, role, expires_at
 FROM invitations
@@ -3791,6 +3981,51 @@ func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormClo
 	return i, err
 }
 
+const updateFormCollectPartial = `-- name: UpdateFormCollectPartial :one
+UPDATE forms
+SET collect_partial = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormCollectPartialParams struct {
+	ID             uuid.UUID
+	WorkspaceID    uuid.UUID
+	CollectPartial bool
+}
+
+type UpdateFormCollectPartialRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер сбора незавершённых ответов (спека design/analytics-tally.md §10.0).
+// Живая колонка, как настройки закрытия: включается и выключается без
+// перепубликации. Право спрашивает service ДО этого запроса — здесь только запись.
+func (q *Queries) UpdateFormCollectPartial(ctx context.Context, arg UpdateFormCollectPartialParams) (UpdateFormCollectPartialRow, error) {
+	row := q.db.QueryRow(ctx, updateFormCollectPartial, arg.ID, arg.WorkspaceID, arg.CollectPartial)
+	var i UpdateFormCollectPartialRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormDraftSchema = `-- name: UpdateFormDraftSchema :one
 UPDATE forms
 SET draft_schema = $3, title = COALESCE($4, title), updated_at = now()
@@ -4218,6 +4453,46 @@ func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegr
 		arg.RefreshToken,
 		arg.Scopes,
 		arg.ConnectedBy,
+	)
+	return err
+}
+
+const upsertPartialSubmission = `-- name: UpsertPartialSubmission :exec
+INSERT INTO partial_submissions (visit_id, form_id, form_version_id, answers, last_block_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (visit_id) DO UPDATE
+SET answers       = EXCLUDED.answers,
+    last_block_id = EXCLUDED.last_block_id,
+    updated_at    = now()
+WHERE partial_submissions.form_id = EXCLUDED.form_id
+`
+
+type UpsertPartialSubmissionParams struct {
+	VisitID       uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	Answers       []byte
+	LastBlockID   pgtype.Text
+}
+
+// Автосохранение черновика (спека design/analytics-tally.md §10.2). Ключ — id
+// ВИЗИТА, поэтому второе автосохранение того же визита перезаписывает первое, а не
+// плодит строки: черновик — это состояние, а не событие.
+//
+// form_version_id и created_at не обновляются намеренно: версия та, на которой
+// человек открыл форму, а created_at — начало заполнения. Перезаписывается ровно
+// содержимое, точка ухода и время последней правки.
+//
+// Условие по form_id — та же защита, что у визитов: visit_id выбирает клиент, а
+// UUIDv7 угадываем по временнóму префиксу, и без него ручкой одной формы правилась
+// бы строка другой.
+func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartialSubmissionParams) error {
+	_, err := q.db.Exec(ctx, upsertPartialSubmission,
+		arg.VisitID,
+		arg.FormID,
+		arg.FormVersionID,
+		arg.Answers,
+		arg.LastBlockID,
 	)
 	return err
 }

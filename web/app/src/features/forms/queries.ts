@@ -5,18 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { formKeys } from './keys'
-import {
-  createForm,
-  deleteForm,
-  duplicateForm,
-  getFormBySlug,
-  listForms,
-  publishForm,
-  unpublishForm,
-  updateCloseSettings,
-  updateFormName,
-  updateNotifyOnSubmission,
-} from './api'
+import { createForm, deleteForm, duplicateForm, getFormBySlug, listForms, publishForm, unpublishForm, updateCloseSettings, updateCollectPartial, updateFormName, updateNotifyOnSubmission } from './api'
 import { saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
@@ -141,6 +130,21 @@ export function useUpdateNotifyOnSubmission() {
     onSuccess: (form, { enabled }) => {
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, notifyOnSubmission: enabled } : old,
+      )
+    },
+  })
+}
+
+// Тумблер сбора незавершённых. Как и уведомления: ответ мутации — карточка формы,
+// поэтому свежее значение в detail кладём из отправленного ввода.
+export function useUpdateCollectPartial() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; slug: string; enabled: boolean }) =>
+      updateCollectPartial(id, enabled),
+    onSuccess: (form, { enabled }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, collectPartial: enabled } : old,
       )
     },
   })

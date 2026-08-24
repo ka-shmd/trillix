@@ -41,6 +41,7 @@ type Form struct {
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
 	NotifyOnSubmission bool
+	CollectPartial     bool
 }
 
 type FormIntegration struct {
@@ -118,6 +119,16 @@ type Outbox struct {
 	SentAt        pgtype.Timestamptz
 	CreatedAt     pgtype.Timestamptz
 	CoalesceKey   pgtype.Text
+}
+
+type PartialSubmission struct {
+	VisitID       uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	Answers       []byte
+	LastBlockID   pgtype.Text
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type PasswordResetToken struct {

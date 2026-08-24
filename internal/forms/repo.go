@@ -60,6 +60,9 @@ type Form struct {
 	CloseAt       *time.Time
 	ResponseLimit *int32
 	ClosedMessage *string
+	// CollectPartial — собирать ли незавершённые ответы (спека §10.0): тумблер
+	// формы, живая колонка. Кабинету нужен, чтобы нарисовать состояние тумблера.
+	CollectPartial bool
 	// NotifyOnSubmission — слать ли владельцу письмо о новом ответе (слайс D; живая
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
@@ -106,6 +109,10 @@ type PublicForm struct {
 	// на выключенных уведомлениях. Рендереру не отдаётся (не свойство формы для
 	// респондента).
 	NotifyOnSubmission bool
+	// CollectPartial — тумблер сбора незавершённых ответов (спека §10.0). Живая
+	// колонка: включается без перепубликации. Право тарифа спрашивает service — и
+	// при включении, и при отдаче публичной формы.
+	CollectPartial bool
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -272,6 +279,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
+		CollectPartial:        row.CollectPartial,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -304,6 +312,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
+		CollectPartial:        row.CollectPartial,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -533,6 +542,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		ClosedMessage:      ptrStr(row.ClosedMessage),
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
+		CollectPartial:     row.CollectPartial,
 	}, nil
 }
 
@@ -607,6 +617,30 @@ func (Repo) SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("set form closed: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateCollectPartial переключает сбор незавершённых ответов. Право тарифа
+// проверяет service до вызова — repo только пишет.
+func (Repo) UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormCollectPartial(ctx, postgres.UpdateFormCollectPartialParams{
+		ID:             id,
+		WorkspaceID:    workspaceID,
+		CollectPartial: enabled,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form collect_partial: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

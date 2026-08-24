@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -233,5 +234,140 @@ func TestSubmit_Limit_ConcurrentRace_ExactCap(t *testing.T) {
 	}
 	if n := countSubmissions(t); n != limit {
 		t.Fatalf("в БД %d строк, ожидалось ровно %d (перебор недопустим, данные не потеряны)", n, limit)
+	}
+}
+
+// --- Частичные ответы (спека design/analytics-tally.md §10) ---
+
+// setCollectPartial включает тумблер сбора прямо в базе: через сервис пришлось бы
+// заводить пользователя и сессию, а предмет теста — публичный путь.
+func setCollectPartial(t *testing.T, formID string, on bool) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET collect_partial = $2 WHERE id = $1`, formID, on); err != nil {
+		t.Fatalf("set collect_partial: %v", err)
+	}
+}
+
+// setPartialGate закрывает/открывает возможность на плане — тем же UPDATE, каким
+// владелец включит гейт на проде.
+func setPartialGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{submissions_partial}', $1::jsonb)
+		 WHERE code = (SELECT s.plan_code FROM subscriptions s
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
+		value, slug); err != nil {
+		t.Fatalf("set partial gate: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{submissions_partial}', 'true')`); err != nil {
+			t.Fatalf("reset partial gate: %v", err)
+		}
+	})
+}
+
+func countPartials(t *testing.T, formID string) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM partial_submissions WHERE form_id = $1`, formID).Scan(&n); err != nil {
+		t.Fatalf("count partials: %v", err)
+	}
+	return n
+}
+
+// savePartial шлёт автосохранение и возвращает статус.
+func savePartial(t *testing.T, srv *httptest.Server, slug, visitID, text string) int {
+	t.Helper()
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() +
+		`","version":1,"answers":{"b1":"` + text + `"},"last_block_id":"b1"}`
+	resp, err := http.Post(srv.URL+"/public/v1/forms/"+slug+"/partial", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post partial: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+// submitWithVisit отправляет ответ с тем же visit_id, что и черновик, — так приём
+// узнаёт, какой черновик убрать.
+func submitWithVisit(t *testing.T, srv *httptest.Server, slug, visitID string) int {
+	t.Helper()
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","visit_id":"` + visitID + `","answers":{"b1":"Анна"}}`
+	resp, err := http.Post(srv.URL+"/public/v1/forms/"+slug+"/submissions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post submission: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+// Сквозной сбор черновика: тумблер включён → автосохранение пишет строку →
+// отправка ответа её убирает. Юнитом не покрыть: между ними живой тариф, живая
+// колонка формы и порядок «сначала коммит ответа, потом удаление черновика».
+func TestPartial_CollectedAndDroppedOnSubmit(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	formID := formIDBySlug(t, slug)
+	setCollectPartial(t, formID, true)
+
+	visitID := domain.NewID().String()
+	if code := savePartial(t, srv, slug, visitID, "черновик"); code != http.StatusNoContent {
+		t.Fatalf("автосохранение: статус %d, ждали 204", code)
+	}
+	if got := countPartials(t, formID); got != 1 {
+		t.Fatalf("черновиков = %d, ждали 1", got)
+	}
+
+	// Повторное автосохранение перезаписывает строку, а не плодит вторую: черновик
+	// это состояние, а не событие.
+	if code := savePartial(t, srv, slug, visitID, "черновик подлиннее"); code != http.StatusNoContent {
+		t.Fatalf("второе автосохранение: статус %d", code)
+	}
+	if got := countPartials(t, formID); got != 1 {
+		t.Fatalf("после второго сохранения черновиков = %d, ждали 1", got)
+	}
+
+	if code := submitWithVisit(t, srv, slug, visitID); code != http.StatusCreated {
+		t.Fatalf("приём ответа: статус %d, ждали 201", code)
+	}
+	if got := countPartials(t, formID); got != 0 {
+		t.Errorf("черновиков после отправки = %d, ждали 0: ставший ответом удаляется", got)
+	}
+}
+
+// Выключенный тумблер — ручки для формы всё равно что нет: 404, а не 403.
+// Существование настройки чужой формы посторонним не раскрывается.
+func TestPartial_DisabledToggleIs404(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+
+	if code := savePartial(t, srv, slug, domain.NewID().String(), "черновик"); code != http.StatusNotFound {
+		t.Fatalf("статус %d, ждали 404 при выключенном тумблере", code)
+	}
+}
+
+// Даунгрейд останавливает сбор немедленно: тумблер остался включённым, а тариф
+// его больше не разрешает — ручка отвечает 404, как при выключенном.
+func TestPartial_DowngradeStopsCollection(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	formID := formIDBySlug(t, slug)
+	setCollectPartial(t, formID, true)
+	setPartialGate(t, slug, false)
+
+	if code := savePartial(t, srv, slug, domain.NewID().String(), "черновик"); code != http.StatusNotFound {
+		t.Fatalf("статус %d, ждали 404 после даунгрейда", code)
 	}
 }

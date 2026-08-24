@@ -55,7 +55,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -82,7 +82,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -179,6 +179,15 @@ SET notify_on_submission = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormCollectPartial :one
+-- Тумблер сбора незавершённых ответов (спека design/analytics-tally.md §10.0).
+-- Живая колонка, как настройки закрытия: включается и выключается без
+-- перепубликации. Право спрашивает service ДО этого запроса — здесь только запись.
+UPDATE forms
+SET collect_partial = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: GetSubmissionOwner :one
 -- Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
 -- (слайс D). Джойн forms → workspace_members(owner) → users. Название берём
@@ -236,6 +245,11 @@ WHERE id = $1 AND workspace_id = $2;
 -- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
+    -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
+    -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
+    -- останавливать сбор, как у бейджа).
+    f.collect_partial,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

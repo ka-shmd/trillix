@@ -25,6 +25,10 @@ const (
 	// во всех контурах (не env: смыслового различия между dev/prod нет).
 	DefaultMinFillTime = 3 * time.Second
 
+	// maxPartialBodyBytes — потолок тела автосохранения. Тот же, что у приёма ответа:
+	// внутри ровно те же ответы, просто не все.
+	maxPartialBodyBytes = maxSubmitBodyBytes
+
 	// DefaultMaxTokenAge — максимальный возраст токена формы; смысл и обоснование —
 	// token.MaxAge. Имя оставлено прежним: его читают тесты и хендлеры фазы 5.
 	DefaultMaxTokenAge = token.MaxAge
@@ -33,6 +37,7 @@ const (
 // submitService — часть сервиса, нужная публичному транспорту приёма.
 type submitService interface {
 	Submit(ctx context.Context, slug string, id uuid.UUID, answers map[string]json.RawMessage, meta Meta) error
+	SavePartial(ctx context.Context, slug string, p PartialInput) error
 }
 
 // RateLimiter — жёсткий лимитер по IP на приём ответа (отдельный от общего и от
@@ -66,6 +71,7 @@ func NewPublicHandler(svc submitService, limiter RateLimiter, tokenSecret []byte
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	limited := httpserver.RateLimitByIP(h.limiter, h.trustedProxy, "слишком много отправок")
 	mux.Handle("POST /public/v1/forms/{slug}/submissions", limited(http.HandlerFunc(h.submit)))
+	mux.Handle("POST /public/v1/forms/{slug}/partial", limited(http.HandlerFunc(h.savePartial)))
 }
 
 // submitRequest — тело POST. submission_id генерирует клиент (UUIDv7, идемпотентность);
@@ -139,4 +145,66 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusCreated, submitResponse{ID: id.String()})
+}
+
+// partialRequest — тело автосохранения. Лишние поля запрещены, как и у бикона.
+type partialRequest struct {
+	VisitID     string                     `json:"visit_id"`
+	Token       string                     `json:"token"`
+	Version     int32                      `json:"version"`
+	Answers     map[string]json.RawMessage `json:"answers"`
+	LastBlockID *string                    `json:"last_block_id"`
+}
+
+// savePartial принимает черновик — то, что человек набрал и пока не отправил.
+//
+// От приёма ответа отличается тремя вещами, и все три следуют из смысла черновика:
+//
+//   - НЕТ нижней границы возраста токена. «Слишком быстро» — признак бота у
+//     отправки; у автосохранения он бессмыслен: первое сохранение уходит через
+//     секунды после открытия формы, и общая проверка отбрасывала бы ровно тех, кого
+//     мы собираемся считать.
+//   - НЕТ honeypot. Скрытое поле проверяет отправку; черновик бота — мусор в
+//     таблице владельца, но не поддельный ответ, а ведро лимитера у ручки своё.
+//   - 204 без тела: клиент ответа не читает (последнее сохранение уходит биконом
+//     через sendBeacon, который тела не получает вовсе).
+func (h *PublicHandler) savePartial(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxPartialBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	var req partialRequest
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: тело больше %d байт", domain.ErrTooLarge, maxPartialBodyBytes))
+			return
+		}
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+
+	issuedAt, err := token.IssuedAt(h.tokenSecret, req.Token)
+	if age := h.now().Sub(issuedAt); err != nil || age < 0 || age > DefaultMaxTokenAge {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: не удалось принять запрос", domain.ErrValidation))
+		return
+	}
+
+	visitID, err := uuid.Parse(req.VisitID)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверный visit_id", domain.ErrValidation))
+		return
+	}
+
+	err = h.svc.SavePartial(r.Context(), r.PathValue("slug"), PartialInput{
+		VisitID:     visitID,
+		Version:     req.Version,
+		Answers:     req.Answers,
+		LastBlockID: req.LastBlockID,
+	})
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

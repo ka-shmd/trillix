@@ -19,6 +19,11 @@ const publicFormSchema = z.object({
   // на выкатке браузер может предъявить ответ прошлой версии — падать из-за этого
   // всей формой нельзя, а бейдж по умолчанию стоит.
   showBadge: z.boolean().default(true),
+  // collectPartial — сохранять ли набранное до отправки. Решение СЕРВЕРА: тумблер
+  // автора плюс разрешение тарифа прямо сейчас. По этому полю рендерер делает ровно
+  // две вещи — автосохраняет и предупреждает респондента; разъехаться они не могут,
+  // потому что факт один. Дефолт false: не собирать по недоразумению.
+  collectPartial: z.boolean().default(false),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
@@ -126,4 +131,38 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
     return { status: 'rejected', message: 'Не удалось отправить — попробуйте ещё раз через минуту.' }
   }
   return { status: 'rejected', message: env.error.message }
+}
+
+// savePartial отправляет черновик — то, что человек набрал и пока не отправил.
+//
+// keepalive, а не sendBeacon, у обычного сохранения: тело JSON и заголовок нам
+// нужны, а bearer-семантики нет. На уходе со страницы вызывающий шлёт то же самое
+// через sendBeacon — он переживает закрытие вкладки, где fetch уже отменяется.
+//
+// Ошибки ГЛОТАЮТСЯ намеренно: автосохранение — фон, и респондент не должен ни
+// видеть его сбой, ни спотыкаться о него при отправке настоящего ответа.
+export function savePartial(slug: string, body: PartialBody): void {
+  const payload = JSON.stringify(body)
+  void fetch(`/public/v1/forms/${encodeURIComponent(slug)}/partial`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true,
+  }).catch(() => {})
+}
+
+// savePartialOnLeave — последнее сохранение на уходе со страницы. sendBeacon
+// переживает закрытие вкладки; Blob задаёт Content-Type (заголовки этому API не
+// передать).
+export function savePartialOnLeave(slug: string, body: PartialBody): void {
+  const blob = new Blob([JSON.stringify(body)], { type: 'application/json' })
+  navigator.sendBeacon(`/public/v1/forms/${encodeURIComponent(slug)}/partial`, blob)
+}
+
+export interface PartialBody {
+  visit_id: string
+  token: string
+  version: number
+  answers: Answers
+  last_block_id: string | null
 }

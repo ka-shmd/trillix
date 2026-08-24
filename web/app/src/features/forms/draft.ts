@@ -50,5 +50,8 @@ export function newFormDetail(): FormDetail {
     responseLimit: null,
     closedMessage: null,
     notifyOnSubmission: true,
+    // Сбор незавершённых у новой формы выключен: собирать то, что человек не
+    // отправлял, по умолчанию нельзя.
+    collectPartial: false,
   }
 }

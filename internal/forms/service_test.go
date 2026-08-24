@@ -59,9 +59,10 @@ type fakeStore struct {
 	lastCloseSettings domain.CloseSettings
 
 	// Тумблер уведомлений (слайс D) и адресат уведомления.
-	lastNotifyEnabled bool
-	owner             Owner
-	ownerErr          error
+	lastNotifyEnabled  bool
+	lastCollectPartial bool
+	owner              Owner
+	ownerErr           error
 
 	// Захват аргументов последнего вызова — для проверок «куда положили».
 	lastCreateWS     uuid.UUID
@@ -117,6 +118,12 @@ func (f *fakeStore) UpdateFormNotifyOnSubmission(_ context.Context, _ postgres.D
 	f.updated = true
 	f.lastNotifyEnabled = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, NotifyOnSubmission: enabled}, nil
+}
+
+func (f *fakeStore) UpdateCollectPartial(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	f.updated = true
+	f.lastCollectPartial = enabled
+	return Form{ID: id, WorkspaceID: workspaceID, CollectPartial: enabled}, nil
 }
 
 func (f *fakeStore) GetSubmissionOwner(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (Owner, error) {
@@ -1315,4 +1322,72 @@ func TestPublish_BlankCSS_DoesNotGate(t *testing.T) {
 	if len(plans.gotKeys) != 0 {
 		t.Fatalf("тариф спрошен из-за пустого CSS: %v", plans.gotKeys)
 	}
+}
+
+// Включение сбора незавершённых требует платного тарифа — единственное место в
+// продукте, где гейт стоит на СБОРЕ, а не на показе (ADR §10).
+func TestUpdateCollectPartial_EnablingRequiresPlan(t *testing.T) {
+	store := &fakeStore{form: Form{ID: uuid.New(), WorkspaceID: uuid.New()}}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, &fakePlans{allowed: false})
+
+	_, err := svc.UpdateCollectPartial(context.Background(), uuid.New(), store.form.ID, true)
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("ошибка = %v, ждали ErrPlanRequired", err)
+	}
+	if store.updated {
+		t.Error("тумблер записан вопреки отказу тарифа")
+	}
+}
+
+// ВЫКЛЮЧИТЬ обязан мочь кто угодно и когда угодно: запрет остановить сбор данных о
+// людях был бы дефектом, а не гейтом. Проверяется на закрытом плане — том самом,
+// на котором включить нельзя.
+func TestUpdateCollectPartial_DisablingNeedsNoPlan(t *testing.T) {
+	store := &fakeStore{form: Form{ID: uuid.New(), WorkspaceID: uuid.New()}}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, &fakePlans{allowed: false})
+
+	form, err := svc.UpdateCollectPartial(context.Background(), uuid.New(), store.form.ID, false)
+	if err != nil {
+		t.Fatalf("выключение упёрлось в тариф: %v", err)
+	}
+	if form.CollectPartial || !store.updated {
+		t.Fatalf("тумблер = %v (записан: %v), ждали выключенный и записанный", form.CollectPartial, store.updated)
+	}
+}
+
+// На публичном пути право спрашивается ЗАНОВО: даунгрейд обязан останавливать сбор
+// чужих данных немедленно, не дожидаясь, пока владелец вспомнит про тумблер.
+func TestCollectPartial_DowngradeStopsCollection(t *testing.T) {
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
+
+	on, err := svc.CollectPartial(context.Background(), uuid.New(), true)
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if on {
+		t.Fatal("сбор продолжается на плане, который его больше не разрешает")
+	}
+}
+
+// Выключенный тумблер тариф не спрашивает вовсе — цена гейта на горячем публичном
+// пути нулевая для большинства форм.
+func TestCollectPartial_DisabledAsksNoPlan(t *testing.T) {
+	plans := &countingPlans{}
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
+
+	on, err := svc.CollectPartial(context.Background(), uuid.New(), false)
+	if err != nil || on {
+		t.Fatalf("сбор = %v, ошибка = %v; ждали выключенный без ошибки", on, err)
+	}
+	if plans.calls != 0 {
+		t.Errorf("походов в тарифы = %d, ждали 0", plans.calls)
+	}
+}
+
+// countingPlans считает обращения к тарифам — ими проверяется цена гейта.
+type countingPlans struct{ calls int }
+
+func (p *countingPlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.Key) (entitlements.Decision, error) {
+	p.calls++
+	return entitlements.Decision{Allowed: true}, nil
 }

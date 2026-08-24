@@ -22,10 +22,18 @@ import (
 type fakeForms struct {
 	pf    forms.PublicForm
 	owner forms.Owner
+	// partialAllowed — разрешает ли тариф сбор незавершённых ответов.
+	partialAllowed bool
 }
 
 func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
 	return f.pf, nil
+}
+
+// CollectPartial повторяет правило сервиса: без тумблера сбора нет, с тумблером
+// решает тариф. partialAllowed=false — план, который сбор больше не разрешает.
+func (f fakeForms) CollectPartial(_ context.Context, _ uuid.UUID, intent bool) (bool, error) {
+	return intent && f.partialAllowed, nil
 }
 
 func (f fakeForms) Get(context.Context, uuid.UUID, uuid.UUID) (forms.Form, error) {

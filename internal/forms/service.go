@@ -75,6 +75,7 @@ type Store interface {
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
+	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, mirrorTitle *string, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
@@ -393,6 +394,61 @@ func (s *Service) UpdateNotifyOnSubmission(ctx context.Context, userID, formID u
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// UpdateCollectPartial переключает сбор незавершённых ответов (спека §10.0).
+//
+// ЕДИНСТВЕННОЕ МЕСТО В ПРОДУКТЕ, ГДЕ ТАРИФ ГЕЙТИТ СБОР, А НЕ ПОКАЗ (ADR §10):
+// черновик — содержимое чужого ответа, и собирать его для владельца, который его не
+// увидит, значит платить приватностью респондента без всякой выгоды.
+//
+// Право спрашивается только при ВКЛЮЧЕНИИ. Выключить обязан мочь кто угодно и
+// когда угодно: запрет остановить сбор данных о людях был бы дефектом, а не гейтом.
+func (s *Service) UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if enabled {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.SubmissionsPartial)
+		if err != nil {
+			return Form{}, err
+		}
+		if !d.Allowed {
+			return Form{}, domain.ErrPlanRequired
+		}
+	}
+	updated, err := s.repo.UpdateCollectPartial(ctx, s.db, form.ID, form.WorkspaceID, enabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// CollectPartial — собирать ли черновики у ЭТОЙ публичной формы прямо сейчас.
+//
+// Решается ПРИ ОТДАЧЕ, а не только при включении тумблера, и это тот же приём, что
+// у бейджа (ShowBadge выше): в колонке лежит НАМЕРЕНИЕ автора, а факт — намерение
+// плюс разрешение тарифа. Даунгрейд обязан останавливать сбор чужих данных
+// немедленно, не дожидаясь, пока владелец вспомнит про тумблер.
+//
+// Цена на горячем публичном пути нулевая для большинства форм: тумблер выключен —
+// спрашивать нечего, в БД не идём вовсе.
+func (s *Service) CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error) {
+	if !intent {
+		return false, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.SubmissionsPartial)
+	if err != nil {
+		// «Спросить не удалось» — не «можно» (BILLING.md §9). Сбор чужих данных при
+		// сбое тарифов не начинается: лишний невзятый черновик дешевле, чем
+		// собранный без права.
+		return false, err
+	}
+	return d.Allowed, nil
 }
 
 // SubmissionOwner отдаёт адресата уведомления о новом ответе (email владельца +

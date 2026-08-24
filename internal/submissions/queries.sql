@@ -141,3 +141,66 @@ WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id > sqlc.arg(after)::uuid
 ORDER BY s.id
 LIMIT $3;
+
+-- name: UpsertPartialSubmission :exec
+-- Автосохранение черновика (спека design/analytics-tally.md §10.2). Ключ — id
+-- ВИЗИТА, поэтому второе автосохранение того же визита перезаписывает первое, а не
+-- плодит строки: черновик — это состояние, а не событие.
+--
+-- form_version_id и created_at не обновляются намеренно: версия та, на которой
+-- человек открыл форму, а created_at — начало заполнения. Перезаписывается ровно
+-- содержимое, точка ухода и время последней правки.
+--
+-- Условие по form_id — та же защита, что у визитов: visit_id выбирает клиент, а
+-- UUIDv7 угадываем по временнóму префиксу, и без него ручкой одной формы правилась
+-- бы строка другой.
+INSERT INTO partial_submissions (visit_id, form_id, form_version_id, answers, last_block_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (visit_id) DO UPDATE
+SET answers       = EXCLUDED.answers,
+    last_block_id = EXCLUDED.last_block_id,
+    updated_at    = now()
+WHERE partial_submissions.form_id = EXCLUDED.form_id;
+
+-- name: DeletePartialByVisit :execrows
+-- Черновик стал ответом — удаляем. Зовётся ПОСЛЕ коммита приёма и best-effort:
+-- 0 строк штатны (черновика не было, visit_id не доехал), ошибка не имеет права
+-- отклонить уже принятый ответ.
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2;
+
+-- name: ListPartialsFirstPage :many
+-- Черновики формы, новыми сверху. Курсор СОСТАВНОЙ (updated_at, visit_id), в
+-- отличие от листинга ответов: ответ иммутабелен, и там хватает монотонного id, а
+-- черновик меняется, пока человек печатает, — по id он бы прыгал в списке.
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2;
+
+-- name: ListPartialsAfter :many
+-- Следующая страница тем же составным курсором.
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+  AND (p.updated_at, p.visit_id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2;
+
+-- name: CountPartials :one
+-- Сколько черновиков у формы. Нужен вкладке «Незавершённые» и плашке тарифа:
+-- число показывается и тому, кому разбивка закрыта.
+SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1;
+
+-- name: DeletePartialSubmission :execrows
+-- Удаление одного черновика владельцем (та же гигиена, что у ответа). Ограничено
+-- form_id: черновик чужой формы по угаданному id не удалить.
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2;
+
+-- name: DeleteOldPartials :execrows
+-- Чистка по возрасту (периодическая задача partial-cleanup). Срок — 30 дней,
+-- константа в коде: черновик это наблюдение, а не документ, и хранить его вечно
+-- значит копить чужой неотправленный текст без причины.
+DELETE FROM partial_submissions WHERE updated_at < $1;

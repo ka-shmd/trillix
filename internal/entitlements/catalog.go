@@ -39,6 +39,19 @@ const (
 	// устройства и браузеры платными не объявлялись, и 402 на весь запрос унёс бы
 	// их заодно.
 	AnalyticsSources Key = "analytics_sources"
+	// SubmissionsPartial — сбор и показ ЧАСТИЧНЫХ ответов: того, что респондент
+	// набрал и не отправил.
+	//
+	// ЕДИНСТВЕННЫЙ КЛЮЧ, КОТОРЫЙ ГЕЙТИТ СБОР, А НЕ ПОКАЗ, и это записанное
+	// исключение (ADR §10, решение владельца 2026-08-24). Аналитика собирается у
+	// всех планов, потому что визиты — счётчики; черновик же содержимое чужого
+	// ответа, и собирать его ради владельца, который его не увидит, — цена без
+	// выгоды. К тому же респондента о сборе предупреждают: сбор «для всех» вешал
+	// бы предупреждение и на бесплатные формы, которым он не нужен.
+	//
+	// Спрашивается ДВАЖДЫ: при включении тумблера формы и при отдаче публичной
+	// формы (даунгрейд обязан останавливать сбор — тот же приём, что у бейджа).
+	SubmissionsPartial Key = "submissions_partial"
 	// FormDesignCustom — свои значения оформления: цвета, шрифт, ширина, кегль,
 	// скругление, кнопка (фаза 22). ОБЕ ТЕМЫ, светлая и тёмная, бесплатны
 	// намеренно: гейт ставится на созданную ценность, а не на настройку, и право
@@ -136,6 +149,7 @@ var CatalogOrder = []Key{
 	MembersPerWorkspace,
 	AnalyticsFunnel,
 	AnalyticsSources,
+	SubmissionsPartial,
 	FormDesignCustom,
 	FormCustomCSS,
 	FormBranding,
@@ -153,4 +167,5 @@ var Catalog = map[Key]Feature{
 	FormDesignCustom:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё оформление"},
 	FormCustomCSS:       {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Свой CSS"},
 	FormBranding:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Без бейджа Trillix"},
+	SubmissionsPartial:  {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Незавершённые ответы"},
 }

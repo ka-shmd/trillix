@@ -38,6 +38,7 @@ type formsService interface {
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -116,6 +117,9 @@ type formDetailResponse struct {
 	ClosedMessage *string    `json:"closedMessage"`
 	// Тумблер уведомления владельцу о новом ответе (слайс D). Только в детали формы.
 	NotifyOnSubmission bool `json:"notifyOnSubmission"`
+	// CollectPartial — тумблер сбора незавершённых ответов. Кабинет рисует по нему
+	// состояние переключателя; включение требует платного тарифа (402).
+	CollectPartial bool `json:"collectPartial"`
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
@@ -155,6 +159,7 @@ type patchRequest struct {
 	UpdatedAt          *time.Time         `json:"updatedAt"`
 	CloseSettings      *closeSettingsBody `json:"closeSettings"`
 	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
+	CollectPartial     *bool              `json:"collectPartial"`
 }
 
 func toFormResponse(f Form) formResponse {
@@ -206,6 +211,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		ResponseLimit:      f.ResponseLimit,
 		ClosedMessage:      f.ClosedMessage,
 		NotifyOnSubmission: f.NotifyOnSubmission,
+		CollectPartial:     f.CollectPartial,
 	}
 }
 
@@ -331,13 +337,20 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	// Ровно одно из name/title/draftSchema/closeSettings за запрос — иначе непонятно,
 	// что менять.
 	set := 0
-	for _, present := range []bool{req.Name != nil, req.DraftSchema != nil, req.CloseSettings != nil, req.NotifyOnSubmission != nil} {
+	facets := []bool{
+		req.Name != nil,
+		req.DraftSchema != nil,
+		req.CloseSettings != nil,
+		req.NotifyOnSubmission != nil,
+		req.CollectPartial != nil,
+	}
+	for _, present := range facets {
 		if present {
 			set++
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial", domain.ErrValidation))
 		return
 	}
 
@@ -363,6 +376,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		})
 	case req.NotifyOnSubmission != nil:
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
+	case req.CollectPartial != nil:
+		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
 	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)
