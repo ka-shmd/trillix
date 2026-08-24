@@ -22,6 +22,16 @@ export const sourceCountSchema = z.object({
 })
 export type SourceCount = z.infer<typeof sourceCountSchema>
 
+// Строка стран или городов. countryCode едет рядом с названием ради флага: у
+// страны это её код, у города — код его страны (одноимённые города в разных
+// странах — обычное дело).
+export const placeCountSchema = z.object({
+  name: z.string(),
+  countryCode: z.string(),
+  visits: z.number().int(),
+})
+export type PlaceCount = z.infer<typeof placeCountSchema>
+
 export const labelCountSchema = z.object({
   label: z.string(),
   visits: z.number().int(),
@@ -40,5 +50,11 @@ export const visitsBreakdownSchema = z.object({
   devices: z.array(labelCountSchema),
   browsers: z.array(labelCountSchema),
   systems: z.array(labelCountSchema),
+  // Пустые списки означают «справочника гео на контуре нет» — блок не рисуется.
+  // unknownPlace — визиты, которым место не определили (справочника нет, приватный
+  // адрес, IPv6): граница метрики показывается рядом со списком, а не прячется.
+  countries: z.array(placeCountSchema),
+  cities: z.array(placeCountSchema),
+  unknownPlace: z.number().int(),
 })
 export type VisitsBreakdown = z.infer<typeof visitsBreakdownSchema>

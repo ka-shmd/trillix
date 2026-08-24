@@ -13,6 +13,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -52,6 +53,7 @@ type upsertCall struct {
 	lastBlockID           *string
 	seq                   int16
 	meta                  json.RawMessage
+	place                 geo.Place
 }
 
 type fakeStore struct {
@@ -61,15 +63,28 @@ type fakeStore struct {
 	insights    domain.VisitInsights
 	buckets     []domain.TimeBucket
 	sources     []domain.SourceRow
+	countries   []domain.PlaceCount
+	cities      []domain.PlaceCount
 	agents      []domain.UserAgentRow
 	step        domain.BucketStep
 	period      domain.Period // окно наблюдения, с которым сервис пришёл в стор
 	upsetErr    error
 }
 
-func (s *fakeStore) UpsertVisit(_ context.Context, _ postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error {
-	s.upserts = append(s.upserts, upsertCall{id, formID, versionID, lastBlockID, seq, meta})
+func (s *fakeStore) UpsertVisit(_ context.Context, _ postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place) error {
+	s.upserts = append(s.upserts, upsertCall{id, formID, versionID, lastBlockID, seq, meta, place})
 	return s.upsetErr
+}
+
+// fakeGeo — справочник, который знает ровно один адрес. Пустой IP и всё остальное
+// даёт пустое место — как настоящий на IPv6 и приватных адресах.
+type fakeGeo struct{}
+
+func (fakeGeo) Lookup(ip string) geo.Place {
+	if ip == "77.94.1.1" {
+		return geo.Place{CountryCode: "RU", Country: "Россия", City: "Москва"}
+	}
+	return geo.Place{}
 }
 
 func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (int64, error) {
@@ -91,6 +106,16 @@ func (s *fakeStore) Timeseries(_ context.Context, _ postgres.DBTX, _ uuid.UUID, 
 	s.period = period
 	s.step = step
 	return s.buckets, nil
+}
+
+func (s *fakeStore) Countries(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
+	s.period = period
+	return s.countries, nil
+}
+
+func (s *fakeStore) Cities(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
+	s.period = period
+	return s.cities, nil
 }
 
 func (s *fakeStore) Sources(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
@@ -115,7 +140,7 @@ func openForm() forms.PublicForm {
 }
 
 func newSvc(f forms.PublicForm, store *fakeStore) *Service {
-	svc := NewService(nil, fakeForms{form: f}, openPlans(), store)
+	svc := NewService(nil, fakeForms{form: f}, openPlans(), store, fakeGeo{})
 	svc.now = func() time.Time { return now }
 	return svc
 }
@@ -160,7 +185,7 @@ func TestRecord_VersionMismatchRejected(t *testing.T) {
 // приватное не раскрывается.
 func TestRecord_NotFoundPropagates(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store)
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store, fakeGeo{})
 	svc.now = func() time.Time { return now }
 
 	if err := svc.Record(context.Background(), "abc", validVisit()); !errors.Is(err, domain.ErrNotFound) {
@@ -316,7 +341,7 @@ func TestRecord_TruncatesMetaOnRuneBoundary(t *testing.T) {
 // id формы из URL правом доступа не является (инвариант 1).
 func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	store := &fakeStore{byLastBlock: []domain.LastBlockCount{{BlockID: "b1", Visits: 5}}}
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store)
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store, fakeGeo{})
 
 	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -337,7 +362,7 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 	svc := NewService(nil, fakeForms{versions: []forms.Version{{
 		Number: 1,
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":false,"settings":{}}]}`),
-	}}}, openPlans(), store)
+	}}}, openPlans(), store, fakeGeo{})
 
 	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if err != nil {
@@ -364,7 +389,7 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 	svc := NewService(nil, fakeForms{versions: []forms.Version{{
 		Number: 1,
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-	}}}, fakePlans{allowed: false}, &fakeStore{})
+	}}}, fakePlans{allowed: false}, &fakeStore{}, fakeGeo{})
 
 	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrPlanRequired) {
@@ -376,7 +401,7 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 // авторизация идёт ПЕРВОЙ, поэтому посторонний получает 404, а не 402 (иначе код
 // ответа рассказывал бы о существовании формы и о плане чужого воркспейса).
 func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{})
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{}, fakeGeo{})
 
 	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -387,7 +412,7 @@ func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
 // Карточки чужой формы недоступны так же, как воронка: forms.Get проверяет членство
 // и отдаёт ErrNotFound, сервис обязан пропустить её наружу нетронутой (инвариант 1).
 func TestInsights_ForeignFormIsNotFound(t *testing.T) {
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), &fakeStore{})
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), &fakeStore{}, fakeGeo{})
 
 	_, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -401,7 +426,7 @@ func TestInsights_ForeignFormIsNotFound(t *testing.T) {
 // обязан отдать числа.
 func TestInsights_NotGatedByPlan(t *testing.T) {
 	store := &fakeStore{insights: domain.VisitInsights{Visits: 7, Submitted: 2}}
-	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store)
+	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store, fakeGeo{})
 
 	in, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if err != nil {
@@ -423,7 +448,7 @@ func TestPeriodReachesStore(t *testing.T) {
 
 	t.Run("карточки", func(t *testing.T) {
 		store := &fakeStore{}
-		svc := NewService(nil, fakeForms{}, openPlans(), store)
+		svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{})
 		if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), period); err != nil {
 			t.Fatalf("неожиданная ошибка: %v", err)
 		}
@@ -434,7 +459,7 @@ func TestPeriodReachesStore(t *testing.T) {
 
 	t.Run("воронка", func(t *testing.T) {
 		store := &fakeStore{}
-		svc := NewService(nil, fakeForms{}, openPlans(), store)
+		svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{})
 		if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), period); err != nil {
 			t.Fatalf("неожиданная ошибка: %v", err)
 		}
@@ -458,7 +483,7 @@ func TestBreakdown_LockedSourcesKeepRestOfTab(t *testing.T) {
 			{UserAgent: "Mozilla/5.0 (Windows NT 10.0) Chrome/140.0.0.0 Safari/537.36", Visits: 10},
 		},
 	}
-	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store)
+	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store, fakeGeo{})
 
 	b, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if err != nil {
@@ -481,7 +506,7 @@ func TestBreakdown_OpenPlanFoldsSources(t *testing.T) {
 		{Referer: "https://vk.com/wall", Visits: 5},
 		{Referer: "https://www.vk.com/feed", Visits: 3},
 	}}
-	svc := NewService(nil, fakeForms{}, openPlans(), store)
+	svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{})
 
 	b, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if err != nil {
@@ -498,7 +523,7 @@ func TestBreakdown_OpenPlanFoldsSources(t *testing.T) {
 // Вкладка чужой формы недоступна — и это проверяется ДО тарифа: иначе код ответа
 // рассказывал бы постороннему о существовании формы.
 func TestBreakdown_ForeignFormIsNotFound(t *testing.T) {
-	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{})
+	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{}, fakeGeo{})
 
 	_, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), domain.Period{})
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -510,7 +535,7 @@ func TestBreakdown_ForeignFormIsNotFound(t *testing.T) {
 // окна — сутками. Без этого график за месяц состоял бы из тысяч точек.
 func TestBreakdown_StepFollowsPeriod(t *testing.T) {
 	store := &fakeStore{}
-	svc := NewService(nil, fakeForms{}, openPlans(), store)
+	svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{})
 	day := domain.Period{From: time.Now().Add(-24 * time.Hour)}
 
 	if _, err := svc.Breakdown(context.Background(), uuid.New(), uuid.New(), day); err != nil {
@@ -518,5 +543,69 @@ func TestBreakdown_StepFollowsPeriod(t *testing.T) {
 	}
 	if store.step != domain.StepHour {
 		t.Errorf("шаг = %q, ждали %q", store.step, domain.StepHour)
+	}
+}
+
+// Гео определяется на ПЕРВОМ биконе и только на нём: у следующих адрес тот же, а
+// строка уже создана — апсерт гео не трогает. Лишний поиск по справочнику на
+// каждое переключение вкладки не нужен.
+func TestRecord_GeoResolvedOnFirstBeaconOnly(t *testing.T) {
+	form := openForm()
+	store := &fakeStore{}
+	svc := newSvc(form, store)
+
+	first := validVisit()
+	first.IP = "77.94.1.1"
+	if err := svc.Record(context.Background(), "abc", first); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	second := first
+	second.Seq = 1
+	if err := svc.Record(context.Background(), "abc", second); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	if len(store.upserts) != 2 {
+		t.Fatalf("апсертов = %d, ждали 2", len(store.upserts))
+	}
+	if got := store.upserts[0].place; got.CountryCode != "RU" || got.City != "Москва" {
+		t.Errorf("место первого бикона = %+v, ждали Россию и Москву", got)
+	}
+	if got := store.upserts[1].place; !got.Empty() {
+		t.Errorf("место второго бикона = %+v, ждали пустое: гео ищется один раз на визит", got)
+	}
+}
+
+// Неизвестный справочнику адрес (IPv6, приватный, чужая сеть) даёт пустое место, а
+// не ошибку: аналитика не имеет права отклонить бикон из-за того, что не узнала
+// город.
+func TestRecord_UnknownAddressIsNotAnError(t *testing.T) {
+	form := openForm()
+	store := &fakeStore{}
+	v := validVisit()
+	v.IP = "2a02:6b8::2:242"
+
+	if err := newSvc(form, store).Record(context.Background(), "abc", v); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if !store.upserts[0].place.Empty() {
+		t.Errorf("место = %+v, ждали пустое", store.upserts[0].place)
+	}
+}
+
+// IP не попадает в мету визита ни под каким ключом. Тест-близнец
+// TestRecord_MetaHasNoIP: тот сторожил отсутствие адреса, когда его вовсе не было
+// в модели, этот — когда он в модель добавлен и обязан остаться внутри сервиса.
+func TestRecord_IPDoesNotLeakIntoMeta(t *testing.T) {
+	form := openForm()
+	store := &fakeStore{}
+	v := validVisit()
+	v.IP = "77.94.1.1"
+
+	if err := newSvc(form, store).Record(context.Background(), "abc", v); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if strings.Contains(string(store.upserts[0].meta), "77.94.1.1") {
+		t.Fatalf("адрес утёк в мету визита: %s", store.upserts[0].meta)
 	}
 }

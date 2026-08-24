@@ -24,6 +24,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -69,7 +70,7 @@ func newServer(t *testing.T) *httptest.Server {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
 
@@ -337,7 +338,7 @@ func funnelService() *visits.Service {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
 }
 
 // setFunnelGate закрывает/открывает воронку на плане воркспейса формы — тем же
@@ -619,6 +620,27 @@ func TestInsights_EmptyFormIsZeroWithoutData(t *testing.T) {
 	}
 }
 
+// beaconFromIP шлёт бикон, представляясь заданным адресом. Заголовок X-Forwarded-For
+// читается сервером только при trustedProxy=true — так же, как на проде за Caddy.
+func beaconFromIP(t *testing.T, srv *httptest.Server, slug, visitID, ip string) {
+	t.Helper()
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() + `","version":1,"seq":0,"last_block_id":null}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/visits", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", ip)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post visit: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("бикон: статус %d, ждали 204", resp.StatusCode)
+	}
+}
+
 // beaconWith шлёт бикон с заголовками и метками источника — тем же путём, каким их
 // шлёт рендерер. Обычный beacon их не несёт: заголовков у него нет, и в мете
 // оказывались бы только пустые строки.
@@ -736,4 +758,100 @@ func TestBreakdown_SourcesClosedByPlan(t *testing.T) {
 	if len(b.Browsers) == 0 {
 		t.Error("браузеры обязаны остаться — платными объявлялись только источники")
 	}
+}
+
+// testGeo — справочник для интеграционных тестов. Настоящий файл весит 37 МБ и в
+// репозиторий не кладётся, поэтому здесь стоит подделка на два адреса: путь
+// «бикон → колонки страны и города» она проверяет ровно так же, а свежесть данных
+// справочника тестам не принадлежит (её проверяет отдельный тест в internal/geo,
+// когда файл на машине есть).
+type testGeoService struct{}
+
+func (testGeoService) Lookup(ip string) geo.Place {
+	switch ip {
+	case "77.94.1.1":
+		return geo.Place{CountryCode: "RU", Country: "Россия", City: "Москва"}
+	case "8.8.8.8":
+		return geo.Place{CountryCode: "US", Country: "США", City: "Маунтин-Вью"}
+	}
+	return geo.Place{}
+}
+
+func testGeo() testGeoService { return testGeoService{} }
+
+// newProxiedServer — тот же публичный транспорт, но с trustedProxy=true: только так
+// сервер читает адрес из X-Forwarded-For, а тест может представиться чужим IP.
+func newProxiedServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
+	visitsSvc := visits.NewService(testPool, formsSvc,
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo())
+
+	mux := http.NewServeMux()
+	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, true).Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Сквозной путь гео: бикон с адресом → колонки страны и города → списки на экране.
+// Юнитами не покрыть — между ними колонки, частичный индекс и группировка.
+//
+// И главное, ради чего тест написан: после всего этого в строке визита НЕТ адреса.
+func TestGeo_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newProxiedServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "8.8.8.8")
+	// Адрес, которого справочник не знает (в тестовой подделке — любой другой):
+	// такой визит не попадает ни в одну страну и считается «не определено».
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "203.0.113.7")
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+
+	if len(b.Countries) != 2 {
+		t.Fatalf("страны = %+v, ждали две", b.Countries)
+	}
+	if b.Countries[0].Name != "Россия" || b.Countries[0].Visits != 2 || b.Countries[0].CountryCode != "RU" {
+		t.Errorf("первая страна = %+v, ждали Россию с 2 визитами", b.Countries[0])
+	}
+	if !hasPlace(b.Cities, "Москва", 2) || !hasPlace(b.Cities, "Маунтин-Вью", 1) {
+		t.Errorf("города = %+v, ждали Москву (2) и Маунтин-Вью (1)", b.Cities)
+	}
+	if b.UnknownPlace != 1 {
+		t.Errorf("без места = %d, ждали 1: неизвестный адрес не приписывается к соседней стране", b.UnknownPlace)
+	}
+
+	// Инвариант приватности: адрес не сохранён ни в одной колонке визита.
+	var dump string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(string_agg(to_jsonb(v)::text, ' '), '') FROM form_visits v WHERE form_id = $1`,
+		formID).Scan(&dump); err != nil {
+		t.Fatalf("dump visits: %v", err)
+	}
+	for _, ip := range []string{"77.94.1.1", "8.8.8.8", "203.0.113.7"} {
+		if strings.Contains(dump, ip) {
+			t.Fatalf("адрес %s сохранён в строке визита — это нарушение ADR §10:\n%s", ip, dump)
+		}
+	}
+}
+
+func hasPlace(rows []domain.PlaceCount, name string, visits int) bool {
+	for _, r := range rows {
+		if r.Name == name && r.Visits == visits {
+			return true
+		}
+	}
+	return false
 }

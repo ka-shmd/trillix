@@ -12,6 +12,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -49,13 +50,22 @@ type Plans interface {
 	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
 }
 
+// Geo — справочник «адрес → место». Реализация — *geo.Service; nil означает
+// «на контуре справочника нет», и это законное состояние: Lookup у nil-сервиса
+// отдаёт пустое место, поэтому ветки «а настроено ли гео» здесь нет.
+type Geo interface {
+	Lookup(ip string) geo.Place
+}
+
 // Store — доступ к данным visits, объявленный на стороне потребителя.
 type Store interface {
-	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error
+	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
 	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
+	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
+	Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
 	Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error)
 	UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error)
 }
@@ -74,6 +84,11 @@ type Visit struct {
 	UserAgent   string
 	Referer     string
 	UTM         map[string]string
+	// IP нужен РОВНО для одного: определить страну и город по локальному
+	// справочнику. Дальше сервиса он не уходит — ни в БД, ни в лог, ни в хеше
+	// (ADR §10). Поле не сериализуется и в теле бикона его нет: адрес берётся из
+	// соединения, а не со слов клиента.
+	IP string
 }
 
 // Service — запись визитов и чтение воронки.
@@ -82,11 +97,12 @@ type Service struct {
 	forms Forms
 	plans Plans
 	repo  Store
+	geo   Geo
 	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store) *Service {
-	return &Service{db: db, forms: forms, plans: plans, repo: repo, now: time.Now}
+func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo) *Service {
+	return &Service{db: db, forms: forms, plans: plans, repo: repo, geo: geoSvc, now: time.Now}
 }
 
 // Record записывает визит. Порядок повторяет приём ответа: резолв формы (черновик/
@@ -132,7 +148,15 @@ func (s *Service) Record(ctx context.Context, slug string, v Visit) error {
 	if err != nil {
 		return fmt.Errorf("marshal visit meta: %w", err)
 	}
-	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON)
+
+	// Место определяется ТОЛЬКО на первом биконе визита: у следующих адрес тот же,
+	// а строка уже создана — апсерт гео не трогает. Так поиск по справочнику идёт
+	// один раз на визит, а не на каждое переключение вкладки.
+	var place geo.Place
+	if v.Seq == 0 && s.geo != nil {
+		place = s.geo.Lookup(v.IP)
+	}
+	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place)
 }
 
 func (s *Service) buildMeta(v Visit) map[string]string {
@@ -252,12 +276,31 @@ func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, perio
 	if err != nil {
 		return domain.VisitsBreakdown{}, err
 	}
+	countries, err := s.repo.Countries(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	cities, err := s.repo.Cities(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
 	agents, err := s.repo.UserAgents(ctx, s.db, formID, period)
 	if err != nil {
 		return domain.VisitsBreakdown{}, err
 	}
 
 	devices, browsers, systems := domain.FoldUserAgents(agents)
+	// Визиты без места считаем вычитанием, а не отдельным запросом: сумма стран
+	// известна, общее число визитов — тоже, и второй счётный запрос за тем же
+	// числом дал бы ещё и возможность рассогласования между двумя выборками.
+	total := 0
+	for _, b := range buckets {
+		total += b.Visits
+	}
+	withPlace := 0
+	for _, c := range countries {
+		withPlace += c.Visits
+	}
 	out := domain.VisitsBreakdown{
 		Step:          step,
 		Timeseries:    domain.FillBuckets(buckets, step, period.From, period.To),
@@ -266,6 +309,9 @@ func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, perio
 		Devices:       devices,
 		Browsers:      browsers,
 		Systems:       systems,
+		Countries:     countries,
+		Cities:        cities,
+		UnknownPlace:  total - withPlace,
 	}
 	if d.Allowed {
 		out.Sources = domain.FoldSources(sources)

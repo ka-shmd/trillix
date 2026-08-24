@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import {
   type LabelCount,
+  type PlaceCount,
   type TimeBucket,
   type VisitsBreakdown,
 } from '../../entities/visitsBreakdown'
@@ -65,12 +66,20 @@ function VisitsPage() {
       <div className="grid gap-8 sm:grid-cols-2">
         <Sources data={data} />
         <Breakdown title="Устройства" rows={data.devices} />
+        {/* Блок гео исчезает целиком, когда справочника на контуре нет: пустой
+            список с нулями выглядел бы как «посетителей не было», а это неправда —
+            мы просто не знаем, откуда они. */}
+        {data.countries.length > 0 && (
+          <Places title="Страны" rows={data.countries} unknown={data.unknownPlace} />
+        )}
+        {data.cities.length > 0 && <Places title="Города" rows={data.cities} />}
         <Breakdown title="Браузеры" rows={data.browsers} />
         <Breakdown title="Операционные системы" rows={data.systems} />
       </div>
       <p className="text-xs text-muted-foreground">
         Аналитика без cookie и кросс-девайс-трекинга: визит не переживает закрытие
-        вкладки, IP не сохраняется.
+        вкладки, IP не сохраняется — страна и город определяются в момент захода и
+        адрес после этого забывается. Страны и города — по справочнику Sypex Geo.
       </p>
     </div>
   )
@@ -155,6 +164,40 @@ function Sources({ data }: { data: VisitsBreakdown }) {
         visits: s.visits,
       }))}
     />
+  )
+}
+
+// Страны и города. Флаг — эмодзи из кода страны: два региональных индикатора, то
+// есть две буквы кода, сдвинутые в свой блок Unicode. Ни картинок, ни спрайта, ни
+// зависимости — и в списке видно страну, не читая названия.
+function Places({ title, rows, unknown }: { title: string; rows: PlaceCount[]; unknown?: number }) {
+  return (
+    <div>
+      <Breakdown
+        title={title}
+        rows={rows.map((r) => ({ label: `${flag(r.countryCode)} ${r.name}`.trim(), visits: r.visits }))}
+      />
+      {/* Оговорка стоит рядом с числом, а не в документации: метрика косвенная, и
+          её граница — часть показания (docs/ANALYTICS.md §8.8). Визиты без места —
+          это адреса нового формата (IPv6), приватные сети и адреса, которых нет в
+          справочнике. */}
+      {unknown !== undefined && unknown > 0 && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Ещё {unknown} {pluralViews(unknown)} — без страны: справочник знает не все
+          адреса.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// flag превращает ISO-код страны в эмодзи флага. Пустой или неполный код даёт
+// пустую строку — рисовать вопросительный знак вместо флага незачем.
+function flag(code: string): string {
+  if (code.length !== 2) return ''
+  const base = 0x1f1e6 // региональный индикатор «A»
+  return String.fromCodePoint(
+    ...[...code.toUpperCase()].map((c) => base + (c.charCodeAt(0) - 65)),
   )
 }
 

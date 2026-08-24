@@ -54,6 +54,14 @@ seed: ## Наполнить БД демо-данными (demo@trillix.local / d
 	go run ./cmd/api seed
 	@echo "seed готов: вход demo@trillix.local / demo-password"
 
+geo-fetch: ## Скачать справочник геолокации Sypex Geo в ./geo (нужен для стран и городов в аналитике)
+	@mkdir -p geo
+	@echo "качаю справочник Sypex Geo (~22 МБ)…"
+	@curl -fsSL -o geo/SxGeoCity.zip https://sypexgeo.net/files/SxGeoCity_utf8.zip
+	@cd geo && unzip -o -q SxGeoCity.zip && rm -f SxGeoCity.zip
+	@echo "готово: geo/SxGeoCity.dat"
+	@echo "пропишите в .env: GEO_DB_PATH=geo/SxGeoCity.dat (на проде — /srv/geo/SxGeoCity.dat)"
+
 sqlc: ## Сгенерировать типобезопасный код доступа к БД из SQL (в internal/postgres)
 	go tool sqlc generate
 

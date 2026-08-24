@@ -17,6 +17,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -384,8 +385,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,
 		submissions.DefaultMinFillTime, cfg.TrustedProxy)
 
+	// Справочник геолокации: пустой GEO_DB_PATH — законная конфигурация (гео на
+	// контуре нет, блок стран и городов не рисуется), а вот заданный, но
+	// нечитаемый путь роняет старт: молча собирать визиты без гео, когда его
+	// просили, значит обнаружить это через месяц по пустому экрану.
+	geoSvc, err := geo.Open(cfg.GeoDBPath)
+	if err != nil {
+		return fmt.Errorf("geo database: %w", err)
+	}
+	if geoSvc != nil {
+		log.Info("geo database loaded", slog.String("path", cfg.GeoDBPath))
+	}
+
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
-	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)

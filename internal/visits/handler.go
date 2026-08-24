@@ -183,6 +183,14 @@ type labelCountResponse struct {
 	Visits int    `json:"visits"`
 }
 
+// placeResponse — строка стран или городов. countryCode едет рядом с названием
+// ради флага: у страны это её код, у города — код его страны.
+type placeResponse struct {
+	Name        string `json:"name"`
+	CountryCode string `json:"countryCode"`
+	Visits      int    `json:"visits"`
+}
+
 type breakdownResponse struct {
 	Step       string               `json:"step"`
 	Timeseries []timeBucketResponse `json:"timeseries"`
@@ -194,6 +202,12 @@ type breakdownResponse struct {
 	Devices       []labelCountResponse `json:"devices"`
 	Browsers      []labelCountResponse `json:"browsers"`
 	Systems       []labelCountResponse `json:"systems"`
+	// Countries и Cities пусты, если справочника гео на контуре нет. unknownPlace —
+	// визиты, которым место не определили (справочника нет, приватный адрес, IPv6):
+	// граница метрики уходит наружу и показывается рядом со списком.
+	Countries    []placeResponse `json:"countries"`
+	Cities       []placeResponse `json:"cities"`
+	UnknownPlace int             `json:"unknownPlace"`
 }
 
 // breakdown отдаёт вкладку «Визиты»: ряд по времени, источники, устройства,
@@ -244,6 +258,9 @@ func (h *Handler) breakdown(w http.ResponseWriter, r *http.Request) {
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, breakdownResponse{
 		Step:          string(b.Step),
+		Countries:     places(b.Countries),
+		Cities:        places(b.Cities),
+		UnknownPlace:  b.UnknownPlace,
 		Timeseries:    series,
 		Sources:       sources,
 		SourcesLocked: b.SourcesLocked,
@@ -258,6 +275,14 @@ func labelCounts(in []domain.LabelCount) []labelCountResponse {
 	out := make([]labelCountResponse, len(in))
 	for i, l := range in {
 		out[i] = labelCountResponse{Label: l.Label, Visits: l.Visits}
+	}
+	return out
+}
+
+func places(in []domain.PlaceCount) []placeResponse {
+	out := make([]placeResponse, len(in))
+	for i, p := range in {
+		out[i] = placeResponse{Name: p.Name, CountryCode: p.CountryCode, Visits: p.Visits}
 	}
 	return out
 }

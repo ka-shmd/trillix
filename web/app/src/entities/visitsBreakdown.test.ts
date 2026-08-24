@@ -27,6 +27,12 @@ const realResponse = {
     { label: 'Windows', visits: 4 },
     { label: 'Не определено', visits: 1 },
   ],
+  countries: [
+    { name: 'Россия', countryCode: 'RU', visits: 4 },
+    { name: 'США', countryCode: 'US', visits: 1 },
+  ],
+  cities: [{ name: 'Москва', countryCode: 'RU', visits: 4 }],
+  unknownPlace: 2,
 }
 
 describe('контракт вкладки «Визиты»', () => {
@@ -38,6 +44,20 @@ describe('контракт вкладки «Визиты»', () => {
     // их принимать, иначе график молча схлопнется до непустых точек.
     expect(parsed.timeseries[1]?.visits).toBe(0)
     expect(parsed.sources[0]?.source).toBe('newsletter')
+    expect(parsed.countries[0]?.name).toBe('Россия')
+  })
+
+  it('принимает контур без справочника гео', () => {
+    // Пустые списки означают «гео на контуре нет» — экран прячет блок целиком.
+    // Схема обязана это принимать: контур без справочника законен.
+    const noGeo = visitsBreakdownSchema.parse({
+      ...realResponse,
+      countries: [],
+      cities: [],
+      unknownPlace: 5,
+    })
+    expect(noGeo.countries).toEqual([])
+    expect(noGeo.unknownPlace).toBe(5)
   })
 
   it('принимает закрытую тарифом секцию источников', () => {

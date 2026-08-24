@@ -79,6 +79,9 @@ type FormVisit struct {
 	Meta          []byte
 	CreatedAt     pgtype.Timestamptz
 	UpdatedAt     pgtype.Timestamptz
+	CountryCode   pgtype.Text
+	Country       pgtype.Text
+	City          pgtype.Text
 }
 
 type IntegrationAccount struct {

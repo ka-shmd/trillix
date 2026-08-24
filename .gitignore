@@ -27,3 +27,4 @@ web/app/.tanstack/
 
 # ОС
 .DS_Store
+geo/

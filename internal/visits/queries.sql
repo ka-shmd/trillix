@@ -19,8 +19,13 @@
 --   seq     — sendBeacon не гарантирует порядок доставки, а visibilitychange шлёт
 --             бикон на каждое переключение вкладки, поэтому «поздний» ранний бикон
 --             без этого условия отбрасывал бы визит назад по воронке.
-INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
-VALUES ($1, $2, $3, $4, $5, $6)
+--
+-- Гео (country_code/country/city) пишется только этой вставкой и в UPDATE не
+-- входит: место определяется по IP ПЕРВОГО бикона, у последующих адрес тот же,
+-- зато лишний поиск по справочнику на каждый бикон — нет.
+INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta,
+                         country_code, country, city)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(country_code), sqlc.narg(country), sqlc.narg(city))
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
     seq           = EXCLUDED.seq,
@@ -142,3 +147,28 @@ WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
 GROUP BY 1;
+
+-- name: VisitCountries :many
+-- Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
+-- попадают: их число считается отдельно, из общего числа визитов, — иначе строка
+-- «Не определено» конкурировала бы со странами в одном списке и притворялась местом.
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+  AND country_code IS NOT NULL
+GROUP BY country_code, country
+ORDER BY visits DESC, country;
+
+-- name: VisitCities :many
+-- Города за период. Код страны едет рядом с именем: одноимённые города в разных
+-- странах — обычное дело, и склеивать их в одну строку значило бы врать.
+SELECT city, country_code, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+  AND city IS NOT NULL AND city <> ''
+GROUP BY city, country_code
+ORDER BY visits DESC, city;

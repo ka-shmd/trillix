@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -20,7 +21,7 @@ type Repo struct{}
 // ровно last_block_id и seq, и только при большем seq той же формы). Отсутствие
 // эффекта — штатный исход (бикон приехал не по порядку), а не ошибка: отличать их
 // вызывающему незачем, поэтому число строк наружу не отдаётся.
-func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error {
+func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place) error {
 	block := pgtype.Text{}
 	if lastBlockID != nil {
 		block = pgtype.Text{String: *lastBlockID, Valid: true}
@@ -32,6 +33,11 @@ func (Repo) UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versi
 		LastBlockID:   block,
 		Seq:           seq,
 		Meta:          meta,
+		// Место не определено → NULL, а не пустая строка: «не знаем» обязано иметь
+		// ровно одно представление, иначе оно расползётся по спискам пустой строкой.
+		CountryCode: nullText(place.CountryCode),
+		Country:     nullText(place.Country),
+		City:        nullText(place.City),
 	})
 	if err != nil {
 		return fmt.Errorf("upsert form visit: %w", err)
@@ -48,6 +54,14 @@ func (Repo) MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid
 		return 0, fmt.Errorf("mark visit submitted: %w", err)
 	}
 	return n, nil
+}
+
+// nullText — пустая строка становится NULL.
+func nullText(s string) pgtype.Text {
+	if s == "" {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: s, Valid: true}
 }
 
 // CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
@@ -156,6 +170,51 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 	out := make([]domain.UserAgentRow, len(rows))
 	for i, r := range rows {
 		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits)}
+	}
+	return out, nil
+}
+
+// Countries — визиты по странам за период. Визиты без гео сюда не попадают.
+func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitCountries(ctx, postgres.VisitCountriesParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("visit countries: %w", err)
+	}
+	out := make([]domain.PlaceCount, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PlaceCount{
+			Name:        r.Country,
+			CountryCode: r.CountryCode.String,
+			Visits:      int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
+// Cities — визиты по городам за период. Код страны едет рядом: одноимённые города в
+// разных странах склеивать нельзя.
+func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitCities(ctx, postgres.VisitCitiesParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("visit cities: %w", err)
+	}
+	out := make([]domain.PlaceCount, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PlaceCount{
+			Name:        r.City.String,
+			CountryCode: r.CountryCode.String,
+			Visits:      int(r.Visits),
+		}
 	}
 	return out, nil
 }

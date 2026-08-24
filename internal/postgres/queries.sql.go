@@ -4110,8 +4110,9 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 
 const upsertFormVisit = `-- name: UpsertFormVisit :exec
 
-INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta,
+                         country_code, country, city)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
     seq           = EXCLUDED.seq,
@@ -4127,6 +4128,9 @@ type UpsertFormVisitParams struct {
 	LastBlockID   pgtype.Text
 	Seq           int16
 	Meta          []byte
+	CountryCode   pgtype.Text
+	Country       pgtype.Text
+	City          pgtype.Text
 }
 
 // Запросы модуля visits. Схема — migrations/0008_form_visits. Генерация:
@@ -4150,6 +4154,10 @@ type UpsertFormVisitParams struct {
 //	seq     — sendBeacon не гарантирует порядок доставки, а visibilitychange шлёт
 //	          бикон на каждое переключение вкладки, поэтому «поздний» ранний бикон
 //	          без этого условия отбрасывал бы визит назад по воронке.
+//
+// Гео (country_code/country/city) пишется только этой вставкой и в UPDATE не
+// входит: место определяется по IP ПЕРВОГО бикона, у последующих адрес тот же,
+// зато лишний поиск по справочнику на каждый бикон — нет.
 func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams) error {
 	_, err := q.db.Exec(ctx, upsertFormVisit,
 		arg.ID,
@@ -4158,6 +4166,9 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.LastBlockID,
 		arg.Seq,
 		arg.Meta,
+		arg.CountryCode,
+		arg.Country,
+		arg.City,
 	)
 	return err
 }
@@ -4224,6 +4235,97 @@ type UpsertTOTPSecretParams struct {
 func (q *Queries) UpsertTOTPSecret(ctx context.Context, arg UpsertTOTPSecretParams) error {
 	_, err := q.db.Exec(ctx, upsertTOTPSecret, arg.UserID, arg.Secret)
 	return err
+}
+
+const visitCities = `-- name: VisitCities :many
+SELECT city, country_code, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+  AND city IS NOT NULL AND city <> ''
+GROUP BY city, country_code
+ORDER BY visits DESC, city
+`
+
+type VisitCitiesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitCitiesRow struct {
+	City        pgtype.Text
+	CountryCode pgtype.Text
+	Visits      int64
+}
+
+// Города за период. Код страны едет рядом с именем: одноимённые города в разных
+// странах — обычное дело, и склеивать их в одну строку значило бы врать.
+func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]VisitCitiesRow, error) {
+	rows, err := q.db.Query(ctx, visitCities, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitCitiesRow
+	for rows.Next() {
+		var i VisitCitiesRow
+		if err := rows.Scan(&i.City, &i.CountryCode, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitCountries = `-- name: VisitCountries :many
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+  AND country_code IS NOT NULL
+GROUP BY country_code, country
+ORDER BY visits DESC, country
+`
+
+type VisitCountriesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitCountriesRow struct {
+	CountryCode pgtype.Text
+	Country     string
+	Visits      int64
+}
+
+// Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
+// попадают: их число считается отдельно, из общего числа визитов, — иначе строка
+// «Не определено» конкурировала бы со странами в одном списке и притворялась местом.
+func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) ([]VisitCountriesRow, error) {
+	rows, err := q.db.Query(ctx, visitCountries, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitCountriesRow
+	for rows.Next() {
+		var i VisitCountriesRow
+		if err := rows.Scan(&i.CountryCode, &i.Country, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const visitInsights = `-- name: VisitInsights :one

@@ -67,6 +67,14 @@ type SourceCount struct {
 	Visits int
 }
 
+// PlaceCount — строка списка стран или городов: название, код страны (для флага) и
+// число визитов. У страны код — её собственный, у города — код его страны.
+type PlaceCount struct {
+	Name        string
+	CountryCode string
+	Visits      int
+}
+
 // UserAgentRow — сырьё разбора: строка user-agent и сколько визитов с ней пришло.
 // Строк здесь сотни (различных агентов), а не по одной на визит, — поэтому разбор
 // на чтении дёшев.
@@ -252,6 +260,13 @@ type VisitsBreakdown struct {
 	Devices       []LabelCount
 	Browsers      []LabelCount
 	Systems       []LabelCount
+	// Countries и Cities пусты, когда справочника гео на контуре нет, — блок просто
+	// не рисуется. UnknownPlace — сколько визитов осталось без страны: справочника
+	// нет, адрес приватный или это IPv6 (формат справочника его не понимает).
+	// Число показывается на экране: граница метрики обязана быть видимой (§8.8).
+	Countries    []PlaceCount
+	Cities       []PlaceCount
+	UnknownPlace int
 }
 
 // CountKnownSources — сколько визитов пришло не «прямым заходом». Считается до
