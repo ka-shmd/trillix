@@ -116,13 +116,13 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 
 // insightsResponse — карточки над вкладками Insights в части визитов.
 //
-// timedVisits отдаётся наружу намеренно: это знаменатель медианы, и без него
-// «0 секунд» на экране неотличимо от «данных ещё нет».
+// timedVisits отдаётся наружу не для показа: это знаменатель медианы, по которому
+// экран отличает «0 секунд» от «данных ещё нет» (второе рисуется прочерком).
 type insightsResponse struct {
 	Visits    int `json:"visits"`
 	Submitted int `json:"submitted"`
 	// uniqueVisitors за период длиннее суток ЗАВЫШЕН: ключ посетителя ротируется
-	// ежесуточно. Оговорка живёт на экране рядом с числом.
+	// ежесуточно. Граница записана в ANALYTICS.md; на экран не выносится.
 	UniqueVisitors    int     `json:"uniqueVisitors"`
 	TimedVisits       int     `json:"timedVisits"`
 	MedianDurationSec float64 `json:"medianDurationSec"`

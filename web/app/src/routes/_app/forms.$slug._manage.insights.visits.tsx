@@ -83,9 +83,7 @@ function VisitsPage() {
         <Breakdown title="Операционные системы" rows={data.systems} />
       </div>
       <p className="text-xs text-muted-foreground">
-        Аналитика без cookie и кросс-девайс-трекинга: визит не переживает закрытие
-        вкладки, IP не сохраняется — страна и город определяются в момент захода и
-        адрес после этого забывается. Страны и города — по справочнику Sypex Geo.
+        Аналитика без cookie: мы не храним персональные данные посетителей.
       </p>
     </div>
   )
@@ -193,14 +191,12 @@ function Places({ title, rows, unknown }: { title: string; rows: PlaceCount[]; u
         title={title}
         rows={rows.map((r) => ({ label: `${flag(r.countryCode)} ${r.name}`.trim(), visits: r.visits }))}
       />
-      {/* Оговорка стоит рядом с числом, а не в документации: метрика косвенная, и
-          её граница — часть показания (docs/ANALYTICS.md §8.8). Визиты без места —
-          это адреса нового формата (IPv6), приватные сети и адреса, которых нет в
-          справочнике. */}
+      {/* Число без объяснения: сколько визитов не попало в список — это данные
+          владельца, а ПОЧЕМУ они не попали (IPv6, приватные сети, пробелы
+          справочника) — вопрос разработчика, и на экране ему не место. */}
       {unknown !== undefined && unknown > 0 && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Ещё {unknown} {pluralViews(unknown)} — без страны: справочник знает не все
-          адреса.
+          Ещё {unknown} {pluralViews(unknown)} без страны
         </p>
       )}
     </div>

@@ -132,15 +132,7 @@ function Cards({ slug, period }: { slug: string; period: Period }) {
     <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card title="Визиты" value={visits.data?.visits} pending={visits.isPending} />
       <Card title="Ответы" value={answers.data?.submissions} pending={answers.isPending} />
-      <Card
-        title="Уникальные"
-        value={visits.data?.uniqueVisitors}
-        pending={visits.isPending}
-        // Ключ посетителя ротируется каждые сутки — иначе он был бы вечным
-        // псевдонимом человека, а не счётчиком. Отсюда завышение на длинных
-        // периодах, и читатель обязан видеть его рядом с числом.
-        hint={period === '24h' ? undefined : 'за период длиннее суток число завышено'}
-      />
+      <Card title="Уникальные" value={visits.data?.uniqueVisitors} pending={visits.isPending} />
       <DurationCard data={visits.data} pending={visits.isPending} />
     </div>
   )
@@ -150,12 +142,10 @@ function Card({
   title,
   value,
   pending,
-  hint,
 }: {
   title: string
   value: number | string | undefined
   pending: boolean
-  hint?: string
 }) {
   return (
     <article className="rounded-lg border p-4">
@@ -163,15 +153,14 @@ function Card({
       <p className="mt-1 text-2xl font-semibold tabular-nums">
         {pending ? <span className="text-muted-foreground">…</span> : (value ?? '—')}
       </p>
-      {hint && <p className="mt-1 text-xs text-muted-foreground">{hint}</p>}
     </article>
   )
 }
 
-// Длительность визита: «нет данных» и «ноль секунд» — разные новости, поэтому
-// пустой знаменатель (ни одного визита с двумя биконами) рисуется прочерком, а не
-// нулём. Оговорка про потерянный бикон стоит рядом с числом, а не в документации:
-// метрика косвенная, и читатель обязан видеть её границу.
+// Длительность визита. «Нет данных» и «ноль секунд» — разные новости, поэтому при
+// пустом знаменателе (ни один визит не измерен) рисуется прочерк, а не ноль.
+// Границы метрики на экран НЕ выносятся: владельцу формы они не адресованы, их
+// место — в docs/ANALYTICS.md §6.
 function DurationCard({
   data,
   pending,
@@ -185,11 +174,6 @@ function DurationCard({
       title="Длительность визита"
       value={measured ? formatDuration(data.medianDurationSec) : undefined}
       pending={pending}
-      hint={
-        measured
-          ? `медиана по ${data.timedVisits} визитам, где доехали оба бикона`
-          : 'пока не по чему считать'
-      }
     />
   )
 }
