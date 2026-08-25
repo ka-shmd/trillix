@@ -48,6 +48,15 @@ const (
 	submitRatePerSec = 1.0 / 3.0
 	submitBurst      = 20
 
+	// Лимит на выдачу токена времени по IP (своё ведро, ARCHITECTURE §4.6). Токен
+	// сам по себе бесполезен — им можно только отправить ответ, а тот ограничен
+	// своим ведром, — поэтому пополнение взято такое же, как у приёма ответа: это
+	// держит заготовку токенов пачкой в том же порядке, что и сами отправки. Запас
+	// шире (30 против 20): открыть форму дешевле, чем ответить, и перезагрузка
+	// страницы — обычное поведение, а не признак перебора.
+	formTokenRatePerSec = 1.0 / 3.0
+	formTokenBurst      = 30
+
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
 	// право записи в наш бакет, то есть чужие байты за наш счёт. Запас 10,
@@ -342,7 +351,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
 
-	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath)
+	formTokenLimiter := ratelimit.NewTokenBucket(formTokenRatePerSec, formTokenBurst)
+	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath,
+		formTokenLimiter, cfg.TrustedProxy)
 	if err != nil {
 		return fmt.Errorf("init public forms handler: %w", err)
 	}
@@ -572,7 +583,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			// Сумма обязана перечислять ВСЕ созданные вёдра: забытое здесь ведро
 			// не ломает лимит, а растит карту до конца жизни процесса.
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
-				visitLimiter.GC() + inviteLimiter.GC() +
+				visitLimiter.GC() + inviteLimiter.GC() + formTokenLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +

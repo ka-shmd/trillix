@@ -1,6 +1,7 @@
 package forms
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,12 +11,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/token"
 )
+
+// Вёдра лимитера для тестов: лимит не ослабляется, а инжектируется другой
+// реализацией (инвариант безопасности 6).
+type allowLimiter struct{}
+
+func (allowLimiter) Allow(string) bool { return true }
+
+type denyLimiter struct{}
+
+func (denyLimiter) Allow(string) bool { return false }
 
 type fakePublicSvc struct {
 	pf  PublicForm
@@ -103,7 +115,7 @@ func writeFixtureIndex(t *testing.T) string {
 // регистрируется, обслуживается только JSON-ручка /public/v1.
 func newPublicMux(t *testing.T, svc publicFormService) *http.ServeMux {
 	t.Helper()
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, "")
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, "", allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
@@ -115,7 +127,7 @@ func newPublicMux(t *testing.T, svc publicFormService) *http.ServeMux {
 // newPublicHTMLMux — mux прод-контура: index.html задан, поэтому Go обслуживает /r.
 func newPublicHTMLMux(t *testing.T, svc publicFormService) *http.ServeMux {
 	t.Helper()
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, writeFixtureIndex(t))
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, writeFixtureIndex(t), allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
@@ -155,9 +167,10 @@ func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 	if body.Title != "Опрос" || body.Version != 2 {
 		t.Fatalf("неожиданное тело: %+v", body)
 	}
-	// token подписан нашим ключом — проверяется тем же секретом.
-	if _, err := token.IssuedAt(testSecret, body.Token); err != nil {
-		t.Fatalf("token невалиден: %v", err)
+	// Токена в кэшируемом теле быть не должно (ADR §10): его возраст мерил бы
+	// возраст записи в кэше браузера, а не время заполнения формы.
+	if bytes.Contains(rec.Body.Bytes(), []byte(`"token"`)) {
+		t.Fatalf("в теле схемы есть token, а он выдаётся некэшируемой ручкой: %s", rec.Body.String())
 	}
 }
 
@@ -388,7 +401,7 @@ func TestNewPublicHandler_IndexMissingMarker_Errors(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`<html><head></head><body><div id="root"></div></body></html>`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewPublicHandler(fakePublicSvc{}, testSecret, testBaseURL, testOGImage, path); err == nil {
+	if _, err := NewPublicHandler(fakePublicSvc{}, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false); err == nil {
 		t.Fatal("ожидалась ошибка старта для index.html без плейсхолдера <!--og-meta-->")
 	}
 }
@@ -396,7 +409,78 @@ func TestNewPublicHandler_IndexMissingMarker_Errors(t *testing.T) {
 // Fail-fast: нечитаемый/несуществующий путь — ошибка старта.
 func TestNewPublicHandler_IndexUnreadable_Errors(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope", "index.html")
-	if _, err := NewPublicHandler(fakePublicSvc{}, testSecret, testBaseURL, testOGImage, missing); err == nil {
+	if _, err := NewPublicHandler(fakePublicSvc{}, testSecret, testBaseURL, testOGImage, missing, allowLimiter{}, false); err == nil {
 		t.Fatal("ожидалась ошибка старта для несуществующего index.html")
+	}
+}
+
+// Ручка выдачи токена обязана быть НЕКЭШИРУЕМОЙ: токен, доехавший до респондента
+// из кэша, стареет вместе с записью кэша, и окно [minFillTime, MaxAge] перестаёт
+// измерять время заполнения формы (ADR §10). Тест держит именно заголовок — без
+// него дефект возвращается молча и обнаруживается только на живой форме.
+func TestFormToken_NoStore_AndSigned(t *testing.T) {
+	rec := httptest.NewRecorder()
+	newPublicMux(t, fakePublicSvc{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/form-token", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200", rec.Code)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, ожидалось no-store", cc)
+	}
+	if etag := rec.Header().Get("ETag"); etag != "" {
+		t.Fatalf("ETag = %q: ревалидация вернула бы прежний токен из кэша", etag)
+	}
+
+	var body formTokenResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("тело не парсится: %v", err)
+	}
+	if _, err := token.IssuedAt(testSecret, body.Token); err != nil {
+		t.Fatalf("token невалиден: %v", err)
+	}
+}
+
+// Два запроса дают РАЗНЫЕ токены со свежим временем: ручка выдаёт время сейчас, а
+// не переиспользует однажды выпущенное.
+func TestFormToken_IssuesFreshToken(t *testing.T) {
+	mux := newPublicMux(t, fakePublicSvc{})
+
+	issued := func() string {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/form-token", nil))
+		var body formTokenResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("тело не парсится: %v", err)
+		}
+		at, err := token.IssuedAt(testSecret, body.Token)
+		if err != nil {
+			t.Fatalf("token невалиден: %v", err)
+		}
+		if age := time.Since(at); age > time.Minute {
+			t.Fatalf("возраст токена %s — время выдачи не «сейчас»", age)
+		}
+		return body.Token
+	}
+
+	if first, second := issued(), issued(); first == second && !strings.Contains(first, ".") {
+		t.Fatalf("токен не разбирается: %q", first)
+	}
+}
+
+// Выдача токена — публичная ручка на чтение без авторизации, поэтому у неё своё
+// ведро: без него токены заготавливаются пачкой (ADR §10).
+func TestFormToken_RateLimited_Returns429(t *testing.T) {
+	h, err := NewPublicHandler(fakePublicSvc{}, testSecret, testBaseURL, testOGImage, "", denyLimiter{}, false)
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/form-token", nil))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("статус %d, ожидалось 429", rec.Code)
 	}
 }

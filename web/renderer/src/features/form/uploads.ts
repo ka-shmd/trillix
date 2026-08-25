@@ -1,5 +1,7 @@
 import { type Uploader, type UploadedFile } from '@fields/fileUpload'
 
+import { holdUntilAccepted, type FormToken } from './formToken'
+
 // Загрузка файла респондентом (фаза 24, docs/design/answer-files.md §3).
 //
 // Два шага, и первый — не формальность: сервер решает, можно ли вообще принять
@@ -44,13 +46,17 @@ function putWithProgress(
 
 // makeUploader — загрузчик для конкретной формы. Токен тот же, что уйдёт с
 // ответом: без него сервер слот не выдаст.
-export function makeUploader(slug: string, token: string): Uploader {
+export function makeUploader(slug: string, token: FormToken): Uploader {
   return async ({ blockId, file, onProgress, signal }): Promise<UploadedFile> => {
+    // Выдача слота проверяет возраст токена тем же окном, что и приём ответа, поэтому
+    // файл, перетащенный в первые секунды после открытия формы, надо додержать — иначе
+    // он отвергается с «обновите форму», хотя обновление тут ровно не помогает.
+    await holdUntilAccepted(token)
     const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}/uploads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        token,
+        token: token.value,
         block_id: blockId,
         file_name: file.name,
         size_bytes: file.size,

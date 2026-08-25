@@ -202,11 +202,11 @@ test('ветвление: скрытый вопрос, скрытый вариа
   // СКРЫТЫЙ вопрос и выбор СКРЫТОГО варианта в обход рендерера. Сервер обязан принять
   // (респондент не виноват, что успел их набрать до переключения источника) и не сохранить.
   //
-  // Токен берём настоящий — из публичной выдачи формы: с пустым антиспам отклонит запрос
-  // раньше, чем дело дойдёт до нормализации, и проверка выродилась бы в проверку антиспама.
-  const publicForm = await page.request.get(`${RENDERER}/public/v1/forms/${form.slug}`)
-  expect(publicForm.ok()).toBeTruthy()
-  const { token } = (await publicForm.json()) as { token: string }
+  // Токен берём настоящий — из его ручки: с пустым антиспам отклонит запрос раньше,
+  // чем дело дойдёт до нормализации, и проверка выродилась бы в проверку антиспама.
+  const tokenRes = await page.request.get(`${RENDERER}/public/v1/form-token`)
+  expect(tokenRes.ok()).toBeTruthy()
+  const { token } = (await tokenRes.json()) as { token: string }
   await page.waitForTimeout(3500) // тот же антиспам: не раньше 3 с от выдачи
 
   const forged = await page.request.post(`${RENDERER}/public/v1/forms/${form.slug}/submissions`, {
