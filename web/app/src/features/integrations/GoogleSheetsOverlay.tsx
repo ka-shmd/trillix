@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, Table2 } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
 import { pickSpreadsheet } from './picker'
+import { GoogleSheetsIcon } from './ServiceIcon'
 import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
@@ -93,9 +94,13 @@ export function GoogleSheetsOverlay({
         onInteractOutside={(e) => pickerOpen && e.preventDefault()}
         onEscapeKeyDown={(e) => pickerOpen && e.preventDefault()}
       >
-        <div className="mx-auto flex w-full max-w-lg flex-col gap-8 px-6 py-16">
+        {/* my-auto, а не justify-center у родителя: родитель прокручиваемый, и
+            центрирование через justify обрезало бы верх содержимого, когда оно выше
+            окна. Так колонка стоит посередине, пока помещается, и прокручивается,
+            когда нет. */}
+        <div className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16">
           <header className="flex flex-col items-center gap-3 text-center">
-            <Table2 className="size-8 text-muted-foreground" aria-hidden />
+            <GoogleSheetsIcon className="size-10" />
             <DialogTitle className="text-2xl">Google Таблицы</DialogTitle>
             <p className="text-sm text-muted-foreground">
               Ответы этой формы будут ложиться строками в таблицу на вашем Google Диске.
@@ -241,6 +246,7 @@ function SetupBody({
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
           id="integration-name"
+          className="h-10 md:text-base"
           value={setup.name}
           maxLength={80}
           placeholder="Необязательно — чтобы отличать связки друг от друга"
@@ -346,7 +352,7 @@ function SheetField({
         {sheets.isError && <LoadFailed />}
       </div>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id="integration-sheet" className="w-full">
+        <SelectTrigger id="integration-sheet" className="w-full text-base data-[size=default]:h-10">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -435,7 +441,10 @@ function SpreadsheetField({
           setup.setSpreadsheet(next)
         }}
       >
-        <SelectTrigger id="integration-spreadsheet" className="w-full">
+        <SelectTrigger
+          id="integration-spreadsheet"
+          className="w-full text-base data-[size=default]:h-10"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -460,10 +469,6 @@ function SpreadsheetField({
           )}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">
-        В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет. Любую
-        другую свою выберите на Google Диске.
-      </p>
     </div>
   )
 }
