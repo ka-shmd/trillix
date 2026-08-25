@@ -23,6 +23,9 @@ type fakePublicSvc struct {
 	// badgeAllowed — разрешает ли тариф снимать бейдж (ключ form_branding).
 	badgeAllowed bool
 	badgeErr     error
+	// partialAllowed — разрешает ли тариф сбор незавершённых (submissions_partial).
+	partialAllowed bool
+	partialErr     error
 }
 
 func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, error) {
@@ -43,6 +46,17 @@ func (f fakePublicSvc) ShowBadge(_ context.Context, _ uuid.UUID, design *domain.
 		return true, f.badgeErr
 	}
 	return !f.badgeAllowed, nil
+}
+
+// CollectPartial повторяет ПРАВИЛО сервиса: нет тумблера — сбора нет и тариф не
+// спрашивается; есть тумблер — решает подставленный тариф. Фейк-константа
+// пропустил бы ровно тот дефект, ради которого поле заведено, — сбор, продолжающийся
+// после даунгрейда.
+func (f fakePublicSvc) CollectPartial(_ context.Context, _ uuid.UUID, intent bool) (bool, error) {
+	if !intent {
+		return false, nil
+	}
+	return f.partialAllowed, f.partialErr
 }
 
 var testSecret = []byte("dev-only-form-token-secret-not-a-real-key")

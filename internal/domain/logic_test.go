@@ -1319,9 +1319,9 @@ func TestSummary_DenominatorCountsShownOnly(t *testing.T) {
 	b := NewSummaryBuilder(versions)
 	// Трое ответили «Нет» — им «Какой?» не показывали; один «Да» и заполнил.
 	for range 3 {
-		b.Add(1, answers(map[string]any{"src": "no"}))
+		b.Add(1, sampleTime, answers(map[string]any{"src": "no"}))
 	}
-	b.Add(1, answers(map[string]any{"src": "yes", "dep": "Барсик"}))
+	b.Add(1, sampleTime, answers(map[string]any{"src": "yes", "dep": "Барсик"}))
 
 	res := b.Result()
 	var got BlockSummary
@@ -1352,8 +1352,8 @@ func TestSummary_NoRules_SameAsBefore(t *testing.T) {
 	versions := []VersionedSchema{{Version: 1, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{q1, q2}}}}
 
 	b := NewSummaryBuilder(versions)
-	b.Add(1, answers(map[string]any{"q1": "а"}))
-	b.Add(1, answers(map[string]any{"q1": "б", "q2": "в"}))
+	b.Add(1, sampleTime, answers(map[string]any{"q1": "а"}))
+	b.Add(1, sampleTime, answers(map[string]any{"q1": "б", "q2": "в"}))
 
 	for _, bs := range b.Result().Blocks {
 		if bs.Asked != 2 {
@@ -1368,8 +1368,8 @@ func TestSummary_HiddenByJump_NotAsked(t *testing.T) {
 	versions := []VersionedSchema{{Version: 1, Schema: FormSchema{SchemaVersion: SchemaVersion, Blocks: blocks}}}
 
 	b := NewSummaryBuilder(versions)
-	b.Add(1, answers(map[string]any{"src": "no"}))             // перескочил q2
-	b.Add(1, answers(map[string]any{"src": "yes", "q2": "x"})) // прошёл всё
+	b.Add(1, sampleTime, answers(map[string]any{"src": "no"}))             // перескочил q2
+	b.Add(1, sampleTime, answers(map[string]any{"src": "yes", "q2": "x"})) // прошёл всё
 
 	for _, bs := range b.Result().Blocks {
 		switch bs.BlockID {

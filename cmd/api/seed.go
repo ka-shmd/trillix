@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -252,10 +253,128 @@ func seedExportForm(ctx context.Context, pool *pgxpool.Pool, formsSvc *forms.Ser
 		return fmt.Errorf("insert submissions: %w", err)
 	}
 
+	if err := seedVisits(ctx, pool, form.ID, v2ID, log); err != nil {
+		return fmt.Errorf("seed visits: %w", err)
+	}
+
 	log.Info("seed: export demo form created",
 		slog.String("form_id", form.ID.String()),
 		slog.String("slug", form.Slug),
 		slog.Int("submissions", seedExportSubmissions))
+	return nil
+}
+
+// runSeedVisits досыпает визиты В СУЩЕСТВУЮЩУЮ форму: `api seed-visits [slug]`.
+//
+// Отдельная команда, а не часть `seed`, по одной причине: `seed` идемпотентен и на
+// непустой базе не делает ничего — а именно такая база у всех, кто работает с
+// проектом не первый день. Без этой команды посмотреть аналитику им пришлось бы
+// уронив свою базу.
+//
+// Без аргумента берётся демо-форма экспорта; со slug'ом — любая опубликованная.
+func runSeedVisits(args []string, cfg config.Config, log *slog.Logger) error {
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	var formID, versionID uuid.UUID
+	var slug string
+	query := `SELECT id, slug, published_version_id FROM forms
+	          WHERE published_version_id IS NOT NULL AND title LIKE 'CSV-демо%'
+	          ORDER BY created_at LIMIT 1`
+	arg := []any{}
+	if len(args) > 0 && args[0] != "" {
+		query = `SELECT id, slug, published_version_id FROM forms
+		         WHERE slug = $1 AND published_version_id IS NOT NULL`
+		arg = []any{args[0]}
+	}
+	if err := pool.QueryRow(ctx, query, arg...).Scan(&formID, &slug, &versionID); err != nil {
+		return fmt.Errorf("find published form (сначала `make seed` или укажите slug): %w", err)
+	}
+
+	if err := seedVisits(ctx, pool, formID, versionID, log); err != nil {
+		return fmt.Errorf("seed visits: %w", err)
+	}
+	log.Info("seed-visits: готово", slog.String("slug", slug))
+	return nil
+}
+
+// seedVisits наполняет аналитику демо-формы: ряд по времени, источники,
+// устройства, страны и города.
+//
+// Зачем это в seed. На локальном контуре аналитику увидеть НЕ ИЗ ЧЕГО: визиты
+// приходят с 127.0.0.1, а у локального адреса страны нет и быть не может (см.
+// geo.Lookup), поэтому экран «Визиты» на dev-машине пустой, даже когда всё
+// работает. Отличить это от ненаписанной функции глазами нельзя — и именно так
+// оно и выглядело владельцу.
+//
+// Пишем напрямую в таблицу, а не биконами через HTTP: бикон честно принесёт
+// локальный адрес, и весь смысл потеряется.
+func seedVisits(ctx context.Context, pool *pgxpool.Pool, formID, versionID uuid.UUID, log *slog.Logger) error {
+	// Места и агенты подобраны так, чтобы на экране было видно РАЗНОЕ: две страны
+	// с несколькими городами, компьютер и телефон, размеченная ссылка и переход с
+	// чужого сайта. Последняя строка без места — она рисует «ещё N визитов без
+	// страны», то есть честную границу метрики.
+	type sample struct {
+		countryCode, country, city, userAgent, referer, utmSource string
+	}
+	chrome := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+	safariPhone := "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+	samples := []sample{
+		{"RU", "Россия", "Москва", chrome, "", "newsletter"},
+		{"RU", "Россия", "Москва", safariPhone, "https://vk.com/wall-1", ""},
+		{"RU", "Россия", "Санкт-Петербург", chrome, "", ""},
+		{"RU", "Россия", "Новосибирск", safariPhone, "https://t.me/channel", ""},
+		{"BY", "Беларусь", "Минск", chrome, "", "newsletter"},
+		{"KZ", "Казахстан", "Алматы", safariPhone, "", ""},
+		{"", "", "", chrome, "", ""}, // место не определено — так выглядит IPv6
+	}
+
+	const days = 14
+	inserted := 0
+	err := (postgres.TxRunner{Pool: pool}).WithTx(ctx, func(tx pgx.Tx) error {
+		for day := 0; day < days; day++ {
+			// Число визитов в день гуляет: ровный ряд выглядел бы как заглушка.
+			perDay := 6 + rand.Intn(12)
+			for i := 0; i < perDay; i++ {
+				sm := samples[rand.Intn(len(samples))]
+				at := time.Now().AddDate(0, 0, -day).Add(-time.Duration(rand.Intn(24)) * time.Hour)
+				meta := map[string]string{"user_agent": sm.userAgent, "referer": sm.referer}
+				if sm.utmSource != "" {
+					meta["utm_source"] = sm.utmSource
+					meta["utm_medium"] = "email"
+				}
+				metaJSON, _ := json.Marshal(meta)
+				// Ключ посетителя: один и тот же на пару «человек + сутки», как в
+				// бою. Без него карточка «Уникальные» показывала бы ноль при сотнях
+				// визитов — та же ловушка, что была с гео.
+				keySrc := sha256.Sum256([]byte(fmt.Sprintf("seed:%d:%d", day, rand.Intn(len(samples)))))
+				visitorKey := keySrc[:16]
+				_, e := tx.Exec(ctx, `
+					INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq,
+					                         submitted, meta, country_code, country, city,
+					                         visitor_key, created_at, updated_at)
+					VALUES ($1, $2, $3, 'b_name', 1, $4, $5,
+					        nullif($6, ''), nullif($7, ''), nullif($8, ''), $9,
+					        $10::timestamptz, $10::timestamptz + $11::interval)`,
+					domain.NewID(), formID, versionID, rand.Intn(3) == 0, metaJSON,
+					sm.countryCode, sm.country, sm.city, visitorKey, at,
+					fmt.Sprintf("%d seconds", 15+rand.Intn(180)))
+				if e != nil {
+					return e
+				}
+				inserted++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	log.Info("seed: demo visits created", slog.Int("visits", inserted), slog.Int("days", days))
 	return nil
 }
 

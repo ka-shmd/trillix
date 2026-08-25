@@ -84,6 +84,16 @@ export function updateNotifyOnSubmission(id: string, enabled: boolean): Promise<
   })
 }
 
+// Тумблер сбора незавершённых ответов. Включение может упереться в тариф (402
+// plan_required) — вызывающий показывает плашку, а не молча оставляет выключенным.
+export function updateCollectPartial(id: string, enabled: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { collectPartial: enabled },
+    schema: formSchema,
+  })
+}
+
 // Дубликация: копия формы «{название} (копия)» с тем же черновиком, всегда draft.
 export function duplicateForm(id: string): Promise<Form> {
   return apiRequest(`/forms/${id}/duplicate`, { method: 'POST', schema: formSchema })

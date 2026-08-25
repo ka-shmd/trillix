@@ -35,10 +35,16 @@ SELECT one FROM ins;
 -- form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
 -- NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
 -- понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+-- Границы периода приходят всегда: у листинга ответов селектора периода нет и он
+-- шлёт ±бесконечность, у сводки — выбранное владельцем окно (спека
+-- design/analytics-tally.md §4). Одна форма запроса вместо двух: копия отличалась
+-- бы одной строкой WHERE, а расходиться начала бы во всём остальном.
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at >= sqlc.arg(from_ts)::timestamptz
+  AND s.created_at <  sqlc.arg(to_ts)::timestamptz
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -50,6 +56,8 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < sqlc.arg(cursor_id)::uuid
+  AND s.created_at >= sqlc.arg(from_ts)::timestamptz
+  AND s.created_at <  sqlc.arg(to_ts)::timestamptz
 ORDER BY s.id DESC
 LIMIT $2;
 
@@ -73,6 +81,19 @@ SELECT count(*) FROM submissions WHERE form_id = $1;
 SELECT count(*) FILTER (WHERE NOT over_quota)::bigint AS visible,
        count(*) FILTER (WHERE over_quota)::bigint AS hidden
 FROM submissions WHERE form_id = $1;
+
+-- name: CountSubmissionsInPeriod :one
+-- Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
+-- то же число, что стоит в таблице ответов: расхождение между соседними экранами
+-- читалось бы как баг, а не как разница определений.
+--
+-- Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
+-- множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
+-- однажды поделить одно на другое.
+SELECT count(*)::bigint FROM submissions
+WHERE form_id = $1 AND NOT over_quota
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz;
 
 -- name: RevealHiddenSubmissions :execrows
 -- Снятие пометки со всех сверхлимитных ответов воркспейса — при переходе на план,
@@ -120,3 +141,66 @@ WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id > sqlc.arg(after)::uuid
 ORDER BY s.id
 LIMIT $3;
+
+-- name: UpsertPartialSubmission :exec
+-- Автосохранение черновика (спека design/analytics-tally.md §10.2). Ключ — id
+-- ВИЗИТА, поэтому второе автосохранение того же визита перезаписывает первое, а не
+-- плодит строки: черновик — это состояние, а не событие.
+--
+-- form_version_id и created_at не обновляются намеренно: версия та, на которой
+-- человек открыл форму, а created_at — начало заполнения. Перезаписывается ровно
+-- содержимое, точка ухода и время последней правки.
+--
+-- Условие по form_id — та же защита, что у визитов: visit_id выбирает клиент, а
+-- UUIDv7 угадываем по временнóму префиксу, и без него ручкой одной формы правилась
+-- бы строка другой.
+INSERT INTO partial_submissions (visit_id, form_id, form_version_id, answers, last_block_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (visit_id) DO UPDATE
+SET answers       = EXCLUDED.answers,
+    last_block_id = EXCLUDED.last_block_id,
+    updated_at    = now()
+WHERE partial_submissions.form_id = EXCLUDED.form_id;
+
+-- name: DeletePartialByVisit :execrows
+-- Черновик стал ответом — удаляем. Зовётся ПОСЛЕ коммита приёма и best-effort:
+-- 0 строк штатны (черновика не было, visit_id не доехал), ошибка не имеет права
+-- отклонить уже принятый ответ.
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2;
+
+-- name: ListPartialsFirstPage :many
+-- Черновики формы, новыми сверху. Курсор СОСТАВНОЙ (updated_at, visit_id), в
+-- отличие от листинга ответов: ответ иммутабелен, и там хватает монотонного id, а
+-- черновик меняется, пока человек печатает, — по id он бы прыгал в списке.
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2;
+
+-- name: ListPartialsAfter :many
+-- Следующая страница тем же составным курсором.
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+  AND (p.updated_at, p.visit_id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2;
+
+-- name: CountPartials :one
+-- Сколько черновиков у формы. Нужен вкладке «Незавершённые» и плашке тарифа:
+-- число показывается и тому, кому разбивка закрыта.
+SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1;
+
+-- name: DeletePartialSubmission :execrows
+-- Удаление одного черновика владельцем (та же гигиена, что у ответа). Ограничено
+-- form_id: черновик чужой формы по угаданному id не удалить.
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2;
+
+-- name: DeleteOldPartials :execrows
+-- Чистка по возрасту (периодическая задача partial-cleanup). Срок — 30 дней,
+-- константа в коде: черновик это наблюдение, а не документ, и хранить его вечно
+-- значит копить чужой неотправленный текст без причины.
+DELETE FROM partial_submissions WHERE updated_at < $1;

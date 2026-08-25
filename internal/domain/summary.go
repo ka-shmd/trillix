@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Сводка ответов (фаза 8.5 шаг 3): распределение по вариантам, статистика чисел и
@@ -83,6 +84,22 @@ type BlockSummary struct {
 	Answered int
 	Buckets  []SummaryBucket // Kind == SummaryDistribution
 	Number   *NumberStats    // Kind == SummaryNumber, nil если никто не ответил
+	// Samples — последние ответы на этот вопрос, новыми сверху, не больше
+	// SamplesLimit. У текстового вопроса распределение бессмысленно, а сами ответы
+	// ценны — ради них раскладка и переехала на формат Tally (ADR §10).
+	Samples []AnswerSample
+}
+
+// SamplesLimit — сколько последних ответов на вопрос уходит наружу. Потолок — часть
+// контракта, а не настройка экрана: аналитический эндпоинт отдаёт счётчики и
+// НЕБОЛЬШУЮ выборку значений, всё остальное — через листинг ответов со своей
+// пагинацией (ADR §10).
+const SamplesLimit = 10
+
+// AnswerSample — один показанный ответ: текст как его увидит владелец и время.
+type AnswerSample struct {
+	Text string
+	At   time.Time
 }
 
 // Summary — результат свёртки: всего ответов у формы и сводка по каждому вопросу.
@@ -119,6 +136,10 @@ type summaryAcc struct {
 	// Числа: сумма и границы по ответившим.
 	sum, min, max float64
 	numCount      int
+	// samples — последние ответы, новыми сверху. Наполняются, пока не наберётся
+	// SamplesLimit: обход идёт от свежих к старым, поэтому первые же и есть
+	// последние.
+	samples []AnswerSample
 }
 
 // NewSummaryBuilder разбирает версии в модель вопросов. versions ожидаются по
@@ -181,7 +202,7 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 
 // Add вливает в сводку один ответ: version — версия, по которой он отправлен,
 // answers — разобранная карта block_id → сырое значение.
-func (b *SummaryBuilder) Add(version int, answers map[string]json.RawMessage) {
+func (b *SummaryBuilder) Add(version int, at time.Time, answers map[string]json.RawMessage) {
 	b.total++
 
 	// ЗНАМЕНАТЕЛЬ — «вопрос ПОКАЗАЛИ этому респонденту» (фаза 21, ADR §10), а не «был
@@ -215,6 +236,7 @@ func (b *SummaryBuilder) Add(version int, answers map[string]json.RawMessage) {
 		// Тип берётся из версии ответа, а не из свежей: смена типа блока владельцем
 		// не должна заставлять разбирать старый ответ по новым правилам.
 		a.add(typ, raw)
+		a.addSample(typ, raw, at)
 	}
 }
 
@@ -319,6 +341,7 @@ func (b *SummaryBuilder) Result() Summary {
 			Kind:     a.typ.summaryKind(),
 			Asked:    a.asked,
 			Answered: a.answered,
+			Samples:  a.samples,
 		}
 		switch s.Kind {
 		case SummaryDistribution:
@@ -333,6 +356,55 @@ func (b *SummaryBuilder) Result() Summary {
 		out.Blocks = append(out.Blocks, s)
 	}
 	return out
+}
+
+// addSample запоминает значение как текст — ровно то, что увидит владелец.
+//
+// Файлы сюда не попадают намеренно: в ответе лежит id загрузки, а имя файла знает
+// другой модуль. Показать id значило бы показать мусор, а тащить сюда имена — везти
+// в сводку зависимость ради десяти строк.
+func (a *summaryAcc) addSample(typ BlockType, raw json.RawMessage, at time.Time) {
+	if len(a.samples) >= SamplesLimit || typ == BlockFile {
+		return
+	}
+	text := sampleText(typ, raw, a.optLabel)
+	if text == "" {
+		return
+	}
+	a.samples = append(a.samples, AnswerSample{Text: text, At: at})
+}
+
+// sampleText превращает значение ответа в текст для экрана. Подписи опций берутся
+// из накопленной карты (объединение версий) — тот же приём, что у выгрузки: id
+// опции владельцу ничего не говорит.
+func sampleText(typ BlockType, raw json.RawMessage, optLabel map[string]string) string {
+	switch {
+	case typ.isSingleChoice():
+		id, ok := decodeString(raw)
+		if !ok {
+			return ""
+		}
+		return optionLabel(optLabel, id)
+	case typ.isMultiChoice():
+		var ids []string
+		if err := json.Unmarshal(raw, &ids); err != nil {
+			return ""
+		}
+		labels := make([]string, 0, len(ids))
+		for _, id := range ids {
+			labels = append(labels, optionLabel(optLabel, id))
+		}
+		return strings.Join(labels, ", ")
+	case typ == BlockConsent:
+		v, ok := decodeString(raw)
+		if !ok || v != ConsentYes {
+			return ""
+		}
+		return "Да"
+	default:
+		v, _ := decodeString(raw)
+		return strings.TrimSpace(v)
+	}
 }
 
 // buckets — деления распределения по типу вопроса.

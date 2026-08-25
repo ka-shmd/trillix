@@ -17,6 +17,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -212,8 +213,10 @@ func runCommand(args []string, cfg config.Config, log *slog.Logger) error {
 		return runSeed(cfg, log)
 	case "seed-user":
 		return runSeedUser(args[1:], cfg, log)
+	case "seed-visits":
+		return runSeedVisits(args[1:], cfg, log)
 	default:
-		return fmt.Errorf("unknown command %q (known: migrate, seed, seed-user)", args[0])
+		return fmt.Errorf("unknown command %q (known: migrate, seed, seed-user, seed-visits)", args[0])
 	}
 }
 
@@ -384,8 +387,23 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	filesPublic := answerfiles.NewPublicHandler(filesSvc, uploadLimiter, cfg.FormTokenSecret,
 		submissions.DefaultMinFillTime, cfg.TrustedProxy)
 
+	// Справочник геолокации: пустой GEO_DB_PATH — законная конфигурация (гео на
+	// контуре нет, блок стран и городов не рисуется), а вот заданный, но
+	// нечитаемый путь роняет старт: молча собирать визиты без гео, когда его
+	// просили, значит обнаружить это через месяц по пустому экрану.
+	geoSvc, err := geo.Open(cfg.GeoDBPath)
+	if err != nil {
+		return fmt.Errorf("geo database: %w", err)
+	}
+	if geoSvc != nil {
+		log.Info("geo database loaded", slog.String("path", cfg.GeoDBPath))
+	}
+
 	visitLimiter := ratelimit.NewTokenBucket(visitRatePerSec, visitBurst)
-	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{})
+	// Секрет аналитики выводится из секрета токена формы (см. deriveVisitorSecret):
+	// своей переменной окружения у неё нет — платить настройкой за одну карточку
+	// владельцу не за что.
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.FormTokenSecret)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
@@ -479,6 +497,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("orphan answer files purged", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
+	// Черновики ответов старше срока хранения (спека §10.5): черновик — наблюдение,
+	// а не документ, и копить чужой неотправленный текст без причины нельзя.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "partial-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := submissionsSvc.CleanupPartials(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("partial submissions purged", slog.Int64("count", n))
 			}
 			return nil
 		},

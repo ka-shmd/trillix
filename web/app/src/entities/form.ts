@@ -66,6 +66,10 @@ export const formDetailSchema = formSchema.extend({
   closedMessage: z.string().nullable(),
   // Слать ли владельцу письмо о новом ответе (слайс D). Новые формы — true.
   notifyOnSubmission: z.boolean(),
+  // Собирать ли незавершённые ответы. Новые формы — false: сбор того, что человек
+  // не отправлял, по умолчанию не включается. Включение требует платного тарифа
+  // (единственный гейт продукта, стоящий на сборе, а не на показе).
+  collectPartial: z.boolean(),
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>

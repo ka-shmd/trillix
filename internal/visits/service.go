@@ -12,6 +12,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -49,11 +50,28 @@ type Plans interface {
 	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
 }
 
+// Geo — справочник «адрес → место». Реализация — *geo.Service; nil означает
+// «на контуре справочника нет», и это законное состояние: Lookup у nil-сервиса
+// отдаёт пустое место, поэтому ветки «а настроено ли гео» здесь нет.
+type Geo interface {
+	Lookup(ip string) geo.Place
+	// Configured отличает «справочника на контуре нет» от «есть, но ни одного
+	// места не определили». Списки в обоих случаях пустые, а означают разное:
+	// первое прячет блок, второе объясняет пустоту.
+	Configured() bool
+}
+
 // Store — доступ к данным visits, объявленный на стороне потребителя.
 type Store interface {
-	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage) error
+	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
-	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]domain.LastBlockCount, error)
+	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
+	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
+	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
+	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
+	Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
+	Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error)
+	UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error)
 }
 
 var _ Store = Repo{}
@@ -70,6 +88,11 @@ type Visit struct {
 	UserAgent   string
 	Referer     string
 	UTM         map[string]string
+	// IP нужен РОВНО для одного: определить страну и город по локальному
+	// справочнику. Дальше сервиса он не уходит — ни в БД, ни в лог, ни в хеше
+	// (ADR §10). Поле не сериализуется и в теле бикона его нет: адрес берётся из
+	// соединения, а не со слов клиента.
+	IP string
 }
 
 // Service — запись визитов и чтение воронки.
@@ -78,11 +101,21 @@ type Service struct {
 	forms Forms
 	plans Plans
 	repo  Store
-	now   func() time.Time // подменяется в тестах (проверка даты закрытия)
+	geo   Geo
+	// visitorSecret — из него выводится суточная соль ключа посетителя. Не читается
+	// из окружения: выводится из секрета токена формы с меткой назначения
+	// (deriveVisitorSecret) — своей переменной у аналитики нет намеренно.
+	visitorSecret []byte
+	now           func() time.Time // подменяется в тестах (проверка даты закрытия)
 }
 
-func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store) *Service {
-	return &Service{db: db, forms: forms, plans: plans, repo: repo, now: time.Now}
+// NewService принимает секрет токена формы (тот же, что у публичных ручек): из него
+// выводится ключ аналитики. Пустой секрет означает «уникальных не считаем».
+func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc Geo, formTokenSecret []byte) *Service {
+	return &Service{
+		db: db, forms: forms, plans: plans, repo: repo, geo: geoSvc,
+		visitorSecret: deriveVisitorSecret(formTokenSecret), now: time.Now,
+	}
 }
 
 // Record записывает визит. Порядок повторяет приём ответа: резолв формы (черновик/
@@ -128,7 +161,23 @@ func (s *Service) Record(ctx context.Context, slug string, v Visit) error {
 	if err != nil {
 		return fmt.Errorf("marshal visit meta: %w", err)
 	}
-	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON)
+
+	// Место определяется ТОЛЬКО на первом биконе визита: у следующих адрес тот же,
+	// а строка уже создана — апсерт гео не трогает. Так поиск по справочнику идёт
+	// один раз на визит, а не на каждое переключение вкладки.
+	// Место и ключ посетителя считаются ТОЛЬКО на первом биконе визита: у следующих
+	// адрес тот же, строка уже создана, и апсерт эти колонки не трогает.
+	var (
+		place geo.Place
+		key   []byte
+	)
+	if v.Seq == 0 {
+		if s.geo != nil {
+			place = s.geo.Lookup(v.IP)
+		}
+		key = visitorKey(s.visitorSecret, pf.FormID, v.IP, v.UserAgent, s.now())
+	}
+	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place, key)
 }
 
 func (s *Service) buildMeta(v Visit) map[string]string {
@@ -160,7 +209,7 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 //
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
-func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.Funnel, error) {
+func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Funnel, error) {
 	// Порядок обязателен: сначала АВТОРИЗАЦИЯ (чужая форма → 404, приватное не
 	// раскрывается), только потом тариф (→ 402). Наоборот — и посторонний узнавал
 	// бы по коду ответа, существует ли форма и какой у чужого воркспейса план.
@@ -199,11 +248,97 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID) (domain.
 
 	// Один счётный запрос на всю воронку: верх (визиты и конверсия) выводится из той
 	// же разбивки, что и шаги, — см. BuildFunnel.
-	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID)
+	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID, period)
 	if err != nil {
 		return domain.Funnel{}, err
 	}
 	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts), nil
+}
+
+// Insights — счётчики визитов за период для карточек над вкладками Insights.
+//
+// Гейта тарифа здесь НЕТ, и это не упущение: карточки — первое, что владелец видит
+// после публикации формы, и замок на них рекламировал бы Pro вместо продукта.
+// Платным остаётся разбор (воронка, источники), а не сам факт «сколько людей».
+func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+	// Авторизация — тем же способом, что у воронки: чужая или несуществующая форма
+	// даёт 404 (инвариант 1, id из URL правом доступа не является).
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return domain.VisitInsights{}, err
+	}
+	return s.repo.Insights(ctx, s.db, formID, period)
+}
+
+// Breakdown — вкладка «Визиты» целиком: ряд по времени, источники, устройства,
+// браузеры, ОС (спека design/analytics-tally.md §8).
+//
+// Гейт стоит на ОДНОЙ секции, а не на всей вкладке: 402 на весь запрос закрыл бы
+// заодно график и устройства, которые платными не объявлялись. Источники приезжают
+// пустым списком с флагом и настоящим числом визитов, у которых источник известен, —
+// плашка обязана показывать число владельца, а не рекламировать пустоту (ADR §10).
+func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitsBreakdown, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	// Тариф спрашивается ПОСЛЕ авторизации: иначе код ответа рассказывал бы
+	// постороннему и о существовании формы, и о плане чужого воркспейса.
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSources)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+
+	step := domain.StepFor(period)
+	buckets, err := s.repo.Timeseries(ctx, s.db, formID, period, step)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	sources, err := s.repo.Sources(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	countries, err := s.repo.Countries(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	cities, err := s.repo.Cities(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+	agents, err := s.repo.UserAgents(ctx, s.db, formID, period)
+	if err != nil {
+		return domain.VisitsBreakdown{}, err
+	}
+
+	devices, browsers, systems := domain.FoldUserAgents(agents)
+	// Визиты без места считаем вычитанием, а не отдельным запросом: сумма стран
+	// известна, общее число визитов — тоже, и второй счётный запрос за тем же
+	// числом дал бы ещё и возможность рассогласования между двумя выборками.
+	total := 0
+	for _, b := range buckets {
+		total += b.Visits
+	}
+	withPlace := 0
+	for _, c := range countries {
+		withPlace += c.Visits
+	}
+	out := domain.VisitsBreakdown{
+		Step:          step,
+		Timeseries:    domain.FillBuckets(buckets, step, period.From, period.To),
+		SourcesLocked: !d.Allowed,
+		KnownSources:  domain.CountKnownSources(sources),
+		Devices:       devices,
+		Browsers:      browsers,
+		Systems:       systems,
+		Countries:     countries,
+		Cities:        cities,
+		UnknownPlace:  total - withPlace,
+		GeoConfigured: s.geo != nil && s.geo.Configured(),
+	}
+	if d.Allowed {
+		out.Sources = domain.FoldSources(sources)
+	}
+	return out, nil
 }
 
 // truncate режет строку по границе рун: обрезка по байтам оставила бы хвост битой

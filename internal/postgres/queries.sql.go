@@ -163,6 +163,19 @@ func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCo
 	return result.RowsAffected(), nil
 }
 
+const countPartials = `-- name: CountPartials :one
+SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
+`
+
+// Сколько черновиков у формы. Нужен вкладке «Незавершённые» и плашке тарифа:
+// число показывается и тому, кому разбивка закрыта.
+func (q *Queries) CountPartials(ctx context.Context, formID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPartials, formID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countSubmissions = `-- name: CountSubmissions :one
 SELECT count(*) FROM submissions WHERE form_id = $1
 `
@@ -198,12 +211,47 @@ func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UU
 	return i, err
 }
 
+const countSubmissionsInPeriod = `-- name: CountSubmissionsInPeriod :one
+SELECT count(*)::bigint FROM submissions
+WHERE form_id = $1 AND NOT over_quota
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+`
+
+type CountSubmissionsInPeriodParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+// Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
+// то же число, что стоит в таблице ответов: расхождение между соседними экранами
+// читалось бы как баг, а не как разница определений.
+//
+// Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
+// множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
+// однажды поделить одно на другое.
+func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsInPeriod, arg.FormID, arg.FromTs, arg.ToTs)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
 GROUP BY last_block_id, submitted
 `
+
+type CountVisitsByLastBlockParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
 
 type CountVisitsByLastBlockRow struct {
 	LastBlockID pgtype.Text
@@ -229,8 +277,11 @@ type CountVisitsByLastBlockRow struct {
 // последнем вопросе», и воронка обвиняла бы вопрос, который на самом деле работает.
 // «Дошёл до вопроса» считается по всем визитам, «отвалился здесь» — только по
 // неотправившим.
-func (q *Queries) CountVisitsByLastBlock(ctx context.Context, formID uuid.UUID) ([]CountVisitsByLastBlockRow, error) {
-	rows, err := q.db.Query(ctx, countVisitsByLastBlock, formID)
+// Границы периода приходят всегда: «всё время» — это ±бесконечность, а не
+// отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
+// ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
+func (q *Queries) CountVisitsByLastBlock(ctx context.Context, arg CountVisitsByLastBlockParams) ([]CountVisitsByLastBlockRow, error) {
+	rows, err := q.db.Query(ctx, countVisitsByLastBlock, arg.FormID, arg.FromTs, arg.ToTs)
 	if err != nil {
 		return nil, err
 	}
@@ -764,6 +815,21 @@ func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteOldPartials = `-- name: DeleteOldPartials :execrows
+DELETE FROM partial_submissions WHERE updated_at < $1
+`
+
+// Чистка по возрасту (периодическая задача partial-cleanup). Срок — 30 дней,
+// константа в коде: черновик это наблюдение, а не документ, и хранить его вечно
+// значит копить чужой неотправленный текст без причины.
+func (q *Queries) DeleteOldPartials(ctx context.Context, updatedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldPartials, updatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOrphanSubmissionFiles = `-- name: DeleteOrphanSubmissionFiles :exec
 DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL
 `
@@ -774,6 +840,45 @@ DELETE FROM submission_files WHERE id = ANY($1::uuid[]) AND claimed_at IS NULL
 func (q *Queries) DeleteOrphanSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOrphanSubmissionFiles, dollar_1)
 	return err
+}
+
+const deletePartialByVisit = `-- name: DeletePartialByVisit :execrows
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2
+`
+
+type DeletePartialByVisitParams struct {
+	VisitID uuid.UUID
+	FormID  uuid.UUID
+}
+
+// Черновик стал ответом — удаляем. Зовётся ПОСЛЕ коммита приёма и best-effort:
+// 0 строк штатны (черновика не было, visit_id не доехал), ошибка не имеет права
+// отклонить уже принятый ответ.
+func (q *Queries) DeletePartialByVisit(ctx context.Context, arg DeletePartialByVisitParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePartialByVisit, arg.VisitID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePartialSubmission = `-- name: DeletePartialSubmission :execrows
+DELETE FROM partial_submissions WHERE visit_id = $1 AND form_id = $2
+`
+
+type DeletePartialSubmissionParams struct {
+	VisitID uuid.UUID
+	FormID  uuid.UUID
+}
+
+// Удаление одного черновика владельцем (та же гигиена, что у ответа). Ограничено
+// form_id: черновик чужой формы по угаданному id не удалить.
+func (q *Queries) DeletePartialSubmission(ctx context.Context, arg DeletePartialSubmissionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePartialSubmission, arg.VisitID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
@@ -1337,7 +1442,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1362,6 +1467,7 @@ type GetFormRow struct {
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
+	CollectPartial        bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1390,6 +1496,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1412,7 +1519,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1437,6 +1544,7 @@ type GetFormBySlugRow struct {
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
+	CollectPartial        bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1467,6 +1575,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1701,6 +1810,11 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
+    -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
+    -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
+    -- останавливать сбор, как у бейджа).
+    f.collect_partial,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1723,6 +1837,7 @@ type GetPublicFormBySlugRow struct {
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
 	NotifyOnSubmission bool
+	CollectPartial     bool
 	SubmissionCount    int64
 }
 
@@ -1757,6 +1872,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.ResponseLimit,
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
+		&i.CollectPartial,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -2781,6 +2897,118 @@ func (q *Queries) ListOwnedTeamsWithMembers(ctx context.Context, userID uuid.UUI
 	return items, nil
 }
 
+const listPartialsAfter = `-- name: ListPartialsAfter :many
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+  AND (p.updated_at, p.visit_id) < ($3::timestamptz, $4::uuid)
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2
+`
+
+type ListPartialsAfterParams struct {
+	FormID   uuid.UUID
+	Limit    int32
+	CursorAt pgtype.Timestamptz
+	CursorID uuid.UUID
+}
+
+type ListPartialsAfterRow struct {
+	VisitID     uuid.UUID
+	Answers     []byte
+	LastBlockID pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Следующая страница тем же составным курсором.
+func (q *Queries) ListPartialsAfter(ctx context.Context, arg ListPartialsAfterParams) ([]ListPartialsAfterRow, error) {
+	rows, err := q.db.Query(ctx, listPartialsAfter,
+		arg.FormID,
+		arg.Limit,
+		arg.CursorAt,
+		arg.CursorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPartialsAfterRow
+	for rows.Next() {
+		var i ListPartialsAfterRow
+		if err := rows.Scan(
+			&i.VisitID,
+			&i.Answers,
+			&i.LastBlockID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPartialsFirstPage = `-- name: ListPartialsFirstPage :many
+SELECT p.visit_id, p.answers, p.last_block_id, p.created_at, p.updated_at, fv.version AS form_version
+FROM partial_submissions p
+JOIN form_versions fv ON fv.id = p.form_version_id
+WHERE p.form_id = $1
+ORDER BY p.updated_at DESC, p.visit_id DESC
+LIMIT $2
+`
+
+type ListPartialsFirstPageParams struct {
+	FormID uuid.UUID
+	Limit  int32
+}
+
+type ListPartialsFirstPageRow struct {
+	VisitID     uuid.UUID
+	Answers     []byte
+	LastBlockID pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Черновики формы, новыми сверху. Курсор СОСТАВНОЙ (updated_at, visit_id), в
+// отличие от листинга ответов: ответ иммутабелен, и там хватает монотонного id, а
+// черновик меняется, пока человек печатает, — по id он бы прыгал в списке.
+func (q *Queries) ListPartialsFirstPage(ctx context.Context, arg ListPartialsFirstPageParams) ([]ListPartialsFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listPartialsFirstPage, arg.FormID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPartialsFirstPageRow
+	for rows.Next() {
+		var i ListPartialsFirstPageRow
+		if err := rows.Scan(
+			&i.VisitID,
+			&i.Answers,
+			&i.LastBlockID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingInvitations = `-- name: ListPendingInvitations :many
 SELECT email, role, expires_at
 FROM invitations
@@ -2913,6 +3141,8 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
+  AND s.created_at >= $4::timestamptz
+  AND s.created_at <  $5::timestamptz
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -2921,6 +3151,8 @@ type ListSubmissionsAfterParams struct {
 	FormID   uuid.UUID
 	Limit    int32
 	CursorID uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
 }
 
 type ListSubmissionsAfterRow struct {
@@ -2933,7 +3165,13 @@ type ListSubmissionsAfterRow struct {
 // Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
 // стабильно, ответы иммутабельны. Тот же индекс и порядок.
 func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsAfterParams) ([]ListSubmissionsAfterRow, error) {
-	rows, err := q.db.Query(ctx, listSubmissionsAfter, arg.FormID, arg.Limit, arg.CursorID)
+	rows, err := q.db.Query(ctx, listSubmissionsAfter,
+		arg.FormID,
+		arg.Limit,
+		arg.CursorID,
+		arg.FromTs,
+		arg.ToTs,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2962,6 +3200,8 @@ SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
+  AND s.created_at >= $3::timestamptz
+  AND s.created_at <  $4::timestamptz
 ORDER BY s.id DESC
 LIMIT $2
 `
@@ -2969,6 +3209,8 @@ LIMIT $2
 type ListSubmissionsFirstPageParams struct {
 	FormID uuid.UUID
 	Limit  int32
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
 }
 
 type ListSubmissionsFirstPageRow struct {
@@ -2983,8 +3225,17 @@ type ListSubmissionsFirstPageRow struct {
 // form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
 // NOT NULL FK, строка версии всегда есть). limit+1 строк — вызывающий по «лишней»
 // понимает, есть ли следующая страница. Индекс — idx_submissions_form_id.
+// Границы периода приходят всегда: у листинга ответов селектора периода нет и он
+// шлёт ±бесконечность, у сводки — выбранное владельцем окно (спека
+// design/analytics-tally.md §4). Одна форма запроса вместо двух: копия отличалась
+// бы одной строкой WHERE, а расходиться начала бы во всём остальном.
 func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissionsFirstPageParams) ([]ListSubmissionsFirstPageRow, error) {
-	rows, err := q.db.Query(ctx, listSubmissionsFirstPage, arg.FormID, arg.Limit)
+	rows, err := q.db.Query(ctx, listSubmissionsFirstPage,
+		arg.FormID,
+		arg.Limit,
+		arg.FromTs,
+		arg.ToTs,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -3730,6 +3981,51 @@ func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormClo
 	return i, err
 }
 
+const updateFormCollectPartial = `-- name: UpdateFormCollectPartial :one
+UPDATE forms
+SET collect_partial = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormCollectPartialParams struct {
+	ID             uuid.UUID
+	WorkspaceID    uuid.UUID
+	CollectPartial bool
+}
+
+type UpdateFormCollectPartialRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер сбора незавершённых ответов (спека design/analytics-tally.md §10.0).
+// Живая колонка, как настройки закрытия: включается и выключается без
+// перепубликации. Право спрашивает service ДО этого запроса — здесь только запись.
+func (q *Queries) UpdateFormCollectPartial(ctx context.Context, arg UpdateFormCollectPartialParams) (UpdateFormCollectPartialRow, error) {
+	row := q.db.QueryRow(ctx, updateFormCollectPartial, arg.ID, arg.WorkspaceID, arg.CollectPartial)
+	var i UpdateFormCollectPartialRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormDraftSchema = `-- name: UpdateFormDraftSchema :one
 UPDATE forms
 SET draft_schema = $3, title = COALESCE($4, title), updated_at = now()
@@ -4049,11 +4345,14 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 
 const upsertFormVisit = `-- name: UpsertFormVisit :exec
 
-INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO form_visits (id, form_id, form_version_id, last_block_id, seq, meta,
+                         country_code, country, city, visitor_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+        $10)
 ON CONFLICT (id) DO UPDATE
 SET last_block_id = EXCLUDED.last_block_id,
-    seq           = EXCLUDED.seq
+    seq           = EXCLUDED.seq,
+    updated_at    = now()
 WHERE form_visits.form_id = EXCLUDED.form_id
   AND form_visits.seq < EXCLUDED.seq
 `
@@ -4065,6 +4364,10 @@ type UpsertFormVisitParams struct {
 	LastBlockID   pgtype.Text
 	Seq           int16
 	Meta          []byte
+	CountryCode   pgtype.Text
+	Country       pgtype.Text
+	City          pgtype.Text
+	VisitorKey    []byte
 }
 
 // Запросы модуля visits. Схема — migrations/0008_form_visits. Генерация:
@@ -4072,7 +4375,8 @@ type UpsertFormVisitParams struct {
 // Запись визита биконом рендерера. id генерирует клиент (UUIDv7), поэтому второй
 // бикон того же визита упирается в PK и становится UPDATE'ом.
 //
-// Обновляются РОВНО два поля. Не обновляются намеренно:
+// Обновляются РОВНО три поля (updated_at приехал с 0030 — это вторая граница
+// длительности визита; первая — created_at). Не обновляются намеренно:
 //
 //	submitted       — его ставит только приём ответа; иначе поздний бикон затирал бы
 //	                  уже засчитанную конверсию обратно в false;
@@ -4087,6 +4391,12 @@ type UpsertFormVisitParams struct {
 //	seq     — sendBeacon не гарантирует порядок доставки, а visibilitychange шлёт
 //	          бикон на каждое переключение вкладки, поэтому «поздний» ранний бикон
 //	          без этого условия отбрасывал бы визит назад по воронке.
+//
+// Гео (country_code/country/city) пишется только этой вставкой и в UPDATE не
+// входит: место определяется по IP ПЕРВОГО бикона, у последующих адрес тот же,
+// зато лишний поиск по справочнику на каждый бикон — нет.
+// Ключ посетителя — там же и по той же причине: он считается от адреса ПЕРВОГО
+// бикона и от даты, и пересчитывать его на каждом биконе незачем.
 func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams) error {
 	_, err := q.db.Exec(ctx, upsertFormVisit,
 		arg.ID,
@@ -4095,6 +4405,10 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 		arg.LastBlockID,
 		arg.Seq,
 		arg.Meta,
+		arg.CountryCode,
+		arg.Country,
+		arg.City,
+		arg.VisitorKey,
 	)
 	return err
 }
@@ -4143,6 +4457,46 @@ func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegr
 	return err
 }
 
+const upsertPartialSubmission = `-- name: UpsertPartialSubmission :exec
+INSERT INTO partial_submissions (visit_id, form_id, form_version_id, answers, last_block_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (visit_id) DO UPDATE
+SET answers       = EXCLUDED.answers,
+    last_block_id = EXCLUDED.last_block_id,
+    updated_at    = now()
+WHERE partial_submissions.form_id = EXCLUDED.form_id
+`
+
+type UpsertPartialSubmissionParams struct {
+	VisitID       uuid.UUID
+	FormID        uuid.UUID
+	FormVersionID uuid.UUID
+	Answers       []byte
+	LastBlockID   pgtype.Text
+}
+
+// Автосохранение черновика (спека design/analytics-tally.md §10.2). Ключ — id
+// ВИЗИТА, поэтому второе автосохранение того же визита перезаписывает первое, а не
+// плодит строки: черновик — это состояние, а не событие.
+//
+// form_version_id и created_at не обновляются намеренно: версия та, на которой
+// человек открыл форму, а created_at — начало заполнения. Перезаписывается ровно
+// содержимое, точка ухода и время последней правки.
+//
+// Условие по form_id — та же защита, что у визитов: visit_id выбирает клиент, а
+// UUIDv7 угадываем по временнóму префиксу, и без него ручкой одной формы правилась
+// бы строка другой.
+func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartialSubmissionParams) error {
+	_, err := q.db.Exec(ctx, upsertPartialSubmission,
+		arg.VisitID,
+		arg.FormID,
+		arg.FormVersionID,
+		arg.Answers,
+		arg.LastBlockID,
+	)
+	return err
+}
+
 const upsertTOTPSecret = `-- name: UpsertTOTPSecret :exec
 INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
 ON CONFLICT (user_id) DO UPDATE
@@ -4161,4 +4515,336 @@ type UpsertTOTPSecretParams struct {
 func (q *Queries) UpsertTOTPSecret(ctx context.Context, arg UpsertTOTPSecretParams) error {
 	_, err := q.db.Exec(ctx, upsertTOTPSecret, arg.UserID, arg.Secret)
 	return err
+}
+
+const visitCities = `-- name: VisitCities :many
+SELECT city, country_code, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+  AND city IS NOT NULL AND city <> ''
+GROUP BY city, country_code
+ORDER BY visits DESC, city
+`
+
+type VisitCitiesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitCitiesRow struct {
+	City        pgtype.Text
+	CountryCode pgtype.Text
+	Visits      int64
+}
+
+// Города за период. Код страны едет рядом с именем: одноимённые города в разных
+// странах — обычное дело, и склеивать их в одну строку значило бы врать.
+func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]VisitCitiesRow, error) {
+	rows, err := q.db.Query(ctx, visitCities, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitCitiesRow
+	for rows.Next() {
+		var i VisitCitiesRow
+		if err := rows.Scan(&i.City, &i.CountryCode, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitCountries = `-- name: VisitCountries :many
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+  AND country_code IS NOT NULL
+GROUP BY country_code, country
+ORDER BY visits DESC, country
+`
+
+type VisitCountriesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitCountriesRow struct {
+	CountryCode pgtype.Text
+	Country     string
+	Visits      int64
+}
+
+// Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
+// попадают: их число считается отдельно, из общего числа визитов, — иначе строка
+// «Не определено» конкурировала бы со странами в одном списке и притворялась местом.
+func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) ([]VisitCountriesRow, error) {
+	rows, err := q.db.Query(ctx, visitCountries, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitCountriesRow
+	for rows.Next() {
+		var i VisitCountriesRow
+		if err := rows.Scan(&i.CountryCode, &i.Country, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitInsights = `-- name: VisitInsights :one
+SELECT count(*)::bigint                                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
+       count(DISTINCT visitor_key)::bigint                     AS unique_visitors,
+       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE updated_at > created_at),
+       0)::float8                                              AS median_duration_sec,
+       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE submitted AND updated_at > created_at),
+       0)::float8                                              AS completion_duration_sec
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+`
+
+type VisitInsightsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitInsightsRow struct {
+	Visits                int64
+	Submitted             int64
+	UniqueVisitors        int64
+	TimedVisits           int64
+	MedianDurationSec     float64
+	TimedCompletions      int64
+	CompletionDurationSec float64
+}
+
+// Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
+// отправило, и медианная длительность визита (спека design/analytics-tally.md §5).
+//
+// МЕДИАНА, а не среднее: вкладка, забытая открытой на сутки, сдвигает среднее на
+// порядок и делает карточку бесполезной ровно в тот день, когда такой посетитель
+// случился. Медиана переживает это без единой строки кода.
+//
+// FILTER (WHERE updated_at > created_at) отбрасывает визиты, от которых доехал
+// ровно один бикон: у них updated_at = created_at, то есть «ноль секунд», и без
+// фильтра потерянный pagehide занижал бы медиану тем сильнее, чем хуже связь у
+// респондентов. Их число отдаётся отдельной колонкой (timed_visits): по ней экран
+// отличает «данных нет» от «ноль секунд» — первое рисуется прочерком.
+//
+// unique_visitors — count(DISTINCT visitor_key). NULL-ключи (нет адреса, нет
+// секрета) count(DISTINCT ...) не считает вовсе — это ровно то поведение, которое
+// нужно: визит без ключа не человек и не «ещё один человек».
+//
+// Ключ СУТОЧНЫЙ, поэтому за период длиннее суток число завышено: один человек,
+// заходивший три дня подряд, даёт три ключа. Граница записана в ANALYTICS.md §6 —
+// на экран она не выносится.
+//
+// completion_duration_sec — та же медиана, но только по визитам, ЗАКОНЧИВШИМСЯ
+// ответом: это «сколько занимает заполнить форму», и оно всегда больше общей
+// длительности визита, в которую входят те, кто ушёл через три секунды. Считается
+// тем же сканом — отдельный запрос был бы лишним походом за числом из той же
+// выборки.
+//
+// Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
+// второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
+func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (VisitInsightsRow, error) {
+	row := q.db.QueryRow(ctx, visitInsights, arg.FormID, arg.FromTs, arg.ToTs)
+	var i VisitInsightsRow
+	err := row.Scan(
+		&i.Visits,
+		&i.Submitted,
+		&i.UniqueVisitors,
+		&i.TimedVisits,
+		&i.MedianDurationSec,
+		&i.TimedCompletions,
+		&i.CompletionDurationSec,
+	)
+	return i, err
+}
+
+const visitSources = `-- name: VisitSources :many
+SELECT coalesce(meta->>'referer', '')::text    AS referer,
+       coalesce(meta->>'utm_source', '')::text AS utm_source,
+       coalesce(meta->>'utm_medium', '')::text AS utm_medium,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+GROUP BY 1, 2, 3
+`
+
+type VisitSourcesParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitSourcesRow struct {
+	Referer   string
+	UtmSource string
+	UtmMedium string
+	Visits    int64
+}
+
+// Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+// перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
+// (domain.FoldSources) — здесь только группировка.
+//
+// Различных троек у формы десятки, а не по одной на визит: разбирать их на чтении
+// дёшево, а хранить разобранное колонкой значило бы, что улучшенное правило чинит
+// только будущие визиты.
+func (q *Queries) VisitSources(ctx context.Context, arg VisitSourcesParams) ([]VisitSourcesRow, error) {
+	rows, err := q.db.Query(ctx, visitSources, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitSourcesRow
+	for rows.Next() {
+		var i VisitSourcesRow
+		if err := rows.Scan(
+			&i.Referer,
+			&i.UtmSource,
+			&i.UtmMedium,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitTimeseries = `-- name: VisitTimeseries :many
+SELECT date_trunc($2::text, created_at)::timestamptz AS bucket,
+       count(*)::bigint                                          AS visits,
+       count(*) FILTER (WHERE submitted)::bigint                 AS submitted
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
+GROUP BY bucket
+ORDER BY bucket
+`
+
+type VisitTimeseriesParams struct {
+	FormID uuid.UUID
+	Step   string
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitTimeseriesRow struct {
+	Bucket    pgtype.Timestamptz
+	Visits    int64
+	Submitted int64
+}
+
+// Ряд визитов по времени для вкладки «Визиты» (спека design/analytics-tally.md §8).
+// Шаг корзины приходит параметром и уезжает прямо в date_trunc: выбор шага —
+// решение сервера (domain.StepFor), потому что от него зависят и запрос, и подписи
+// оси, а две копии этого выбора разъезжаются молча.
+//
+// Отдаются ТОЛЬКО непустые корзины: дыры достраивает Go (domain.FillBuckets).
+// Генерировать пустые в SQL значило бы завести здесь generate_series по границам
+// периода — то есть вторую копию правила «что такое период».
+func (q *Queries) VisitTimeseries(ctx context.Context, arg VisitTimeseriesParams) ([]VisitTimeseriesRow, error) {
+	rows, err := q.db.Query(ctx, visitTimeseries,
+		arg.FormID,
+		arg.Step,
+		arg.FromTs,
+		arg.ToTs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitTimeseriesRow
+	for rows.Next() {
+		var i VisitTimeseriesRow
+		if err := rows.Scan(&i.Bucket, &i.Visits, &i.Submitted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitUserAgents = `-- name: VisitUserAgents :many
+SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
+       count(*)::bigint                        AS visits
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+GROUP BY 1
+`
+
+type VisitUserAgentsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitUserAgentsRow struct {
+	UserAgent string
+	Visits    int64
+}
+
+// Сырьё списков «устройства / браузеры / ОС»: сгруппированные строки user-agent.
+// Разбор — в Go (domain.ParseUserAgent): здесь нет и не должно быть знания о том,
+// что Edge представляется Chrome'ом.
+func (q *Queries) VisitUserAgents(ctx context.Context, arg VisitUserAgentsParams) ([]VisitUserAgentsRow, error) {
+	rows, err := q.db.Query(ctx, visitUserAgents, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitUserAgentsRow
+	for rows.Next() {
+		var i VisitUserAgentsRow
+		if err := rows.Scan(&i.UserAgent, &i.Visits); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

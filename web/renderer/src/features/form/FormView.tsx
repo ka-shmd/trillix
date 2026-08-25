@@ -31,7 +31,13 @@ import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
 import { StepBar } from '@fields/stepBar'
 
-import { type PublicForm, type SubmitOutcome, submitAnswers } from './api'
+import {
+  type PublicForm,
+  type SubmitOutcome,
+  savePartial,
+  savePartialOnLeave,
+  submitAnswers,
+} from './api'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
@@ -70,6 +76,10 @@ function FocusReporter({
 }) {
   return <div onFocusCapture={() => onReach(index)}>{children}</div>
 }
+
+// Пауза перед автосохранением черновика (мс). Сохраняем не на каждый символ:
+// форма из двадцати полей иначе слала бы сотни запросов на одно заполнение.
+const partialSaveDelayMs = 3000
 
 // Задержки перед повторами при обрыве сети (мс). До 3 повторов с нарастающим
 // бэкоффом — DEV-PLAN фаза 5, шаг 6. Все повторы шлют один submission_id, поэтому
@@ -347,6 +357,40 @@ export function FormView({
       document.removeEventListener('visibilitychange', onHidden)
     }
   }, [blocks])
+
+  // ЧЕРНОВИК (спека design/analytics-tally.md §10). Сохраняем набранное, пока
+  // человек печатает, — но только если СЕРВЕР разрешил: `collectPartial` это тумблер
+  // автора плюс разрешение тарифа, и клиенту тут решать нечего. В предпросмотре
+  // билдера сбора нет по той же причине, что и визитов, — трекера там нет вовсе.
+  //
+  // Дебаунс, а не сохранение на каждый символ: иначе форма из двадцати полей
+  // отправляла бы сотни запросов на одно заполнение. Последнее сохранение уходит на
+  // уходе со страницы биконом — он переживает закрытие вкладки, где fetch отменяется.
+  const collectPartial = form.collectPartial && !preview
+
+  useEffect(() => {
+    const tracker = visit.current
+    if (!collectPartial || tracker === null) return
+
+    const body = () => ({
+      visit_id: tracker.id,
+      token: form.token,
+      version: form.version,
+      answers,
+      last_block_id: furthest.current >= 0 ? (blocks[furthest.current]?.id ?? null) : null,
+    })
+
+    // Эффект перезапускается на каждой правке ответов, поэтому и таймер, и
+    // обработчик ухода всегда видят свежее состояние — ref для этого не нужен
+    // (и запрещён: писать его во время рендера нельзя).
+    const timer = setTimeout(() => savePartial(slug, body()), partialSaveDelayMs)
+    const onLeave = () => savePartialOnLeave(slug, body())
+    window.addEventListener('pagehide', onLeave)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pagehide', onLeave)
+    }
+  }, [answers, blocks, collectPartial, form.token, form.version, slug])
 
   // ВОРОНКА (фаза 19, шаг 5). Переход на страницу — это и есть «дошёл до сюда», то
   // самое наблюдение, которого воронке не хватало с самого начала: касание поля молчит
@@ -663,6 +707,13 @@ export function FormView({
             <p className="form-note form-note-error" role="alert">
               {notice}
             </p>
+          )}
+          {/* Предупреждение о сохранении набранного. Показывается РОВНО когда сбор
+            включён: и то и другое следует из одного серверного флага, поэтому
+            собирать молча продукт не может даже по ошибке (решение владельца
+            2026-08-24, спека §10.3). */}
+          {collectPartial && (
+            <p className="form-note">Форма сохраняет введённое, даже если вы её не отправите.</p>
           )}
           {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
             а не про форму, и лезть выше содержимого автора ему незачем. */}

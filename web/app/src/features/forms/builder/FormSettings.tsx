@@ -4,8 +4,10 @@ import { toast } from 'sonner'
 
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
-import { useUpdateCloseSettings, useUpdateNotifyOnSubmission } from '../queries'
+import { ApiError } from '../../../shared/api/errors'
+import { useUpdateCloseSettings, useUpdateCollectPartial, useUpdateNotifyOnSubmission } from '../queries'
 
+import { InstantSwitch } from './InstantSwitch'
 import { useBuilderStore } from './storeContext'
 import { type FormRef } from './useAutosave'
 import {
@@ -21,7 +23,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 // FormSettings — страница настроек формы: то, чего на полотне не видно. Полотно
@@ -96,6 +97,7 @@ export function FormSettings({
 
   const updateClose = useUpdateCloseSettings()
   const updateNotify = useUpdateNotifyOnSubmission()
+  const updatePartial = useUpdateCollectPartial()
 
   // Диалог-страховка: уход с несохранёнными правками любой секции — осознанный.
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -300,27 +302,63 @@ export function FormSettings({
         {/* Одиночный тумблер сохраняется сразу по переключению (не кнопкой, как секции
             выше): его состояние и есть сохранённое значение, «сохранилось ли» не
             двусмысленно. Поэтому в dirty-страховку ухода он не входит. Частые ответы
-            склеиваются в одно письмо — троттлинг на бэкенде. */}
-        <div className="mt-4 flex items-center gap-3">
-          <Switch
+            склеиваются в одно письмо — троттлинг на бэкенде.
+
+            Положение держит сам InstantSwitch: у новой формы за кликом стоят два
+            запроса (создание формы и PATCH), и контролируемый серверным значением
+            переключатель выглядел бы несработавшим. */}
+        <div className="flex items-center gap-3">
+          <InstantSwitch
             id="notify-on-submission"
+            label="Присылать письмо о новом ответе"
             checked={detail.notifyOnSubmission}
-            disabled={updateNotify.isPending}
-            onCheckedChange={(enabled) =>
-              void ensureForm()
-                .then(({ id, slug }) => updateNotify.mutate({ id, slug, enabled }))
-                .catch(() => toast.error(CREATE_FAILED))
+            onToggle={(enabled) =>
+              ensureForm()
+                .then(({ id, slug }) => updateNotify.mutateAsync({ id, slug, enabled }))
+                .then(() => undefined)
+                .catch((e: unknown) => {
+                  toast.error(CREATE_FAILED)
+                  throw e
+                })
             }
           />
-          <Label htmlFor="notify-on-submission" className="text-sm font-normal">
-            Присылать письмо о новом ответе
-          </Label>
-          {updateNotify.isError && (
-            <span className="text-xs text-destructive" role="status">
-              Не удалось сохранить
-            </span>
-          )}
         </div>
+      </section>
+
+      <section className="mt-8 border-t pt-6">
+        <h2 className="text-sm font-medium">Незавершённые ответы</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Форма запомнит набранное, даже если человек её не отправит. Респондент
+          увидит об этом предупреждение.
+        </p>
+
+        {/* Единственный тумблер продукта, который включает СБОР данных, а не их
+            показ, — поэтому он и предупреждение живут от одного флага, и включить
+            сбор молча нельзя. Отказ тарифа (402) приходит из мутации: показываем
+            тост со ссылкой на тариф, а тумблер возвращается в выключенное положение
+            сам (PartialToggle сбрасывает своё состояние на ошибке).
+
+            У НОВОЙ формы за одним кликом стоят два запроса — создание формы и PATCH
+            тумблера, — поэтому положение держит сам компонент, а не серверное
+            значение: иначе клик выглядел бы несработавшим. */}
+        <InstantSwitch
+          id="collect-partial"
+          label="Собирать незавершённые ответы"
+          checked={detail.collectPartial}
+          onToggle={(enabled) =>
+            ensureForm()
+              .then(({ id, slug }) => updatePartial.mutateAsync({ id, slug, enabled }))
+              .then(() => undefined)
+              .catch((e: unknown) => {
+                toast.error(
+                  e instanceof ApiError && e.code === 'plan_required'
+                    ? 'Сбор незавершённых ответов доступен на платном тарифе'
+                    : CREATE_FAILED,
+                )
+                throw e
+              })
+          }
+        />
       </section>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>

@@ -2,7 +2,7 @@
 
 ## Зависимости — заморожены
 
-Runtime: `pgx/v5`, `golang.org/x/crypto`, `golang.org/x/image` (ресайз картинок на загрузке — `draw.CatmullRom` в `internal/media`; в stdlib ресайза нет), `golang-migrate`, `google/uuid`. Dev-time: `sqlc`, `golangci-lint`, `testcontainers-go`. Добавление ЛЮБОЙ другой — только через вопрос человеку с обоснованием «почему 50 строк своего кода хуже». Токен-бакет, nanoid, чтение env — десятки строк, пишутся руками (и уже написаны — искать в `internal/`, grep перед созданием нового). UUIDv7 — из `github.com/google/uuid` (замороженная runtime-зависимость выше); единая точка генерации — `domain.NewID`.
+Runtime: `pgx/v5`, `golang.org/x/crypto`, `golang.org/x/image` (ресайз картинок на загрузке — `draw.CatmullRom` в `internal/media`; в stdlib ресайза нет), `golang-migrate`, `google/uuid`, `night-codes/go-sypexgeo` (чтение бинарного справочника «диапазон адресов → город» для аналитики визитов, ADR §10; формат чужой и недокументированный, свой парсер к нему — не «50 строк»). Dev-time: `sqlc`, `golangci-lint`, `testcontainers-go`. Добавление ЛЮБОЙ другой — только через вопрос человеку с обоснованием «почему 50 строк своего кода хуже». Токен-бакет, nanoid, чтение env — десятки строк, пишутся руками (и уже написаны — искать в `internal/`, grep перед созданием нового). UUIDv7 — из `github.com/google/uuid` (замороженная runtime-зависимость выше); единая точка генерации — `domain.NewID`.
 
 ## Go-инструменты — по явному списку пакетов, не `./...`
 

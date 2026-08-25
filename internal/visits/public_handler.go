@@ -110,6 +110,11 @@ func (h *PublicHandler) record(w http.ResponseWriter, r *http.Request) {
 		UserAgent:   r.UserAgent(),
 		Referer:     r.Referer(),
 		UTM:         req.UTM,
+		// Адрес берётся из соединения (за нашим прокси — из X-Forwarded-For), а не
+		// из тела: телу верить нельзя, и поля для него в биконе нет. Нужен он ровно
+		// для поиска страны и города по локальному справочнику — дальше сервиса не
+		// уходит и никуда не сохраняется (ADR §10).
+		IP: httpserver.ClientIP(r, h.trustedProxy),
 	}
 	if err := h.svc.Record(r.Context(), r.PathValue("slug"), v); err != nil {
 		httpserver.WriteError(w, r, err)

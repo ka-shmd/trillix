@@ -77,6 +77,15 @@ type Config struct {
 	// S3PathStyle — path-style адресация (endpoint/bucket/key). MinIO и часть
 	// РФ-провайдеров требуют true; AWS virtual-hosted — false.
 	S3PathStyle bool
+	// GeoDBPath — путь к файлу справочника Sypex Geo («диапазон адресов → город»),
+	// из которого аналитика визитов выводит страну и город (ADR §10). Пустой путь —
+	// законное состояние: гео на контуре нет, блок стран и городов не рисуется.
+	//
+	// Файл кладётся на контур руками и обновляется вручную: он живёт своей жизнью
+	// относительно кода, и привязывать его свежесть к выкатке незачем. Поэтому же
+	// он не в образе — путь ведёт в примонтированный том.
+	GeoDBPath string
+
 	// TrustedProxy — стоит ли процесс за доверенным обратным прокси (наш Caddy).
 	// true → IP клиента для rate-limit'а брать из X-Forwarded-For (иначе за прокси
 	// все клиенты видятся одним IP прокси и лимитер держит одно ведро на весь сайт).
@@ -191,6 +200,8 @@ func Load() (Config, error) {
 	cfg.S3PublicEndpoint = required("S3_PUBLIC_ENDPOINT")
 	pathStyleRaw := required("S3_PATH_STYLE")
 	trustedProxyRaw := required("TRUSTED_PROXY")
+	// Не required: контур без справочника — не сломанный контур, а обычная dev-машина.
+	cfg.GeoDBPath = os.Getenv("GEO_DB_PATH")
 	cfg.MailTransport = required("MAIL_TRANSPORT")
 	cfg.MailFrom = required("MAIL_FROM")
 	// SMTP-параметры опциональны на этом шаге: обязательны они только при

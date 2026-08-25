@@ -24,6 +24,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -69,7 +70,7 @@ func newServer(t *testing.T) *httptest.Server {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), submissions.Repo{}, "http://app.test")
 
@@ -337,29 +338,40 @@ func funnelService() *visits.Service {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{})
+	return visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
 }
 
 // setFunnelGate закрывает/открывает воронку на плане воркспейса формы — тем же
 // UPDATE, каким владелец включит гейт на проде (гейты приезжают выключенными).
 func setFunnelGate(t *testing.T, slug string, allowed bool) {
 	t.Helper()
+	setGate(t, slug, "analytics_funnel", allowed)
+}
+
+// setSourcesGate — то же для источников трафика.
+func setSourcesGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	setGate(t, slug, "analytics_sources", allowed)
+}
+
+func setGate(t *testing.T, slug, key string, allowed bool) {
+	t.Helper()
 	value := "false"
 	if allowed {
 		value = "true"
 	}
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', $1::jsonb)
+		`UPDATE plans SET limits = jsonb_set(limits, array[$3::text], $1::jsonb)
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
 		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
 		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
-		value, slug); err != nil {
-		t.Fatalf("set funnel gate: %v", err)
+		value, slug, key); err != nil {
+		t.Fatalf("set gate %s: %v", key, err)
 	}
 	t.Cleanup(func() {
 		if _, err := testPool.Exec(context.Background(),
-			`UPDATE plans SET limits = jsonb_set(limits, '{analytics_funnel}', 'true')`); err != nil {
-			t.Fatalf("reset funnel gate: %v", err)
+			`UPDATE plans SET limits = jsonb_set(limits, array[$1::text], 'true')`, key); err != nil {
+			t.Fatalf("reset gate %s: %v", key, err)
 		}
 	})
 }
@@ -378,7 +390,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 		beacon(t, srv, slug, domain.NewID().String(), 0, "")
 	}
 
-	_, err := funnelService().Funnel(context.Background(), userID, formID)
+	_, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
 	}
@@ -394,7 +406,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 
 	// Открыли тариф — те же данные показываются, ничего не потеряно.
 	setFunnelGate(t, slug, true)
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel после открытия тарифа: %v", err)
 	}
@@ -429,7 +441,7 @@ func TestFunnel_EndToEnd(t *testing.T) {
 		t.Fatalf("приём ответа: статус %d, ждали 201", code)
 	}
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -467,7 +479,7 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	// Владелец другой формы — посторонний для этой.
 	_, strangerID := formOwner(t, publishedForm(t))
 
-	if _, err := funnelService().Funnel(context.Background(), strangerID, formID); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := funnelService().Funnel(context.Background(), strangerID, formID, domain.Period{}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
 }
@@ -479,7 +491,7 @@ func TestFunnel_NoVisits(t *testing.T) {
 	slug := publishedForm(t)
 	formID, userID := formOwner(t, slug)
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID)
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -491,5 +503,407 @@ func TestFunnel_NoVisits(t *testing.T) {
 	}
 	if f.Steps[0].Reached != 0 || f.Steps[0].DroppedHere != 0 {
 		t.Errorf("шаг не нулевой: %+v", f.Steps[0])
+	}
+}
+
+// ageVisit отодвигает визит в прошлое: created_at и updated_at сдвигаются на d
+// назад, разница между ними сохраняется. Иначе окно наблюдения нечем проверить —
+// тест не может ждать сутки.
+func ageVisit(t *testing.T, id string, d time.Duration) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`UPDATE form_visits SET created_at = created_at - $2::interval,
+		                        updated_at = updated_at - $2::interval
+		 WHERE id = $1`, id, d.String())
+	if err != nil {
+		t.Fatalf("age visit %s: %v", id, err)
+	}
+}
+
+// Окно наблюдения режет и карточки, и воронку — по created_at визита. Проверяется
+// на настоящем SQL: границы едут в запрос как ±бесконечность или как времена, и
+// перепутанная граница (>= вместо <) юнитом не ловится вовсе.
+func TestInsights_PeriodCutsOldVisits(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	old := domain.NewID().String()
+	beacon(t, srv, slug, old, 0, "")
+	beacon(t, srv, slug, old, 1, "b1")
+	ageVisit(t, old, 10*24*time.Hour)
+
+	fresh := domain.NewID().String()
+	beacon(t, srv, slug, fresh, 0, "")
+	beacon(t, srv, slug, fresh, 1, "b1")
+
+	svc := funnelService()
+	ctx := context.Background()
+
+	all, err := svc.Insights(ctx, userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights (всё время): %v", err)
+	}
+	if all.Visits != 2 {
+		t.Errorf("визитов за всё время = %d, ждали 2", all.Visits)
+	}
+
+	window := domain.Period{From: time.Now().Add(-48 * time.Hour)}
+	recent, err := svc.Insights(ctx, userID, formID, window)
+	if err != nil {
+		t.Fatalf("Insights (48 часов): %v", err)
+	}
+	if recent.Visits != 1 {
+		t.Errorf("визитов за 48 часов = %d, ждали 1: старый визит должен выпасть", recent.Visits)
+	}
+
+	f, err := svc.Funnel(ctx, userID, formID, window)
+	if err != nil {
+		t.Fatalf("Funnel (48 часов): %v", err)
+	}
+	if f.Visits != 1 {
+		t.Errorf("воронка за 48 часов = %d визитов, ждали 1", f.Visits)
+	}
+}
+
+// Длительность визита считается по двум биконам, а визит с одним биконом в медиану
+// не входит — иначе потерянный pagehide занижал бы её тем сильнее, чем хуже связь
+// у респондентов. TimedVisits — знаменатель, который экран показывает рядом.
+func TestInsights_DurationCountsOnlyVisitsWithTwoBeacons(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	// Визит с одним биконом: updated_at == created_at.
+	beacon(t, srv, slug, domain.NewID().String(), 0, "")
+
+	// Визит с двумя биконами, разведёнными во времени: 30 секунд.
+	timed := domain.NewID().String()
+	beacon(t, srv, slug, timed, 0, "")
+	beacon(t, srv, slug, timed, 1, "b1")
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE form_visits SET updated_at = created_at + interval '30 seconds' WHERE id = $1`, timed); err != nil {
+		t.Fatalf("set duration: %v", err)
+	}
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 2 {
+		t.Fatalf("визитов = %d, ждали 2", in.Visits)
+	}
+	if in.TimedVisits != 1 {
+		t.Errorf("TimedVisits = %d, ждали 1: визит с одним биконом в медиану не входит", in.TimedVisits)
+	}
+	if in.MedianDurationSec != 30 {
+		t.Errorf("медиана = %v с, ждали 30", in.MedianDurationSec)
+	}
+}
+
+// Пустая форма отдаёт нули, и ноль медианы при нулевом TimedVisits означает «данных
+// нет», а не «визиты длиной ноль» — экран обязан различать это, поэтому знаменатель
+// приезжает наружу.
+func TestInsights_EmptyFormIsZeroWithoutData(t *testing.T) {
+	resetDB(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 0 || in.TimedVisits != 0 || in.MedianDurationSec != 0 {
+		t.Fatalf("карточки пустой формы = %+v, ждали нули", in)
+	}
+}
+
+// beaconFromIP шлёт бикон, представляясь заданным адресом. Заголовок X-Forwarded-For
+// читается сервером только при trustedProxy=true — так же, как на проде за Caddy.
+func beaconFromIP(t *testing.T, srv *httptest.Server, slug, visitID, ip string) {
+	t.Helper()
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() + `","version":1,"seq":0,"last_block_id":null}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/visits", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", ip)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post visit: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("бикон: статус %d, ждали 204", resp.StatusCode)
+	}
+}
+
+// beaconWith шлёт бикон с заголовками и метками источника — тем же путём, каким их
+// шлёт рендерер. Обычный beacon их не несёт: заголовков у него нет, и в мете
+// оказывались бы только пустые строки.
+func beaconWith(t *testing.T, srv *httptest.Server, slug, visitID, userAgent, referer string, utm map[string]string) {
+	t.Helper()
+	utmJSON, err := json.Marshal(utm)
+	if err != nil {
+		t.Fatalf("marshal utm: %v", err)
+	}
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() +
+		`","version":1,"seq":0,"last_block_id":null,"utm":` + string(utmJSON) + `}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/visits", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post visit: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("бикон: статус %d, ждали 204", resp.StatusCode)
+	}
+}
+
+// Вкладка «Визиты» целиком на настоящих данных: что записал бикон, то и читает
+// разбивка. Юнитами это не покрыть — между ними лежат JSONB-мета, group by по
+// выражениям и date_trunc.
+func TestBreakdown_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+		"https://vk.com/wall-1", nil)
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+		"", map[string]string{"utm_source": "newsletter", "utm_medium": "email"})
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+
+	if len(b.Timeseries) != 1 || b.Timeseries[0].Visits != 2 {
+		t.Errorf("ряд = %+v, ждали одну корзину на 2 визита", b.Timeseries)
+	}
+	if b.Step != domain.StepDay {
+		t.Errorf("шаг = %q, ждали сутки для «всего времени»", b.Step)
+	}
+	if b.KnownSources != 2 {
+		t.Errorf("визитов с источником = %d, ждали 2 (vk.com и newsletter)", b.KnownSources)
+	}
+	if !hasSource(b.Sources, "newsletter", "email", 1) || !hasSource(b.Sources, "vk.com", "Нет", 1) {
+		t.Errorf("источники = %+v, ждали newsletter/email и vk.com", b.Sources)
+	}
+	if !hasLabel(b.Devices, "Компьютер", 1) || !hasLabel(b.Devices, "Телефон", 1) {
+		t.Errorf("устройства = %+v, ждали компьютер и телефон", b.Devices)
+	}
+	if !hasLabel(b.Browsers, "Chrome", 1) || !hasLabel(b.Browsers, "Safari", 1) {
+		t.Errorf("браузеры = %+v, ждали Chrome и Safari", b.Browsers)
+	}
+	if !hasLabel(b.Systems, "Windows", 1) || !hasLabel(b.Systems, "iOS", 1) {
+		t.Errorf("ОС = %+v, ждали Windows и iOS", b.Systems)
+	}
+}
+
+func hasSource(rows []domain.SourceCount, source, medium string, visits int) bool {
+	for _, r := range rows {
+		if r.Source == source && r.Medium == medium && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+func hasLabel(rows []domain.LabelCount, label string, visits int) bool {
+	for _, r := range rows {
+		if r.Label == label && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+// Гейт источников закрывает секцию, но не вкладку — и визиты продолжают
+// собираться: платным стал показ разбивки, а не запись (ADR §10).
+func TestBreakdown_SourcesClosedByPlan(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+	beaconWith(t, srv, slug, domain.NewID().String(),
+		"Mozilla/5.0 (Windows NT 10.0) Chrome/140.0.0.0 Safari/537.36", "https://vk.com/x", nil)
+
+	setSourcesGate(t, slug, false)
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+	if !b.SourcesLocked || len(b.Sources) != 0 {
+		t.Errorf("источники = %+v (locked=%v), ждали закрытые", b.Sources, b.SourcesLocked)
+	}
+	if b.KnownSources != 1 {
+		t.Errorf("визитов с источником = %d, ждали 1: число показывается и под замком", b.KnownSources)
+	}
+	if len(b.Browsers) == 0 {
+		t.Error("браузеры обязаны остаться — платными объявлялись только источники")
+	}
+}
+
+// testGeo — справочник для интеграционных тестов. Настоящий файл весит 37 МБ и в
+// репозиторий не кладётся, поэтому здесь стоит подделка на два адреса: путь
+// «бикон → колонки страны и города» она проверяет ровно так же, а свежесть данных
+// справочника тестам не принадлежит (её проверяет отдельный тест в internal/geo,
+// когда файл на машине есть).
+type testGeoService struct{}
+
+func (testGeoService) Configured() bool { return true }
+
+func (testGeoService) Lookup(ip string) geo.Place {
+	switch ip {
+	case "77.94.1.1":
+		return geo.Place{CountryCode: "RU", Country: "Россия", City: "Москва"}
+	case "8.8.8.8":
+		return geo.Place{CountryCode: "US", Country: "США", City: "Маунтин-Вью"}
+	}
+	return geo.Place{}
+}
+
+func testGeo() testGeoService { return testGeoService{} }
+
+// newProxiedServer — тот же публичный транспорт, но с trustedProxy=true: только так
+// сервер читает адрес из X-Forwarded-For, а тест может представиться чужим IP.
+func newProxiedServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
+	visitsSvc := visits.NewService(testPool, formsSvc,
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, testGeo(), []byte("dev-only-visitor-secret-not-real"))
+
+	mux := http.NewServeMux()
+	visits.NewPublicHandler(visitsSvc, ratelimit.AllowAll{}, testSecret, true).Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// Сквозной путь гео: бикон с адресом → колонки страны и города → списки на экране.
+// Юнитами не покрыть — между ними колонки, частичный индекс и группировка.
+//
+// И главное, ради чего тест написан: после всего этого в строке визита НЕТ адреса.
+func TestGeo_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newProxiedServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "8.8.8.8")
+	// Адрес, которого справочник не знает (в тестовой подделке — любой другой):
+	// такой визит не попадает ни в одну страну и считается «не определено».
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "203.0.113.7")
+
+	b, err := funnelService().Breakdown(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Breakdown: %v", err)
+	}
+
+	if len(b.Countries) != 2 {
+		t.Fatalf("страны = %+v, ждали две", b.Countries)
+	}
+	if b.Countries[0].Name != "Россия" || b.Countries[0].Visits != 2 || b.Countries[0].CountryCode != "RU" {
+		t.Errorf("первая страна = %+v, ждали Россию с 2 визитами", b.Countries[0])
+	}
+	if !hasPlace(b.Cities, "Москва", 2) || !hasPlace(b.Cities, "Маунтин-Вью", 1) {
+		t.Errorf("города = %+v, ждали Москву (2) и Маунтин-Вью (1)", b.Cities)
+	}
+	if b.UnknownPlace != 1 {
+		t.Errorf("без места = %d, ждали 1: неизвестный адрес не приписывается к соседней стране", b.UnknownPlace)
+	}
+
+	// Инвариант приватности: адрес не сохранён ни в одной колонке визита.
+	var dump string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(string_agg(to_jsonb(v)::text, ' '), '') FROM form_visits v WHERE form_id = $1`,
+		formID).Scan(&dump); err != nil {
+		t.Fatalf("dump visits: %v", err)
+	}
+	for _, ip := range []string{"77.94.1.1", "8.8.8.8", "203.0.113.7"} {
+		if strings.Contains(dump, ip) {
+			t.Fatalf("адрес %s сохранён в строке визита — это нарушение ADR §10:\n%s", ip, dump)
+		}
+	}
+}
+
+func hasPlace(rows []domain.PlaceCount, name string, visits int) bool {
+	for _, r := range rows {
+		if r.Name == name && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+// Сквозной счёт уникальных: три визита одного человека за сутки — один уникальный,
+// визит другого — второй. Проверяется на настоящем SQL, потому что вся суть в
+// count(DISTINCT ...) и в том, что NULL-ключи он не считает.
+func TestUniqueVisitors_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := newProxiedServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+
+	// Один человек, три визита (разные id визита — как три открытия страницы).
+	for i := 0; i < 3; i++ {
+		beaconFromIP(t, srv, slug, domain.NewID().String(), "77.94.1.1")
+	}
+	// Второй человек.
+	beaconFromIP(t, srv, slug, domain.NewID().String(), "8.8.8.8")
+
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 4 {
+		t.Fatalf("визитов = %d, ждали 4", in.Visits)
+	}
+	if in.UniqueVisitors != 2 {
+		t.Errorf("уникальных = %d, ждали 2: три визита одного человека — один уникальный",
+			in.UniqueVisitors)
+	}
+
+	// Инвариант: в строке визита лежит ключ, а не адрес и не user-agent, из которых
+	// он собран. Ключ 16 сырых байт и обратно не разворачивается.
+	var keys int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM form_visits WHERE form_id = $1 AND length(visitor_key) = 16`,
+		formID).Scan(&keys); err != nil {
+		t.Fatalf("count keys: %v", err)
+	}
+	if keys != 4 {
+		t.Errorf("ключей = %d, ждали 4 — по одному на визит", keys)
+	}
+	var dump string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(string_agg(to_jsonb(v)::text, ' '), '') FROM form_visits v WHERE form_id = $1`,
+		formID).Scan(&dump); err != nil {
+		t.Fatalf("dump visits: %v", err)
+	}
+	if strings.Contains(dump, "77.94.1.1") || strings.Contains(dump, "8.8.8.8") {
+		t.Fatalf("адрес сохранён в строке визита — нарушение ADR §10:\n%s", dump)
 	}
 }

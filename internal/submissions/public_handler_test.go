@@ -26,6 +26,16 @@ type fakeSvc struct {
 	gotSlug  string
 	gotMeta  Meta
 	callback func()
+	// gotPartial — что доехало до сервиса автосохранением; partialErr — отказ
+	// сервиса (выключенный тумблер, закрытая форма).
+	gotPartial *PartialInput
+	partialErr error
+}
+
+func (f *fakeSvc) SavePartial(_ context.Context, slug string, p PartialInput) error {
+	f.gotSlug = slug
+	f.gotPartial = &p
+	return f.partialErr
 }
 
 func (f *fakeSvc) Submit(_ context.Context, slug string, id uuid.UUID, _ map[string]json.RawMessage, meta Meta) error {
@@ -219,5 +229,59 @@ func TestSubmit_UnknownField_Returns422(t *testing.T) {
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("статус %d, ожидалось 422 (лишнее поле)", rec.Code)
+	}
+}
+
+// doPartial — запрос к ручке автосохранения (do ходит на приём ответа).
+func doPartial(t *testing.T, h *PublicHandler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/public/v1/forms/abc/partial", strings.NewReader(body)))
+	return rec
+}
+
+// У автосохранения НЕТ нижней границы возраста токена, в отличие от приёма ответа.
+// «Слишком быстро» — признак бота у отправки; у черновика он бессмыслен: первое
+// сохранение уходит через секунды после открытия формы, и общая проверка
+// отбрасывала бы ровно то, что мы собираемся собирать.
+func TestSavePartial_FreshTokenAccepted(t *testing.T) {
+	svc := &fakeSvc{}
+	// Токен выдан ПРЯМО СЕЙЧАС — приём ответа с таким ответил бы 422.
+	body := `{"visit_id":"` + uuid.New().String() + `","token":"` + token.Issue(testSecret, fixedNow) +
+		`","version":1,"answers":{"b1":"черновик"},"last_block_id":"b1"}`
+
+	rec := doPartial(t, newHandler(svc, allowLimiter{}), body)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("статус %d, ждали 204: тела ответа sendBeacon всё равно не читает", rec.Code)
+	}
+	if svc.gotPartial == nil {
+		t.Fatal("черновик не доехал до сервиса")
+	}
+	if got := string(svc.gotPartial.Answers["b1"]); got != `"черновик"` {
+		t.Errorf("ответ = %s, ждали набранное значение", got)
+	}
+}
+
+// Просроченный токен (сутки) отбрасывается — та же верхняя граница, что у визитов.
+func TestSavePartial_StaleTokenRejected(t *testing.T) {
+	body := `{"visit_id":"` + uuid.New().String() + `","token":"` +
+		token.Issue(testSecret, fixedNow.Add(-25*time.Hour)) + `","version":1,"answers":{}}`
+
+	if rec := doPartial(t, newHandler(&fakeSvc{}, allowLimiter{}), body); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ждали 422", rec.Code)
+	}
+}
+
+// Лишнее поле в теле — отказ: ручка публична на запись, и принимать произвольный
+// словарь от клиента она не должна (то же правило, что у бикона визита).
+func TestSavePartial_UnknownFieldRejected(t *testing.T) {
+	body := `{"visit_id":"` + uuid.New().String() + `","token":"` + token.Issue(testSecret, fixedNow) +
+		`","version":1,"answers":{},"submitted":true}`
+
+	if rec := doPartial(t, newHandler(&fakeSvc{}, allowLimiter{}), body); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ждали 422", rec.Code)
 	}
 }

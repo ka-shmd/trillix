@@ -9,6 +9,7 @@ package submissions_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -52,7 +53,50 @@ type summaryBody struct {
 			Min float64 `json:"min"`
 			Max float64 `json:"max"`
 		} `json:"number"`
+		Samples []struct {
+			Text string `json:"text"`
+			At   string `json:"at"`
+		} `json:"samples"`
 	} `json:"blocks"`
+}
+
+// samplesLimit зеркалит domain.SamplesLimit: тест ходит через HTTP и внутренние
+// константы ему недоступны (пакет submissions_test). Разъедутся — тест упадёт на
+// числе значений, а не промолчит.
+const samplesLimit = 10
+
+// blockByID достаёт вопрос сводки целиком — в отличие от block(), который отдаёт
+// только распределение.
+func (s summaryBody) blockByID(t *testing.T, id string) struct {
+	BlockID  string `json:"blockId"`
+	Label    string `json:"label"`
+	Type     string `json:"type"`
+	Kind     string `json:"kind"`
+	Asked    int    `json:"asked"`
+	Answered int    `json:"answered"`
+	Buckets  []struct {
+		Key   string `json:"key"`
+		Label string `json:"label"`
+		Count int    `json:"count"`
+	} `json:"buckets"`
+	Number *struct {
+		Avg float64 `json:"avg"`
+		Min float64 `json:"min"`
+		Max float64 `json:"max"`
+	} `json:"number"`
+	Samples []struct {
+		Text string `json:"text"`
+		At   string `json:"at"`
+	} `json:"samples"`
+} {
+	t.Helper()
+	for _, b := range s.Blocks {
+		if b.BlockID == id {
+			return b
+		}
+	}
+	t.Fatalf("в сводке нет вопроса %s", id)
+	return s.Blocks[0]
 }
 
 func (s summaryBody) block(t *testing.T, id string) (int, map[string]int) {
@@ -219,5 +263,51 @@ func TestSummary_NoVersions_EmptyButValid(t *testing.T) {
 	}
 	if body.Total != 0 || len(body.Blocks) != 0 {
 		t.Fatalf("сводка черновика = %+v, ожидался пустой итог", body)
+	}
+}
+
+// Последние ответы приезжают сквозь весь путь: приём → хранение → сводка. Юнитом
+// не покрыть: между свёрткой и экраном лежат листинг пачками и порядок обхода
+// (новые сверху), от которого зависит, какие десять значений считаются последними.
+func TestSummary_SamplesEndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	owner, ownerID := authedClient(t, srv, "samples-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+	v1 := versionID(t, formID, 1)
+
+	const extra = 2
+	for i := 1; i <= samplesLimit+extra; i++ {
+		insertAnswer(t, formID, v1, fmt.Sprintf(`{"b_note":"Ответ %02d","b_src":"o1"}`, i))
+	}
+
+	resp, err := owner.Get(srv.URL + "/api/v1/forms/" + formID.String() + "/submissions/summary")
+	if err != nil {
+		t.Fatalf("get summary: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var body summaryBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	note := body.blockByID(t, "b_note")
+	if len(note.Samples) != samplesLimit {
+		t.Fatalf("значений = %d, ждали потолок %d: остальное — через листинг ответов",
+			len(note.Samples), samplesLimit)
+	}
+	// Новые сверху: последний отправленный ответ стоит первым.
+	if want := fmt.Sprintf("Ответ %02d", samplesLimit+extra); note.Samples[0].Text != want {
+		t.Errorf("первое значение = %q, ждали %q", note.Samples[0].Text, want)
+	}
+	if note.Samples[0].At == "" {
+		t.Error("у значения нет времени — экрану нечего показать вместо «2 минуты назад»")
+	}
+
+	// У вопроса с вариантами значения тоже есть, и это ПОДПИСИ, а не внутренние id.
+	src := body.blockByID(t, "b_src")
+	if len(src.Samples) == 0 || src.Samples[0].Text != "Друзья" {
+		t.Errorf("значения выбора = %+v, ждали подпись «Друзья»", src.Samples)
 	}
 }

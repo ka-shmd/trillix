@@ -1,0 +1,153 @@
+package domain
+
+import (
+	"testing"
+	"time"
+)
+
+func TestFoldSources(t *testing.T) {
+	t.Parallel()
+
+	rows := []SourceRow{
+		{Referer: "https://vk.com/wall-123", Visits: 5},
+		{Referer: "https://www.vk.com/feed", Visits: 3}, // тот же источник: www режется
+		{UTMSource: "newsletter", UTMMedium: "email", Visits: 7},
+		// utm перебивает referer: канал назвал автор рассылки, а не браузер.
+		{Referer: "https://t.me/channel", UTMSource: "newsletter", UTMMedium: "email", Visits: 2},
+		{Visits: 4}, // ни того ни другого — прямой заход
+		{Referer: "не адрес вовсе", Visits: 1}, // мусор туда же, а не в источник с именем-мусором
+	}
+
+	got := FoldSources(rows)
+
+	want := []SourceCount{
+		{Source: "newsletter", Medium: "email", Visits: 9},
+		{Source: "vk.com", Medium: "Нет", Visits: 8},
+		{Source: "Прямые заходы", Medium: "Нет", Visits: 5},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("строк = %d (%+v), ждали %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("строка %d = %+v, ждали %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestCountKnownSources(t *testing.T) {
+	t.Parallel()
+
+	rows := []SourceRow{
+		{UTMSource: "newsletter", Visits: 7},
+		{Referer: "https://vk.com/x", Visits: 5},
+		{Visits: 4},
+	}
+	// Число показывается и тем, у кого разбивка закрыта тарифом, — плашка обязана
+	// говорить правду, а не рекламировать пустоту.
+	if got := CountKnownSources(rows); got != 12 {
+		t.Errorf("визитов с источником = %d, ждали 12", got)
+	}
+}
+
+func TestFoldUserAgents(t *testing.T) {
+	t.Parallel()
+
+	chromeWin := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36"
+	safariPhone := "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+
+	devices, browsers, systems := FoldUserAgents([]UserAgentRow{
+		{UserAgent: chromeWin, Visits: 10},
+		{UserAgent: chromeWin + " " /* другая строка, тот же браузер */, Visits: 2},
+		{UserAgent: safariPhone, Visits: 5},
+		{UserAgent: "", Visits: 1},
+	})
+
+	if devices[0] != (LabelCount{Label: "Компьютер", Visits: 12}) {
+		t.Errorf("устройства[0] = %+v, ждали 12 компьютеров", devices[0])
+	}
+	if browsers[0] != (LabelCount{Label: "Chrome", Visits: 12}) {
+		t.Errorf("браузеры[0] = %+v, ждали 12 Chrome", browsers[0])
+	}
+	if systems[0] != (LabelCount{Label: "Windows", Visits: 12}) {
+		t.Errorf("ОС[0] = %+v, ждали 12 Windows", systems[0])
+	}
+	// Пустой user-agent не приписывается к соседнему значению: строка с честным
+	// именем лучше, чем завышенный Chrome.
+	if !hasLabel(devices, "Не определено", 1) {
+		t.Errorf("устройства = %+v, ждали строку «Не определено» на 1 визит", devices)
+	}
+}
+
+func hasLabel(rows []LabelCount, label string, visits int) bool {
+	for _, r := range rows {
+		if r.Label == label && r.Visits == visits {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFillBuckets(t *testing.T) {
+	t.Parallel()
+
+	day := func(d int) time.Time { return time.Date(2026, 8, d, 0, 0, 0, 0, time.UTC) }
+
+	t.Run("дыра в ряду становится нулём", func(t *testing.T) {
+		t.Parallel()
+		// Дыра читается как «данных нет», хотя означает «ноль визитов» — разница
+		// видна на графике сразу и означает разное.
+		got := FillBuckets([]TimeBucket{
+			{At: day(1), Visits: 3, Submitted: 1},
+			{At: day(4), Visits: 2},
+		}, StepDay, time.Time{}, time.Time{})
+
+		if len(got) != 4 {
+			t.Fatalf("корзин = %d (%+v), ждали 4", len(got), got)
+		}
+		if got[1].Visits != 0 || !got[1].At.Equal(day(2)) {
+			t.Errorf("вторая корзина = %+v, ждали пустую за 2 августа", got[1])
+		}
+	})
+
+	t.Run("окно шире данных — ряд начинается пустыми корзинами", func(t *testing.T) {
+		t.Parallel()
+		got := FillBuckets([]TimeBucket{{At: day(3), Visits: 1}}, StepDay, day(1), day(3))
+		if len(got) != 3 || !got[0].At.Equal(day(1)) || got[0].Visits != 0 {
+			t.Fatalf("ряд = %+v, ждали три корзины с первой пустой", got)
+		}
+	})
+
+	t.Run("пусто остаётся пустым", func(t *testing.T) {
+		t.Parallel()
+		// Не одна нулевая корзина: «визитов не было» рисуется пустым состоянием
+		// экрана, а не графиком из одного нуля.
+		if got := FillBuckets(nil, StepDay, day(1), day(5)); len(got) != 0 {
+			t.Fatalf("ряд = %+v, ждали пустой", got)
+		}
+	})
+}
+
+func TestStepFor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		p    Period
+		want BucketStep
+	}{
+		{"всё время — сутками", Period{}, StepDay},
+		{"сутки — часами", Period{From: now.Add(-24 * time.Hour), To: now}, StepHour},
+		{"ровно двое суток — ещё часами", Period{From: now.Add(-48 * time.Hour), To: now}, StepHour},
+		{"неделя — сутками", Period{From: now.Add(-7 * 24 * time.Hour), To: now}, StepDay},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := StepFor(tt.p); got != tt.want {
+				t.Errorf("шаг = %q, ждали %q", got, tt.want)
+			}
+		})
+	}
+}

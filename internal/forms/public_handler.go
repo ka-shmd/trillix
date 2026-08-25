@@ -28,6 +28,9 @@ type publicFormService interface {
 	// ShowBadge — решение о бейдже «Сделано в Trillix»: намерение автора из схемы
 	// плюс разрешение тарифа. Свойство выдачи, а не документа (спека §9.4).
 	ShowBadge(ctx context.Context, workspaceID uuid.UUID, design *domain.FormDesign) (bool, error)
+	// CollectPartial — собирать ли черновики у этой формы прямо сейчас: намерение
+	// автора (тумблер) плюс разрешение тарифа.
+	CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error)
 }
 
 // PublicHandler — публичный транспорт форм (без авторизации и CSRF): отдаёт схему
@@ -93,6 +96,11 @@ type publicFormResponse struct {
 	// разрешает его тариф (спека §9.4). Поле, а не вывод клиента из схемы, ровно
 	// поэтому — тариф клиенту знать неоткуда и незачем.
 	ShowBadge bool `json:"showBadge"`
+	// CollectPartial — сохранять ли набранное до отправки. Решение СЕРВЕРА: тумблер
+	// автора плюс разрешение тарифа прямо сейчас (даунгрейд останавливает сбор, как
+	// и с бейджем). Рендерер по этому полю делает ровно две вещи — автосохраняет и
+	// предупреждает респондента; разъехаться они не могут, потому что факт один.
+	CollectPartial bool `json:"collectPartial"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
@@ -182,12 +190,26 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// Токен выдаётся на каждый ответ; при кэшировании его возраст растёт, но это
 	// только усиливает проверку «не раньше 3 с» (свежий мгновенный токен — бот).
 	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
-		Title:     pf.Title,
-		Version:   pf.Version,
-		Schema:    schema,
-		Token:     token.Issue(h.tokenSecret, h.now().UTC()),
-		ShowBadge: showBadge,
+		Title:          pf.Title,
+		Version:        pf.Version,
+		Schema:         schema,
+		Token:          token.Issue(h.tokenSecret, h.now().UTC()),
+		ShowBadge:      showBadge,
+		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
 	})
+}
+
+// collectPartial — решение «собирать ли черновики» для этой выдачи. Сбой опроса
+// тарифа сбор НЕ начинает: невзятый черновик дешевле, чем взятый без права
+// (у бейджа выбор обратный — там при сбое остаётся бренд).
+func (h *PublicHandler) collectPartial(r *http.Request, workspaceID uuid.UUID, intent bool) bool {
+	on, err := h.svc.CollectPartial(r.Context(), workspaceID, intent)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("collect partial gate",
+			slog.String("workspace_id", workspaceID.String()), slog.String("error", err.Error()))
+		return false
+	}
+	return on
 }
 
 // showBadge — решение «рисовать ли бейдж» для этой выдачи. Сбой опроса тарифа не

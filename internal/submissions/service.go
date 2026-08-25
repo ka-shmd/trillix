@@ -30,6 +30,12 @@ const (
 	DefaultPageLimit = 50
 	MaxPageLimit     = 100
 
+	// PartialTTL — сколько живёт черновик после последней правки. Константа, а не
+	// переменная окружения (решение владельца): черновик — наблюдение, а не
+	// документ, и ещё одна строка конфига дороже пользы. Хранить его вечно значит
+	// копить чужой неотправленный текст без причины.
+	PartialTTL = 30 * 24 * time.Hour
+
 	// notifyDigestWindow — окно троттлинга уведомлений владельцу (слайс D): все
 	// ответы, пришедшие за это окно после первого, склеиваются в одно письмо «N
 	// ответов». Ограничивает поток до ≤1 письма на форму за окно даже у вирусной
@@ -42,6 +48,9 @@ const (
 // *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// CollectPartial — собирать ли черновики у этой формы прямо сейчас: тумблер
+	// автора плюс разрешение тарифа (даунгрейд останавливает сбор).
+	CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error)
 	// Get проверяет членство пользователя в воркспейсе формы и возвращает её;
 	// чужая или несуществующая → domain.ErrNotFound (анти-IDOR, приватное не
 	// раскрывается). Листингу нужен только факт доступа, не поля формы.
@@ -119,13 +128,28 @@ type AnswerFiles interface {
 	InfoByForm(ctx context.Context, formID uuid.UUID) (map[string]domain.AnswerFile, error)
 }
 
+// PartialInput — то, что присылает автосохранение рендерера.
+type PartialInput struct {
+	VisitID     uuid.UUID
+	Version     int32
+	Answers     map[string]json.RawMessage
+	LastBlockID *string
+}
+
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
 type Store interface {
+	UpsertPartial(ctx context.Context, db postgres.DBTX, visitID, formID, versionID uuid.UUID, answers json.RawMessage, lastBlockID *string) error
+	DeletePartialByVisit(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error)
+	ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *PartialCursor) ([]Partial, error)
+	CountPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
+	DeletePartial(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error)
+	DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
-	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error)
+	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
 	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
-	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error)
+	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
+	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
 	// жёсткому капу формы, у которого своя семантика.
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
@@ -409,6 +433,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// принятый ответ): конверсия визита и уведомление владельцу. Только для новой
 	// строки (не для идемпотентного ретрая).
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
+	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && pf.NotifyOnSubmission {
 		s.notifyOwner(ctx, pf.FormID, slug)
 	}
@@ -601,6 +626,75 @@ func (s *Service) markVisitSubmitted(ctx context.Context, formID, visitID uuid.U
 	}
 }
 
+// dropPartial убирает черновик, ставший ответом. По тем же основаниям, что и
+// markVisitSubmitted: ПОСЛЕ коммита приёма, без возврата ошибки — ответ уже принят,
+// и уронить его из-за неубранного черновика нельзя.
+//
+// Не доехавший visit_id (uuid.Nil) — штатный случай: черновик останется и попадёт
+// во вкладку «Незавершённые» рядом со своим же отправленным ответом. Погрешность
+// записана; чистка по возрасту унесёт его сама.
+func (s *Service) dropPartial(ctx context.Context, formID, visitID uuid.UUID) {
+	if visitID == uuid.Nil {
+		return
+	}
+	if _, err := s.repo.DeletePartialByVisit(ctx, s.db, visitID, formID); err != nil {
+		httpserver.LoggerFrom(ctx).Warn("partial not deleted after submit",
+			slog.String("form_id", formID.String()),
+			slog.String("error", err.Error()))
+	}
+}
+
+// SavePartial сохраняет черновик — то, что респондент набрал и не отправил (спека
+// §10.2). Публичный путь: авторизации нет, зато есть три отказа.
+//
+// Порядок повторяет приём ответа и запись визита: резолв формы (черновик/нет → 404),
+// «форма закрыта» → 410, версия из тела против опубликованной. Сверх этого —
+// ТУМБЛЕР: выключен или тариф его больше не разрешает → 404, ручки для этой формы
+// всё равно что нет. 404, а не 403: существование настройки чужой формы посторонним
+// не раскрывается.
+//
+// ВАЛИДАЦИЯ МЯГКАЯ, и это несущее решение. Черновик неполон по определению:
+// требовать обязательные поля значило бы не сохранить ничего. Проверяется только
+// то, что защищает нас: размер (транспорт), известность блока в схеме версии и
+// строковый тип значения. Неизвестные ключи молча отбрасываются — схема могла
+// смениться, а ронять автосохранение из-за этого незачем.
+func (s *Service) SavePartial(ctx context.Context, slug string, p PartialInput) error {
+	pf, err := s.forms.PublicForm(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, s.now().UTC()) {
+		return domain.ErrFormClosed
+	}
+	on, err := s.forms.CollectPartial(ctx, pf.WorkspaceID, pf.CollectPartial)
+	if err != nil {
+		return err
+	}
+	if !on {
+		return domain.ErrNotFound
+	}
+	if p.Version != pf.Version {
+		return fmt.Errorf("%w: форма переиздана", domain.ErrValidation)
+	}
+
+	schema, err := domain.ValidateSchema(pf.Schema)
+	if err != nil {
+		return fmt.Errorf("parse published schema of %s: %v", slug, err)
+	}
+	answers := domain.FilterDraftAnswers(schema, p.Answers)
+	raw, err := json.Marshal(answers)
+	if err != nil {
+		return fmt.Errorf("marshal partial answers: %w", err)
+	}
+	return s.repo.UpsertPartial(ctx, s.db, p.VisitID, pf.FormID, pf.VersionID, raw, p.LastBlockID)
+}
+
+// CleanupPartials удаляет черновики старше срока хранения. Зовётся периодической
+// задачей; возвращает число удалённых для лога.
+func (s *Service) CleanupPartials(ctx context.Context) (int64, error) {
+	return s.repo.DeleteOldPartials(ctx, s.db, s.now().UTC().Add(-PartialTTL))
+}
+
 // ListForForm возвращает страницу ответов формы для её автора. Порядок: авторизация
 // через forms.Get (чужая/нет формы → 404, приватное не раскрывается), затем чтение
 // страницы. after — курсор предыдущей страницы (nil для первой). Общий счётчик
@@ -621,9 +715,9 @@ func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, aft
 	fetch := int32(limit + 1)
 	var rows []Submission
 	if after == nil {
-		rows, err = s.repo.ListSubmissions(ctx, s.db, formID, fetch)
+		rows, err = s.repo.ListSubmissions(ctx, s.db, formID, fetch, domain.Period{})
 	} else {
-		rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, fetch)
+		rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, fetch, domain.Period{})
 	}
 	if err != nil {
 		return Page{}, err
@@ -695,7 +789,7 @@ func parseVersions(formID uuid.UUID, versions []forms.Version) ([]domain.Version
 //
 // Авторизацию НЕ делает: вызывающий обязан сделать её сам (versionedSchemas или
 // forms.Get) — id формы из URL правом доступа не является (инвариант 1).
-func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
+func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, period domain.Period, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
 	var after *Cursor
 	for {
 		if err := ctx.Err(); err != nil {
@@ -704,9 +798,9 @@ func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, fn func(
 		var rows []Submission
 		var err error
 		if after == nil {
-			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, streamBatch)
+			rows, err = s.repo.ListSubmissions(ctx, s.db, formID, streamBatch, period)
 		} else {
-			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, streamBatch)
+			rows, err = s.repo.ListSubmissionsAfter(ctx, s.db, formID, after.ID, streamBatch, period)
 		}
 		if err != nil {
 			return err
@@ -750,7 +844,9 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	if err := emit(builder.Header()); err != nil {
 		return err
 	}
-	return s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
+	// Выгрузка периодом не режется: CSV — документ «все ответы формы», и молчаливое
+	// урезание его окном экрана владелец заметил бы уже в чужой таблице.
+	return s.eachSubmission(ctx, formID, domain.Period{}, func(sub Submission, answers map[string]json.RawMessage) error {
 		return emit(builder.Row(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers))
 	})
 }
@@ -762,20 +858,34 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 //
 // Стоимость линейна по числу ответов формы: см. строку лога в handler.go — по ней
 // видно, во что она обходится на реальных данных.
-func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID) (domain.Summary, error) {
+func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Summary{}, err
 	}
 
 	builder := domain.NewSummaryBuilder(vs)
-	if err := s.eachSubmission(ctx, formID, func(sub Submission, answers map[string]json.RawMessage) error {
-		builder.Add(int(sub.FormVersion), answers)
+	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
+		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		return nil
 	}); err != nil {
 		return domain.Summary{}, err
 	}
 	return builder.Result(), nil
+}
+
+// CountInPeriod — сколько видимых ответов пришло за окно наблюдения. Карточка
+// «Ответы» над вкладками Insights; гейта тарифа нет (счётчик своих же ответов
+// платным быть не может), авторизация — та же, что у листинга.
+func (s *Service) CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error) {
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return 0, err
+	}
+	n, err := s.repo.CountInPeriod(ctx, s.db, formID, period)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация

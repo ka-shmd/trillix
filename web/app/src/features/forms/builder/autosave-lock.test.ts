@@ -41,6 +41,7 @@ function seedDetail(qc: QueryClient) {
     responseLimit: null,
     closedMessage: null,
     notifyOnSubmission: true,
+    collectPartial: false,
   })
 }
 

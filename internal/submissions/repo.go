@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -66,10 +67,13 @@ func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmis
 }
 
 // ListSubmissions — первая страница ответов формы (новые сверху).
-func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32) ([]Submission, error) {
+func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error) {
+	from, to := postgres.PeriodBounds(period)
 	rows, err := postgres.New(db).ListSubmissionsFirstPage(ctx, postgres.ListSubmissionsFirstPageParams{
 		FormID: formID,
 		Limit:  limit,
+		FromTs: from,
+		ToTs:   to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list submissions: %w", err)
@@ -87,11 +91,14 @@ func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.U
 }
 
 // ListSubmissionsAfter — следующая страница одноколоночным курсором (id).
-func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32) ([]Submission, error) {
+func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error) {
+	from, to := postgres.PeriodBounds(period)
 	rows, err := postgres.New(db).ListSubmissionsAfter(ctx, postgres.ListSubmissionsAfterParams{
 		FormID:   formID,
 		CursorID: cursorID,
 		Limit:    limit,
+		FromTs:   from,
+		ToTs:     to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list submissions after cursor: %w", err)
@@ -204,4 +211,141 @@ func (Repo) LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid
 		return fmt.Errorf("lock form for submit: %w", err)
 	}
 	return nil
+}
+
+// CountInPeriod — сколько ВИДИМЫХ ответов пришло за окно наблюдения (карточка
+// «Ответы» над вкладками Insights). Сверхлимитные не считаются — так же, как их
+// не показывает таблица ответов.
+func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error) {
+	from, to := postgres.PeriodBounds(period)
+	n, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
+		FormID: formID,
+		FromTs: from,
+		ToTs:   to,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count submissions in period: %w", err)
+	}
+	return n, nil
+}
+
+// Partial — черновик ответа в проекции кабинета: id визита, набранное, докуда
+// дошёл человек и время последней правки.
+type Partial struct {
+	VisitID     uuid.UUID
+	FormVersion int32
+	Answers     json.RawMessage
+	LastBlockID string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// UpsertPartial сохраняет черновик визита. Повторное автосохранение перезаписывает
+// содержимое той же строки — черновик это состояние, а не событие.
+func (Repo) UpsertPartial(ctx context.Context, db postgres.DBTX, visitID, formID, versionID uuid.UUID, answers json.RawMessage, lastBlockID *string) error {
+	block := pgtype.Text{}
+	if lastBlockID != nil {
+		block = pgtype.Text{String: *lastBlockID, Valid: true}
+	}
+	err := postgres.New(db).UpsertPartialSubmission(ctx, postgres.UpsertPartialSubmissionParams{
+		VisitID:       visitID,
+		FormID:        formID,
+		FormVersionID: versionID,
+		Answers:       answers,
+		LastBlockID:   block,
+	})
+	if err != nil {
+		return fmt.Errorf("upsert partial submission: %w", err)
+	}
+	return nil
+}
+
+// DeletePartialByVisit убирает черновик, ставший ответом. 0 строк — штатный исход.
+func (Repo) DeletePartialByVisit(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeletePartialByVisit(ctx, postgres.DeletePartialByVisitParams{
+		VisitID: visitID,
+		FormID:  formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete partial by visit: %w", err)
+	}
+	return n, nil
+}
+
+// ListPartials — страница черновиков формы, новыми сверху. after nil = первая.
+func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *PartialCursor) ([]Partial, error) {
+	var (
+		rows []postgres.ListPartialsFirstPageRow
+		err  error
+	)
+	if after == nil {
+		rows, err = postgres.New(db).ListPartialsFirstPage(ctx, postgres.ListPartialsFirstPageParams{
+			FormID: formID,
+			Limit:  limit,
+		})
+	} else {
+		var next []postgres.ListPartialsAfterRow
+		next, err = postgres.New(db).ListPartialsAfter(ctx, postgres.ListPartialsAfterParams{
+			FormID:   formID,
+			CursorAt: pgtype.Timestamptz{Time: after.UpdatedAt, Valid: true},
+			CursorID: after.VisitID,
+			Limit:    limit,
+		})
+		rows = make([]postgres.ListPartialsFirstPageRow, len(next))
+		for i, r := range next {
+			rows[i] = postgres.ListPartialsFirstPageRow(r)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list partials: %w", err)
+	}
+	out := make([]Partial, len(rows))
+	for i, r := range rows {
+		out[i] = Partial{
+			VisitID:     r.VisitID,
+			FormVersion: r.FormVersion,
+			Answers:     json.RawMessage(r.Answers),
+			LastBlockID: r.LastBlockID.String,
+			CreatedAt:   r.CreatedAt.Time,
+			UpdatedAt:   r.UpdatedAt.Time,
+		}
+	}
+	return out, nil
+}
+
+// CountPartials — сколько черновиков у формы. Показывается и под замком тарифа.
+func (Repo) CountPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).CountPartials(ctx, formID)
+	if err != nil {
+		return 0, fmt.Errorf("count partials: %w", err)
+	}
+	return n, nil
+}
+
+// DeletePartial — удаление одного черновика владельцем.
+func (Repo) DeletePartial(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeletePartialSubmission(ctx, postgres.DeletePartialSubmissionParams{
+		VisitID: visitID,
+		FormID:  formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete partial: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteOldPartials — чистка по возрасту (периодическая задача).
+func (Repo) DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteOldPartials(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("delete old partials: %w", err)
+	}
+	return n, nil
+}
+
+// PartialCursor — составной курсор листинга черновиков: черновик меняется, пока
+// человек печатает, поэтому монотонного id (как у ответов) здесь мало.
+type PartialCursor struct {
+	UpdatedAt time.Time
+	VisitID   uuid.UUID
 }
