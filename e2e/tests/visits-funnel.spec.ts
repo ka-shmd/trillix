@@ -112,10 +112,14 @@ test('визит считается под прод-CSP, конверсия и �
   // такой визит закончиться не мог, и пускать его значило бы дать способ портить
   // владельцу конверсию.
   //
-  // Токен формы берём ДО закрытия: закрытая форма его уже не выдаёт (GET отдаёт
-  // 410), а без валидного токена ручка ответила бы 422 и проверяла бы не то.
+  // Номер версии берём ДО закрытия: закрытая форма схемы уже не отдаёт (GET → 410),
+  // а с неверной версией ручка ответила бы не тем статусом и проверяла бы не то.
+  // Токен живёт в своей ручке и от закрытия формы не зависит вовсе (ADR §10).
   const publicForm = await page.request.get(`${RENDERER}/public/v1/forms/${form.slug}`)
-  const { token, version } = (await publicForm.json()) as { token: string; version: number }
+  const { version } = (await publicForm.json()) as { version: number }
+  const { token } = (await (
+    await page.request.get(`${RENDERER}/public/v1/form-token`)
+  ).json()) as { token: string }
 
   expect(
     (await page.request.post(`/api/v1/forms/${form.id}/unpublish`, { headers })).ok(),

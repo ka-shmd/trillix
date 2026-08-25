@@ -29,6 +29,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/token"
 	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
@@ -60,6 +61,9 @@ func resetDB(t *testing.T) {
 // точками вставки — оформления в теге <html> и головы формы в <head>) во временный
 // файл — так же, как его получит api из смонтированной статики в проде. Нужен, чтобы
 // Go регистрировал и обслуживал /r в этом стеке.
+// testTokenSecret — ключ подписи токена формы на весь стек теста.
+var testTokenSecret = []byte("dev-only-form-token-secret-not-a-real-key")
+
 // Лимит не ослабляется ради теста, а инжектируется пермиссивной реализацией
 // (инвариант безопасности 6).
 type allowLimiter struct{}
@@ -93,7 +97,7 @@ func newStack(t *testing.T) *httptest.Server {
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
-	formsPublic, err := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
+	formsPublic, err := forms.NewPublicHandler(formsSvc, testTokenSecret,
 		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t),
 		allowLimiter{}, false)
 	if err != nil {
@@ -556,13 +560,25 @@ func TestForms_PublicFetch(t *testing.T) {
 	patchDraftSchema(t, owner, srv, form.ID, schema, form.UpdatedAt, http.StatusOK)
 	publishForm(t, owner, srv, form.ID, http.StatusOK)
 
-	// Публичная выдача: 200, title/version/schema/token, ETag выставлен.
+	// Публичная выдача: 200, title/version/schema, ETag выставлен.
 	pub, etag := getPublicOK(t, anon, srv, form.Slug)
 	if pub.Title != "Публичный опрос" || pub.Version != 1 {
 		t.Fatalf("публичная форма: %+v", pub)
 	}
-	if pub.Token == "" || etag == "" {
-		t.Fatalf("нет token (%q) или ETag (%q)", pub.Token, etag)
+	if etag == "" {
+		t.Fatal("нет ETag")
+	}
+	// Токена в кэшируемом теле нет: он приезжает некэшируемой ручкой, иначе его
+	// возраст мерил бы возраст записи в кэше браузера (ADR §10).
+	if pub.Token != "" {
+		t.Fatalf("в теле схемы приехал token %q", pub.Token)
+	}
+	tok, cacheControl := getFormToken(t, anon, srv)
+	if _, err := token.IssuedAt(testTokenSecret, tok); err != nil {
+		t.Fatalf("токен ручки невалиден: %v", err)
+	}
+	if cacheControl != "no-store" {
+		t.Fatalf("Cache-Control ручки токена = %q, ожидалось no-store", cacheControl)
 	}
 	// Наружу уходит канон (v3): welded-вопрос v1 разложен на подпись title + поле b1.
 	got := parseSchema(t, pub.Schema)
@@ -1111,7 +1127,26 @@ type publicFormDTO struct {
 	Title   string          `json:"title"`
 	Version int32           `json:"version"`
 	Schema  json.RawMessage `json:"schema"`
-	Token   string          `json:"token"`
+	// Token остаётся полем DTO, чтобы тест мог доказать его ОТСУТСТВИЕ в
+	// кэшируемом теле: токен выдаёт отдельная некэшируемая ручка (ADR §10).
+	Token string `json:"token"`
+}
+
+// getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.
+func getFormToken(t *testing.T, c *http.Client, srv *httptest.Server) (string, string) {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/public/v1/form-token", "", "")
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("статус выдачи токена %d, ожидалось 200", r.StatusCode)
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("тело токена не парсится: %v", err)
+	}
+	return body.Token, r.Header.Get("Cache-Control")
 }
 
 func getPublic(t *testing.T, c *http.Client, srv *httptest.Server, slug string, wantStatus int) {

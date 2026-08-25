@@ -51,7 +51,8 @@ describe('fetchFormToken', () => {
 
     // Адрес ручки — часть контракта: токен обязан ехать НЕ из кэшируемого тела
     // схемы формы (ADR §10).
-    expect(fetchMock.mock.calls[0][0]).toBe('/public/v1/form-token')
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/public/v1/form-token')
     expect(token.value).toBe('1756123456789.sig')
     expect(token.receivedAt).toBeGreaterThanOrEqual(before)
 
