@@ -1,7 +1,7 @@
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link2, Pencil } from 'lucide-react'
+import { Copy, Pencil } from 'lucide-react'
 
 import { type Form, displayFormTitle } from '../../entities/form'
 import { FormActionsMenu } from '../../features/forms/FormActionsMenu'
@@ -87,25 +87,38 @@ function ManageLayout() {
           форму, вход в редактор. Залитая кнопка стоит последней, у самого края:
           она главная, и цветное пятно на краю читается как конец ряда. */}
       <PageActions>
-        {workspace && <MemberCluster workspace={workspace} onOpen={() => setMembersOpen(true)} />}
-        {/* Копирование ссылки вынесено значком: действие частое, а ради него
-            приходилось открывать меню. У черновика выключено — публичной страницы
-            у него ещё нет. */}
+        {workspace && (
+          <MemberCluster
+            workspace={workspace}
+            onOpen={() => setMembersOpen(true)}
+            className="px-2.5"
+          />
+        )}
+        {/* Копирование ссылки вынесено из меню: действие частое, а ради него
+            приходилось открывать меню. Со СЛОВАМИ, а не значком: значок копирования
+            и значок ссылки одинаково правдоподобны, и угадывать, который тут,
+            человек не должен. У черновика выключено — публичной страницы у него
+            ещё нет. */}
         <Button
           variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground"
-          aria-label="Копировать ссылку на форму"
-          title="Копировать ссылку на форму"
+          size="sm"
+          className="h-8 gap-1.5 px-2 text-muted-foreground"
           disabled={form.data?.status === 'draft'}
           onClick={() => copyFormLink(slug)}
         >
-          <Link2 className="size-4" />
+          <Copy className="size-4" />
+          Копировать ссылку
         </Button>
         {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
             одна такая, и приглушать единственный вход в редактор незачем. Размер
-            малый: бар высотой 56px, кнопка в полный рост подпирала бы его края. */}
-        <Button asChild size="sm" className="h-7 gap-1.5 px-2.5">
+            малый: бар высотой 56px, кнопка в полный рост подпирала бы его края.
+            Высота у всех трёх контролов ряда одна (32px), боковые поля тоже.
+
+            ml-2 — ОПТИЧЕСКАЯ поправка, а не ритм. У ghost-кнопки видимая граница
+            это её текст, у залитой — край заливки, поэтому при одинаковом зазоре
+            между коробками (8px) глаз видит 28px слева от кнопки и 18 справа от
+            соседа. Лишние 8 выравнивают то, что видно, а не то, что в разметке. */}
+        <Button asChild size="sm" className="ml-2 h-8 gap-1.5 px-2.5">
           <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
             <Pencil className="size-3.5" /> Редактировать
           </Link>

@@ -4,6 +4,7 @@ import type { Workspace } from '../../entities/workspace'
 import { UserAvatar } from '../../shared/UserAvatar'
 import { membersQueryOptions } from './queries'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // Сколько кружков помещается в кластер до «+N»: дальше он перестаёт читаться как
@@ -23,14 +24,20 @@ const VISIBLE_AVATARS = 4
 export function MemberCluster({
   workspace,
   onOpen,
+  className,
 }: {
   workspace: Workspace
   onOpen: () => void
+  // className — подгонка под соседей по ряду. В баре формы кластер стоит рядом с
+  // двумя текстовыми кнопками, и его боковые поля обязаны совпасть с их: при
+  // равных зазорах между коробками разные внутренние поля дают разные зазоры
+  // между тем, что видно, — ряд читается неровным.
+  className?: string
 }) {
   const state = useQuery(membersQueryOptions(workspace.id))
 
   if (state.isPending) {
-    return <Skeleton className="h-7 w-16 rounded-full" aria-hidden="true" />
+    return <Skeleton className="h-8 w-14 rounded-full" aria-hidden="true" />
   }
 
   const members = state.data?.members ?? []
@@ -41,7 +48,7 @@ export function MemberCluster({
     <Button
       variant="ghost"
       size="sm"
-      className="h-8 shrink-0 gap-1.5 px-2"
+      className={cn('h-8 shrink-0 gap-1.5 px-2', className)}
       onClick={onOpen}
       aria-haspopup="dialog"
     >
