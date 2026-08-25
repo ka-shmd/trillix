@@ -65,7 +65,9 @@ export async function listSheets(formId: string, spreadsheetId: string): Promise
 // нажатию кнопки, а не при показе экрана, — токен не должен лежать в стейте
 // страницы просто так.
 export function getPickerCredentials(formId: string): Promise<PickerCredentials> {
-  return apiRequest(`/forms/${formId}/integrations/google/picker`, { schema: pickerCredentialsSchema })
+  return apiRequest(`/forms/${formId}/integrations/google/picker`, {
+    schema: pickerCredentialsSchema,
+  })
 }
 
 // Таблицы для выбора в окне. Запрашиваются при его открытии: список живёт у

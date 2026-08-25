@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil, Table2, Trash2 } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 
 import type { FormSheet } from '../../entities/integration'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
 import { GoogleSheetsIcon } from './ServiceIcon'
 import { formIntegrationsQueryOptions, useUnlinkSheet, useUpdateConnection } from './queries'
 import { Section } from '../../shared/page/Section'
-import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,20 +49,15 @@ export function IntegrationsView({ formId }: { formId: string }) {
 
   return (
     <div className="flex flex-col gap-12">
-      {/* Раздел рисуется и при нуле связок: блок, который просто исчезает, читается
-          как недогрузившаяся страница, а вопрос «куда уезжают ответы» стоит и тогда,
-          когда ответ — «никуда». */}
-      <Section
-        title="Мои подключения"
-        description="Здесь собраны все интеграции, подключённые к этой форме. Интеграцию можно включить или выключить, а ход синхронизации ответов — посмотреть в журнале событий."
-      >
-        {connections.length === 0 ? (
-          <EmptyState
-            icon={Table2}
-            title="Пока ничего не подключено"
-            description="Ответы этой формы никуда не уезжают автоматически — их видно в кабинете и в выгрузке CSV."
-          />
-        ) : (
+      {/* Блок СИТУАТИВНЫЙ: при нуле связок его нет вовсе, и пустого состояния здесь
+          не бывает. Обычно исчезающий раздел читается как недогрузившаяся страница —
+          но не тут: сразу под ним стоит каталог с той же кнопкой «Подключить», и
+          пустое состояние предлагало бы то же самое вторым голосом. */}
+      {connections.length > 0 && (
+        <Section
+          title="Мои подключения"
+          description="Здесь собраны все интеграции, подключённые к этой форме. Интеграцию можно включить или выключить, а ход синхронизации ответов — посмотреть в журнале событий."
+        >
           <ul className="flex flex-col gap-2">
             {connections.map((connection) => (
               <li key={connection.id}>
@@ -75,8 +70,8 @@ export function IntegrationsView({ formId }: { formId: string }) {
               </li>
             ))}
           </ul>
-        )}
-      </Section>
+        </Section>
+      )}
 
       <Section
         title="Доступные интеграции"
@@ -89,7 +84,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
         <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
           <li className="flex flex-col items-start">
             <GoogleSheetsIcon className="size-8" />
-            <p className="mt-4 text-base font-semibold">Google Таблицы</p>
+            <p className="mt-2 text-base font-semibold">Google Таблицы</p>
             <p className="mt-1 text-sm text-muted-foreground">Отправляйте ответы в таблицу</p>
             <Button
               variant="link"

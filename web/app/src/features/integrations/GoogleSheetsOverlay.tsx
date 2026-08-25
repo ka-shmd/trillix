@@ -165,7 +165,9 @@ function useSetupState(connection: FormSheet | null): SetupState {
   const [picked, setPicked] = useState<SpreadsheetRef | null>(
     // Книга связки может быть не из нашего списка (выбрана на Диске) — тогда
     // без этого пункта Select не смог бы показать выбранное.
-    connection ? { id: connection.spreadsheetId, name: connection.name || 'Текущая таблица' } : null,
+    connection
+      ? { id: connection.spreadsheetId, name: connection.name || 'Текущая таблица' }
+      : null,
   )
 
   return {
@@ -272,8 +274,8 @@ function SetupBody({
         <div>
           <Label htmlFor="integration-backfill">Перенести уже накопленные ответы</Label>
           <p className="mt-1 text-xs text-muted-foreground">
-            Ответы, которые форма собрала раньше, уедут в таблицу сразу. У формы с тысячами
-            ответов перенос займёт время.
+            Ответы, которые форма собрала раньше, уедут в таблицу сразу. У формы с тысячами ответов
+            перенос займёт время.
           </p>
         </div>
         <Switch
@@ -294,7 +296,6 @@ function SetupBody({
       <Button size="lg" disabled={saving} onClick={() => save()}>
         {connection ? 'Сохранить' : 'Подключить Google Таблицы'}
       </Button>
-
     </div>
   )
 
@@ -460,8 +461,8 @@ function SpreadsheetField({
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">
-        В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет.
-        Любую другую свою выберите на Google Диске.
+        В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет. Любую
+        другую свою выберите на Google Диске.
       </p>
     </div>
   )
@@ -473,7 +474,10 @@ function SpreadsheetField({
 function ConnectionState({ connection }: { connection: FormSheet }) {
   if (connection.status === 'broken') {
     return (
-      <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+      <p
+        role="alert"
+        className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+      >
         {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
       </p>
     )
@@ -499,7 +503,12 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
 function formatMoment(iso: string): string {
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return 'недавно'
-  return at.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+  return at.toLocaleString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
