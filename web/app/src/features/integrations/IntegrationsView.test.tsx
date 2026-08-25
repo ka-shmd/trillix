@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { FormIntegrations, FormSheet } from '../../entities/integration'
@@ -101,15 +101,29 @@ function openSetup() {
   fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
 }
 
+// Действия строки живут в меню «⋯»: сперва открыть его, потом выбрать пункт.
+// Radix открывает меню на pointerdown, которого fireEvent.click не даёт, — поэтому
+// клавиатурой (Enter на триггере), а не мышью.
+function openRowMenu() {
+  fireEvent.keyDown(screen.getByRole('button', { name: /Действия с подключением/ }), {
+    key: 'Enter',
+  })
+}
+
 function openConnection() {
-  fireEvent.click(screen.getByRole('button', { name: 'Настроить подключение' }))
+  openRowMenu()
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Настроить подключение' }))
 }
 
 describe('два блока экрана', () => {
-  it('связок нет — блока «Мои подключения» тоже нет', () => {
+  // Раздел остаётся на месте и при нуле связок: исчезающий блок читается как
+  // недогрузившаяся страница, а вопрос «куда уезжают ответы» стоит и тогда, когда
+  // ответ — «никуда».
+  it('связок нет — блок «Мои подключения» показывает пустое состояние', () => {
     renderView(state({ account: CONNECTED }))
 
-    expect(screen.queryByText('Мои подключения')).toBeNull()
+    expect(screen.getByText('Мои подключения')).toBeTruthy()
+    expect(screen.getByText('Пока ничего не подключено')).toBeTruthy()
     expect(screen.getByText('Доступные интеграции')).toBeTruthy()
   })
 
@@ -134,9 +148,9 @@ describe('два блока экрана', () => {
 
     expect(screen.getByText(/Доступ к аккаунту .* потерян/)).toBeTruthy()
     expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
-    // Связка живая по своему статусу, но точка обязана быть красной: чинится
-    // аккаунт, а не она.
-    expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
+    // Связка живая по своему статусу, но помечена сломанной: чинится аккаунт, а
+    // не она.
+    expect(screen.getByText('Сломано')).toBeTruthy()
   })
 
   it('провайдер не настроен на контуре — так и написано в каталоге', () => {
@@ -155,23 +169,24 @@ describe('два блока экрана', () => {
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('состояние связки видно точкой и подписью', () => {
+  it('состояние связки видно бейджем и подписью', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
-    expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
+    expect(screen.getByText('Переносим ответы')).toBeTruthy()
     expect(screen.getByText(/переносим накопленные ответы/i)).toBeTruthy()
   })
 
   it('выключенная связка помечена и не притворяется работающей', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ enabled: false })] }))
 
-    expect(screen.getByLabelText('Выключено')).toBeTruthy()
+    expect(screen.getByText('Выключено')).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Включить подключение' })).toBeTruthy()
   })
 
   it('удаление спрашивает подтверждение и обещает сохранить таблицу', () => {
     renderView(state({ account: CONNECTED, connections: [conn()] }))
-    fireEvent.click(screen.getByRole('button', { name: 'Удалить подключение' }))
+    openRowMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить подключение' }))
 
     expect(screen.getByRole('alertdialog')).toBeTruthy()
     expect(screen.getByText(/останутся на вашем google диске/i)).toBeTruthy()
@@ -322,8 +337,11 @@ describe('оверлей настройки Google Таблиц', () => {
     openConnection()
 
     // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
-    // что он видит, это что с ней сейчас.
-    expect(screen.getByText(/переносим ответы/i)).toBeTruthy()
+    // что он видит, это что с ней сейчас. Ищем внутри окна: тот же статус словом
+    // стоит и на бейдже строки под ним.
+    expect(
+      within(screen.getByRole('dialog')).getByText(/переносим ответы, которые уже пришли/i),
+    ).toBeTruthy()
   })
 
   it('после подключения в окне провайдера состояние перезапрашивается', async () => {
