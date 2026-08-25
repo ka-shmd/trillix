@@ -102,12 +102,10 @@ export function GoogleSheetsOverlay({
         <div className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16">
           <header className="flex flex-col items-center gap-3 text-center">
             <GoogleSheetsIcon className="size-10" />
-            {/* Оверлей занимает весь экран, поэтому его заголовок берёт верхнюю ступень
-                шкалы — ту же, что h1 страницы (docs/DESIGN-SYSTEM.md). Базовый
-                text-lg/semibold у DialogTitle перекрывается целиком: и кегль, и вес. */}
-            <DialogTitle className="text-3xl font-extrabold tracking-tight">
-              Google Таблицы
-            </DialogTitle>
+            {/* Оверлей занимает весь экран, поэтому его заголовок берёт верхнюю
+                ступень шкалы кеглей (docs/DESIGN-SYSTEM.md). Вес остаётся тот, что
+                у DialogTitle. */}
+            <DialogTitle className="text-3xl">Google Таблицы</DialogTitle>
             <p className="text-sm text-muted-foreground">
               Отправляйте ответы формы прямо в Google Таблицы.
             </p>
@@ -561,6 +559,15 @@ function ConnectAccount({
 
   return (
     <div className="flex flex-col gap-5">
+      {/* Трансграничная передача названа ДО перехода к согласию, а не после:
+          ответы уезжают в Google (США), и продукт не делает этого молча (спека
+          design/integrations-gsheets.md §10, «Безопасность и 152-ФЗ»). Вторая
+          половина той же меры — `connected_by` в базе: запись, чьим согласием
+          ответы уезжают наружу. */}
+      <p className="text-sm text-muted-foreground">
+        Ответы, включая персональные данные респондентов, могут быть переданы в сервисы Google.
+      </p>
+
       {/* Именно <a>, а не onClick+fetch: нужен полноценный переход браузера —
           XHR за редиректом на домен Google не пойдёт. Клик пробует открыть
           отдельное окно и гасит переход, только если это удалось. */}
