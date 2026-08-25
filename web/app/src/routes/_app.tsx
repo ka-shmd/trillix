@@ -111,12 +111,17 @@ function AppLayout() {
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
-          {/* Сворачивание сайдбара. На мобильном этот триггер — ЕДИНСТВЕННЫЙ способ
-              его открыть: там сайдбар превращается в выезжающую шторку (Sheet),
-              которая сама себя не показывает, и без кнопки навигации в кабинете с
-              телефона нет вовсе. */}
-          <SidebarTrigger className="text-muted-foreground" />
-          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+          {/* ТОЛЬКО НА МОБИЛЬНОМ, и это не косметика: там сайдбар — выезжающая
+              шторка (Sheet), которая сама себя не показывает, а полоски-рейла у неё
+              нет. Убери отсюда кнопку — и навигации в кабинете с телефона не будет
+              вовсе. На десктопе сворачивание живёт в самой панели, здесь оно лишнее.
+              Порог md совпадает с MOBILE_BREAKPOINT (768) в hooks/use-mobile.ts —
+              разъедутся, и на промежуточной ширине не останется ни одного входа. */}
+          <SidebarTrigger className="text-muted-foreground md:hidden" />
+          <Separator
+            orientation="vertical"
+            className="mr-1 data-[orientation=vertical]:h-4 md:hidden"
+          />
           {/* Слева путь страницы, справа её действия. */}
           <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
           <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />

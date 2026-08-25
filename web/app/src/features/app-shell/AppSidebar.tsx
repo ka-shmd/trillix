@@ -10,6 +10,8 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
+  SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
 import { Button } from '@/components/ui/button'
@@ -68,8 +70,13 @@ export function AppSidebar({
   return (
     <Sidebar>
       <SidebarHeader>
-        <div className="flex items-center px-2 py-1">
-          <span className="text-base font-bold tracking-tight">Trillix</span>
+        <div className="flex items-center gap-2 px-2 py-1">
+          <span className="flex-1 text-base font-bold tracking-tight">Trillix</span>
+          {/* Свернуть — отсюда, из самой панели. Развернуть обратно отсюда нельзя:
+              свёрнутая панель уезжает за экран целиком (collapsible=offcanvas), и
+              кнопка уезжает вместе с ней. Обратный путь дают SidebarRail ниже
+              (полоска у края экрана) и Ctrl/Cmd+B. */}
+          <SidebarTrigger className="text-muted-foreground" />
         </div>
       </SidebarHeader>
 
@@ -148,6 +155,11 @@ export function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      {/* Полоска у края экрана: единственный способ вернуть свёрнутую панель мышью.
+          Клавиатурой её не поймать (tabIndex=-1 в вендоренном компоненте) — там
+          работает Ctrl/Cmd+B. */}
+      <SidebarRail />
     </Sidebar>
   )
 }
