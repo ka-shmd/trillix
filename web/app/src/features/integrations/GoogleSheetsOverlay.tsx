@@ -25,6 +25,7 @@ import {
   SelectGroup,
   SelectItem,
   SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -452,22 +453,28 @@ function SpreadsheetField({
         <SelectContent>
           <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
           {known.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>Мои таблицы</SelectLabel>
-              {known.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
+            <>
+              <SelectSeparator />
+              <SelectGroup>
+                <SelectLabel>Мои таблицы</SelectLabel>
+                {known.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </>
           )}
           {pickerEnabled && (
-            <SelectGroup>
-              <SelectLabel>Добавить таблицу</SelectLabel>
-              <SelectItem value={BROWSE}>
-                {opening ? 'Открываем Google Диск…' : 'Выбрать на Google Диске'}
-              </SelectItem>
-            </SelectGroup>
+            <>
+              <SelectSeparator />
+              <SelectGroup>
+                <SelectLabel>Добавить таблицу</SelectLabel>
+                <SelectItem value={BROWSE}>
+                  {opening ? 'Открываем Google Диск…' : 'Выбрать на Google Диске'}
+                </SelectItem>
+              </SelectGroup>
+            </>
           )}
         </SelectContent>
       </Select>
@@ -496,11 +503,12 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
       </p>
     )
   }
+  // Доставок ещё не было — строки нет вовсе: «ответы будут попадать в таблицу»
+  // повторяет то, ради чего связку и заводили.
+  if (!connection.lastDeliveredAt) return null
   return (
     <p className="text-sm text-muted-foreground">
-      {connection.lastDeliveredAt
-        ? `Последний ответ уехал в таблицу ${formatMoment(connection.lastDeliveredAt)}.`
-        : 'Ответы будут попадать в таблицу сразу после отправки.'}
+      Последний ответ уехал в таблицу {formatMoment(connection.lastDeliveredAt)}.
     </p>
   )
 }
@@ -607,8 +615,8 @@ function ConnectedAccountField({
   return (
     <div className="flex flex-col gap-2">
       <Label>Аккаунт Google</Label>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
-        <span className="text-sm">{account.email}</span>
+      <div className="flex min-h-10 flex-wrap items-center gap-2 rounded-md border px-3 py-2">
+        <span className="text-base">{account.email}</span>
         {account.canManage && (
           <Button
             asChild
