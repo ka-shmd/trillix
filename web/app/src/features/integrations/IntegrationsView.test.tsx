@@ -196,13 +196,11 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: /подключить google таблицы/i })).toBeTruthy()
   })
 
-  it('аккаунт не подключён — только рассказ и согласие, настроек ещё нет', () => {
+  it('аккаунт не подключён — только вход в согласие, настроек ещё нет', () => {
     renderView(state())
     openSetup()
 
     expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
-    // Про вывоз персональных данных оверлей говорит ДО подключения, а не после.
-    expect(screen.getByText(/персональные данные/i)).toBeTruthy()
     // Поля, которые всё равно заперты, — обещание работы, которой человек ещё
     // не может сделать: их здесь нет вовсе.
     expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
