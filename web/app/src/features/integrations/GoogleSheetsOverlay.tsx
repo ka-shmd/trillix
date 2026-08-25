@@ -488,6 +488,12 @@ function SpreadsheetField({
 // ConnectionState — что сейчас со связкой. Причина поломки здесь единственное
 // место, где её видно: это не техническая деталь провайдера, а состояние того,
 // что человек настроил, и починка — в его руках (переподключить аккаунт).
+//
+// РОВНО ДВА СОСТОЯНИЯ ГОВОРЯТ ВСЛУХ: сломано и переносим. Работающая связка молчит —
+// ни «ответы будут попадать», ни «последний ответ уехал тогда-то»: первое повторяет
+// то, ради чего связку заводили, второе отвечает на вопрос, которого никто не
+// задавал, открывая настройки. Когда появится журнал доставок (BACKLOG), время
+// последней уедет туда, где его ищут.
 function ConnectionState({ connection }: { connection: FormSheet }) {
   if (connection.status === 'broken') {
     return (
@@ -506,27 +512,7 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
       </p>
     )
   }
-  // Доставок ещё не было — строки нет вовсе: «ответы будут попадать в таблицу»
-  // повторяет то, ради чего связку и заводили.
-  if (!connection.lastDeliveredAt) return null
-  return (
-    <p className="text-sm text-muted-foreground">
-      Последний ответ уехал в таблицу {formatMoment(connection.lastDeliveredAt)}.
-    </p>
-  )
-}
-
-// formatMoment — «23 августа, 14:05» человеку понятнее ISO-строки, а точность до
-// минуты здесь всё, что нужно.
-function formatMoment(iso: string): string {
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return 'недавно'
-  return at.toLocaleString('ru-RU', {
-    day: 'numeric',
-    month: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return null
 }
 
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
