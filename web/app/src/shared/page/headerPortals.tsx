@@ -1,5 +1,7 @@
 import { Fragment, isValidElement } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from '@tanstack/react-router'
+import { House } from 'lucide-react'
 
 import { useAppHeaderSlots } from '../appHeader'
 import {
@@ -27,6 +29,16 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
   const { left } = useAppHeaderSlots()
   if (!left) return null
 
+  // Дом добавляется ЗДЕСЬ, а не каждым экраном: он одинаков всюду, и передавать
+  // его первым элементом означало бы повторить одну и ту же ссылку в десятке
+  // мест — и однажды где-нибудь забыть.
+  const trail: React.ReactNode[] = [
+    <Link key="home" to="/forms" search={(prev) => prev} aria-label="Главная">
+      <House className="size-4" />
+    </Link>,
+    ...items,
+  ]
+
   return createPortal(
     <Breadcrumb className="min-w-0">
       {/* Крошки набраны ЧЕРНИЛАМИ — тем же тоном, что названия в разделах, — и
@@ -34,8 +46,8 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
           не даёт кегль — нижняя ступень шкалы. Кегля ВНЕ шкалы здесь стоять не
           должно: 13px не спорил ни с чем и именно поэтому выглядел чужим. */}
       <BreadcrumbList className="flex-nowrap gap-1.5 text-xs font-medium text-foreground sm:gap-1.5">
-        {items.map((item, i) => {
-          const last = i === items.length - 1
+        {trail.map((item, i) => {
+          const last = i === trail.length - 1
           return (
             <Fragment key={i}>
               <BreadcrumbItem className="min-w-0">

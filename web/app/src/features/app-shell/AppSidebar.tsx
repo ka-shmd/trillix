@@ -69,8 +69,12 @@ export function AppSidebar({
 
   return (
     <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1">
+      {/* Высота шапки панели равна высоте верхнего бара (56px), а поля совпадают
+          с его левым полем: логотип и крошки обязаны стоять на одной линии — они
+          соседи по верхнему краю экрана, и разница в пару пикселей читается как
+          съехавшая вёрстка. */}
+      <SidebarHeader className="h-14 justify-center px-3 py-0">
+        <div className="flex items-center gap-2">
           <span className="flex-1 text-base font-bold tracking-tight">Trillix</span>
           {/* Свернуть — отсюда, из самой панели. Развернуть обратно отсюда нельзя:
               свёрнутая панель уезжает за экран целиком (collapsible=offcanvas), и

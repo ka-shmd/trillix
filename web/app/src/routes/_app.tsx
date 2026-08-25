@@ -8,9 +8,9 @@ import { formKeys } from '../features/forms/keys'
 import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
 import { useCurrentWorkspace } from '../features/workspaces/current'
 import { useMemo, useState } from 'react'
-import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
-import { Separator } from '@/components/ui/separator'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
+import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
 import { AppHeaderContext } from '../shared/appHeader'
 
@@ -111,17 +111,9 @@ function AppLayout() {
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
         <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
-          {/* ТОЛЬКО НА МОБИЛЬНОМ, и это не косметика: там сайдбар — выезжающая
-              шторка (Sheet), которая сама себя не показывает, а полоски-рейла у неё
-              нет. Убери отсюда кнопку — и навигации в кабинете с телефона не будет
-              вовсе. На десктопе сворачивание живёт в самой панели, здесь оно лишнее.
-              Порог md совпадает с MOBILE_BREAKPOINT (768) в hooks/use-mobile.ts —
-              разъедутся, и на промежуточной ширине не останется ни одного входа. */}
-          <SidebarTrigger className="text-muted-foreground md:hidden" />
-          <Separator
-            orientation="vertical"
-            className="mr-1 data-[orientation=vertical]:h-4 md:hidden"
-          />
+          {/* Кнопка панели появляется здесь, только когда в самой панели её нажать
+              негде: свёрнутая уезжает за экран, мобильная шторка закрыта. */}
+          <HeaderSidebarTrigger />
           {/* Слева путь страницы, справа её действия. */}
           <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
           <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
