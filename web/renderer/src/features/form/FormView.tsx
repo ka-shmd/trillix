@@ -51,6 +51,7 @@ import {
 import { firstErrorPage, firstQuestionIndex } from './pages'
 import { uuidv7 } from './submissionId'
 import { makeUploader } from './uploads'
+import { holdUntilAccepted, type FormToken } from './formToken'
 import { ThankYou } from './ThankYou'
 import { type Errors, validateAll, validateBlock } from './validation'
 import { createVisitTracker, type VisitTracker } from './visits'
@@ -109,11 +110,17 @@ async function submitWithRetry(
 export function FormView({
   slug,
   form,
+  token,
   bridge,
   embed,
 }: {
   slug: string
   form: PublicForm
+  /**
+   * Подписанное время выдачи (ADR §10). null — предпросмотр автора: сети в этом
+   * режиме нет вовсе, поэтому отсутствие токена и есть признак «не отправляем».
+   */
+  token: FormToken | null
   bridge: HostBridge | null
   /** Параметры вставки; null — форма открыта прямой ссылкой. */
   embed: EmbedOptions | null
@@ -122,6 +129,9 @@ export function FormView({
   const redirectSelf = embed?.redirectSelf ?? false
   // Предпросмотр вставки: форма живая, но следов не оставляет — ни визита, ни ответа.
   const preview = embed?.preview ?? false
+  // Значение токена отдельной переменной: оно уезжает в зависимости эффекта черновика,
+  // а объект FormToken пересоздаётся вместе с состоянием загрузчика.
+  const tokenValue = token?.value ?? ''
   // Настройка вида вставки: заголовок формы. Выравнивание содержимого — атрибут на
   // документе (main.tsx) и правила в index.css: оно про раскладку холста, а не про
   // блоки, и в разметке ему делать нечего.
@@ -166,10 +176,7 @@ export function FormView({
   // Загрузчик файлов: в предпросмотре его НЕТ — поле рисуется целиком, но байтов
   // не принимает. Иначе автор, разглядывая свою форму, засорял бы бакет
   // загрузками, которые никогда не станут ответом.
-  const uploader = useMemo(
-    () => (preview ? null : makeUploader(slug, form.token)),
-    [preview, slug, form.token],
-  )
+  const uploader = useMemo(() => (token === null ? null : makeUploader(slug, token)), [slug, token])
   const pages = plan.pages
   const lastPage = pages.length - 1
   const multi = pages.length > 1
@@ -315,9 +322,10 @@ export function FormView({
   // доступом к ref во время рендера.
   const visit = useRef<VisitTracker | null>(null)
   if (visit.current === null) {
-    visit.current = preview
-      ? null
-      : createVisitTracker(slug, form.token, form.version, window.location.search)
+    visit.current =
+      token === null
+        ? null
+        : createVisitTracker(slug, token.value, form.version, window.location.search)
   }
   const started = useRef(false)
   // Самая дальняя точка визита: индекс последнего блока, которого коснулись.
@@ -366,7 +374,7 @@ export function FormView({
   // Дебаунс, а не сохранение на каждый символ: иначе форма из двадцати полей
   // отправляла бы сотни запросов на одно заполнение. Последнее сохранение уходит на
   // уходе со страницы биконом — он переживает закрытие вкладки, где fetch отменяется.
-  const collectPartial = form.collectPartial && !preview
+  const collectPartial = form.collectPartial && token !== null
 
   useEffect(() => {
     const tracker = visit.current
@@ -374,7 +382,7 @@ export function FormView({
 
     const body = () => ({
       visit_id: tracker.id,
-      token: form.token,
+      token: tokenValue,
       version: form.version,
       answers,
       last_block_id: furthest.current >= 0 ? (blocks[furthest.current]?.id ?? null) : null,
@@ -390,7 +398,7 @@ export function FormView({
       clearTimeout(timer)
       window.removeEventListener('pagehide', onLeave)
     }
-  }, [answers, blocks, collectPartial, form.token, form.version, slug])
+  }, [answers, blocks, collectPartial, tokenValue, form.version, slug])
 
   // ВОРОНКА (фаза 19, шаг 5). Переход на страницу — это и есть «дошёл до сюда», то
   // самое наблюдение, которого воронке не хватало с самого начала: касание поля молчит
@@ -475,7 +483,11 @@ export function FormView({
     // ПРЕДПРОСМОТР ОСТАНАВЛИВАЕТСЯ РОВНО ЗДЕСЬ — после валидации, до сети. Всё, что
     // делает форма, автор увидит (обязательные поля, переход к странице с ошибкой,
     // экран благодарности), а в таблице ответов не появится ничего: ответа не было.
-    if (preview) {
+    //
+    // Условие — отсутствие токена, а не флаг предпросмотра: токена нет ровно в этом
+    // режиме, и проверка «нечем разговаривать с сервером» вдобавок доказывает
+    // типу, что ниже он есть.
+    if (token === null) {
       setPhase('done')
       return
     }
@@ -485,9 +497,14 @@ export function FormView({
 
     let outcome: SubmitOutcome
     try {
+      // Додержка перед сетью, а не отказ: сервер не принимает ответ моложе трёх
+      // секунд, и платить за этот барьер отказом должен скрипт, а не человек,
+      // заполнивший короткую форму быстро (ADR §10). Ждём уже в состоянии
+      // 'submitting' — кнопка занята, отдельного экрана ожидания не нужно.
+      await holdUntilAccepted(token)
       outcome = await submitWithRetry(slug, {
         submissionId: submissionId.current,
-        token: form.token,
+        token: token.value,
         // Ответы на скрытые вопросы не отправляются: они остались в стейте (человек
         // переключил источник, и введённое ждёт возврата), но формой не собраны.
         // Сервер повторит вычистку сам — здесь она ради честного тела запроса.

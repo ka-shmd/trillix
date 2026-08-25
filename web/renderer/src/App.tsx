@@ -18,13 +18,23 @@ export function App({
 }) {
   useHostHeight(bridge)
   const slug = slugFromPath(window.location.pathname)
-  const state = usePublicForm(slug)
+  // Предпросмотр автора решается здесь, а не в FormView: от него зависит, запрашивать
+  // ли токен формы, а это делает загрузчик.
+  const state = usePublicForm(slug, embed?.preview ?? false)
 
   switch (state.status) {
     case 'loading':
       return <StatusScreen title="Загрузка формы…" />
     case 'ok':
-      return <FormView slug={slug} form={state.form} bridge={bridge} embed={embed} />
+      return (
+        <FormView
+          slug={slug}
+          form={state.form}
+          token={state.token}
+          bridge={bridge}
+          embed={embed}
+        />
+      )
     case 'closed':
       // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
       // название и текст владельца, а не безликое «недоступна» (шаг 4).
