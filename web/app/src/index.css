@@ -4,10 +4,13 @@
 @custom-variant dark (&:is(.dark *));
 
 /* Дизайн-токены кабинета — база shadcn/ui (slate, oklch) с двумя правками поверх.
-   Первая: акцент — ГЛУБОКИЙ ИНДИГО (`--primary` и его спутники `--ring`,
+   Первая: акцент — ГЛУБОКИЙ СИНИЙ С ЗЕЛЕНЦОЙ (`--primary` и его спутники `--ring`,
    `--sidebar-primary`), а не дежурный blue-600 из темы shadcn: тот на тёплом фоне
-   читается «синей кнопкой из шаблона». Взят темнее и заметно менее насыщенным —
-   на белом это чернильное пятно, а не сигнальный цвет. Вторая: свои статусные цвета `--success`
+   читается «синей кнопкой из шаблона». Взят темнее и заметно менее насыщенным — на
+   белом это чернильное пятно, а не сигнальный цвет. Тон 245: выше по кругу (260+)
+   синий уходит в фиолет, ниже (225−) — в бирюзу. Хрома 0.10, а не больше: уже на
+   0.13 красный канал в sRGB упирается в ноль — цвет садится на край гаммы, делается
+   ядовитым и на широком гамуте уезжает. Вторая: свои статусные цвета `--success`
    и `--warning` — у shadcn их нет, а состояния в кабинете есть (подключение
    работает / переносит / сломано). `--success` взят ЯРКИМ (green-500): он носит смысл
    сам, без подписи — кружок связки и включённый тумблер, — поэтому важна заметность,
@@ -38,7 +41,7 @@
   --card-foreground: oklch(0.32 0.012 70);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.32 0.012 70);
-  --primary: oklch(0.47 0.155 272);
+  --primary: oklch(0.47 0.1 245);
   --primary-foreground: oklch(0.985 0.004 80);
   --secondary: oklch(0.97 0.005 80);
   --secondary-foreground: oklch(0.32 0.012 70);
@@ -53,7 +56,7 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.925 0.006 80);
   --input: oklch(0.925 0.006 80);
-  --ring: oklch(0.47 0.155 272);
+  --ring: oklch(0.47 0.1 245);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -61,12 +64,12 @@
   --chart-5: oklch(0.769 0.188 70.08);
   --sidebar: oklch(0.985 0.004 80);
   --sidebar-foreground: oklch(0.32 0.012 70);
-  --sidebar-primary: oklch(0.47 0.155 272);
+  --sidebar-primary: oklch(0.47 0.1 245);
   --sidebar-primary-foreground: oklch(0.985 0.004 80);
   --sidebar-accent: oklch(0.97 0.005 80);
   --sidebar-accent-foreground: oklch(0.32 0.012 70);
   --sidebar-border: oklch(0.925 0.006 80);
-  --sidebar-ring: oklch(0.47 0.155 272);
+  --sidebar-ring: oklch(0.47 0.1 245);
 }
 
 .dark {
@@ -76,7 +79,7 @@
   --card-foreground: oklch(0.96 0.005 80);
   --popover: oklch(0.25 0.007 70);
   --popover-foreground: oklch(0.96 0.005 80);
-  --primary: oklch(0.62 0.15 272);
+  --primary: oklch(0.68 0.085 245);
   --primary-foreground: oklch(0.985 0.004 80);
   --secondary: oklch(0.29 0.007 70);
   --secondary-foreground: oklch(0.96 0.005 80);
@@ -91,7 +94,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.62 0.15 272);
+  --ring: oklch(0.68 0.085 245);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -99,12 +102,12 @@
   --chart-5: oklch(0.645 0.246 16.439);
   --sidebar: oklch(0.25 0.007 70);
   --sidebar-foreground: oklch(0.96 0.005 80);
-  --sidebar-primary: oklch(0.62 0.15 272);
+  --sidebar-primary: oklch(0.68 0.085 245);
   --sidebar-primary-foreground: oklch(0.985 0.004 80);
   --sidebar-accent: oklch(0.29 0.007 70);
   --sidebar-accent-foreground: oklch(0.96 0.005 80);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.62 0.15 272);
+  --sidebar-ring: oklch(0.68 0.085 245);
 }
 
 @theme inline {
