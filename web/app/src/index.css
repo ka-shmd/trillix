@@ -16,24 +16,31 @@
    темы нет: тёмные значения здесь полные, и тема включается одним PR ровно до тех
    пор, пока в светлой половине не появится токен без пары.
 
+   ТЕКСТ НАБРАН ЧЕРНИЛАМИ, А НЕ ЧЁРНЫМ: `--foreground` — тёмный сине-серый (L 0.25,
+   хрома 0.04), `--muted-foreground` — его же спокойный младший тон. Чистый чёрный на
+   белом даёт максимальный контраст и вместе с ним техническую сухость; чернила
+   #192135 держат 16:1 к белому (AAA требует 7:1), подпись #626C7F — 5.3:1 (AA для
+   основного кегля). Замерено пикселями, а не прикинуто по L: разбирать oklch как
+   rgb — верный способ получить бессмысленную цифру.
+
    Правила использования — docs/DESIGN-SYSTEM.md. Цвет мимо токенов (`bg-emerald-500`
    в разметке) — отступление: у него нет тёмного значения и он не виден системе. */
 :root {
   --radius: 0.5rem;
   --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.25 0.04 266);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --card-foreground: oklch(0.25 0.04 266);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
+  --popover-foreground: oklch(0.25 0.04 266);
   --primary: oklch(0.546 0.245 262.881);
   --primary-foreground: oklch(0.97 0.014 254.604);
   --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
+  --secondary-foreground: oklch(0.25 0.04 266);
   --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
+  --muted-foreground: oklch(0.53 0.033 264);
   --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
+  --accent-foreground: oklch(0.25 0.04 266);
   --success: oklch(0.723 0.192 149.579);
   --success-foreground: oklch(0.266 0.065 152.934);
   --warning: oklch(0.666 0.179 58.318);
@@ -48,18 +55,18 @@
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
   --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
+  --sidebar-foreground: oklch(0.25 0.04 266);
   --sidebar-primary: oklch(0.546 0.245 262.881);
   --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
   --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
+  --sidebar-accent-foreground: oklch(0.25 0.04 266);
   --sidebar-border: oklch(0.929 0.013 255.508);
   --sidebar-ring: oklch(0.546 0.245 262.881);
 }
 
 .dark {
   --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
+  --foreground: oklch(0.97 0.012 264);
   --card: oklch(0.208 0.042 265.755);
   --card-foreground: oklch(0.984 0.003 247.858);
   --popover: oklch(0.208 0.042 265.755);
@@ -69,7 +76,7 @@
   --secondary: oklch(0.279 0.041 260.031);
   --secondary-foreground: oklch(0.984 0.003 247.858);
   --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
+  --muted-foreground: oklch(0.72 0.032 264);
   --accent: oklch(0.279 0.041 260.031);
   --accent-foreground: oklch(0.984 0.003 247.858);
   --success: oklch(0.723 0.192 149.579);

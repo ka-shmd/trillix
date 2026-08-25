@@ -29,10 +29,11 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
 
   return createPortal(
     <Breadcrumb className="min-w-0">
-      {/* Крошки — служебная строка, а не заголовок: text-xs и приглушённый цвет
-          даже у текущей страницы, имя которой и так стоит заголовком под баром.
-          Пока последняя крошка была тёмной и полужирной, она спорила с h1. */}
-      <BreadcrumbList className="flex-nowrap gap-1.5 text-xs sm:gap-1.5">
+      {/* Крошки — служебная строка, а не заголовок. Тише их делает не кегль, а
+          приглушённый цвет, в том числе у текущей страницы: её имя и так стоит
+          заголовком прямо под баром. Пока последняя крошка была тёмной и
+          полужирной, она спорила с h1. */}
+      <BreadcrumbList className="flex-nowrap gap-1.5 text-sm sm:gap-1.5">
         {items.map((item, i) => {
           const last = i === items.length - 1
           return (

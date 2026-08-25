@@ -7,10 +7,10 @@ import { cn } from '@/lib/utils'
 // против 16/600. Пока оба были `font-medium` одного размера, раздел и его
 // содержимое читались как один уровень, и структура страницы пропадала.
 //
-// Вертикальный ритм — пять значений на весь кабинет, у каждого своя работа
+// Вертикальный ритм — шесть значений на весь кабинет, у каждого своя работа
 // (docs/DESIGN-SYSTEM.md): 4 внутри пары «заголовок и его подпись», 8 между
-// однородными строками, 16 между блоком и его содержимым, 32 поля страницы,
-// 48 между разделами.
+// однородными строками, 16 между элементами блока, 24 между заголовком раздела и
+// его содержимым, 32 поля страницы, 48 между разделами.
 //
 // Пояснение раздела ограничено половиной его ширины — см. комментарий в разметке.
 export function Section({
@@ -27,7 +27,7 @@ export function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className={cn('flex flex-col gap-4', className)}>
+    <section className={cn('flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-xl font-bold tracking-tight">{title}</h2>
@@ -36,7 +36,7 @@ export function Section({
               На узком экране половина превратилась бы в колонку в пять слов,
               поэтому ограничение начинается с sm. */}
           {description && (
-            <p className="mt-1 max-w-full text-base text-muted-foreground sm:max-w-[50%]">
+            <p className="mt-1 max-w-full text-sm text-muted-foreground sm:max-w-[50%]">
               {description}
             </p>
           )}

@@ -75,8 +75,9 @@ function ManageLayout() {
       <PageCrumbs items={[workspaceCrumb, title]} />
       <PageActions>
         {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
-            одна, и приглушать единственный вход в редактор незачем. */}
-        <Button asChild className="gap-1.5">
+            одна, и приглушать единственный вход в редактор незачем. Размер малый:
+            бар высотой 56px, и кнопка в полный рост подпирала бы его края. */}
+        <Button asChild size="sm" className="gap-1.5">
           <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
             <Pencil className="size-4" /> Редактировать
           </Link>
