@@ -9,15 +9,27 @@ import { useRouterState } from '@tanstack/react-router'
 // Пусто (параметра нет) = ЛИЧНОЕ пространство. Так адрес «/forms» остаётся
 // «/forms», а десяток существующих ссылок на дашборд не обязан ничего знать
 // про пространства.
-// useCurrentWorkspaceId читает ?w= из текущего адреса вне зависимости от того,
-// какой это маршрут: оболочка кабинета (сайдбар, кнопка «Новая форма») живёт
+// useCurrentWorkspaceId читает текущее пространство из адреса вне зависимости от
+// того, какой это маршрут: оболочка кабинета (сайдбар, кнопка «Новая форма») живёт
 // над деревом маршрутов и типизированного доступа к их search не имеет.
 // Возвращает '' для личного — так же, как формы трактуют отсутствие параметра.
+//
+// ДВА МЕСТА, ГДЕ ПРОСТРАНСТВО МОЖЕТ БЫТЬ НАПИСАНО: `?w=` у форм и путь
+// `/workspaces/{id}` у страницы пространства. Второе появилось вместе с этой
+// страницей и без него «Новая форма» из сайдбара, стоя внутри командного
+// пространства, молча заводила бы форму в личном — а гейты тарифа спрашивали бы
+// не тот план. Путь важнее параметра: он и есть текущий экран.
 export function useCurrentWorkspaceId(): string {
   return useRouterState({
-    select: (s) => {
-      const w = (s.location.search as { w?: unknown }).w
-      return typeof w === 'string' ? w : ''
-    },
+    select: (s) => workspaceIdFromLocation(s.location.pathname, s.location.search),
   })
+}
+
+// Разбор адреса вынесен из хука отдельной функцией: правило «путь важнее ?w=»
+// проверяется тестом, а не запуском роутера.
+export function workspaceIdFromLocation(pathname: string, search: unknown): string {
+  const fromPath = /^\/workspaces\/([^/]+)\/?$/.exec(pathname)?.[1]
+  if (fromPath !== undefined) return decodeURIComponent(fromPath)
+  const w = (search as { w?: unknown }).w
+  return typeof w === 'string' ? w : ''
 }

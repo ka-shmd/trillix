@@ -1,13 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import {
-  CreditCard,
-  FileText,
-  LayoutGrid,
-  LayoutTemplate,
-  LogOut,
-  Plus,
-  Settings,
-} from 'lucide-react'
+import { CreditCard, FileText, LayoutTemplate, LogOut, Plus, Settings } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -48,6 +40,10 @@ export interface AppSidebarProps {
   onCreateForm: () => void
   onLogout: () => void
   loggingOut: boolean
+  // workspacesNav — блок «Пространства» готовым узлом. Он читает список с сервера
+  // и открывает окна состава, то есть тянет фичу, а сайдбар остаётся
+  // презентационным: собирает его маршрут `_app`, как и остальные обработчики.
+  workspacesNav: React.ReactNode
 }
 
 export function AppSidebar({
@@ -57,13 +53,13 @@ export function AppSidebar({
   onCreateForm,
   onLogout,
   loggingOut,
+  workspacesNav,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
   const templatesActive = pathname.startsWith('/templates')
   const planActive = pathname.startsWith('/settings/plan')
   const accountActive = pathname.startsWith('/settings/account')
-  const workspacesActive = pathname.startsWith('/workspaces')
 
   return (
     <Sidebar>
@@ -103,14 +99,6 @@ export function AppSidebar({
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={workspacesActive} tooltip="Пространства">
-                  <Link to="/workspaces">
-                    <LayoutGrid className="size-4" />
-                    <span>Пространства</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={planActive} tooltip="Тариф">
                   <Link to="/settings/plan">
                     <CreditCard className="size-4" />
@@ -129,6 +117,8 @@ export function AppSidebar({
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {workspacesNav}
       </SidebarContent>
 
       <SidebarFooter>
