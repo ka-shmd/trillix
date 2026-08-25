@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, LayoutGrid, MoreHorizontal, Plus } from 'lucide-react'
+import { ChevronDown, MoreHorizontal, Plus } from 'lucide-react'
 import type { Workspace } from '../../entities/workspace'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { MembersDialog } from './MembersDialog'
@@ -133,7 +133,6 @@ function WorkspaceNavItem({
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isCurrent}>
         <Link to="/workspaces/$workspaceId" params={{ workspaceId: workspace.id }}>
-          <LayoutGrid className="size-4" />
           <span className="truncate">{workspace.name}</span>
         </Link>
       </SidebarMenuButton>
