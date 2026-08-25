@@ -24,6 +24,12 @@ import {
 
 // Презентационная оболочка кабинета. Данные пользователя и обработчики
 // (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
+//
+// ТРИ ЯРУСА, И ПУНКТ ПОПАДАЕТ В ЯРУС ПО СВОЕМУ УРОВНЮ, А НЕ ПО ЧАСТОТЕ: вверху
+// работа (создать форму, «Формы», «Шаблоны»), в середине контекст (пространства),
+// внизу аккаунт (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем
+// списке наравне с «Формами» и одновременно дублировались в нижнем меню — теперь
+// они только внизу.
 export interface AppSidebarProps {
   userEmail: string
   // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
@@ -58,21 +64,19 @@ export function AppSidebar({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
   const templatesActive = pathname.startsWith('/templates')
-  const planActive = pathname.startsWith('/settings/plan')
-  const accountActive = pathname.startsWith('/settings/account')
 
   return (
     <Sidebar>
       <SidebarHeader>
-        <div className="flex items-center px-2 py-1.5">
-          <span className="text-lg font-bold tracking-tight">Trillix</span>
+        <div className="flex items-center px-2 py-1">
+          <span className="text-base font-bold tracking-tight">Trillix</span>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent>
-            <Button className="w-full justify-start gap-2" onClick={onCreateForm}>
+            <Button size="sm" className="w-full justify-start gap-2" onClick={onCreateForm}>
               <Plus className="size-4" />
               Новая форма
             </Button>
@@ -95,22 +99,6 @@ export function AppSidebar({
                   <Link to="/templates">
                     <LayoutTemplate className="size-4" />
                     <span>Шаблоны</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={planActive} tooltip="Тариф">
-                  <Link to="/settings/plan">
-                    <CreditCard className="size-4" />
-                    <span>Тариф</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={accountActive} tooltip="Настройки">
-                  <Link to="/settings/account">
-                    <Settings className="size-4" />
-                    <span>Настройки</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -139,6 +127,12 @@ export function AppSidebar({
                   {userEmail}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/settings/plan">
+                    <CreditCard className="size-4" />
+                    Тариф
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link to="/settings/account">
                     <Settings className="size-4" />

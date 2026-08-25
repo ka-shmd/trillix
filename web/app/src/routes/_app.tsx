@@ -7,11 +7,12 @@ import { NEW_FORM_SLUG } from '../features/forms/draft'
 import { formKeys } from '../features/forms/keys'
 import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
 import { useCurrentWorkspace } from '../features/workspaces/current'
-import { useState } from 'react'
-import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import { useMemo, useState } from 'react'
+import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar'
+import { Separator } from '@/components/ui/separator'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
-import { HeaderSlotContext } from '../shared/headerSlot'
+import { AppHeaderContext } from '../shared/appHeader'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
 // сессии → редирект на /login (защищённый маршрут не показывает контент).
@@ -32,8 +33,16 @@ function AppLayout() {
   const logout = useLogout()
   const qc = useQueryClient()
   const currentWorkspace = useCurrentWorkspace()
-  // DOM-узел слота действий в шапке; страницы порталят в него свои кнопки.
-  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null)
+  // DOM-узлы двух половин верхнего бара: слева путь, справа действия. Страницы
+  // порталят в них через PageCrumbs/PageActions (shared/page/headerPortals.tsx).
+  const [headerLeft, setHeaderLeft] = useState<HTMLElement | null>(null)
+  const [headerRight, setHeaderRight] = useState<HTMLElement | null>(null)
+  // Новый объект на каждый рендер оболочки перерисовывал бы каждую страницу с
+  // крошками — контекст сравнивается по ссылке.
+  const headerSlots = useMemo(
+    () => ({ left: headerLeft, right: headerRight }),
+    [headerLeft, headerRight],
+  )
 
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
   if (!user) return null
@@ -101,17 +110,24 @@ function AppLayout() {
         {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background px-4">
-          {/* Слот действий страницы (крошки, кнопки редактора и т.п.). */}
-          <div ref={setHeaderSlot} className="flex flex-1 items-center gap-2" />
+        <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-3">
+          {/* Сворачивание сайдбара. На мобильном этот триггер — ЕДИНСТВЕННЫЙ способ
+              его открыть: там сайдбар превращается в выезжающую шторку (Sheet),
+              которая сама себя не показывает, и без кнопки навигации в кабинете с
+              телефона нет вовсе. */}
+          <SidebarTrigger className="text-muted-foreground" />
+          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+          {/* Слева путь страницы, справа её действия. */}
+          <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
+          <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
         </header>
         {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
             ответам — обычные поля. */}
         <main className="flex-1 overflow-auto">
           {!user.emailVerified && <VerifyEmailBanner />}
-          <HeaderSlotContext.Provider value={headerSlot}>
+          <AppHeaderContext.Provider value={headerSlots}>
             <Outlet />
-          </HeaderSlotContext.Provider>
+          </AppHeaderContext.Provider>
         </main>
       </SidebarInset>
     </SidebarProvider>

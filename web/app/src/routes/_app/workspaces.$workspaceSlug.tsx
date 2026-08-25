@@ -1,13 +1,11 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { createPortal } from 'react-dom'
-import { ChevronRight, House } from 'lucide-react'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { WorkspaceSection } from '../../features/workspaces/WorkspaceSection'
 import { WorkspaceFormList } from '../../features/forms/WorkspaceFormList'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formKeys } from '../../features/forms/keys'
-import { useHeaderSlot } from '../../shared/headerSlot'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -28,7 +26,6 @@ function WorkspacePage() {
   const workspaces = useQuery(workspacesQueryOptions)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const headerSlot = useHeaderSlot()
   const workspace = workspaces.data?.find((w) => w.slug === workspaceSlug)
 
   // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
@@ -45,7 +42,14 @@ function WorkspacePage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl p-6">
-      {headerSlot && createPortal(<HeaderCrumbs name={workspace?.name ?? '…'} />, headerSlot)}
+      <PageCrumbs
+        items={[
+          <Link key="ws" to="/workspaces">
+            Пространства
+          </Link>,
+          workspace?.name ?? '…',
+        ]}
+      />
       <h1 className="sr-only">{workspace?.name ?? 'Пространство'}</h1>
 
       {workspaces.isPending && (
@@ -93,25 +97,3 @@ function WorkspacePage() {
 
 // Крошки страницы: дом → «Пространства» → имя. Тот же вид, что у крошек редактора
 // (BuilderScreen): один верхний бар — один способ назвать текущее место.
-function HeaderCrumbs({ name }: { name: string }) {
-  return (
-    <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1 text-sm">
-      <Link
-        to="/forms"
-        search={(prev) => prev}
-        aria-label="Дом"
-        className="flex shrink-0 items-center text-muted-foreground hover:text-foreground"
-      >
-        <House className="size-4" />
-      </Link>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
-      <Link to="/workspaces" className="shrink-0 text-muted-foreground hover:text-foreground">
-        Пространства
-      </Link>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
-      <span className="min-w-0 truncate font-medium" aria-current="page">
-        {name}
-      </span>
-    </nav>
-  )
-}
