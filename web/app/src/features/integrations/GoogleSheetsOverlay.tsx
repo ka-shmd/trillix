@@ -103,7 +103,7 @@ export function GoogleSheetsOverlay({
             <GoogleSheetsIcon className="size-10" />
             <DialogTitle className="text-2xl">Google Таблицы</DialogTitle>
             <p className="text-sm text-muted-foreground">
-              Ответы этой формы будут ложиться строками в таблицу на вашем Google Диске.
+              Отправляйте ответы формы прямо в Google Таблицы.
             </p>
           </header>
 
@@ -279,9 +279,11 @@ function SetupBody({
       <div className="flex items-start justify-between gap-4">
         <div>
           <Label htmlFor="integration-backfill">Перенести уже накопленные ответы</Label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Ответы, которые форма собрала раньше, уедут в таблицу сразу. У формы с тысячами ответов
-            перенос займёт время.
+          {/* Кегль тот же, что у подписи над ним: пояснение к переключателю — такой
+              же вторичный текст, а не сноска. */}
+          <p className="mt-1 text-sm text-muted-foreground">
+            Выгрузите все ответы формы в Google Таблицы. У формы с большим числом ответов выгрузка
+            займёт время.
           </p>
         </div>
         <Switch
