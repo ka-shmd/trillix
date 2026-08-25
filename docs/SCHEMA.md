@@ -100,16 +100,19 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | | | индекс `idx_totp_recovery_codes_user` по `user_id` |
 
-## `workspaces` (0002, `personal_user_id` — 0016)
+## `workspaces` (0002, `personal_user_id` — 0016, `slug` — 0035)
 
 Контейнер владения формами.
 
 | Колонка | Тип | Ограничения |
 |---|---|---|
 | `id` | `UUID` | PK |
+| `slug` | `TEXT` | `NOT NULL UNIQUE` (`0035`) — короткий публичный ключ, nanoid(10) (`domain.NewSlug`) |
 | `name` | `TEXT` | `NOT NULL` — личное при регистрации называется «Личное пространство» |
 | `personal_user_id` | `UUID` | nullable, `UNIQUE`, FK → `users(id)` `ON DELETE CASCADE` — заполнен у личного, `NULL` у командного |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**`slug` — тот же приём, что `forms.slug`:** PK остаётся UUIDv7 (на него ссылаются семь таблиц, он обязан быть вечным), а в адрес кабинета уезжает короткий ключ — `/workspaces/{slug}` и `?w={slug}`. Запросы API по-прежнему адресуют пространство по `id`; перевод одного в другой делает кабинет по `GET /workspaces`, который отдаёт оба. Отдельной ручки-резолвера (как `/forms/lookup?slug=` у формы) пространству не нужно: список приезжает целиком, в отличие от постраничного списка форм. Существующим строкам ключ выдал бэкфилл `0035` — `gen_random_uuid()` в base64, 60 бит без pgcrypto.
 
 **`personal_user_id` отвечает сразу на два вопроса** — «личное ли пространство» и «чьё оно». `UNIQUE` даёт «ровно одно личное на аккаунт» на уровне БД и не мешает множеству дополнительных (в Postgres `UNIQUE` пропускает любое число `NULL`). Личное пространство не удаляется, не покидается и **не замораживается при даунгрейде** — иначе человек теряет доступ к собственным формам (ADR §10).
 

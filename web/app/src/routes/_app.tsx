@@ -6,8 +6,7 @@ import type { Workspace } from '../entities/workspace'
 import { NEW_FORM_SLUG } from '../features/forms/draft'
 import { formKeys } from '../features/forms/keys'
 import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
-import { workspacesQueryOptions } from '../features/workspaces/queries'
-import { useCurrentWorkspaceId } from '../shared/currentWorkspace'
+import { useCurrentWorkspace } from '../features/workspaces/current'
 import { useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
@@ -32,8 +31,7 @@ function AppLayout() {
   const { data: user } = useQuery(meQueryOptions)
   const logout = useLogout()
   const qc = useQueryClient()
-  const workspaces = useQuery(workspacesQueryOptions)
-  const currentWorkspaceId = useCurrentWorkspaceId()
+  const currentWorkspace = useCurrentWorkspace()
   // DOM-узел слота действий в шапке; страницы порталят в него свои кнопки.
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null)
 
@@ -45,16 +43,15 @@ function AppLayout() {
   // адрес редактора — из него его прочтёт и создание (пусто = личное).
   //
   // Текущее пространство берётся из адреса ЦЕЛИКОМ (shared/currentWorkspace: `?w=`
-  // либо путь `/workspaces/{id}`), а не переносом прежнего search: на странице
+  // либо путь `/workspaces/{slug}`), а не переносом прежнего search: на странице
   // пространства параметра `w` нет, и форма молча уезжала бы в личное.
   function handleCreate() {
-    const current = workspaces.data?.find((w) => w.id === currentWorkspaceId)
-    if (current) {
-      handleCreateIn(current)
+    if (currentWorkspace) {
+      handleCreateIn(currentWorkspace)
       return
     }
-    // Списка ещё нет либо пространство не наше — адрес остаётся как был: `?w=`
-    // из него редактор прочтёт сам, а чужой id всё равно отвергнет сервер.
+    // Список ещё не приехал — адрес остаётся как был: `?w=` из него редактор
+    // прочтёт сам и переведёт уже в момент создания формы.
     void navigate({
       to: '/forms/$slug/edit',
       params: { slug: NEW_FORM_SLUG },
@@ -68,7 +65,7 @@ function AppLayout() {
     void navigate({
       to: '/forms/$slug/edit',
       params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.id },
+      search: workspace.isPersonal ? {} : { w: workspace.slug },
     })
   }
 

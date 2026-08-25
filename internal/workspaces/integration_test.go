@@ -82,6 +82,7 @@ func newStack(t *testing.T) *httptest.Server {
 
 type workspaceDTO struct {
 	ID         string `json:"id"`
+	Slug       string `json:"slug"`
 	Name       string `json:"name"`
 	IsPersonal bool   `json:"isPersonal"`
 	FormCount  int64  `json:"formCount"`
@@ -345,6 +346,23 @@ func TestCreateWorkspace_AppearsInListAsTeam(t *testing.T) {
 	// Личное первое: оно старше любого другого (сортировка по created_at).
 	if !got.Workspaces[0].IsPersonal || got.Workspaces[1].IsPersonal {
 		t.Errorf("порядок и пометки = %+v, ждали личное первым", got.Workspaces)
+	}
+
+	// Slug есть у ОБОИХ, и они разные. Личное заводит транзакция регистрации
+	// (internal/auth), командное — этот модуль; забыть ключ в одном из двух мест
+	// компилятор не мешает, а колонка UNIQUE превратит забывчивость в отказ
+	// второй регистрации, то есть далеко от места ошибки.
+	for _, ws := range got.Workspaces {
+		if len(ws.Slug) != domain.SlugLen {
+			t.Errorf("пространство %q: slug %q длиной %d, ждали %d",
+				ws.Name, ws.Slug, len(ws.Slug), domain.SlugLen)
+		}
+	}
+	if got.Workspaces[0].Slug == got.Workspaces[1].Slug {
+		t.Errorf("два пространства с одним slug %q", got.Workspaces[0].Slug)
+	}
+	if created.Slug != got.Workspaces[1].Slug {
+		t.Errorf("ответ создания отдал slug %q, а список — %q", created.Slug, got.Workspaces[1].Slug)
 	}
 
 	// Владелец ровно один и это создатель: пространство работает по его плану.

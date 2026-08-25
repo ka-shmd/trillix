@@ -86,10 +86,14 @@ func (Repo) GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) 
 // CreateWorkspace заводит ЛИЧНОЕ пространство: personal_user_id заполнен всегда
 // (регистрация — единственный вызывающий). Командные пространства заводит
 // workspaces со своим запросом и NULL в этой колонке.
-func (Repo) CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error) {
+func (Repo) CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string, personalUserID uuid.UUID) (Workspace, error) {
 	row, err := postgres.New(db).CreatePersonalWorkspace(ctx, postgres.CreatePersonalWorkspaceParams{
-		ID:             id,
-		Name:           name,
+		ID:   id,
+		Name: name,
+		// МИНА: slug пустым оставить нельзя — колонка UNIQUE (0035), и вторая
+		// регистрация упала бы на дубле пустой строки. Компилятор этого не ловит:
+		// незаполненное поле параметров — валидный нулевой string.
+		Slug:           slug,
 		PersonalUserID: pgtype.UUID{Bytes: personalUserID, Valid: true},
 	})
 	if err != nil {

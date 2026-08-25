@@ -249,6 +249,9 @@ func providerName(v string) *string {
 func (s *Service) createUserWithIdentity(ctx context.Context, email string, p IdentityProfile) (User, error) {
 	userID := domain.NewID()
 	wsID := domain.NewID()
+	// Публичный ключ личного пространства: тот же nanoid, что у формы (0035).
+	// Генерируется здесь, рядом с id, — repo идентификаторов не выдумывает.
+	wsSlug := domain.NewSlug()
 
 	var user User
 	err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
@@ -272,7 +275,7 @@ func (s *Service) createUserWithIdentity(ctx context.Context, email string, p Id
 			}
 			user = filled
 		}
-		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName, userID); e != nil {
+		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, wsSlug, personalWorkspaceName, userID); e != nil {
 			return e
 		}
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {

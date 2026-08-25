@@ -31,6 +31,7 @@ type fakeStore struct {
 	ownerAdded      bool
 	addOwnerErr     error
 	ownerUserID     uuid.UUID
+	createdSlugs    []string
 	createdWSIDs    []uuid.UUID
 	inviteErr       error
 	deletedMembers  int64
@@ -122,13 +123,14 @@ func (f *fakeStore) DeleteMember(_ context.Context, _ postgres.DBTX, _, _ uuid.U
 	return f.deletedMembers, f.deleteMemberErr
 }
 
-func (f *fakeStore) Create(_ context.Context, _ postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
+func (f *fakeStore) Create(_ context.Context, _ postgres.DBTX, id uuid.UUID, slug, name string) (Workspace, error) {
 	if f.createErr != nil {
 		return Workspace{}, f.createErr
 	}
 	f.createdName = name
+	f.createdSlugs = append(f.createdSlugs, slug)
 	f.createdWSIDs = append(f.createdWSIDs, id)
-	return Workspace{ID: id, Name: name}, nil
+	return Workspace{ID: id, Slug: slug, Name: name}, nil
 }
 
 func (f *fakeStore) AddOwner(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID) error {
@@ -223,6 +225,37 @@ func TestCreate_WritesWorkspaceAndOwnerInOneTx(t *testing.T) {
 	}
 	if plans.gotUser != uid || plans.gotKey != entitlements.Workspaces {
 		t.Errorf("гейт спрошен как (%s, %q), ждали (%s, %q)", plans.gotUser, plans.gotKey, uid, entitlements.Workspaces)
+	}
+}
+
+// Пустой slug — не абстрактная придирка: колонка UNIQUE (0035), поэтому первое
+// пространство с пустым ключом запишется, а второе упадёт на дубле. Компилятор
+// такую дыру не видит (незаполненное поле параметров — валидный нулевой string),
+// поэтому её сторожит тест.
+func TestCreate_GeneratesUniqueSlug(t *testing.T) {
+	uid := uuid.New()
+	store := &fakeStore{}
+	svc, _ := newTestService(store, &fakePlans{allowed: true})
+
+	first, err := svc.Create(context.Background(), uid, "Первое")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	second, err := svc.Create(context.Background(), uid, "Второе")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	for i, got := range store.createdSlugs {
+		if len(got) != domain.SlugLen {
+			t.Errorf("в репозиторий ушёл slug %q длиной %d, ждали %d", got, len(got), domain.SlugLen)
+		}
+		if i > 0 && got == store.createdSlugs[i-1] {
+			t.Errorf("два пространства подряд получили один slug %q — UNIQUE отвергнет второе", got)
+		}
+	}
+	if first.Slug == "" || second.Slug == "" {
+		t.Errorf("наружу отдан пустой slug: %q и %q", first.Slug, second.Slug)
 	}
 }
 

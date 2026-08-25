@@ -512,8 +512,8 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 }
 
 const createPersonalWorkspace = `-- name: CreatePersonalWorkspace :one
-INSERT INTO workspaces (id, name, personal_user_id)
-VALUES ($1, $2, $3)
+INSERT INTO workspaces (id, name, personal_user_id, slug)
+VALUES ($1, $2, $3, $4)
 RETURNING id, name, created_at
 `
 
@@ -521,6 +521,7 @@ type CreatePersonalWorkspaceParams struct {
 	ID             uuid.UUID
 	Name           string
 	PersonalUserID pgtype.UUID
+	Slug           string
 }
 
 type CreatePersonalWorkspaceRow struct {
@@ -532,7 +533,12 @@ type CreatePersonalWorkspaceRow struct {
 // Личное пространство регистрации: personal_user_id — и пометка «личное», и
 // ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
 func (q *Queries) CreatePersonalWorkspace(ctx context.Context, arg CreatePersonalWorkspaceParams) (CreatePersonalWorkspaceRow, error) {
-	row := q.db.QueryRow(ctx, createPersonalWorkspace, arg.ID, arg.Name, arg.PersonalUserID)
+	row := q.db.QueryRow(ctx, createPersonalWorkspace,
+		arg.ID,
+		arg.Name,
+		arg.PersonalUserID,
+		arg.Slug,
+	)
 	var i CreatePersonalWorkspaceRow
 	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
 	return i, err
@@ -618,18 +624,20 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createWorkspace = `-- name: CreateWorkspace :one
-INSERT INTO workspaces (id, name)
-VALUES ($1, $2)
-RETURNING id, name, created_at
+INSERT INTO workspaces (id, slug, name)
+VALUES ($1, $2, $3)
+RETURNING id, slug, name, created_at
 `
 
 type CreateWorkspaceParams struct {
 	ID   uuid.UUID
+	Slug string
 	Name string
 }
 
 type CreateWorkspaceRow struct {
 	ID        uuid.UUID
+	Slug      string
 	Name      string
 	CreatedAt pgtype.Timestamptz
 }
@@ -641,9 +649,14 @@ type CreateWorkspaceRow struct {
 // Владельца добавляет отдельная строка членства в той же транзакции:
 // пространство без владельца — пространство без плана.
 func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (CreateWorkspaceRow, error) {
-	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Name)
+	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Slug, arg.Name)
 	var i CreateWorkspaceRow
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Slug,
+		&i.Name,
+		&i.CreatedAt,
+	)
 	return i, err
 }
 
@@ -2173,12 +2186,13 @@ func (q *Queries) GetUserIDByEmail(ctx context.Context, lower string) (uuid.UUID
 }
 
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
-SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+SELECT id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1
 `
 
 type GetWorkspaceByIDRow struct {
 	ID         uuid.UUID
+	Slug       string
 	Name       string
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
@@ -2189,6 +2203,7 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 	var i GetWorkspaceByIDRow
 	err := row.Scan(
 		&i.ID,
+		&i.Slug,
 		&i.Name,
 		&i.CreatedAt,
 		&i.IsPersonal,
@@ -3416,7 +3431,7 @@ func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUI
 
 const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
-SELECT w.id, w.name, w.created_at,
+SELECT w.id, w.slug, w.name, w.created_at,
        (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
        (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
 FROM workspace_members m
@@ -3427,6 +3442,7 @@ ORDER BY w.created_at ASC
 
 type ListWorkspacesByUserRow struct {
 	ID         uuid.UUID
+	Slug       string
 	Name       string
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
@@ -3460,6 +3476,7 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 		var i ListWorkspacesByUserRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Slug,
 			&i.Name,
 			&i.CreatedAt,
 			&i.IsPersonal,
@@ -3707,7 +3724,7 @@ const renameWorkspace = `-- name: RenameWorkspace :one
 UPDATE workspaces
 SET name = $2
 WHERE id = $1
-RETURNING id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+RETURNING id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 `
 
 type RenameWorkspaceParams struct {
@@ -3717,6 +3734,7 @@ type RenameWorkspaceParams struct {
 
 type RenameWorkspaceRow struct {
 	ID         uuid.UUID
+	Slug       string
 	Name       string
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
@@ -3729,6 +3747,7 @@ func (q *Queries) RenameWorkspace(ctx context.Context, arg RenameWorkspaceParams
 	var i RenameWorkspaceRow
 	err := row.Scan(
 		&i.ID,
+		&i.Slug,
 		&i.Name,
 		&i.CreatedAt,
 		&i.IsPersonal,

@@ -38,7 +38,7 @@ function WorkspacesPage() {
     void navigate({
       to: '/forms/$slug/edit',
       params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.id },
+      search: workspace.isPersonal ? {} : { w: workspace.slug },
     })
   }
 

@@ -110,6 +110,7 @@ CREATE TABLE user_identities (
 -- через members.
 CREATE TABLE workspaces (
     id               UUID PRIMARY KEY,
+    slug             TEXT NOT NULL UNIQUE,   -- короткий id для адреса кабинета, nanoid(10) (0035)
     name             TEXT NOT NULL,
     personal_user_id UUID UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -425,7 +426,7 @@ GET    /auth/oauth/{provider}/start   уход к провайдеру (302; с�
 GET    /auth/oauth/{provider}/callback возврат от провайдера (302 в кабинет; email занят → экран привязки, сессии нет)
 POST   /auth/oauth/link               привязка провайдера к существующему аккаунту по паролю
 
-GET    /workspaces                    список воркспейсов текущего пользователя (в MVP — один личный)
+GET    /workspaces                    список воркспейсов текущего пользователя (id + slug; URL кабинета адресует пространство slug'ом, запросы API — id, перевод делает кабинет по этому же списку)
 
 GET    /forms                         список форм воркспейса (курсорная пагинация, поиск q, сортировка sort)
 POST   /forms                         создать форму

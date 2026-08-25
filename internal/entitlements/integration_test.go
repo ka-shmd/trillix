@@ -158,7 +158,7 @@ func TestCheckWorkspace_NoSubscriptionIsError(t *testing.T) {
 	ctx := context.Background()
 	wsID := uuid.New()
 	if _, err := testPool.Exec(ctx,
-		`INSERT INTO workspaces (id, name) VALUES ($1, 'no-plan')`, wsID); err != nil {
+		`INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, 'no-plan')`, wsID, domain.NewSlug()); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func seedWorkspace(t *testing.T, plan string) (uuid.UUID, uuid.UUID) {
 	ctx := context.Background()
 	wsID := uuid.New()
 	ownerID := seedUser(t)
-	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, 'test')`, wsID); err != nil {
+	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, 'test')`, wsID, domain.NewSlug()); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if _, err := testPool.Exec(ctx,
