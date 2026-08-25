@@ -110,7 +110,7 @@ function AppLayout() {
         {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-4">
+        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
           {/* Сворачивание сайдбара. На мобильном этот триггер — ЕДИНСТВЕННЫЙ способ
               его открыть: там сайдбар превращается в выезжающую шторку (Sheet),
               которая сама себя не показывает, и без кнопки навигации в кабинете с
