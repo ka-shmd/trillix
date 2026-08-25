@@ -74,7 +74,9 @@ function ManageLayout() {
     <PageContainer>
       <PageCrumbs items={[workspaceCrumb, title]} />
       <PageActions>
-        <Button asChild variant="outline" size="sm" className="gap-1.5">
+        {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
+            одна, и приглушать единственный вход в редактор незачем. */}
+        <Button asChild className="gap-1.5">
           <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
             <Pencil className="size-4" /> Редактировать
           </Link>
@@ -117,14 +119,14 @@ function FormTabs({ slug }: { slug: string }) {
   // одинаковая специфичность, и побеждает та, что позже в сгенерированном CSS
   // Tailwind, — активный таб оказывается прозрачным, хотя класс на нём есть.
   // Проверять это надо computed-стилем, а не наличием класса в className.
-  const base = 'border-b-2 px-1 pb-2 text-sm transition-colors'
+  const base = 'border-b-2 px-1 pb-3 text-sm transition-colors'
   const active = { className: 'border-primary font-semibold text-foreground' }
   const inactive = {
     className: 'border-transparent font-medium text-muted-foreground hover:text-foreground',
   }
 
   return (
-    <nav className="mt-4 mb-6 flex gap-5 border-b" aria-label="Разделы формы">
+    <nav className="mt-7 mb-8 flex gap-6 border-b" aria-label="Разделы формы">
       <Link
         to="/forms/$slug/share"
         search={(prev) => prev}

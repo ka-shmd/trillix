@@ -29,14 +29,19 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
 
   return createPortal(
     <Breadcrumb className="min-w-0">
-      <BreadcrumbList className="flex-nowrap">
+      {/* Крошки — служебная строка, а не заголовок: text-xs и приглушённый цвет
+          даже у текущей страницы, имя которой и так стоит заголовком под баром.
+          Пока последняя крошка была тёмной и полужирной, она спорила с h1. */}
+      <BreadcrumbList className="flex-nowrap gap-1.5 text-xs sm:gap-1.5">
         {items.map((item, i) => {
           const last = i === items.length - 1
           return (
             <Fragment key={i}>
               <BreadcrumbItem className="min-w-0">
                 {last ? (
-                  <BreadcrumbPage className="truncate font-medium">{item}</BreadcrumbPage>
+                  <BreadcrumbPage className="truncate font-normal text-muted-foreground">
+                    {item}
+                  </BreadcrumbPage>
                 ) : isValidElement(item) ? (
                   <BreadcrumbLink asChild className="truncate">
                     {item}
@@ -45,7 +50,7 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
                   <span className="truncate">{item}</span>
                 )}
               </BreadcrumbItem>
-              {!last && <BreadcrumbSeparator />}
+              {!last && <BreadcrumbSeparator className="text-muted-foreground/40 [&>svg]:size-3" />}
             </Fragment>
           )
         })}

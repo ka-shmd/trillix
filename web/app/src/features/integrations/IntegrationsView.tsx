@@ -48,7 +48,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
   const editing = connections.find((c) => c.id === overlay) ?? null
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-10">
       {/* Раздел рисуется и при нуле связок: блок, который просто исчезает, читается
           как недогрузившаяся страница, а вопрос «куда уезжают ответы» стоит и тогда,
           когда ответ — «никуда». */}
@@ -86,14 +86,14 @@ export function IntegrationsView({ formId }: { formId: string }) {
             логотипом опознаётся с одного взгляда, тогда как одинаковые строки
             приходится читать. Один живой пункт; заглушек «скоро будет» здесь нет —
             они обещают срок, которого никто не давал. */}
-        <ul className="grid gap-x-6 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
           <li className="flex flex-col items-start">
-            <GoogleSheetsIcon className="size-8" />
-            <p className="mt-3 text-sm font-semibold">Google Таблицы</p>
+            <GoogleSheetsIcon className="size-10" />
+            <p className="mt-4 text-base font-semibold">Google Таблицы</p>
             <p className="mt-1 text-sm text-muted-foreground">Отправляйте ответы в таблицу</p>
             <Button
               variant="link"
-              className="mt-2 h-auto p-0 text-primary"
+              className="mt-3 h-auto p-0 text-base text-primary"
               onClick={() => setOverlay('new')}
             >
               Подключить
@@ -143,10 +143,10 @@ function ConnectionRow({
   const name = connection.name || 'Google Таблицы'
 
   return (
-    <div className="flex items-center gap-3 py-2">
-      <GoogleSheetsIcon className="size-7 shrink-0" />
+    <div className="flex items-center gap-4 py-3">
+      <GoogleSheetsIcon className="size-9 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="flex items-center gap-2 text-sm font-medium">
+        <p className="flex items-center gap-2 text-base font-semibold">
           <span className="truncate">{name}</span>
           <StatusDot
             status={connection.status}
@@ -154,7 +154,7 @@ function ConnectionRow({
             accountLost={accountLost}
           />
         </p>
-        <p className="text-sm text-muted-foreground">
+        <p className="mt-0.5 text-sm text-muted-foreground">
           {connectionSummary(connection, accountLost)}{' '}
           <a
             href={connection.url}
@@ -169,9 +169,15 @@ function ConnectionRow({
 
       {/* Включённый тумблер — ярко-зелёный, а не цвета акцента: рядом с ним такой
           же зелёный кружок состояния, и разными оттенками они читались бы как два
-          разных сигнала. */}
+          разных сигнала.
+
+          Размер задан свой: рядом с названием в 16px штатные 32×18 читаются
+          значком. МИНА: сдвиг бегунка у shadcn записан как calc(100%-2px) от
+          ширины САМОГО бегунка и верен только для его родных размеров — при
+          другой дорожке бегунок не доезжает до края. Поэтому сдвиг здесь явный:
+          дорожка 44 − рамки 2 − бегунок 20 = 22px. */}
       <Switch
-        className="data-[state=checked]:bg-success"
+        className="mr-1 h-6 w-11 data-[state=checked]:bg-success [&>span]:size-5 [&>span[data-state=checked]]:translate-x-[1.375rem]"
         checked={connection.enabled}
         disabled={update.isPending}
         aria-label={connection.enabled ? 'Выключить подключение' : 'Включить подключение'}
@@ -181,21 +187,21 @@ function ConnectionRow({
       />
       <Button
         variant="ghost"
-        size="icon-sm"
+        size="icon"
         className="text-muted-foreground"
         aria-label="Настроить подключение"
         onClick={onEdit}
       >
-        <Pencil className="size-4" />
+        <Pencil className="size-[1.15rem]" />
       </Button>
       <Button
         variant="ghost"
-        size="icon-sm"
+        size="icon"
         className="text-muted-foreground"
         aria-label="Удалить подключение"
         onClick={() => setConfirming(true)}
       >
-        <Trash2 className="size-4" />
+        <Trash2 className="size-[1.15rem]" />
       </Button>
 
       {/* Удаление спрашивает: связка уносит с собой настройки и историю
