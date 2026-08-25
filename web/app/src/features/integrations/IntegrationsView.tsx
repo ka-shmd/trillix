@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Pencil, Table2, Trash2 } from 'lucide-react'
 
-import type { FormIntegrations, FormSheet } from '../../entities/integration'
+import type { FormSheet } from '../../entities/integration'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
 import { GoogleSheetsIcon } from './ServiceIcon'
 import { formIntegrationsQueryOptions, useUnlinkSheet, useUpdateConnection } from './queries'
@@ -54,7 +54,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
           когда ответ — «никуда». */}
       <Section
         title="Мои подключения"
-        description="Куда уезжают ответы этой формы. Подключений может быть несколько — например, в рабочую таблицу и в архивную."
+        description="Здесь собраны все интеграции, подключённые к этой форме. Интеграцию можно включить или выключить, а ход синхронизации ответов — посмотреть в журнале событий."
       >
         {connections.length === 0 ? (
           <EmptyState
@@ -80,7 +80,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
 
       <Section
         title="Доступные интеграции"
-        description="Ответы формы могут уезжать во внешние сервисы сами — сразу после отправки."
+        description="Эти инструменты сделают Trillix ещё полезнее."
       >
         {/* Сетка, а не строки: каталог со временем станет длинным, и плитка с
             логотипом опознаётся с одного взгляда, тогда как одинаковые строки
@@ -90,7 +90,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
           <li className="flex flex-col items-start">
             <GoogleSheetsIcon className="size-8" />
             <p className="mt-3 text-sm font-semibold">Google Таблицы</p>
-            <p className="mt-1 text-sm text-muted-foreground">{catalogSummary(state.data)}</p>
+            <p className="mt-1 text-sm text-muted-foreground">Отправляйте ответы в таблицу</p>
             <Button
               variant="link"
               className="mt-2 h-auto p-0 text-primary"
@@ -258,15 +258,4 @@ function connectionSummary(connection: FormSheet, accountLost: boolean): string 
   if (connection.status === 'broken') return 'Записать не удаётся — откройте настройки; связано с'
   if (connection.status === 'backfilling') return 'Переносим накопленные ответы в'
   return 'Ответы синхронизируются с'
-}
-
-// catalogSummary — строка каталога. Она же объясняет, почему кнопка «Подключить»
-// может не сработать: аккаунта ещё нет или интеграция не настроена на контуре.
-function catalogSummary(state: FormIntegrations): string {
-  if (!state.account.enabled) return 'На этом контуре интеграция не настроена'
-  if (state.account.needsReconnect) {
-    return `Доступ к аккаунту ${state.account.email} потерян — подключите его заново`
-  }
-  if (state.account.connected) return `Подключено как ${state.account.email}`
-  return 'Каждый ответ ложится строкой в таблицу на вашем Google Диске'
 }

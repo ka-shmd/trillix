@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils'
 //
 // Вертикальный ритм кабинета — три значения, других нет: gap-8 между разделами,
 // gap-3 внутри раздела, gap-2 между элементами списка (docs/DESIGN-SYSTEM.md).
+//
+// Пояснение раздела ограничено половиной его ширины — см. комментарий в разметке.
 export function Section({
   title,
   description,
@@ -26,9 +28,17 @@ export function Section({
   return (
     <section className={cn('flex flex-col gap-3', className)}>
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+          {/* Пояснение не шире половины раздела: строка во всю ширину экрана
+              нечитаема, а короткая мера сама отделяет пояснение от содержимого.
+              На узком экране половина превратилась бы в колонку в пять слов,
+              поэтому ограничение начинается с sm. */}
+          {description && (
+            <p className="mt-0.5 max-w-full text-sm text-muted-foreground sm:max-w-[50%]">
+              {description}
+            </p>
+          )}
         </div>
         {action && <div className="shrink-0">{action}</div>}
       </div>
