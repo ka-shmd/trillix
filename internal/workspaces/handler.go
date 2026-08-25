@@ -289,7 +289,11 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 type workspaceResponse struct {
-	ID   string `json:"id"`
+	ID string `json:"id"`
+	// slug — короткий публичный ключ: им кабинет адресует пространство в своих
+	// URL (/workspaces/{slug}, ?w={slug}), как формой — forms.slug. В запросы
+	// API по-прежнему едет id: перевод делает кабинет по этому же списку.
+	Slug string `json:"slug"`
 	Name string `json:"name"`
 	// isPersonal — личное пространство спрашивающего: кабинет помечает его в
 	// списке и не показывает у него действий «покинуть»/«удалить».
@@ -390,6 +394,7 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 
 func toResponse(ws Workspace) workspaceResponse {
 	return workspaceResponse{
-		ID: ws.ID.String(), Name: ws.Name, IsPersonal: ws.IsPersonal, FormCount: ws.FormCount,
+		ID: ws.ID.String(), Slug: ws.Slug, Name: ws.Name,
+		IsPersonal: ws.IsPersonal, FormCount: ws.FormCount,
 	}
 }

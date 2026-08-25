@@ -58,7 +58,9 @@ func addTeam(t *testing.T, name string, owner uuid.UUID, members ...uuid.UUID) u
 	t.Helper()
 	ctx := context.Background()
 	wsID := domain.NewID()
-	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, name) VALUES ($1, $2)`, wsID, name); err != nil {
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, $3)`,
+		wsID, domain.NewSlug(), name); err != nil {
 		t.Fatalf("insert workspace: %v", err)
 	}
 	if _, err := testPool.Exec(ctx,
