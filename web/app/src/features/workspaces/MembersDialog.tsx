@@ -35,7 +35,11 @@ export function MembersDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const state = useQuery(membersQueryOptions(workspace.id))
+  // Состав спрашивается ТОЛЬКО У ОТКРЫТОГО окна: закрытое всё равно остаётся в
+  // дереве (иначе оно не умеет появляться), а запрос состава идёт на КАЖДОЕ
+  // пространство отдельно (N+1, §6 WORKSPACES.md) — и с блоком в сайдбаре это
+  // происходило бы на каждом экране кабинета, а не на одном обзоре.
+  const state = useQuery({ ...membersQueryOptions(workspace.id), enabled: open })
   const invite = useInviteMember(workspace.id)
   const remove = useRemoveMember(workspace.id)
   const leave = useLeaveWorkspace(workspace.id)
