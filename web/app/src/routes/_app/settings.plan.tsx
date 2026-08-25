@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { type PlanFeature } from '../../entities/plan'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
-import { useCurrentWorkspaceId } from '../../shared/currentWorkspace'
+import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { planSnapshotQueryOptions } from '../../features/plan/queries'
 import { formatDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
@@ -20,20 +20,20 @@ export const Route = createFileRoute('/_app/settings/plan')({
 })
 
 function PlanPage() {
-  // Тариф показывается для ТЕКУЩЕГО пространства (?w=). Пусто = личное — и оно
-  // ищется ПО ПОМЕТКЕ, а не как первое в списке: список сортируется по возрасту
-  // ПО ВСЕМ пространствам с членством, включая чужие, которые старше
-  // моей регистрации. У приглашённого первым шло бы чужое, и «Тариф» в сайдбаре
-  // отдавал бы 403 без единого способа попасть на свой (найдено ревью фазы 18).
-  const current = useCurrentWorkspaceId()
+  // Тариф показывается для ТЕКУЩЕГО пространства (адрес называет его slug'ом,
+  // пусто = личное); перевод в id для запроса делает useCurrentWorkspace — оно же
+  // ищет личное ПО ПОМЕТКЕ, а не как первое в списке. Список сортируется по
+  // возрасту ПО ВСЕМ пространствам с членством, включая чужие, которые старше моей
+  // регистрации: у приглашённого первым шло бы чужое, и «Тариф» в сайдбаре отдавал
+  // бы 403 без единого способа попасть на свой (найдено ревью фазы 18).
   const workspaces = useQuery(workspacesQueryOptions)
-  const workspaceId = current || workspaces.data?.find((w) => w.isPersonal)?.id
+  const workspace = useCurrentWorkspace()
   const plan = useQuery({
-    ...planSnapshotQueryOptions(workspaceId ?? ''),
-    enabled: workspaceId !== undefined,
+    ...planSnapshotQueryOptions(workspace?.id ?? ''),
+    enabled: workspace !== undefined,
   })
 
-  // Сбой списка воркспейсов разбирается ОТДЕЛЬНО: без него workspaceId остаётся
+  // Сбой списка воркспейсов разбирается ОТДЕЛЬНО: без него пространство остаётся
   // undefined, запрос тарифа не включается, а выключенный запрос в TanStack v5
   // вечно `pending` — страница показывала бы «Загрузка тарифа…» без конца и без
   // кнопки повтора. Найдено ревью фазы 17.
