@@ -191,9 +191,18 @@
   body[data-scroll-locked] {
     margin-right: 0 !important;
   }
+  /* ШРИФТ КАБИНЕТА — INTER, И ФАЙЛЫ ЗА НИМ УЖЕ ЕСТЬ: вариативный 100–900 объявлен
+     в web/shared/fields/fields.css (общий с рендерером) и самохостится оттуда.
+     Google Fonts подключать нельзя — в проде их режет CSP (`default-src 'self'`), а
+     на публичной странице формы это ещё и запрос браузера респондента на чужой
+     сервер. Системный стек остаётся запасным: до загрузки файла (`font-display:
+     swap`) и на случай, если он не доедет.
+     Полотна формы это не касается — там семейство выбирает автор
+     (`--rf-font-family`), и оно перебивает наследование. */
   body {
     @apply bg-background text-foreground;
     font-family:
+      'Inter',
       system-ui,
       -apple-system,
       'Segoe UI',

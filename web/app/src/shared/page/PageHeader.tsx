@@ -4,10 +4,10 @@ import { cn } from '@/lib/utils'
 // справа. Крошки и путь назад сюда НЕ входят — они живут в верхнем баре кабинета
 // (routes/_app.tsx), один на всё приложение.
 //
-// Три уровня иерархии задаются здесь и в Section, а не подбираются на каждом
-// экране: заголовок страницы text-2xl/bold → заголовок раздела text-lg/semibold →
-// название элемента списка text-base/semibold. Каждый следующий на ступень мельче,
-// а самый верхний ещё и тяжелее.
+// Верхняя ступень шкалы кеглей кабинета (вся шкала — docs/DESIGN-SYSTEM.md):
+// заголовок страницы 30/800 → заголовок раздела 20/700 → название элемента 16/600.
+// Вторичный текст всегда на ступень мельче того, к чему относится, — это и есть
+// правило, по которому размер не приходится подбирать на каждом экране.
 export function PageHeader({
   title,
   titleAction,
@@ -32,11 +32,11 @@ export function PageHeader({
     <header className={cn('flex flex-wrap items-start justify-between gap-4', className)}>
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
-          <h1 className="truncate text-2xl font-bold tracking-tight">{title}</h1>
+          <h1 className="truncate text-3xl font-extrabold tracking-tight">{title}</h1>
           {titleAction}
         </div>
-        {description && <p className="mt-1.5 text-sm text-muted-foreground">{description}</p>}
-        {meta && <div className="mt-3 flex flex-wrap items-center gap-2">{meta}</div>}
+        {description && <p className="mt-1 text-base text-muted-foreground">{description}</p>}
+        {meta && <div className="mt-2 flex flex-wrap items-center gap-2">{meta}</div>}
       </div>
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
