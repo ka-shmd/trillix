@@ -56,11 +56,6 @@ func resetDB(t *testing.T) {
 	}
 }
 
-// newStack собирает реальную вертикаль auth+forms поверх контейнерного пула.
-// fixtureIndexPath кладёт минимальный собранный index.html рендерера (с обеими
-// точками вставки — оформления в теге <html> и головы формы в <head>) во временный
-// файл — так же, как его получит api из смонтированной статики в проде. Нужен, чтобы
-// Go регистрировал и обслуживал /r в этом стеке.
 // testTokenSecret — ключ подписи токена формы на весь стек теста.
 var testTokenSecret = []byte("dev-only-form-token-secret-not-a-real-key")
 
@@ -70,6 +65,11 @@ type allowLimiter struct{}
 
 func (allowLimiter) Allow(string) bool { return true }
 
+// newStack собирает реальную вертикаль auth+forms поверх контейнерного пула.
+// fixtureIndexPath кладёт минимальный собранный index.html рендерера (с обеими
+// точками вставки — оформления в теге <html> и головы формы в <head>) во временный
+// файл — так же, как его получит api из смонтированной статики в проде. Нужен, чтобы
+// Go регистрировал и обслуживал /r в этом стеке.
 func fixtureIndexPath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "index.html")
