@@ -120,14 +120,14 @@ function FormTabs({ slug }: { slug: string }) {
   // одинаковая специфичность, и побеждает та, что позже в сгенерированном CSS
   // Tailwind, — активный таб оказывается прозрачным, хотя класс на нём есть.
   // Проверять это надо computed-стилем, а не наличием класса в className.
-  const base = 'border-b-2 px-1 pb-3 text-base transition-colors'
+  const base = 'border-b-2 px-0.5 pb-2 text-sm transition-colors'
   const active = { className: 'border-primary font-semibold text-foreground' }
   const inactive = {
     className: 'border-transparent font-medium text-muted-foreground hover:text-foreground',
   }
 
   return (
-    <nav className="mt-8 mb-8 flex gap-6 border-b" aria-label="Разделы формы">
+    <nav className="mt-6 mb-8 flex gap-4 border-b" aria-label="Разделы формы">
       <Link
         to="/forms/$slug/share"
         search={(prev) => prev}
