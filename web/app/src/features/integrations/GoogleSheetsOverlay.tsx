@@ -102,7 +102,12 @@ export function GoogleSheetsOverlay({
         <div className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16">
           <header className="flex flex-col items-center gap-3 text-center">
             <GoogleSheetsIcon className="size-10" />
-            <DialogTitle className="text-2xl">Google Таблицы</DialogTitle>
+            {/* Оверлей занимает весь экран, поэтому его заголовок берёт верхнюю ступень
+                шкалы — ту же, что h1 страницы (docs/DESIGN-SYSTEM.md). Базовый
+                text-lg/semibold у DialogTitle перекрывается целиком: и кегль, и вес. */}
+            <DialogTitle className="text-3xl font-extrabold tracking-tight">
+              Google Таблицы
+            </DialogTitle>
             <p className="text-sm text-muted-foreground">
               Отправляйте ответы формы прямо в Google Таблицы.
             </p>
