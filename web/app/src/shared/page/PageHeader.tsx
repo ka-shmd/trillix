@@ -9,12 +9,17 @@ import { cn } from '@/lib/utils'
 // в Section, а не подбираются на каждом экране.
 export function PageHeader({
   title,
+  titleAction,
   description,
   meta,
   actions,
   className,
 }: {
   title: React.ReactNode
+  // titleAction — кнопка ПРИ заголовке (меню действий над сущностью), а не при
+  // странице. Отдельно от `actions`: те живут в верхнем баре и относятся к экрану,
+  // эта стоит вплотную к имени и относится к тому, что названо.
+  titleAction?: React.ReactNode
   description?: React.ReactNode
   // meta — ряд под заголовком: бейдж статуса, версия, счётчик. Отдельно от
   // description, потому что это состояние сущности, а не текст про неё.
@@ -25,7 +30,10 @@ export function PageHeader({
   return (
     <header className={cn('flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0">
-        <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+        <div className="flex min-w-0 items-center gap-1">
+          <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+          {titleAction}
+        </div>
         {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
         {meta && <div className="mt-2 flex flex-wrap items-center gap-2">{meta}</div>}
       </div>

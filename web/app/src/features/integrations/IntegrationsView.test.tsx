@@ -101,18 +101,8 @@ function openSetup() {
   fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
 }
 
-// Действия строки живут в меню «⋯»: сперва открыть его, потом выбрать пункт.
-// Radix открывает меню на pointerdown, которого fireEvent.click не даёт, — поэтому
-// клавиатурой (Enter на триггере), а не мышью.
-function openRowMenu() {
-  fireEvent.keyDown(screen.getByRole('button', { name: /Действия с подключением/ }), {
-    key: 'Enter',
-  })
-}
-
 function openConnection() {
-  openRowMenu()
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Настроить подключение' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Настроить подключение' }))
 }
 
 describe('два блока экрана', () => {
@@ -148,9 +138,9 @@ describe('два блока экрана', () => {
 
     expect(screen.getByText(/Доступ к аккаунту .* потерян/)).toBeTruthy()
     expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
-    // Связка живая по своему статусу, но помечена сломанной: чинится аккаунт, а
-    // не она.
-    expect(screen.getByText('Сломано')).toBeTruthy()
+    // Связка живая по своему статусу, но кружок обязан быть красным: чинится
+    // аккаунт, а не она.
+    expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
   })
 
   it('провайдер не настроен на контуре — так и написано в каталоге', () => {
@@ -169,24 +159,23 @@ describe('два блока экрана', () => {
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('состояние связки видно бейджем и подписью', () => {
+  it('состояние связки видно кружком и подписью', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
-    expect(screen.getByText('Переносим ответы')).toBeTruthy()
+    expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
     expect(screen.getByText(/переносим накопленные ответы/i)).toBeTruthy()
   })
 
   it('выключенная связка помечена и не притворяется работающей', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ enabled: false })] }))
 
-    expect(screen.getByText('Выключено')).toBeTruthy()
+    expect(screen.getByLabelText('Выключено')).toBeTruthy()
     expect(screen.getByRole('switch', { name: 'Включить подключение' })).toBeTruthy()
   })
 
   it('удаление спрашивает подтверждение и обещает сохранить таблицу', () => {
     renderView(state({ account: CONNECTED, connections: [conn()] }))
-    openRowMenu()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить подключение' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить подключение' }))
 
     expect(screen.getByRole('alertdialog')).toBeTruthy()
     expect(screen.getByText(/останутся на вашем google диске/i)).toBeTruthy()
@@ -337,8 +326,7 @@ describe('оверлей настройки Google Таблиц', () => {
     openConnection()
 
     // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
-    // что он видит, это что с ней сейчас. Ищем внутри окна: тот же статус словом
-    // стоит и на бейдже строки под ним.
+    // что он видит, это что с ней сейчас.
     expect(
       within(screen.getByRole('dialog')).getByText(/переносим ответы, которые уже пришли/i),
     ).toBeTruthy()

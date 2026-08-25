@@ -8,7 +8,9 @@
    `--sidebar-primary`), значения взяты у канонической темы shadcn «blue», где
    контраст с фоном уже выверен. Вторая: свои статусные цвета `--success`
    и `--warning` — у shadcn их нет, а состояния в кабинете есть (подключение
-   работает / переносит / сломано).
+   работает / переносит / сломано). `--success` взят ЯРКИМ (green-500): он носит смысл
+   сам, без подписи — кружок связки и включённый тумблер, — поэтому важна заметность,
+   а не контраст текста на нём (для текста есть тёмный `--success-foreground`).
 
    ЛЮБОЙ НОВЫЙ ТОКЕН ОБЯЗАН ИМЕТЬ ЗНАЧЕНИЕ И В `.dark`, даже пока переключателя
    темы нет: тёмные значения здесь полные, и тема включается одним PR ровно до тех
@@ -32,8 +34,8 @@
   --muted-foreground: oklch(0.554 0.046 257.417);
   --accent: oklch(0.968 0.007 247.896);
   --accent-foreground: oklch(0.208 0.042 265.755);
-  --success: oklch(0.596 0.145 163.225);
-  --success-foreground: oklch(0.984 0.003 247.858);
+  --success: oklch(0.723 0.192 149.579);
+  --success-foreground: oklch(0.266 0.065 152.934);
   --warning: oklch(0.666 0.179 58.318);
   --warning-foreground: oklch(0.984 0.003 247.858);
   --destructive: oklch(0.577 0.245 27.325);
@@ -70,8 +72,8 @@
   --muted-foreground: oklch(0.704 0.04 256.788);
   --accent: oklch(0.279 0.041 260.031);
   --accent-foreground: oklch(0.984 0.003 247.858);
-  --success: oklch(0.696 0.17 162.48);
-  --success-foreground: oklch(0.129 0.042 264.695);
+  --success: oklch(0.723 0.192 149.579);
+  --success-foreground: oklch(0.266 0.065 152.934);
   --warning: oklch(0.769 0.188 70.08);
   --warning-foreground: oklch(0.129 0.042 264.695);
   --destructive: oklch(0.704 0.191 22.216);
@@ -191,7 +193,12 @@
   }
   body {
     @apply bg-background text-foreground;
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family:
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
   }
 }
 

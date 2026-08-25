@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, MoreHorizontal, Pencil, Table2, Trash2 } from 'lucide-react'
+import { Pencil, Table2, Trash2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet } from '../../entities/integration'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
+import { GoogleSheetsIcon } from './ServiceIcon'
 import { formIntegrationsQueryOptions, useUnlinkSheet, useUpdateConnection } from './queries'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -17,16 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 
 // Экран «Интеграции» формы — два блока, как у образца (Tally): сверху то, что уже
@@ -90,18 +82,24 @@ export function IntegrationsView({ formId }: { formId: string }) {
         title="Доступные интеграции"
         description="Ответы формы могут уезжать во внешние сервисы сами — сразу после отправки."
       >
-        {/* Один живой пункт. Заглушек «скоро будет» здесь нет: они обещают срок,
-            которого никто не давал. */}
-        <Card className="flex-row items-center gap-3 p-4">
-          <ServiceIcon />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">Google Таблицы</p>
-            <p className="text-sm text-muted-foreground">{catalogSummary(state.data)}</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setOverlay('new')}>
-            Подключить
-          </Button>
-        </Card>
+        {/* Сетка, а не строки: каталог со временем станет длинным, и плитка с
+            логотипом опознаётся с одного взгляда, тогда как одинаковые строки
+            приходится читать. Один живой пункт; заглушек «скоро будет» здесь нет —
+            они обещают срок, которого никто не давал. */}
+        <ul className="grid gap-x-6 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+          <li className="flex flex-col items-start">
+            <GoogleSheetsIcon className="size-8" />
+            <p className="mt-3 text-sm font-semibold">Google Таблицы</p>
+            <p className="mt-1 text-sm text-muted-foreground">{catalogSummary(state.data)}</p>
+            <Button
+              variant="link"
+              className="mt-2 h-auto p-0 text-primary"
+              onClick={() => setOverlay('new')}
+            >
+              Подключить
+            </Button>
+          </li>
+        </ul>
       </Section>
 
       {overlay && (
@@ -116,22 +114,14 @@ export function IntegrationsView({ formId }: { formId: string }) {
   )
 }
 
-// Глиф сервиса. Подложка, а не голая иконка в потоке: в списке из нескольких
-// интеграций она держит левую колонку ровной независимо от формы логотипа.
-function ServiceIcon() {
-  return (
-    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
-      <Table2 className="size-4 text-muted-foreground" aria-hidden />
-    </span>
-  )
-}
-
 // ConnectionRow — одна работающая связка: состояние слева, управление справа.
 //
-// СПРАВА РОВНО ДВА ОРГАНА: тумблер и меню. Тумблер видим, потому что это частое
-// действие и одновременно показатель состояния; «Настроить», «Открыть таблицу» и
-// «Удалить» уехали в меню — иначе удаление стоит в списке тем же весом, что и
-// настройка. Тот же приём, что у строки пространства в сайдбаре.
+// БЕЗ РАМКИ. Связок у формы единицы, и они однородны: рамка вокруг каждой рисует
+// границу там, где различать нечего, — список читается как список, а не как стопка
+// карточек.
+//
+// Действия стоят прямо в строке (тумблер, настройка, удаление), а не в меню «⋯»:
+// их три, они частые, и лишний клик по каждому дороже, чем компактность строки.
 function ConnectionRow({
   formId,
   connection,
@@ -153,12 +143,12 @@ function ConnectionRow({
   const name = connection.name || 'Google Таблицы'
 
   return (
-    <Card className="flex-row items-center gap-3 p-4">
-      <ServiceIcon />
+    <div className="flex items-center gap-3 py-2">
+      <GoogleSheetsIcon className="size-7 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 text-sm font-medium">
           <span className="truncate">{name}</span>
-          <StatusBadge
+          <StatusDot
             status={connection.status}
             enabled={connection.enabled}
             accountLost={accountLost}
@@ -177,7 +167,11 @@ function ConnectionRow({
         </p>
       </div>
 
+      {/* Включённый тумблер — ярко-зелёный, а не цвета акцента: рядом с ним такой
+          же зелёный кружок состояния, и разными оттенками они читались бы как два
+          разных сигнала. */}
       <Switch
+        className="data-[state=checked]:bg-success"
         checked={connection.enabled}
         disabled={update.isPending}
         aria-label={connection.enabled ? 'Выключить подключение' : 'Включить подключение'}
@@ -185,31 +179,24 @@ function ConnectionRow({
           update.mutate({ id: connection.id, name: connection.name ?? '', enabled })
         }
       />
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label={`Действия с подключением «${name}»`}>
-            <MoreHorizontal className="size-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuItem onSelect={onEdit}>
-            <Pencil className="size-4" />
-            Настроить подключение
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <a href={connection.url} target="_blank" rel="noreferrer">
-              <ExternalLink className="size-4" />
-              Открыть таблицу
-            </a>
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem variant="destructive" onSelect={() => setConfirming(true)}>
-            <Trash2 className="size-4" />
-            Удалить подключение
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label="Настроить подключение"
+        onClick={onEdit}
+      >
+        <Pencil className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label="Удалить подключение"
+        onClick={() => setConfirming(true)}
+      >
+        <Trash2 className="size-4" />
+      </Button>
 
       {/* Удаление спрашивает: связка уносит с собой настройки и историю
           доставок, а восстановить её можно только подключением заново. Сама
@@ -232,17 +219,19 @@ function ConnectionRow({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Card>
+    </div>
   )
 }
 
-// StatusBadge — состояние связки словом, а не цветной точкой: подпись у точки
-// читал только скринридер, а глазами состояние приходилось выводить из текста
-// ниже, который его и так повторял.
+// StatusDot — состояние связки кружком без подписи: словом его уже говорит строка
+// под названием («Ответы синхронизируются с…», «Записать не удаётся…»), и бейдж
+// рядом повторял бы её вторым голосом.
+//
+// Подпись остаётся у скринридера (`aria-label`) — цвет для него не существует.
 //
 // Цвета — токенами (`bg-success`, `bg-warning`): литерал `bg-emerald-500` не имеет
 // тёмного значения и не виден системе.
-function StatusBadge({
+function StatusDot({
   status,
   enabled,
   accountLost,
@@ -251,15 +240,15 @@ function StatusBadge({
   enabled: boolean
   accountLost: boolean
 }) {
-  const [label, className] = !enabled
-    ? ['Выключено', 'bg-muted text-muted-foreground']
+  const [color, label] = !enabled
+    ? ['bg-muted-foreground/40', 'Выключено']
     : status === 'broken' || accountLost
-      ? ['Сломано', 'bg-destructive text-white']
+      ? ['bg-destructive', 'Сломано']
       : status === 'backfilling'
-        ? ['Переносим ответы', 'bg-warning text-warning-foreground']
-        : ['Работает', 'bg-success text-success-foreground']
+        ? ['bg-warning', 'Переносим ответы']
+        : ['bg-success', 'Работает']
 
-  return <Badge className={`shrink-0 border-transparent ${className}`}>{label}</Badge>
+  return <span className={`size-2 shrink-0 rounded-full ${color}`} role="img" aria-label={label} />
 }
 
 function connectionSummary(connection: FormSheet, accountLost: boolean): string {

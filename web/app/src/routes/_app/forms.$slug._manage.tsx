@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
 
 import { type Form, displayFormTitle } from '../../entities/form'
+import { FormActionsMenu } from '../../features/forms/FormActionsMenu'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { PageContainer } from '../../shared/page/PageContainer'
@@ -32,12 +33,13 @@ export const Route = createFileRoute('/_app/forms/$slug/_manage')({
   component: ManageLayout,
 })
 
-const statusMeta: Record<
-  Form['status'],
-  { label: string; variant: 'secondary' | 'default' | 'outline' }
+// Бейдж статуса ставится только ОТКЛОНЕНИЮ от нормы. «Опубликована» — обычное
+// состояние формы, и подпись о нём занимала место, ничего не сообщая; черновик и
+// закрытый приём объясняют, почему форма не отвечает на розданную ссылку.
+const statusMeta: Partial<
+  Record<Form['status'], { label: string; variant: 'secondary' | 'outline' }>
 > = {
   draft: { label: 'Черновик', variant: 'secondary' },
-  published: { label: 'Опубликована', variant: 'default' },
   closed: { label: 'Закрыта', variant: 'outline' },
 }
 
@@ -66,7 +68,7 @@ function ManageLayout() {
   }
 
   const title = form.data ? displayFormTitle(form.data.title) : 'Форма'
-  const meta = form.data ? statusMeta[form.data.status] : null
+  const meta = form.data ? statusMeta[form.data.status] : undefined
 
   return (
     <PageContainer>
@@ -81,11 +83,11 @@ function ManageLayout() {
 
       <PageHeader
         title={title}
+        titleAction={form.data && <FormActionsMenu form={form.data} />}
         meta={
-          form.data &&
-          meta && (
+          form.data && (
             <>
-              <Badge variant={meta.variant}>{meta.label}</Badge>
+              {meta && <Badge variant={meta.variant}>{meta.label}</Badge>}
               {form.data.publishedVersion !== null && (
                 <span className="text-sm text-muted-foreground">
                   Версия {form.data.publishedVersion}
