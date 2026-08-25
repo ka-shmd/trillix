@@ -31,9 +31,9 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
     <Breadcrumb className="min-w-0">
       {/* Крошки набраны ЧЕРНИЛАМИ — тем же тоном, что названия в разделах, — и
           средним весом: блёклые читались как выключенные. Спорить с заголовком им
-          не даёт кегль: 13px, единственный размер вне замороженной шкалы, потому
-          что это хром бара, а не текст страницы. */}
-      <BreadcrumbList className="flex-nowrap gap-1.5 text-[13px] font-medium text-foreground sm:gap-1.5">
+          не даёт кегль — нижняя ступень шкалы. Кегля ВНЕ шкалы здесь стоять не
+          должно: 13px не спорил ни с чем и именно поэтому выглядел чужим. */}
+      <BreadcrumbList className="flex-nowrap gap-1.5 text-xs font-medium text-foreground sm:gap-1.5">
         {items.map((item, i) => {
           const last = i === items.length - 1
           return (
