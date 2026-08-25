@@ -4,7 +4,7 @@ import { CopyPlus, Link2, MoreHorizontal, Pencil, TextCursorInput, Trash2 } from
 import { toast } from 'sonner'
 
 import { type Form, displayFormName } from '../../entities/form'
-import { publicFormUrl } from './publicUrl'
+import { copyFormLink } from './copyLink'
 import { useDeleteForm, useDuplicateForm, useUpdateFormName } from './queries'
 import {
   AlertDialog,
@@ -57,13 +57,6 @@ export function FormActionsMenu({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const label = displayFormName(form)
 
-  function copyLink() {
-    navigator.clipboard
-      .writeText(publicFormUrl(form.slug))
-      .then(() => toast.success('Ссылка на форму скопирована'))
-      .catch(() => toast.error('Не удалось скопировать — откройте «Поделиться»'))
-  }
-
   // Дублирование НЕ уводит с формы: человек нажал действие над той, что открыта, и
   // подмена экрана на копию читалась бы как «меня куда-то унесло». Копия видна в
   // списке форм, о чём и говорит тост.
@@ -108,7 +101,10 @@ export function FormActionsMenu({
             <TextCursorInput className="size-4" />
             Переименовать
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={copyLink} disabled={form.status === 'draft'}>
+          <DropdownMenuItem
+            onSelect={() => copyFormLink(form.slug)}
+            disabled={form.status === 'draft'}
+          >
             <Link2 className="size-4" />
             Копировать ссылку
           </DropdownMenuItem>

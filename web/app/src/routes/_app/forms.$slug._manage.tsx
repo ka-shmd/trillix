@@ -1,10 +1,15 @@
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil } from 'lucide-react'
+import { useState } from 'react'
+import { Link2, Pencil } from 'lucide-react'
 
 import { type Form, displayFormTitle } from '../../entities/form'
 import { FormActionsMenu } from '../../features/forms/FormActionsMenu'
+import { copyFormLink } from '../../features/forms/copyLink'
 import { formDetailQueryOptions } from '../../features/forms/queries'
+import { MemberCluster } from '../../features/workspaces/MemberCluster'
+import { MembersDialog } from '../../features/workspaces/MembersDialog'
+import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
@@ -47,6 +52,11 @@ function ManageLayout() {
   const { slug } = Route.useParams()
   const form = useQuery(formDetailQueryOptions(slug))
   const workspaceCrumb = useWorkspaceCrumb()
+  // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
+  // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
+  // не тех людей.
+  const workspace = useCurrentWorkspace()
+  const [membersOpen, setMembersOpen] = useState(false)
 
   // Форма не найдена — общий экран на всю группу: рисовать табы над «формы нет»
   // бессмысленно. Свои error-стейты данных у экранов внутри остаются.
@@ -73,16 +83,40 @@ function ManageLayout() {
   return (
     <PageContainer>
       <PageCrumbs items={[workspaceCrumb, title]} />
+      {/* Правая часть бара — от общего к частному: кто в пространстве, ссылка на
+          форму, вход в редактор. Залитая кнопка стоит последней, у самого края:
+          она главная, и цветное пятно на краю читается как конец ряда. */}
       <PageActions>
+        {workspace && <MemberCluster workspace={workspace} onOpen={() => setMembersOpen(true)} />}
+        {/* Копирование ссылки вынесено значком: действие частое, а ради него
+            приходилось открывать меню. У черновика выключено — публичной страницы
+            у него ещё нет. */}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-muted-foreground"
+          aria-label="Копировать ссылку на форму"
+          title="Копировать ссылку на форму"
+          disabled={form.data?.status === 'draft'}
+          onClick={() => copyFormLink(slug)}
+        >
+          <Link2 className="size-4" />
+        </Button>
         {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
-            одна, и приглушать единственный вход в редактор незачем. Размер малый:
-            бар высотой 56px, и кнопка в полный рост подпирала бы его края. */}
+            одна такая, и приглушать единственный вход в редактор незачем. Размер
+            малый: бар высотой 56px, кнопка в полный рост подпирала бы его края. */}
         <Button asChild size="sm" className="h-7 gap-1.5 px-2.5">
           <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
             <Pencil className="size-3.5" /> Редактировать
           </Link>
         </Button>
       </PageActions>
+
+      {/* Окно состава живёт на странице, а не в портале бара: портал несёт только
+          то, что видно в самом баре. */}
+      {workspace && (
+        <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
+      )}
 
       <PageHeader
         title={title}
