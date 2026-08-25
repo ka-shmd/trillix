@@ -228,6 +228,7 @@ type Workspace struct {
 	Name           string
 	CreatedAt      pgtype.Timestamptz
 	PersonalUserID pgtype.UUID
+	Slug           string
 }
 
 type WorkspaceMember struct {

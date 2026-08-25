@@ -14,7 +14,11 @@ import (
 // Workspace — пространство пользователя (доменное представление, без утечки
 // sqlc-типов в service/handler).
 type Workspace struct {
-	ID   uuid.UUID
+	ID uuid.UUID
+	// Slug — короткий публичный ключ пространства (nanoid(10), domain.NewSlug),
+	// тот же приём, что forms.slug: адресом кабинета работает он, а PK остаётся
+	// UUIDv7, потому что на него ссылаются семь таблиц.
+	Slug string
 	Name string
 	// IsPersonal — личное пространство СПРАШИВАЮЩЕГО: создано его регистрацией,
 	// не удаляется, не покидается и не замораживается при даунгрейде (ADR §10).
@@ -40,7 +44,7 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) 
 	out := make([]Workspace, len(rows))
 	for i, r := range rows {
 		out[i] = Workspace{
-			ID: r.ID, Name: r.Name, IsPersonal: r.IsPersonal,
+			ID: r.ID, Slug: r.Slug, Name: r.Name, IsPersonal: r.IsPersonal,
 			CreatedAt: r.CreatedAt.Time, FormCount: r.FormCount,
 		}
 	}
@@ -49,12 +53,12 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) 
 
 // Create заводит пространство (без пометки личного): личное создаёт только
 // транзакция регистрации, и оно у аккаунта ровно одно.
-func (Repo) Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error) {
-	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{ID: id, Name: name})
+func (Repo) Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string) (Workspace, error) {
+	row, err := postgres.New(db).CreateWorkspace(ctx, postgres.CreateWorkspaceParams{ID: id, Slug: slug, Name: name})
 	if err != nil {
 		return Workspace{}, fmt.Errorf("create workspace: %w", err)
 	}
-	return Workspace{ID: row.ID, Name: row.Name, CreatedAt: row.CreatedAt.Time}, nil
+	return Workspace{ID: row.ID, Slug: row.Slug, Name: row.Name, CreatedAt: row.CreatedAt.Time}, nil
 }
 
 // Rename меняет название пространства. Право спрашивает сервис: repo логики не
@@ -64,7 +68,7 @@ func (Repo) Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name str
 	if err != nil {
 		return Workspace{}, fmt.Errorf("rename workspace %s: %w", id, err)
 	}
-	return Workspace{ID: row.ID, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
+	return Workspace{ID: row.ID, Slug: row.Slug, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
 }
 
 // Delete сносит пространство со всем содержимым (каскад по FK). Личное не
@@ -114,7 +118,7 @@ func (Repo) GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (W
 	if err != nil {
 		return Workspace{}, fmt.Errorf("get workspace %s: %w", id, err)
 	}
-	return Workspace{ID: row.ID, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
+	return Workspace{ID: row.ID, Slug: row.Slug, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
 }
 
 func (Repo) EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error) {

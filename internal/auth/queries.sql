@@ -45,8 +45,8 @@ SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken;
 -- Личное пространство регистрации: personal_user_id — и пометка «личное», и
 -- ответ на «чьё» (0016). Командные пространства заводит другой запрос, с NULL.
 -- name: CreatePersonalWorkspace :one
-INSERT INTO workspaces (id, name, personal_user_id)
-VALUES ($1, $2, $3)
+INSERT INTO workspaces (id, name, personal_user_id, slug)
+VALUES ($1, $2, $3, $4)
 RETURNING id, name, created_at;
 
 -- name: CreateWorkspaceMember :exec

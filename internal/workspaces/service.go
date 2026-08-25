@@ -33,7 +33,7 @@ type Store interface {
 	ListOwnedTeamsWithMembers(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error)
 	ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error)
 	DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
-	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
+	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string) (Workspace, error)
 	Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	Delete(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
@@ -127,9 +127,13 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, name string) (Wo
 	// его не видно ни в одном списке — то есть создать его молча значит создать
 	// мусор.
 	id := domain.NewID()
+	// Slug генерирует приложение, а не БД: тот же nanoid, что у формы, и та же
+	// страховка от коллизии — UNIQUE на колонке (60 бит делают её астрономически
+	// редкой, но повтор обязан стать ошибкой вставки, а не тихим дублем).
+	slug := domain.NewSlug()
 	var created Workspace
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		w, e := s.repo.Create(ctx, tx, id, name)
+		w, e := s.repo.Create(ctx, tx, id, slug, name)
 		if e != nil {
 			return e
 		}

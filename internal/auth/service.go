@@ -66,7 +66,7 @@ type Store interface {
 	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)
 	EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error)
 	MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error)
-	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string, personalUserID uuid.UUID) (Workspace, error)
+	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string, personalUserID uuid.UUID) (Workspace, error)
 	AddWorkspaceMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error
 	CreateSubscription(ctx context.Context, db postgres.DBTX, userID uuid.UUID, planCode string) error
 	CreateSession(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, expiresAt time.Time) error
@@ -193,6 +193,9 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 
 	userID := domain.NewID()
 	wsID := domain.NewID()
+	// Публичный ключ личного пространства: тот же nanoid, что у формы (0035).
+	// Генерируется здесь, рядом с id, — repo идентификаторов не выдумывает.
+	wsSlug := domain.NewSlug()
 
 	var user User
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
@@ -204,7 +207,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 			return e
 		}
 		user = u
-		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, personalWorkspaceName, userID); e != nil {
+		if _, e := s.repo.CreateWorkspace(ctx, tx, wsID, wsSlug, personalWorkspaceName, userID); e != nil {
 			return e
 		}
 		if e := s.repo.AddWorkspaceMember(ctx, tx, wsID, userID, roleOwner); e != nil {

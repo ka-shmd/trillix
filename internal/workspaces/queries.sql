@@ -16,7 +16,7 @@
 -- Подзапрос, а не второй поход в forms: обзор рисует ВСЕ пространства разом, и
 -- отдельный запрос на каждое был бы N+1 ради одного числа. Мягкого удаления у
 -- форм нет — считаются все строки, включая черновики.
-SELECT w.id, w.name, w.created_at,
+SELECT w.id, w.slug, w.name, w.created_at,
        (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
        (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
 FROM workspace_members m
@@ -31,9 +31,9 @@ ORDER BY w.created_at ASC;
 -- остальное — приглашения, роли, места, права — у пространств одинаковое.
 -- Владельца добавляет отдельная строка членства в той же транзакции:
 -- пространство без владельца — пространство без плана.
-INSERT INTO workspaces (id, name)
-VALUES ($1, $2)
-RETURNING id, name, created_at;
+INSERT INTO workspaces (id, slug, name)
+VALUES ($1, $2, $3)
+RETURNING id, slug, name, created_at;
 
 -- name: RenameWorkspace :one
 -- Переименование пространства. Право спрашивает сервис (ActionWorkspaceManage);
@@ -41,7 +41,7 @@ RETURNING id, name, created_at;
 UPDATE workspaces
 SET name = $2
 WHERE id = $1
-RETURNING id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal;
+RETURNING id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal;
 
 -- name: DeleteWorkspace :execrows
 -- Удаление пространства со всем содержимым: формы, версии, ответы, визиты,
@@ -92,7 +92,7 @@ WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
 RETURNING workspace_id, email, role;
 
 -- name: GetWorkspaceByID :one
-SELECT id, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
+SELECT id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1;
 
 -- name: GetUserIDByEmail :one
