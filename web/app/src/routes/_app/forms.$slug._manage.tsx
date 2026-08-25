@@ -77,9 +77,9 @@ function ManageLayout() {
         {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
             одна, и приглушать единственный вход в редактор незачем. Размер малый:
             бар высотой 56px, и кнопка в полный рост подпирала бы его края. */}
-        <Button asChild size="sm" className="gap-1.5">
+        <Button asChild size="sm" className="h-7 gap-1.5 px-2.5 text-[13px]">
           <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
-            <Pencil className="size-4" /> Редактировать
+            <Pencil className="size-3.5" /> Редактировать
           </Link>
         </Button>
       </PageActions>
