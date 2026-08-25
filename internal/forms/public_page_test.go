@@ -164,7 +164,7 @@ func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 		VersionID: uuid.New(),
 	}}
 
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
 		VersionID: uuid.New(),
 	}}
 
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
@@ -290,7 +290,7 @@ func writeFixtureIndexWithFonts(t *testing.T) string {
 
 func getHTMLPageWithFonts(t *testing.T, svc publicFormService) string {
 	t.Helper()
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, writeFixtureIndexWithFonts(t))
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, writeFixtureIndexWithFonts(t), allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
@@ -505,7 +505,7 @@ func TestPublicHTML_FontsAppearAfterIndex_PreloadRecovers(t *testing.T) {
 		t.Fatalf("запись фикстуры index.html: %v", err)
 	}
 	svc := designedForm(t, `{"font":"inter"}`)
-	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path)
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}

@@ -60,6 +60,12 @@ func resetDB(t *testing.T) {
 // точками вставки — оформления в теге <html> и головы формы в <head>) во временный
 // файл — так же, как его получит api из смонтированной статики в проде. Нужен, чтобы
 // Go регистрировал и обслуживал /r в этом стеке.
+// Лимит не ослабляется ради теста, а инжектируется пермиссивной реализацией
+// (инвариант безопасности 6).
+type allowLimiter struct{}
+
+func (allowLimiter) Allow(string) bool { return true }
+
 func fixtureIndexPath(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "index.html")
@@ -88,7 +94,8 @@ func newStack(t *testing.T) *httptest.Server {
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, []byte("dev-only-form-token-secret-not-a-real-key"),
-		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t))
+		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t),
+		allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}

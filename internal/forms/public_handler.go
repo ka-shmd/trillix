@@ -41,6 +41,10 @@ type PublicHandler struct {
 	tokenSecret   []byte
 	publicBaseURL string // база рендерера: og:url на /r/{slug} и ссылка на форму
 	ogImageURL    string // абсолютный URL картинки превью (og:image)
+	// tokenLimiter — ведро выдачи токена времени. Не опционально: это единственное,
+	// что вообще ограничивает заготовку токенов пачкой (ADR §10).
+	tokenLimiter httpserver.RateLimiter
+	trustedProxy bool // за Caddy честный IP клиента — из X-Forwarded-For (TD-1)
 	// indexPath — путь к собранному index.html рендерера. Пустой в dev: тогда /r не
 	// обслуживается Go (форму отдаёт vite-dev), и index не читается вовсе.
 	indexPath string
@@ -55,12 +59,16 @@ type PublicHandler struct {
 // собранному index.html рендерера (прод); пустой в dev — тогда /r не обслуживается
 // Go (форму отдаёт vite-dev). Непустой путь читается сразу: нечитаемый файл или
 // отсутствие плейсхолдера — ошибка старта, а не первого запроса.
-func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, indexHTMLPath string) (*PublicHandler, error) {
+func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, ogImageURL, indexHTMLPath string,
+	tokenLimiter httpserver.RateLimiter, trustedProxy bool,
+) (*PublicHandler, error) {
 	h := &PublicHandler{
 		svc:           svc,
 		tokenSecret:   tokenSecret,
 		publicBaseURL: strings.TrimRight(publicBaseURL, "/"),
 		ogImageURL:    ogImageURL,
+		tokenLimiter:  tokenLimiter,
+		trustedProxy:  trustedProxy,
 		now:           time.Now,
 	}
 	if indexHTMLPath != "" {
@@ -79,18 +87,23 @@ func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, 
 // формы с OG-мета (/r/{slug}). В dev /r отдаёт vite-dev, поэтому Go его не регит.
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
+	limited := httpserver.RateLimitByIP(h.tokenLimiter, h.trustedProxy, "слишком много запросов")
+	mux.Handle("GET /public/v1/form-token", limited(http.HandlerFunc(h.formToken)))
 	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
 	}
 }
 
-// publicFormResponse — тело GET /public/v1/forms/{slug}. token — подписанное время
-// выдачи (антиспам «минимальное время заполнения», проверяется при приёме, фаза 5).
+// publicFormResponse — тело GET /public/v1/forms/{slug}.
+//
+// Токена времени здесь НЕТ и быть не должно: ответ кэшируемый (max-age=60 плюс
+// иммутабельный ETag), а значит его возраст измерял бы возраст записи в кэше
+// браузера, а не время заполнения формы. Токен приезжает отдельной некэшируемой
+// ручкой /public/v1/form-token — ADR §10.
 type publicFormResponse struct {
 	Title   string          `json:"title"`
 	Version int32           `json:"version"`
 	Schema  json.RawMessage `json:"schema"`
-	Token   string          `json:"token"`
 	// ShowBadge — рисовать ли бейдж «Сделано в Trillix». Решение СЕРВЕРА и
 	// свойство выдачи, а не документа: в схеме лежит лишь намерение автора, а
 	// разрешает его тариф (спека §9.4). Поле, а не вывод клиента из схемы, ровно
@@ -113,6 +126,30 @@ type closedFormResponse struct {
 	// Бейдж стоит и на этом экране: иначе он снимается разглядыванием второго
 	// экрана — открыл закрытую форму, и бренда нет.
 	ShowBadge bool `json:"showBadge"`
+}
+
+// formTokenResponse — тело GET /public/v1/form-token.
+type formTokenResponse struct {
+	Token string `json:"token"`
+}
+
+// formToken выдаёт подписанное время выдачи — тот самый токен, чей возраст проверяют
+// приём ответа, выдача слота файла и бикон визита.
+//
+// Ручка НЕ знает про форму и не ходит в базу: токен есть HMAC над временем, он не
+// привязан к слагу (граница известна — TECH-DEBT §5), а обязательный slug стоил бы
+// запроса в базу на каждое открытие формы ровно ради подписи времени.
+//
+// МИНА: ответ обязан быть некэшируемым. Токен жил в теле GET /forms/{slug} с
+// max-age=60 и иммутабельным ETag, и из-за этого окно [minFillTime, MaxAge] мерило
+// возраст записи в кэше браузера, а не человека: первое открытие формы всегда
+// упиралось в отказ, а дальше 304 бессрочно возвращал первый токен. История —
+// JOURNAL, «Токен формы выдаётся некэшируемым ответом».
+func (h *PublicHandler) formToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	httpserver.WriteJSON(w, r, http.StatusOK, formTokenResponse{
+		Token: token.Issue(h.tokenSecret, h.now().UTC()),
+	})
 }
 
 func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -187,13 +224,10 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Токен выдаётся на каждый ответ; при кэшировании его возраст растёт, но это
-	// только усиливает проверку «не раньше 3 с» (свежий мгновенный токен — бот).
 	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
 		Title:          pf.Title,
 		Version:        pf.Version,
 		Schema:         schema,
-		Token:          token.Issue(h.tokenSecret, h.now().UTC()),
 		ShowBadge:      showBadge,
 		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
 	})
