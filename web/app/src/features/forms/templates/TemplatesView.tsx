@@ -1,6 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
 
-import { useCurrentWorkspaceId } from '../../../shared/currentWorkspace'
 import { useCreateFormFromTemplate } from './queries'
 import { type FormTemplate, TEMPLATES, questionCaptions } from './templates'
 import { Button } from '@/components/ui/button'
@@ -14,11 +13,12 @@ import { Card } from '@/components/ui/card'
 // а первые несколько уже отвечают на вопрос «про что эта форма».
 const PREVIEW_QUESTIONS = 4
 
-export function TemplatesView() {
+// workspaceId — куда положить форму из шаблона: то пространство, в котором человек
+// сейчас работает (undefined = личное либо «ещё не знаем», см. маршрут). Приезжает
+// пропом, а не читается отсюда: текущее пространство резолвит фича пространств, а
+// импорт фичи из фичи запрещён (web/CLAUDE.md) — связывает их маршрут.
+export function TemplatesView({ workspaceId }: { workspaceId?: string }) {
   const navigate = useNavigate()
-  // Форма из шаблона ложится в то пространство, в котором человек сейчас работает, —
-  // как и «Новая форма» в сайдбаре (пусто = личное).
-  const workspaceId = useCurrentWorkspaceId()
   const create = useCreateFormFromTemplate()
   // Какую карточку нажали: мутация одна на всю галерею, а «Создаём…» и ошибка
   // принадлежат одной кнопке.
@@ -26,7 +26,7 @@ export function TemplatesView() {
 
   function use(template: FormTemplate) {
     create.mutate(
-      { template, workspaceId: workspaceId || undefined },
+      { template, workspaceId },
       {
         onSuccess: (form) =>
           navigate({

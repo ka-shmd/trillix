@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-import { useCurrentWorkspaceId } from '../../shared/currentWorkspace'
-import { workspacesQueryOptions } from '../workspaces/queries'
+import { useCurrentWorkspace } from '../workspaces/current'
 import { planSnapshotQueryOptions } from './queries'
 
 // «Можно ли этому пространству такую возможность» — один вопрос вместо трёх
@@ -13,16 +12,13 @@ import { planSnapshotQueryOptions } from './queries'
 // равно на бэке (инвариант 3, «фронт прячет ради UX, бэк отказывает ради правды»).
 // По той же причине сбой запроса тарифа ничего не запирает.
 //
-// Пространство берётся из адреса (?w=), пустое значит личное — и ищется оно ПО
-// ПОМЕТКЕ, а не как первое в списке: список сортируется по возрасту по всем
-// пространствам с членством, включая чужие, которые старше моей регистрации.
+// Пространство берётся из адреса (?w= или путь страницы пространства), пустое
+// значит личное; перевод slug'а адреса в id для запроса делает useCurrentWorkspace.
 export function useFeatureAllowed(key: string): boolean {
-  const current = useCurrentWorkspaceId()
-  const workspaces = useQuery(workspacesQueryOptions)
-  const workspaceId = current || workspaces.data?.find((w) => w.isPersonal)?.id
+  const workspace = useCurrentWorkspace()
   const plan = useQuery({
-    ...planSnapshotQueryOptions(workspaceId ?? ''),
-    enabled: workspaceId !== undefined,
+    ...planSnapshotQueryOptions(workspace?.id ?? ''),
+    enabled: workspace !== undefined,
   })
   const feature = plan.data?.features.find((f) => f.key === key)
   return feature?.allowed ?? true

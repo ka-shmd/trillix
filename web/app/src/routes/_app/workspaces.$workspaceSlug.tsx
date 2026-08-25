@@ -11,24 +11,25 @@ import { useHeaderSlot } from '../../shared/headerSlot'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
-// Страница одного пространства (/workspaces/{id}): та же секция, что на обзоре,
+// Страница одного пространства (/workspaces/{slug}): та же секция, что на обзоре,
 // но одна на весь экран — сюда ведёт клик по пространству в сайдбаре.
 //
-// Пространство берётся из СПИСКА (GET /workspaces), а не отдельной ручкой: список
+// Адрес называет пространство SLUG'ом, как адрес формы — form.slug. Само оно
+// берётся из СПИСКА (GET /workspaces), а не отдельной ручкой: список
 // уже прочитан сайдбаром на каждом экране, и второй запрос ради имени и числа форм
 // был бы лишним. Отсюда же и «нет такого»: список отдаёт только те пространства, где
 // человек состоит, поэтому чужое и несуществующее здесь неотличимы — как и на сервере.
-export const Route = createFileRoute('/_app/workspaces/$workspaceId')({
+export const Route = createFileRoute('/_app/workspaces/$workspaceSlug')({
   component: WorkspacePage,
 })
 
 function WorkspacePage() {
-  const { workspaceId } = Route.useParams()
+  const { workspaceSlug } = Route.useParams()
   const workspaces = useQuery(workspacesQueryOptions)
   const navigate = useNavigate()
   const qc = useQueryClient()
   const headerSlot = useHeaderSlot()
-  const workspace = workspaces.data?.find((w) => w.id === workspaceId)
+  const workspace = workspaces.data?.find((w) => w.slug === workspaceSlug)
 
   // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
   // её заводит первая правка (features/forms/draft.ts). Пространство едет в адрес
@@ -38,7 +39,7 @@ function WorkspacePage() {
     void navigate({
       to: '/forms/$slug/edit',
       params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.id },
+      search: workspace.isPersonal ? {} : { w: workspace.slug },
     })
   }
 

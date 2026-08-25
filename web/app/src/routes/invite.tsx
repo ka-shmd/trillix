@@ -61,7 +61,9 @@ function InvitePage() {
             disabled={accept.isPending}
             onClick={() =>
               accept.mutate(token, {
-                onSuccess: (ws) => navigate({ to: '/forms', search: { w: ws.id } }),
+                // В адрес едет slug, а не id: так пространство названо во всех
+                // URL кабинета (shared/currentWorkspace).
+                onSuccess: (ws) => navigate({ to: '/forms', search: { w: ws.slug } }),
               })
             }
           >

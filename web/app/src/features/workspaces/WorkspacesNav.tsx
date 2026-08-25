@@ -127,12 +127,12 @@ function WorkspaceNavItem({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const [membersOpen, setMembersOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
-  const isCurrent = pathname === `/workspaces/${workspace.id}`
+  const isCurrent = pathname === `/workspaces/${workspace.slug}`
 
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isCurrent}>
-        <Link to="/workspaces/$workspaceId" params={{ workspaceId: workspace.id }}>
+        <Link to="/workspaces/$workspaceSlug" params={{ workspaceSlug: workspace.slug }}>
           <span className="truncate">{workspace.name}</span>
         </Link>
       </SidebarMenuButton>

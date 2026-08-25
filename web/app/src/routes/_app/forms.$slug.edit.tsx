@@ -9,7 +9,8 @@ import { formKeys } from '../../features/forms/keys'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { type DraftCreation } from '../../features/forms/builder/useAutosave'
 import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
-import { useCurrentWorkspaceId } from '../../shared/currentWorkspace'
+import { resolveWorkspaceId } from '../../features/workspaces/current'
+import { useCurrentWorkspaceSlug } from '../../shared/currentWorkspace'
 import { Button } from '@/components/ui/button'
 
 // Редактор формы (/forms/$slug/edit): грузит форму по slug через Query и отдаёт
@@ -28,9 +29,11 @@ function FormEditor() {
   const { slug } = Route.useParams()
   const navigate = useNavigate()
   const qc = useQueryClient()
-  // Пространство, в котором заводить форму, берётся из адреса (пусто = личное) — тем
-  // же способом, каким его читает кнопка «Новая форма», приведшая сюда.
-  const workspaceId = useCurrentWorkspaceId()
+  // Пространство, в котором заводить форму, берётся из адреса (?w=<slug>, пусто =
+  // личное) — тем же способом, каким его читает кнопка «Новая форма», приведшая
+  // сюда. Из адреса берётся SLUG, а `POST /forms` ждёт id: перевод делается в
+  // момент создания (resolveWorkspaceId), а не на рендере — см. мину там.
+  const workspaceSlug = useCurrentWorkspaceSlug()
 
   // Черновик несозданной формы. Решение «это черновик» принимается ОДИН раз, на
   // монтировании: создание меняет slug в адресе, и перечитанный параметр увёл бы
@@ -55,7 +58,7 @@ function FormEditor() {
 
   const draft: DraftCreation | undefined = isDraft
     ? {
-        create: () => createForm(undefined, workspaceId || undefined),
+        create: async () => createForm(undefined, await resolveWorkspaceId(qc, workspaceSlug)),
         onCreated: (form: Form) => {
           // Карточка пришла в ответе, остальное у новой формы дефолтное (тот же
           // источник, что и у синтетической детали). Запись в кэш обязательна: из

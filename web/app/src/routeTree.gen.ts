@@ -25,7 +25,7 @@ import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-pa
 import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
-import { Route as AppWorkspacesWorkspaceIdRouteImport } from './routes/_app/workspaces.$workspaceId'
+import { Route as AppWorkspacesWorkspaceSlugRouteImport } from './routes/_app/workspaces.$workspaceSlug'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
 import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug.embed'
@@ -121,10 +121,10 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   path: '/forms/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppWorkspacesWorkspaceIdRoute =
-  AppWorkspacesWorkspaceIdRouteImport.update({
-    id: '/workspaces/$workspaceId',
-    path: '/workspaces/$workspaceId',
+const AppWorkspacesWorkspaceSlugRoute =
+  AppWorkspacesWorkspaceSlugRouteImport.update({
+    id: '/workspaces/$workspaceSlug',
+    path: '/workspaces/$workspaceSlug',
     getParentRoute: () => AppRoute,
   } as any)
 const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
@@ -233,7 +233,7 @@ export interface FileRoutesByFullPath {
   '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
-  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/forms/': typeof AppFormsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
@@ -266,7 +266,7 @@ export interface FileRoutesByTo {
   '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
-  '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/forms': typeof AppFormsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
@@ -301,7 +301,7 @@ export interface FileRoutesById {
   '/_app/': typeof AppIndexRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
-  '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRoute
+  '/_app/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/_app/forms/': typeof AppFormsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
@@ -336,7 +336,7 @@ export interface FileRouteTypes {
     | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
-    | '/workspaces/$workspaceId'
+    | '/workspaces/$workspaceSlug'
     | '/forms/'
     | '/workspaces/'
     | '/forms/$slug'
@@ -369,7 +369,7 @@ export interface FileRouteTypes {
     | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
-    | '/workspaces/$workspaceId'
+    | '/workspaces/$workspaceSlug'
     | '/forms'
     | '/workspaces'
     | '/forms/$slug'
@@ -403,7 +403,7 @@ export interface FileRouteTypes {
     | '/_app/'
     | '/_app/settings/account'
     | '/_app/settings/plan'
-    | '/_app/workspaces/$workspaceId'
+    | '/_app/workspaces/$workspaceSlug'
     | '/_app/forms/'
     | '/_app/workspaces/'
     | '/_app/forms/$slug/_manage'
@@ -545,11 +545,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/workspaces/$workspaceId': {
-      id: '/_app/workspaces/$workspaceId'
-      path: '/workspaces/$workspaceId'
-      fullPath: '/workspaces/$workspaceId'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceIdRouteImport
+    '/_app/workspaces/$workspaceSlug': {
+      id: '/_app/workspaces/$workspaceSlug'
+      path: '/workspaces/$workspaceSlug'
+      fullPath: '/workspaces/$workspaceSlug'
+      preLoaderRoute: typeof AppWorkspacesWorkspaceSlugRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings/plan': {
@@ -718,7 +718,7 @@ interface AppRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
-  AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRoute
+  AppWorkspacesWorkspaceSlugRoute: typeof AppWorkspacesWorkspaceSlugRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
@@ -731,7 +731,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
-  AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRoute,
+  AppWorkspacesWorkspaceSlugRoute: AppWorkspacesWorkspaceSlugRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,

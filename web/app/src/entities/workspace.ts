@@ -4,6 +4,10 @@ import { z } from 'zod'
 // ответа GET /workspaces. Личное создаётся регистрацией и всегда первое в списке.
 export const workspaceSchema = z.object({
   id: z.string(),
+  // slug — короткий публичный ключ (nanoid(10)): им кабинет адресует пространство
+  // в СВОИХ URL (/workspaces/{slug}, ?w={slug}), как формой — form.slug. В запросы
+  // API едет id — ровно то же разделение, что у формы.
+  slug: z.string(),
   name: z.string(),
   // isPersonal — личное пространство: его нельзя удалить или покинуть, и оно не
   // замораживается при даунгрейде (ADR §10).

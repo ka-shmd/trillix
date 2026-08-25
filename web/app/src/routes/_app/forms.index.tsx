@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react'
 import { z } from 'zod'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formsListQueryOptions } from '../../features/forms/queries'
+import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { FormCard } from '../../features/forms/FormCard'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
 import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
@@ -21,7 +22,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 // параметры поиска: обязательные search-параметры типы роутера требуют у КАЖДОЙ
 // ссылки. Мусор из адреса (его правят руками) гасит catch: неизвестная сортировка
 // читается как умолчание, а не роняет экран.
-// w — текущее пространство (пусто = личное), см. shared/currentWorkspace.
+// w — текущее пространство SLUG'ом (пусто = личное), см. shared/currentWorkspace;
+// в id его переводит useCurrentWorkspace, потому что запрос списка ждёт id.
 const formsSearchSchema = z.object({
   q: z.string().optional().catch(undefined),
   sort: formsSortSchema.optional().catch(undefined),
@@ -37,8 +39,16 @@ export const Route = createFileRoute('/_app/forms/')({
 
 function FormsDashboard() {
   const navigate = useNavigate()
-  const { q = '', sort = DEFAULT_FORMS_SORT, w = '' } = Route.useSearch()
-  const query = useInfiniteQuery(formsListQueryOptions({ q, sort, workspaceId: w }))
+  const { q = '', sort = DEFAULT_FORMS_SORT } = Route.useSearch()
+  // В адресе пространство названо SLUG'ом, а список форм спрашивается по id
+  // (features/workspaces/current.ts). Пока перевод не сделан, запрос не
+  // включается: с пустым workspaceId он показал бы формы ЛИЧНОГО пространства
+  // под адресом командного — то есть чужой список без единого признака подмены.
+  const workspace = useCurrentWorkspace()
+  const query = useInfiniteQuery({
+    ...formsListQueryOptions({ q, sort, workspaceId: workspace?.id ?? '' }),
+    enabled: workspace !== undefined,
+  })
 
   // Кнопка НИЧЕГО не создаёт: открывает редактор нового черновика, а форму заводит
   // первая правка (features/forms/draft.ts). search сохраняется — из него редактор
