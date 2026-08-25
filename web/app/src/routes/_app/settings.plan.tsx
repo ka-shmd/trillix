@@ -6,6 +6,7 @@ import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { planSnapshotQueryOptions } from '../../features/plan/queries'
 import { formatDate } from '../../shared/format'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 
@@ -67,6 +68,7 @@ function PlanPage() {
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-8">
+      <PageCrumbs items={['Тариф']} />
       <section>
         <h1 className="text-lg font-medium">Тариф</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -100,8 +102,8 @@ function PlanPage() {
 
       <section className="rounded-lg border p-4">
         <p className="text-sm">
-          Оплата тарифов ещё не подключена — мы её готовим. Ничего не потеряется: все
-          собранные ответы сохраняются независимо от плана.
+          Оплата тарифов ещё не подключена — мы её готовим. Ничего не потеряется: все собранные
+          ответы сохраняются независимо от плана.
         </p>
         <Button className="mt-3" size="sm" disabled>
           Перейти на платный тариф
