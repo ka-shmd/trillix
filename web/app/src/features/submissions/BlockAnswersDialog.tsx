@@ -23,6 +23,12 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 //
 // Значения приходят готовым текстом с сервера (подпись опции, а не её id) — тем же
 // рендером, что и в сводке над окном.
+//
+// ВЫСОТА ОБЛАСТИ ПРОКРУТКИ ЗАДАНА ЯВНО (max-h), а не долей свободного места
+// (flex-1). У окна своей высоты нет — её задаёт содержимое, — поэтому доли считать
+// не от чего: область вырастает по списку, прокрутка не включается вовсе, а список
+// вываливается за нижний край окна. Кнопка «Показать ещё» при этом остаётся на
+// своём месте у края и оказывается поверх строк.
 export function BlockAnswersDialog({
   open,
   onOpenChange,
@@ -51,12 +57,8 @@ export function BlockAnswersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* Колонкой flex, а не сеткой по умолчанию: только так работает max-h у самого
-          окна, а список получает ВСЮ оставшуюся высоту через flex-1 + min-h-0.
-          Пока окно было сеткой, его высоту задавало содержимое, и нижний край
-          обрезал то, что не поместилось. */}
-      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
-        <DialogHeader className="shrink-0">
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
           <DialogTitle className="break-words">{label}</DialogTitle>
           <DialogDescription>
             {answered} {pluralAnswers(answered)} за выбранный период.
@@ -68,7 +70,7 @@ export function BlockAnswersDialog({
         ) : answers.isError ? (
           <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
         ) : (
-          <ScrollArea className="min-h-0 flex-1">
+          <ScrollArea className="max-h-[60vh]">
             {/* Поле справа — под полосу прокрутки: без него длинный ответ упирается
                 в неё вплотную и читается как обрезанный. */}
             <ul className="flex flex-col pr-4">
@@ -93,7 +95,7 @@ export function BlockAnswersDialog({
           <Button
             variant="outline"
             size="sm"
-            className="w-full shrink-0"
+            className="w-full"
             onClick={() => void answers.fetchNextPage()}
             disabled={answers.isFetchingNextPage}
           >
