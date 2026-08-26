@@ -34,6 +34,16 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 // не от чего: область вырастает по списку, прокрутка не включается вовсе, а список
 // вываливается за нижний край окна. Кнопка «Показать ещё» при этом остаётся на
 // своём месте у края и оказывается поверх строк.
+//
+// «Показать ещё» стоит В КОНЦЕ СПИСКА, внутри прокрутки, — там, где человек
+// дочитал, а не прибитой к низу окна. Всё прокручиваемое обёрнуто ОДНИМ блоком с
+// полями: Radix кладёт содержимое области в обёртку с display: table, и отступы
+// прямых потомков в ней ведут себя не как в обычном потоке — кнопка вставала
+// вплотную к нижнему краю и выглядела обрезанной. Правое поле того же блока —
+// зазор под полосу прокрутки.
+//
+// Кнопка, а не подгрузка по прокрутке: автоподгрузка в своей области прокрутки не
+// даёт добраться до конца списка ни мышью, ни клавиатурой.
 export function BlockAnswersDialog({
   open,
   onOpenChange,
@@ -76,36 +86,31 @@ export function BlockAnswersDialog({
           <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
         ) : (
           <ScrollArea className="max-h-[60vh]">
-            {/* Поле справа — под полосу прокрутки: без него длинный ответ упирается
-                в неё вплотную и читается как обрезанный. */}
-            <ul className="flex flex-col pr-4">
-              {rows.map((a, i) => (
-                <li
-                  key={`${a.at}-${i}`}
-                  className="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-0"
+            <div className="pr-4 pb-2">
+              <ul className="flex flex-col">
+                {rows.map((a, i) => (
+                  <li
+                    key={`${a.at}-${i}`}
+                    className="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-0"
+                  >
+                    <span className="min-w-0 break-words">{a.text}</span>
+                    <span className="shrink-0 text-muted-foreground">{formatDate(a.at)}</span>
+                  </li>
+                ))}
+              </ul>
+              {answers.hasNextPage && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 w-full"
+                  onClick={() => void answers.fetchNextPage()}
+                  disabled={answers.isFetchingNextPage}
                 >
-                  <span className="min-w-0 break-words">{a.text}</span>
-                  <span className="shrink-0 text-muted-foreground">{formatDate(a.at)}</span>
-                </li>
-              ))}
-            </ul>
+                  {answers.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+                </Button>
+              )}
+            </div>
           </ScrollArea>
-        )}
-
-        {/* Кнопка ВНЕ области прокрутки: внутри неё до кнопки приходилось
-            доскроллить, и она же первой уходила под нижний край окна. Кнопка, а не
-            подгрузка по прокрутке: автоподгрузка в своей области прокрутки не даёт
-            добраться до конца списка ни мышью, ни клавиатурой. */}
-        {answers.hasNextPage && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => void answers.fetchNextPage()}
-            disabled={answers.isFetchingNextPage}
-          >
-            {answers.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-          </Button>
         )}
       </DialogContent>
     </Dialog>
