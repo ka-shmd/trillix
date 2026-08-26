@@ -11,6 +11,7 @@ import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
+import { DEFAULT_PERIOD } from '../../shared/period'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
@@ -203,7 +204,7 @@ function FormTabs({ slug }: { slug: string }) {
           соседней. Сам /insights экрана не имеет — его index редиректит на сводку. */}
       <Link
         to="/forms/$slug/insights"
-        search={{ period: 'all' }}
+        search={{ period: DEFAULT_PERIOD }}
         params={{ slug }}
         className={base}
         activeProps={active}

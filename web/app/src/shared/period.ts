@@ -8,8 +8,19 @@ import { z } from 'zod'
 // Значение периода — токен, а не пара дат: в query-ключе TanStack дата менялась бы
 // на каждый рендер (Date.now()), и кеш обнулялся бы сам собой. Даты считаются в
 // момент запроса.
-export const periodSchema = z.enum(['all', '24h', '7d', '30d']).catch('all')
-export type Period = z.infer<typeof periodSchema>
+const periodEnum = z.enum(['all', '24h', '7d', '30d'])
+export type Period = z.infer<typeof periodEnum>
+
+// DEFAULT_PERIOD — окно, с которым аналитика открывается, когда его не назвали:
+// адрес без ?period, старая закладка на /summary, вход по вкладке «Аналитика».
+// Одна константа на все эти входы: разъехавшись, они открывали бы разные экраны с
+// одной кнопки.
+//
+// Она же — ответ на битое значение в адресе (.catch ниже). Ветку «неизвестный
+// период» отдельно писать не надо: непонятное окно и неназванное — один случай.
+export const DEFAULT_PERIOD: Period = '24h'
+
+export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
 
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',

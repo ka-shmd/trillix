@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { periodRange, periodSchema } from './period'
+import { DEFAULT_PERIOD, periodRange, periodSchema } from './period'
 
 describe('окно наблюдения', () => {
   it('«всё время» не шлёт границ вовсе', () => {
@@ -27,10 +27,17 @@ describe('окно наблюдения', () => {
     expect(periodRange('7d').to).toBeUndefined()
   })
 
-  it('мусор в адресе читается как «всё время», а не роняет экран', () => {
+  it('мусор и пустота в адресе дают окно по умолчанию, а не роняют экран', () => {
     // Период приезжает из URL, то есть его правит человек. Единственный разумный
-    // исход — показать всё, а не белый экран.
-    expect(periodSchema.parse('вчера')).toBe('all')
-    expect(periodSchema.parse(undefined)).toBe('all')
+    // исход — открыть окно по умолчанию, а не белый экран. Непонятное окно и
+    // неназванное — один случай, поэтому и значение у них одно.
+    expect(periodSchema.parse('вчера')).toBe(DEFAULT_PERIOD)
+    expect(periodSchema.parse(undefined)).toBe(DEFAULT_PERIOD)
+  })
+
+  // Экраны аналитики открываются на сутках: у формы, которая принимает ответы
+  // прямо сейчас, вопрос «что происходит» чаще, чем «что было за всё время».
+  it('по умолчанию — сутки', () => {
+    expect(DEFAULT_PERIOD).toBe('24h')
   })
 })
