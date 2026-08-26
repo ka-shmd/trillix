@@ -27,16 +27,20 @@ export function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className={cn('flex flex-col gap-6', className)}>
+    <section className={cn('@container flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-          {/* Пояснение не шире половины раздела: строка во всю ширину экрана
-              нечитаема, а короткая мера сама отделяет пояснение от содержимого.
-              На узком экране половина превратилась бы в колонку в пять слов,
-              поэтому ограничение начинается с sm. */}
+          {/* Пояснение не шире половины раздела — но только у ШИРОКОГО раздела:
+              строка во всю страницу нечитаема, а в колонке на пол-экрана половина
+              превратилась бы в текст в пять слов.
+
+              Порог считается по ширине САМОГО раздела (@container), а не экрана:
+              разделы стоят и во всю ширину, и парами в две колонки, и правило про
+              меру строки зависит от того, сколько места у раздела, а не сколько его
+              у окна. */}
           {description && (
-            <p className="mt-1 max-w-full text-sm text-muted-foreground sm:max-w-[50%]">
+            <p className="mt-1 max-w-full text-sm text-muted-foreground @2xl:max-w-[50%]">
               {description}
             </p>
           )}
