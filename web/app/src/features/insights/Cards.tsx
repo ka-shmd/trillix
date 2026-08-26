@@ -17,7 +17,15 @@ import { type Period } from '../../shared/period'
 // свои данные, а не отчёт об устройстве счётчика. Отличие «данных нет» от нуля
 // показывается прочерком.
 
-// Card — общий примитив: заголовок и число.
+// Card — общий примитив: заголовок и число. Подложка, а не рамка: четыре
+// обведённых прямоугольника в ряд читаются как четыре объекта на странице, тогда
+// как это одна полоса состояния (docs/DESIGN-SYSTEM.md, «плоскость вместо рамки»).
+// Число — кегль заголовка раздела (20/700), а не свой: полоса стоит НАД разделами и
+// не должна их перекрикивать.
+//
+// Разметка — dt/dd внутри dl полосы, а не заголовок с абзацем: подпись карточки это
+// имя величины, а не раздел страницы. Заголовком она попадала в оглавление
+// скринридера вперемешку с настоящими разделами.
 export function Card({
   title,
   value,
@@ -28,12 +36,12 @@ export function Card({
   pending: boolean
 }) {
   return (
-    <article className="rounded-lg border p-4">
-      <h2 className="text-sm text-muted-foreground">{title}</h2>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">
+    <div className="rounded-lg bg-muted/50 px-4 py-3">
+      <dt className="text-sm text-muted-foreground">{title}</dt>
+      <dd className="mt-0.5 text-xl font-bold tabular-nums">
         {pending ? <span className="text-muted-foreground">…</span> : (value ?? '—')}
-      </p>
-    </article>
+      </dd>
+    </div>
   )
 }
 
@@ -56,7 +64,7 @@ export function VisitCards({ slug, period }: { slug: string; period: Period }) {
   const measured = visits.data !== undefined && visits.data.timedVisits > 0
 
   return (
-    <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card title="Визиты" value={visits.data?.visits} pending={visits.isPending} />
       <Card title="Ответы" value={answers.data?.submissions} pending={answers.isPending} />
       <Card title="Уникальные" value={visits.data?.uniqueVisitors} pending={visits.isPending} />
@@ -65,7 +73,7 @@ export function VisitCards({ slug, period }: { slug: string; period: Period }) {
         value={measured ? formatDuration(visits.data.medianDurationSec) : undefined}
         pending={visits.isPending}
       />
-    </div>
+    </dl>
   )
 }
 
@@ -104,7 +112,7 @@ export function CompletionCards({
       : undefined
 
   return (
-    <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <Card title="Начали отвечать" value={started} pending={pending} />
       <Card title="Завершили" value={completed} pending={pending} />
       <Card title="Доля завершивших" value={rate} pending={pending} />
@@ -113,6 +121,6 @@ export function CompletionCards({
         value={measured ? formatDuration(visits.data.completionDurationSec) : undefined}
         pending={visits.isPending}
       />
-    </div>
+    </dl>
   )
 }

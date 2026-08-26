@@ -2,10 +2,14 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
 import { type BlockSummary } from '../../entities/summary'
-import { formDetailQueryOptions } from '../../features/forms/queries'
+import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { VisitCards } from '../../features/insights/Cards'
+import { percentOf } from '../../features/insights/metrics'
+import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { formatRelative, pluralAnswers } from '../../shared/format'
+import { Section } from '../../shared/page/Section'
+import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 
 // Вкладка «Сводка» (/forms/$slug/insights/answers): распределения, статистика чисел
@@ -15,8 +19,9 @@ import { Button } from '@/components/ui/button'
 // наблюдения и карточки — на оболочке раздела «Аналитика».
 //
 // Агрегат считает сервер — сюда приходят только счётчики (сырые ответы в браузер не
-// выгружаются). Бары — на CSS: графических библиотек в проекте нет, список
-// зависимостей заморожен (web/CLAUDE.md).
+// выгружаются). Вопросы стоят В ДВЕ КОЛОНКИ и на подложке, а не в рамках: у
+// распределения из трёх вариантов половина ширины страницы уходит в пустоту, а рамка
+// вокруг каждого превращает список вопросов в список коробок.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
   component: SummaryPage,
 })
@@ -36,73 +41,68 @@ function SummaryPage() {
   const total = summary.data?.total ?? 0
 
   return (
-    <>
+    <div className="flex flex-col gap-12">
       <VisitCards slug={slug} period={period} />
 
-      {summary.isSuccess && (
-        <p className="mb-6 text-sm text-muted-foreground">
-          {total === 0 ? 'За выбранный период ответов нет' : `${total} ${pluralAnswers(total)}`}
-        </p>
-      )}
-
-      {summary.isPending ? (
-        <p className="text-sm text-muted-foreground">Считаем сводку…</p>
-      ) : summary.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Не удалось посчитать сводку.</p>
-          <Button variant="outline" size="sm" onClick={() => summary.refetch()}>
-            Повторить
-          </Button>
-        </div>
-      ) : total === 0 ? (
-        <div className="mx-auto mt-12 max-w-md text-center">
-          <h2 className="text-lg font-medium">Ответов пока нет</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Опубликуйте форму и поделитесь ссылкой — сводка появится здесь. Если
-            ответы были раньше, расширьте период.
-          </p>
-        </div>
-      ) : summary.data.blocks.length === 0 ? (
-        // Ответы есть, а вопросов нет: все вопросы формы удалены после сбора ответов.
-        // Не пустой экран, а объяснение — иначе выглядит как поломка.
-        <p className="text-sm text-muted-foreground">
-          В опубликованных версиях формы нет вопросов — сводить нечего. Сами ответы
-          доступны в таблице.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {summary.data.blocks.map((b) => (
-            <BlockCard key={b.blockId} block={b} total={total} slug={slug} />
-          ))}
-        </div>
-      )}
-    </>
+      <Section
+        title="Ответы по вопросам"
+        description={
+          summary.isSuccess && total > 0
+            ? `${total} ${pluralAnswers(total)} за выбранный период. Знаменатель у каждого вопроса свой — столько человек его видели.`
+            : 'Распределение ответов по каждому вопросу формы.'
+        }
+      >
+        {summary.isPending ? (
+          <LoadingRows rows={3} />
+        ) : summary.isError ? (
+          <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
+        ) : total === 0 ? (
+          <EmptyState
+            title="Ответов пока нет"
+            description="Опубликуйте форму и поделитесь ссылкой — сводка появится здесь. Если ответы были раньше, расширьте период."
+          />
+        ) : summary.data.blocks.length === 0 ? (
+          // Ответы есть, а вопросов нет: все вопросы формы удалены после сбора
+          // ответов. Не пустой экран, а объяснение — иначе выглядит как поломка.
+          <EmptyState
+            title="Сводить нечего"
+            description="В опубликованных версиях формы нет вопросов. Сами ответы доступны в таблице."
+          />
+        ) : (
+          <div className="grid gap-x-8 gap-y-6 @3xl:grid-cols-2">
+            {summary.data.blocks.map((b) => (
+              <BlockCard key={b.blockId} block={b} total={total} slug={slug} />
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
   )
 }
 
 function BlockCard({ block, total, slug }: { block: BlockSummary; total: number; slug: string }) {
   return (
-    <article className="rounded-lg border p-5">
-      <h2 className="font-medium">{block.label}</h2>
-      <p className="mt-0.5 text-sm text-muted-foreground">
-        Ответили {block.answered} из {block.asked}
-        {/* Знаменатель меньше числа ответов формы — значит вопрос видели не все: он за
-            условием, на пропущенной странице или появился в поздней версии (фаза 21).
-            Без этой оговорки владелец сравнивает «12 из 34» с «400 ответов» на карточке
-            формы и читает расхождение как поломку. */}
-        {block.asked < total && ` — вопрос показали ${block.asked} из ${total}`}
-      </p>
-      <div className="mt-4">
-        {block.kind === 'distribution' ? (
-          <Distribution block={block} />
-        ) : block.kind === 'number' ? (
-          <NumberStats block={block} />
-        ) : (
-          <Samples block={block} />
-        )}
+    <article className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
+      <div>
+        <h3 className="font-semibold">{block.label}</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Ответили {block.answered} из {block.asked}
+          {/* Знаменатель меньше числа ответов формы — значит вопрос видели не все: он за
+              условием, на пропущенной странице или появился в поздней версии (фаза 21).
+              Без этой оговорки владелец сравнивает «12 из 34» с «400 ответов» на карточке
+              формы и читает расхождение как поломку. */}
+          {block.asked < total && ` — вопрос показали ${block.asked} из ${total}`}
+        </p>
       </div>
+      {block.kind === 'distribution' ? (
+        <Distribution block={block} />
+      ) : block.kind === 'number' ? (
+        <NumberStats block={block} />
+      ) : (
+        <Samples block={block} />
+      )}
       {block.samples.length > 0 && block.answered > block.samples.length && (
-        <Button asChild variant="link" size="sm" className="mt-2 h-auto p-0">
+        <Button asChild variant="link" size="sm" className="h-auto justify-start p-0">
           <Link to="/forms/$slug/submissions" params={{ slug }} search={(prev) => prev}>
             Все ответы
           </Link>
@@ -126,15 +126,17 @@ function Distribution({ block }: { block: BlockSummary }) {
     return <p className="text-sm text-muted-foreground">В этом вопросе нет вариантов.</p>
   }
   const base = barBase(block)
-  return (
-    <ul className="flex flex-col gap-3">
-      {block.buckets.map((b) => (
-        <li key={b.key}>
-          <Bar label={b.label} count={b.count} base={base} />
-        </li>
-      ))}
-    </ul>
-  )
+  const rows: BarRow[] = block.buckets.map((b) => ({
+    key: b.key,
+    label: b.label,
+    count: b.count,
+    // Ширина полоски и названный процент — от ОДНОЙ базы: у распределения доля
+    // осмысленна сама по себе («52 % выбрали Рекламу»), в отличие от списков
+    // визитов, где полоска меряется максимумом строки.
+    share: base > 0 ? b.count / base : 0,
+    percent: percentOf(b.count, base),
+  }))
+  return <BarRows rows={rows} />
 }
 
 // Последние ответы под вопросом — вместо доли заполнивших у текстовых типов.
@@ -145,41 +147,32 @@ function Distribution({ block }: { block: BlockSummary }) {
 // ответов со своей пагинацией.
 function Samples({ block }: { block: BlockSummary }) {
   if (block.samples.length === 0) {
-    return <Bar label="Заполнили" count={block.answered} base={block.asked} />
+    return (
+      <BarRows
+        rows={[
+          {
+            key: 'filled',
+            label: 'Заполнили',
+            count: block.answered,
+            share: block.asked > 0 ? block.answered / block.asked : 0,
+            percent: percentOf(block.answered, block.asked),
+          },
+        ]}
+      />
+    )
   }
   return (
     <ul className="flex flex-col">
       {block.samples.map((s, i) => (
         <li
           key={`${s.at}-${i}`}
-          className="flex justify-between gap-4 border-b py-2 text-sm last:border-0"
+          className="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-0"
         >
           <span className="min-w-0 break-words">{s.text}</span>
           <span className="shrink-0 text-muted-foreground">{formatRelative(s.at)}</span>
         </li>
       ))}
     </ul>
-  )
-}
-
-// Один бар: подпись, счётчик с долей и полоска. Полоска декоративна (aria-hidden) —
-// то же число уже прочитано текстом рядом, дублировать его скринридеру незачем.
-function Bar({ label, count, base }: { label: string; count: number; base: number }) {
-  // Ноль в знаменателе — вопрос, который никто не видел (версия без ответов):
-  // показываем пустую полоску, а не NaN.
-  const pct = base > 0 ? Math.round((count / base) * 100) : 0
-  return (
-    <>
-      <div className="flex justify-between gap-4 text-sm">
-        <span className="min-w-0 break-words">{label}</span>
-        <span className="shrink-0 tabular-nums text-muted-foreground">
-          {count} · {pct} %
-        </span>
-      </div>
-      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
-      </div>
-    </>
   )
 }
 
@@ -199,7 +192,7 @@ function NumberStats({ block }: { block: BlockSummary }) {
       ].map(([title, value]) => (
         <div key={title as string}>
           <dt className="text-sm text-muted-foreground">{title}</dt>
-          <dd className="mt-0.5 text-xl font-semibold tabular-nums">
+          <dd className="mt-0.5 text-xl font-bold tabular-nums">
             {numberFmt.format(value as number)}
           </dd>
         </div>
