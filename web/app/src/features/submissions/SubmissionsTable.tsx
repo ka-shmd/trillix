@@ -1,3 +1,5 @@
+import { CalendarClock } from 'lucide-react'
+
 import { type AnswerColumn } from './columns'
 import { formatAnswer } from './answerFormat'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
@@ -31,7 +33,13 @@ import {
 // (`shared/blockIcons`). Он отвечает на вопрос, которого в подписи нет: «5» в клетке —
 // это оценка по шкале, номер или выбранный вариант? Подпись вопроса при этом обрезана
 // до одной строки, и у двух похоже названных колонок глиф часто единственное отличие,
-// которое видно целиком.
+// которое видно целиком. У даты отправки глиф свой (`CalendarClock`), не из словаря
+// типов: она не вопрос, а отметка приёма, и календарь без часов путал бы её с колонкой
+// вопроса типа «Дата».
+//
+// КОЛОНКИ ОДИНАКОВОЙ ШИРИНЫ: своей ширины не назначено ни одной, и `table-fixed` делит
+// место поровну. Назначенная в пикселях колонка на широком экране остаётся узкой
+// полосой, вокруг которой копится пустота, а на узком — режет соседей.
 //
 // ТАБЛИЦА ИДЁТ ОТ КРАЯ ДО КРАЯ. Отрицательные боковые поля гасят поля колонки
 // страницы (`-mx-5 sm:-mx-8` — ровно `px-5 sm:px-8` у PageContainer), а рамка
@@ -42,6 +50,11 @@ import {
 // Вертикальная линия у каждой колонки, кроме последней: без неё длинный ответ
 // сливается со следующей клеткой, и непонятно, где кончается один вопрос.
 const DIVIDER = 'border-r last:border-r-0'
+
+// Шапка набрана ПРИГЛУШЁННЫМ и стоит выше строки данных: подписи колонок читают один
+// раз, а значения — постоянно, и одинаковыми чернилами шапка спорит с ними за внимание.
+// Высота перебивается тем же плоским `h-*`, каким задана у TableHead (h-10).
+const HEAD = 'h-12 text-muted-foreground'
 
 // Боковое поле крайних колонок = поле страницы: текст таблицы стоит на той же
 // линии, что и текст над ней.
@@ -68,15 +81,20 @@ export function SubmissionsTable({
       <Table className="table-fixed">
         <TableHeader>
           <TableRow>
-            <TableHead className={`w-[230px] ${EDGE_LEFT} ${DIVIDER}`}>Дата отправки</TableHead>
-            {showVersion && <TableHead className={`w-[96px] ${DIVIDER}`}>Версия</TableHead>}
+            <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>
+              <span className="flex min-w-0 items-center gap-1.5">
+                <CalendarClock className="size-4 shrink-0" aria-hidden />
+                <span className="truncate">Дата отправки</span>
+              </span>
+            </TableHead>
+            {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
             {columns.map((c, i) => (
               <TableHead
                 key={c.block.id}
-                className={`${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
+                className={`${HEAD} ${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
               >
                 <span className="flex min-w-0 items-center gap-1.5" title={c.label}>
-                  <BlockTypeIcon type={c.block.type} className="shrink-0 text-muted-foreground" />
+                  <BlockTypeIcon type={c.block.type} className="shrink-0" />
                   <span className="truncate">{c.label}</span>
                 </span>
               </TableHead>

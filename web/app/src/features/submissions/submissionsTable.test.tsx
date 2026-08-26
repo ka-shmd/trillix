@@ -59,15 +59,13 @@ describe('таблица ответов', () => {
     expect(screen.getAllByRole('row')).toHaveLength(ROWS.length + 1)
   })
 
-  it('колонку вопроса подписывает глиф его типа', () => {
-    // Тот же глиф, что у вопроса на полотне: подпись обрезана одной строкой, и у двух
+  it('каждую колонку подписывает глиф', () => {
+    // У вопроса — тот же глиф, что на полотне: подпись обрезана одной строкой, и у двух
     // похоже названных колонок глиф часто единственное отличие, которое видно целиком.
+    // У даты отправки глиф свой — она не вопрос.
     renderTable()
     const heads = screen.getAllByRole('columnheader')
-    expect(heads[1]!.querySelector('svg')).toBeTruthy()
-    expect(heads[2]!.querySelector('svg')).toBeTruthy()
-    // У даты глифа нет — она не вопрос.
-    expect(heads[0]!.querySelector('svg')).toBeNull()
+    for (const h of heads) expect(h.querySelector('svg')).toBeTruthy()
   })
 
   it('в ячейке стоит подпись варианта, а не его id', () => {
