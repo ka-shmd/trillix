@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { textFromString, type Block } from '@entities/formSchema'
 
-import { answerColumns } from './columns'
+import { answerColumns, previewColumns } from './columns'
 import { SubmissionsTable } from './SubmissionsTable'
 import { type Submission } from '../../entities/submission'
 
@@ -20,6 +19,8 @@ const BLOCKS = [
   },
   { id: 'cap2', groupId: 'g2', type: 'label', text: textFromString('Оценка') },
   { id: 'rate', groupId: 'g2', type: 'number' },
+  { id: 'cap3', groupId: 'g3', type: 'label', text: textFromString('Комментарий') },
+  { id: 'note', groupId: 'g3', type: 'long_text' },
 ] as unknown as Block[]
 
 const ROWS: Submission[] = [
@@ -33,28 +34,28 @@ const ROWS: Submission[] = [
 ]
 
 function renderTable(onOpen = vi.fn()) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
-    <QueryClientProvider client={client}>
-      <SubmissionsTable
-        rows={ROWS}
-        columns={answerColumns(BLOCKS)}
-        files={{}}
-        showVersion={false}
-        formId="f1"
-        onOpen={onOpen}
-      />
-    </QueryClientProvider>,
+    <SubmissionsTable
+      rows={ROWS}
+      columns={previewColumns(answerColumns(BLOCKS))}
+      files={{}}
+      showVersion={false}
+      onOpen={onOpen}
+    />,
   )
   return onOpen
 }
 
 describe('таблица ответов', () => {
-  it('колонка на вопрос, строка на ответ', () => {
+  it('показывает два первых вопроса, а не все', () => {
+    // Колонка на каждый вопрос уводит таблицу в прокрутку вбок; ответ целиком
+    // читается в окне по строке.
     renderTable()
-    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent)
-    expect(headers).toEqual(['Заполнен', 'Как вы о нас узнали', 'Оценка', 'Действия'])
-    // Строк ровно столько, сколько ответов, плюс шапка.
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+      'Дата отправки',
+      'Как вы о нас узнали',
+      'Оценка',
+    ])
     expect(screen.getAllByRole('row')).toHaveLength(ROWS.length + 1)
   })
 
@@ -67,8 +68,7 @@ describe('таблица ответов', () => {
   it('на неотвеченный вопрос ставит прочерк, а не пустоту', () => {
     // Пустая клетка неотличима от недогрузившейся строки.
     renderTable()
-    const rows = screen.getAllByRole('row')
-    expect(within(rows[2]!).getByText('—')).toBeTruthy()
+    expect(within(screen.getAllByRole('row')[2]!).getByText('—')).toBeTruthy()
   })
 
   it('клик по строке открывает ответ', () => {
@@ -77,11 +77,12 @@ describe('таблица ответов', () => {
     expect(onOpen).toHaveBeenCalledWith(ROWS[0])
   })
 
-  it('клик по «⋯» ответ НЕ открывает', () => {
-    // Клик по триггеру всплывает до строки, если его не остановить, и меню
-    // открывается одновременно с окном ответа поверх него.
+  it('дата — кнопка, и открывает ответ РОВНО один раз', () => {
+    // Путь к ответу с клавиатуры: клик по строке мышью её не заменяет. Клик по
+    // самой кнопке всплыл бы до строки и открыл бы окно дважды.
     const onOpen = renderTable()
-    fireEvent.click(screen.getAllByRole('button', { name: /Действия с ответом/ })[0]!)
-    expect(onOpen).not.toHaveBeenCalled()
+    fireEvent.click(screen.getAllByRole('button')[0]!)
+    expect(onOpen).toHaveBeenCalledTimes(1)
+    expect(onOpen).toHaveBeenCalledWith(ROWS[0])
   })
 })

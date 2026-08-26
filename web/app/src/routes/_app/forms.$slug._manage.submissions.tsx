@@ -5,7 +5,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionsListQueryOptions } from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
-import { answerColumns, versionsDiffer } from '../../features/submissions/columns'
+import { answerColumns, previewColumns, versionsDiffer } from '../../features/submissions/columns'
 import { SubmissionPanel } from '../../features/submissions/SubmissionPanel'
 import { SubmissionsTable } from '../../features/submissions/SubmissionsTable'
 import { FormStats } from '../../features/forms/FormStats'
@@ -18,9 +18,11 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 
 // Таблица ответов формы (/forms/$slug/submissions): курсорная подгрузка, новые
 // сверху, строка — один ответ, колонка — один вопрос. Клик по строке открывает
-// ответ целиком; действия строки — в меню «⋯»; выгрузка всего — кнопкой раздела.
+// ответ целиком (там же и удаление); выгрузка всего — кнопкой раздела.
 //
 // Шапка страницы, крошки и табы — на оболочке _manage: своей шапки экран не рисует.
+// Колонка страницы у этой вкладки без потолка ширины (`full`) — её выбирает та же
+// оболочка по открытому маршруту.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/submissions')({
   component: SubmissionsPage,
 })
@@ -115,10 +117,9 @@ function SubmissionsPage() {
           <div className="flex flex-col gap-6">
             <SubmissionsTable
               rows={submissions}
-              columns={columns}
+              columns={previewColumns(columns)}
               files={files}
               showVersion={versionsDiffer(submissions)}
-              formId={formId ?? ''}
               onOpen={openSubmission}
             />
             {list.hasNextPage && (
@@ -138,7 +139,15 @@ function SubmissionsPage() {
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-          {selected && <SubmissionPanel submission={selected} columns={columns} files={files} />}
+          {selected && (
+            <SubmissionPanel
+              submission={selected}
+              columns={columns}
+              files={files}
+              formId={formId ?? ''}
+              onDeleted={() => setOpen(false)}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>

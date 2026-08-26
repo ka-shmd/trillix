@@ -1,4 +1,4 @@
-import { createFileRoute, Link, Outlet } from '@tanstack/react-router'
+import { createFileRoute, Link, Outlet, useMatchRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Copy, Pencil } from 'lucide-react'
@@ -52,6 +52,12 @@ const statusMeta: Partial<
 function ManageLayout() {
   const { slug } = Route.useParams()
   const form = useQuery(formDetailQueryOptions(slug))
+  // Ширину колонки задаёт ОТКРЫТАЯ вкладка, а не группа целиком: у «Ответов»
+  // таблица, которой потолок ширины оборачивается прокруткой вбок при пустых полях
+  // по краям, у остальных трёх — текст и разделы, которым потолок нужен (мера
+  // строки). Одной ширины на группу поэтому не существует.
+  const matchRoute = useMatchRoute()
+  const width = matchRoute({ to: '/forms/$slug/submissions' }) ? 'full' : 'default'
   const workspaceCrumb = useWorkspaceCrumb()
   // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
@@ -82,7 +88,7 @@ function ManageLayout() {
   const meta = form.data ? statusMeta[form.data.status] : undefined
 
   return (
-    <PageContainer>
+    <PageContainer width={width}>
       <PageCrumbs items={[workspaceCrumb, title]} />
       {/* Правая часть бара — от общего к частному: кто в пространстве, ссылка на
           форму, вход в редактор. Залитая кнопка стоит последней, у самого края:
