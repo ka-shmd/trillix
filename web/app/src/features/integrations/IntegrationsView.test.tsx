@@ -216,7 +216,10 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: /подключить google таблицы/i })).toBeTruthy()
   })
 
-  it('пока списки едут — в окне виден индикатор', async () => {
+  // Половина настроек зависит от того, что приедет (какие таблицы, какие листы),
+  // поэтому окно не показывает индикатор рядом с полями, а закрывает их: трогать
+  // раньше — это выбирать из пустого списка.
+  it('пока списки едут — окно закрыто индикатором, а поля выключены', async () => {
     hangingList.enabled = true
     try {
       renderView(state({ account: CONNECTED }), { seedSpreadsheets: false })
@@ -224,16 +227,21 @@ describe('оверлей настройки Google Таблиц', () => {
 
       // Счётчик useIsFetching доезжает до родителя подпиской, а не тем же тиком.
       await waitFor(() => expect(screen.getByText(/загружаем данные google/i)).toBeTruthy())
+      // inert выключает поддержку и мыши, и клавиатуры — слой поверх сам по себе
+      // не помешал бы дойти до полей табом.
+      const column = screen.getByLabelText(/название подключения/i).closest('[inert]')
+      expect(column).not.toBeNull()
     } finally {
       hangingList.enabled = false
     }
   })
 
-  it('списки приехали — индикатора нет', () => {
+  it('списки приехали — индикатора нет и поля живые', () => {
     renderView(state({ account: CONNECTED }))
     openSetup()
 
     expect(screen.queryByText(/загружаем данные google/i)).toBeNull()
+    expect(screen.getByLabelText(/название подключения/i).closest('[inert]')).toBeNull()
   })
 
   it('аккаунт не подключён — предупреждение и вход в согласие, настроек ещё нет', () => {

@@ -111,7 +111,15 @@ export function GoogleSheetsOverlay({
             центрирование через justify обрезало бы верх содержимого, когда оно выше
             окна. Так колонка стоит посередине, пока помещается, и прокручивается,
             когда нет. */}
-        <div className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16">
+        {/* inert, а не только слой поверх: накрывающий div ловит мышь, но не мешает
+            дойти до полей табом. Атрибут выключает поддерево целиком — и для
+            указателя, и для клавиатуры, и для скринридера. Фокус при этом
+            уезжает на сам DialogContent (у него tabIndex=-1), то есть из окна не
+            выпадает. */}
+        <div
+          inert={loading > 0}
+          className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16"
+        >
           <header className="flex flex-col items-center gap-3 text-center">
             <GoogleSheetsIcon className="size-10" />
             {/* Оверлей занимает весь экран, поэтому его заголовок берёт верхнюю
@@ -121,17 +129,6 @@ export function GoogleSheetsOverlay({
             <p className="text-sm text-muted-foreground">
               Отправляйте ответы формы прямо в Google Таблицы.
             </p>
-            {/* Место под индикатор зарезервировано всегда: колонка стоит по центру
-                по вертикали, и появляющаяся строка иначе подпрыгивала бы всем
-                содержимым. */}
-            <div className="flex h-5 items-center justify-center" aria-live="polite">
-              {loading > 0 && (
-                <span className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" aria-hidden />
-                  Загружаем данные Google…
-                </span>
-              )}
-            </div>
           </header>
 
           <SetupBody
@@ -143,6 +140,21 @@ export function GoogleSheetsOverlay({
             onPickerOpenChange={setPickerOpen}
           />
         </div>
+
+        {/* Слой поверх окна, пока едут его списки: половина настроек зависит от
+            того, что приедет (какие таблицы, какие листы), и трогать их раньше
+            значит выбирать из пустого списка. fixed, а не absolute: окно
+            прокручиваемое, и absolute уехал бы вместе с содержимым. */}
+        {loading > 0 && (
+          <div
+            className="fixed inset-0 z-10 flex items-center justify-center gap-3 bg-background/85"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
+            <span className="text-base text-muted-foreground">Загружаем данные Google…</span>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
