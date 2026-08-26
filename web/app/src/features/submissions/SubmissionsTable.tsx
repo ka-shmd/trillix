@@ -39,6 +39,10 @@ import {
 // невидимой кнопки под фокусом не бывает (тот же приём, что у строки формы в обзоре
 // пространства).
 //
+// Кластер прижат к ПРАВОМУ краю своей колонки: колонки одной ширины, а дата короче
+// колонки, и значки, стоящие сразу за текстом, вставали бы на разном расстоянии от
+// границы у соседних строк. У правого края они собираются в одну вертикаль.
+//
 // В шапке колонки стоит ГЛИФ ТИПА — тот же, что у вопроса на полотне редактора
 // (`shared/blockIcons`). Он отвечает на вопрос, которого в подписи нет: «5» в клетке —
 // это оценка по шкале, номер или выбранный вариант? Подпись вопроса при этом обрезана
@@ -125,9 +129,9 @@ export function SubmissionsTable({
                 className="group/row hover:bg-transparent dark:hover:bg-transparent"
               >
                 <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2">
                     <span>{formatDateTime(s.createdAt)}</span>
-                    <span className="flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                    <span className="ml-auto flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                       <Button
                         variant="ghost"
                         size="icon-sm"
