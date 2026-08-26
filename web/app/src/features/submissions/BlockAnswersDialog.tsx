@@ -51,8 +51,12 @@ export function BlockAnswersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
+      {/* Колонкой flex, а не сеткой по умолчанию: только так работает max-h у самого
+          окна, а список получает ВСЮ оставшуюся высоту через flex-1 + min-h-0.
+          Пока окно было сеткой, его высоту задавало содержимое, и нижний край
+          обрезал то, что не поместилось. */}
+      <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-2xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="break-words">{label}</DialogTitle>
           <DialogDescription>
             {answered} {pluralAnswers(answered)} за выбранный период.
@@ -64,8 +68,10 @@ export function BlockAnswersDialog({
         ) : answers.isError ? (
           <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
         ) : (
-          <ScrollArea className="-mx-1 max-h-[55vh] px-1">
-            <ul className="flex flex-col">
+          <ScrollArea className="min-h-0 flex-1">
+            {/* Поле справа — под полосу прокрутки: без него длинный ответ упирается
+                в неё вплотную и читается как обрезанный. */}
+            <ul className="flex flex-col pr-4">
               {rows.map((a, i) => (
                 <li
                   key={`${a.at}-${i}`}
@@ -76,21 +82,23 @@ export function BlockAnswersDialog({
                 </li>
               ))}
             </ul>
-            {/* Кнопка, а не подгрузка по прокрутке: у окна своя область прокрутки
-                внутри страницы, и автоподгрузка в ней не даёт добраться до конца
-                списка ни мышью, ни клавиатурой. */}
-            {answers.hasNextPage && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3 w-full"
-                onClick={() => void answers.fetchNextPage()}
-                disabled={answers.isFetchingNextPage}
-              >
-                {answers.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-              </Button>
-            )}
           </ScrollArea>
+        )}
+
+        {/* Кнопка ВНЕ области прокрутки: внутри неё до кнопки приходилось
+            доскроллить, и она же первой уходила под нижний край окна. Кнопка, а не
+            подгрузка по прокрутке: автоподгрузка в своей области прокрутки не даёт
+            добраться до конца списка ни мышью, ни клавиатурой. */}
+        {answers.hasNextPage && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full shrink-0"
+            onClick={() => void answers.fetchNextPage()}
+            disabled={answers.isFetchingNextPage}
+          >
+            {answers.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+          </Button>
         )}
       </DialogContent>
     </Dialog>
