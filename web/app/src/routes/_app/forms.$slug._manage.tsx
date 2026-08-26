@@ -11,7 +11,7 @@ import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
-import { DEFAULT_PERIOD } from '../../shared/period'
+import { periodSchema } from '../../shared/period'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
@@ -221,10 +221,15 @@ function FormTabs({ slug }: { slug: string }) {
       {/* Ссылка на РАЗДЕЛ, а не на его вкладку: activeProps роутера подсвечивает
           предка открытого маршрута, поэтому «Аналитика» остаётся активной и на
           «Сводке», и на «Отвалах». Ссылка на конкретную вкладку гасла бы на
-          соседней. Сам /insights экрана не имеет — его index редиректит на сводку. */}
+          соседней. Сам /insights экрана не имеет — его index редиректит на сводку.
+
+          Период здесь ДОБИРАЕТСЯ ИЗ АДРЕСА, а не назначается: `periodSchema` отдаёт
+          названное окно как есть, а неназванное и непонятное — умолчанием. Вбитая
+          сюда константа гасила бы подсветку на любом другом периоде: роутер считает
+          ссылку активной, только когда её search — подмножество текущего. */}
       <Link
         to="/forms/$slug/insights"
-        search={{ period: DEFAULT_PERIOD }}
+        search={(prev) => ({ ...prev, period: periodSchema.parse(prev.period) })}
         params={{ slug }}
         className={base}
         activeProps={active}

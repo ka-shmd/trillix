@@ -43,6 +43,12 @@ function InsightsLayout() {
 // наборы классов разведены по activeProps/inactiveProps — смешивать их нельзя
 // (у Tailwind-утилит одинаковая специфичность, побеждает порядок в сгенерированном
 // CSS, а не в строке className).
+//
+// Search вкладки ДОПОЛНЯЕТСЯ, а не собирается заново: объект-литерал в этом пропе
+// адрес не дополняет, а ЗАМЕНЯЕТ (`buildLocation`: функция получает текущий search,
+// объект встаёт на его место целиком), и всё, о чём вкладка не знает, — в первую
+// очередь `?w=` с пространством — переход молча терял бы. Период при этом называется
+// явно, потому что маршрут вкладки требует его непустым.
 function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
   // Сегментированный переключатель, как у вендоренного Tabs: разделы формы над ним
   // — подчёркнутые вкладки, и второй ряд того же вида читался бы как продолжение
@@ -59,7 +65,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/answers"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -69,7 +75,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/visits"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -79,7 +85,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/drop-offs"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
