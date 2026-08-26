@@ -17,10 +17,12 @@ const buttonVariants = cva(
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80',
         ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
         // ЛОКАЛЬНЫЙ ВАРИАНТ, которого нет у shadcn: утилитарное действие рядом с
-        // полем (копировать, скачать). Чернилами, а не акцентом — синий в кабинете
+        // полем (копировать, скачать). Чёрным, а не акцентом — синий в кабинете
         // значит «главное действие экрана», и на «Копировать» он спорил бы с ним за
-        // внимание. Переустановишь компонент — вариант пропадёт вместе с правкой.
-        utility: 'bg-foreground text-background hover:bg-foreground/90',
+        // внимание. Свой токен `--utility`, а не `--foreground`: чернила текста и
+        // чёрное заливки — разные роли, и связав их, правка текста меняла бы кнопки.
+        // Переустановишь компонент — вариант пропадёт вместе с правкой.
+        utility: 'bg-utility text-utility-foreground hover:bg-utility/90',
         link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
