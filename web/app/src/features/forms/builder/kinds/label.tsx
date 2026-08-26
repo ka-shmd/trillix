@@ -1,12 +1,9 @@
-import { Tag } from 'lucide-react'
-
 import { type EditorKind } from './contract'
 
 export const label: EditorKind = {
   menu: { question: false, field: false, layout: true },
   label: 'Подпись',
   description: 'Мелкая подпись поля — для компактных вопросов и полей регистрации.',
-  icon: <Tag className="size-4" />,
   row: {
     surface: 'text',
     name: 'Подпись поля',

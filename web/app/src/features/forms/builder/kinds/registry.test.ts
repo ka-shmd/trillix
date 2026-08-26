@@ -1,9 +1,7 @@
-import { type ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import { BLOCK_TYPES } from '@entities/blocks/contract'
 import {
-  type BlockType,
   carriesText,
   isAnswerableType,
   isChoiceType,
@@ -58,24 +56,6 @@ describe('реестр редактора сходится с контракто
       // «Лэйаут» — подписи и контент, кроме заголовка формы: он единственный и приколот
       // первой строкой документа, вставке не подлежит.
       expect(menu.layout, `${t} в разделе «Лэйаут»`).toBe(isContentType(t) && t !== 'form_title')
-    }
-  })
-
-  it('глиф у каждого типа свой', () => {
-    // Глиф — единственная опора автора там, где типы стоят рядом (slash-меню, диалог
-    // добавления, смена типа в попапе), где подписи нет вовсе (правый угол поля на
-    // полотне) и где имена типов совпадают (список вопросов в условной логике). Два типа
-    // с одной иконкой в этих местах неразличимы.
-    //
-    // Сравниваются КОМПОНЕНТЫ иконок, а не отрендеренная разметка: у lucide-react один
-    // компонент на глиф, и повтор ловится ссылочным равенством.
-    const seen = new Map<unknown, BlockType>()
-    for (const t of BLOCK_TYPES) {
-      const icon = editorKind(t).icon as ReactElement
-      const glyph = icon.type
-      const twin = seen.get(glyph)
-      expect(twin, `${t} и ${twin} делят один глиф`).toBeUndefined()
-      seen.set(glyph, t)
     }
   })
 

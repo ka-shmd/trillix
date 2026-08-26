@@ -1,5 +1,6 @@
 import { type AnswerColumn } from './columns'
 import { formatAnswer } from './answerFormat'
+import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDateTime } from '../../shared/format'
 import { type AnswerFile, type Submission } from '../../entities/submission'
 import {
@@ -25,6 +26,12 @@ import {
 //
 // Дата — КНОПКА, а не текст: клик по строке открывает ответ, и до этого действия
 // нужен путь с клавиатуры. Заодно она же и подсказка, что строка нажимается.
+//
+// В шапке колонки стоит ГЛИФ ТИПА — тот же, что у вопроса на полотне редактора
+// (`shared/blockIcons`). Он отвечает на вопрос, которого в подписи нет: «5» в клетке —
+// это оценка по шкале, номер или выбранный вариант? Подпись вопроса при этом обрезана
+// до одной строки, и у двух похоже названных колонок глиф часто единственное отличие,
+// которое видно целиком.
 //
 // ТАБЛИЦА ИДЁТ ОТ КРАЯ ДО КРАЯ. Отрицательные боковые поля гасят поля колонки
 // страницы (`-mx-5 sm:-mx-8` — ровно `px-5 sm:px-8` у PageContainer), а рамка
@@ -68,8 +75,9 @@ export function SubmissionsTable({
                 key={c.block.id}
                 className={`${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
               >
-                <span className="block truncate" title={c.label}>
-                  {c.label}
+                <span className="flex min-w-0 items-center gap-1.5" title={c.label}>
+                  <BlockTypeIcon type={c.block.type} className="shrink-0 text-muted-foreground" />
+                  <span className="truncate">{c.label}</span>
                 </span>
               </TableHead>
             ))}

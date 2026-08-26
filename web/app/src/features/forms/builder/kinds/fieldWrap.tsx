@@ -2,7 +2,7 @@ import { type ReactNode } from 'react'
 
 import { type Block } from '@entities/formSchema'
 
-import { typeIcon } from '../blockTypeIcons'
+import { BlockTypeIcon } from '../../../../shared/BlockTypeIcon'
 import './fieldWrap.css'
 
 // Вид поля на полотне — общий rf-input (единый с превью и рендерером); rf-input-typed
@@ -23,9 +23,9 @@ export const PLACEHOLDER_CLS = `${FIELD_CLS} canvas-ph`
 //
 // Глиф типа в правом углу — подсказка автору, ЧТО это за поле, когда подпись ещё не
 // написана. Только в редакторе: у респондента тип виден по самому контролу, и в публичной
-// форме Tally такого глифа нет (проверено замером). Иконка берётся из реестра типов — того же
-// словаря, что в slash-меню и диалоге добавления, чтобы тип выглядел одинаково везде, где
-// о нём говорят. pointer-events-none обязателен: иначе глиф съедает клик по правому краю
+// форме Tally такого глифа нет (проверено замером). Иконка берётся из общего словаря
+// (`shared/blockIcons`) — того же, что в slash-меню и диалоге добавления, чтобы тип
+// выглядел одинаково везде, где о нём говорят. pointer-events-none обязателен: иначе глиф съедает клик по правому краю
 // поля.
 export function FieldWrap({
   block,
@@ -55,7 +55,7 @@ export function FieldWrap({
           glyphTop ? 'top-2' : 'top-1/2 -translate-y-1/2'
         }`}
       >
-        {typeIcon(block.type)}
+        <BlockTypeIcon type={block.type} />
       </span>
     </div>
   )

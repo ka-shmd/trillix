@@ -132,7 +132,9 @@ export interface EditorKind {
   menu: { question: boolean; field: boolean; layout: boolean }
   label: string
   description: string
-  icon: ReactNode
+  // Глифа у типа здесь нет: он живёт в `shared/blockIcons` — его спрашивает и полотно, и
+  // таблица ответов, а импорт одной фичи из другой запрещён. У ВАРИАНТА глиф свой
+  // (KindVariant.icon): вариант — пункт меню, а не тип.
   // Дефолты нового блока поверх скелета (id/groupId/пустой текст/пустые настройки).
   // Отсутствуют — тип создаётся скелетом как есть.
   defaults?: Partial<Block>

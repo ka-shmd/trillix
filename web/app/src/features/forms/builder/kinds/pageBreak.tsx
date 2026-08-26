@@ -1,4 +1,4 @@
-import { PartyPopper, SeparatorHorizontal } from 'lucide-react'
+import { PartyPopper } from 'lucide-react'
 
 import { type EditorKind } from './contract'
 import { PageBreakField } from './pageBreakField'
@@ -18,7 +18,6 @@ export const pageBreak: EditorKind = {
   menu: { question: false, field: false, layout: true },
   label: 'Новая страница',
   description: 'Всё, что ниже, респондент увидит следующим шагом.',
-  icon: <SeparatorHorizontal className="size-4" />,
   // Раздела в общем попапе настроек у типа НЕТ: имя страницы правится своим маленьким
   // попапом, который открывает КЛИК ПО ПОДПИСИ разделителя (решение владельца 2026-08-21,
   // образец — Tally). Второе место для того же значения означало бы две правды об одном.
