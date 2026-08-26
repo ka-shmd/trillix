@@ -53,16 +53,10 @@ export function ShareView({ form }: { form: FormDetail }) {
 function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }) {
   const link = publicFormUrl(form.slug)
 
-  // Превью стоит СЛЕВА ОТ ВСЕГО раздела, а не внутри него: колонки заведены выше
-  // Section, поэтому карточка начинается на уровне заголовка, а не под ним.
+  // Превью — СОСЕДНИЙ РАЗДЕЛ, а не содержимое этого: колонки заведены выше Section,
+  // поэтому оба заголовка стоят на одной линии.
   return (
-    <div className="grid gap-8 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] md:items-start">
-      <LinkPreview
-        title={displayFormTitle(form.title)}
-        host={publicFormHost()}
-        teaser={linkTeaser(form.draftSchema.blocks)}
-      />
-
+    <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] md:items-start">
       <Section
         title="Ссылка на форму"
         description={
@@ -84,6 +78,12 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
           <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
         </div>
       </Section>
+
+      <LinkPreview
+        title={displayFormTitle(form.title)}
+        host={publicFormHost()}
+        teaser={linkTeaser(form.draftSchema.blocks)}
+      />
     </div>
   )
 }
@@ -113,22 +113,20 @@ function linkTeaser(blocks: Block[]): string {
 // (сервер дополнительно отдаёт og:image); точная отрисовка зависит от площадки.
 function LinkPreview({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
-    <div className="flex flex-col gap-2">
-      {/* Подложка вместо рамки. Полоска слева остаётся: она не обводит блок, а
-          цитирует вид карточки, которую рисуют мессенджеры. */}
-      <div className="rounded-lg bg-muted p-4">
-        <div className="border-l-2 border-primary pl-3">
-          <p className="truncate text-sm text-muted-foreground">{host}</p>
-          <p className="mt-1 text-base font-semibold">{title}</p>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
-          </p>
-        </div>
+    <Section
+      title="Превью ссылки"
+      description="Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от площадки."
+    >
+      {/* Ни фона, ни рамки — только полоска слева: она не обводит блок, а цитирует
+          вид карточки, которую рисуют мессенджеры. Серая, а не акцентная: акцент в
+          кабинете значит «сюда можно нажать», а это картинка. */}
+      <div className="border-l-4 border-border pl-4">
+        <p className="truncate text-sm text-muted-foreground">{host}</p>
+        <p className="mt-1 text-base font-semibold">{title}</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
+        </p>
       </div>
-      <p className="text-sm text-muted-foreground">
-        Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от
-        площадки.
-      </p>
-    </div>
+    </Section>
   )
 }
