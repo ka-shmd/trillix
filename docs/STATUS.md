@@ -201,7 +201,7 @@ refresh-токен, если провайдер прислал новый. Ра�
 
 ## Что решено НЕ делать сейчас
 
-Перенесено в POST-MVP: шаблоны форм, колонки первых вопросов в таблице ответов, QR. Границы
+Перенесено в POST-MVP: шаблоны форм, QR. Границы
 закрытых фаз — в их спеках: [`embed.md`](design/embed.md) §11–12, [`logic.md`](design/logic.md)
 §2.1, [`theme.md`](design/theme.md) §2, [`integrations-gsheets.md`](design/integrations-gsheets.md)
 (обратная запись из таблицы, несколько аккаунтов Google на пространство, e2e-сценарий).

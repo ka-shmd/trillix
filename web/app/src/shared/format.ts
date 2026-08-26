@@ -19,6 +19,23 @@ export function formatDate(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : dateFmt.format(d)
 }
 
+// Дата вместе со временем. Нужна там, где строка — ОДНО событие, а не день: в
+// таблице ответов два ответа за одни сутки без часов неразличимы, и «когда именно
+// пришёл вот этот» — обычный вопрос к таблице. Там, где дата подписывает значение
+// (сводка, окно всех ответов вопроса), часы лишний шум — там остаётся formatDate.
+const dateTimeFmt = new Intl.DateTimeFormat(LOCALE, {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : dateTimeFmt.format(d)
+}
+
 // Склонение слова «ответ» по числу: 1 ответ, 2 ответа, 5 ответов. Общее для страниц
 // ответов и сводки — они показывают один и тот же счётчик и обязаны звучать одинаково.
 export function pluralAnswers(n: number): string {

@@ -1,44 +1,31 @@
 import { useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { type Block, isAnswerableType, plainText } from '@entities/formSchema'
-import { groupMeta } from '@fields/groups'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
-import {
-  submissionsListQueryOptions,
-  useDeleteSubmission,
-} from '../../features/submissions/queries'
+import { submissionsListQueryOptions } from '../../features/submissions/queries'
 import { submissionsExportUrl } from '../../features/submissions/api'
-import { answerFiles, formatAnswer } from '../../features/submissions/answerFormat'
+import { answerColumns, versionsDiffer } from '../../features/submissions/columns'
+import { SubmissionPanel } from '../../features/submissions/SubmissionPanel'
+import { SubmissionsTable } from '../../features/submissions/SubmissionsTable'
 import { FormStats } from '../../features/forms/FormStats'
-import { formatDate, pluralAnswers } from '../../shared/format'
-import { type AnswerFile, type AnswerValue, type Submission } from '../../entities/submission'
+import { pluralAnswers } from '../../shared/format'
+import { Section } from '../../shared/page/Section'
+import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
+import { type AnswerFile, type Submission } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 
-// Таблица ответов формы (/forms/$slug/submissions): курсорная подгрузка (новые
-// сверху). В таблице только версия и дата заполнения; сами ответы — в диалоге,
-// который открывается по строке. Плюс экспорт в CSV и счётчик.
+// Таблица ответов формы (/forms/$slug/submissions): курсорная подгрузка, новые
+// сверху, строка — один ответ, колонка — один вопрос. Клик по строке открывает
+// ответ целиком; действия строки — в меню «⋯»; выгрузка всего — кнопкой раздела.
+//
+// Шапка страницы, крошки и табы — на оболочке _manage: своей шапки экран не рисует.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/submissions')({
-  component: ResponsesPage,
+  component: SubmissionsPage,
 })
 
-function ResponsesPage() {
+function SubmissionsPage() {
   // URL адресует форму slug'ом; UUID (formId) для запросов ответов берём из
   // загруженной формы. Список ответов ждёт, пока slug зарезолвится в id (enabled).
   const { slug } = Route.useParams()
@@ -48,9 +35,9 @@ function ResponsesPage() {
     ...submissionsListQueryOptions(formId ?? ''),
     enabled: formId !== undefined,
   })
-  // open управляет видимостью диалога, selected — какой ответ показываем. Не
-  // обнуляем selected при закрытии: иначе содержимое пропадёт раньше, чем диалог
-  // доиграет анимацию ухода. Оно остаётся смонтированным до следующего открытия.
+  // open управляет видимостью окна, selected — какой ответ показываем. Не обнуляем
+  // selected при закрытии: иначе содержимое пропадёт раньше, чем окно доиграет
+  // анимацию ухода. Оно остаётся смонтированным до следующего открытия.
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState<Submission | null>(null)
 
@@ -70,47 +57,13 @@ function ResponsesPage() {
     string,
     AnswerFile
   >
-  // Только отвечаемые блоки — колонки таблицы/панели. Неотвечаемые (подписи/контент)
-  // ответов не собирают, из выгрузки и таблицы исключены (зеркалит CSV на бэкенде).
-  // Подпись колонки берётся из группы блока (title/label), поэтому считаем meta по
-  // всем блокам, а колонки — по отвечаемым.
-  const allBlocks = form.data?.draftSchema.blocks ?? []
-  const groups = groupMeta(allBlocks)
-  const blocks = allBlocks.filter((b) => isAnswerableType(b.type))
+  const columns = answerColumns(form.data?.draftSchema.blocks ?? [])
 
   return (
-    <>
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-        {!list.isPending && !list.isError && (
-          <div className="text-sm text-muted-foreground">
-            <p>{total === 0 ? 'Пока нет ответов' : `${total} ${pluralAnswers(total)}`}</p>
-            {/* Знаменатель к числу ответов: без него «12 ответов» не отличить от
-                «12 из 900 открывших» (фаза 8.5 шаг 6). */}
-            {form.data && form.data.status !== 'draft' && (
-              <p className="mt-0.5 text-xs">
-                <FormStats
-                  visits={form.data.visitCount}
-                  submittedVisits={form.data.visitSubmittedCount}
-                  submissions={total}
-                />
-              </p>
-            )}
-          </div>
-        )}
-        {total > 0 && formId && (
-          // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
-          <Button asChild variant="outline" size="sm" className="ml-auto">
-            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
-          </Button>
-        )}
-      </div>
-
+    <div className="flex flex-col gap-8">
       {hidden > 0 && (
-        <div
-          role="status"
-          className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 text-sm"
-        >
-          <p>
+        <div role="status" className="rounded-lg bg-warning/10 p-4 text-sm">
+          <p className="font-medium">
             {hidden} {pluralAnswers(hidden)} скрыто — исчерпан лимит тарифа.
           </p>
           <p className="mt-1 text-muted-foreground">
@@ -119,206 +72,75 @@ function ResponsesPage() {
         </div>
       )}
 
-      {list.isPending ? (
-        <p className="text-sm text-muted-foreground">Загрузка ответов…</p>
-      ) : list.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Не удалось загрузить ответы.</p>
-          <Button variant="outline" size="sm" onClick={() => list.refetch()}>
-            Повторить
-          </Button>
-        </div>
-      ) : submissions.length === 0 ? (
-        <div className="mx-auto mt-12 max-w-md text-center">
-          <h2 className="text-lg font-medium">Ответов пока нет</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Опубликуйте форму и поделитесь ссылкой — ответы появятся здесь.
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="overflow-x-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Заполнен</TableHead>
-                  <TableHead>Версия</TableHead>
-                  <TableHead>
-                    <span className="sr-only">Действия</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {submissions.map((s) => (
-                  <TableRow key={s.id} className="cursor-pointer" onClick={() => openSubmission(s)}>
-                    <TableCell className="whitespace-nowrap">{formatDate(s.createdAt)}</TableCell>
-                    <TableCell>{s.formVersion}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openSubmission(s)
-                        }}
-                      >
-                        Открыть
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+      <Section
+        title="Все ответы"
+        description={
+          list.isSuccess ? (
+            // Знаменатель к числу ответов: без него «12 ответов» не отличить от
+            // «12 из 900 открывших» (фаза 8.5 шаг 6). У черновика просмотров нет —
+            // там остаётся голый счётчик.
+            form.data && form.data.status !== 'draft' ? (
+              <FormStats
+                visits={form.data.visitCount}
+                submittedVisits={form.data.visitSubmittedCount}
+                submissions={total}
+              />
+            ) : (
+              `${total} ${pluralAnswers(total)}`
+            )
+          ) : (
+            'Каждая строка — один заполненный ответ.'
+          )
+        }
+        action={
+          total > 0 &&
+          formId && (
+            // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
+            <Button asChild variant="outline" size="sm">
+              <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
+            </Button>
+          )
+        }
+      >
+        {list.isPending ? (
+          <LoadingRows rows={4} />
+        ) : list.isError ? (
+          <ErrorState title="Не удалось загрузить ответы." onRetry={() => void list.refetch()} />
+        ) : submissions.length === 0 ? (
+          <EmptyState
+            title="Ответов пока нет"
+            description="Опубликуйте форму и поделитесь ссылкой — ответы появятся здесь."
+          />
+        ) : (
+          <div className="flex flex-col gap-6">
+            <SubmissionsTable
+              rows={submissions}
+              columns={columns}
+              files={files}
+              showVersion={versionsDiffer(submissions)}
+              formId={formId ?? ''}
+              onOpen={openSubmission}
+            />
+            {list.hasNextPage && (
+              <div className="flex justify-center">
+                <Button
+                  variant="outline"
+                  onClick={() => void list.fetchNextPage()}
+                  disabled={list.isFetchingNextPage}
+                >
+                  {list.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+                </Button>
+              </div>
+            )}
           </div>
-
-          {list.hasNextPage && (
-            <div className="mt-6 flex justify-center">
-              <Button
-                variant="outline"
-                onClick={() => list.fetchNextPage()}
-                disabled={list.isFetchingNextPage}
-              >
-                {list.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
-              </Button>
-            </div>
-          )}
-        </>
-      )}
+        )}
+      </Section>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
-          {selected && formId && (
-            <SubmissionPanel
-              submission={selected}
-              blocks={blocks}
-              files={files}
-              groups={groups}
-              formId={formId}
-              onClose={() => setOpen(false)}
-            />
-          )}
+          {selected && <SubmissionPanel submission={selected} columns={columns} files={files} />}
         </DialogContent>
       </Dialog>
-    </>
-  )
-}
-
-// SubmissionPanel — полный ответ: вопросы текущей схемы + ответы на вопросы прежних
-// версий (block_id, которых нет в текущей схеме) — чтобы данные не прятались.
-function SubmissionPanel({
-  submission,
-  blocks,
-  files,
-  groups,
-  formId,
-  onClose,
-}: {
-  submission: Submission
-  blocks: Block[]
-  files: Record<string, AnswerFile>
-  groups: ReturnType<typeof groupMeta>
-  formId: string
-  onClose: () => void
-}) {
-  const knownIds = new Set(blocks.map((b) => b.id))
-  const extraIds = Object.keys(submission.answers).filter((id) => !knownIds.has(id))
-  const remove = useDeleteSubmission(formId)
-
-  function handleDelete() {
-    // Список инвалидируется в onSuccess мутации; панель закрываем.
-    remove.mutate(submission.id, { onSuccess: onClose })
-  }
-
-  return (
-    <>
-      <DialogHeader>
-        <DialogTitle>Ответ от {formatDate(submission.createdAt)}</DialogTitle>
-        <DialogDescription>Версия формы: {submission.formVersion}</DialogDescription>
-      </DialogHeader>
-
-      <dl className="flex flex-col gap-4">
-        {blocks.map((b) => (
-          <div key={b.id}>
-            <dt className="text-sm font-medium">{blockTitle(b, groups.get(b.groupId)?.caption)}</dt>
-            <dd className="mt-0.5 text-sm text-muted-foreground">
-              {b.type === 'file' ? (
-                <FileLinks value={submission.answers[b.id]} files={files} />
-              ) : (
-                formatAnswer(b, submission.answers[b.id]) || '—'
-              )}
-            </dd>
-          </div>
-        ))}
-        {extraIds.map((id) => (
-          <div key={id}>
-            <dt className="text-sm font-medium">
-              {id} <span className="text-muted-foreground">(из прежней версии)</span>
-            </dt>
-            <dd className="mt-0.5 text-sm text-muted-foreground">
-              {formatAnswer(undefined, submission.answers[id])}
-            </dd>
-          </div>
-        ))}
-      </dl>
-
-      <div className="flex flex-col gap-2">
-        {remove.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            Не удалось удалить. Попробуйте ещё раз.
-          </p>
-        )}
-        <Button
-          variant="outline"
-          className="text-destructive hover:text-destructive"
-          onClick={handleDelete}
-          disabled={remove.isPending}
-        >
-          {remove.isPending ? 'Удаляем…' : 'Удалить ответ'}
-        </Button>
-      </div>
-    </>
-  )
-}
-
-// Как вопрос подписан в панели ответа. Имя вопроса (фаза 16, ADR §10) стоит первым —
-// той же ступенью, что в domain.questionLabel: колонка выгрузки и подпись в этой
-// панели обязаны называть вопрос ОДИНАКОВО. Разошедшись, два экрана одного кабинета
-// показывали бы владельцу разные формы — ровно то, о чём предупреждает ANALYTICS.md.
-//
-// Последней ступени («Тип N») здесь нет: она требует нумерации вопросов по всем
-// версиям формы, которой у экрана нет, — вместо неё честное «(без названия)».
-function blockTitle(b: Block, caption?: string): string {
-  return (
-    (b.name ?? '').trim() ||
-    (caption ?? '').trim() ||
-    plainText(b.text).trim() ||
-    (b.settings?.placeholder ?? '').trim() ||
-    '(без названия)'
-  )
-}
-
-// FileLinks — приложенные файлы ссылками на скачивание. Ссылка ведёт на НАШ
-// эндпоинт, а не на хранилище: подпись живёт минуту, и вшитая в разметку она
-// протухла бы, пока автор читает ответ. Скачивание — обычная навигация, поэтому
-// download и target здесь не нужны: сервер отдаёт вложение сам.
-function FileLinks({
-  value,
-  files,
-}: {
-  value: AnswerValue | undefined
-  files: Record<string, AnswerFile>
-}) {
-  const items = answerFiles(value, files)
-  if (items.length === 0) return <>—</>
-  return (
-    <ul className="flex flex-col gap-1">
-      {items.map((f) => (
-        <li key={f.id}>
-          <a className="text-primary underline underline-offset-4" href={`/api/v1/files/${f.id}`}>
-            {f.name}
-          </a>
-        </li>
-      ))}
-    </ul>
+    </div>
   )
 }
