@@ -51,7 +51,7 @@ function SummaryPage() {
         title="Ответы по вопросам"
         description={
           summary.isSuccess && total > 0
-            ? `${total} ${pluralAnswers(total)} за выбранный период. Знаменатель у каждого вопроса свой — столько человек его видели.`
+            ? `${total} ${pluralAnswers(total)} за выбранный период`
             : 'Распределение ответов по каждому вопросу формы.'
         }
       >
