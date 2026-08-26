@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
+import { withoutPeriod } from '../../shared/period'
 import { useCurrentWorkspace } from './current'
 
 // Корневая крошка кабинета — ПРОСТРАНСТВО, в котором человек находится, а не
@@ -19,7 +20,7 @@ export function useWorkspaceCrumb(): React.ReactNode {
 
   if (!workspace) {
     return (
-      <Link to="/forms" search={(prev) => prev}>
+      <Link to="/forms" search={withoutPeriod}>
         Формы
       </Link>
     )

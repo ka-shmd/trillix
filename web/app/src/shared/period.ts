@@ -22,6 +22,20 @@ export const DEFAULT_PERIOD: Period = '24h'
 
 export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
 
+// withoutPeriod — search для ссылки, УВОДЯЩЕЙ ИЗ РАЗДЕЛА «Аналитика». Окно наблюдения
+// принадлежит разделу и за его пределами не значит ничего: ни один другой экран его не
+// читает. Но `search={(prev) => prev}`, которым ссылки кабинета переносят пространство и
+// поиск, переносит и его — и `?period=30d` тянется за человеком по всем разделам формы
+// вплоть до дашборда, оставаясь в адресе, которым он поделится.
+//
+// Снимается ИМЕННО ЗДЕСЬ, на выходе, а не на входе: маршрут-получатель чужие ключи не
+// вычищает — `validateSearch` разбирает адрес, но не переписывает его.
+export function withoutPeriod<T extends object>(prev: T): Omit<T, 'period'> {
+  const rest = { ...prev } as T & { period?: unknown }
+  delete rest.period
+  return rest
+}
+
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',
   '24h': '24 часа',

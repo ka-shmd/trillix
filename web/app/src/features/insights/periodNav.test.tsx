@@ -15,7 +15,7 @@ import {
   useSearch,
 } from '@tanstack/react-router'
 
-import { periodSchema } from '../../shared/period'
+import { periodSchema, withoutPeriod } from '../../shared/period'
 
 afterEach(cleanup)
 
@@ -124,7 +124,7 @@ function renderSections(initial: string, analyticsSearch: 'pinned' | 'inherited'
           <Link
             to="/forms/$slug/share"
             params={{ slug }}
-            search={(prev) => prev}
+            search={withoutPeriod}
             activeProps={{ 'data-on': 'yes' }}
           >
             Поделиться
@@ -248,6 +248,23 @@ describe('подсветка раздела «Аналитика»', () => {
 
     expect(router.state.location.pathname).toBe('/forms/abc/insights/visits')
     expect(router.state.location.search).toEqual({ w: 'ws-1', period: '7d' })
+  })
+
+  // Окно наблюдения — параметр раздела, а не формы. Ссылка «(prev) => prev», которой
+  // разделы переносят пространство и поиск дашборда, тянула его наружу: `?period=30d`
+  // доезжал до списка форм и оставался в адресе, которым человек делится.
+  it('снимает окно наблюдения на выходе из раздела', async () => {
+    const router = renderSections('/forms/abc/insights/answers?w=ws-1&period=30d', 'inherited')
+    await act(async () => {
+      await router.load()
+    })
+
+    await act(async () => {
+      screen.getByText('Поделиться').click()
+    })
+
+    expect(router.state.location.pathname).toBe('/forms/abc/share')
+    expect(router.state.location.search).toEqual({ w: 'ws-1' })
   })
 
   it('вбитый в ссылку период гасит её на любом другом', async () => {

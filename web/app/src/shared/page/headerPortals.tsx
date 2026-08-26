@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { House } from 'lucide-react'
 
+import { withoutPeriod } from '../period'
 import { useAppHeaderSlots } from '../appHeader'
 import {
   Breadcrumb,
@@ -33,7 +34,7 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
   // его первым элементом означало бы повторить одну и ту же ссылку в десятке
   // мест — и однажды где-нибудь забыть.
   const trail: React.ReactNode[] = [
-    <Link key="home" to="/forms" search={(prev) => prev} aria-label="Главная">
+    <Link key="home" to="/forms" search={withoutPeriod} aria-label="Главная">
       <House className="size-4" />
     </Link>,
     ...items,

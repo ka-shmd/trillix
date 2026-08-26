@@ -11,7 +11,7 @@ import { MemberCluster } from '../../features/workspaces/MemberCluster'
 import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
-import { periodSchema } from '../../shared/period'
+import { periodSchema, withoutPeriod } from '../../shared/period'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
@@ -83,7 +83,7 @@ function ManageLayout() {
           description="Возможно, её удалили или ссылка устарела."
         />
         <Button asChild variant="outline" size="sm" className="mt-3">
-          <Link to="/forms" search={(prev) => prev}>
+          <Link to="/forms" search={withoutPeriod}>
             Вернуться к списку
           </Link>
         </Button>
@@ -149,7 +149,7 @@ function ManageLayout() {
             и есть тот зазор, который видит глаз: 16 слева от кнопки против 16 от
             аватара до значка копирования. */}
           <Button asChild size="sm" className="h-8 gap-1.5 px-2 has-[>svg]:px-2">
-            <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
+            <Link to="/forms/$slug/edit" search={withoutPeriod} params={{ slug }}>
               <Pencil className="size-3.5" /> Редактировать
             </Link>
           </Button>
@@ -210,7 +210,7 @@ function FormTabs({ slug }: { slug: string }) {
     <nav className="mt-6 mb-8 flex gap-4 border-b" aria-label="Разделы формы">
       <Link
         to="/forms/$slug/share"
-        search={(prev) => prev}
+        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
@@ -239,7 +239,7 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/submissions"
-        search={(prev) => prev}
+        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
@@ -249,7 +249,7 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/integrations"
-        search={(prev) => prev}
+        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
