@@ -56,7 +56,7 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
   // Превью — СОСЕДНИЙ РАЗДЕЛ, а не содержимое этого: колонки заведены выше Section,
   // поэтому оба заголовка стоят на одной линии.
   return (
-    <div className="grid gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,20rem)] md:items-start">
+    <div className="grid gap-8 md:grid-cols-2 md:items-start">
       <Section
         title="Ссылка на форму"
         description={
