@@ -27,6 +27,7 @@ import { formatDate } from '../../shared/format'
 import { UserAvatar } from '../../shared/UserAvatar'
 import { ApiError } from '../../shared/api/errors'
 import type { User } from '../../entities/user'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -63,6 +64,7 @@ function AccountPage() {
   // линтом (react-hooks/set-state-in-effect) и даёт каскадный ререндер.
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-10 p-6">
+      <PageCrumbs items={['Настройки']} />
       <AccountForm key={user.id} user={user} />
       <EmailForm key={`email-${user.email}`} user={user} />
       <PasswordForm key={`pwd-${user.id}`} hasPassword={user.hasPassword} />
@@ -86,7 +88,8 @@ function DeleteAccountSection({ user }: { user: User }) {
   // Пароль спрашиваем, если он есть; код — если включён второй фактор. Сервер
   // проверяет то же самое: у аккаунта через провайдера без фактора
   // доказательством служит сама сессия.
-  const ready = (!user.hasPassword || password !== '') && (!user.twoFactorEnabled || code.trim() !== '')
+  const ready =
+    (!user.hasPassword || password !== '') && (!user.twoFactorEnabled || code.trim() !== '')
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -223,7 +226,11 @@ function AvatarSection({ user }: { user: User }) {
             disabled={busy}
             onClick={() => fileRef.current?.click()}
           >
-            {upload.isPending ? 'Загружаем…' : user.avatarKey === '' ? 'Загрузить фото' : 'Заменить'}
+            {upload.isPending
+              ? 'Загружаем…'
+              : user.avatarKey === ''
+                ? 'Загрузить фото'
+                : 'Заменить'}
           </Button>
           {user.avatarKey !== '' && (
             <Button
@@ -495,8 +502,8 @@ function EmailForm({ user }: { user: User }) {
         <h2 className="text-lg font-medium">Адрес аккаунта</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Сейчас {user.email}
-          {user.emailVerified ? ' — подтверждён.' : ' — не подтверждён.'} На него приходят
-          письма и восстановление доступа.
+          {user.emailVerified ? ' — подтверждён.' : ' — не подтверждён.'} На него приходят письма и
+          восстановление доступа.
         </p>
       </div>
 
@@ -600,9 +607,7 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
   })
 
   const connected = identities.data ?? []
-  const available = (providers.data ?? []).filter(
-    (p) => !connected.some((c) => c.provider === p),
-  )
+  const available = (providers.data ?? []).filter((p) => !connected.some((c) => c.provider === p))
   // Последний способ войти снять нельзя — кнопку не рисуем и говорим почему.
   // Сервер ответит 409 в любом случае, но узнавать об этом из ошибки после
   // нажатия — плохой способ объяснять правило.
@@ -638,9 +643,7 @@ function IdentitiesSection({ hasPassword }: { hasPassword: boolean }) {
           <li className="flex items-center justify-between rounded-lg border p-3">
             <div>
               <p className="text-sm">Пароль</p>
-              <p className="text-sm text-muted-foreground">
-                {hasPassword ? 'Задан' : 'Не задан'}
-              </p>
+              <p className="text-sm text-muted-foreground">{hasPassword ? 'Задан' : 'Не задан'}</p>
             </div>
           </li>
           {connected.map((identity) => (
@@ -824,7 +827,9 @@ function TwoFactorSection({ user }: { user: User }) {
             <Button
               type="submit"
               variant="outline"
-              disabled={code.trim() === '' || (user.hasPassword && password === '') || disable.isPending}
+              disabled={
+                code.trim() === '' || (user.hasPassword && password === '') || disable.isPending
+              }
             >
               {disable.isPending ? 'Выключаем…' : 'Выключить'}
             </Button>

@@ -2618,11 +2618,7 @@ describe('createBuilderStore — тип с обязательным заголо
 
     expect(types(store)).toEqual(['title', 'short_text', 'title'])
     expect(packRows(groupBlocks(store.getState().blocks))).toHaveLength(1)
-    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual([
-      1,
-      '-',
-      2,
-    ])
+    expect(store.getState().blocks.map((b) => b.settings?.column ?? '-')).toEqual([1, '-', 2])
   })
 
   it('голый заголовок прямо НАД следующим вопросом остаётся одиночкой', () => {
@@ -2966,9 +2962,7 @@ describe('createBuilderStore — обложка и логотип', () => {
       schemaVersion: SCHEMA_VERSION,
       blocks: [{ id: 'a', groupId: '', type: 'short_text' }],
     })
-    const id = store
-      .getState()
-      .addBlockAfter('a', 'page_break', { settings: { thankYou: true } })
+    const id = store.getState().addBlockAfter('a', 'page_break', { settings: { thankYou: true } })
     const block = store.getState().blocks.find((b) => b.id === id)
     expect(block?.type).toBe('page_break')
     expect(block?.settings?.thankYou).toBe(true)

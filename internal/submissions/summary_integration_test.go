@@ -311,3 +311,114 @@ func TestSummary_SamplesEndToEnd(t *testing.T) {
 		t.Errorf("значения выбора = %+v, ждали подпись «Друзья»", src.Samples)
 	}
 }
+
+// DTO окна «все ответы на вопрос» — зеркалит blockAnswersResponse транспорта.
+type blockAnswersBody struct {
+	Answers []struct {
+		Text string `json:"text"`
+		At   string `json:"at"`
+	} `json:"answers"`
+	NextCursor *string `json:"nextCursor"`
+}
+
+func getBlockAnswers(t *testing.T, c *http.Client, base string, formID uuid.UUID, block, query string) blockAnswersBody {
+	t.Helper()
+	resp, err := c.Get(base + "/api/v1/forms/" + formID.String() + "/submissions/summary/" + block + query)
+	if err != nil {
+		t.Fatalf("get block answers: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200", resp.StatusCode)
+	}
+	var body blockAnswersBody
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body
+}
+
+// Окно «все ответы»: сводка отдаёт десять последних значений вопроса, окно листает
+// их целиком. Проверяется то, ради чего ручка и заведена, — что за потолок сводки
+// можно выйти, и что порядок остаётся «новые сверху» через границу страниц.
+func TestBlockAnswers_PagesBeyondSummaryLimit(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+	v1 := versionID(t, formID, 1)
+
+	// Ответы вставляются по возрастанию: id — UUIDv7, и порядок вставки задаёт
+	// хронологию, по которой листинг отдаёт «новые сверху».
+	const total = samplesLimit + 5
+	for i := 0; i < total; i++ {
+		insertAnswer(t, formID, v1, fmt.Sprintf(`{"b_note":"ответ %02d"}`, i))
+	}
+
+	// Сводка упирается в свой потолок — ради этого окно и нужно.
+	first := getBlockAnswers(t, owner, srv.URL, formID, "b_note", "?limit="+fmt.Sprint(samplesLimit))
+	if len(first.Answers) != samplesLimit {
+		t.Fatalf("на первой странице %d значений, ожидалось %d", len(first.Answers), samplesLimit)
+	}
+	if first.Answers[0].Text != fmt.Sprintf("ответ %02d", total-1) {
+		t.Errorf("сверху %q, ожидался самый свежий ответ", first.Answers[0].Text)
+	}
+	if first.NextCursor == nil {
+		t.Fatal("курсор пуст, хотя ответы не кончились")
+	}
+
+	second := getBlockAnswers(t, owner, srv.URL, formID, "b_note", "?cursor="+*first.NextCursor)
+	if len(second.Answers) != total-samplesLimit {
+		t.Fatalf("на второй странице %d значений, ожидалось %d", len(second.Answers), total-samplesLimit)
+	}
+	// Порядок сквозной: вторая страница продолжает первую, а не начинает заново.
+	if second.Answers[0].Text != fmt.Sprintf("ответ %02d", total-samplesLimit-1) {
+		t.Errorf("вторая страница начинается с %q — порядок разорван", second.Answers[0].Text)
+	}
+	// Ответы кончились: курсора больше нет, иначе окно листалось бы вечно.
+	if second.NextCursor != nil {
+		t.Errorf("курсор %q на последней странице", *second.NextCursor)
+	}
+}
+
+// Значение приходит РЕНДЕРОМ, тем же, что в сводке: подпись опции, а не её id.
+// Иначе окно, открытое из строки распределения, показало бы другой текст, чем
+// строка над ним.
+func TestBlockAnswers_RendersOptionLabels(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+	v1 := versionID(t, formID, 1)
+
+	insertAnswer(t, formID, v1, `{"b_src":"o1"}`)
+	insertAnswer(t, formID, v1, `{"b_src":"o2"}`)
+
+	body := getBlockAnswers(t, owner, srv.URL, formID, "b_src", "")
+	if len(body.Answers) != 2 {
+		t.Fatalf("значений %d, ожидалось 2", len(body.Answers))
+	}
+	if body.Answers[0].Text != "Поиск" || body.Answers[1].Text != "Друзья" {
+		t.Errorf("значения %q и %q, ожидались подписи опций «Поиск» и «Друзья»",
+			body.Answers[0].Text, body.Answers[1].Text)
+	}
+}
+
+// Анти-IDOR: id формы в адресе правом доступа не является. Чужая форма — 404, а не
+// 403: существование приватного не раскрывается.
+func TestBlockAnswers_ForeignForm_404(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	_, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
+	stranger, _ := authedClient(t, srv, "stranger-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+
+	resp, err := stranger.Get(srv.URL + "/api/v1/forms/" + formID.String() + "/submissions/summary/b_note")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус %d, ожидалось 404", resp.StatusCode)
+	}
+}

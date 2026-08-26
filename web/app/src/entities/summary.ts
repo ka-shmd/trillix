@@ -59,3 +59,17 @@ export const formSummarySchema = z.object({
   blocks: z.array(blockSummarySchema),
 })
 export type FormSummary = z.infer<typeof formSummarySchema>
+
+// Страница значений ОДНОГО вопроса — окно «все ответы» на вкладке «Сводка».
+// Зеркалит blockAnswersResponse из internal/submissions/handler.go.
+//
+// Значение приходит готовым ТЕКСТОМ, тем же, что в samples сводки: подпись опции, а
+// не её id. Разбирать ответ здесь значило бы завести третью копию доменных правил
+// после Go и Zod схемы формы.
+export const blockAnswersPageSchema = z.object({
+  answers: z.array(answerSampleSchema),
+  // null — ответы формы кончились. Не «страница неполная»: вопрос за условием даёт
+  // пустые страницы посреди формы.
+  nextCursor: z.string().nullable(),
+})
+export type BlockAnswersPage = z.infer<typeof blockAnswersPageSchema>

@@ -19,7 +19,12 @@ afterEach(cleanup)
 
 const doc = (thankYou = false): Block[] => [
   { id: 'q1', groupId: 'g1', type: 'short_text' },
-  { id: 'pb', groupId: 'gp', type: 'page_break', ...(thankYou ? { settings: { thankYou: true } } : {}) },
+  {
+    id: 'pb',
+    groupId: 'gp',
+    type: 'page_break',
+    ...(thankYou ? { settings: { thankYou: true } } : {}),
+  },
   { id: 'h', groupId: 'g2', type: 'heading', text: textFromString('Готово') },
 ]
 

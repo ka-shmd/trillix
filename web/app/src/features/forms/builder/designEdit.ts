@@ -6,13 +6,7 @@ import type { FormCover, FormDesign, FormLogo } from '@entities/formSchema'
 // открывает (STATUS.md).
 
 export type PaletteField =
-  | 'canvas'
-  | 'field'
-  | 'text'
-  | 'muted'
-  | 'accent'
-  | 'button'
-  | 'buttonText'
+  'canvas' | 'field' | 'text' | 'muted' | 'accent' | 'button' | 'buttonText'
 
 // Порядок — как в панели: сверху вниз от «самого крупного» к деталям. Он же порядок
 // в схеме и в designToVars, и держать его одинаковым дешевле, чем однажды искать,

@@ -1,10 +1,13 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 
 import { embedModeSchema, DEFAULT_EMBED_MODE } from '../../features/forms/embedSnippet'
 import { EmbedView } from '../../features/forms/embed/EmbedView'
 import { formDetailQueryOptions } from '../../features/forms/queries'
+import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
+import { PageCrumbs } from '../../shared/page/headerPortals'
+import { displayFormTitle } from '../../entities/form'
 
 // Экран «Встроить» (/forms/{slug}/embed). ВНЕ группы `_manage` намеренно: у той
 // колонка max-w-4xl и табы формы, а здесь нужен весь экран — панель настроек и
@@ -29,10 +32,14 @@ function EmbedPage() {
   const { mode = DEFAULT_EMBED_MODE } = Route.useSearch()
   const navigate = useNavigate()
   const query = useQuery(formDetailQueryOptions(slug))
+  const workspaceCrumb = useWorkspaceCrumb()
 
   if (query.isError) {
     return (
-      <div role="alert" className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+      <div
+        role="alert"
+        className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6"
+      >
         <p className="text-sm">Форма не найдена.</p>
       </div>
     )
@@ -42,15 +49,26 @@ function EmbedPage() {
   }
 
   return (
-    <EmbedView
-      form={query.data}
-      mode={mode}
-      onModeChange={(next) =>
-        void navigate({ to: '.', search: (prev) => ({ ...prev, mode: next }), replace: true })
-      }
-      onClose={() =>
-        void navigate({ to: '/forms/$slug/share', params: { slug }, search: (prev) => prev })
-      }
-    />
+    <>
+      <PageCrumbs
+        items={[
+          workspaceCrumb,
+          <Link key="form" to="/forms/$slug/share" params={{ slug }} search={(prev) => prev}>
+            {displayFormTitle(query.data.title)}
+          </Link>,
+          'Встроить',
+        ]}
+      />
+      <EmbedView
+        form={query.data}
+        mode={mode}
+        onModeChange={(next) =>
+          void navigate({ to: '.', search: (prev) => ({ ...prev, mode: next }), replace: true })
+        }
+        onClose={() =>
+          void navigate({ to: '/forms/$slug/share', params: { slug }, search: (prev) => prev })
+        }
+      />
+    </>
   )
 }

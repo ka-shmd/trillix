@@ -156,7 +156,10 @@ describe('ярусы карты — общее вынесено из конте�
     // ВЕЗДЕ, где эта строка бывает под кареткой: объектная остановка (date/scale),
     // картинка и инпут плейсхолдера — последний до фазы его не знал вовсе.
     for (const ctx of ['object', 'image', 'field'] as const) {
-      expect(shortcutsFor(ctx).map((s) => s.label), ctx).toContain('Alt+↑↓')
+      expect(
+        shortcutsFor(ctx).map((s) => s.label),
+        ctx,
+      ).toContain('Alt+↑↓')
     }
   })
 

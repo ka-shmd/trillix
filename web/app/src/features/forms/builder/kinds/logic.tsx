@@ -1,5 +1,3 @@
-import { GitBranch } from 'lucide-react'
-
 import { type EditorKind } from './contract'
 import { LogicField } from './logicField'
 
@@ -14,6 +12,5 @@ export const logic: EditorKind = {
   menu: { question: false, field: false, layout: true },
   label: 'Условие',
   description: 'Показать, спрятать или сделать обязательным — в зависимости от ответа.',
-  icon: <GitBranch className="size-4" />,
   row: { surface: 'object', lineH: 'h-6', Control: LogicField, hint: 'object' },
 }

@@ -1,6 +1,11 @@
 import { apiRequest } from '../../shared/api/client'
 import { submissionsPageSchema, type SubmissionsPage } from '../../entities/submission'
-import { formSummarySchema, type FormSummary } from '../../entities/summary'
+import {
+  blockAnswersPageSchema,
+  formSummarySchema,
+  type BlockAnswersPage,
+  type FormSummary,
+} from '../../entities/summary'
 import { submissionsCountSchema, type SubmissionsCount } from '../../entities/submission'
 import { periodRange, type Period } from '../../shared/period'
 
@@ -21,6 +26,24 @@ export function getSummary(formId: string, period: Period): Promise<FormSummary>
   return apiRequest(`/forms/${formId}/submissions/summary${query ? `?${query}` : ''}`, {
     schema: formSummarySchema,
   })
+}
+
+// Все значения одного вопроса, страницами. Период тот же, что у сводки: открыв
+// окно из строки «Ответили 12 из 34» за неделю, владелец обязан увидеть те же
+// двенадцать, а не всё время.
+export function listBlockAnswers(
+  formId: string,
+  blockId: string,
+  period: Period,
+  cursor?: string,
+): Promise<BlockAnswersPage> {
+  const params = new URLSearchParams(periodRange(period))
+  if (cursor) params.set('cursor', cursor)
+  const query = params.toString()
+  return apiRequest(
+    `/forms/${formId}/submissions/summary/${encodeURIComponent(blockId)}${query ? `?${query}` : ''}`,
+    { schema: blockAnswersPageSchema },
+  )
 }
 
 // Число ответов за период — карточка над вкладками аналитики. Своя ручка, а не поле

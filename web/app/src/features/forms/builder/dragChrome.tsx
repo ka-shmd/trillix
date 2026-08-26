@@ -114,11 +114,7 @@ export function SideDropZone({
   return (
     <>
       {!railOff && <span aria-hidden="true" className={zoneRail(side, hot)} />}
-      <div
-        ref={setNodeRef}
-        aria-hidden="true"
-        className={`${zoneFill(hot)} ${ZONE_SIDE[side]}`}
-      />
+      <div ref={setNodeRef} aria-hidden="true" className={`${zoneFill(hot)} ${ZONE_SIDE[side]}`} />
     </>
   )
 }

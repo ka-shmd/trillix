@@ -1,5 +1,14 @@
-// Форматирование даты ISO-строки в человекочитаемый вид (локаль браузера).
-const dateFmt = new Intl.DateTimeFormat(undefined, {
+// LOCALE — язык дат и чисел кабинета. Прибит гвоздём, а не взят из браузера
+// (`undefined`): интерфейс русский целиком, включая склонения, которые мы пишем
+// руками, и «Aug 24, 2026» посреди русской строки выглядит сбоем, а не заботой о
+// госте. Появится переключатель языка — менять здесь, в одном месте.
+//
+// Отсюда его берут и подписи осей графиков (features/insights/VisitsChart.tsx):
+// второй `undefined` вернул бы английский на одну половину экрана.
+export const LOCALE = 'ru-RU'
+
+// Форматирование даты ISO-строки в человекочитаемый вид.
+const dateFmt = new Intl.DateTimeFormat(LOCALE, {
   day: 'numeric',
   month: 'short',
   year: 'numeric',
@@ -8,6 +17,23 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
 export function formatDate(iso: string): string {
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : dateFmt.format(d)
+}
+
+// Дата вместе со временем. Нужна там, где строка — ОДНО событие, а не день: в
+// таблице ответов два ответа за одни сутки без часов неразличимы, и «когда именно
+// пришёл вот этот» — обычный вопрос к таблице. Там, где дата подписывает значение
+// (сводка, окно всех ответов вопроса), часы лишний шум — там остаётся formatDate.
+const dateTimeFmt = new Intl.DateTimeFormat(LOCALE, {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+export function formatDateTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : dateTimeFmt.format(d)
 }
 
 // Склонение слова «ответ» по числу: 1 ответ, 2 ответа, 5 ответов. Общее для страниц
@@ -59,20 +85,4 @@ export function formatDuration(seconds: number): string {
   const minutes = Math.floor(total / 60)
   if (minutes < 60) return `${minutes} мин ${total % 60} с`
   return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`
-}
-
-const relativeFmt = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-
-// «2 минуты назад» по ISO-времени. Через Intl, а не своим склонением: правила
-// множественного числа уже написаны в браузере, и писать их второй раз незачем.
-export function formatRelative(iso: string, now: Date = new Date()): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  const seconds = Math.round((d.getTime() - now.getTime()) / 1000)
-  const abs = Math.abs(seconds)
-  if (abs < 60) return relativeFmt.format(Math.round(seconds), 'second')
-  if (abs < 3600) return relativeFmt.format(Math.round(seconds / 60), 'minute')
-  if (abs < 86_400) return relativeFmt.format(Math.round(seconds / 3600), 'hour')
-  if (abs < 2_592_000) return relativeFmt.format(Math.round(seconds / 86_400), 'day')
-  return formatDate(iso)
 }

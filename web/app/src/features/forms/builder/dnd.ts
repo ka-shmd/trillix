@@ -59,7 +59,14 @@ export const DRAG_ACTIVATION_DISTANCE = 6
 //
 // Снимок живёт РОВНО ОДИН КАДР: прокрутка между кадрами его обесценивает, а внутри
 // кадра меняться ей негде.
-type FlatRect = { top: number; bottom: number; left: number; right: number; width: number; height: number }
+type FlatRect = {
+  top: number
+  bottom: number
+  left: number
+  right: number
+  width: number
+  height: number
+}
 
 let flatCache = new WeakMap<ClientRect, FlatRect>()
 let flatScheduled = false

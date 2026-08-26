@@ -1,6 +1,17 @@
-import { infiniteQueryOptions, queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  infiniteQueryOptions,
+  queryOptions,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { submissionKeys } from './keys'
-import { deleteSubmission, getSubmissionsCount, getSummary, listSubmissions } from './api'
+import {
+  deleteSubmission,
+  getSubmissionsCount,
+  getSummary,
+  listBlockAnswers,
+  listSubmissions,
+} from './api'
 import { type Period } from '../../shared/period'
 
 // Ответы формы — серверный стейт с курсорной пагинацией (новые сверху), страницы
@@ -19,6 +30,18 @@ export function submissionsSummaryQueryOptions(formId: string, period: Period) {
   return queryOptions({
     queryKey: submissionKeys.summary(formId, period),
     queryFn: () => getSummary(formId, period),
+  })
+}
+
+// Все значения одного вопроса — курсорная пагинация, как у списка ответов.
+// enabled оставлен вызывающему: запрос уходит только при открытом окне, иначе
+// каждый вопрос сводки тянул бы свою страницу заранее.
+export function blockAnswersQueryOptions(formId: string, blockId: string, period: Period) {
+  return infiniteQueryOptions({
+    queryKey: submissionKeys.blockAnswers(formId, period, blockId),
+    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })
 }
 

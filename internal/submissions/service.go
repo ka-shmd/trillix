@@ -3,6 +3,7 @@ package submissions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -790,7 +791,13 @@ func parseVersions(formID uuid.UUID, versions []forms.Version) ([]domain.Version
 // Авторизацию НЕ делает: вызывающий обязан сделать её сам (versionedSchemas или
 // forms.Get) — id формы из URL правом доступа не является (инвариант 1).
 func (s *Service) eachSubmission(ctx context.Context, formID uuid.UUID, period domain.Period, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
-	var after *Cursor
+	return s.eachSubmissionFrom(ctx, formID, period, nil, fn)
+}
+
+// eachSubmissionFrom — тот же обход, но с произвольного места. Начальный курсор
+// нужен окну «все ответы на вопрос»: оно листает один вопрос страницами и на каждую
+// заходит с того ответа, где остановилось прошлое чтение.
+func (s *Service) eachSubmissionFrom(ctx context.Context, formID uuid.UUID, period domain.Period, after *Cursor, fn func(sub Submission, answers map[string]json.RawMessage) error) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -872,6 +879,65 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 		return domain.Summary{}, err
 	}
 	return builder.Result(), nil
+}
+
+// AnswerPage — страница значений ОДНОГО вопроса, новыми сверху.
+type AnswerPage struct {
+	Answers []domain.AnswerSample
+	// NextCursor — nil, когда ответы формы кончились. Не «когда страница неполная»:
+	// вопрос за условием даёт пустые страницы посреди формы, и остановка по их
+	// длине обрезала бы список на первом же таком месте.
+	NextCursor *Cursor
+}
+
+// errAnswersEnough — сигнал остановить обход: страница набрана. Ошибкой, потому что
+// другого способа выйти из eachSubmissionFrom досрочно нет; наружу не уходит.
+var errAnswersEnough = errors.New("submissions: answer page is full")
+
+// BlockAnswers — значения одного вопроса страницами: окно «все ответы» на вкладке
+// «Сводка». Сводка отдаёт десять последних на каждый вопрос (domain.SamplesLimit),
+// здесь тот же вопрос листается целиком.
+//
+// Считает ТОТ ЖЕ SummaryBuilder в режиме одного вопроса (domain.AnswerLog): подписи
+// опций, тип вопроса и правило «что считать вопросом» обязаны совпасть со сводкой,
+// иначе окно покажет не то, что строка над ним.
+//
+// Наружу уходит РЕНДЕР значения, а не сырой ответ: id опции владельцу ничего не
+// говорит, а разбор его на клиенте был бы третьей копией доменных правил после Go и
+// Zod.
+func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error) {
+	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return AnswerPage{}, err
+	}
+	limit = clampLimit(limit)
+
+	builder := domain.NewSummaryBuilder(vs)
+	builder.AnswerLog(blockID, limit)
+
+	// last — id последнего ПРОСМОТРЕННОГО ответа, а не последнего показанного:
+	// следующая страница обязана начинаться за ним, иначе ответы, не давшие
+	// значения (вопрос пропущен, скрыт условием), читались бы снова и снова.
+	var last uuid.UUID
+	var full bool
+	err = s.eachSubmissionFrom(ctx, formID, period, after, func(sub Submission, answers map[string]json.RawMessage) error {
+		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
+		last = sub.ID
+		if builder.SamplesFull(blockID) {
+			full = true
+			return errAnswersEnough
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errAnswersEnough) {
+		return AnswerPage{}, err
+	}
+
+	page := AnswerPage{Answers: builder.Samples(blockID)}
+	if full {
+		page.NextCursor = &Cursor{ID: last}
+	}
+	return page, nil
 }
 
 // CountInPeriod — сколько видимых ответов пришло за окно наблюдения. Карточка

@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION } from '@entities/formSchema'
 import { carriesText, isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
@@ -110,8 +110,7 @@ function setup(schema: FormSchema) {
   )
   // Фокус ставим внутри act: чипы появляются от setState в обработчике focus, и без
   // прокачки React проверка увидела бы полотно до перерисовки.
-  const focus = (id: string, edge?: 'start' | 'end') =>
-    act(() => engine.focusBlock(id, edge))
+  const focus = (id: string, edge?: 'start' | 'end') => act(() => engine.focusBlock(id, edge))
   return { engine, store, focus, activeRow: (): ActiveRow | null => active }
 }
 

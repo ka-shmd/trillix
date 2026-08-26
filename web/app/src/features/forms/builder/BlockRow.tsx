@@ -1352,9 +1352,7 @@ function OptionsInline({
   // активировать мышью — кликать не по чему, — то есть правило само отрезало бы себе
   // вход. Пустой список законен: блок рождается без вариантов.
   const activeRow = useActiveRow()
-  const activeGroup = useBuilderStore(
-    (s) => s.blocks.find((b) => b.id === activeRow?.id)?.groupId,
-  )
+  const activeGroup = useBuilderStore((s) => s.blocks.find((b) => b.id === activeRow?.id)?.groupId)
   const showGhost = options.length === 0 || activeGroup === block.groupId
   const optionRefs = useRef(new Map<string, HTMLInputElement | null>())
   const ghostRef = useRef<HTMLInputElement>(null)
@@ -1403,8 +1401,7 @@ function OptionsInline({
   const optCollision: CollisionDetection = (args) => {
     const activeId = String(args.active.id)
     const zones = args.droppableContainers.filter((c) => optionZoneTarget(c.id) !== null)
-    const zoneHit =
-      zones.length === 0 ? [] : pointerWithin({ ...args, droppableContainers: zones })
+    const zoneHit = zones.length === 0 ? [] : pointerWithin({ ...args, droppableContainers: zones })
     zoneRef.current = zoneHit.length > 0 ? String(zoneHit[0]!.id) : null
     if (zoneRef.current !== null) {
       // Вертикальную цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
@@ -1763,9 +1760,7 @@ function OptionsInline({
                       <ColumnResizer
                         index={i}
                         gutter={OPT_GUTTER}
-                        onCommit={(next) =>
-                          setOptionRowWidths(block.id, row[0]![0]!.id, next)
-                        }
+                        onCommit={(next) => setOptionRowWidths(block.id, row[0]![0]!.id, next)}
                       />
                     )}
                     {zones && i > 0 && canAdd && (

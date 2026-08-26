@@ -42,7 +42,13 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 
 import { useFeatureAllowed } from '../../plan/useFeature'
 
@@ -202,8 +208,8 @@ export function DesignDrawer({
             <p className="text-muted-foreground bg-muted/50 flex gap-2 rounded-md p-3 text-sm">
               <Lock className="mt-0.5 size-4 shrink-0" />
               <span>
-                Своё оформление — на платном тарифе. Настроить и посмотреть можно уже
-                сейчас, черновик сохранится; опубликовать форму с ним не получится.{' '}
+                Своё оформление — на платном тарифе. Настроить и посмотреть можно уже сейчас,
+                черновик сохранится; опубликовать форму с ним не получится.{' '}
                 <Link to="/settings/plan" className="underline underline-offset-2">
                   Тариф
                 </Link>
@@ -249,7 +255,7 @@ export function DesignDrawer({
             {contrast !== null && (
               <Wide>
                 <Warning>
-                Контраст текста к фону — {contrast.toFixed(1)}:1, ниже рекомендованных 4,5:1.
+                  Контраст текста к фону — {contrast.toFixed(1)}:1, ниже рекомендованных 4,5:1.
                   Такой текст трудно читать на телефоне и при ярком свете.
                 </Warning>
               </Wide>
@@ -418,23 +424,22 @@ export function DesignDrawer({
               <Wide>
                 <p className="text-muted-foreground text-xs">
                   Последовательность <code>&lt;/</code> не допускается — уберите теги{' '}
-                  <code>&lt;style&gt;</code>, оставьте только правила. Пока она есть,
-                  CSS не сохраняется.
+                  <code>&lt;style&gt;</code>, оставьте только правила. Пока она есть, CSS не
+                  сохраняется.
                 </p>
               </Wide>
             )}
             <Wide>
               <p className="text-muted-foreground text-xs">
-                Правила применяются к форме у респондента и в превью — на полотно
-                редактора они не действуют. Пометьте блок своим именем в его настройках
-                и обращайтесь к нему как к классу.
+                Правила применяются к форме у респондента и в превью — на полотно редактора они не
+                действуют. Пометьте блок своим именем в его настройках и обращайтесь к нему как к
+                классу.
               </p>
             </Wide>
             {design?.css && !canUseCSS && (
               <Wide>
                 <Warning>
-                  На бесплатном тарифе форму с этим CSS не опубликовать. Черновик
-                  сохранится.
+                  На бесплатном тарифе форму с этим CSS не опубликовать. Черновик сохранится.
                 </Warning>
               </Wide>
             )}
@@ -456,8 +461,8 @@ export function DesignDrawer({
               Вернуться к теме «{pendingTheme ? THEME_TITLES[pendingTheme] : ''}»?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Готовая тема заменит оформление целиком: свои цвета, шрифт, лэйаут, поля и
-              кнопки будут сброшены. Отменить это можно будет через Ctrl+Z.
+              Готовая тема заменит оформление целиком: свои цвета, шрифт, лэйаут, поля и кнопки
+              будут сброшены. Отменить это можно будет через Ctrl+Z.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

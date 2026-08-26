@@ -29,7 +29,7 @@ function InsightsLayout() {
 
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
         <InsightsTabs slug={slug} period={period} />
         <PeriodSelect />
       </div>
@@ -43,17 +43,29 @@ function InsightsLayout() {
 // наборы классов разведены по activeProps/inactiveProps — смешивать их нельзя
 // (у Tailwind-утилит одинаковая специфичность, побеждает порядок в сгенерированном
 // CSS, а не в строке className).
+//
+// Search вкладки ДОПОЛНЯЕТСЯ, а не собирается заново: объект-литерал в этом пропе
+// адрес не дополняет, а ЗАМЕНЯЕТ (`buildLocation`: функция получает текущий search,
+// объект встаёт на его место целиком), и всё, о чём вкладка не знает, — в первую
+// очередь `?w=` с пространством — переход молча терял бы. Период при этом называется
+// явно, потому что маршрут вкладки требует его непустым.
 function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
-  const base = 'rounded-full px-3 py-1.5 text-sm transition-colors'
-  const active = { className: 'bg-foreground font-medium text-background' }
-  const inactive = { className: 'text-muted-foreground hover:bg-muted hover:text-foreground' }
+  // Сегментированный переключатель, как у вендоренного Tabs: разделы формы над ним
+  // — подчёркнутые вкладки, и второй ряд того же вида читался бы как продолжение
+  // первого. Один и тот же уровень навигации нельзя рисовать дважды подряд.
+  const base = 'rounded-md px-2.5 py-1 text-sm transition-colors'
+  const active = { className: 'bg-background font-semibold text-foreground shadow-sm' }
+  const inactive = { className: 'font-medium text-muted-foreground hover:text-foreground' }
 
   return (
-    <nav className="flex gap-1" aria-label="Разделы аналитики">
+    <nav
+      className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+      aria-label="Разделы аналитики"
+    >
       <Link
         to="/forms/$slug/insights/answers"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -63,7 +75,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/visits"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -73,7 +85,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/drop-offs"
         params={{ slug }}
-        search={{ period }}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -98,10 +110,13 @@ function PeriodSelect() {
     <Select
       value={period}
       onValueChange={(value) =>
-        void navigate({ to: '.', search: (prev) => ({ ...prev, period: periodSchema.parse(value) }) })
+        void navigate({
+          to: '.',
+          search: (prev) => ({ ...prev, period: periodSchema.parse(value) }),
+        })
       }
     >
-      <SelectTrigger className="w-[150px]" aria-label="Период">
+      <SelectTrigger className="w-[140px]" aria-label="Период">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -114,4 +129,3 @@ function PeriodSelect() {
     </Select>
   )
 }
-

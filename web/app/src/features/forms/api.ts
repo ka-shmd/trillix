@@ -55,7 +55,6 @@ export function createForm(title?: string, workspaceId?: string): Promise<Form> 
   })
 }
 
-
 // Переименование ВНУТРЕННЕГО имени (дашборд). Не трогает публичный заголовок; пустая
 // строка сбрасывает имя (кабинет снова показывает заголовок). См. ADR §10.
 export function updateFormName(id: string, name: string): Promise<Form> {

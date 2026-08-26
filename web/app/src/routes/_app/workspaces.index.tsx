@@ -1,8 +1,7 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { createPortal } from 'react-dom'
-import { ChevronRight, House, SquarePlus } from 'lucide-react'
+import { SquarePlus } from 'lucide-react'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { CreateWorkspaceDialog } from '../../features/workspaces/CreateWorkspaceDialog'
 import { WorkspaceSection } from '../../features/workspaces/WorkspaceSection'
@@ -10,7 +9,7 @@ import { WorkspaceFormList } from '../../features/forms/WorkspaceFormList'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formKeys } from '../../features/forms/keys'
 import type { Workspace } from '../../entities/workspace'
-import { useHeaderSlot } from '../../shared/headerSlot'
+import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -25,7 +24,6 @@ function WorkspacesPage() {
   const workspaces = useQuery(workspacesQueryOptions)
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const headerSlot = useHeaderSlot()
   const [creating, setCreating] = useState(false)
 
   // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
@@ -44,26 +42,16 @@ function WorkspacesPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl p-6">
-      {/* Название страницы и создание живут в верхней шапке — там же, где крошки
-          редактора. Портал сохраняет React-контекст, несмотря на другое место в DOM. */}
-      {headerSlot &&
-        createPortal(
-          <>
-            <HeaderCrumbs />
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto gap-2"
-              onClick={() => setCreating(true)}
-            >
-              {/* Квадрат с плюсом — «завести пространство»; голый Plus в шапке
-                  кабинета уже занят смыслом «новая форма» (кнопка сайдбара). */}
-              <SquarePlus className="size-4" />
-              Новое пространство
-            </Button>
-          </>,
-          headerSlot,
-        )}
+      {/* Название страницы и создание живут в верхнем баре кабинета. */}
+      <PageCrumbs items={['Пространства']} />
+      <PageActions>
+        <Button variant="ghost" size="sm" className="gap-2" onClick={() => setCreating(true)}>
+          {/* Квадрат с плюсом — «завести пространство»; голый Plus в шапке
+              кабинета уже занят смыслом «новая форма» (кнопка сайдбара). */}
+          <SquarePlus className="size-4" />
+          Новое пространство
+        </Button>
+      </PageActions>
       {/* Заголовок остаётся в разметке, но не на экране: без него страница
           начиналась бы с h2 названий пространств, и структура документа
           рассыпалась бы. Видимое имя страницы — крошка выше. */}
@@ -110,21 +98,3 @@ function WorkspacesPage() {
 
 // Крошки страницы: дом → «Пространства». Тот же вид, что у крошек редактора
 // (BuilderScreen): один верхний бар — один способ назвать текущее место.
-function HeaderCrumbs() {
-  return (
-    <nav aria-label="Хлебные крошки" className="flex min-w-0 items-center gap-1 text-sm">
-      <Link
-        to="/forms"
-        search={(prev) => prev}
-        aria-label="Дом"
-        className="flex shrink-0 items-center text-muted-foreground hover:text-foreground"
-      >
-        <House className="size-4" />
-      </Link>
-      <ChevronRight className="size-4 shrink-0 text-muted-foreground/50" />
-      <span className="min-w-0 truncate font-medium" aria-current="page">
-        Пространства
-      </span>
-    </nav>
-  )
-}

@@ -1,6 +1,13 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Copy, MessageSquareText, MoreHorizontal, Pencil, TextCursorInput, Trash2 } from 'lucide-react'
+import {
+  Copy,
+  MessageSquareText,
+  MoreHorizontal,
+  Pencil,
+  TextCursorInput,
+  Trash2,
+} from 'lucide-react'
 import { type Form, displayFormName } from '../../entities/form'
 import { formatDate, pluralAnswers } from '../../shared/format'
 import { RenameForm } from './RenameForm'

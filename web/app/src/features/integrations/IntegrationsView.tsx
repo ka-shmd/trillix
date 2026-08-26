@@ -1,10 +1,13 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil, Table2, Trash2 } from 'lucide-react'
+import { Pencil, Trash2 } from 'lucide-react'
 
-import type { FormIntegrations, FormSheet } from '../../entities/integration'
+import type { FormSheet } from '../../entities/integration'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
+import { GoogleSheetsIcon } from './ServiceIcon'
 import { formIntegrationsQueryOptions, useUnlinkSheet, useUpdateConnection } from './queries'
+import { Section } from '../../shared/page/Section'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,33 +38,26 @@ export function IntegrationsView({ formId }: { formId: string }) {
   const [overlay, setOverlay] = useState<string | null>(null)
 
   if (state.isPending) {
-    return <p className="text-sm text-muted-foreground">Загрузка…</p>
+    return <LoadingRows rows={2} />
   }
   if (state.isError || !state.data) {
-    return (
-      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-4">
-        <p className="mb-3 text-sm">Не удалось загрузить интеграции.</p>
-        <Button variant="outline" size="sm" onClick={() => state.refetch()}>
-          Повторить
-        </Button>
-      </div>
-    )
+    return <ErrorState title="Не удалось загрузить интеграции." onRetry={() => state.refetch()} />
   }
 
   const { connections } = state.data
   const editing = connections.find((c) => c.id === overlay) ?? null
 
   return (
-    <section className="flex flex-col gap-10">
+    <div className="flex flex-col gap-12">
+      {/* Блок СИТУАТИВНЫЙ: при нуле связок его нет вовсе, и пустого состояния здесь
+          не бывает. Обычно исчезающий раздел читается как недогрузившаяся страница —
+          но не тут: сразу под ним стоит каталог с той же кнопкой «Подключить», и
+          пустое состояние предлагало бы то же самое вторым голосом. */}
       {connections.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <div>
-            <h2 className="font-medium">Мои подключения</h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Куда уезжают ответы этой формы. Подключений может быть несколько — например, в
-              рабочую таблицу и в архивную.
-            </p>
-          </div>
+        <Section
+          title="Мои подключения"
+          description="Здесь собраны все интеграции, подключённые к этой форме. Интеграцию можно включить или выключить, а ход синхронизации ответов — посмотреть в журнале событий."
+        >
           <ul className="flex flex-col gap-2">
             {connections.map((connection) => (
               <li key={connection.id}>
@@ -74,29 +70,32 @@ export function IntegrationsView({ formId }: { formId: string }) {
               </li>
             ))}
           </ul>
-        </div>
+        </Section>
       )}
 
-      <div className="flex flex-col gap-3">
-        <div>
-          <h2 className="font-medium">Доступные интеграции</h2>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Ответы формы могут уезжать во внешние сервисы сами — сразу после отправки.
-          </p>
-        </div>
-        {/* Один живой пункт. Заглушек «скоро будет» здесь нет: они обещают срок,
-            которого никто не давал. */}
-        <div className="flex items-center gap-3 rounded-lg border p-4">
-          <Table2 className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">Google Таблицы</p>
-            <p className="text-sm text-muted-foreground">{catalogSummary(state.data)}</p>
-          </div>
-          <Button variant="outline" size="sm" onClick={() => setOverlay('new')}>
-            Подключить
-          </Button>
-        </div>
-      </div>
+      <Section
+        title="Доступные интеграции"
+        description="Эти инструменты сделают Trillix ещё полезнее."
+      >
+        {/* Сетка, а не строки: каталог со временем станет длинным, и плитка с
+            логотипом опознаётся с одного взгляда, тогда как одинаковые строки
+            приходится читать. Один живой пункт; заглушек «скоро будет» здесь нет —
+            они обещают срок, которого никто не давал. */}
+        <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
+          <li className="flex flex-col items-start">
+            <GoogleSheetsIcon className="size-8" />
+            <p className="mt-2 text-base font-semibold">Google Таблицы</p>
+            <p className="mt-1 text-sm text-muted-foreground">Отправляйте ответы в таблицу</p>
+            <Button
+              variant="link"
+              className="mt-4 h-auto p-0 text-sm text-primary"
+              onClick={() => setOverlay('new')}
+            >
+              Подключить
+            </Button>
+          </li>
+        </ul>
+      </Section>
 
       {overlay && (
         <GoogleSheetsOverlay
@@ -106,11 +105,18 @@ export function IntegrationsView({ formId }: { formId: string }) {
           onClose={() => setOverlay(null)}
         />
       )}
-    </section>
+    </div>
   )
 }
 
 // ConnectionRow — одна работающая связка: состояние слева, управление справа.
+//
+// БЕЗ РАМКИ. Связок у формы единицы, и они однородны: рамка вокруг каждой рисует
+// границу там, где различать нечего, — список читается как список, а не как стопка
+// карточек.
+//
+// Действия стоят прямо в строке (тумблер, настройка, удаление), а не в меню «⋯»:
+// их три, они частые, и лишний клик по каждому дороже, чем компактность строки.
 function ConnectionRow({
   formId,
   connection,
@@ -129,20 +135,21 @@ function ConnectionRow({
   const update = useUpdateConnection(formId)
   const unlink = useUnlinkSheet(formId)
   const [confirming, setConfirming] = useState(false)
+  const name = connection.name || 'Google Таблицы'
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border p-4">
-      <Table2 className="size-5 shrink-0 text-muted-foreground" aria-hidden />
+    <div className="flex items-center gap-3 py-3">
+      <GoogleSheetsIcon className="size-7 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="flex items-center gap-2 font-medium">
-          {connection.name || 'Google Таблицы'}
+        <p className="flex items-center gap-2 text-base font-semibold">
+          <span className="truncate">{name}</span>
           <StatusDot
             status={connection.status}
             enabled={connection.enabled}
             accountLost={accountLost}
           />
         </p>
-        <p className="text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-muted-foreground">
           {connectionSummary(connection, accountLost)}{' '}
           <a
             href={connection.url}
@@ -155,7 +162,13 @@ function ConnectionRow({
         </p>
       </div>
 
+      {/* Включённый тумблер — ярко-зелёный, а не цвета акцента: рядом с ним такой
+          же зелёный кружок состояния, и разными оттенками они читались бы как два
+          разных сигнала. Размер штатный: подменять геометрию вендоренного Switch
+          нельзя без пересчёта хода бегунка — он записан как calc(100%-2px) от
+          ширины бегунка и верен только для родной дорожки. */}
       <Switch
+        className="data-[state=checked]:bg-success"
         checked={connection.enabled}
         disabled={update.isPending}
         aria-label={connection.enabled ? 'Выключить подключение' : 'Включить подключение'}
@@ -163,12 +176,19 @@ function ConnectionRow({
           update.mutate({ id: connection.id, name: connection.name ?? '', enabled })
         }
       />
-      <Button variant="ghost" size="icon" aria-label="Настроить подключение" onClick={onEdit}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label="Настроить подключение"
+        onClick={onEdit}
+      >
         <Pencil className="size-4" />
       </Button>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
+        className="text-muted-foreground"
         aria-label="Удалить подключение"
         onClick={() => setConfirming(true)}
       >
@@ -200,9 +220,14 @@ function ConnectionRow({
   )
 }
 
-// StatusDot — точка состояния: зелёная у работающей связки, серая у выключенной,
-// красная у сломанной. Точка, а не текст: в строке списка важен факт «в порядке
-// или нет», а подробности живут в настройках.
+// StatusDot — состояние связки кружком без подписи: словом его уже говорит строка
+// под названием («Ответы синхронизируются с…», «Записать не удаётся…»), и бейдж
+// рядом повторял бы её вторым голосом.
+//
+// Подпись остаётся у скринридера (`aria-label`) — цвет для него не существует.
+//
+// Цвета — токенами (`bg-success`, `bg-warning`): литерал `bg-emerald-500` не имеет
+// тёмного значения и не виден системе.
 function StatusDot({
   status,
   enabled,
@@ -213,32 +238,21 @@ function StatusDot({
   accountLost: boolean
 }) {
   const [color, label] = !enabled
-    ? ['bg-muted-foreground/50', 'Выключено']
+    ? ['bg-muted-foreground/40', 'Выключено']
     : status === 'broken' || accountLost
       ? ['bg-destructive', 'Сломано']
       : status === 'backfilling'
-        ? ['bg-amber-500', 'Переносим ответы']
-        : ['bg-emerald-500', 'Работает']
+        ? ['bg-warning', 'Переносим ответы']
+        : ['bg-success', 'Работает']
 
-  return <span className={`size-2 rounded-full ${color}`} role="img" aria-label={label} />
+  return <span className={`size-2 shrink-0 rounded-full ${color}`} role="img" aria-label={label} />
 }
 
 function connectionSummary(connection: FormSheet, accountLost: boolean): string {
-  if (!connection.enabled) return 'Выключено. Ответы не синхронизируются с'
+  if (!connection.enabled) return 'Ответы не синхронизируются с'
   // Потерянный аккаунт важнее статуса связки: чинится он, а не она.
   if (accountLost) return 'Доступ к Google потерян — подключите аккаунт заново; связано с'
   if (connection.status === 'broken') return 'Записать не удаётся — откройте настройки; связано с'
   if (connection.status === 'backfilling') return 'Переносим накопленные ответы в'
   return 'Ответы синхронизируются с'
-}
-
-// catalogSummary — строка каталога. Она же объясняет, почему кнопка «Подключить»
-// может не сработать: аккаунта ещё нет или интеграция не настроена на контуре.
-function catalogSummary(state: FormIntegrations): string {
-  if (!state.account.enabled) return 'На этом контуре интеграция не настроена'
-  if (state.account.needsReconnect) {
-    return `Доступ к аккаунту ${state.account.email} потерян — подключите его заново`
-  }
-  if (state.account.connected) return `Подключено как ${state.account.email}`
-  return 'Каждый ответ ложится строкой в таблицу на вашем Google Диске'
 }

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { FormIntegrations, FormSheet } from '../../entities/integration'
@@ -10,6 +10,21 @@ import { integrationKeys } from './keys'
 // Поход к провайдеру идёт в отдельном окне, которого в happy-dom нет. Подменяем
 // хук окна: он отдаёт наверх исход, а тест решает, каким тот будет.
 const popup = vi.hoisted(() => ({ callbacks: [] as ((outcome: string) => void)[] }))
+
+// Список таблиц, который НИКОГДА не приезжает. Ловить «запрос в полёте» на живом
+// fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
+// проверял бы, кто успел первым. Мок трогает только один вызов; остальные тесты
+// сеют список в кэш и до него не доходят (staleTime 30 с).
+const hangingList = vi.hoisted(() => ({ enabled: false }))
+
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>()
+  return {
+    ...actual,
+    listSpreadsheets: (formId: string) =>
+      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(formId),
+  }
+})
 
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
@@ -81,13 +96,18 @@ function newTestClient() {
 }
 
 // Данные кладём прямо в кеш: экран проверяется по состоянию, а не по транспорту.
-function renderView(data: FormIntegrations) {
+//
+// seedSpreadsheets=false оставляет список таблиц НЕпосеянным — запрос уходит и
+// остаётся в полёте. Это единственный способ поймать состояние «что-то ещё едет»,
+// ради которого в окне есть индикатор.
+function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
-  qc.setQueryData(
-    [...integrationKeys.form(FORM_ID), 'spreadsheets'],
-    [{ id: 'ss-old', name: 'Прошлая форма' }],
-  )
+  if (seedSpreadsheets) {
+    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID), [
+      { id: 'ss-old', name: 'Прошлая форма' },
+    ])
+  }
   render(
     <QueryClientProvider client={qc}>
       <IntegrationsView formId={FORM_ID} />
@@ -106,6 +126,8 @@ function openConnection() {
 }
 
 describe('два блока экрана', () => {
+  // Блок ситуативный: при нуле связок его нет вовсе. Пустое состояние здесь было бы
+  // вторым голосом — каталог прямо под ним предлагает то же самое.
   it('связок нет — блока «Мои подключения» тоже нет', () => {
     renderView(state({ account: CONNECTED }))
 
@@ -123,8 +145,9 @@ describe('два блока экрана', () => {
   })
 
   // Ключ контура сменился — подключение осталось строкой в базе, но работать им
-  // нельзя. Экран обязан сказать это до того, как человек потеряет ответ.
-  it('доступ к аккаунту потерян — каталог и строка связки говорят «заново»', () => {
+  // нельзя. Экран обязан сказать это до того, как человек потеряет ответ. Говорит
+  // строка связки: в каталоге состояния аккаунта больше нет.
+  it('доступ к аккаунту потерян — строка связки говорит «заново»', () => {
     renderView(
       state({
         account: { ...CONNECTED, needsReconnect: true },
@@ -132,14 +155,15 @@ describe('два блока экрана', () => {
       }),
     )
 
-    expect(screen.getByText(/Доступ к аккаунту .* потерян/)).toBeTruthy()
     expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
-    // Связка живая по своему статусу, но точка обязана быть красной: чинится
+    // Связка живая по своему статусу, но кружок обязан быть красным: чинится
     // аккаунт, а не она.
     expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
   })
 
-  it('провайдер не настроен на контуре — так и написано в каталоге', () => {
+  // Состояние аккаунта ушло из каталога в окно подключения: плитка отвечает на
+  // «что это такое», а не на «почему у меня не выйдет».
+  it('провайдер не настроен на контуре — так написано в окне подключения', () => {
     renderView(
       state({
         account: {
@@ -151,11 +175,12 @@ describe('два блока экрана', () => {
         },
       }),
     )
+    openSetup()
 
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('состояние связки видно точкой и подписью', () => {
+  it('состояние связки видно кружком и подписью', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
     expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
@@ -191,12 +216,42 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: /подключить google таблицы/i })).toBeTruthy()
   })
 
-  it('аккаунт не подключён — только рассказ и согласие, настроек ещё нет', () => {
+  // Половина настроек зависит от того, что приедет (какие таблицы, какие листы),
+  // поэтому окно не показывает индикатор рядом с полями, а закрывает их: трогать
+  // раньше — это выбирать из пустого списка.
+  it('пока списки едут — окно закрыто индикатором, а поля выключены', async () => {
+    hangingList.enabled = true
+    try {
+      renderView(state({ account: CONNECTED }), { seedSpreadsheets: false })
+      openSetup()
+
+      // Счётчик useIsFetching доезжает до родителя подпиской, а не тем же тиком.
+      await waitFor(() => expect(screen.getByText(/загружаем данные google/i)).toBeTruthy())
+      // inert выключает поддержку и мыши, и клавиатуры — слой поверх сам по себе
+      // не помешал бы дойти до полей табом.
+      const column = screen.getByLabelText(/название подключения/i).closest('[inert]')
+      expect(column).not.toBeNull()
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  it('списки приехали — индикатора нет и поля живые', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    expect(screen.queryByText(/загружаем данные google/i)).toBeNull()
+    expect(screen.getByLabelText(/название подключения/i).closest('[inert]')).toBeNull()
+  })
+
+  it('аккаунт не подключён — предупреждение и вход в согласие, настроек ещё нет', () => {
     renderView(state())
     openSetup()
 
     expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
-    // Про вывоз персональных данных оверлей говорит ДО подключения, а не после.
+    // Про вывоз персональных данных оверлей говорит ДО подключения, а не после
+    // (спека design/integrations-gsheets.md §10). Проверка стоит здесь, потому что
+    // строку легко снести как «лишний текст»: она про 152-ФЗ, а не про UX.
     expect(screen.getByText(/персональные данные/i)).toBeTruthy()
     // Поля, которые всё равно заперты, — обещание работы, которой человек ещё
     // не может сделать: их здесь нет вовсе.
@@ -323,7 +378,9 @@ describe('оверлей настройки Google Таблиц', () => {
 
     // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
     // что он видит, это что с ней сейчас.
-    expect(screen.getByText(/переносим ответы/i)).toBeTruthy()
+    expect(
+      within(screen.getByRole('dialog')).getByText(/переносим ответы, которые уже пришли/i),
+    ).toBeTruthy()
   })
 
   it('после подключения в окне провайдера состояние перезапрашивается', async () => {

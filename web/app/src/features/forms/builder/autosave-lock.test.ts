@@ -57,4 +57,3 @@ describe('formLockToken', () => {
     expect(formLockToken(qc, formId, 'ignored')).toBe(T0)
   })
 })
-

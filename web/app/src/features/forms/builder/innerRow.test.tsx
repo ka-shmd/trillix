@@ -92,7 +92,9 @@ describe('двухколоночная секция в превью', () => {
   })
 
   it('три элемента слева и два справа — две ячейки, 3 и 2 группы', () => {
-    const form = preview(schema(col('l1', 1), col('l2', 1), col('l3', 1), col('r1', 2), col('r2', 2)))
+    const form = preview(
+      schema(col('l1', 1), col('l2', 1), col('l3', 1), col('r1', 2), col('r2', 2)),
+    )
 
     const rows = form.querySelectorAll(':scope > .rf-row')
     expect(rows).toHaveLength(1)

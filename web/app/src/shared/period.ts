@@ -8,8 +8,33 @@ import { z } from 'zod'
 // Значение периода — токен, а не пара дат: в query-ключе TanStack дата менялась бы
 // на каждый рендер (Date.now()), и кеш обнулялся бы сам собой. Даты считаются в
 // момент запроса.
-export const periodSchema = z.enum(['all', '24h', '7d', '30d']).catch('all')
-export type Period = z.infer<typeof periodSchema>
+const periodEnum = z.enum(['all', '24h', '7d', '30d'])
+export type Period = z.infer<typeof periodEnum>
+
+// DEFAULT_PERIOD — окно, с которым аналитика открывается, когда его не назвали:
+// адрес без ?period, старая закладка на /summary, вход по вкладке «Аналитика».
+// Одна константа на все эти входы: разъехавшись, они открывали бы разные экраны с
+// одной кнопки.
+//
+// Она же — ответ на битое значение в адресе (.catch ниже). Ветку «неизвестный
+// период» отдельно писать не надо: непонятное окно и неназванное — один случай.
+export const DEFAULT_PERIOD: Period = '24h'
+
+export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
+
+// withoutPeriod — search для ссылки, УВОДЯЩЕЙ ИЗ РАЗДЕЛА «Аналитика». Окно наблюдения
+// принадлежит разделу и за его пределами не значит ничего: ни один другой экран его не
+// читает. Но `search={(prev) => prev}`, которым ссылки кабинета переносят пространство и
+// поиск, переносит и его — и `?period=30d` тянется за человеком по всем разделам формы
+// вплоть до дашборда, оставаясь в адресе, которым он поделится.
+//
+// Снимается ИМЕННО ЗДЕСЬ, на выходе, а не на входе: маршрут-получатель чужие ключи не
+// вычищает — `validateSearch` разбирает адрес, но не переписывает его.
+export function withoutPeriod<T extends object>(prev: T): Omit<T, 'period'> {
+  const rest = { ...prev } as T & { period?: unknown }
+  delete rest.period
+  return rest
+}
 
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',

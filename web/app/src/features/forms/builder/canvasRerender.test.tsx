@@ -36,7 +36,12 @@ function schema(n: number): FormSchema {
     { id: 'ft', groupId: 'gft', type: 'form_title', text: textFromString('Форма') },
   ]
   for (let i = 0; i < n; i++) {
-    blocks.push({ id: `c${i}`, groupId: `g${i}`, type: 'title', text: textFromString(`Вопрос ${i}`) })
+    blocks.push({
+      id: `c${i}`,
+      groupId: `g${i}`,
+      type: 'title',
+      text: textFromString(`Вопрос ${i}`),
+    })
     blocks.push({ id: `f${i}`, groupId: `g${i}`, type: 'short_text', settings: {} })
   }
   return { schemaVersion: SCHEMA_VERSION, blocks }
@@ -63,7 +68,8 @@ function touchedRows(container: HTMLElement, action: () => void): Set<string> {
   act(action)
   const rows = new Set<string>()
   for (const r of obs.takeRecords()) {
-    const node = r.target.nodeType === Node.ELEMENT_NODE ? (r.target as Element) : r.target.parentElement
+    const node =
+      r.target.nodeType === Node.ELEMENT_NODE ? (r.target as Element) : r.target.parentElement
     const id = node?.closest('[data-block-id]')?.getAttribute('data-block-id')
     if (id) rows.add(id)
   }

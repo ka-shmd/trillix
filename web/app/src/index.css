@@ -3,76 +3,161 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Дизайн-токены — канонический дефолт shadcn/ui (base color slate, oklch).
-   Не переопределяем: «красивый из коробки» вид — сознательный выбор. Тёмная тема
-   (.dark) уже заполнена дефолтом shadcn; включение по классу — фаза 8. */
+/* Дизайн-токены кабинета — база shadcn/ui (slate, oklch) с двумя правками поверх.
+   Первая: акцент — ГЛУБОКИЙ СИНИЙ С ЗЕЛЕНЦОЙ (`--primary` и его спутники `--ring`,
+   `--sidebar-primary`), а не дежурный blue-600 из темы shadcn: тот на тёплом фоне
+   читается «синей кнопкой из шаблона». Взят темнее и заметно менее насыщенным — на
+   белом это чернильное пятно, а не сигнальный цвет. Тон 260: выше по кругу (270+)
+   синий уходит в фиолет, ниже (235−) — в бирюзу. ЯРЧЕ БРАТЬ НЕЛЬЗЯ: на L 0.58 белый
+   текст на заливке даёт 4.4:1 и не проходит AA — это потолок яркости, а не вкусовая
+   граница. Снизу граница другая, гаммы: на тоне 238 хрома 0.13 сажает красный канал
+   в ноль, то есть на край sRGB, где цвет ядовит и на широком гамуте уезжает.
+   Правишь акцент — меряй белый НА нём, а не только его контраст к белому фону. Вторая: свои статусные цвета `--success`
+   и `--warning` — у shadcn их нет, а состояния в кабинете есть (подключение
+   работает / переносит / сломано).
+
+   ВТОРОЙ АКЦЕНТ — `--highlight` (фиолетовый). Он НЕ статус и НЕ действие: синий
+   значит «сюда можно нажать», зелёный/янтарный/красный заняты состояниями, а деталям
+   вроде иллюстраций нужен цвет, который ничего не обещает. Тон 300 выбран как
+   единственный свободный: он читается другим рядом с синим и не путается ни с одним
+   статусным. `--success` взят ЯРКИМ (green-500): он носит смысл
+   сам, без подписи — кружок связки и включённый тумблер, — поэтому важна заметность,
+   а не контраст текста на нём (для текста есть тёмный `--success-foreground`).
+
+   ДАННЫЕ — ПЯТАЯ РОЛЬ ЦВЕТА, и у неё два разных набора, потому что у графиков две
+   разные задачи. Ряд графика не действие и не состояние: красить его `--primary`
+   значит обещать нажатие там, где его нет, а `--success` — приписывать смысл
+   «хорошо» произвольной категории.
+
+   `--chart-1` и `--chart-1-soft` — ПАРА «целое и его часть»: один тон в двух
+   светлотах (визиты и из них отправившие). Тон один потому, что величина одна.
+
+   `--chart-1..8` — КАТЕГОРИАЛЬНЫЙ набор для секторов кольца. Восемь ТОНОВ, а не
+   светлот одного: восемь ступеней синего человек между собой не различает, и
+   кольцо из них не отвечает ни на один вопрос.
+
+   Порядок набора несущий. Сектора кольца идут подряд, поэтому слипаются именно
+   СОСЕДИ ПО ПОРЯДКУ — и набор расставлен так, чтобы каждая соседняя пара стояла
+   далеко (замер в oklab: минимум 0.162 в светлой теме, 0.136 в тёмной, при том что
+   ближайшая пара НЕсоседей — 0.122). Пары считаются ПО КРУГУ: восьмой сектор
+   касается первого, поэтому на восьмом месте стоит глухой коричневый — любой синий
+   или фиолетовый там сливался бы с первым сектором. Светлота гуляет вместе с
+   тоном: цвета обязаны различаться и без цвета.
+
+   Оливковый (125) и малиновый (355) взяты приглушёнными НАРОЧНО: рядом живут
+   сигнальные `--success` (149) и `--destructive` (27), и категория, покрашенная в
+   полноценный зелёный, читалась бы как «всё хорошо». Правило «статусные тона
+   заняты» на секторе графика не нарушено ровно этой приглушённостью плюс подписью,
+   которая стоит рядом с каждым сектором.
+
+   ЛЮБОЙ НОВЫЙ ТОКЕН ОБЯЗАН ИМЕТЬ ЗНАЧЕНИЕ И В `.dark`, даже пока переключателя
+   темы нет: тёмные значения здесь полные, и тема включается одним PR ровно до тех
+   пор, пока в светлой половине не появится токен без пары.
+
+   НЕЙТРАЛЬНАЯ ОСЬ — ТЁПЛАЯ, И ЦЕЛИКОМ: тон 70–80 (в сторону жёлтого) у текста,
+   подложек, линий и сайдбара. Тёплые буквы на холодно-серых линиях выглядят
+   случайностью, поэтому ось поворачивается вся, а не только `--foreground`.
+   Синий акцент при этом остаётся холодным — так и задумано: он единственное
+   цветное пятно и не должен растворяться в фоне.
+
+   Чистый чёрный на белом даёт максимальный контраст и вместе с ним техническую
+   сухость. Чернила и подпись держат запас над нормой (цифры — в
+   docs/DESIGN-SYSTEM.md). Замеряй контраст ПИКСЕЛЯМИ, а не прикидывай по L:
+   разбирать строку oklch как rgb — верный способ получить бессмысленную цифру.
+
+   Правила использования — docs/DESIGN-SYSTEM.md. Цвет мимо токенов (`bg-emerald-500`
+   в разметке) — отступление: у него нет тёмного значения и он не виден системе. */
 :root {
-  --radius: 0.625rem;
+  --radius: 0.5rem;
   --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
+  --foreground: oklch(0.32 0.012 70);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
+  --card-foreground: oklch(0.32 0.012 70);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
+  --popover-foreground: oklch(0.32 0.012 70);
+  --primary: oklch(0.55 0.19 260);
+  --primary-foreground: oklch(0.985 0.004 80);
+  --secondary: oklch(0.97 0.005 80);
+  --secondary-foreground: oklch(0.32 0.012 70);
+  --muted: oklch(0.97 0.005 80);
+  --muted-foreground: oklch(0.545 0.014 70);
+  --accent: oklch(0.97 0.005 80);
+  --accent-foreground: oklch(0.32 0.012 70);
+  --utility: oklch(0.16 0.006 70);
+  --utility-foreground: oklch(0.985 0.004 80);
+  --highlight: oklch(0.55 0.2 300);
+  --highlight-foreground: oklch(0.985 0.004 80);
+  --success: oklch(0.723 0.192 149.579);
+  --success-foreground: oklch(0.266 0.065 152.934);
+  --warning: oklch(0.666 0.179 58.318);
+  --warning-foreground: oklch(0.985 0.004 80);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
+  --border: oklch(0.925 0.006 80);
+  --input: oklch(0.925 0.006 80);
+  --ring: oklch(0.55 0.19 260);
+  --chart-1: oklch(0.55 0.19 260);
+  --chart-1-soft: oklch(0.78 0.08 258);
+  --chart-2: oklch(0.68 0.11 195);
+  --chart-3: oklch(0.58 0.18 305);
+  --chart-4: oklch(0.76 0.13 80);
+  --chart-5: oklch(0.64 0.17 355);
+  --chart-6: oklch(0.66 0.1 125);
+  --chart-7: oklch(0.62 0.14 45);
+  --chart-8: oklch(0.42 0.07 60);
+  --sidebar: oklch(0.985 0.004 80);
+  --sidebar-foreground: oklch(0.32 0.012 70);
+  --sidebar-primary: oklch(0.55 0.19 260);
+  --sidebar-primary-foreground: oklch(0.985 0.004 80);
+  --sidebar-accent: oklch(0.97 0.005 80);
+  --sidebar-accent-foreground: oklch(0.32 0.012 70);
+  --sidebar-border: oklch(0.925 0.006 80);
+  --sidebar-ring: oklch(0.55 0.19 260);
 }
 
 .dark {
-  --background: oklch(0.129 0.042 264.695);
-  --foreground: oklch(0.984 0.003 247.858);
-  --card: oklch(0.208 0.042 265.755);
-  --card-foreground: oklch(0.984 0.003 247.858);
-  --popover: oklch(0.208 0.042 265.755);
-  --popover-foreground: oklch(0.984 0.003 247.858);
-  --primary: oklch(0.929 0.013 255.508);
-  --primary-foreground: oklch(0.208 0.042 265.755);
-  --secondary: oklch(0.279 0.041 260.031);
-  --secondary-foreground: oklch(0.984 0.003 247.858);
-  --muted: oklch(0.279 0.041 260.031);
-  --muted-foreground: oklch(0.704 0.04 256.788);
-  --accent: oklch(0.279 0.041 260.031);
-  --accent-foreground: oklch(0.984 0.003 247.858);
+  --background: oklch(0.19 0.006 70);
+  --foreground: oklch(0.96 0.005 80);
+  --card: oklch(0.25 0.007 70);
+  --card-foreground: oklch(0.96 0.005 80);
+  --popover: oklch(0.25 0.007 70);
+  --popover-foreground: oklch(0.96 0.005 80);
+  --primary: oklch(0.72 0.14 260);
+  --primary-foreground: oklch(0.985 0.004 80);
+  --secondary: oklch(0.29 0.007 70);
+  --secondary-foreground: oklch(0.96 0.005 80);
+  --muted: oklch(0.29 0.007 70);
+  --muted-foreground: oklch(0.72 0.014 75);
+  --accent: oklch(0.29 0.007 70);
+  --accent-foreground: oklch(0.96 0.005 80);
+  --utility: oklch(0.985 0.004 80);
+  --utility-foreground: oklch(0.16 0.006 70);
+  --highlight: oklch(0.68 0.16 300);
+  --highlight-foreground: oklch(0.19 0.006 70);
+  --success: oklch(0.723 0.192 149.579);
+  --success-foreground: oklch(0.266 0.065 152.934);
+  --warning: oklch(0.769 0.188 70.08);
+  --warning-foreground: oklch(0.19 0.006 70);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.551 0.027 264.364);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0.042 265.755);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
+  --ring: oklch(0.72 0.14 260);
+  --chart-1: oklch(0.66 0.16 260);
+  --chart-1-soft: oklch(0.4 0.07 258);
+  --chart-2: oklch(0.76 0.1 195);
+  --chart-3: oklch(0.7 0.16 305);
+  --chart-4: oklch(0.82 0.12 80);
+  --chart-5: oklch(0.72 0.15 355);
+  --chart-6: oklch(0.74 0.09 125);
+  --chart-7: oklch(0.72 0.13 45);
+  --chart-8: oklch(0.6 0.07 60);
+  --sidebar: oklch(0.25 0.007 70);
+  --sidebar-foreground: oklch(0.96 0.005 80);
+  --sidebar-primary: oklch(0.72 0.14 260);
+  --sidebar-primary-foreground: oklch(0.985 0.004 80);
+  --sidebar-accent: oklch(0.29 0.007 70);
+  --sidebar-accent-foreground: oklch(0.96 0.005 80);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --sidebar-ring: oklch(0.72 0.14 260);
 }
 
 @theme inline {
@@ -92,14 +177,26 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-utility: var(--utility);
+  --color-utility-foreground: var(--utility-foreground);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
+  --color-chart-1-soft: var(--chart-1-soft);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --color-chart-7: var(--chart-7);
+  --color-chart-8: var(--chart-8);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -167,9 +264,23 @@
   body[data-scroll-locked] {
     margin-right: 0 !important;
   }
+  /* ШРИФТ КАБИНЕТА — INTER, И ФАЙЛЫ ЗА НИМ УЖЕ ЕСТЬ: вариативный 100–900 объявлен
+     в web/shared/fields/fields.css (общий с рендерером) и самохостится оттуда.
+     Google Fonts подключать нельзя — в проде их режет CSP (`default-src 'self'`), а
+     на публичной странице формы это ещё и запрос браузера респондента на чужой
+     сервер. Системный стек остаётся запасным: до загрузки файла (`font-display:
+     swap`) и на случай, если он не доедет.
+     Полотна формы это не касается — там семейство выбирает автор
+     (`--rf-font-family`), и оно перебивает наследование. */
   body {
     @apply bg-background text-foreground;
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family:
+      'Inter',
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
   }
 }
 

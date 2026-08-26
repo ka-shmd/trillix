@@ -1,8 +1,9 @@
-import { type ReactNode } from 'react'
+import { createElement, type ReactNode } from 'react'
 
 import { type Block, type BlockType } from '@entities/formSchema'
 
 import { editorKind, orderedTypes } from './kinds/index'
+import { BlockTypeIcon } from '../../../shared/BlockTypeIcon'
 
 // Разделы меню добавления блока (v2, фаза 8.7):
 //   • «Вопросы» — бандл: подпись (title) + поле. Выбор создаёт озаглавленный вопрос
@@ -52,7 +53,8 @@ const GROUP_SUFFIX: Record<BlockGroup, string> = {
 const GROUP_KEY: Record<BlockGroup, string> = { question: 'q', field: 'f', layout: 'l' }
 
 // MENU_ITEMS выводится из реестра типов (kinds/*): состав разделов объявляет сам тип
-// (menu в его файле), подписи и описания — оттуда же. До фазы 16 здесь лежали два ручных
+// (menu в его файле), подписи и описания — оттуда же, глиф — из `shared/blockIcons` по
+// типу (createElement, а не JSX: файл остаётся .ts). До фазы 16 здесь лежали два ручных
 // списка (FIELD_TYPES и LAYOUT_TYPES), то есть третье место, где перечислены типы, — и
 // тип, забытый в них, просто не появлялся в меню, ничего не ломая заметно.
 //
@@ -72,20 +74,18 @@ export const MENU_ITEMS: ReadonlyArray<MenuItem> = BLOCK_GROUP_ORDER.flatMap((gr
         bundle: group === 'question',
         label: kind.label,
         description: `${kind.description}${GROUP_SUFFIX[group]}`,
-        icon: kind.icon,
+        icon: createElement(BlockTypeIcon, { type }),
       }
       return [
         base,
-        ...(kind.variants ?? []).map(
-          (v): MenuItem => ({
-            ...base,
-            key: `${base.key}_${v.key}`,
-            label: v.label,
-            description: `${v.description}${GROUP_SUFFIX[group]}`,
-            icon: v.icon,
-            preset: v.defaults,
-          }),
-        ),
+        ...(kind.variants ?? []).map((v): MenuItem => ({
+          ...base,
+          key: `${base.key}_${v.key}`,
+          label: v.label,
+          description: `${v.description}${GROUP_SUFFIX[group]}`,
+          icon: v.icon,
+          preset: v.defaults,
+        })),
       ]
     }),
 )

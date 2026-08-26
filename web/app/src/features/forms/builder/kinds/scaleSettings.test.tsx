@@ -66,8 +66,7 @@ function setup(schema: FormSchema = SCALE) {
   return { store }
 }
 
-const row = (id: string) =>
-  within(document.querySelector(`[data-block-id="${id}"]`) as HTMLElement)
+const row = (id: string) => within(document.querySelector(`[data-block-id="${id}"]`) as HTMLElement)
 
 function openMenu(id: string, label: string) {
   const grip = row(id).getByLabelText(label)

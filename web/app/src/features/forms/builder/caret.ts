@@ -39,8 +39,7 @@ export function textCaret(el: TextEl): CaretAdapter {
       el.setSelectionRange(pos, pos)
     },
     caretAtStart: () => el.selectionStart === 0 && el.selectionEnd === 0,
-    caretAtEnd: () =>
-      el.selectionStart === el.value.length && el.selectionEnd === el.value.length,
+    caretAtEnd: () => el.selectionStart === el.value.length && el.selectionEnd === el.value.length,
     autosize() {
       if (!(el instanceof HTMLTextAreaElement)) return
       el.style.height = 'auto'

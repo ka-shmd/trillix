@@ -1,7 +1,14 @@
 import { designSchema } from '@entities/formSchema'
 import { describe, expect, it } from 'vitest'
 
-import { coverFill, patch, patchCoverHeight, patchLogo, patchTop, PALETTE_FIELDS } from './designEdit'
+import {
+  coverFill,
+  patch,
+  patchCoverHeight,
+  patchLogo,
+  patchTop,
+  PALETTE_FIELDS,
+} from './designEdit'
 
 describe('patch', () => {
   it('ставит значение в пустой документ', () => {
@@ -11,7 +18,11 @@ describe('patch', () => {
   })
 
   it('не трогает соседние поля и другие группы', () => {
-    const before = { theme: 'dark', palette: { accent: '#00aa55' }, layout: { fontSize: 18 } } as const
+    const before = {
+      theme: 'dark',
+      palette: { accent: '#00aa55' },
+      layout: { fontSize: 18 },
+    } as const
     expect(patch(before, 'palette', 'text', '#111111')).toEqual({
       theme: 'dark',
       palette: { accent: '#00aa55', text: '#111111' },
@@ -22,7 +33,9 @@ describe('patch', () => {
   it('снятие последнего значения убирает и группу', () => {
     // Иначе в схеме копятся пустые объекты, которых автор не создавал: документ
     // отличается от исходного при одинаковом виде.
-    expect(patch({ palette: { accent: '#00aa55' } }, 'palette', 'accent', undefined)).toBeUndefined()
+    expect(
+      patch({ palette: { accent: '#00aa55' } }, 'palette', 'accent', undefined),
+    ).toBeUndefined()
   })
 
   it('снятие последнего значения оставляет остальной документ', () => {

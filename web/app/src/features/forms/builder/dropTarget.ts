@@ -147,9 +147,7 @@ export function pickDropTarget<B extends Part>(
   // под заголовком формы. Заехал на первый вопрос, но не дошёл до его якоря — это уже
   // не «первым», а «ни над какой щелью» (см. ниже).
   if (hit === null) {
-    return pointer.y < firstRowTop
-      ? { afterId: null, lineIds: firstRowIds, before: true }
-      : null
+    return pointer.y < firstRowTop ? { afterId: null, lineIds: firstRowIds, before: true } : null
   }
   // Полоса кончилась, а следующая ещё не началась: указатель стоит на элементе, но не
   // на том его месте, которое называет щель. Цели нет — и это ответ, а не пробел:

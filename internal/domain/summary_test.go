@@ -418,3 +418,79 @@ func TestSummary_SamplesSkipEmpty(t *testing.T) {
 		t.Fatalf("значения = %+v, ждали пусто", got)
 	}
 }
+
+// AnswerLog — режим одного вопроса для окна «все ответы». Проверяются три вещи,
+// каждая из которых при поломке даёт не падение, а неверный список на экране:
+// потолок поднимается только у названного вопроса, у остальных значения не копятся
+// вовсе, и подписи опций остаются теми же, что в сводке.
+func TestAnswerLog_OnlyNamedBlockCollectsAndLimitRises(t *testing.T) {
+	versions := []VersionedSchema{
+		vsg(1,
+			grp("Как узнали", choiceBlock("b_src", "", BlockSingleChoice,
+				Option{ID: "o_ad", Label: "Реклама"}, Option{ID: "o_fr", Label: "Друзья"})),
+			grp("Имя", Block{ID: "b_name", Type: BlockShortText}),
+		),
+	}
+	b := NewSummaryBuilder(versions)
+	b.AnswerLog("b_src", 25)
+
+	// Двадцать ответов — больше, чем SamplesLimit сводки, но меньше потолка окна.
+	for i := 0; i < 20; i++ {
+		opt := "o_ad"
+		if i%2 == 0 {
+			opt = "o_fr"
+		}
+		b.Add(1, sampleTime, ans(map[string]any{"b_src": opt, "b_name": "Аня"}))
+	}
+
+	got := b.Samples("b_src")
+	if len(got) != 20 {
+		t.Fatalf("значений у названного вопроса: %d, ожидалось 20", len(got))
+	}
+	// Подпись опции, а не её id: окно обязано читаться так же, как сводка над ним.
+	if got[0].Text != "Друзья" {
+		t.Errorf("первое значение %q, ожидалась подпись опции", got[0].Text)
+	}
+	if b.SamplesFull("b_src") {
+		t.Error("страница считается набранной, хотя потолок 25, а значений 20")
+	}
+	// У соседнего вопроса потолок обнулён: окно листает ОДИН вопрос, и таскать
+	// значения остальных значит платить за них памятью на каждой странице.
+	if n := len(b.Samples("b_name")); n != 0 {
+		t.Errorf("у неназванного вопроса накопилось %d значений, ожидалось 0", n)
+	}
+}
+
+// Набранная страница обязана сообщать о себе: по SamplesFull сервис останавливает
+// обход ответов, не досматривая форму до конца.
+func TestAnswerLog_FullAtLimit(t *testing.T) {
+	versions := []VersionedSchema{vsg(1, grp("Имя", Block{ID: "b_name", Type: BlockShortText}))}
+	b := NewSummaryBuilder(versions)
+	b.AnswerLog("b_name", 3)
+
+	for i := 0; i < 5; i++ {
+		b.Add(1, sampleTime, ans(map[string]any{"b_name": strconv.Itoa(i)}))
+	}
+	if !b.SamplesFull("b_name") {
+		t.Fatal("страница не считается набранной, хотя значений больше потолка")
+	}
+	if n := len(b.Samples("b_name")); n != 3 {
+		t.Errorf("значений %d, ожидался потолок 3", n)
+	}
+}
+
+// Вопрос, удалённый из всех версий, — законное состояние: окно откроется пустым, а
+// не уронит запрос.
+func TestAnswerLog_UnknownBlockIsEmpty(t *testing.T) {
+	versions := []VersionedSchema{vsg(1, grp("Имя", Block{ID: "b_name", Type: BlockShortText}))}
+	b := NewSummaryBuilder(versions)
+	b.AnswerLog("b_gone", 10)
+	b.Add(1, sampleTime, ans(map[string]any{"b_name": "Аня"}))
+
+	if got := b.Samples("b_gone"); got != nil {
+		t.Errorf("значения удалённого вопроса: %v, ожидался пустой список", got)
+	}
+	if b.SamplesFull("b_gone") {
+		t.Error("страница удалённого вопроса считается набранной")
+	}
+}

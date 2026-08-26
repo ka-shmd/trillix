@@ -1,9 +1,4 @@
-import {
-  SCALE_LOWER_BOUND,
-  SCALE_UPPER_BOUND,
-  type Block,
-  scaleRange,
-} from '@entities/formSchema'
+import { SCALE_LOWER_BOUND, SCALE_UPPER_BOUND, type Block, scaleRange } from '@entities/formSchema'
 
 import { useBuilderStore } from '../storeContext'
 import { SelectSetting, SettingRow } from './settings'

@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 
 import { TemplatesView } from '../../features/forms/templates/TemplatesView'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 
 // Шаблоны форм (/templates): встроенные заготовки, с которых начинают вместо пустого
 // полотна. Входов два — пункт сайдбара и ссылка «Использовать шаблон» на пустом
@@ -14,5 +15,10 @@ export const Route = createFileRoute('/_app/templates')({
 // slug'ом, а `POST /forms` ждёт id.
 function TemplatesPage() {
   const workspace = useCurrentWorkspace()
-  return <TemplatesView workspaceId={workspace?.id} />
+  return (
+    <>
+      <PageCrumbs items={['Шаблоны']} />
+      <TemplatesView workspaceId={workspace?.id} />
+    </>
+  )
 }

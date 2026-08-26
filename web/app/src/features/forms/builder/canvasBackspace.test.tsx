@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 
-import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -61,7 +61,7 @@ describe('Backspace в начале строки', () => {
     expect(store.getState().blocks.map((b) => b.id)).toEqual(['a'])
   })
 
-  it('строка с текстом Backspace\'ом не удаляется', () => {
+  it("строка с текстом Backspace'ом не удаляется", () => {
     const { store } = setup([
       { id: 'a', groupId: 'g1', type: 'text', text: textFromString('Абзац') },
       { id: 'b', groupId: 'g2', type: 'text', text: textFromString('Второй') },

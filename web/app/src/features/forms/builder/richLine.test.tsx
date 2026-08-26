@@ -6,7 +6,14 @@ import { useStore } from 'zustand'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, MAX_SPANS, type Span, plainText, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import {
+  type FormSchema,
+  MAX_SPANS,
+  type Span,
+  plainText,
+  textFromString,
+  SCHEMA_VERSION,
+} from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -36,7 +43,12 @@ function reactiveRow(text: string | Span[] = '', type: 'text' | 'title' = 'text'
   const schema: FormSchema = {
     schemaVersion: SCHEMA_VERSION,
     blocks: [
-      { id: 't', groupId: 'g1', type, text: typeof text === 'string' ? textFromString(text) : text },
+      {
+        id: 't',
+        groupId: 'g1',
+        type,
+        text: typeof text === 'string' ? textFromString(text) : text,
+      },
     ],
   }
   store.getState().hydrate(schema)
@@ -595,7 +607,9 @@ describe('панель форматирования', () => {
 describe('лимит кусков оформления', () => {
   // Ровно предельный документ: MAX_SPANS кусков по два символа, через один жирные.
   const atLimit = (): Span[] =>
-    Array.from({ length: MAX_SPANS }, (_, i) => (i % 2 ? { t: 'аб', m: ['b' as const] } : { t: 'вг' }))
+    Array.from({ length: MAX_SPANS }, (_, i) =>
+      i % 2 ? { t: 'аб', m: ['b' as const] } : { t: 'вг' },
+    )
 
   it('форматирование, переваливающее лимит, не применяется', () => {
     const { store } = reactiveRow(atLimit())

@@ -76,7 +76,9 @@ export function ConflictBanner() {
       className="flex flex-wrap items-center justify-between gap-2 border-b border-destructive/40 bg-destructive/5 px-4 py-2 text-sm"
       role="alert"
     >
-      <span>Форма изменена в другой вкладке. Обновите страницу, чтобы продолжить редактирование.</span>
+      <span>
+        Форма изменена в другой вкладке. Обновите страницу, чтобы продолжить редактирование.
+      </span>
       <button
         type="button"
         className="font-medium text-destructive underline underline-offset-2"

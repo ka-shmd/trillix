@@ -91,7 +91,15 @@ describe('марки пустой строки', () => {
   })
 
   it('чужие марки сохраняются, своя не дублируется', () => {
-    expect(applyDefaultMarks([{ t: 'а', m: ['i'] }, { t: 'б', m: ['b'] }], ['b'])).toEqual([
+    expect(
+      applyDefaultMarks(
+        [
+          { t: 'а', m: ['i'] },
+          { t: 'б', m: ['b'] },
+        ],
+        ['b'],
+      ),
+    ).toEqual([
       { t: 'а', m: ['i', 'b'] },
       { t: 'б', m: ['b'] },
     ])
@@ -158,7 +166,11 @@ describe('вставка текста в модель', () => {
 
   it('чип не разрезает: у его начала — перед ним, иначе за ним', () => {
     const chip: Span[] = [{ t: 'Имя', ref: 'q1' }, { t: ' хвост' }]
-    expect(insertText(chip, 0, '\n')).toEqual([{ t: '\n' }, { t: 'Имя', ref: 'q1' }, { t: ' хвост' }])
+    expect(insertText(chip, 0, '\n')).toEqual([
+      { t: '\n' },
+      { t: 'Имя', ref: 'q1' },
+      { t: ' хвост' },
+    ])
     expect(insertText(chip, 2, '\n')).toEqual([{ t: 'Имя', ref: 'q1' }, { t: '\n хвост' }])
   })
 

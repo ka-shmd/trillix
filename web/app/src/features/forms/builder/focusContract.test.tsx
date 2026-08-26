@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import { type FormSchema, textFromString, SCHEMA_VERSION } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -72,7 +72,13 @@ describe('контракт фокус-целей строк (§2.1)', () => {
       blocks: [
         { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'head', groupId: 'g2', type: 'heading', text: textFromString('Раздел') },
-        { id: 'cons', groupId: 'g3', type: 'consent', text: textFromString('Согласен'), required: true },
+        {
+          id: 'cons',
+          groupId: 'g3',
+          type: 'consent',
+          text: textFromString('Согласен'),
+          required: true,
+        },
       ],
     })
     for (const [id, text] of [
@@ -102,8 +108,7 @@ describe('контракт фокус-целей строк (§2.1)', () => {
         { id: 'para', groupId: 'g3', type: 'text', text: [] },
       ],
     })
-    const named = (name: string) =>
-      document.querySelector(`[data-rich-line][aria-label="${name}"]`)
+    const named = (name: string) => document.querySelector(`[data-rich-line][aria-label="${name}"]`)
     expect(named('Заголовок вопроса')).not.toBeNull()
     expect(named('Текст согласия')).not.toBeNull()
     // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
@@ -150,7 +155,12 @@ describe('контракт фокус-целей строк (§2.1)', () => {
           id: 'ch',
           groupId: 'g1',
           type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Красный' }, { id: 'o2', label: 'Синий' }] },
+          settings: {
+            options: [
+              { id: 'o1', label: 'Красный' },
+              { id: 'o2', label: 'Синий' },
+            ],
+          },
         },
       ],
     })
@@ -421,7 +431,12 @@ describe('Cmd+Shift+Backspace — явное удаление (§3.4)', () => {
     const { engine, handlers } = setup({
       schemaVersion: SCHEMA_VERSION,
       blocks: [
-        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'A' }] },
+        },
       ],
     })
     engine.focusBlock('ch', 'start')
@@ -551,7 +566,12 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     const { engine } = setup({
       schemaVersion: SCHEMA_VERSION,
       blocks: [
-        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'A' }] } },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'A' }] },
+        },
       ],
     })
     engine.focusBlock('ch', 'start')
@@ -611,7 +631,12 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
           id: 'ch',
           groupId: 'g1',
           type: 'single_choice',
-          settings: { options: [{ id: 'o1', label: 'Да' }, { id: 'o2', label: 'Нет' }] },
+          settings: {
+            options: [
+              { id: 'o1', label: 'Да' },
+              { id: 'o2', label: 'Нет' },
+            ],
+          },
         },
       ],
     })
@@ -636,7 +661,12 @@ describe('Mod+Alt+←/→ — ряд (§5, клавиатурное зеркал
           id: 'dd',
           groupId: 'g1',
           type: 'dropdown',
-          settings: { options: [{ id: 'o1', label: 'Мск' }, { id: 'o2', label: 'Спб' }] },
+          settings: {
+            options: [
+              { id: 'o1', label: 'Мск' },
+              { id: 'o2', label: 'Спб' },
+            ],
+          },
         },
       ],
     })
@@ -667,7 +697,12 @@ describe('ось колонок: каретка едет с блоком чер�
     )
     return { store, engine }
   }
-  const field = (id: string) => ({ id, groupId: `g_${id}`, type: 'short_text' as const, settings: {} })
+  const field = (id: string) => ({
+    id,
+    groupId: `g_${id}`,
+    type: 'short_text' as const,
+    settings: {},
+  })
   // Чья строка под кареткой: id блока с ближайшего предка-строки (тем же признаком строку
   // узнаёт и сам редактор — activeRow по data-block-id).
   const caretBlock = () => el().closest('[data-block-id]')?.getAttribute('data-block-id') ?? null

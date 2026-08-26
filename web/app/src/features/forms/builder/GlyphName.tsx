@@ -2,7 +2,7 @@ import { type ReactNode } from 'react'
 
 import { type BlockType } from '@entities/formSchema'
 
-import { typeIcon } from './blockTypeIcons'
+import { BlockTypeIcon } from '../../../shared/BlockTypeIcon'
 
 // «Глиф типа + имя» — общий вид пункта, который называет вопрос там, где самого вопроса
 // не видно: список источников в условной логике, пункты меню, будущие пикеры целей. Имя
@@ -10,8 +10,9 @@ import { typeIcon } from './blockTypeIcons'
 // «Короткий ответ»), поэтому глиф здесь не украшение — он единственное, что отличает
 // строку от соседней.
 //
-// Глиф берётся из реестра типов (`typeIcon`) — того же словаря, что в slash-меню, диалоге
-// добавления и в углу поля на полотне: тип выглядит одинаково везде, где о нём говорят.
+// Глиф берётся из общего словаря (`shared/blockIcons`) — того же, что в slash-меню,
+// диалоге добавления, в углу поля на полотне и в шапке колонки таблицы ответов: тип
+// выглядит одинаково везде, где о нём говорят.
 //
 // ГРУППА ПОКАЗЫВАЕТ ГЛИФ СВОЕГО ИНПУТА, а не подписи: `type` сюда передаёт вызывающий, и
 // для вопроса это тип его отвечаемого блока. У подписи собственного глифа в этой роли не
@@ -33,7 +34,7 @@ import { typeIcon } from './blockTypeIcons'
 export function GlyphName({ type, children }: { type: BlockType; children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      {typeIcon(type)}
+      <BlockTypeIcon type={type} />
       <span className="truncate">{children}</span>
     </span>
   )

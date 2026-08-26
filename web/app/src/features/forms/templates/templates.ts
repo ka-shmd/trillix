@@ -20,7 +20,16 @@ import {
 // заготовка, а не витрина возможностей редактора.
 type AnswerType = Extract<
   BlockType,
-  'short_text' | 'long_text' | 'email' | 'phone' | 'number' | 'date' | 'scale' | 'single_choice' | 'multi_choice' | 'dropdown'
+  | 'short_text'
+  | 'long_text'
+  | 'email'
+  | 'phone'
+  | 'number'
+  | 'date'
+  | 'scale'
+  | 'single_choice'
+  | 'multi_choice'
+  | 'dropdown'
 >
 
 export type TemplateItem =
@@ -97,9 +106,9 @@ export function buildTemplateSchema(template: FormTemplate): FormSchema {
 
 // questionCaptions — о чём шаблон спрашивает; карточка галереи печатает первые из них.
 export function questionCaptions(template: FormTemplate): string[] {
-  return template.items.map((i) => ('q' in i ? i.q : 'consent' in i ? i.consent : null)).filter(
-    (s): s is string => s !== null,
-  )
+  return template.items
+    .map((i) => ('q' in i ? i.q : 'consent' in i ? i.consent : null))
+    .filter((s): s is string => s !== null)
 }
 
 export const TEMPLATES: FormTemplate[] = [
@@ -191,7 +200,8 @@ export const TEMPLATES: FormTemplate[] = [
   {
     id: 'nps',
     title: 'Оценка мероприятия',
-    description: 'Одна шкала от 0 до 10 и вопрос «почему» — замер, который считают каждый раз одинаково.',
+    description:
+      'Одна шкала от 0 до 10 и вопрос «почему» — замер, который считают каждый раз одинаково.',
     items: [
       {
         q: 'Насколько вы готовы порекомендовать нас коллегам?',

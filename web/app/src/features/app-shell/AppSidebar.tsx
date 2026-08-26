@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CreditCard, FileText, LayoutTemplate, LogOut, Plus, Settings } from 'lucide-react'
+import { CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -10,9 +10,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
-import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,6 +24,15 @@ import {
 
 // Презентационная оболочка кабинета. Данные пользователя и обработчики
 // (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
+//
+// ТРИ ЯРУСА, И ПУНКТ ПОПАДАЕТ В ЯРУС ПО СВОЕМУ УРОВНЮ, А НЕ ПО ЧАСТОТЕ: вверху
+// работа («Формы», «Шаблоны»), в середине контекст (пространства), внизу аккаунт
+// (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем списке наравне
+// с «Формами» и одновременно дублировались в нижнем меню — теперь они только внизу.
+//
+// СОЗДАНИЯ ФОРМЫ В САЙДБАРЕ НЕТ (решение владельца): форма заводится там, где видно,
+// куда она ляжет, — кнопкой на дашборде и «плюсом» у пространства. Кнопка над
+// навигацией называла место неявно, текущим пространством из адреса.
 export interface AppSidebarProps {
   userEmail: string
   // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
@@ -34,10 +43,6 @@ export interface AppSidebarProps {
   // email (entities/user.ts, displayName). Считает вызывающий: сайдбар
   // презентационный и в фичи не ходит.
   userName: string
-  // «Новая форма» открывает редактор нового черновика и НЕ ждёт сервера: форму
-  // заводит первая правка (features/forms/draft.ts), поэтому состояния «Создаём…»
-  // у кнопки больше нет.
-  onCreateForm: () => void
   onLogout: () => void
   loggingOut: boolean
   // workspacesNav — блок «Пространства» готовым узлом. Он читает список с сервера
@@ -50,7 +55,6 @@ export function AppSidebar({
   userEmail,
   person,
   userName,
-  onCreateForm,
   onLogout,
   loggingOut,
   workspacesNav,
@@ -58,27 +62,26 @@ export function AppSidebar({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
   const templatesActive = pathname.startsWith('/templates')
-  const planActive = pathname.startsWith('/settings/plan')
-  const accountActive = pathname.startsWith('/settings/account')
 
   return (
     <Sidebar>
-      <SidebarHeader>
-        <div className="flex items-center px-2 py-1.5">
-          <span className="text-lg font-bold tracking-tight">Trillix</span>
+      {/* Высота шапки панели равна высоте верхнего бара (56px), а поля совпадают
+          с его левым полем: логотип и крошки обязаны стоять на одной линии — они
+          соседи по верхнему краю экрана, и разница в пару пикселей читается как
+          съехавшая вёрстка. */}
+      <SidebarHeader className="h-14 justify-center px-3 py-0">
+        <div className="flex items-center gap-2">
+          <span className="flex-1 text-base font-bold tracking-tight">Trillix</span>
+          {/* Свернуть — отсюда, из самой панели. Развернуть обратно отсюда нельзя:
+              свёрнутая панель уезжает за экран целиком (collapsible=offcanvas), и
+              кнопка уезжает вместе с ней. Обратно её возвращает та же кнопка,
+              переехавшая в верхний бар (HeaderSidebarTrigger), — она появляется
+              ровно в этом состоянии. Плюс Ctrl/Cmd+B. */}
+          <SidebarTrigger className="text-muted-foreground" />
         </div>
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <Button className="w-full justify-start gap-2" onClick={onCreateForm}>
-              <Plus className="size-4" />
-              Новая форма
-            </Button>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
@@ -95,22 +98,6 @@ export function AppSidebar({
                   <Link to="/templates">
                     <LayoutTemplate className="size-4" />
                     <span>Шаблоны</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={planActive} tooltip="Тариф">
-                  <Link to="/settings/plan">
-                    <CreditCard className="size-4" />
-                    <span>Тариф</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={accountActive} tooltip="Настройки">
-                  <Link to="/settings/account">
-                    <Settings className="size-4" />
-                    <span>Настройки</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -139,6 +126,12 @@ export function AppSidebar({
                   {userEmail}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/settings/plan">
+                    <CreditCard className="size-4" />
+                    Тариф
+                  </Link>
+                </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link to="/settings/account">
                     <Settings className="size-4" />

@@ -9,6 +9,7 @@ import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { FormCard } from '../../features/forms/FormCard'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
 import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -92,6 +93,8 @@ function FormsDashboard() {
 
   return (
     <section className="mx-auto max-w-5xl p-6">
+      {/* Путь — само пространство: дашборд и есть его список форм. */}
+      <PageCrumbs items={[workspace?.name ?? 'Формы']} />
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold tracking-tight">Мои формы</h1>
         <Button onClick={handleCreate} className="gap-2">
@@ -100,12 +103,7 @@ function FormsDashboard() {
         </Button>
       </div>
 
-      <FormsToolbar
-        q={q}
-        sort={sort}
-        onSearchChange={onSearchChange}
-        onSortChange={onSortChange}
-      />
+      <FormsToolbar q={q} sort={sort} onSearchChange={onSearchChange} onSortChange={onSortChange} />
 
       {query.isPending ? (
         <FormsSkeleton />
@@ -169,10 +167,7 @@ function FormsDashboard() {
 // Скелетоны на время первой загрузки — экран не мигает пустотой.
 function FormsSkeleton() {
   return (
-    <div
-      className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4"
-      aria-hidden="true"
-    >
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4" aria-hidden="true">
       {Array.from({ length: 6 }, (_, i) => (
         <Skeleton key={i} className="h-36 rounded-xl" />
       ))}

@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, Table2 } from 'lucide-react'
+import { useIsFetching, useQuery } from '@tanstack/react-query'
+import { AlertCircle, Loader2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
+import { integrationKeys } from './keys'
 import { pickSpreadsheet } from './picker'
+import { GoogleSheetsIcon } from './ServiceIcon'
 import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
@@ -24,6 +26,7 @@ import {
   SelectGroup,
   SelectItem,
   SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -85,6 +88,17 @@ export function GoogleSheetsOverlay({
   // возвращалась модальность.
   const setup = useSetupState(connection)
 
+  // Что-нибудь ещё едет? Считаем ТОЛЬКО списки самого окна: ключ состояния формы
+  // короче на один сегмент, и опрос переноса (раз в 3 секунды, пока связка
+  // переносит накопленные ответы) иначе моргал бы индикатором на ровном месте.
+  const loading = useIsFetching({
+    predicate: (query) => {
+      const key = query.queryKey
+      const own = integrationKeys.form(formId)
+      return key.length > own.length && key[0] === own[0] && key[1] === own[1]
+    },
+  })
+
   return (
     <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
@@ -93,12 +107,27 @@ export function GoogleSheetsOverlay({
         onInteractOutside={(e) => pickerOpen && e.preventDefault()}
         onEscapeKeyDown={(e) => pickerOpen && e.preventDefault()}
       >
-        <div className="mx-auto flex w-full max-w-lg flex-col gap-8 px-6 py-16">
+        {/* my-auto, а не justify-center у родителя: родитель прокручиваемый, и
+            центрирование через justify обрезало бы верх содержимого, когда оно выше
+            окна. Так колонка стоит посередине, пока помещается, и прокручивается,
+            когда нет. */}
+        {/* inert, а не только слой поверх: накрывающий div ловит мышь, но не мешает
+            дойти до полей табом. Атрибут выключает поддерево целиком — и для
+            указателя, и для клавиатуры, и для скринридера. Фокус при этом
+            уезжает на сам DialogContent (у него tabIndex=-1), то есть из окна не
+            выпадает. */}
+        <div
+          inert={loading > 0}
+          className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16"
+        >
           <header className="flex flex-col items-center gap-3 text-center">
-            <Table2 className="size-8 text-muted-foreground" aria-hidden />
-            <DialogTitle className="text-2xl">Google Таблицы</DialogTitle>
+            <GoogleSheetsIcon className="size-10" />
+            {/* Оверлей занимает весь экран, поэтому его заголовок берёт верхнюю
+                ступень шкалы кеглей (docs/DESIGN-SYSTEM.md). Вес остаётся тот, что
+                у DialogTitle. */}
+            <DialogTitle className="text-3xl">Google Таблицы</DialogTitle>
             <p className="text-sm text-muted-foreground">
-              Ответы этой формы будут ложиться строками в таблицу на вашем Google Диске.
+              Отправляйте ответы формы прямо в Google Таблицы.
             </p>
           </header>
 
@@ -111,6 +140,21 @@ export function GoogleSheetsOverlay({
             onPickerOpenChange={setPickerOpen}
           />
         </div>
+
+        {/* Слой поверх окна, пока едут его списки: половина настроек зависит от
+            того, что приедет (какие таблицы, какие листы), и трогать их раньше
+            значит выбирать из пустого списка. fixed, а не absolute: окно
+            прокручиваемое, и absolute уехал бы вместе с содержимым. */}
+        {loading > 0 && (
+          <div
+            className="fixed inset-0 z-10 flex items-center justify-center gap-3 bg-background/85"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
+            <span className="text-base text-muted-foreground">Загружаем данные Google…</span>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
@@ -165,7 +209,9 @@ function useSetupState(connection: FormSheet | null): SetupState {
   const [picked, setPicked] = useState<SpreadsheetRef | null>(
     // Книга связки может быть не из нашего списка (выбрана на Диске) — тогда
     // без этого пункта Select не смог бы показать выбранное.
-    connection ? { id: connection.spreadsheetId, name: connection.name || 'Текущая таблица' } : null,
+    connection
+      ? { id: connection.spreadsheetId, name: connection.name || 'Текущая таблица' }
+      : null,
   )
 
   return {
@@ -239,6 +285,7 @@ function SetupBody({
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
           id="integration-name"
+          className="h-10 md:text-base"
           value={setup.name}
           maxLength={80}
           placeholder="Необязательно — чтобы отличать связки друг от друга"
@@ -271,9 +318,11 @@ function SetupBody({
       <div className="flex items-start justify-between gap-4">
         <div>
           <Label htmlFor="integration-backfill">Перенести уже накопленные ответы</Label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Ответы, которые форма собрала раньше, уедут в таблицу сразу. У формы с тысячами
-            ответов перенос займёт время.
+          {/* Кегль тот же, что у подписи над ним: пояснение к переключателю — такой
+              же вторичный текст, а не сноска. */}
+          <p className="mt-1 text-sm text-muted-foreground">
+            Выгрузите все ответы формы в Google Таблицы. У формы с большим числом ответов выгрузка
+            займёт время.
           </p>
         </div>
         <Switch
@@ -294,7 +343,6 @@ function SetupBody({
       <Button size="lg" disabled={saving} onClick={() => save()}>
         {connection ? 'Сохранить' : 'Подключить Google Таблицы'}
       </Button>
-
     </div>
   )
 
@@ -345,7 +393,7 @@ function SheetField({
         {sheets.isError && <LoadFailed />}
       </div>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id="integration-sheet" className="w-full">
+        <SelectTrigger id="integration-sheet" className="w-full text-base data-[size=default]:h-10">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -434,35 +482,40 @@ function SpreadsheetField({
           setup.setSpreadsheet(next)
         }}
       >
-        <SelectTrigger id="integration-spreadsheet" className="w-full">
+        <SelectTrigger
+          id="integration-spreadsheet"
+          className="w-full text-base data-[size=default]:h-10"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={NEW_SPREADSHEET}>Создать новую таблицу</SelectItem>
           {known.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>Мои таблицы</SelectLabel>
-              {known.map((s) => (
-                <SelectItem key={s.id} value={s.id}>
-                  {s.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
+            <>
+              <SelectSeparator />
+              <SelectGroup>
+                <SelectLabel>Мои таблицы</SelectLabel>
+                {known.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </>
           )}
           {pickerEnabled && (
-            <SelectGroup>
-              <SelectLabel>Добавить таблицу</SelectLabel>
-              <SelectItem value={BROWSE}>
-                {opening ? 'Открываем Google Диск…' : 'Выбрать на Google Диске'}
-              </SelectItem>
-            </SelectGroup>
+            <>
+              <SelectSeparator />
+              <SelectGroup>
+                <SelectLabel>Добавить таблицу</SelectLabel>
+                <SelectItem value={BROWSE}>
+                  {opening ? 'Открываем Google Диск…' : 'Выбрать на Google Диске'}
+                </SelectItem>
+              </SelectGroup>
+            </>
           )}
         </SelectContent>
       </Select>
-      <p className="text-xs text-muted-foreground">
-        В списке — таблицы, созданные Trillix: доступа к остальным файлам Диска у нас нет.
-        Любую другую свою выберите на Google Диске.
-      </p>
     </div>
   )
 }
@@ -470,10 +523,19 @@ function SpreadsheetField({
 // ConnectionState — что сейчас со связкой. Причина поломки здесь единственное
 // место, где её видно: это не техническая деталь провайдера, а состояние того,
 // что человек настроил, и починка — в его руках (переподключить аккаунт).
+//
+// РОВНО ДВА СОСТОЯНИЯ ГОВОРЯТ ВСЛУХ: сломано и переносим. Работающая связка молчит —
+// ни «ответы будут попадать», ни «последний ответ уехал тогда-то»: первое повторяет
+// то, ради чего связку заводили, второе отвечает на вопрос, которого никто не
+// задавал, открывая настройки. Когда появится журнал доставок (BACKLOG), время
+// последней уедет туда, где его ищут.
 function ConnectionState({ connection }: { connection: FormSheet }) {
   if (connection.status === 'broken') {
     return (
-      <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm">
+      <p
+        role="alert"
+        className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+      >
         {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
       </p>
     )
@@ -485,21 +547,7 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
       </p>
     )
   }
-  return (
-    <p className="text-sm text-muted-foreground">
-      {connection.lastDeliveredAt
-        ? `Последний ответ уехал в таблицу ${formatMoment(connection.lastDeliveredAt)}.`
-        : 'Ответы будут попадать в таблицу сразу после отправки.'}
-    </p>
-  )
-}
-
-// formatMoment — «23 августа, 14:05» человеку понятнее ISO-строки, а точность до
-// минуты здесь всё, что нужно.
-function formatMoment(iso: string): string {
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return 'недавно'
-  return at.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+  return null
 }
 
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
@@ -532,17 +580,14 @@ function ConnectAccount({
 
   return (
     <div className="flex flex-col gap-5">
-      <ul className="flex flex-col gap-2 text-sm text-muted-foreground">
-        <li>• Каждый ответ ложится строкой в таблицу — через секунды после отправки.</li>
-        <li>• Уже накопленные ответы можно перенести сразу.</li>
-        <li>
-          • Мы попросим доступ только к таблицам, которые создадим сами, — остальные файлы Диска
-          останутся закрытыми.
-        </li>
-        <li>
-          • Ответы, включая персональные данные респондентов, будут передаваться в сервис Google.
-        </li>
-      </ul>
+      {/* Трансграничная передача названа ДО перехода к согласию, а не после:
+          ответы уезжают в Google (США), и продукт не делает этого молча (спека
+          design/integrations-gsheets.md §10, «Безопасность и 152-ФЗ»). Вторая
+          половина той же меры — `connected_by` в базе: запись, чьим согласием
+          ответы уезжают наружу. */}
+      <p className="text-sm text-muted-foreground">
+        Ответы, включая персональные данные респондентов, могут быть переданы в сервисы Google.
+      </p>
 
       {/* Именно <a>, а не onClick+fetch: нужен полноценный переход браузера —
           XHR за редиректом на домен Google не пойдёт. Клик пробует открыть
@@ -591,8 +636,8 @@ function ConnectedAccountField({
   return (
     <div className="flex flex-col gap-2">
       <Label>Аккаунт Google</Label>
-      <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
-        <span className="text-sm">{account.email}</span>
+      <div className="flex min-h-10 flex-wrap items-center gap-2 rounded-md border px-3 py-2">
+        <span className="text-base">{account.email}</span>
         {account.canManage && (
           <Button
             asChild
