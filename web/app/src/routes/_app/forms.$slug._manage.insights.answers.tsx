@@ -7,7 +7,7 @@ import { VisitCards } from '../../features/insights/Cards'
 import { percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
-import { formatDate, pluralAnswers } from '../../shared/format'
+import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -176,7 +176,7 @@ function Samples({ block }: { block: BlockSummary }) {
   )
 }
 
-const numberFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
+const numberFmt = new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 })
 
 function NumberStats({ block }: { block: BlockSummary }) {
   if (!block.number) {

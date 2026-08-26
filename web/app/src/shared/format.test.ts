@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { conversionPercent, formatDuration, pluralViews } from './format'
+import { conversionPercent, formatDate, formatDuration, pluralViews } from './format'
 
 describe('pluralViews', () => {
   it('склоняет по последней цифре', () => {
@@ -21,6 +21,22 @@ describe('pluralViews', () => {
 
   it('ноль — множественное', () => {
     expect(pluralViews(0)).toBe('просмотров')
+  })
+})
+
+describe('formatDate', () => {
+  // РЕГРЕССИЯ. Локаль прибита к ru-RU, а не берётся из браузера: при `undefined`
+  // дата зависела от машины читателя, и на английской системе «Aug 24, 2026»
+  // вставало посреди русского интерфейса. Тест падает на возврате к `undefined`
+  // только на нерусской машине, поэтому проверяется САМ МЕСЯЦ, а не длина строки.
+  it('пишет месяц по-русски', () => {
+    expect(formatDate('2026-08-24T10:00:00Z')).toContain('авг')
+  })
+
+  // Мусор вместо даты не роняет строку: ISO приходит с сервера, но и битое
+  // значение не должно ломать таблицу.
+  it('нечитаемую дату отдаёт прочерком', () => {
+    expect(formatDate('не дата')).toBe('—')
   })
 })
 

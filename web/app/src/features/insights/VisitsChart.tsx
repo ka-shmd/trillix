@@ -1,6 +1,7 @@
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from 'recharts'
 
 import { type BucketStep, type TimeBucket } from '../../entities/visitsBreakdown'
+import { LOCALE } from '../../shared/format'
 import {
   type ChartConfig,
   ChartContainer,
@@ -29,15 +30,15 @@ const chartConfig = {
 // короткая.
 const ENTRY_MS = 450
 
-const hourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
-const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' })
-const hourFullFmt = new Intl.DateTimeFormat(undefined, {
+const hourFmt = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit' })
+const dayFmt = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short' })
+const hourFullFmt = new Intl.DateTimeFormat(LOCALE, {
   day: 'numeric',
   month: 'short',
   hour: '2-digit',
   minute: '2-digit',
 })
-const dayFullFmt = new Intl.DateTimeFormat(undefined, {
+const dayFullFmt = new Intl.DateTimeFormat(LOCALE, {
   weekday: 'short',
   day: 'numeric',
   month: 'long',
