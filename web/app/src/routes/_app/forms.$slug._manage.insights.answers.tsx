@@ -7,7 +7,7 @@ import { VisitCards } from '../../features/insights/Cards'
 import { percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
-import { formatRelative, pluralAnswers } from '../../shared/format'
+import { formatDate, pluralAnswers } from '../../shared/format'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -169,7 +169,7 @@ function Samples({ block }: { block: BlockSummary }) {
           className="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-0"
         >
           <span className="min-w-0 break-words">{s.text}</span>
-          <span className="shrink-0 text-muted-foreground">{formatRelative(s.at)}</span>
+          <span className="shrink-0 text-muted-foreground">{formatDate(s.at)}</span>
         </li>
       ))}
     </ul>

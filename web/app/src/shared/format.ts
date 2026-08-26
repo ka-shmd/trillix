@@ -60,19 +60,3 @@ export function formatDuration(seconds: number): string {
   if (minutes < 60) return `${minutes} мин ${total % 60} с`
   return `${Math.floor(minutes / 60)} ч ${minutes % 60} мин`
 }
-
-const relativeFmt = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
-
-// «2 минуты назад» по ISO-времени. Через Intl, а не своим склонением: правила
-// множественного числа уже написаны в браузере, и писать их второй раз незачем.
-export function formatRelative(iso: string, now: Date = new Date()): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  const seconds = Math.round((d.getTime() - now.getTime()) / 1000)
-  const abs = Math.abs(seconds)
-  if (abs < 60) return relativeFmt.format(Math.round(seconds), 'second')
-  if (abs < 3600) return relativeFmt.format(Math.round(seconds / 60), 'minute')
-  if (abs < 86_400) return relativeFmt.format(Math.round(seconds / 3600), 'hour')
-  if (abs < 2_592_000) return relativeFmt.format(Math.round(seconds / 86_400), 'day')
-  return formatDate(iso)
-}
