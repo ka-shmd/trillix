@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { AlertCircle } from 'lucide-react'
+import { useIsFetching, useQuery } from '@tanstack/react-query'
+import { AlertCircle, Loader2 } from 'lucide-react'
 
 import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
+import { integrationKeys } from './keys'
 import { pickSpreadsheet } from './picker'
 import { GoogleSheetsIcon } from './ServiceIcon'
 import {
@@ -87,6 +88,17 @@ export function GoogleSheetsOverlay({
   // возвращалась модальность.
   const setup = useSetupState(connection)
 
+  // Что-нибудь ещё едет? Считаем ТОЛЬКО списки самого окна: ключ состояния формы
+  // короче на один сегмент, и опрос переноса (раз в 3 секунды, пока связка
+  // переносит накопленные ответы) иначе моргал бы индикатором на ровном месте.
+  const loading = useIsFetching({
+    predicate: (query) => {
+      const key = query.queryKey
+      const own = integrationKeys.form(formId)
+      return key.length > own.length && key[0] === own[0] && key[1] === own[1]
+    },
+  })
+
   return (
     <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
@@ -109,6 +121,17 @@ export function GoogleSheetsOverlay({
             <p className="text-sm text-muted-foreground">
               Отправляйте ответы формы прямо в Google Таблицы.
             </p>
+            {/* Место под индикатор зарезервировано всегда: колонка стоит по центру
+                по вертикали, и появляющаяся строка иначе подпрыгивала бы всем
+                содержимым. */}
+            <div className="flex h-5 items-center justify-center" aria-live="polite">
+              {loading > 0 && (
+                <span className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" aria-hidden />
+                  Загружаем данные Google…
+                </span>
+              )}
+            </div>
           </header>
 
           <SetupBody

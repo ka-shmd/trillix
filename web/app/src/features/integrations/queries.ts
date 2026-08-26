@@ -28,7 +28,7 @@ export function formIntegrationsQueryOptions(formId: string) {
 // это поход к провайдеру, и делать его на каждый показ таба незачем.
 export function spreadsheetsQueryOptions(formId: string) {
   return queryOptions({
-    queryKey: [...integrationKeys.form(formId), 'spreadsheets'] as const,
+    queryKey: integrationKeys.spreadsheets(formId),
     queryFn: () => listSpreadsheets(formId),
     staleTime: 30_000,
   })
@@ -38,7 +38,7 @@ export function spreadsheetsQueryOptions(formId: string) {
 // а не остались чужие.
 export function sheetsQueryOptions(formId: string, spreadsheetId: string) {
   return queryOptions({
-    queryKey: [...integrationKeys.form(formId), 'sheets', spreadsheetId] as const,
+    queryKey: integrationKeys.sheets(formId, spreadsheetId),
     queryFn: () => listSheets(formId, spreadsheetId),
     staleTime: 30_000,
   })

@@ -11,6 +11,21 @@ import { integrationKeys } from './keys'
 // хук окна: он отдаёт наверх исход, а тест решает, каким тот будет.
 const popup = vi.hoisted(() => ({ callbacks: [] as ((outcome: string) => void)[] }))
 
+// Список таблиц, который НИКОГДА не приезжает. Ловить «запрос в полёте» на живом
+// fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
+// проверял бы, кто успел первым. Мок трогает только один вызов; остальные тесты
+// сеют список в кэш и до него не доходят (staleTime 30 с).
+const hangingList = vi.hoisted(() => ({ enabled: false }))
+
+vi.mock('./api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./api')>()
+  return {
+    ...actual,
+    listSpreadsheets: (formId: string) =>
+      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(formId),
+  }
+})
+
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
     popup.callbacks.push(onOutcome)
@@ -81,13 +96,18 @@ function newTestClient() {
 }
 
 // Данные кладём прямо в кеш: экран проверяется по состоянию, а не по транспорту.
-function renderView(data: FormIntegrations) {
+//
+// seedSpreadsheets=false оставляет список таблиц НЕпосеянным — запрос уходит и
+// остаётся в полёте. Это единственный способ поймать состояние «что-то ещё едет»,
+// ради которого в окне есть индикатор.
+function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
-  qc.setQueryData(
-    [...integrationKeys.form(FORM_ID), 'spreadsheets'],
-    [{ id: 'ss-old', name: 'Прошлая форма' }],
-  )
+  if (seedSpreadsheets) {
+    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID), [
+      { id: 'ss-old', name: 'Прошлая форма' },
+    ])
+  }
   render(
     <QueryClientProvider client={qc}>
       <IntegrationsView formId={FORM_ID} />
@@ -194,6 +214,26 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByLabelText(/таблица/i)).toBeTruthy()
     expect(screen.getByLabelText(/перенести уже накопленные ответы/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /подключить google таблицы/i })).toBeTruthy()
+  })
+
+  it('пока списки едут — в окне виден индикатор', async () => {
+    hangingList.enabled = true
+    try {
+      renderView(state({ account: CONNECTED }), { seedSpreadsheets: false })
+      openSetup()
+
+      // Счётчик useIsFetching доезжает до родителя подпиской, а не тем же тиком.
+      await waitFor(() => expect(screen.getByText(/загружаем данные google/i)).toBeTruthy())
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  it('списки приехали — индикатора нет', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    expect(screen.queryByText(/загружаем данные google/i)).toBeNull()
   })
 
   it('аккаунт не подключён — предупреждение и вход в согласие, настроек ещё нет', () => {
