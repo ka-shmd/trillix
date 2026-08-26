@@ -14,7 +14,13 @@
    в ноль, то есть на край sRGB, где цвет ядовит и на широком гамуте уезжает.
    Правишь акцент — меряй белый НА нём, а не только его контраст к белому фону. Вторая: свои статусные цвета `--success`
    и `--warning` — у shadcn их нет, а состояния в кабинете есть (подключение
-   работает / переносит / сломано). `--success` взят ЯРКИМ (green-500): он носит смысл
+   работает / переносит / сломано).
+
+   ВТОРОЙ АКЦЕНТ — `--highlight` (фиолетовый). Он НЕ статус и НЕ действие: синий
+   значит «сюда можно нажать», зелёный/янтарный/красный заняты состояниями, а деталям
+   вроде иллюстраций нужен цвет, который ничего не обещает. Тон 300 выбран как
+   единственный свободный: он читается другим рядом с синим и не путается ни с одним
+   статусным. `--success` взят ЯРКИМ (green-500): он носит смысл
    сам, без подписи — кружок связки и включённый тумблер, — поэтому важна заметность,
    а не контраст текста на нём (для текста есть тёмный `--success-foreground`).
 
@@ -51,6 +57,8 @@
   --muted-foreground: oklch(0.545 0.014 70);
   --accent: oklch(0.97 0.005 80);
   --accent-foreground: oklch(0.32 0.012 70);
+  --highlight: oklch(0.55 0.2 300);
+  --highlight-foreground: oklch(0.985 0.004 80);
   --success: oklch(0.723 0.192 149.579);
   --success-foreground: oklch(0.266 0.065 152.934);
   --warning: oklch(0.666 0.179 58.318);
@@ -89,6 +97,8 @@
   --muted-foreground: oklch(0.72 0.014 75);
   --accent: oklch(0.29 0.007 70);
   --accent-foreground: oklch(0.96 0.005 80);
+  --highlight: oklch(0.68 0.16 300);
+  --highlight-foreground: oklch(0.19 0.006 70);
   --success: oklch(0.723 0.192 149.579);
   --success-foreground: oklch(0.266 0.065 152.934);
   --warning: oklch(0.769 0.188 70.08);
@@ -129,6 +139,8 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);

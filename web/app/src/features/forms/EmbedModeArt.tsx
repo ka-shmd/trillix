@@ -8,8 +8,9 @@ import { type EmbedMode } from './embedSnippet'
 // как раз пространственная.
 //
 // Инлайн-SVG, а не файлы: CSP прода режет чужие источники, а свой ассет тут не нужен —
-// это десяток прямоугольников. Цвета — токенами (`fill-muted`, `fill-primary/25`), так
-// что миниатюра поедет за темой вместе с остальным кабинетом.
+// это десяток прямоугольников. Цвета — токенами, так что миниатюра поедет за темой
+// вместе с остальным кабинетом. Форма закрашена ВТОРЫМ акцентом (`--highlight`), а не
+// синим: синий в кабинете значит «сюда можно нажать», а это картинка.
 //
 // aria-hidden: смысл несёт подпись под миниатюрой, а не она сама.
 export function EmbedModeArt({ mode, className }: { mode: EmbedMode; className?: string }) {
@@ -56,7 +57,7 @@ function BlockArt() {
   return (
     <>
       <PageText y={30} />
-      <rect x="16" y={72} width="112" height="42" rx="4" className="fill-primary/25" />
+      <rect x="16" y={72} width="112" height="42" rx="4" className="fill-highlight/25" />
       <rect x="16" y={124} width="126" height="4" rx="2" className="fill-muted-foreground/15" />
       <rect x="16" y={133} width="92" height="4" rx="2" className="fill-muted-foreground/15" />
     </>
@@ -70,12 +71,14 @@ function WidgetArt() {
       <PageText y={30} />
       <rect x="16" y={78} width="118" height="4" rx="2" className="fill-muted-foreground/15" />
       <rect x="16" y={87} width="98" height="4" rx="2" className="fill-muted-foreground/15" />
-      <rect x="122" y={100} width="66" height="40" rx="4" className="fill-primary/25" />
+      <rect x="122" y={100} width="66" height="40" rx="4" className="fill-highlight/25" />
     </>
   )
 }
 
-// Страницей: форма занимает окно целиком, чужого содержимого не остаётся.
+// Страницей: форма занимает окно ЦЕЛИКОМ, до краёв — чужого содержимого не остаётся
+// вовсе. Без полей и скруглений: отступ вокруг читался бы как «форма стоит на
+// странице», а вид ровно про то, что страницы под ней нет. Края режет clipPath рамки.
 function PageArt() {
-  return <rect x="10" y={26} width="180" height="114" rx="4" className="fill-primary/25" />
+  return <rect y={16} width="200" height="134" className="fill-highlight/25" />
 }

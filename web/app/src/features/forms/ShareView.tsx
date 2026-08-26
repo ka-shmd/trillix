@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { Share2 } from 'lucide-react'
+import { Copy, Share2 } from 'lucide-react'
 
 import { type Block, plainText } from '@entities/formSchema'
 import { type FormDetail, displayFormTitle } from '../../entities/form'
@@ -75,7 +75,10 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
           />
           {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
               меню действий (features/forms/copyLink.ts). */}
-          <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
+          <Button variant="utility" className="gap-2" onClick={() => copyFormLink(form.slug)}>
+            <Copy className="size-4" />
+            Копировать
+          </Button>
         </div>
       </Section>
 
