@@ -1,7 +1,8 @@
 import { Link } from '@tanstack/react-router'
 
 import { type FormDetail } from '../../entities/form'
-import { MODE_HINTS, MODE_TITLES, type EmbedMode } from './embedSnippet'
+import { MODE_TITLES, type EmbedMode } from './embedSnippet'
+import { EmbedModeArt } from './EmbedModeArt'
 import { Section } from '../../shared/page/Section'
 
 // Блок «Встроить на сайт» на «Поделиться» — ТОЛЬКО три кнопки выбора вида. Настройки,
@@ -9,9 +10,10 @@ import { Section } from '../../shared/page/Section'
 // целиком и глядя на результат, а «Поделиться» — страница про ссылку.
 const MODES: EmbedMode[] = ['block', 'widget', 'page']
 
-// Виды вставки — плитки, а не строки списка: это три РАЗНЫХ варианта, между которыми
-// выбирают. Разделяет их подложка, а не рамка (docs/DESIGN-SYSTEM.md, «плоскость
-// вместо рамки»); наведение её усиливает — плитка кликабельна целиком.
+// Виды вставки — три миниатюры с подписью: разница между ними пространственная (где
+// на чужой странице окажется форма), и картинка объясняет её быстрее строки текста.
+// Поэтому пояснений под подписями больше нет — их работу делает сама миниатюра.
+// Полный текст остался там, где картинки нет: в выпадающем списке на экране вставки.
 export function EmbedSection({ form }: { form: FormDetail }) {
   return (
     <Section title="Встроить на сайт" description="Выберите способ встроить форму на свой сайт.">
@@ -22,10 +24,17 @@ export function EmbedSection({ form }: { form: FormDetail }) {
               to="/forms/$slug/embed"
               params={{ slug: form.slug }}
               search={(prev) => ({ ...prev, mode })}
-              className="block h-full rounded-lg bg-muted/60 p-4 transition-colors hover:bg-muted"
+              className="group block rounded-lg"
             >
-              <span className="block text-base font-semibold">{MODE_TITLES[mode]}</span>
-              <span className="mt-1 block text-sm text-muted-foreground">{MODE_HINTS[mode]}</span>
+              {/* Подложка только на миниатюре: подпись стоит под ней, как у картинки,
+                  и заливка под текстом превратила бы пару в одну плитку. */}
+              <EmbedModeArt
+                mode={mode}
+                className="w-full rounded-lg transition-opacity group-hover:opacity-80"
+              />
+              <span className="mt-3 block text-center text-base font-semibold">
+                {MODE_TITLES[mode]}
+              </span>
             </Link>
           </li>
         ))}
