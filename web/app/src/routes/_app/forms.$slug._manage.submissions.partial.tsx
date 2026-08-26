@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 
+import { SubmissionsTabs } from '../../features/submissions/SubmissionsTabs'
 import { EmptyState } from '../../shared/page/states'
 
 // Вкладка «Частичные» — черновики того, что респондент набрал и не отправил
@@ -10,10 +11,15 @@ export const Route = createFileRoute('/_app/forms/$slug/_manage/submissions/part
 })
 
 function PartialSubmissionsPage() {
+  const { slug } = Route.useParams()
+
   return (
-    <EmptyState
-      title="Черновиков пока нет"
-      description="Здесь появятся ответы, которые начали заполнять и не отправили. Собирать их форма начинает, когда включён тумблер «Сохранять незавершённые ответы»."
-    />
+    <>
+      <SubmissionsTabs slug={slug} />
+      <EmptyState
+        title="Черновиков пока нет"
+        description="Здесь появятся ответы, которые начали заполнять и не отправили. Собирать их форма начинает, когда включён тумблер «Сохранять незавершённые ответы»."
+      />
+    </>
   )
 }

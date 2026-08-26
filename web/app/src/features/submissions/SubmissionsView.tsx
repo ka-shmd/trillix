@@ -6,7 +6,7 @@ import { submissionsListQueryOptions } from './queries'
 import { submissionsExportUrl } from './api'
 import { SubmissionPanel } from './SubmissionPanel'
 import { SubmissionsTable } from './SubmissionsTable'
-import { FormStats } from '../forms/FormStats'
+import { SubmissionsTabs } from './SubmissionsTabs'
 import { formDetailQueryOptions } from '../forms/queries'
 import { pluralAnswers } from '../../shared/format'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -56,6 +56,24 @@ export function SubmissionsView({ slug }: { slug: string }) {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* Счётчик и выгрузка стоят в одном ряду с вкладками: это единственные два органа
+          управления экрана, и отдельная строка под вкладками отдавала бы им целый ярус
+          страницы. Просмотры и конверсия отсюда убраны (решение владельца) — они живут
+          на карточке формы и на «Аналитике», а здесь спорили с самим списком. */}
+      <SubmissionsTabs slug={slug}>
+        {list.isSuccess && (
+          <span className="text-sm text-muted-foreground">
+            {total} {pluralAnswers(total)}
+          </span>
+        )}
+        {total > 0 && formId && (
+          // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
+          <Button asChild variant="outline" size="sm">
+            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
+          </Button>
+        )}
+      </SubmissionsTabs>
+
       {hidden > 0 && (
         <div role="status" className="rounded-lg bg-warning/10 p-4 text-sm">
           <p className="font-medium">
@@ -66,33 +84,6 @@ export function SubmissionsView({ slug }: { slug: string }) {
           </p>
         </div>
       )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          {list.isSuccess ? (
-            // Знаменатель к числу ответов: без него «12 ответов» не отличить от «12 из 900
-            // открывших» (фаза 8.5 шаг 6). У черновика просмотров нет — там остаётся голый
-            // счётчик.
-            form.data && form.data.status !== 'draft' ? (
-              <FormStats
-                visits={form.data.visitCount}
-                submittedVisits={form.data.visitSubmittedCount}
-                submissions={total}
-              />
-            ) : (
-              `${total} ${pluralAnswers(total)}`
-            )
-          ) : (
-            'Каждая строка — один заполненный ответ.'
-          )}
-        </p>
-        {total > 0 && formId && (
-          // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
-          <Button asChild variant="outline" size="sm">
-            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
-          </Button>
-        )}
-      </div>
 
       {list.isPending ? (
         <LoadingRows rows={4} />
