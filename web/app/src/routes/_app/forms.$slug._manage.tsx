@@ -57,8 +57,14 @@ function ManageLayout() {
   // название с табами прыгало бы по экрану при каждом переключении раздела. Без
   // потолка ширины идёт только таблица ответов, которой этот потолок оборачивается
   // прокруткой вбок при пустых полях по краям.
+  //
+  // Совпадение НЕЧЁТКОЕ (`fuzzy`): у раздела «Ответы» свои вкладки, и адрес всегда
+  // длиннее самого раздела (/submissions/all и далее). Точное сравнение не совпало бы
+  // ни разу, и колонка молча осталась бы обычной ширины.
   const matchRoute = useMatchRoute()
-  const contentWidth = matchRoute({ to: '/forms/$slug/submissions' }) ? 'full' : 'default'
+  const contentWidth = matchRoute({ to: '/forms/$slug/submissions', fuzzy: true })
+    ? 'full'
+    : 'default'
   const workspaceCrumb = useWorkspaceCrumb()
   // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
