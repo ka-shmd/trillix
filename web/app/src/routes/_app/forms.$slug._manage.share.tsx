@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { ShareView } from '../../features/forms/ShareView'
+import { LoadingRows } from '../../shared/page/states'
 
 // Таб «Поделиться» (/forms/$slug/share): ссылка на опубликованную форму, превью
 // карточки и управление публикацией. Данные — та же деталь формы из Query, что и у
@@ -19,7 +20,7 @@ function SharePage() {
   const query = useQuery(formDetailQueryOptions(slug))
 
   if (!query.data) {
-    return <p className="text-sm text-muted-foreground">Загрузка…</p>
+    return <LoadingRows rows={2} />
   }
   return <ShareView form={query.data} />
 }

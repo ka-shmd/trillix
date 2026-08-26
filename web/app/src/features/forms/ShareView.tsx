@@ -1,95 +1,90 @@
-import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
+import { Share2 } from 'lucide-react'
 
 import { type Block, plainText } from '@entities/formSchema'
 import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
 import { planRequiredMessage } from '../plan/planError'
+import { copyFormLink } from './copyLink'
 import { EmbedSection } from './EmbedSection'
 import { publicFormUrl, publicFormHost } from './publicUrl'
 import { usePublishForm, useUnpublishForm } from './queries'
+import { Section } from '../../shared/page/Section'
+import { EmptyState, ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
 // ShareView — содержимое таба «Поделиться» (/forms/$slug/share). Открывается после
 // публикации (редирект из шапки редактора) и табом у уже опубликованной формы.
-// Две карточки (ссылка и её превью), внизу — управление жизненным циклом
-// (перепубликация изменений, закрытие, повторная публикация закрытой).
-// Шапка формы (назад, название, статус, «Редактировать») — на оболочке _manage.
+// Колонку, заголовок формы и табы даёт оболочка _manage — здесь только разделы.
 export function ShareView({ form }: { form: FormDetail }) {
-  const link = publicFormUrl(form.slug)
-  const neverPublished = form.publishedVersion === null
   const isClosed = form.status === 'closed'
 
-  return (
-    <>
-      {neverPublished ? (
-        <div className="mx-auto mt-12 max-w-md text-center">
-          <h2 className="text-lg font-medium">Форма ещё не опубликована</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Опубликуйте её в редакторе — здесь появятся ссылка и превью.
-          </p>
-          <Button asChild className="mt-4">
-            <Link to="/forms/$slug/edit" params={{ slug: form.slug }}>
+  // Неопубликованная форма — не «страница без данных», а страница, которой ещё нет
+  // смысла: ссылки не существует, встраивать нечего, управлять нечем. Поэтому вместо
+  // пустых разделов один вход в редактор.
+  if (form.publishedVersion === null) {
+    return (
+      <EmptyState
+        icon={Share2}
+        title="Форма ещё не опубликована"
+        description="Опубликуйте её в редакторе — здесь появятся ссылка, карточка для мессенджеров и код для вставки на сайт."
+        action={
+          <Button asChild>
+            <Link to="/forms/$slug/edit" params={{ slug: form.slug }} search={(prev) => prev}>
               Открыть редактор
             </Link>
           </Button>
-        </div>
-      ) : (
-        <>
-          <div className="grid gap-4 md:grid-cols-2">
-            <LinkBlock link={link} inactive={isClosed} />
-            <PreviewBlock
-              title={displayFormTitle(form.title)}
-              host={publicFormHost()}
-              teaser={linkTeaser(form.draftSchema.blocks)}
-            />
-          </div>
-          {!isClosed && <EmbedSection form={form} />}
-          <ManageSection form={form} />
-        </>
-      )}
-    </>
-  )
-}
-
-// LinkBlock — ссылка на форму с копированием и поясняющим текстом. Закрытая форма:
-// ссылка остаётся видна, но помечаем, что приём ответов приостановлен.
-function LinkBlock({ link, inactive }: { link: string; inactive: boolean }) {
-  const [copied, setCopied] = useState(false)
-
-  const onCopy = () => {
-    navigator.clipboard
-      .writeText(link)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-      })
-      .catch(() => {
-        // Буфер недоступен — поле readonly, пользователь скопирует вручную.
-      })
+        }
+      />
+    )
   }
 
   return (
-    <div className="rounded-lg border p-5">
-      <h2 className="text-base font-medium">Ссылка на форму</h2>
-      <div className="mt-3 flex items-center gap-2">
+    <div className="flex flex-col gap-12">
+      <LinkSection form={form} inactive={isClosed} />
+      {/* Закрытой форме встраивать нечего: фрейм покажет «приём закрыт». */}
+      {!isClosed && <EmbedSection form={form} />}
+      <ManageSection form={form} />
+    </div>
+  )
+}
+
+// LinkSection — сама ссылка и то, как её увидят при пересылке. Один раздел, а не два
+// соседних: превью карточки объясняет ту же ссылку, и разводить их по разным
+// заголовкам значит спрашивать у человека, чем «Ссылка» отличается от «Как выглядит
+// ссылка».
+function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }) {
+  const link = publicFormUrl(form.slug)
+
+  return (
+    <Section
+      title="Ссылка на форму"
+      description={
+        inactive
+          ? 'Форма закрыта: по ссылке приём ответов приостановлен. Опубликуйте снова, чтобы принимать ответы.'
+          : 'Отправьте её респондентам — по ней откроется форма. Правки применяются только после повторной публикации.'
+      }
+    >
+      <div className="flex items-center gap-2">
         <Input
           readOnly
           value={link}
           aria-label="Ссылка на форму"
           onFocus={(e) => e.currentTarget.select()}
-          className="h-9 font-mono text-xs"
+          className="h-10 font-mono text-sm md:text-sm"
         />
-        <Button size="sm" onClick={onCopy}>
-          {copied ? 'Готово' : 'Копировать'}
-        </Button>
+        {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
+            меню действий (features/forms/copyLink.ts). */}
+        <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
       </div>
-      <p className="mt-3 text-sm text-muted-foreground">
-        {inactive
-          ? 'Форма закрыта: по ссылке приём ответов приостановлен. Опубликуйте снова, чтобы принимать ответы.'
-          : 'Отправьте эту ссылку респондентам — по ней откроется форма. Правки применяются только после повторной публикации.'}
-      </p>
-    </div>
+
+      <LinkPreview
+        title={displayFormTitle(form.title)}
+        host={publicFormHost()}
+        teaser={linkTeaser(form.draftSchema.blocks)}
+      />
+    </Section>
   )
 }
 
@@ -112,26 +107,25 @@ function linkTeaser(blocks: Block[]): string {
   return labels.join(' · ')
 }
 
-// PreviewBlock — предпросмотр карточки ссылки, как её строит сервер из OG-мета
+// LinkPreview — предпросмотр карточки ссылки, как её строит сервер из OG-мета
 // (internal/forms/public_page.go, страница /r/{slug}): og:title = название формы,
 // og:description = заголовки первых вопросов. Здесь — приближение того же вида
 // (сервер дополнительно отдаёт og:image); точная отрисовка зависит от площадки.
-function PreviewBlock({ title, host, teaser }: { title: string; host: string; teaser: string }) {
+function LinkPreview({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
-    <div className="rounded-lg border p-5">
-      <h2 className="text-base font-medium">Как выглядит ссылка</h2>
-      <div className="mt-3 rounded-md border bg-muted/30 p-3">
+    <div className="flex flex-col gap-2">
+      <Card className="max-w-md gap-0 bg-muted/30 p-4">
         <div className="border-l-2 border-primary pl-3">
-          <p className="truncate text-xs text-muted-foreground">{host}</p>
-          <p className="mt-0.5 font-medium">{title}</p>
-          <p className="mt-0.5 text-sm text-muted-foreground">
+          <p className="truncate text-sm text-muted-foreground">{host}</p>
+          <p className="mt-1 text-base font-semibold">{title}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
             {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
           </p>
         </div>
-      </div>
-      <p className="mt-3 text-sm text-muted-foreground">
-        Так карточка выглядит при пересылке в мессенджерах и соцсетях: сервер отдаёт og:title
-        (название) и og:description (заголовки первых вопросов). Точный вид зависит от площадки.
+      </Card>
+      <p className="text-sm text-muted-foreground">
+        Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от
+        площадки.
       </p>
     </div>
   )
@@ -148,24 +142,23 @@ function ManageSection({ form }: { form: Form }) {
   const hasChanges = form.status === 'published' && form.hasUnpublishedChanges
 
   return (
-    <div className="mt-8 rounded-lg border p-5">
-      <h2 className="text-base font-medium">Управление</h2>
-
-      {isClosed ? (
-        <>
-          <p className="mt-1 text-sm text-muted-foreground">Форма закрыта — ответы не принимаются.</p>
-          <Button className="mt-3" disabled={busy} onClick={() => publish.mutate(form.id)}>
+    <Section
+      title="Управление"
+      description={
+        isClosed
+          ? 'Форма закрыта — ответы не принимаются.'
+          : hasChanges
+            ? 'Черновик изменился — опубликованная версия отстаёт от редактора.'
+            : undefined
+      }
+    >
+      <div className="flex flex-wrap gap-2">
+        {isClosed ? (
+          <Button disabled={busy} onClick={() => publish.mutate(form.id)}>
             {publish.isPending ? 'Публикуем…' : 'Опубликовать снова'}
           </Button>
-        </>
-      ) : (
-        <>
-          {hasChanges && (
-            <p className="mt-1 text-sm text-muted-foreground">
-              Черновик изменился — опубликованная версия отстаёт от редактора.
-            </p>
-          )}
-          <div className="mt-3 flex flex-wrap gap-2">
+        ) : (
+          <>
             {hasChanges && (
               <Button disabled={busy} onClick={() => publish.mutate(form.id)}>
                 {publish.isPending ? 'Публикуем…' : 'Опубликовать изменения'}
@@ -179,23 +172,24 @@ function ManageSection({ form }: { form: Form }) {
             >
               {unpublish.isPending ? 'Закрываем…' : 'Закрыть форму'}
             </Button>
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
 
       {(publish.isError || unpublish.isError) && (
-        <p className="mt-2 text-sm text-destructive" role="alert">
-          {/* Перепубликация — вторая точка того же гейта, и общий текст про
-              заголовки вопросов на отказе по тарифу прямо врал: автор шёл чинить
-              то, что не сломано. Сообщение сервера здесь то же, что в шапке
-              редактора, и берётся одним помощником — разъехавшись, две точки
-              объясняли бы один 402 по-разному. */}
-          {planRequiredMessage(publish.error) ??
+        // Перепубликация — вторая точка того же гейта, и общий текст про заголовки
+        // вопросов на отказе по тарифу прямо врал: автор шёл чинить то, что не
+        // сломано. Сообщение сервера здесь то же, что в шапке редактора, и берётся
+        // одним помощником — разъехавшись, две точки объясняли бы один 402 по-разному.
+        <ErrorState
+          title={
+            planRequiredMessage(publish.error) ??
             (publish.isError
               ? 'Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.'
-              : 'Не удалось выполнить действие. Попробуйте ещё раз.')}
-        </p>
+              : 'Не удалось выполнить действие. Попробуйте ещё раз.')
+          }
+        />
       )}
-    </div>
+    </Section>
   )
 }
