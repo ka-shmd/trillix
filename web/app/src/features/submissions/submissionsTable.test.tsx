@@ -40,6 +40,7 @@ function renderTable(onOpen = vi.fn()) {
       columns={previewColumns(answerColumns(BLOCKS))}
       files={{}}
       showVersion={false}
+      formId="f1"
       onOpen={onOpen}
     />,
   )
@@ -82,18 +83,25 @@ describe('таблица ответов', () => {
     expect(within(screen.getAllByRole('row')[2]!).getByText('—')).toBeTruthy()
   })
 
-  it('клик по строке открывает ответ', () => {
+  it('строка сама по себе ответ не открывает', () => {
+    // Действия строки — значки в колонке даты, а не клик по всей полосе: половина
+    // ширины таблицы это текст ответа, который хочется выделить и скопировать.
     const onOpen = renderTable()
     fireEvent.click(screen.getAllByRole('row')[1]!)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('значок «открыть» открывает ответ своей строки', () => {
+    const onOpen = renderTable()
+    fireEvent.click(screen.getAllByRole('button', { name: /Открыть ответ от/ })[0]!)
+    expect(onOpen).toHaveBeenCalledTimes(1)
     expect(onOpen).toHaveBeenCalledWith(ROWS[0])
   })
 
-  it('дата — кнопка, и открывает ответ РОВНО один раз', () => {
-    // Путь к ответу с клавиатуры: клик по строке мышью её не заменяет. Клик по
-    // самой кнопке всплыл бы до строки и открыл бы окно дважды.
-    const onOpen = renderTable()
-    fireEvent.click(screen.getAllByRole('button')[0]!)
-    expect(onOpen).toHaveBeenCalledTimes(1)
-    expect(onOpen).toHaveBeenCalledWith(ROWS[0])
+  it('у каждой строки есть значок удаления', () => {
+    // Значки гаснут прозрачностью, а не display:none, — иначе они выпадают из порядка
+    // табуляции, и до удаления не добраться с клавиатуры.
+    renderTable()
+    expect(screen.getAllByRole('button', { name: /Удалить ответ от/ })).toHaveLength(ROWS.length)
   })
 })

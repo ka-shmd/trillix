@@ -120,6 +120,7 @@ function SubmissionsPage() {
               columns={previewColumns(columns)}
               files={files}
               showVersion={versionsDiffer(submissions)}
+              formId={formId ?? ''}
               onOpen={openSubmission}
             />
             {list.hasNextPage && (

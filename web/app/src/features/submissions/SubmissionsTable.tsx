@@ -1,8 +1,13 @@
+import { useState } from 'react'
+import { Eye, Trash2 } from 'lucide-react'
+
 import { type AnswerColumn } from './columns'
 import { formatAnswer } from './answerFormat'
+import { DeleteSubmissionDialog } from './DeleteSubmissionDialog'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDateTime } from '../../shared/format'
 import { type AnswerFile, type Submission } from '../../entities/submission'
+import { Button } from '@/components/ui/button'
 import {
   Table,
   TableBody,
@@ -24,8 +29,15 @@ import {
 // делает обрезку ячейки одной строкой предсказуемой — у клетки есть своя ширина, а
 // не «сколько выторговала».
 //
-// Дата — КНОПКА, а не текст: клик по строке открывает ответ, и до этого действия
-// нужен путь с клавиатуры. Заодно она же и подсказка, что строка нажимается.
+// СТРОКА НЕ НАЖИМАЕТСЯ и на наведение не красится (решение владельца). Действия строки —
+// два значка, которые проступают в колонке даты, когда курсор над строкой: открыть ответ
+// целиком и удалить.
+//
+// Значки гаснут ПРОЗРАЧНОСТЬЮ, а не `display: none`, и место занимают всегда: скрытые
+// вторым способом они выпадают из порядка табуляции, а появляющиеся в потоке — сдвигают
+// строку под курсором. Видимыми при фокусе их делает `group-focus-within`, поэтому
+// невидимой кнопки под фокусом не бывает (тот же приём, что у строки формы в обзоре
+// пространства).
 //
 // В шапке колонки стоит ГЛИФ ТИПА — тот же, что у вопроса на полотне редактора
 // (`shared/blockIcons`). Он отвечает на вопрос, которого в подписи нет: «5» в клетке —
@@ -68,78 +80,113 @@ export function SubmissionsTable({
   columns,
   files,
   showVersion,
+  formId,
   onOpen,
 }: {
   rows: Submission[]
   columns: AnswerColumn[]
   files: Record<string, AnswerFile>
   showVersion: boolean
+  formId: string
   onOpen: (s: Submission) => void
 }) {
   const lastIndex = columns.length - 1
+  // Одно окно подтверждения на таблицу, а не по окну на строку: подтверждают по одному,
+  // а сотня смонтированных диалогов — сотня порталов на пустом месте.
+  const [confirming, setConfirming] = useState<Submission | null>(null)
 
   return (
-    <div className="-mx-5 border-y sm:-mx-8">
-      <Table className="table-fixed">
-        <TableHeader>
-          <TableRow>
-            <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>Дата отправки</TableHead>
-            {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
-            {columns.map((c, i) => (
-              <TableHead
-                key={c.block.id}
-                className={`${HEAD} ${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
-              >
-                <span className="flex min-w-0 items-center gap-1.5" title={c.label}>
-                  <BlockTypeIcon type={c.block.type} className="shrink-0" />
-                  <span className="truncate">{c.label}</span>
-                </span>
-              </TableHead>
-            ))}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((s) => (
-            <TableRow key={s.id} className="cursor-pointer" onClick={() => onOpen(s)}>
-              <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
-                <button
-                  type="button"
-                  className="hover:underline"
-                  onClick={(e) => {
-                    // Клик по кнопке всплыл бы до строки и открыл ответ дважды.
-                    e.stopPropagation()
-                    onOpen(s)
-                  }}
+    <>
+      <div className="-mx-5 border-y sm:-mx-8">
+        <Table className="table-fixed">
+          <TableHeader>
+            {/* Подложка на наведении снята и у шапки: строки на неё не отвечают, и
+                подсвеченная шапка выглядела бы единственным нажимаемым местом таблицы. */}
+            <TableRow className="hover:bg-transparent dark:hover:bg-transparent">
+              <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>Дата отправки</TableHead>
+              {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
+              {columns.map((c, i) => (
+                <TableHead
+                  key={c.block.id}
+                  className={`${HEAD} ${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
                 >
-                  {formatDateTime(s.createdAt)}
-                </button>
-              </TableCell>
-              {showVersion && (
-                <TableCell className={`tabular-nums text-muted-foreground ${DIVIDER}`}>
-                  {s.formVersion}
-                </TableCell>
-              )}
-              {columns.map((c, i) => {
-                const text = formatAnswer(c.block, s.answers[c.block.id], files)
-                return (
-                  <TableCell
-                    key={c.block.id}
-                    className={`${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
-                  >
-                    {text ? (
-                      <span className="block truncate" title={text}>
-                        {text}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                )
-              })}
+                  <span className="flex min-w-0 items-center gap-1.5" title={c.label}>
+                    <BlockTypeIcon type={c.block.type} className="shrink-0" />
+                    <span className="truncate">{c.label}</span>
+                  </span>
+                </TableHead>
+              ))}
             </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+          </TableHeader>
+          <TableBody>
+            {rows.map((s) => (
+              <TableRow
+                key={s.id}
+                className="group/row hover:bg-transparent dark:hover:bg-transparent"
+              >
+                <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
+                  <div className="flex items-center gap-1">
+                    <span>{formatDateTime(s.createdAt)}</span>
+                    <span className="flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 text-muted-foreground"
+                        aria-label={`Открыть ответ от ${formatDateTime(s.createdAt)}`}
+                        title="Открыть ответ"
+                        onClick={() => onOpen(s)}
+                      >
+                        <Eye className="size-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="size-7 text-muted-foreground hover:text-destructive"
+                        aria-label={`Удалить ответ от ${formatDateTime(s.createdAt)}`}
+                        title="Удалить ответ"
+                        onClick={() => setConfirming(s)}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </span>
+                  </div>
+                </TableCell>
+                {showVersion && (
+                  <TableCell className={`tabular-nums text-muted-foreground ${DIVIDER}`}>
+                    {s.formVersion}
+                  </TableCell>
+                )}
+                {columns.map((c, i) => {
+                  const text = formatAnswer(c.block, s.answers[c.block.id], files)
+                  return (
+                    <TableCell
+                      key={c.block.id}
+                      className={`${DIVIDER} ${i === lastIndex ? EDGE_RIGHT : ''}`}
+                    >
+                      {text ? (
+                        <span className="block truncate" title={text}>
+                          {text}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                  )
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {confirming && (
+        <DeleteSubmissionDialog
+          formId={formId}
+          submission={confirming}
+          open
+          onOpenChange={(next) => !next && setConfirming(null)}
+        />
+      )}
+    </>
   )
 }
