@@ -1,5 +1,3 @@
-import { Clock } from 'lucide-react'
-
 import { type AnswerColumn } from './columns'
 import { formatAnswer } from './answerFormat'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
@@ -33,9 +31,8 @@ import {
 // (`shared/blockIcons`). Он отвечает на вопрос, которого в подписи нет: «5» в клетке —
 // это оценка по шкале, номер или выбранный вариант? Подпись вопроса при этом обрезана
 // до одной строки, и у двух похоже названных колонок глиф часто единственное отличие,
-// которое видно целиком. У даты отправки глиф свой (`Clock`), не из словаря типов: она не
-// вопрос, а отметка приёма, и календарь спутал бы её с колонкой вопроса типа «Дата», у
-// которого глиф ровно такой.
+// которое видно целиком. У ДАТЫ ОТПРАВКИ ГЛИФА НЕТ (решение владельца): он различает
+// вопросы между собой, а дата в таблице одна, и путать её не с чем.
 //
 // КОЛОНКИ ОДИНАКОВОЙ ШИРИНЫ: своей ширины не назначено ни одной, и `table-fixed` делит
 // место поровну. Назначенная в пикселях колонка на широком экране остаётся узкой
@@ -86,12 +83,7 @@ export function SubmissionsTable({
       <Table className="table-fixed">
         <TableHeader>
           <TableRow>
-            <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>
-              <span className="flex min-w-0 items-center gap-1.5">
-                <Clock className="size-4 shrink-0" aria-hidden />
-                <span className="truncate">Дата отправки</span>
-              </span>
-            </TableHead>
+            <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>Дата отправки</TableHead>
             {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
             {columns.map((c, i) => (
               <TableHead
@@ -112,7 +104,7 @@ export function SubmissionsTable({
               <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
                 <button
                   type="button"
-                  className="font-medium hover:underline"
+                  className="hover:underline"
                   onClick={(e) => {
                     // Клик по кнопке всплыл бы до строки и открыл ответ дважды.
                     e.stopPropagation()
