@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import { type Block } from '@entities/formSchema'
 
-import { JUMP_END, filterTargetTree, jumpTargetsFrom, logicBlockWarnings, targetTree } from './model'
+import {
+  JUMP_END,
+  filterTargetTree,
+  jumpTargetsFrom,
+  logicBlockWarnings,
+  targetTree,
+} from './model'
 
 // Плоский список id дерева целей — удобнее сравнивать, чем вложенную структуру.
 const ids = (tree: ReturnType<typeof targetTree>): string[] =>
@@ -31,7 +37,12 @@ const doc = (l: Block['logic'] = {}): Block[] => [
   blk('q2', 'g2', 'phone'),
   {
     ...blk('list', 'g3', 'multi_choice'),
-    settings: { options: [{ id: 'o1', label: 'Один' }, { id: 'o2', label: 'Два' }] },
+    settings: {
+      options: [
+        { id: 'o1', label: 'Один' },
+        { id: 'o2', label: 'Два' },
+      ],
+    },
   },
 ]
 
@@ -69,9 +80,7 @@ describe('дерево целей: страница → вопрос → вар�
   // Глиф — свойство ТИПА, а тип есть только у блока (решение владельца 2026-08-16).
   // Поэтому в дереве он достаётся не всем пунктам, и «кому именно» проверяется здесь.
   describe('глиф достаётся только блоку', () => {
-    const glyphs = (
-      tree: ReturnType<typeof targetTree>,
-    ): Record<string, string | undefined> =>
+    const glyphs = (tree: ReturnType<typeof targetTree>): Record<string, string | undefined> =>
       Object.fromEntries(
         tree.flatMap((p) =>
           p.items.flatMap((n) => [
@@ -218,7 +227,10 @@ describe('предупреждения блока', () => {
 
   it('правильное правило предупреждений не даёт', () => {
     expect(
-      warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', targets: ['q2cap'] }] }),
+      warn({
+        when: { blockId: 'q1', op: 'answered' },
+        then: [{ kind: 'show', targets: ['q2cap'] }],
+      }),
     ).toEqual([])
   })
 
@@ -229,7 +241,10 @@ describe('предупреждения блока', () => {
 
   it('источник ниже ЦЕЛИ — правило по этой цели не действует', () => {
     // Источник q2 стоит ниже цели q1cap: к моменту, когда решается цель, он не решён.
-    const out = warn({ when: { blockId: 'q2', op: 'answered' }, then: [{ kind: 'show', targets: ['q1cap'] }] })
+    const out = warn({
+      when: { blockId: 'q2', op: 'answered' },
+      then: [{ kind: 'show', targets: ['q1cap'] }],
+    })
     expect(out.join(' ')).toContain('ниже')
   })
 
@@ -256,7 +271,9 @@ describe('предупреждения блока', () => {
 
   it('строка вопроса — законная цель, предупреждения нет', () => {
     // Правило на строке группы прячет её одну — вопрос при этом остаётся.
-    expect(warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', targets: ['q2'] }] })).toEqual([])
+    expect(
+      warn({ when: { blockId: 'q1', op: 'answered' }, then: [{ kind: 'show', targets: ['q2'] }] }),
+    ).toEqual([])
   })
 
   it('обязателен всегда — условие ничего не меняет', () => {

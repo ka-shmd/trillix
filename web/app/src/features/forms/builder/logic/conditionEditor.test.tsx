@@ -21,9 +21,7 @@ const leaf = (blockId: string): LogicCondition => ({ blockId, op: 'answered' })
 
 function setup(value: Group) {
   const onChange = vi.fn()
-  render(
-    <ConditionEditor blocks={sources} sources={sources} value={value} onChange={onChange} />,
-  )
+  render(<ConditionEditor blocks={sources} sources={sources} value={value} onChange={onChange} />)
   return { onChange }
 }
 
@@ -98,7 +96,9 @@ describe('глиф вопроса-источника', () => {
         onChange={vi.fn()}
       />,
     )
-    const svg = screen.getByLabelText('Вопрос-источник').querySelector('[data-slot=select-value] svg')
+    const svg = screen
+      .getByLabelText('Вопрос-источник')
+      .querySelector('[data-slot=select-value] svg')
     return svg?.getAttribute('class') ?? null
   }
 

@@ -12,12 +12,7 @@ import {
 } from '@entities/formSchema'
 
 import { Button } from '@/components/ui/button'
-import {
-  Command,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command'
+import { Command, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
@@ -220,9 +215,12 @@ function buildAction(
 ): LogicAction | null {
   if (kind === 'block_submit') return { kind }
   if (kind === 'jump') return { kind, end: true }
-  const known = new Set(tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.children.map((c) => c.id)])))
+  const known = new Set(
+    tree.flatMap((p) => p.items.flatMap((n) => [n.id, ...n.children.map((c) => c.id)])),
+  )
   const kept = keep.filter((id) => known.has(id))
-  const targets = kept.length > 0 ? kept : [tree[0]?.items[0]?.id].filter((id): id is string => Boolean(id))
+  const targets =
+    kept.length > 0 ? kept : [tree[0]?.items[0]?.id].filter((id): id is string => Boolean(id))
   return targets.length > 0 ? { kind, targets } : null
 }
 
@@ -315,7 +313,6 @@ function ActionRow({
           ]}
         />
       )}
-
     </div>
   )
 }
@@ -338,7 +335,9 @@ function JumpTarget({
   return (
     <Select
       value={targets.some((t) => t.value === current) ? current : ''}
-      onValueChange={(v) => onChange(v === JUMP_END ? { kind: 'jump', end: true } : { kind: 'jump', to: v })}
+      onValueChange={(v) =>
+        onChange(v === JUMP_END ? { kind: 'jump', end: true } : { kind: 'jump', to: v })
+      }
     >
       <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Куда перейти">
         <SelectValue placeholder="Страница…" />
@@ -427,7 +426,9 @@ function TargetPicker({
           <CommandInput placeholder="Поиск" value={query} onValueChange={setQuery} />
           <CommandList className="max-h-80">
             {found.length === 0 ? (
-              <div className="text-muted-foreground py-6 text-center text-sm">Ничего не найдено</div>
+              <div className="text-muted-foreground py-6 text-center text-sm">
+                Ничего не найдено
+              </div>
             ) : (
               found.map(({ page, items }) => {
                 const pageOpen = searching || !closedPages.has(page)

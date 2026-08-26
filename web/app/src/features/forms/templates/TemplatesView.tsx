@@ -42,8 +42,8 @@ export function TemplatesView({ workspaceId }: { workspaceId?: string }) {
     <div className="mx-auto w-full max-w-5xl p-6">
       <h1 className="mb-1 text-2xl font-semibold tracking-tight">Шаблоны</h1>
       <p className="mb-6 text-sm text-muted-foreground">
-        Готовая форма вместо пустого полотна: берёте заготовку — получаете свою форму со
-        всеми вопросами, дальше правите как обычно.
+        Готовая форма вместо пустого полотна: берёте заготовку — получаете свою форму со всеми
+        вопросами, дальше правите как обычно.
       </p>
 
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -66,11 +66,7 @@ export function TemplatesView({ workspaceId }: { workspaceId?: string }) {
                   ))}
                   {rest > 0 && <li>· ещё {rest}</li>}
                 </ul>
-                <Button
-                  className="w-full"
-                  onClick={() => use(t)}
-                  disabled={create.isPending}
-                >
+                <Button className="w-full" onClick={() => use(t)} disabled={create.isPending}>
                   {pendingId === t.id ? 'Создаём…' : 'Использовать'}
                 </Button>
                 {failed && (

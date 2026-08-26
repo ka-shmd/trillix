@@ -462,8 +462,7 @@ export function SlashEditor({
     // Ответ кладётся в ref полотна, а НЕ отдаётся dnd-kit коллизией: зона не сортируемый
     // элемент, и её `over` стоил бы активному блоку трансформы (см. состояние зоны).
     const zones = args.droppableContainers.filter((c) => isRowZone(c.id))
-    const zoneHit =
-      zones.length === 0 ? [] : pointerWithin({ ...args, droppableContainers: zones })
+    const zoneHit = zones.length === 0 ? [] : pointerWithin({ ...args, droppableContainers: zones })
     zoneRef.current = zoneHit.length > 0 ? String(zoneHit[0]!.id) : null
     if (zoneRef.current !== null) {
       // Вертикальную цель гасим: она осталась от последнего кадра ВНЕ зоны, и по ней
@@ -751,36 +750,39 @@ export function SlashEditor({
   // кареткой. Предыдущий блок — картинка → удаляем её, а текущий блок с кареткой
   // остаётся на месте (у image нет textarea, встать каретке некуда). Иначе — пустой
   // текущий блок схлопываем в предыдущий с переносом фокуса.
-  const handleBackspaceAtStart = useCallback((id: string) => {
-    const blocks = readBlocks()
-    const i = blocks.findIndex((b) => b.id === id)
-    const cur = blocks[i]
-    if (!cur) return
-    const prev = blocks[i - 1]
-    if (prev?.type === 'image') {
-      // Картинка перед кареткой — удаляем её. Если текущий блок пуст, сбрасываем его к
-      // обычному тексту: под удалённой картинкой должен остаться чистый текстовый блок,
-      // а не пустое поле-вопрос. Непустой блок сохраняем как есть.
-      removeBlock(prev.id)
-      if (isBlank(cur) && cur.type !== 'text') changeBlockType(cur.id, 'text')
-      return
-    }
-    // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
-    // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
-    // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
-    // блока нет — полотно пустеет, каретка на заголовок (не в body).
-    //
-    // Каретка идёт в предыдущую СТРОКУ, а не в предыдущую остановку (`prevRow`, а не
-    // `stopNeighbor`): инпут плейсхолдера схлопывание не перескакивает — см.
-    // navigation.ts, там же и почему обход его всё-таки перескакивает.
-    if (isBlank(cur)) {
-      const prevStop = prevRow(blocks, i)
-      if (isCaptionType(cur.type)) removeGroup(id)
-      else removeBlock(id)
-      if (prevStop) engine.focusBlock(prevStop.id, 'end')
-      else focusTitle()
-    }
-  }, [readBlocks, removeBlock, removeGroup, changeBlockType, engine, focusTitle])
+  const handleBackspaceAtStart = useCallback(
+    (id: string) => {
+      const blocks = readBlocks()
+      const i = blocks.findIndex((b) => b.id === id)
+      const cur = blocks[i]
+      if (!cur) return
+      const prev = blocks[i - 1]
+      if (prev?.type === 'image') {
+        // Картинка перед кареткой — удаляем её. Если текущий блок пуст, сбрасываем его к
+        // обычному тексту: под удалённой картинкой должен остаться чистый текстовый блок,
+        // а не пустое поле-вопрос. Непустой блок сохраняем как есть.
+        removeBlock(prev.id)
+        if (isBlank(cur) && cur.type !== 'text') changeBlockType(cur.id, 'text')
+        return
+      }
+      // Пустой блок схлопываем в предыдущий (фокус в его конец). Подпись владеет
+      // группой (решение владельца): Backspace на пустой подписи сносит группу целиком
+      // (подпись + контент + поле), а не оставляет осиротевшее голое поле. Предыдущего
+      // блока нет — полотно пустеет, каретка на заголовок (не в body).
+      //
+      // Каретка идёт в предыдущую СТРОКУ, а не в предыдущую остановку (`prevRow`, а не
+      // `stopNeighbor`): инпут плейсхолдера схлопывание не перескакивает — см.
+      // navigation.ts, там же и почему обход его всё-таки перескакивает.
+      if (isBlank(cur)) {
+        const prevStop = prevRow(blocks, i)
+        if (isCaptionType(cur.type)) removeGroup(id)
+        else removeBlock(id)
+        if (prevStop) engine.focusBlock(prevStop.id, 'end')
+        else focusTitle()
+      }
+    },
+    [readBlocks, removeBlock, removeGroup, changeBlockType, engine, focusTitle],
+  )
 
   // Cmd/Ctrl+Enter (§3.2) — «действие над ответом»: из подписи/контента прыгнуть к
   // контролу ответа своей группы. choice: каретка на последний вариант (edge end), а
@@ -803,28 +805,31 @@ export function SlashEditor({
   // (решение владельца): страховка — тост с напоминанием про Ctrl+Z, а undo
   // восстанавливает группу в целости. Исход фокуса по контракту (§2.4): следующая
   // строка после группы, иначе предыдущая, иначе заголовок формы.
-  const handleDeleteBlock = useCallback((id: string) => {
-    const blocks = readBlocks()
-    const i = blocks.findIndex((b) => b.id === id)
-    const cur = blocks[i]
-    if (!cur) return
-    const isGroup = isCaptionType(cur.type)
-    // Удаляемый диапазон: подпись → вся смежная группа (regroup держит группу
-    // односвязной), иначе только этот блок. Соседей берём ДО удаления по краям
-    // диапазона — их id переживают операцию.
-    const removed = isGroup ? blocks.filter((b) => b.groupId === cur.groupId) : [cur]
-    const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
-    // Исход фокуса перескакивает лист-поля (navigation.ts): от краёв удаляемого
-    // диапазона ищем ближайшую остановку — следующую, иначе предыдущую.
-    const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down')
-    const prev = stopNeighbor(blocks, firstIdx, 'up')
-    if (isGroup) removeGroup(id)
-    else removeBlock(id)
-    if (next) engine.focusBlock(next.id, 'start')
-    else if (prev) engine.focusBlock(prev.id, 'end')
-    else focusTitle()
-    toast(isGroup ? 'Вопрос удалён' : 'Блок удалён', { description: 'Ctrl+Z — вернуть' })
-  }, [readBlocks, removeBlock, removeGroup, engine, focusTitle])
+  const handleDeleteBlock = useCallback(
+    (id: string) => {
+      const blocks = readBlocks()
+      const i = blocks.findIndex((b) => b.id === id)
+      const cur = blocks[i]
+      if (!cur) return
+      const isGroup = isCaptionType(cur.type)
+      // Удаляемый диапазон: подпись → вся смежная группа (regroup держит группу
+      // односвязной), иначе только этот блок. Соседей берём ДО удаления по краям
+      // диапазона — их id переживают операцию.
+      const removed = isGroup ? blocks.filter((b) => b.groupId === cur.groupId) : [cur]
+      const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
+      // Исход фокуса перескакивает лист-поля (navigation.ts): от краёв удаляемого
+      // диапазона ищем ближайшую остановку — следующую, иначе предыдущую.
+      const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down')
+      const prev = stopNeighbor(blocks, firstIdx, 'up')
+      if (isGroup) removeGroup(id)
+      else removeBlock(id)
+      if (next) engine.focusBlock(next.id, 'start')
+      else if (prev) engine.focusBlock(prev.id, 'end')
+      else focusTitle()
+      toast(isGroup ? 'Вопрос удалён' : 'Блок удалён', { description: 'Ctrl+Z — вернуть' })
+    },
+    [readBlocks, removeBlock, removeGroup, engine, focusTitle],
+  )
 
   // Backspace на объектной остановке (§2.2/§2.4): удалить объект, каретка — в конец
   // предыдущей строки; её нет → заголовок формы.
@@ -942,11 +947,7 @@ export function SlashEditor({
   // несёт (его несёт ряд). Позиция приезжает ПРОПОМ, а не вариантом `first:`: в боксе
   // колонки первыми стоят зоны жеста, они появляются с началом драга, и CSS-правило
   // «первый ребёнок» роняло бы вопросу интервал прямо посреди жеста.
-  const renderGroup = (
-    g: (typeof groups)[number],
-    railOff = false,
-    headOfCell = false,
-  ) => (
+  const renderGroup = (g: (typeof groups)[number], railOff = false, headOfCell = false) => (
     <GroupRow
       key={g.id}
       group={g}
@@ -1013,94 +1014,94 @@ export function SlashEditor({
                 cover ? 'pt-15 sm:pt-17' : 'pt-10 sm:pt-36'
               }`}
             >
-            {/* Оверлеи ниже — absolute ДО списка в DOM (строки positioned и рисуются
+              {/* Оверлеи ниже — absolute ДО списка в DOM (строки positioned и рисуются
           поверх), позиционирование ПРЯМОЕ, без своей анимации: rAF-замер и так даёт
           гладкие значения, а пружина, ретаргетируемая каждый кадр, копила скорость по
           движущейся цели и отскакивала на остановке. Замер гонит именно rAF, а не
           события драга: onDragMove молчит, пока активная строка доигрывает свой переход,
           и оверлей отставал бы от неё. */}
-            {/* ГОСТ ИСТОЧНИКА: копия в слоте, из которого элемент вынули. Геометрия —
+              {/* ГОСТ ИСТОЧНИКА: копия в слоте, из которого элемент вынули. Геометрия —
           лайаут-бокс слота (measureSlot), а не клиентский прямоугольник: сам элемент в
           это время едет за курсором трансформом. Ширину задаём измеренную, высоту — нет:
           копия рисуется теми же BlockField, что и оригинал, и своя высота у неё честнее
           округлённой чужой. */}
-            {sourceGhost && sourceGhostNode && (
-              <SourceSlot rect={sourceGhost}>{sourceGhostNode}</SourceSlot>
-            )}
-            {/* ЛИНИЯ ВСТАВКИ: где элемент окажется, если отпустить сейчас. Соседи с
+              {sourceGhost && sourceGhostNode && (
+                <SourceSlot rect={sourceGhost}>{sourceGhostNode}</SourceSlot>
+              )}
+              {/* ЛИНИЯ ВСТАВКИ: где элемент окажется, если отпустить сейчас. Соседи с
           2026-08-11 неподвижны (стратегия расступания снята), и место называет только
           она. Ширина линии — часть сообщения: во всю форму значит «между рядами», в
           одну колонку — «в эту колонку». Тот же слой и тот же способ позиционирования,
           что у рейла: absolute-оверлей по измеренным rect'ам, без своей анимации. */}
-            {dropLine && <DropLine rect={dropLine} />}
-            {/* Рамка-предупреждение (§4.3): строка, которая от этого дропа останется
+              {dropLine && <DropLine rect={dropLine} />}
+              {/* Рамка-предупреждение (§4.3): строка, которая от этого дропа останется
           без заголовка. Про МЕСТО вставки она, в отличие от рейла, не говорит ничего —
           только про УЩЕРБ: «отсюда уйдёт имя». */}
-            {warnFrame && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-dashed border-destructive/70"
-                style={{
-                  transform: `translate(${warnFrame.x - 10}px, ${warnFrame.y - 6}px)`,
-                  width: warnFrame.w + 20,
-                  height: warnFrame.h + 12,
-                }}
-              />
-            )}
-            {/* Логотип — уже ВНУТРИ колонки: выравнивается по её левому краю, как в
+              {warnFrame && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-0 top-0 rounded-lg border-2 border-dashed border-destructive/70"
+                  style={{
+                    transform: `translate(${warnFrame.x - 10}px, ${warnFrame.y - 6}px)`,
+                    width: warnFrame.w + 20,
+                    height: warnFrame.h + 12,
+                  }}
+                />
+              )}
+              {/* Логотип — уже ВНУТРИ колонки: выравнивается по её левому краю, как в
           рендерере. */}
-            <LogoArea formId={formId} over={Boolean(cover)} />
-            {/* group/title — якорь наведения кнопок «завести» (AddChrome): показываются
+              <LogoArea formId={formId} over={Boolean(cover)} />
+              {/* group/title — якорь наведения кнопок «завести» (AddChrome): показываются
           только при наведении на заголовок, не на всё полотно. AddChrome стоит внутри
           этой группы, а не снаружи, — иначе наведение на сами кнопки гасило бы их. */}
-            <div className="group/title">
-              <AddChrome formId={formId} onOpenDesign={onOpenDesign} />
-              {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
-            </div>
+              <div className="group/title">
+                <AddChrome formId={formId} onOpenDesign={onOpenDesign} />
+                {formTitle && <FormTitleRow block={formTitle} onEnter={focusFirstOrCreate} />}
+              </div>
 
-            {blocks.length === 0 ? (
-              <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
-            ) : (
-              <DndContext
-                sensors={sensors}
-                collisionDetection={collisionDetection}
-                // Стратегия замера и опции сенсоров — модульные константы (см. MEASURING).
-                measuring={MEASURING}
-                onDragStart={(e) => {
-                  const id = String(e.active.id)
-                  const isGroup = groupIds.has(id)
-                  setDrag({ kind: isGroup ? 'group' : 'block', activeId: id, overGroup: null })
-                  // rAF-цикл ведёт рамки (только блочный драг) И ближайшее место с гостом
-                  // источника (оба слоя: вопрос за ручку подписи встаёт в ряд ровно так
-                  // же, как одиночка), поэтому запускается всегда. Рамки внутри него сами
-                  // выходят на групповом драге — его отклик нативный.
-                  //
-                  // Слот считается один раз здесь: состав его строк за жест не меняется
-                  // (меняется только их место, а его цикл и меряет). Тащат вопрос — слот
-                  // это все его строки, тащат строку — она сама.
-                  startFrameLoop(
-                    id,
-                    isGroup ? blocks.filter((b) => b.groupId === id).map((b) => b.id) : [id],
-                  )
-                }}
-                onDragOver={(e) => {
-                  const overId = e.over ? String(e.over.id) : null
-                  // Бэйл на тот же overGroup: лишний setState = лишний ре-рендер посреди
-                  // драга (см. коммент у groupIdList, чем это опасно).
-                  setDrag((d) =>
-                    d && d.kind === 'group' && d.overGroup !== overId
-                      ? { ...d, overGroup: overId }
-                      : d,
-                  )
-                }}
-                onDragEnd={onDragEnd}
-                onDragCancel={() => {
-                  stopFrameLoop()
-                  setDrag(null)
-                }}
-              >
-                <SortableContext items={groupIdList} strategy={canvasSorting}>
-                  {/* Ритм полотна = ритм превью/рендерера (этап 13.3). ИНТЕРВАЛ НЕСЁТ САМ
+              {blocks.length === 0 ? (
+                <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
+              ) : (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={collisionDetection}
+                  // Стратегия замера и опции сенсоров — модульные константы (см. MEASURING).
+                  measuring={MEASURING}
+                  onDragStart={(e) => {
+                    const id = String(e.active.id)
+                    const isGroup = groupIds.has(id)
+                    setDrag({ kind: isGroup ? 'group' : 'block', activeId: id, overGroup: null })
+                    // rAF-цикл ведёт рамки (только блочный драг) И ближайшее место с гостом
+                    // источника (оба слоя: вопрос за ручку подписи встаёт в ряд ровно так
+                    // же, как одиночка), поэтому запускается всегда. Рамки внутри него сами
+                    // выходят на групповом драге — его отклик нативный.
+                    //
+                    // Слот считается один раз здесь: состав его строк за жест не меняется
+                    // (меняется только их место, а его цикл и меряет). Тащат вопрос — слот
+                    // это все его строки, тащат строку — она сама.
+                    startFrameLoop(
+                      id,
+                      isGroup ? blocks.filter((b) => b.groupId === id).map((b) => b.id) : [id],
+                    )
+                  }}
+                  onDragOver={(e) => {
+                    const overId = e.over ? String(e.over.id) : null
+                    // Бэйл на тот же overGroup: лишний setState = лишний ре-рендер посреди
+                    // драга (см. коммент у groupIdList, чем это опасно).
+                    setDrag((d) =>
+                      d && d.kind === 'group' && d.overGroup !== overId
+                        ? { ...d, overGroup: overId }
+                        : d,
+                    )
+                  }}
+                  onDragEnd={onDragEnd}
+                  onDragCancel={() => {
+                    stopFrameLoop()
+                    setDrag(null)
+                  }}
+                >
+                  <SortableContext items={groupIdList} strategy={canvasSorting}>
+                    {/* Ритм полотна = ритм превью/рендерера (этап 13.3). ИНТЕРВАЛ НЕСЁТ САМ
                 ЭЛЕМЕНТ — это его ВЕРХНИЙ отступ, «место передо мной», а не gap
                 контейнера (2026-08-13, см. .rf-form в fields.css): 12px у ряда
                 и у вопроса в колонке = .rf-form, те же 12px внутри вопроса даёт строка
@@ -1116,78 +1117,78 @@ export function SlashEditor({
                 py-1.5 строк в вертикаль НЕ входит (там -mb-1.5 и укороченный на
                 столько же mt, см. BlockRow), поэтому просвет здесь — чистый контент и
                 совпадает с превью замером (критерий 13.3 — ноль расхождений). */}
-                  {/* Ряды — НАСТОЯЩИЕ контейнеры (а не flex-wrap с шириной в 50%, как было
+                    {/* Ряды — НАСТОЯЩИЕ контейнеры (а не flex-wrap с шириной в 50%, как было
                 до появления стопок): правая колонка ряда может держать НЕСКОЛЬКО
                 групп друг под другом (§5), а wrap уложил бы третью полуширинную li
                 в начало новой строки, а не в стопку. Разметка теперь совпадает с
                 превью и рендерером один в один: .rf-row → .rf-cell → группы.
                 DOM-порядок = порядок документа, sortable-вселенная не тронута —
                 обёртки не заводят вложенных SortableContext, только лэйаут. */}
-                  <ol className="mt-[calc(1.5rem*var(--rf-density)_+_1.5rem)] flex flex-col">
-                    {rows.map((row, rowIndex) => {
-                      const rowId = row[0]![0]!.id
-                      // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
-                      // полоса ряда неподвижна, её края = края холста при любом
-                      // содержимом, тогда как край группы зависит от того, что внутри.
-                      // Ряд узнаёт себя по СОСТАВУ, а не по адресу: адресом зоны служит
-                      // любой участник, кроме перетаскиваемого (см. inviteRowId), тогда
-                      // как key ряда обязан оставаться стабильным — иначе смена адреса
-                      // посреди драга ремаунтила бы весь ряд.
-                      const zones = hasGroup(row, inviteRow)
-                      // Колонок в ряду СЕЙЧАС — от этого зависит, какие зоны показывать:
-                      // границ на одну больше, чем колонок, а подвал есть у каждой
-                      // колонки настоящей секции (у полноширинного ряда колонок нет, и
-                      // «в стопку» там значить нечему — placeInRow такой дроп отвергнет).
-                      // Границы гаснут на потолке: обещать колонку, которой не будет,
-                      // нельзя.
-                      const cols = row.length
-                      const canAdd = cols < MAX_COLUMNS
-                      // ДУБЛЁРА ЗДЕСЬ БОЛЬШЕ НЕТ (решение владельца 2026-08-12). Пока
-                      // курсор стоял в зоне, ряд перестраивался в секцию и будущее место
-                      // занимала тусклая копия перетаскиваемого — показ результата вместо
-                      // отклика. Ушёл он вместе с последней причиной, по которой полотно
-                      // во время драга вообще что-то двигало: раскладка теперь неподвижна
-                      // целиком, а место называют линия (§5.2) и полоса взятой зоны.
-                      // Доли колонок — тем же правилом и тем же раскладчиком, что у
-                      // превью и рендерера. Полотно рисует их inline `flexGrow`, а не
-                      // переменной `--rf-cell-grow`: ячейка здесь своя (Tailwind), класса
-                      // .rf-cell на ней нет, а жест правит именно это свойство напрямую,
-                      // минуя стор (columnResize).
-                      const widths = groupRowWidths(row)
-                      const cellNodes = row.map((c, i) => (
-                        <div
-                          key={c[0]!.id}
-                          // self-start — ЯЧЕЙКА ОБНИМАЕТ СВОЁ СОДЕРЖИМОЕ, а не тянется на
-                          // высоту ряда. Флексовый `stretch` растягивает короткую колонку
-                          // до низа секции, и её подвал — зона «встань в стопку» — уезжает
-                          // под ВЕСЬ ряд, за чужую колонку: автор целится под свой
-                          // единственный вопрос, а зона этажом ниже. Вида это не меняет
-                          // (ячейка ничего не рисует, дети и так лежат сверху), но это
-                          // осознанное расхождение с `.rf-cell` рендерера — там растяжение
-                          // безвредно, зон нет.
-                          // Вертикального зазора у колонки нет: интервал стопки несут сами
-                          // вопросы (mt у li в GroupRow), как .rf-cell у превью.
-                          className="relative flex min-w-0 flex-1 flex-col self-start"
-                          style={{ flexGrow: widths?.[i] }}
-                          // Ячейка ряда для жеста ширины: по этой метке ручка находит
-                          // колонки своего ряда, не считая соседями зоны драга. Только у
-                          // НАСТОЯЩЕЙ секции: метка снимает потолок поля (fields.css), а
-                          // у полноширинного вопроса он в силе — иначе полотно показывало
-                          // бы поле шире, чем превью и респондент.
-                          {...(cols > 1 ? { 'data-rf-cell': '' } : {})}
-                        >
-                          {/* Ручка ширины — в жёлобе слева от колонки; у первой её нет
+                    <ol className="mt-[calc(1.5rem*var(--rf-density)_+_1.5rem)] flex flex-col">
+                      {rows.map((row, rowIndex) => {
+                        const rowId = row[0]![0]!.id
+                        // Приглашение висит на РЯДЕ, а не на группе, и это не косметика:
+                        // полоса ряда неподвижна, её края = края холста при любом
+                        // содержимом, тогда как край группы зависит от того, что внутри.
+                        // Ряд узнаёт себя по СОСТАВУ, а не по адресу: адресом зоны служит
+                        // любой участник, кроме перетаскиваемого (см. inviteRowId), тогда
+                        // как key ряда обязан оставаться стабильным — иначе смена адреса
+                        // посреди драга ремаунтила бы весь ряд.
+                        const zones = hasGroup(row, inviteRow)
+                        // Колонок в ряду СЕЙЧАС — от этого зависит, какие зоны показывать:
+                        // границ на одну больше, чем колонок, а подвал есть у каждой
+                        // колонки настоящей секции (у полноширинного ряда колонок нет, и
+                        // «в стопку» там значить нечему — placeInRow такой дроп отвергнет).
+                        // Границы гаснут на потолке: обещать колонку, которой не будет,
+                        // нельзя.
+                        const cols = row.length
+                        const canAdd = cols < MAX_COLUMNS
+                        // ДУБЛЁРА ЗДЕСЬ БОЛЬШЕ НЕТ (решение владельца 2026-08-12). Пока
+                        // курсор стоял в зоне, ряд перестраивался в секцию и будущее место
+                        // занимала тусклая копия перетаскиваемого — показ результата вместо
+                        // отклика. Ушёл он вместе с последней причиной, по которой полотно
+                        // во время драга вообще что-то двигало: раскладка теперь неподвижна
+                        // целиком, а место называют линия (§5.2) и полоса взятой зоны.
+                        // Доли колонок — тем же правилом и тем же раскладчиком, что у
+                        // превью и рендерера. Полотно рисует их inline `flexGrow`, а не
+                        // переменной `--rf-cell-grow`: ячейка здесь своя (Tailwind), класса
+                        // .rf-cell на ней нет, а жест правит именно это свойство напрямую,
+                        // минуя стор (columnResize).
+                        const widths = groupRowWidths(row)
+                        const cellNodes = row.map((c, i) => (
+                          <div
+                            key={c[0]!.id}
+                            // self-start — ЯЧЕЙКА ОБНИМАЕТ СВОЁ СОДЕРЖИМОЕ, а не тянется на
+                            // высоту ряда. Флексовый `stretch` растягивает короткую колонку
+                            // до низа секции, и её подвал — зона «встань в стопку» — уезжает
+                            // под ВЕСЬ ряд, за чужую колонку: автор целится под свой
+                            // единственный вопрос, а зона этажом ниже. Вида это не меняет
+                            // (ячейка ничего не рисует, дети и так лежат сверху), но это
+                            // осознанное расхождение с `.rf-cell` рендерера — там растяжение
+                            // безвредно, зон нет.
+                            // Вертикального зазора у колонки нет: интервал стопки несут сами
+                            // вопросы (mt у li в GroupRow), как .rf-cell у превью.
+                            className="relative flex min-w-0 flex-1 flex-col self-start"
+                            style={{ flexGrow: widths?.[i] }}
+                            // Ячейка ряда для жеста ширины: по этой метке ручка находит
+                            // колонки своего ряда, не считая соседями зоны драга. Только у
+                            // НАСТОЯЩЕЙ секции: метка снимает потолок поля (fields.css), а
+                            // у полноширинного вопроса он в силе — иначе полотно показывало
+                            // бы поле шире, чем превью и респондент.
+                            {...(cols > 1 ? { 'data-rf-cell': '' } : {})}
+                          >
+                            {/* Ручка ширины — в жёлобе слева от колонки; у первой её нет
                               (границы слева от ряда не существует). Во время драга не
                               рисуется вовсе: полотно в этот момент не отвечает на
                               наведение (§5), и линия обещала бы жест, которого нет. */}
-                          {i > 0 && drag === null && (
-                            <ColumnResizer
-                              index={i}
-                              gutter={ROW_GUTTER}
-                              onCommit={(next) => setRowWidths(row[0]![0]!.blocks[0]!.id, next)}
-                            />
-                          )}
-                          {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
+                            {i > 0 && drag === null && (
+                              <ColumnResizer
+                                index={i}
+                                gutter={ROW_GUTTER}
+                                onCommit={(next) => setRowWidths(row[0]![0]!.blocks[0]!.id, next)}
+                              />
+                            )}
+                            {/* Зоны колонки живут в ЕЁ боксе: внутренняя граница — в
                               жёлобе слева от неё, подвал — под ней. Первая колонка
                               границы не показывает: слева от неё внешняя полоса, у
                               которой для этого есть поле полотна.
@@ -1195,36 +1196,36 @@ export function SlashEditor({
                               droppable нечем поймать. Видно при этом РОВНО ОДНУ, ту, что
                               под курсором: показывается зона не сама по себе, а когда взята
                               (§5.1). */}
-                          {zones && i > 0 && i < cols && canAdd && (
-                            <GapDropZone
-                              id={rowZoneId(inviteRow!, i + 1, true)}
-                              hot={zoneHot(i + 1, true)}
-                              gutter={ROW_GUTTER}
-                            />
-                          )}
-                          {zones && cols > 1 && i < cols && (
-                            <FootDropZone
-                              id={rowZoneId(inviteRow!, i + 1, false)}
-                              hot={zoneHot(i + 1, false)}
-                              gutter={ROW_GUTTER}
-                            />
-                          )}
-                          {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
-                        </div>
-                      ))
-                      return (
-                        // Фрагмент несёт key ряда, потому что ПЕРЕД рядом со страницей
-                        // «Спасибо» встаёт кнопка отправки — ровно там, где её увидит
-                        // респондент. Страницы «Спасибо» нет — фрагмент пуст, разметка
-                        // прежняя.
-                        <Fragment key={rowId}>
-                          {nav.byRow.has(rowIndex) && (
-                            <PageNavRow
-                              nav={nav.byRow.get(rowIndex)!}
-                              breakId={nav.byRow.get(rowIndex)!.breakId}
-                            />
-                          )}
-                          {/* Ряд — контейнер ВСЕГДА, даже об одном вопросе: он якорь зон и
+                            {zones && i > 0 && i < cols && canAdd && (
+                              <GapDropZone
+                                id={rowZoneId(inviteRow!, i + 1, true)}
+                                hot={zoneHot(i + 1, true)}
+                                gutter={ROW_GUTTER}
+                              />
+                            )}
+                            {zones && cols > 1 && i < cols && (
+                              <FootDropZone
+                                id={rowZoneId(inviteRow!, i + 1, false)}
+                                hot={zoneHot(i + 1, false)}
+                                gutter={ROW_GUTTER}
+                              />
+                            )}
+                            {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
+                          </div>
+                        ))
+                        return (
+                          // Фрагмент несёт key ряда, потому что ПЕРЕД рядом со страницей
+                          // «Спасибо» встаёт кнопка отправки — ровно там, где её увидит
+                          // респондент. Страницы «Спасибо» нет — фрагмент пуст, разметка
+                          // прежняя.
+                          <Fragment key={rowId}>
+                            {nav.byRow.has(rowIndex) && (
+                              <PageNavRow
+                                nav={nav.byRow.get(rowIndex)!}
+                                breakId={nav.byRow.get(rowIndex)!.breakId}
+                              />
+                            )}
+                            {/* Ряд — контейнер ВСЕГДА, даже об одном вопросе: он якорь зон и
                         единственный бокс, чья геометрия не зависит от того, что внутри.
                         Мобильный — стек, тот же брейкпоинт (sm=640), что у .rf-row в
                         fields.css: иначе полколонки остались бы и на телефоне, где у
@@ -1238,55 +1239,55 @@ export function SlashEditor({
                         вертикали (.rf-row), поэтому на мобильном, где ряд разваливается
                         в стек, зазор не меняется — как и у .rf-row в fields.css. Оба
                         множатся на --rf-density, как и там. */}
-                        <div
-                          className={`relative flex flex-col gap-[calc(0.75rem*var(--rf-density))] sm:flex-row ${
-                            rowIndex === 0 ? '' : spaceMt(rowSpace(row))
-                          } ${rowSpaceBelow(row)}`}
-                        >
-                          {zones && canAdd && (
-                            <SideDropZone
-                              id={rowZoneId(inviteRow!, 1, true)}
-                              side="left"
-                              railOff={zoneRailOff}
-                              hot={zoneHot(1, true)}
-                            />
-                          )}
-                          {zones && canAdd && (
-                            <SideDropZone
-                              id={rowZoneId(inviteRow!, cols + 1, true)}
-                              side="right"
-                              railOff={zoneRailOff}
-                              hot={zoneHot(cols + 1, true)}
-                            />
-                          )}
-                          {cellNodes}
-                        </div>
-                        </Fragment>
-                      )
-                    })}
-                  </ol>
-                </SortableContext>
-              </DndContext>
-            )}
+                            <div
+                              className={`relative flex flex-col gap-[calc(0.75rem*var(--rf-density))] sm:flex-row ${
+                                rowIndex === 0 ? '' : spaceMt(rowSpace(row))
+                              } ${rowSpaceBelow(row)}`}
+                            >
+                              {zones && canAdd && (
+                                <SideDropZone
+                                  id={rowZoneId(inviteRow!, 1, true)}
+                                  side="left"
+                                  railOff={zoneRailOff}
+                                  hot={zoneHot(1, true)}
+                                />
+                              )}
+                              {zones && canAdd && (
+                                <SideDropZone
+                                  id={rowZoneId(inviteRow!, cols + 1, true)}
+                                  side="right"
+                                  railOff={zoneRailOff}
+                                  hot={zoneHot(cols + 1, true)}
+                                />
+                              )}
+                              {cellNodes}
+                            </div>
+                          </Fragment>
+                        )
+                      })}
+                    </ol>
+                  </SortableContext>
+                </DndContext>
+              )}
 
-            <BlockTypeDialog
-              open={insertOpen}
-              onOpenChange={setInsertOpen}
-              onPick={handlePickInsertType}
-            />
+              <BlockTypeDialog
+                open={insertOpen}
+                onOpenChange={setInsertOpen}
+                onPick={handlePickInsertType}
+              />
 
-            <ShortcutSheet
-              ctx={sheet.ctx}
-              filters={sheet.filters}
-              open={sheet.open}
-              onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
-            />
+              <ShortcutSheet
+                ctx={sheet.ctx}
+                filters={sheet.filters}
+                open={sheet.open}
+                onOpenChange={(open) => setSheet((s) => ({ ...s, open }))}
+              />
 
-            {/* Кнопок у пустого полотна нет: отправлять нечего, а единственный элемент
+              {/* Кнопок у пустого полотна нет: отправлять нечего, а единственный элемент
           страницы уводил бы внимание с приглашения начать (EmptyStarter). Появляются с
           первым же блоком — но НЕ здесь, если форма кончается страницей «Спасибо»: тогда
           кнопки нарисованы выше её разрыва (pageNavPlan.tail === null). */}
-            {blocks.length > 0 && nav.tail && <PageNavRow nav={nav.tail} />}
+              {blocks.length > 0 && nav.tail && <PageNavRow nav={nav.tail} />}
             </div>
           </div>
         </ActiveRowValueProvider>
@@ -1614,9 +1615,7 @@ const GroupRow = memo(function GroupRow({
       // вместе с линией вставки.
       className={`group/grp relative w-full rounded-md ${
         headOfCell ? '' : spaceMt(groupSpace(group.blocks))
-      } ${
-        isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''
-      }`}
+      } ${isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''}`}
     >
       {/* Рейл — постоянная идентичность группы (§4.3): тонкая линия в левом
           жёлобе, в покое проявляется по hover/focus-within всей группы; во время
@@ -1724,9 +1723,7 @@ const GroupRow = memo(function GroupRow({
               <div
                 key={innerRow[0]![0]!.id}
                 className={
-                  pair
-                    ? 'flex items-center gap-[calc(0.75rem*var(--rf-density))]'
-                    : 'contents'
+                  pair ? 'flex items-center gap-[calc(0.75rem*var(--rf-density))]' : 'contents'
                 }
               >
                 {innerRow.map((cell, i) => (
@@ -1974,9 +1971,8 @@ function EmptyStarter({
           утилиты»). Класс на элементе виден, отступа нет. */}
       <div className="mt-8">
         <p className="rf-text max-w-prose">
-          Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>,
-          чтобы вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой
-          вопрос.
+          Trillix — конструктор форм, который работает как документ. Печатайте <Kbd>/</Kbd>, чтобы
+          вставить блок, и <Kbd>@</Kbd>, чтобы подставить в текст ответ на другой вопрос.
         </p>
       </div>
     </div>

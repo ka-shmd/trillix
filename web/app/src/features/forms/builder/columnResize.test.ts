@@ -53,7 +53,10 @@ describe('nextWidths', () => {
   })
 
   it('упор в предел с другой стороны', () => {
-    expect(nextWidths([50, 50], 1, -95)).toEqual([MIN_COLUMN_WIDTH, COLUMN_WIDTH_TOTAL - MIN_COLUMN_WIDTH])
+    expect(nextWidths([50, 50], 1, -95)).toEqual([
+      MIN_COLUMN_WIDTH,
+      COLUMN_WIDTH_TOTAL - MIN_COLUMN_WIDTH,
+    ])
   })
 
   it('пара теснее двух минимумов — жест ничего не двигает', () => {

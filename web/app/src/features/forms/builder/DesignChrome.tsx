@@ -175,7 +175,12 @@ export function LogoRow({ formId }: { formId: FormIdSource }) {
         {logo ? (
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
-              <ChromeButton id="chrome-logo" title="Логотип" busy={upload.progress !== null} className="w-8">
+              <ChromeButton
+                id="chrome-logo"
+                title="Логотип"
+                busy={upload.progress !== null}
+                className="w-8"
+              >
                 <img src={mediaSrc(logo.imageKey)} alt="" className="size-full object-cover" />
               </ChromeButton>
             </PopoverTrigger>
@@ -286,26 +291,26 @@ export function CoverRow({ formId }: { formId: FormIdSource }) {
             </ChromeButton>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-64">
-          <MenuItem
-            onClick={() => {
-              setOpen(false)
-              upload.pick()
-            }}
-          >
-            <ImagePlus className="size-4" /> {cover?.imageKey ? 'Заменить картинку' : 'Картинка…'}
-          </MenuItem>
-          {/* Тот же выборщик, что на полотне и у цветов оформления: обложка красится
+            <MenuItem
+              onClick={() => {
+                setOpen(false)
+                upload.pick()
+              }}
+            >
+              <ImagePlus className="size-4" /> {cover?.imageKey ? 'Заменить картинку' : 'Картинка…'}
+            </MenuItem>
+            {/* Тот же выборщик, что на полотне и у цветов оформления: обложка красится
               одним жестом и той же палитрой, где бы её ни красили. */}
-          <ColorPicker
-            initial={cover?.color ?? DEFAULT_COVER_COLOR}
-            swatches={COVER_COLORS}
-            removeLabel="Убрать обложку"
-            onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
-            onRemove={() => {
-              setOpen(false)
-              setCover(undefined)
-            }}
-          />
+            <ColorPicker
+              initial={cover?.color ?? DEFAULT_COVER_COLOR}
+              swatches={COVER_COLORS}
+              removeLabel="Убрать обложку"
+              onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
+              onRemove={() => {
+                setOpen(false)
+                setCover(undefined)
+              }}
+            />
           </PopoverContent>
         </Popover>
       </Cell>

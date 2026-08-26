@@ -1,11 +1,19 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { CopyPlus, Link2, MoreHorizontal, Pencil, TextCursorInput, Trash2 } from 'lucide-react'
+import {
+  CircleSlash,
+  CopyPlus,
+  Link2,
+  MoreHorizontal,
+  Pencil,
+  TextCursorInput,
+  Trash2,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { type Form, displayFormName } from '../../entities/form'
 import { copyFormLink } from './copyLink'
-import { useDeleteForm, useDuplicateForm, useUpdateFormName } from './queries'
+import { useDeleteForm, useDuplicateForm, useUnpublishForm, useUpdateFormName } from './queries'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,6 +61,7 @@ export function FormActionsMenu({
   const rename = useUpdateFormName()
   const duplicate = useDuplicateForm()
   const remove = useDeleteForm()
+  const unpublish = useUnpublishForm()
   const [renaming, setRenaming] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const label = displayFormName(form)
@@ -64,6 +73,17 @@ export function FormActionsMenu({
     duplicate.mutate(form.id, {
       onSuccess: (copy) => toast.success(`Создана копия «${displayFormName(copy)}»`),
       onError: () => toast.error('Не удалось создать копию'),
+    })
+  }
+
+  // Закрытие приёма ответов живёт ЗДЕСЬ, а не на «Поделиться»: раздел «Управление»
+  // оттуда убран, а это было его единственное место во всём кабинете. Обратное
+  // действие — публикация — есть в редакторе (PublishControls той же кнопкой
+  // открывает закрытую форму), поэтому дублировать её в меню незачем.
+  function handleUnpublish() {
+    unpublish.mutate(form.id, {
+      onSuccess: () => toast.success(`Форма «${label}» закрыта — ответы не принимаются`),
+      onError: () => toast.error('Не удалось закрыть форму'),
     })
   }
 
@@ -112,6 +132,14 @@ export function FormActionsMenu({
             <CopyPlus className="size-4" />
             {duplicate.isPending ? 'Дублируем…' : 'Дублировать'}
           </DropdownMenuItem>
+          {/* Закрыть можно только принимающую ответы: у черновика приёма ещё нет, у
+              закрытой он уже остановлен. */}
+          {form.status === 'published' && (
+            <DropdownMenuItem onSelect={handleUnpublish} disabled={unpublish.isPending}>
+              <CircleSlash className="size-4" />
+              {unpublish.isPending ? 'Закрываем…' : 'Закрыть приём ответов'}
+            </DropdownMenuItem>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             variant="destructive"

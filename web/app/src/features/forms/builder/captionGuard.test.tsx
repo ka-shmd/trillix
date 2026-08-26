@@ -43,9 +43,9 @@ function setup(schema: FormSchema = QUESTION) {
 }
 
 // Опции последнего тоста — второй аргумент вызова.
-const lastToastOptions = () => vi.mocked(toast).mock.calls.at(-1)?.[1] as
-  | { action?: { label: string; onClick: () => void } }
-  | undefined
+const lastToastOptions = () =>
+  vi.mocked(toast).mock.calls.at(-1)?.[1] as
+    { action?: { label: string; onClick: () => void } } | undefined
 
 describe('captionGuard', () => {
   it('перенос поля из вопроса называет жертву тостом', () => {

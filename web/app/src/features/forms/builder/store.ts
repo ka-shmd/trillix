@@ -64,15 +64,7 @@ const newOptionId = (): string => `opt_${crypto.randomUUID()}`
 // required. Стор про семантику правил не знает, ему хватает того, что это поле
 // документа.
 export type BlockPatch = Partial<
-  Pick<
-    Block,
-    | 'text'
-    | 'name'
-    | 'required'
-    | 'settings'
-    | 'logic'
-    | 'class'
-  >
+  Pick<Block, 'text' | 'name' | 'required' | 'settings' | 'logic' | 'class'>
 >
 
 // Чем вызвана правка — знает только вызывающий, и стору это нужно ровно для одного:
@@ -1923,7 +1915,9 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           cells.forEach((cell, i) => {
             for (const id of cell) width.set(id, widths[i]!)
           })
-          const blocks = s.blocks.map((b) => withWidth(b, width.get(b.id) ?? b.settings?.columnWidth))
+          const blocks = s.blocks.map((b) =>
+            withWidth(b, width.get(b.id) ?? b.settings?.columnWidth),
+          )
           // Правка НЕ структурная: состав, порядок и колонки те же, меняется только
           // пропорция — regroup и уборке битов здесь делать нечего.
           return blocks.some((b, i) => b !== s.blocks[i]) ? { blocks } : null

@@ -7,7 +7,10 @@ import { handleRowKeys, type RowKeyEvent, type RowKeySpec } from './rowKeys'
 // устной традицией, которую каждая из четырёх поверхностей выводила заново — и одна
 // уже выводила неточно (рукописная заплата `!chords.moveGroup(e)` в плейсхолдере).
 
-const key = (code: string, mods: Partial<RowKeyEvent> = {}): RowKeyEvent & { prevented: number } => {
+const key = (
+  code: string,
+  mods: Partial<RowKeyEvent> = {},
+): RowKeyEvent & { prevented: number } => {
   const e = {
     code,
     key: code,

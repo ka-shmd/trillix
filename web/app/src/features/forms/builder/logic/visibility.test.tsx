@@ -120,9 +120,7 @@ describe('превью: варианты, страницы и кнопка', () 
   it('скрытый вариант не рисуется в списке', () => {
     const blocks: Block[] = [
       ...choice('pet', 'Кто у вас?'),
-      logicBlock('L', answered('pet', 'yes'), [
-        { kind: 'show', targets: ['leash'] },
-      ]),
+      logicBlock('L', answered('pet', 'yes'), [{ kind: 'show', targets: ['leash'] }]),
       {
         id: 't_stuff',
         groupId: 'g_stuff',

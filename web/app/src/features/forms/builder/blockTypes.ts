@@ -76,16 +76,14 @@ export const MENU_ITEMS: ReadonlyArray<MenuItem> = BLOCK_GROUP_ORDER.flatMap((gr
       }
       return [
         base,
-        ...(kind.variants ?? []).map(
-          (v): MenuItem => ({
-            ...base,
-            key: `${base.key}_${v.key}`,
-            label: v.label,
-            description: `${v.description}${GROUP_SUFFIX[group]}`,
-            icon: v.icon,
-            preset: v.defaults,
-          }),
-        ),
+        ...(kind.variants ?? []).map((v): MenuItem => ({
+          ...base,
+          key: `${base.key}_${v.key}`,
+          label: v.label,
+          description: `${v.description}${GROUP_SUFFIX[group]}`,
+          icon: v.icon,
+          preset: v.defaults,
+        })),
       ]
     }),
 )

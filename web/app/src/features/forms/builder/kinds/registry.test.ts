@@ -42,10 +42,9 @@ describe('реестр редактора сходится с контракто
         carriesText(t),
       )
       expect(row.surface === 'choice', 'поверхность вариантов ⟺ choice-тип').toBe(isChoiceType(t))
-      expect(
-        row.surface === 'placeholder',
-        'поверхность плейсхолдера ⟺ тип его поддерживает',
-      ).toBe(supportsPlaceholder(t))
+      expect(row.surface === 'placeholder', 'поверхность плейсхолдера ⟺ тип его поддерживает').toBe(
+        supportsPlaceholder(t),
+      )
     })
   }
 

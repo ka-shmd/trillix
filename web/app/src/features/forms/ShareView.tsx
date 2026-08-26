@@ -2,14 +2,12 @@ import { Link } from '@tanstack/react-router'
 import { Share2 } from 'lucide-react'
 
 import { type Block, plainText } from '@entities/formSchema'
-import { type Form, type FormDetail, displayFormTitle } from '../../entities/form'
-import { planRequiredMessage } from '../plan/planError'
+import { type FormDetail, displayFormTitle } from '../../entities/form'
 import { copyFormLink } from './copyLink'
 import { EmbedSection } from './EmbedSection'
 import { publicFormUrl, publicFormHost } from './publicUrl'
-import { usePublishForm, useUnpublishForm } from './queries'
 import { Section } from '../../shared/page/Section'
-import { EmptyState, ErrorState } from '../../shared/page/states'
+import { EmptyState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -44,7 +42,6 @@ export function ShareView({ form }: { form: FormDetail }) {
       <LinkSection form={form} inactive={isClosed} />
       {/* Закрытой форме встраивать нечего: фрейм покажет «приём закрыт». */}
       {!isClosed && <EmbedSection form={form} />}
-      <ManageSection form={form} />
     </div>
   )
 }
@@ -56,18 +53,24 @@ export function ShareView({ form }: { form: FormDetail }) {
 function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }) {
   const link = publicFormUrl(form.slug)
 
+  // Превью стоит СЛЕВА ОТ ВСЕГО раздела, а не внутри него: колонки заведены выше
+  // Section, поэтому карточка начинается на уровне заголовка, а не под ним.
   return (
-    <Section
-      title="Ссылка на форму"
-      description={
-        inactive
-          ? 'Форма закрыта: по ссылке приём ответов приостановлен. Опубликуйте снова, чтобы принимать ответы.'
-          : 'Отправьте её респондентам — по ней откроется форма. Правки применяются только после повторной публикации.'
-      }
-    >
-      {/* Ссылка слева, её вид справа: превью объясняет то, что стоит рядом, и под
-          полем оно читалось бы как следующий шаг, а не как пояснение. */}
-      <div className="grid gap-6 md:grid-cols-2 md:items-start">
+    <div className="grid gap-8 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)] md:items-start">
+      <LinkPreview
+        title={displayFormTitle(form.title)}
+        host={publicFormHost()}
+        teaser={linkTeaser(form.draftSchema.blocks)}
+      />
+
+      <Section
+        title="Ссылка на форму"
+        description={
+          inactive
+            ? 'Форма закрыта: по ссылке приём ответов приостановлен. Опубликуйте её снова в редакторе, чтобы принимать ответы.'
+            : 'Форма опубликована и готова к отправке. Скопируйте ссылку, чтобы поделиться ею в соцсетях, мессенджерах или по почте.'
+        }
+      >
         <div className="flex items-center gap-2">
           <Input
             readOnly
@@ -80,14 +83,8 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
               меню действий (features/forms/copyLink.ts). */}
           <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
         </div>
-
-        <LinkPreview
-          title={displayFormTitle(form.title)}
-          host={publicFormHost()}
-          teaser={linkTeaser(form.draftSchema.blocks)}
-        />
-      </div>
-    </Section>
+      </Section>
+    </div>
   )
 }
 
@@ -133,68 +130,5 @@ function LinkPreview({ title, host, teaser }: { title: string; host: string; tea
         площадки.
       </p>
     </div>
-  )
-}
-
-// ManageSection — управление жизненным циклом опубликованной формы. Те же мутации,
-// что раньше жили в поповере шапки: перепубликация изменившегося черновика и
-// закрытие; у закрытой — повторная публикация.
-function ManageSection({ form }: { form: Form }) {
-  const publish = usePublishForm()
-  const unpublish = useUnpublishForm()
-  const busy = publish.isPending || unpublish.isPending
-  const isClosed = form.status === 'closed'
-  const hasChanges = form.status === 'published' && form.hasUnpublishedChanges
-
-  return (
-    <Section
-      title="Управление"
-      description={
-        isClosed
-          ? 'Форма закрыта — ответы не принимаются.'
-          : hasChanges
-            ? 'Черновик изменился — опубликованная версия отстаёт от редактора.'
-            : undefined
-      }
-    >
-      <div className="flex flex-wrap gap-2">
-        {isClosed ? (
-          <Button disabled={busy} onClick={() => publish.mutate(form.id)}>
-            {publish.isPending ? 'Публикуем…' : 'Опубликовать снова'}
-          </Button>
-        ) : (
-          <>
-            {hasChanges && (
-              <Button disabled={busy} onClick={() => publish.mutate(form.id)}>
-                {publish.isPending ? 'Публикуем…' : 'Опубликовать изменения'}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              className="text-destructive hover:text-destructive"
-              disabled={busy}
-              onClick={() => unpublish.mutate(form.id)}
-            >
-              {unpublish.isPending ? 'Закрываем…' : 'Закрыть форму'}
-            </Button>
-          </>
-        )}
-      </div>
-
-      {(publish.isError || unpublish.isError) && (
-        // Перепубликация — вторая точка того же гейта, и общий текст про заголовки
-        // вопросов на отказе по тарифу прямо врал: автор шёл чинить то, что не
-        // сломано. Сообщение сервера здесь то же, что в шапке редактора, и берётся
-        // одним помощником — разъехавшись, две точки объясняли бы один 402 по-разному.
-        <ErrorState
-          title={
-            planRequiredMessage(publish.error) ??
-            (publish.isError
-              ? 'Не удалось опубликовать. Проверьте, что у вопросов есть заголовки, а у вариантов — текст.'
-              : 'Не удалось выполнить действие. Попробуйте ещё раз.')
-          }
-        />
-      )}
-    </Section>
   )
 }

@@ -164,9 +164,8 @@ export function PublishControls({
           <AlertDialogHeader>
             <AlertDialogTitle>В форме есть элементы платной подписки</AlertDialogTitle>
             <AlertDialogDescription>
-              Чтобы опубликовать эту форму, нужна подписка. Задействовано:{' '}
-              {blocked.join(', ')}. Черновик сохраняется и правится на любом тарифе —
-              платной остаётся только публикация.
+              Чтобы опубликовать эту форму, нужна подписка. Задействовано: {blocked.join(', ')}.
+              Черновик сохраняется и правится на любом тарифе — платной остаётся только публикация.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

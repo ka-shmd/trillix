@@ -14,10 +14,7 @@ const MODES: EmbedMode[] = ['block', 'widget', 'page']
 // вместо рамки»); наведение её усиливает — плитка кликабельна целиком.
 export function EmbedSection({ form }: { form: FormDetail }) {
   return (
-    <Section
-      title="Встроить на сайт"
-      description="Форма встанет прямо на вашу страницу, ответы придут сюда же. Выберите вид — дальше можно будет настроить его и посмотреть на результат."
-    >
+    <Section title="Встроить на сайт" description="Выберите способ встроить форму на свой сайт.">
       <ul className="grid gap-4 sm:grid-cols-3">
         {MODES.map((mode) => (
           <li key={mode}>

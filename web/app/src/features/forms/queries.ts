@@ -5,13 +5,21 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { formKeys } from './keys'
-import { createForm, deleteForm, duplicateForm, getFormBySlug, listForms, publishForm, unpublishForm, updateCloseSettings, updateCollectPartial, updateFormName, updateNotifyOnSubmission } from './api'
-import { saveDraftSchema } from './builder/api'
 import {
-  type CloseSettingsInput,
-  type FormDetail,
-  type FormsSort,
-} from '../../entities/form'
+  createForm,
+  deleteForm,
+  duplicateForm,
+  getFormBySlug,
+  listForms,
+  publishForm,
+  unpublishForm,
+  updateCloseSettings,
+  updateCollectPartial,
+  updateFormName,
+  updateNotifyOnSubmission,
+} from './api'
+import { saveDraftSchema } from './builder/api'
+import { type CloseSettingsInput, type FormDetail, type FormsSort } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
@@ -74,7 +82,6 @@ export function useCreateForm() {
     onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
   })
 }
-
 
 // Переименование внутреннего имени (дашборд). Как и rename заголовка, двигает
 // updated_at — патчим detail (name + updatedAt), чтобы не словить 409 автосейва.

@@ -64,8 +64,8 @@ function canvasWith(store: ReturnType<typeof createBuilderStore>) {
 
 // Доли ряда так, как их видит браузер: у превью — переменная, у полотна — flex-grow.
 const previewGrow = (form: Element): string[] =>
-  [...form.querySelectorAll(':scope > .rf-row > .rf-cell')].map(
-    (c) => (c as HTMLElement).style.getPropertyValue('--rf-cell-grow'),
+  [...form.querySelectorAll(':scope > .rf-row > .rf-cell')].map((c) =>
+    (c as HTMLElement).style.getPropertyValue('--rf-cell-grow'),
   )
 
 const canvasGrow = (container: Element): string[] =>
@@ -110,10 +110,9 @@ describe('доли колонок доезжают до разметки', () =>
       ),
     )
     const cells = form.querySelectorAll(':scope > .rf-group > .rf-row > .rf-cell')
-    expect([...cells].map((c) => (c as HTMLElement).style.getPropertyValue('--rf-cell-grow'))).toEqual([
-      '35',
-      '65',
-    ])
+    expect(
+      [...cells].map((c) => (c as HTMLElement).style.getPropertyValue('--rf-cell-grow')),
+    ).toEqual(['35', '65'])
   })
 })
 

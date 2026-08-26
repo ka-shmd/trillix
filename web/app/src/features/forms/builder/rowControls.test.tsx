@@ -5,16 +5,12 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
-import { type Block, type FormSchema, textFromString, SCHEMA_VERSION} from '@entities/formSchema'
+import { type Block, type FormSchema, textFromString, SCHEMA_VERSION } from '@entities/formSchema'
 import { carriesText, isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
-import {
-  ActiveRowApiProvider,
-  ActiveRowValueProvider,
-  useActiveRowState,
-} from './activeRow'
+import { ActiveRowApiProvider, ActiveRowValueProvider, useActiveRowState } from './activeRow'
 import { BlockRow } from './BlockRow'
 
 // Кто чем управляет на полотне (§4 EDITOR + §4.1 спеки фазы 15): кластер значков
@@ -103,8 +99,7 @@ function setup(schema: FormSchema, groupHandle: GroupHandle | null = null) {
 }
 
 // row — корень строки блока (у него data-block-id, см. BlockRow).
-const row = (id: string) =>
-  within(document.querySelector(`[data-block-id="${id}"]`) as HTMLElement)
+const row = (id: string) => within(document.querySelector(`[data-block-id="${id}"]`) as HTMLElement)
 
 // controls — подписи кнопок кластера, найденные в строке. Кластер спрятан прозрачностью
 // (а не размонтирован), поэтому «нет значков» — это именно отсутствие кнопок в DOM.
@@ -345,9 +340,20 @@ describe('голая строка ответа', () => {
     schemaVersion: SCHEMA_VERSION,
     blocks: [
       { id: 'txt', groupId: 'g1', type: 'short_text', settings: {} },
-      { id: 'ok', groupId: 'g2', type: 'consent', text: textFromString('Согласен'), required: true },
+      {
+        id: 'ok',
+        groupId: 'g2',
+        type: 'consent',
+        text: textFromString('Согласен'),
+        required: true,
+      },
       { id: 'cap', groupId: 'g3', type: 'title', text: textFromString('Откуда узнали?') },
-      { id: 'ch', groupId: 'g3', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+      {
+        id: 'ch',
+        groupId: 'g3',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Да' }] },
+      },
     ],
   }
 
@@ -356,10 +362,21 @@ describe('голая строка ответа', () => {
     const focus = vi.spyOn(engine, 'focusBlock')
 
     engine.focusBlock('txt')
-    fireEvent.keyDown(document.activeElement!, { code: 'KeyT', key: 't', ctrlKey: true, altKey: true })
+    fireEvent.keyDown(document.activeElement!, {
+      code: 'KeyT',
+      key: 't',
+      ctrlKey: true,
+      altKey: true,
+    })
 
     const blocks = store.getState().blocks
-    expect(blocks.map((b) => b.type)).toEqual(['title', 'short_text', 'consent', 'title', 'single_choice'])
+    expect(blocks.map((b) => b.type)).toEqual([
+      'title',
+      'short_text',
+      'consent',
+      'title',
+      'single_choice',
+    ])
     // Подпись встала НАД полем и склеилась с ним в вопрос (regroup).
     expect(blocks[0]!.groupId).toBe(blocks[1]!.groupId)
     expect(focus).toHaveBeenLastCalledWith(blocks[0]!.id, 'end')
@@ -370,7 +387,12 @@ describe('голая строка ответа', () => {
     const before = store.getState().blocks
 
     engine.focusBlock('ch')
-    fireEvent.keyDown(document.activeElement!, { code: 'KeyT', key: 't', ctrlKey: true, altKey: true })
+    fireEvent.keyDown(document.activeElement!, {
+      code: 'KeyT',
+      key: 't',
+      ctrlKey: true,
+      altKey: true,
+    })
 
     // Ни блока, ни шага истории: жест не обещан, значит и не сработал.
     expect(store.getState().blocks).toBe(before)
@@ -382,7 +404,12 @@ describe('голая строка ответа', () => {
     const before = store.getState().blocks
 
     engine.focusBlock('ok')
-    fireEvent.keyDown(document.activeElement!, { code: 'KeyT', key: 't', ctrlKey: true, altKey: true })
+    fireEvent.keyDown(document.activeElement!, {
+      code: 'KeyT',
+      key: 't',
+      ctrlKey: true,
+      altKey: true,
+    })
 
     expect(store.getState().blocks).toBe(before)
   })
@@ -450,7 +477,6 @@ describe('звёздочка обязательности', () => {
     setup(REQUIRED)
     expect(controls('para')).not.toContain(STAR)
   })
-
 })
 
 describe('значки варианта', () => {
@@ -578,7 +604,12 @@ describe('значки варианта', () => {
       schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'cap', groupId: 'g1', type: 'title', text: textFromString('Откуда узнали?') },
-        { id: 'ch', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+        {
+          id: 'ch',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да' }] },
+        },
       ],
     })
     row('ch').getByLabelText('Удалить вариант').click()

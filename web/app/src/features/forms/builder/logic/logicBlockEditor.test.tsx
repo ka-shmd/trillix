@@ -51,7 +51,10 @@ describe('ярус «Тогда»', () => {
   })
 
   it('кнопки «+ Действие» под списком больше нет', () => {
-    setup({ when: { blockId: 'src', op: 'answered' }, then: [{ kind: 'show', targets: ['t_dep'] }] })
+    setup({
+      when: { blockId: 'src', op: 'answered' },
+      then: [{ kind: 'show', targets: ['t_dep'] }],
+    })
     const labels = screen
       .queryAllByRole('button')
       .map((b) => b.textContent?.trim())
@@ -60,7 +63,10 @@ describe('ярус «Тогда»', () => {
   })
 
   it('крестика в конце строки больше нет — удаление уехало в меню', () => {
-    setup({ when: { blockId: 'src', op: 'answered' }, then: [{ kind: 'show', targets: ['t_dep'] }] })
+    setup({
+      when: { blockId: 'src', op: 'answered' },
+      then: [{ kind: 'show', targets: ['t_dep'] }],
+    })
     expect(screen.queryByLabelText('Удалить действие')).toBeNull()
     expect(rowMenus()).toHaveLength(1)
   })
@@ -68,10 +74,7 @@ describe('ярус «Тогда»', () => {
   it('меню стоит у каждого заполненного действия', () => {
     setup({
       when: { blockId: 'src', op: 'answered' },
-      then: [
-        { kind: 'show', targets: ['t_dep'] },
-        { kind: 'block_submit' },
-      ],
+      then: [{ kind: 'show', targets: ['t_dep'] }, { kind: 'block_submit' }],
     })
     expect(rowMenus()).toHaveLength(2)
   })

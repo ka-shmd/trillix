@@ -5,7 +5,11 @@ import { toast } from 'sonner'
 import { isHttpUrl, MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
 import { ApiError } from '../../../shared/api/errors'
-import { useUpdateCloseSettings, useUpdateCollectPartial, useUpdateNotifyOnSubmission } from '../queries'
+import {
+  useUpdateCloseSettings,
+  useUpdateCollectPartial,
+  useUpdateNotifyOnSubmission,
+} from '../queries'
 
 import { InstantSwitch } from './InstantSwitch'
 import { useBuilderStore } from './storeContext'
@@ -149,7 +153,12 @@ export function FormSettings({
 
   return (
     <section aria-label="Настройки формы" className="mx-auto max-w-2xl px-5 pb-16 pt-10 sm:px-8">
-      <Button variant="ghost" size="sm" className="-ml-2 gap-1.5 text-muted-foreground" onClick={back}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-2 gap-1.5 text-muted-foreground"
+        onClick={back}
+      >
         <ArrowLeft className="size-4" /> Назад к редактору
       </Button>
 
@@ -158,9 +167,9 @@ export function FormSettings({
       <section className="mt-8 border-t pt-6">
         <h2 className="text-sm font-medium">После отправки</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Что респондент увидит, когда отправит ответ. Нужен экран посложнее — соберите
-          страницу «Спасибо» на полотне: включите тумблер на последнем разрыве страницы, и
-          она заменит этот текст.
+          Что респондент увидит, когда отправит ответ. Нужен экран посложнее — соберите страницу
+          «Спасибо» на полотне: включите тумблер на последнем разрыве страницы, и она заменит этот
+          текст.
         </p>
 
         <Label htmlFor="thank-you-text" className="mt-4 block text-sm font-medium">
@@ -275,7 +284,10 @@ export function FormSettings({
         />
 
         <div className="mt-6 flex items-center gap-3">
-          <Button onClick={saveClose} disabled={!closeDirty || limitInvalid || updateClose.isPending}>
+          <Button
+            onClick={saveClose}
+            disabled={!closeDirty || limitInvalid || updateClose.isPending}
+          >
             {updateClose.isPending ? 'Сохраняем…' : 'Сохранить'}
           </Button>
           <span
@@ -328,8 +340,8 @@ export function FormSettings({
       <section className="mt-8 border-t pt-6">
         <h2 className="text-sm font-medium">Незавершённые ответы</h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          Форма запомнит набранное, даже если человек её не отправит. Респондент
-          увидит об этом предупреждение.
+          Форма запомнит набранное, даже если человек её не отправит. Респондент увидит об этом
+          предупреждение.
         </p>
 
         {/* Единственный тумблер продукта, который включает СБОР данных, а не их

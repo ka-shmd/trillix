@@ -79,7 +79,9 @@ function ColorButton({ current }: { current: string }) {
 // под форму того, что накрываем: у логотипа она круглая (см. LogoArea).
 function ProgressOverlay({ pct, className = '' }: { pct: number; className?: string }) {
   return (
-    <div className={`absolute inset-0 flex items-center justify-center bg-background/60 ${className}`}>
+    <div
+      className={`absolute inset-0 flex items-center justify-center bg-background/60 ${className}`}
+    >
       <div className="w-2/3 max-w-40">
         <div className="h-1.5 overflow-hidden rounded-full bg-muted">
           <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
