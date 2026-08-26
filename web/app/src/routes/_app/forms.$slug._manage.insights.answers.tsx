@@ -19,9 +19,9 @@ import { Button } from '@/components/ui/button'
 // наблюдения и карточки — на оболочке раздела «Аналитика».
 //
 // Агрегат считает сервер — сюда приходят только счётчики (сырые ответы в браузер не
-// выгружаются). Вопросы стоят В ДВЕ КОЛОНКИ и на подложке, а не в рамках: у
-// распределения из трёх вариантов половина ширины страницы уходит в пустоту, а рамка
-// вокруг каждого превращает список вопросов в список коробок.
+// выгружаются). Вопросы идут ОДНОЙ колонкой и без подложки: список вопросов читают
+// сверху вниз, в том порядке, в каком их видел респондент, а вторая колонка ломает
+// этот порядок пополам. Разделяет вопросы воздух, а не коробка.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
   component: SummaryPage,
 })
@@ -69,7 +69,7 @@ function SummaryPage() {
             description="В опубликованных версиях формы нет вопросов. Сами ответы доступны в таблице."
           />
         ) : (
-          <div className="grid gap-x-8 gap-y-6 @3xl:grid-cols-2">
+          <div className="flex flex-col gap-8">
             {summary.data.blocks.map((b) => (
               <BlockCard key={b.blockId} block={b} total={total} slug={slug} />
             ))}
@@ -82,7 +82,7 @@ function SummaryPage() {
 
 function BlockCard({ block, total, slug }: { block: BlockSummary; total: number; slug: string }) {
   return (
-    <article className="flex flex-col gap-3 rounded-lg bg-muted/40 p-4">
+    <article className="flex flex-col gap-3">
       <div>
         <h3 className="font-semibold">{block.label}</h3>
         <p className="mt-1 text-sm text-muted-foreground">
