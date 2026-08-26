@@ -118,29 +118,39 @@ describe('ShareChart', () => {
         ]}
       />,
     )
-    // Секторы кольца здесь НЕ проверяются: recharts рисует их анимацией, а первый
-    // кадр в happy-dom не наступает — слой остаётся пустым. В браузере он не пустой
-    // (проверено тем же тестом с выключенной анимацией). Осмысленная часть кольца
-    // всё равно наша: подписи и доли рядом с ним.
-    expect(container.querySelector('.recharts-pie')).toBeTruthy()
+    expect(container.querySelectorAll('.recharts-pie-sector')).toHaveLength(2)
     expect(getByText('3 · 75 %')).toBeTruthy()
   })
 
   // Восемь строк — потолок секторов. Ровно восемь ещё помещаются целиком, и
   // «Прочее» на них появляться не должно: пустая группа это лишний сектор.
   it('восемь строк показывает целиком, без «Прочего»', () => {
-    const { queryByText, getAllByRole } = render(<ShareChart rows={rows(8)} />)
+    const { container, queryByText, getAllByRole } = render(<ShareChart rows={rows(8)} />)
     expect(queryByText('Прочее')).toBeNull()
     expect(getAllByRole('listitem')).toHaveLength(8)
+    expect(container.querySelectorAll('.recharts-pie-sector')).toHaveLength(8)
+  })
+
+  // Соседние сектора обязаны быть РАЗНОГО тона: восемь ступеней одного синего
+  // человек не различает, и кольцо перестаёт отвечать на вопрос, ради которого его
+  // смотрят. Тест ловит и вырождение палитры, и её расхождение с числом секторов.
+  it('красит каждый сектор своим тоном', () => {
+    const { container } = render(<ShareChart rows={rows(8)} />)
+    const fills = [...container.querySelectorAll('.recharts-sector')].map((n) =>
+      n.getAttribute('fill'),
+    )
+    expect(fills).toHaveLength(8)
+    expect(new Set(fills).size).toBe(8)
   })
 
   it('девятую и дальше сворачивает в «Прочее» с их суммой', () => {
     // 12 строк: 12+11+…+1 = 78 всего, хвост (строки 9..12) = 4+3+2+1 = 10.
     // Число ищем ВНУТРИ строки «Прочее»: у третьей строки визитов ровно столько же,
     // и поиск по тексту нашёл бы обе.
-    const { getAllByRole } = render(<ShareChart rows={rows(12)} />)
+    const { container, getAllByRole } = render(<ShareChart rows={rows(12)} />)
     const items = getAllByRole('listitem')
     expect(items).toHaveLength(9)
+    expect(container.querySelectorAll('.recharts-pie-sector')).toHaveLength(9)
     const other = items.at(-1)
     expect(other?.textContent).toContain('Прочее')
     expect(other?.textContent).toContain('10 · 13 %')

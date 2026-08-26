@@ -94,7 +94,9 @@ export function FunnelChart({ funnel }: { funnel: FormFunnel }) {
             />
           }
         />
-        <Bar dataKey="reached" fill="var(--color-reached)" radius={3}>
+        {/* 450 мс вместо полутора секунд по умолчанию: воронка рисуется раз на
+            заход, но полтора секунды въезда приходится пересиживать. */}
+        <Bar dataKey="reached" fill="var(--color-reached)" radius={3} animationDuration={450}>
           <LabelList
             dataKey="caption"
             position="right"

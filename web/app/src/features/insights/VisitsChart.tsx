@@ -15,13 +15,19 @@ import {
 // «столько людей открыло форму за эту корзину». Парой столбиков целое пришлось бы
 // складывать глазом.
 //
-// Цвета — пара `--chart-1`/`--chart-2`: один тон в двух светлотах, то есть «целое и
-// его часть». Категориальные тона (3–5) здесь были бы неправдой — это не две разные
-// категории визитов, а одна с выделенной долей.
+// Цвета — пара `--chart-1`/`--chart-1-soft`: один тон в двух светлотах, то есть
+// «целое и его часть». Категориальный набор колец (`--chart-2..8`) здесь был бы
+// неправдой: это не две разные категории визитов, а одна с выделенной долей.
 const chartConfig = {
   submitted: { label: 'С ответом', color: 'var(--chart-1)' },
-  rest: { label: 'Без ответа', color: 'var(--chart-2)' },
+  rest: { label: 'Без ответа', color: 'var(--chart-1-soft)' },
 } satisfies ChartConfig
+
+// Въезд столбиков. У recharts по умолчанию 1500 мс — это не появление графика, а
+// самостоятельный номер, который приходится пересиживать. График по времени стоит
+// вне вкладок и рисуется раз на заход, поэтому анимация у него остаётся, но
+// короткая.
+const ENTRY_MS = 450
 
 const hourFmt = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' })
 const dayFmt = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short' })
@@ -80,8 +86,19 @@ export function VisitsChart({ buckets, step }: { buckets: TimeBucket[]; step: Bu
         {/* Отправившие — В ОСНОВАНИИ столбика: доля, ради которой график и смотрят,
             стоит на оси и сравнивается между корзинами по одной линии. Закругление
             только у верхнего сегмента — иначе шов посреди столбика. */}
-        <Bar dataKey="submitted" stackId="visits" fill="var(--color-submitted)" />
-        <Bar dataKey="rest" stackId="visits" fill="var(--color-rest)" radius={[3, 3, 0, 0]} />
+        <Bar
+          dataKey="submitted"
+          stackId="visits"
+          fill="var(--color-submitted)"
+          animationDuration={ENTRY_MS}
+        />
+        <Bar
+          dataKey="rest"
+          stackId="visits"
+          fill="var(--color-rest)"
+          radius={[3, 3, 0, 0]}
+          animationDuration={ENTRY_MS}
+        />
       </BarChart>
     </ChartContainer>
   )
