@@ -6,7 +6,6 @@ import type { Workspace } from '../entities/workspace'
 import { NEW_FORM_SLUG } from '../features/forms/draft'
 import { formKeys } from '../features/forms/keys'
 import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
-import { useCurrentWorkspace } from '../features/workspaces/current'
 import { useMemo, useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
@@ -32,7 +31,6 @@ function AppLayout() {
   const { data: user } = useQuery(meQueryOptions)
   const logout = useLogout()
   const qc = useQueryClient()
-  const currentWorkspace = useCurrentWorkspace()
   // DOM-узлы двух половин верхнего бара: слева путь, справа действия. Страницы
   // порталят в них через PageCrumbs/PageActions (shared/page/headerPortals.tsx).
   const [headerLeft, setHeaderLeft] = useState<HTMLElement | null>(null)
@@ -47,29 +45,10 @@ function AppLayout() {
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
   if (!user) return null
 
-  // «Новая форма» НИЧЕГО не создаёт: открывается редактор несуществующего черновика,
-  // а форма заводится первой правкой (features/forms/draft.ts). Пространство едет в
-  // адрес редактора — из него его прочтёт и создание (пусто = личное).
-  //
-  // Текущее пространство берётся из адреса ЦЕЛИКОМ (shared/currentWorkspace: `?w=`
-  // либо путь `/workspaces/{slug}`), а не переносом прежнего search: на странице
-  // пространства параметра `w` нет, и форма молча уезжала бы в личное.
-  function handleCreate() {
-    if (currentWorkspace) {
-      handleCreateIn(currentWorkspace)
-      return
-    }
-    // Список ещё не приехал — адрес остаётся как был: `?w=` из него редактор
-    // прочтёт сам и переведёт уже в момент создания формы.
-    void navigate({
-      to: '/forms/$slug/edit',
-      params: { slug: NEW_FORM_SLUG },
-      search: (prev) => prev,
-    })
-  }
-
-  // «+» у пространства в сайдбаре: тот же ленивый черновик, но в НАЗВАННОМ
-  // пространстве, а не в текущем — оно уезжает в адрес редактора (пусто = личное).
+  // «+» у пространства в сайдбаре НИЧЕГО не создаёт: открывается редактор
+  // несуществующего черновика, а форма заводится первой правкой
+  // (features/forms/draft.ts). Пространство здесь НАЗВАНО и уезжает в адрес
+  // редактора (пусто = личное) — оттуда его прочтёт и создание.
   function handleCreateIn(workspace: Workspace) {
     void navigate({
       to: '/forms/$slug/edit',
@@ -84,7 +63,6 @@ function AppLayout() {
         userEmail={user.email}
         person={user}
         userName={displayName(user)}
-        onCreateForm={handleCreate}
         onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
         loggingOut={logout.isPending}
         workspacesNav={

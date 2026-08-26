@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CreditCard, FileText, LayoutTemplate, LogOut, Plus, Settings } from 'lucide-react'
+import { CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -13,7 +13,6 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
-import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,10 +26,13 @@ import {
 // (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
 //
 // ТРИ ЯРУСА, И ПУНКТ ПОПАДАЕТ В ЯРУС ПО СВОЕМУ УРОВНЮ, А НЕ ПО ЧАСТОТЕ: вверху
-// работа (создать форму, «Формы», «Шаблоны»), в середине контекст (пространства),
-// внизу аккаунт (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем
-// списке наравне с «Формами» и одновременно дублировались в нижнем меню — теперь
-// они только внизу.
+// работа («Формы», «Шаблоны»), в середине контекст (пространства), внизу аккаунт
+// (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем списке наравне
+// с «Формами» и одновременно дублировались в нижнем меню — теперь они только внизу.
+//
+// СОЗДАНИЯ ФОРМЫ В САЙДБАРЕ НЕТ (решение владельца): форма заводится там, где видно,
+// куда она ляжет, — кнопкой на дашборде и «плюсом» у пространства. Кнопка над
+// навигацией называла место неявно, текущим пространством из адреса.
 export interface AppSidebarProps {
   userEmail: string
   // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
@@ -41,10 +43,6 @@ export interface AppSidebarProps {
   // email (entities/user.ts, displayName). Считает вызывающий: сайдбар
   // презентационный и в фичи не ходит.
   userName: string
-  // «Новая форма» открывает редактор нового черновика и НЕ ждёт сервера: форму
-  // заводит первая правка (features/forms/draft.ts), поэтому состояния «Создаём…»
-  // у кнопки больше нет.
-  onCreateForm: () => void
   onLogout: () => void
   loggingOut: boolean
   // workspacesNav — блок «Пространства» готовым узлом. Он читает список с сервера
@@ -57,7 +55,6 @@ export function AppSidebar({
   userEmail,
   person,
   userName,
-  onCreateForm,
   onLogout,
   loggingOut,
   workspacesNav,
@@ -85,15 +82,6 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <Button size="sm" className="w-full justify-start gap-2" onClick={onCreateForm}>
-              <Plus className="size-4" />
-              Новая форма
-            </Button>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
