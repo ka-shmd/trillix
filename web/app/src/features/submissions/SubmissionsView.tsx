@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { Download } from 'lucide-react'
 
 import { answerColumns, previewColumns, versionsDiffer } from './columns'
 import { submissionsListQueryOptions } from './queries'
@@ -55,21 +56,19 @@ export function SubmissionsView({ slug }: { slug: string }) {
   const columns = answerColumns(form.data?.draftSchema.blocks ?? [])
 
   return (
-    <div className="flex flex-col gap-6">
-      {/* Счётчик и выгрузка стоят в одном ряду с вкладками: это единственные два органа
-          управления экрана, и отдельная строка под вкладками отдавала бы им целый ярус
-          страницы. Просмотры и конверсия отсюда убраны (решение владельца) — они живут
-          на карточке формы и на «Аналитике», а здесь спорили с самим списком. */}
+    <div className="flex flex-col gap-4">
+      {/* Выгрузка стоит в одном ряду с вкладками: это единственный орган управления
+          экрана, и отдельная строка под вкладками отдавала бы ему целый ярус страницы.
+          Приглушённой ссылкой без рамки (решение владельца): контурная кнопка обещает
+          действие над самим списком, а выгрузка — служебный выход из него. */}
       <SubmissionsTabs slug={slug}>
-        {list.isSuccess && (
-          <span className="text-sm text-muted-foreground">
-            {total} {pluralAnswers(total)}
-          </span>
-        )}
         {total > 0 && formId && (
           // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
-          <Button asChild variant="outline" size="sm">
-            <a href={submissionsExportUrl(formId)}>Экспорт CSV</a>
+          <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
+            <a href={submissionsExportUrl(formId)}>
+              <Download className="size-4" />
+              Экспорт CSV
+            </a>
           </Button>
         )}
       </SubmissionsTabs>

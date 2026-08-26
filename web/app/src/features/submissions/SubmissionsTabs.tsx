@@ -11,16 +11,19 @@ import { Link } from '@tanstack/react-router'
 // — подчёркнутые вкладки, и второй ряд того же вида читался бы как продолжение первого.
 //
 // РЯД РИСУЕТ КАЖДАЯ ВКЛАДКА, а не оболочка раздела, хотя вкладки в нём одни и те же.
-// Причина в правой половине (`children`): счётчик и выгрузка считаются по данным ОТКРЫТОЙ
-// вкладки, и оболочка, чтобы их показать, тянула бы список ответов даже там, где он не
-// нужен, — а на «Частичных» ещё и врала бы чужим числом.
+// Причина в правой половине (`children`): выгрузка относится к данным ОТКРЫТОЙ вкладки, и
+// оболочка, чтобы её показать, тянула бы список ответов даже там, где он не нужен, — а на
+// «Частичных» предлагала бы скачать чужой файл.
+//
+// Своего нижнего отступа у ряда НЕТ: расстояние до содержимого задаёт страница. Ряд стоит
+// вплотную к таблице (решение владельца) — он её орган управления, а не отдельный этаж.
 export function SubmissionsTabs({ slug, children }: { slug: string; children?: React.ReactNode }) {
   const base = 'rounded-md px-2.5 py-1 text-sm transition-colors'
   const active = { className: 'bg-background font-semibold text-foreground shadow-sm' }
   const inactive = { className: 'font-medium text-muted-foreground hover:text-foreground' }
 
   return (
-    <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <nav
         className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]"
         aria-label="Разделы ответов"

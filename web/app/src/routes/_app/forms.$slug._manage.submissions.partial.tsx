@@ -14,12 +14,12 @@ function PartialSubmissionsPage() {
   const { slug } = Route.useParams()
 
   return (
-    <>
+    <div className="flex flex-col gap-4">
       <SubmissionsTabs slug={slug} />
       <EmptyState
         title="Черновиков пока нет"
         description="Здесь появятся ответы, которые начали заполнять и не отправили. Собирать их форма начинает, когда включён тумблер «Сохранять незавершённые ответы»."
       />
-    </>
+    </div>
   )
 }
