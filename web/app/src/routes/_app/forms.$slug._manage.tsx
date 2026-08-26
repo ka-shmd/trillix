@@ -52,12 +52,13 @@ const statusMeta: Partial<
 function ManageLayout() {
   const { slug } = Route.useParams()
   const form = useQuery(formDetailQueryOptions(slug))
-  // Ширину колонки задаёт ОТКРЫТАЯ вкладка, а не группа целиком: у «Ответов»
-  // таблица, которой потолок ширины оборачивается прокруткой вбок при пустых полях
-  // по краям, у остальных трёх — текст и разделы, которым потолок нужен (мера
-  // строки). Одной ширины на группу поэтому не существует.
+  // Ширину задаёт открытая вкладка — и только СОДЕРЖИМОМУ. Крошки, название формы
+  // и ряд табов стоят в своей колонке одной ширины на все вкладки: разъедься она, и
+  // название с табами прыгало бы по экрану при каждом переключении раздела. Без
+  // потолка ширины идёт только таблица ответов, которой этот потолок оборачивается
+  // прокруткой вбок при пустых полях по краям.
   const matchRoute = useMatchRoute()
-  const width = matchRoute({ to: '/forms/$slug/submissions' }) ? 'full' : 'default'
+  const contentWidth = matchRoute({ to: '/forms/$slug/submissions' }) ? 'full' : 'default'
   const workspaceCrumb = useWorkspaceCrumb()
   // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
@@ -87,14 +88,18 @@ function ManageLayout() {
   const title = form.data ? displayFormTitle(form.data.title) : 'Форма'
   const meta = form.data ? statusMeta[form.data.status] : undefined
 
+  // Шапка и содержимое — ДВЕ колонки, а не одна: у них разная ширина. Вертикальные
+  // поля страницы поделены между ними (верхнее у шапки, нижнее у содержимого),
+  // поэтому на глаз это по-прежнему одна страница.
   return (
-    <PageContainer width={width}>
-      <PageCrumbs items={[workspaceCrumb, title]} />
-      {/* Правая часть бара — от общего к частному: кто в пространстве, ссылка на
+    <>
+      <PageContainer className="pb-0">
+        <PageCrumbs items={[workspaceCrumb, title]} />
+        {/* Правая часть бара — от общего к частному: кто в пространстве, ссылка на
           форму, вход в редактор. Залитая кнопка стоит последней, у самого края:
           она главная, и цветное пятно на краю читается как конец ряда. */}
-      <PageActions>
-        {/* Кластер в баре — без поля и без подложки на наведении: он читается как
+        <PageActions>
+          {/* Кластер в баре — без поля и без подложки на наведении: он читается как
             «вот эти люди», а не как кнопка, и подсветка делала из ряда лиц ещё один
             орган управления. Кольцо фокуса остаётся — иначе клавиатурой до состава
             не добраться.
@@ -102,29 +107,29 @@ function ManageLayout() {
             Тёмный вариант гасится ОТДЕЛЬНО: `hover:bg-transparent` убирает только
             светлый `hover:bg-accent`, а `dark:hover:bg-accent/50` живёт под своим
             вариантом, специфичнее, и вернул бы подложку при включении темы. */}
-        {workspace && (
-          <MemberCluster
-            workspace={workspace}
-            onOpen={() => setMembersOpen(true)}
-            className="px-0 hover:bg-transparent dark:hover:bg-transparent"
-          />
-        )}
-        {/* Копирование ссылки вынесено из меню: действие частое, а ради него
+          {workspace && (
+            <MemberCluster
+              workspace={workspace}
+              onOpen={() => setMembersOpen(true)}
+              className="px-0 hover:bg-transparent dark:hover:bg-transparent"
+            />
+          )}
+          {/* Копирование ссылки вынесено из меню: действие частое, а ради него
             приходилось открывать меню. Со СЛОВАМИ, а не значком: значок копирования
             и значок ссылки одинаково правдоподобны, и угадывать, который тут,
             человек не должен. У черновика выключено — публичной страницы у него
             ещё нет. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 gap-1.5 px-2 text-muted-foreground has-[>svg]:px-2"
-          disabled={form.data?.status === 'draft'}
-          onClick={() => copyFormLink(slug)}
-        >
-          <Copy className="size-4" />
-          Копировать ссылку
-        </Button>
-        {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 px-2 text-muted-foreground has-[>svg]:px-2"
+            disabled={form.data?.status === 'draft'}
+            onClick={() => copyFormLink(slug)}
+          >
+            <Copy className="size-4" />
+            Копировать ссылку
+          </Button>
+          {/* Главное действие над формой — залитая кнопка, а не контурная: в баре она
             одна такая, и приглушать единственный вход в редактор незачем. Размер
             малый: бар высотой 56px, кнопка в полный рост подпирала бы его края.
             Высота у всех трёх контролов ряда одна (32px), боковые поля тоже.
@@ -137,40 +142,43 @@ function ManageLayout() {
             её текст, у залитой — край заливки, поэтому её собственные 8px поля уже
             и есть тот зазор, который видит глаз: 16 слева от кнопки против 16 от
             аватара до значка копирования. */}
-        <Button asChild size="sm" className="h-8 gap-1.5 px-2 has-[>svg]:px-2">
-          <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
-            <Pencil className="size-3.5" /> Редактировать
-          </Link>
-        </Button>
-      </PageActions>
+          <Button asChild size="sm" className="h-8 gap-1.5 px-2 has-[>svg]:px-2">
+            <Link to="/forms/$slug/edit" search={(prev) => prev} params={{ slug }}>
+              <Pencil className="size-3.5" /> Редактировать
+            </Link>
+          </Button>
+        </PageActions>
 
-      {/* Окно состава живёт на странице, а не в портале бара: портал несёт только
+        {/* Окно состава живёт на странице, а не в портале бара: портал несёт только
           то, что видно в самом баре. */}
-      {workspace && (
-        <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
-      )}
+        {workspace && (
+          <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
+        )}
 
-      <PageHeader
-        title={title}
-        titleAction={form.data && <FormActionsMenu form={form.data} />}
-        meta={
-          form.data && (
-            <>
-              {meta && <Badge variant={meta.variant}>{meta.label}</Badge>}
-              {form.data.publishedVersion !== null && (
-                <span className="text-sm text-muted-foreground">
-                  Версия {form.data.publishedVersion}
-                </span>
-              )}
-            </>
-          )
-        }
-      />
+        <PageHeader
+          title={title}
+          titleAction={form.data && <FormActionsMenu form={form.data} />}
+          meta={
+            form.data && (
+              <>
+                {meta && <Badge variant={meta.variant}>{meta.label}</Badge>}
+                {form.data.publishedVersion !== null && (
+                  <span className="text-sm text-muted-foreground">
+                    Версия {form.data.publishedVersion}
+                  </span>
+                )}
+              </>
+            )
+          }
+        />
 
-      <FormTabs slug={slug} />
+        <FormTabs slug={slug} />
+      </PageContainer>
 
-      <Outlet />
-    </PageContainer>
+      <PageContainer width={contentWidth} className="pt-0">
+        <Outlet />
+      </PageContainer>
+    </>
   )
 }
 
