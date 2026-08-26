@@ -1,4 +1,8 @@
 import { Link } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+
+import { submissionsCountQueryOptions } from './queries'
+import { formDetailQueryOptions } from '../forms/queries'
 
 // Ряд вкладок раздела «Ответы» и его правая половина. Вкладки — настоящие ссылки
 // (навигация, а не переключатель), как разделы формы и вкладки аналитики: средний клик,
@@ -17,8 +21,26 @@ import { Link } from '@tanstack/react-router'
 //
 // Своего нижнего отступа у ряда НЕТ: расстояние до содержимого задаёт страница. Ряд стоит
 // вплотную к таблице (решение владельца) — он её орган управления, а не отдельный этаж.
+//
+// ЧИСЛО У ВКЛАДКИ БЕРЁТСЯ СВОИМ ЗАПРОСОМ (`/submissions/count`), а не из списка открытой
+// вкладки: иначе на «Частичных», где списка нет, числа пропали бы у всех трёх сразу.
+// Запрос дешёвый и общий с карточкой «Ответы» на «Аналитике» — кеш TanStack отдаёт его
+// одним походом на оба экрана.
+//
+// У «ЧАСТИЧНЫХ» ЧИСЛА НЕТ ВОВСЕ, и ноль там писать нельзя: черновики собираются, читать
+// их пока нечем (слайс H), и «0» был бы не пустотой, а враньём.
 export function SubmissionsTabs({ slug, children }: { slug: string; children?: React.ReactNode }) {
-  const base = 'rounded-md px-2.5 py-1 text-sm transition-colors'
+  const form = useQuery(formDetailQueryOptions(slug))
+  const formId = form.data?.id
+  const count = useQuery({
+    // Окно наблюдения «всё время»: раздел «Ответы» периода не имеет — в отличие от
+    // «Аналитики», где то же число режется выбранным окном.
+    ...submissionsCountQueryOptions(formId ?? '', 'all'),
+    enabled: formId !== undefined,
+  })
+  const submitted = count.data?.submissions
+
+  const base = 'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors'
   const active = { className: 'bg-background font-semibold text-foreground shadow-sm' }
   const inactive = { className: 'font-medium text-muted-foreground hover:text-foreground' }
 
@@ -37,6 +59,7 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
           inactiveProps={inactive}
         >
           Все ответы
+          <TabCount value={submitted} />
         </Link>
         <Link
           to="/forms/$slug/submissions/completed"
@@ -47,6 +70,7 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
           inactiveProps={inactive}
         >
           Законченные
+          <TabCount value={submitted} />
         </Link>
         <Link
           to="/forms/$slug/submissions/partial"
@@ -62,4 +86,12 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
       {children && <div className="flex items-center gap-3">{children}</div>}
     </div>
   )
+}
+
+// Число у вкладки — приглушённое и моноширинными цифрами: подпись называет вкладку, а
+// число уточняет, и одинаковыми чернилами они читались бы как одна надпись. Табличные
+// цифры держат ширину ряда постоянной, пока счётчик тикает.
+function TabCount({ value }: { value?: number }) {
+  if (value === undefined) return null
+  return <span className="text-xs font-normal text-muted-foreground tabular-nums">{value}</span>
 }
