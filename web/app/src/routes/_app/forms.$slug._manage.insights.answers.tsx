@@ -1,13 +1,16 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
 import { type BlockSummary } from '../../entities/summary'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { VisitCards } from '../../features/insights/Cards'
 import { percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
+import { BlockAnswersDialog } from '../../features/submissions/BlockAnswersDialog'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
+import { type Period } from '../../shared/period'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -71,7 +74,13 @@ function SummaryPage() {
         ) : (
           <div className="flex flex-col gap-8">
             {summary.data.blocks.map((b) => (
-              <BlockCard key={b.blockId} block={b} total={total} slug={slug} />
+              <BlockCard
+                key={b.blockId}
+                block={b}
+                total={total}
+                formId={formId ?? ''}
+                period={period}
+              />
             ))}
           </div>
         )}
@@ -80,7 +89,19 @@ function SummaryPage() {
   )
 }
 
-function BlockCard({ block, total, slug }: { block: BlockSummary; total: number; slug: string }) {
+function BlockCard({
+  block,
+  total,
+  formId,
+  period,
+}: {
+  block: BlockSummary
+  total: number
+  formId: string
+  period: Period
+}) {
+  const [allOpen, setAllOpen] = useState(false)
+
   return (
     <article className="flex flex-col gap-3">
       <div>
@@ -101,12 +122,29 @@ function BlockCard({ block, total, slug }: { block: BlockSummary; total: number;
       ) : (
         <Samples block={block} />
       )}
+      {/* «Все ответы» показывается, только когда показано не всё: сводка отдаёт
+          десять последних значений, и у вопроса с девятью ответами кнопка открыла
+          бы окно с тем же самым списком. */}
       {block.samples.length > 0 && block.answered > block.samples.length && (
-        <Button asChild variant="link" size="sm" className="h-auto justify-start p-0">
-          <Link to="/forms/$slug/submissions" params={{ slug }} search={(prev) => prev}>
+        <>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto justify-start p-0"
+            onClick={() => setAllOpen(true)}
+          >
             Все ответы
-          </Link>
-        </Button>
+          </Button>
+          <BlockAnswersDialog
+            open={allOpen}
+            onOpenChange={setAllOpen}
+            formId={formId}
+            blockId={block.blockId}
+            label={block.label}
+            answered={block.answered}
+            period={period}
+          />
+        </>
       )}
     </article>
   )

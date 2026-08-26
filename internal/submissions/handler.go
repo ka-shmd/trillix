@@ -28,6 +28,7 @@ type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
 	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
+	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 }
@@ -63,6 +64,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/export", h.requireAuth(http.HandlerFunc(h.export)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary", h.requireAuth(http.HandlerFunc(h.summary)))
+	// Значения одного вопроса: подпуть сводки, а не свой корень — окно открывается
+	// из её строки и живёт по тем же правилам (то же окно наблюдения, тот же рендер).
+	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 }
@@ -251,6 +255,61 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		blocks[i] = item
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks})
+}
+
+type answerResponse struct {
+	Text string    `json:"text"`
+	At   time.Time `json:"at"`
+}
+
+type blockAnswersResponse struct {
+	Answers    []answerResponse `json:"answers"`
+	NextCursor *string          `json:"nextCursor"`
+}
+
+// blockAnswers — все значения ОДНОГО вопроса страницами: окно «все ответы» на
+// вкладке «Сводка». Сводка отдаёт по десять последних на каждый вопрос, здесь тот
+// же вопрос листается целиком.
+//
+// Наружу уходит готовый ТЕКСТ значения, как и в сводке: подпись выбранной опции, а
+// не её id. Разбор на клиенте был бы третьей копией доменных правил после Go и Zod.
+func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	after, ok := parseCursor(w, r)
+	if !ok {
+		return
+	}
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Окно наблюдения то же, что у сводки, и это несущее: открыв «все ответы» из
+	// строки «Ответили 12 из 34» за неделю, владелец обязан увидеть те же двенадцать.
+	page, err := h.svc.BlockAnswers(r.Context(), userID, formID, r.PathValue("block"), period,
+		after, parseLimit(r.URL.Query().Get("limit")))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	items := make([]answerResponse, len(page.Answers))
+	for i, a := range page.Answers {
+		items[i] = answerResponse{Text: a.Text, At: a.At}
+	}
+	resp := blockAnswersResponse{Answers: items}
+	if page.NextCursor != nil {
+		enc := encodeCursor(*page.NextCursor)
+		resp.NextCursor = &enc
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
 // countResponse — карточка «Ответы» над вкладками Insights.

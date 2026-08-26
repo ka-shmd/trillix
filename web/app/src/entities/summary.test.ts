@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formSummarySchema, type BlockSummary, type FormSummary } from './summary'
+import {
+  blockAnswersPageSchema,
+  formSummarySchema,
+  type BlockSummary,
+  type FormSummary,
+} from './summary'
 
 // Индексация массива под noUncheckedIndexedAccess даёт `T | undefined`: достаём
 // вопрос явно, чтобы падало осмысленным сообщением, а не на первом же обращении.
@@ -135,7 +140,16 @@ describe('formSummarySchema', () => {
     expect(() =>
       formSummarySchema.parse({
         total: 1,
-        blocks: [{ blockId: 'x', label: 'X', type: 'short_text', kind: 'sparkline', asked: 1, answered: 1 }],
+        blocks: [
+          {
+            blockId: 'x',
+            label: 'X',
+            type: 'short_text',
+            kind: 'sparkline',
+            asked: 1,
+            answered: 1,
+          },
+        ],
       }),
     ).toThrow()
   })
@@ -154,5 +168,30 @@ describe('последние ответы в сводке', () => {
     const phone = blockAt(parsed, 0)
     expect(phone.samples[0]?.text).toBe('+7 900 000-00-00')
     expect(phone.samples[0]?.at).toBe('2026-08-24T09:15:00Z')
+  })
+})
+
+// Контракт окна «все ответы на вопрос». Фикстура снята с настоящего ответа сервера
+// (интеграционный прогон против Postgres, форма summarySchemaV1): смещение +03:00
+// во времени и base64-курсор — как есть, не приведённые к удобному виду. Выдуманная
+// фикстура проверяла бы схему саму против себя.
+describe('страница значений одного вопроса', () => {
+  const realServerPage = {
+    answers: [
+      { text: 'Хотелось бы больше вариантов оплаты.', at: '2026-08-26T15:45:44.019801+03:00' },
+    ],
+    nextCursor: 'MDFhMDNlMWEtZTBkMy03YWYzLTljYjEtZDkzY2UyZjBhYWI2',
+  }
+
+  it('принимает ответ сервера как есть', () => {
+    const page = blockAnswersPageSchema.parse(realServerPage)
+    expect(page.answers).toHaveLength(1)
+    expect(page.nextCursor).toBe(realServerPage.nextCursor)
+  })
+
+  // null — не «нет поля», а «ответы кончились»: по нему окно перестаёт листать.
+  it('пустой курсор на последней странице — null, а не отсутствие поля', () => {
+    const page = blockAnswersPageSchema.parse({ answers: [], nextCursor: null })
+    expect(page.nextCursor).toBeNull()
   })
 })

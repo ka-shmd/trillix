@@ -1,0 +1,98 @@
+import { useInfiniteQuery } from '@tanstack/react-query'
+
+import { blockAnswersQueryOptions } from './queries'
+import { formatDate, pluralAnswers } from '../../shared/format'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
+import { type Period } from '../../shared/period'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { ScrollArea } from '@/components/ui/scroll-area'
+
+// Окно «все ответы на этот вопрос»: сводка показывает десять последних значений,
+// здесь тот же вопрос листается целиком.
+//
+// Окно, а не переход в таблицу ответов: там строка — это ВЕСЬ ответ респондента со
+// всеми полями, и найти в ней один вопрос значит читать таблицу вбок. Вопрос,
+// открытый из своей же строки сводки, отвечает ровно на то, что спросили.
+//
+// Значения приходят готовым текстом с сервера (подпись опции, а не её id) — тем же
+// рендером, что и в сводке над окном.
+export function BlockAnswersDialog({
+  open,
+  onOpenChange,
+  formId,
+  blockId,
+  label,
+  answered,
+  period,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  formId: string
+  blockId: string
+  label: string
+  answered: number
+  period: Period
+}) {
+  const answers = useInfiniteQuery({
+    ...blockAnswersQueryOptions(formId, blockId, period),
+    // Запрос уходит только при открытом окне: иначе каждый вопрос сводки тянул бы
+    // свою первую страницу заранее — у формы на двадцать вопросов это двадцать
+    // запросов за данными, которых никто не просил.
+    enabled: open,
+  })
+  const rows = answers.data?.pages.flatMap((p) => p.answers) ?? []
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="break-words">{label}</DialogTitle>
+          <DialogDescription>
+            {answered} {pluralAnswers(answered)} за выбранный период.
+          </DialogDescription>
+        </DialogHeader>
+
+        {answers.isPending ? (
+          <LoadingRows rows={4} />
+        ) : answers.isError ? (
+          <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
+        ) : (
+          <ScrollArea className="-mx-1 max-h-[55vh] px-1">
+            <ul className="flex flex-col">
+              {rows.map((a, i) => (
+                <li
+                  key={`${a.at}-${i}`}
+                  className="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-0"
+                >
+                  <span className="min-w-0 break-words">{a.text}</span>
+                  <span className="shrink-0 text-muted-foreground">{formatDate(a.at)}</span>
+                </li>
+              ))}
+            </ul>
+            {/* Кнопка, а не подгрузка по прокрутке: у окна своя область прокрутки
+                внутри страницы, и автоподгрузка в ней не даёт добраться до конца
+                списка ни мышью, ни клавиатурой. */}
+            {answers.hasNextPage && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={() => void answers.fetchNextPage()}
+                disabled={answers.isFetchingNextPage}
+              >
+                {answers.isFetchingNextPage ? 'Загружаем…' : 'Показать ещё'}
+              </Button>
+            )}
+          </ScrollArea>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}

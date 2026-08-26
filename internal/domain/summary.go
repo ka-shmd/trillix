@@ -137,9 +137,48 @@ type summaryAcc struct {
 	sum, min, max float64
 	numCount      int
 	// samples — последние ответы, новыми сверху. Наполняются, пока не наберётся
-	// SamplesLimit: обход идёт от свежих к старым, поэтому первые же и есть
+	// sampleLimit: обход идёт от свежих к старым, поэтому первые же и есть
 	// последние.
 	samples []AnswerSample
+	// sampleLimit — потолок значений ЭТОГО вопроса. Поле, а не константа, потому
+	// что потребителя два: сводка берёт по десять последних на каждый вопрос, а
+	// окно «все ответы» листает один вопрос страницами (см. AnswerLog).
+	sampleLimit int
+}
+
+// AnswerLog переводит builder в режим ОДНОГО вопроса: у названного потолок
+// значений поднимается до limit, у остальных обнуляется. Нужен окну «все ответы на
+// этот вопрос», которое листает их страницами.
+//
+// Режимом того же builder'а, а не своим обходом версий: подписи опций, тип вопроса
+// и правило «что считать вопросом» — те же самые, и вторая их копия разошлась бы со
+// сводкой молча (ANALYTICS.md §4). Неизвестный blockID — законное состояние (вопрос
+// удалён из всех версий): страница выйдет пустой, а не ошибкой.
+func (b *SummaryBuilder) AnswerLog(blockID string, limit int) {
+	for id, a := range b.acc {
+		if id == blockID {
+			a.sampleLimit = limit
+		} else {
+			a.sampleLimit = 0
+		}
+	}
+}
+
+// SamplesFull — набралось ли значений столько, сколько просили. По нему обход
+// ответов останавливается, не досматривая форму до конца: у вопроса с тысячей
+// ответов страница набирается на первых же строках.
+func (b *SummaryBuilder) SamplesFull(blockID string) bool {
+	a, ok := b.acc[blockID]
+	return ok && len(a.samples) >= a.sampleLimit
+}
+
+// Samples — накопленные значения одного вопроса, новыми сверху.
+func (b *SummaryBuilder) Samples(blockID string) []AnswerSample {
+	a, ok := b.acc[blockID]
+	if !ok {
+		return nil
+	}
+	return a.samples
 }
 
 // NewSummaryBuilder разбирает версии в модель вопросов. versions ожидаются по
@@ -164,10 +203,11 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 	// выгрузка и воронка обязаны показывать один и тот же список вопросов.
 	for _, q := range QuestionOrder(versions) {
 		a := &summaryAcc{
-			label:    q.Label,
-			typ:      q.Block.Type,
-			optLabel: make(map[string]string),
-			counts:   make(map[string]int),
+			label:       q.Label,
+			typ:         q.Block.Type,
+			optLabel:    make(map[string]string),
+			counts:      make(map[string]int),
+			sampleLimit: SamplesLimit,
 		}
 		if q.Block.Type == BlockScale {
 			// Диапазон — из свежайшей версии с этим блоком (q.Block): деления шкалы
@@ -364,7 +404,7 @@ func (b *SummaryBuilder) Result() Summary {
 // другой модуль. Показать id значило бы показать мусор, а тащить сюда имена — везти
 // в сводку зависимость ради десяти строк.
 func (a *summaryAcc) addSample(typ BlockType, raw json.RawMessage, at time.Time) {
-	if len(a.samples) >= SamplesLimit || typ == BlockFile {
+	if len(a.samples) >= a.sampleLimit || typ == BlockFile {
 		return
 	}
 	text := sampleText(typ, raw, a.optLabel)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"slices"
 	"strconv"
 	"time"
 
@@ -336,6 +337,18 @@ func seedAnswers(ctx context.Context, pool *pgxpool.Pool, formID, versionID, wor
 		return nil
 	}
 
+	// Времена ответов раскидываются по двум неделям и сортируются ПО ВОЗРАСТАНИЮ,
+	// после чего строки вставляются в этом порядке. Это не косметика: id ответа —
+	// UUIDv7, и весь кабинет сортирует ответы по нему, а не по created_at (см.
+	// ListSubmissionsFirstPage). Вставь их вразнобой — и демо-данные окажутся
+	// единственным местом, где id и дата разошлись: экран честно покажет «новые
+	// сверху» по id, а даты в нём будут прыгать.
+	times := make([]time.Time, seedAnswersCount)
+	for i := range times {
+		times[i] = time.Now().Add(-time.Duration(rand.Intn(14*24*60)) * time.Minute)
+	}
+	slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
+
 	repo := submissions.Repo{}
 	meta := json.RawMessage(`{}`)
 	created := 0
@@ -356,7 +369,7 @@ func seedAnswers(ctx context.Context, pool *pgxpool.Pool, formID, versionID, wor
 			}
 			raw, _ := json.Marshal(answers)
 			id := domain.NewID()
-			at := time.Now().Add(-time.Duration(rand.Intn(14*24*60)) * time.Minute)
+			at := times[i]
 			if _, e := repo.InsertSubmission(ctx, tx, submissions.NewSubmission{
 				ID:          id,
 				FormID:      formID,
