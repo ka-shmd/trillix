@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type FunnelStep } from '../../entities/funnel'
-import { droppedPhrase, percentOf, shareOfMax, worstStep } from './metrics'
+import { droppedPhrase, percentOf, worstStep } from './metrics'
 
 function step(label: string, reached: number, droppedHere: number): FunnelStep {
   return { blockId: label, label, reached, droppedHere }
@@ -17,17 +17,6 @@ describe('percentOf', () => {
   // и вёрстка сломалась бы молча.
   it('нулевой знаменатель даёт ноль, а не NaN', () => {
     expect(percentOf(0, 0)).toBe(0)
-  })
-})
-
-describe('shareOfMax', () => {
-  it('меряет строку максимумом списка', () => {
-    expect(shareOfMax(5, 10)).toBe(0.5)
-    expect(shareOfMax(10, 10)).toBe(1)
-  })
-
-  it('пустой список не делит на ноль', () => {
-    expect(shareOfMax(0, 0)).toBe(0)
   })
 })
 

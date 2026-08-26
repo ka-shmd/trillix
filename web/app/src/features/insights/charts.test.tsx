@@ -2,7 +2,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 
-import { DeviceChart } from './DeviceChart'
+import { ShareChart } from './ShareChart'
 import { FunnelChart } from './FunnelChart'
 import { VisitsChart } from './VisitsChart'
 
@@ -104,10 +104,14 @@ describe('FunnelChart', () => {
   })
 })
 
-describe('DeviceChart', () => {
-  it('рисует сектор на каждое устройство и называет доли', () => {
+describe('ShareChart', () => {
+  function rows(n: number) {
+    return Array.from({ length: n }, (_, i) => ({ label: `Строка ${i + 1}`, visits: n - i }))
+  }
+
+  it('называет доли и рисует кольцо', () => {
     const { container, getByText } = render(
-      <DeviceChart
+      <ShareChart
         rows={[
           { label: 'Компьютер', visits: 3 },
           { label: 'Телефон', visits: 1 },
@@ -120,5 +124,25 @@ describe('DeviceChart', () => {
     // всё равно наша: подписи и доли рядом с ним.
     expect(container.querySelector('.recharts-pie')).toBeTruthy()
     expect(getByText('3 · 75 %')).toBeTruthy()
+  })
+
+  // Восемь строк — потолок секторов. Ровно восемь ещё помещаются целиком, и
+  // «Прочее» на них появляться не должно: пустая группа это лишний сектор.
+  it('восемь строк показывает целиком, без «Прочего»', () => {
+    const { queryByText, getAllByRole } = render(<ShareChart rows={rows(8)} />)
+    expect(queryByText('Прочее')).toBeNull()
+    expect(getAllByRole('listitem')).toHaveLength(8)
+  })
+
+  it('девятую и дальше сворачивает в «Прочее» с их суммой', () => {
+    // 12 строк: 12+11+…+1 = 78 всего, хвост (строки 9..12) = 4+3+2+1 = 10.
+    // Число ищем ВНУТРИ строки «Прочее»: у третьей строки визитов ровно столько же,
+    // и поиск по тексту нашёл бы обе.
+    const { getAllByRole } = render(<ShareChart rows={rows(12)} />)
+    const items = getAllByRole('listitem')
+    expect(items).toHaveLength(9)
+    const other = items.at(-1)
+    expect(other?.textContent).toContain('Прочее')
+    expect(other?.textContent).toContain('10 · 13 %')
   })
 })

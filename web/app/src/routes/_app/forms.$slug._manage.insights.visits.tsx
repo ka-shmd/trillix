@@ -7,11 +7,10 @@ import {
   type VisitsBreakdown,
 } from '../../entities/visitsBreakdown'
 import { formDetailQueryOptions } from '../../features/forms/queries'
-import { BarRows, BreakdownTabs } from '../../features/insights/Breakdown'
+import { BreakdownTabs } from '../../features/insights/Breakdown'
 import { VisitCards } from '../../features/insights/Cards'
-import { shareOfMax } from '../../features/insights/metrics'
 import { visitsBreakdownQueryOptions } from '../../features/insights/queries'
-import { DeviceChart, VisitsChart } from '../../features/insights/lazyCharts'
+import { ShareChart, VisitsChart } from '../../features/insights/lazyCharts'
 import { pluralViews } from '../../shared/format'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -110,13 +109,9 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
         <Section title="С чего смотрят" description="Устройство, браузер и система посетителей.">
           <BreakdownTabs
             panels={[
-              {
-                value: 'devices',
-                label: 'Устройства',
-                content: data.devices.length > 0 ? <DeviceChart rows={data.devices} /> : <NoRows />,
-              },
-              { value: 'browsers', label: 'Браузеры', content: <Counts rows={data.browsers} /> },
-              { value: 'systems', label: 'Система', content: <Counts rows={data.systems} /> },
+              { value: 'devices', label: 'Устройства', content: <Share rows={data.devices} /> },
+              { value: 'browsers', label: 'Браузеры', content: <Share rows={data.browsers} /> },
+              { value: 'systems', label: 'Система', content: <Share rows={data.systems} /> },
             ]}
           />
         </Section>
@@ -129,22 +124,13 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
   )
 }
 
-// Список с полоской: подпись, число, доля от максимума строки. Доля именно от
-// максимума, а не от суммы: у списка своя задача — сравнить строки между собой,
-// поэтому процент рядом с числом здесь не печатается.
-function Counts({ rows }: { rows: LabelCount[] }) {
+// Все шесть разбивок вкладки показываются ОДИНАКОВО — кольцом с легендой. Вопрос
+// к ним один и тот же: «как поделилось», и отвечает на него доля целого. Кольцо
+// держит длинный хвост потому, что девятая строка и дальше сворачиваются в
+// «Прочее», а числа хвоста показываются наведением (features/insights/ShareChart).
+function Share({ rows }: { rows: LabelCount[] }) {
   if (rows.length === 0) return <NoRows />
-  const max = Math.max(...rows.map((r) => r.visits))
-  return (
-    <BarRows
-      rows={rows.map((r) => ({
-        key: r.label,
-        label: r.label,
-        count: r.visits,
-        share: shareOfMax(r.visits, max),
-      }))}
-    />
-  )
+  return <ShareChart rows={rows} />
 }
 
 function NoRows() {
@@ -173,7 +159,7 @@ function Sources({ data }: { data: VisitsBreakdown }) {
     )
   }
   return (
-    <Counts
+    <Share
       rows={data.sources.map((s) => ({
         label: s.medium === 'Нет' ? s.source : `${s.source} / ${s.medium}`,
         visits: s.visits,
@@ -195,7 +181,7 @@ function Places({ rows, unknown }: { rows: PlaceCount[]; unknown?: number }) {
   }
   return (
     <div className="flex flex-col gap-2">
-      <Counts
+      <Share
         rows={rows.map((r) => ({
           label: `${flag(r.countryCode)} ${r.name}`.trim(),
           visits: r.visits,

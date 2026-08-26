@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // настройках.
 //
 // Импортируй графики ОТСЮДА, а не из соседних файлов напрямую: прямой импорт из
-// VisitsChart/FunnelChart/DeviceChart втащит recharts обратно в общий чанк, и
+// VisitsChart/FunnelChart/ShareChart втащит recharts обратно в общий чанк, и
 // проверка этого — только замер сборки (`npm run build`), потому что работать
 // будет одинаково.
 //
@@ -23,9 +23,7 @@ const VisitsChartImpl = lazy(() =>
 const FunnelChartImpl = lazy(() =>
   import('./FunnelChart').then((m) => ({ default: m.FunnelChart })),
 )
-const DeviceChartImpl = lazy(() =>
-  import('./DeviceChart').then((m) => ({ default: m.DeviceChart })),
-)
+const ShareChartImpl = lazy(() => import('./ShareChart').then((m) => ({ default: m.ShareChart })))
 
 export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) {
   return (
@@ -47,10 +45,10 @@ export function FunnelChart(props: { funnel: FormFunnel }) {
   )
 }
 
-export function DeviceChart(props: { rows: LabelCount[] }) {
+export function ShareChart(props: { rows: LabelCount[] }) {
   return (
-    <Suspense fallback={<Skeleton className="size-36 rounded-full" />}>
-      <DeviceChartImpl {...props} />
+    <Suspense fallback={<Skeleton className="size-32 rounded-full" />}>
+      <ShareChartImpl {...props} />
     </Suspense>
   )
 }
