@@ -24,6 +24,11 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 // Значения приходят готовым текстом с сервера (подпись опции, а не её id) — тем же
 // рендером, что и в сводке над окном.
 //
+// Ширина окна — та же, что у колонки страницы (max-w-4xl, 896): ответы на вопрос
+// читаются в той же мере строки, что и всё остальное в кабинете, а окно у́же
+// страницы ломало бы длинный ответ переносами там, где на самой странице он бы
+// поместился.
+//
 // ВЫСОТА ОБЛАСТИ ПРОКРУТКИ ЗАДАНА ЯВНО (max-h), а не долей свободного места
 // (flex-1). У окна своей высоты нет — её задаёт содержимое, — поэтому доли считать
 // не от чего: область вырастает по списку, прокрутка не включается вовсе, а список
@@ -57,7 +62,7 @@ export function BlockAnswersDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle className="break-words">{label}</DialogTitle>
           <DialogDescription>
