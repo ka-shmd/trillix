@@ -11,7 +11,6 @@ import { usePublishForm, useUnpublishForm } from './queries'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
 // ShareView — содержимое таба «Поделиться» (/forms/$slug/share). Открывается после
@@ -66,24 +65,28 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
           : 'Отправьте её респондентам — по ней откроется форма. Правки применяются только после повторной публикации.'
       }
     >
-      <div className="flex items-center gap-2">
-        <Input
-          readOnly
-          value={link}
-          aria-label="Ссылка на форму"
-          onFocus={(e) => e.currentTarget.select()}
-          className="h-10 font-mono text-sm md:text-sm"
-        />
-        {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
-            меню действий (features/forms/copyLink.ts). */}
-        <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
-      </div>
+      {/* Ссылка слева, её вид справа: превью объясняет то, что стоит рядом, и под
+          полем оно читалось бы как следующий шаг, а не как пояснение. */}
+      <div className="grid gap-6 md:grid-cols-2 md:items-start">
+        <div className="flex items-center gap-2">
+          <Input
+            readOnly
+            value={link}
+            aria-label="Ссылка на форму"
+            onFocus={(e) => e.currentTarget.select()}
+            className="h-10 font-mono text-sm md:text-sm"
+          />
+          {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
+              меню действий (features/forms/copyLink.ts). */}
+          <Button onClick={() => copyFormLink(form.slug)}>Копировать</Button>
+        </div>
 
-      <LinkPreview
-        title={displayFormTitle(form.title)}
-        host={publicFormHost()}
-        teaser={linkTeaser(form.draftSchema.blocks)}
-      />
+        <LinkPreview
+          title={displayFormTitle(form.title)}
+          host={publicFormHost()}
+          teaser={linkTeaser(form.draftSchema.blocks)}
+        />
+      </div>
     </Section>
   )
 }
@@ -114,7 +117,9 @@ function linkTeaser(blocks: Block[]): string {
 function LinkPreview({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
     <div className="flex flex-col gap-2">
-      <Card className="max-w-md gap-0 bg-muted/30 p-4">
+      {/* Подложка вместо рамки. Полоска слева остаётся: она не обводит блок, а
+          цитирует вид карточки, которую рисуют мессенджеры. */}
+      <div className="rounded-lg bg-muted p-4">
         <div className="border-l-2 border-primary pl-3">
           <p className="truncate text-sm text-muted-foreground">{host}</p>
           <p className="mt-1 text-base font-semibold">{title}</p>
@@ -122,7 +127,7 @@ function LinkPreview({ title, host, teaser }: { title: string; host: string; tea
             {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
           </p>
         </div>
-      </Card>
+      </div>
       <p className="text-sm text-muted-foreground">
         Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от
         площадки.

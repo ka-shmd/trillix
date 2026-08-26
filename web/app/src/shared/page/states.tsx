@@ -9,6 +9,10 @@ import { cn } from '@/lib/utils'
 
 // Отказ запроса. role="alert" обязателен: экран сменился молча, и без него
 // скринридер не скажет об этом ничего.
+//
+// Подложка, а не рамка: блок, обведённый линией, читается как отдельный объект на
+// странице, а отказ — это состояние того, что и так на ней стоит
+// (docs/DESIGN-SYSTEM.md, «плоскость вместо рамки»).
 export function ErrorState({
   title = 'Не удалось загрузить данные.',
   description,
@@ -23,12 +27,9 @@ export function ErrorState({
   className?: string
 }) {
   return (
-    <div
-      role="alert"
-      className={cn('rounded-lg border border-destructive/40 bg-destructive/5 p-4', className)}
-    >
+    <div role="alert" className={cn('rounded-lg bg-destructive/8 p-4 text-destructive', className)}>
       <p className="text-sm font-medium">{title}</p>
-      {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="mt-1 text-sm text-destructive/80">{description}</p>}
       {onRetry && (
         <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}>
           {retryLabel}
@@ -56,7 +57,7 @@ export function EmptyState({
   return (
     <div
       className={cn(
-        'flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-10 text-center',
+        'flex flex-col items-center gap-2 rounded-lg bg-muted/60 px-6 py-10 text-center',
         className,
       )}
     >
