@@ -26,7 +26,7 @@ import { useEffect, useRef } from 'react'
 const MOCK_STYLES = `
   :root { color-scheme: light }
   body { margin: 0; background: #f2f3f5; font-family: system-ui, sans-serif }
-  .wrap { max-width: 1440px; margin: 0 auto; padding: 32px 24px 80px }
+  .wrap { margin: 20px 130px }
   .bar { height: 44px; background: #dfe1e6; border-radius: 4px }
   .line { height: 14px; background: #e4e6ea; border-radius: 4px; margin-top: 12px }
   .line-short { width: 42% }
