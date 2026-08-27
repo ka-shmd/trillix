@@ -652,8 +652,8 @@ func TestForms_PublicFetch(t *testing.T) {
 }
 
 // Демо-критерий этапа 14.2: форма с РАЗМЕЧЕННЫМ текстом, собранная запросом к API,
-// доезжает до публичной ручки без потерь — марки, цвет, фон и ссылка целы, а в данные
-// (og:description публичной страницы) уходит плоский текст без разметки.
+// доезжает до публичной ручки без потерь — марки, цвет, фон и ссылка целы, а в мету
+// публичной страницы её разметка не протекает вовсе.
 //
 // Проверяется весь путь целиком: PATCH черновика → ValidateSchema → JSONB → публикация
 // → снапшот версии → GET /public/v1. На каждом шаге текст мог схлопнуться в строку или
@@ -694,19 +694,22 @@ func TestForms_RichTextSurvivesRoundTrip(t *testing.T) {
 		t.Fatalf("богатый текст доехал искажённым:\nждали %+v\nполучили %+v", want, got.Blocks[0].Text)
 	}
 
-	// В данные разметка не протекает: og:description публичной HTML-страницы —
-	// плоский текст подписи.
+	// В МЕТУ СТРАНИЦЫ ПОДПИСИ ВОПРОСОВ НЕ ПОПАДАЮТ ВОВСЕ (решение владельца
+	// 2026-08-27): описание карточки — своё поле, тизера из подписей больше нет.
+	// Поэтому проверка стала сильнее прежней: раньше требовался плоский текст
+	// подписи без разметки, теперь не должно быть ни того ни другого. Заголовок же
+	// в мете есть и остаётся плоским — колонка forms.title это зеркало plainText.
 	r := do(t, anon, http.MethodGet, srv.URL+"/r/"+form.Slug, "", "")
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("страница формы: статус %d", r.StatusCode)
 	}
 	body := body2(t, r)
-	if !strings.Contains(body, "Ваше имя — см. политику") {
-		t.Fatalf("og:description без плоского текста подписи: %s", body)
+	if !strings.Contains(body, `<meta property="og:title" content="Опрос с оформлением">`) {
+		t.Fatalf("в мете нет заголовка формы: %s", body)
 	}
-	for _, marker := range []string{`"m":`, "#c026d3", "trillix.ru/privacy", "<b>"} {
+	for _, marker := range []string{`"m":`, "#c026d3", "trillix.ru/privacy", "<b>", "Ваше имя"} {
 		if strings.Contains(body, marker) {
-			t.Fatalf("разметка протекла в og:description (%q): %s", marker, body)
+			t.Fatalf("содержимое полотна протекло в мету (%q): %s", marker, body)
 		}
 	}
 }

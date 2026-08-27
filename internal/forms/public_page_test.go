@@ -43,8 +43,9 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 		`<meta property="og:title" content="Опрос клиентов">`,
 		`<meta property="og:image" content="http://localhost:5174/og-preview.png">`,
 		`<meta property="og:url" content="http://localhost:5174/r/abc123">`,
-		`<meta property="og:description" content="Ваше имя · Оценка">`, // подзаголовок из блоков
-		`<meta name="description" content="Ваше имя · Оценка">`,        // стандартный SEO-мета
+		`<meta property="og:site_name" content="` + defaultSiteName + `">`,
+		`<meta property="og:description" content="` + defaultDescription + `">`, // дефолт: своей карточки у формы нет
+		`<meta name="description" content="` + defaultDescription + `">`,        // то же значение, одна мысль
 		`<title>Опрос клиентов</title>`,
 	} {
 		if !strings.Contains(body, want) {
@@ -101,16 +102,33 @@ func TestPublicHTML_TitleInjection_Escaped(t *testing.T) {
 	}
 }
 
-// Пустая форма без вопросов → og:description опускается (тизера нет), но
-// стандартный <meta name="description"> присутствует с фолбэком (SEO).
-func TestPublicHTML_NoBlocks_OmitsOGButKeepsMetaDescription(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{Title: "Пустая", Version: 1, Schema: json.RawMessage(`{"blocks":[]}`), VersionID: uuid.New()}}
+// Форма без своей карточки получает ДЕФОЛТЫ, а не пустоту: имя площадки, общее
+// описание и брендовую картинку. Описание одно на обе меты — og:description и
+// <meta name="description">; двух значений на одну мысль здесь больше нет.
+func TestPublicHTML_NoCard_UsesDefaults(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:     "Пустая",
+		Version:   1,
+		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Как вам номер?"}]}]}`),
+		VersionID: uuid.New(),
+	}}
 	body := getHTMLPage(t, svc, "abc").Body.String()
-	if strings.Contains(body, "og:description") {
-		t.Fatalf("для формы без вопросов og:description не ожидался:\n%s", body)
+
+	for _, want := range []string{
+		`<meta property="og:site_name" content="` + defaultSiteName + `">`,
+		`<meta property="og:description" content="` + defaultDescription + `">`,
+		`<meta name="description" content="` + defaultDescription + `">`,
+		`<meta property="og:title" content="Пустая">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("в HTML нет %s:\n%s", want, body)
+		}
 	}
-	if !strings.Contains(body, `<meta name="description" content="`+fallbackMetaDescription+`">`) {
-		t.Fatalf("ожидался фолбэк-мета описания для пустой формы:\n%s", body)
+	// Подписи вопросов в описание БОЛЬШЕ НЕ ЕДУТ (решение владельца 2026-08-27):
+	// у формы есть своё поле описания, и второй, выводимый источник только объяснял
+	// бы, почему в окне настройки одно, а по ссылке другое.
+	if strings.Contains(body, "Как вам номер?") {
+		t.Fatalf("тизер из подписей вернулся в мету:\n%s", body)
 	}
 }
 
@@ -120,40 +138,6 @@ func TestPublicHTML_NotPublished_Returns404(t *testing.T) {
 		t.Fatalf("статус %d, ожидалось 404 (черновик/закрытая по HTML-пути не раскрывается)", code)
 	}
 }
-
-func TestOGDescriptionFromSchema(t *testing.T) {
-	// Берёт текст до трёх непустых блоков-подписей (title/label, v2), пропускает
-	// пустые, режет по рунам. Схема валидируется (апгрейд v1→v2 на лету).
-	long := strings.Repeat("я", 250)
-	title := func(id, text string) string {
-		return `{"id":"` + id + `","groupId":"g_` + id + `","type":"title","text":[{"t":"` + text + `"}]}`
-	}
-	cases := []struct {
-		name   string
-		schema string
-		want   string
-	}{
-		{"три блока", `{"schemaVersion":1,"blocks":[` + title("a", "A") + `,` + title("b", "B") + `,` + title("c", "C") + `,` + title("d", "D") + `]}`, "A · B · C"},
-		{"пустые пропускаются", `{"schemaVersion":1,"blocks":[` + title("a", "  ") + `,` + title("b", "X") + `]}`, "X"},
-		{"нет блоков", `{"blocks":[]}`, ""},
-		{"битая схема", `{oops`, ""},
-		{"обрезка по рунам", `{"schemaVersion":1,"blocks":[` + title("a", long) + `]}`, string([]rune(long)[:200]) + "…"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := ogDescriptionFromSchema(json.RawMessage(c.schema)); got != c.want {
-				t.Fatalf("got %q, want %q", got, c.want)
-			}
-		})
-	}
-}
-
-// --- Перечитывание собранного index.html (TD-29) ---
-//
-// Выкатка может обновить ТОЛЬКО статику: тег образа тот же → compose не пересоздаёт
-// контейнер api → разобранный при старте документ остался бы старым навсегда, и
-// форма отдавала бы прошлый HTML со ссылками на несуществующие ассеты. Молча, при
-// зелёном деплое. Эти тесты сторожат перечитывание и его отказоустойчивость.
 
 func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 	path := writeFixtureIndex(t)
@@ -617,8 +601,11 @@ func TestPublicHTML_LinkPreviewNeedsPlan(t *testing.T) {
 		ImageKey: "ws-1/abc123.png",
 	}, false))
 
-	if strings.Contains(body, "og:site_name") {
-		t.Fatalf("имя площадки применилось без права тарифа:\n%s", body)
+	if !strings.Contains(body, `<meta property="og:site_name" content="`+defaultSiteName+`">`) {
+		t.Fatalf("без права тарифа имя площадки обязано быть дефолтным:\n%s", body)
+	}
+	if strings.Contains(body, "Журнал") {
+		t.Fatalf("своё имя площадки применилось без права тарифа:\n%s", body)
 	}
 	if strings.Contains(body, "Каким должен быть февральский номер") {
 		t.Fatalf("заголовок карточки применился без права тарифа:\n%s", body)
@@ -632,19 +619,20 @@ func TestPublicHTML_LinkPreviewNeedsPlan(t *testing.T) {
 }
 
 // Пустое поле карточки = «взять дефолт», а не «показать пустоту». Карточка, в
-// которой автор задал только картинку, обязана оставить прежние заголовок и тизер.
+// которой автор задал только картинку, обязана оставить дефолтные заголовок, имя
+// площадки и описание.
 func TestPublicHTML_LinkPreviewPartialKeepsDefaults(t *testing.T) {
 	svc := linkPreviewSvc(&domain.LinkPreview{ImageKey: "ws-1/abc123.png"}, true)
-	svc.pf.Schema = json.RawMessage(`{"schemaVersion":1,"blocks":[
-		{"id":"b1","type":"label","groupId":"g1","text":[{"t":"Как вам номер?"}]}
-	]}`)
 
 	body := linkPreviewHTML(t, svc)
 	if !strings.Contains(body, `<meta property="og:title" content="Опрос читателей">`) {
 		t.Fatalf("пустой заголовок карточки затёр заголовок формы:\n%s", body)
 	}
-	if !strings.Contains(body, `<meta property="og:description" content="Как вам номер?">`) {
-		t.Fatalf("пустое описание карточки затёрло тизер из подписей:\n%s", body)
+	if !strings.Contains(body, `<meta property="og:description" content="`+defaultDescription+`">`) {
+		t.Fatalf("пустое описание карточки затёрло дефолт:\n%s", body)
+	}
+	if !strings.Contains(body, `<meta property="og:site_name" content="`+defaultSiteName+`">`) {
+		t.Fatalf("пустое имя площадки затёрло дефолт:\n%s", body)
 	}
 	if !strings.Contains(body, `/media/ws-1/abc123.png`) {
 		t.Fatalf("картинка карточки не применилась:\n%s", body)

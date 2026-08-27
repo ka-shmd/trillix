@@ -1,14 +1,14 @@
 import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { Link } from '@tanstack/react-router'
 import { ImagePlus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { mediaSrc } from '@fields/media'
 import {
-  EMPTY_LINK_PREVIEW,
   MAX_LINK_PREVIEW_DESCRIPTION_LEN,
   MAX_LINK_PREVIEW_SITE_NAME_LEN,
   MAX_LINK_PREVIEW_TITLE_LEN,
-  displayFormTitle,
+  resolveLinkPreview,
   type FormDetail,
   type LinkPreview,
 } from '../../entities/form'
@@ -49,14 +49,26 @@ export function LinkPreviewDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const saved = form.linkPreview ?? EMPTY_LINK_PREVIEW
+  // ПОЛЯ ЗАПОЛНЕНЫ ТЕКСТОМ, А НЕ ПЛЕЙСХОЛДЕРОМ (решение владельца 2026-08-27): в
+  // инпутах стоит действующая карточка — своя, где автор её задал, и дефолтная там,
+  // где нет. Плейсхолдер показывал бы то же самое серым, но не давал бы взяться за
+  // текст: чтобы поправить слово в дефолтном описании, его пришлось бы набрать
+  // целиком. Цена решения — сохранение материализует дефолты в колонку: смена
+  // общего слогана до такой формы больше не доедет.
+  const saved = resolveLinkPreview(form, form.linkPreview)
   const [draft, setDraft] = useState<LinkPreview>(saved)
-  // Деталь формы — источник истины: её могли поменять в другой вкладке. Сверка в
-  // рендере, а не эффектом (тот дал бы лишний каскадный рендер) — тот же приём,
-  // что на странице настроек формы.
-  const [synced, setSynced] = useState<LinkPreview>(saved)
-  if (synced !== saved && !open) {
-    setSynced(saved)
+  // Деталь формы — источник истины: её могли поменять в другой вкладке или мы сами
+  // только что сохранили. Сверка в рендере, а не эффектом (тот дал бы лишний
+  // каскадный рендер) — тот же приём, что на странице настроек формы.
+  //
+  // СВЕРКА ПО ЗНАЧЕНИЮ, А НЕ ПО ССЫЛКЕ, и это не вкусовщина: resolveLinkPreview
+  // собирает новый объект на каждый рендер, поэтому `synced !== saved` было бы верно
+  // всегда — setState в рендере, новый объект, снова setState. Бесконечный цикл,
+  // который не виден в типах и падает только в браузере.
+  const savedKey = JSON.stringify(saved)
+  const [syncedKey, setSyncedKey] = useState(savedKey)
+  if (syncedKey !== savedKey && !open) {
+    setSyncedKey(savedKey)
     setDraft(saved)
   }
 
@@ -105,10 +117,18 @@ export function LinkPreviewDialog({
 
         {!allowed && (
           // Плашка, а не блокировка полей: настроить и посмотреть можно, применится
-          // после перехода на платный тариф. Ссылка на тариф — в метке ПРО заголовка.
+          // после перехода на платный тариф. Ссылка ведёт на страницу тарифа — тем же
+          // адресом, что метка ПРО в заголовке; здесь она названа словами, потому что
+          // предложение перейти и есть содержание плашки.
           <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm">
-            Настроить карточку можно на любом тарифе, но к опубликованной форме она применится
-            только на платном — сейчас по ссылке показывается карточка по умолчанию.
+            Карточку можно настроить и сейчас, но чтобы она применилась к опубликованной форме,
+            нужен платный тариф.{' '}
+            <Link
+              to="/settings/plan"
+              className="font-medium underline underline-offset-4 hover:no-underline"
+            >
+              Перейти на тариф
+            </Link>
           </p>
         )}
 
@@ -118,7 +138,6 @@ export function LinkPreviewDialog({
               <Input
                 id="lp-site-name"
                 value={draft.siteName}
-                placeholder="Название вашей компании"
                 maxLength={MAX_LINK_PREVIEW_SITE_NAME_LEN}
                 onChange={(e) => set({ siteName: e.target.value })}
               />
@@ -139,7 +158,6 @@ export function LinkPreviewDialog({
               <Input
                 id="lp-title"
                 value={draft.title}
-                placeholder={displayFormTitle(form.title)}
                 maxLength={MAX_LINK_PREVIEW_TITLE_LEN}
                 onChange={(e) => set({ title: e.target.value })}
               />
@@ -149,7 +167,6 @@ export function LinkPreviewDialog({
               <Textarea
                 id="lp-description"
                 value={draft.description}
-                placeholder="О чём форма и сколько времени займёт"
                 maxLength={MAX_LINK_PREVIEW_DESCRIPTION_LEN}
                 onChange={(e) => set({ description: e.target.value })}
               />

@@ -2,7 +2,6 @@ package forms
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -66,13 +65,13 @@ const shellMarker = " data-form-shell"
 var headTmpl = template.Must(template.New("head").Parse(
 	`{{range .Preload}}<link rel="preload" as="font" type="font/woff2" crossorigin href="{{.}}">{{end}}` +
 		`<title>{{.Title}}</title>` +
-		`<meta name="description" content="{{.MetaDescription}}">` +
+		`<meta name="description" content="{{.Description}}">` +
 		`{{if .ThemeColor}}<meta name="theme-color" content="{{.ThemeColor}}">{{end}}` +
 		`{{if .Icon}}<link rel="icon" href="{{.Icon}}">{{end}}` +
 		`<meta property="og:type" content="website">` +
-		`{{if .SiteName}}<meta property="og:site_name" content="{{.SiteName}}">{{end}}` +
+		`<meta property="og:site_name" content="{{.SiteName}}">` +
 		`<meta property="og:title" content="{{.Title}}">` +
-		`{{if .Description}}<meta property="og:description" content="{{.Description}}">{{end}}` +
+		`<meta property="og:description" content="{{.Description}}">` +
 		`<meta property="og:image" content="{{.OGImage}}">` +
 		`<meta property="og:url" content="{{.URL}}">` +
 		`<meta name="twitter:card" content="summary_large_image">`,
@@ -80,15 +79,14 @@ var headTmpl = template.Must(template.New("head").Parse(
 
 type headData struct {
 	Title string
-	// Description — тизер для og:description (заголовки блоков); может быть пустым,
-	// тогда og:description опускается. MetaDescription — стандартный <meta
-	// name="description">, всегда непустой (SEO): тот же тизер или фолбэк.
-	Description     string
-	MetaDescription string
-	OGImage         string
-	URL             string
-	// SiteName — og:site_name из своей карточки ссылки; пусто → меты нет вовсе
-	// (площадка подставит домен сама, и это лучше, чем наша выдумка).
+	// Description — og:description и <meta name="description"> одной строкой: с
+	// появлением поля описания в карточке ссылки различать их стало нечем, а два
+	// значения на одну мысль расходятся при первой же правке.
+	Description string
+	OGImage     string
+	URL         string
+	// SiteName — имя площадки над заголовком карточки; всегда непусто (дефолт —
+	// имя сервиса).
 	SiteName string
 	// Icon — абсолютный URL своей иконки площадки; пусто → остаётся значок из
 	// разметки рендерера.
@@ -102,9 +100,21 @@ type headData struct {
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
 const maxOGDescriptionLen = 200
 
-// fallbackMetaDescription — <meta name="description"> для формы без заполненных
-// заголовков вопросов (пустой тизер): описание страницы для поисковиков.
-const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
+// Дефолты карточки ссылки — то, что видит получатель ссылки на форму, автор которой
+// карточку не настраивал (или настраивал, но тариф её не разрешает).
+//
+// ЗЕРКАЛО: те же две строки объявлены в web/app/src/entities/form.ts
+// (LINK_PREVIEW_SITE_NAME, LINK_PREVIEW_DESCRIPTION) — по ним кабинет рисует
+// предпросмотр и заполняет окно настройки. Разойдутся — предпросмотр начнёт врать
+// про то, что увидит получатель, а заметить это можно только отправив себе ссылку.
+const (
+	defaultSiteName = "Trillix"
+	// defaultDescription — общий текст, а НЕ тизер из заголовков первых вопросов
+	// (решение владельца 2026-08-27, отменяет прежнее поведение): у формы появилось
+	// своё поле описания, и держать рядом второй, выводимый источник значило бы
+	// объяснять автору, почему в окне одно, а по ссылке другое.
+	defaultDescription = "Форма на Trillix — соберите свою за пару минут."
+)
 
 // fallbackFormTitle — <title> вкладки и og:title формы, у которой автор заголовок
 // стёр (фаза 15). На самой странице заголовка тогда нет вовсе — так решил автор, —
@@ -282,14 +292,11 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Схема разбирается ОДИН раз на все три её роли в этом ответе: тизер описания,
-	// оформление оболочки и шрифт для preload. Разбор отказоустойчив — битая схема
-	// даёт страницу без тизера и без оформления, а не 500.
+	// Схема разбирается ради оформления оболочки и шрифта для preload. Разбор
+	// отказоустойчив — битая схема даёт страницу без оформления, а не 500.
 	var design *domain.FormDesign
-	var desc string
 	if schema, err := domain.ValidateSchema(pf.Schema); err == nil {
 		design = schema.Design
-		desc = ogDescription(schema)
 	}
 
 	// Своя карточка ссылки поверх дефолтов. Право тарифа спрашивается ЗДЕСЬ, при
@@ -298,15 +305,20 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 	card := h.linkPreview(r, pf.WorkspaceID, pf.LinkPreview)
 
 	title := titleOrFallback(pf.Title)
-	if card != nil && card.Title != "" {
-		title = card.Title
-	}
-	if card != nil && card.Description != "" {
-		desc = truncateRunes(card.Description, maxOGDescriptionLen)
-	}
-	metaDesc := desc
-	if metaDesc == "" {
-		metaDesc = fallbackMetaDescription
+	desc := defaultDescription
+	siteName := defaultSiteName
+	if card != nil {
+		// Пустое поле карточки = «оставить дефолт», а не «показать пустоту»: карточка,
+		// у которой заполнен один заголовок, — законное и частое состояние.
+		if card.Title != "" {
+			title = card.Title
+		}
+		if card.Description != "" {
+			desc = truncateRunes(card.Description, maxOGDescriptionLen)
+		}
+		if card.SiteName != "" {
+			siteName = card.SiteName
+		}
 	}
 
 	// prefix + <атрибуты оболочки> + mid + <голова формы> + tail. Рендерим в буфер:
@@ -323,16 +335,15 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := headData{
-		Title:           title,
-		Description:     desc,
-		MetaDescription: metaDesc,
-		OGImage:         h.ogImageURL,
-		URL:             h.publicBaseURL + "/r/" + slug,
-		ThemeColor:      domain.DesignThemeColor(design),
-		Preload:         h.fontPreload(doc, design),
+		Title:       title,
+		Description: desc,
+		SiteName:    siteName,
+		OGImage:     h.ogImageURL,
+		URL:         h.publicBaseURL + "/r/" + slug,
+		ThemeColor:  domain.DesignThemeColor(design),
+		Preload:     h.fontPreload(doc, design),
 	}
 	if card != nil {
-		data.SiteName = card.SiteName
 		if url := h.mediaURL(card.ImageKey); url != "" {
 			data.OGImage = url
 		}
@@ -393,41 +404,6 @@ func (h *PublicHandler) fontPreload(doc *indexDoc, d *domain.FormDesign) []strin
 		}
 	}
 	return out
-}
-
-// ogDescriptionFromSchema — тизер по сырой схеме. Отдельно от ogDescription, потому
-// что схему для страницы формы разбирает getHTML (ей нужен ещё и design), а тесту
-// разбора удобнее сырой JSON.
-func ogDescriptionFromSchema(schema json.RawMessage) string {
-	s, err := domain.ValidateSchema(schema)
-	if err != nil {
-		return ""
-	}
-	return ogDescription(s)
-}
-
-// ogDescription собирает подзаголовок превью из формы: тексты первых блоков-подписей
-// (title/label) через « · ». Отдельного поля описания у формы нет, поэтому берём
-// осмысленный тизер из её содержимого. Схему, которую не удалось разобрать, сюда не
-// передают вовсе — тизер тогда пуст, а страница отдаётся как обычно.
-func ogDescription(s domain.FormSchema) string {
-	labels := make([]string, 0, 3)
-	for _, b := range s.Blocks {
-		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
-			continue
-		}
-		// Плоский текст: og:description читают краулеры и соцсети, разметке там места
-		// нет (фаза 14).
-		text := strings.TrimSpace(domain.PlainText(b.Text))
-		if text == "" {
-			continue
-		}
-		labels = append(labels, text)
-		if len(labels) == 3 {
-			break
-		}
-	}
-	return truncateRunes(strings.Join(labels, " · "), maxOGDescriptionLen)
 }
 
 // truncateRunes обрезает строку до n рун (не байт — кириллица), добавляя «…».
