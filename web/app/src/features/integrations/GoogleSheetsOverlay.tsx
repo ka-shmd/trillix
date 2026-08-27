@@ -421,7 +421,19 @@ function SetupBody({
     <div className="flex flex-col gap-6">
       {/* Состояние существующей связки — первым делом: человек открыл её, скорее
           всего, потому что что-то не так. */}
-      {connection && <ConnectionState formId={formId} connection={connection} />}
+      {connection && (
+        <ConnectionState
+          formId={formId}
+          connection={connection}
+          // Человек уже выбрал другую цель — связка переезжает, и прежний лист
+          // вместе со своей бедой перестаёт быть её делом.
+          moving={
+            setup.account !== connection.accountId ||
+            setup.spreadsheet !== connection.spreadsheetId ||
+            setup.sheet !== String(connection.sheetId)
+          }
+        />
+      )}
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="integration-name">Название подключения</Label>
@@ -685,7 +697,16 @@ function SpreadsheetField({
 // то, ради чего связку заводили, второе отвечает на вопрос, которого никто не
 // задавал, открывая настройки. Когда появится журнал доставок (BACKLOG), время
 // последней уедет туда, где его ищут.
-function ConnectionState({ formId, connection }: { formId: string; connection: FormSheet }) {
+function ConnectionState({
+  formId,
+  connection,
+  moving,
+}: {
+  formId: string
+  connection: FormSheet
+  // moving — в полях выбрана НЕ та цель, что записана у связки.
+  moving: boolean
+}) {
   // Перезалив живёт ВНУТРИ предупреждения, а не отдельной кнопкой рядом: причина
   // и выход из неё стоят в одном месте, и человеку не приходится догадываться,
   // что красный текст лечится кнопкой под ним. Из этого следует и обратное — у
@@ -693,6 +714,20 @@ function ConnectionState({ formId, connection }: { formId: string; connection: F
   // (дубль после ретрая, строки, удалённые автором руками). Решение владельца
   // 2026-08-27; понадобится вход и в спокойном состоянии — ему место рядом с
   // журналом доставок, там же, где «повторить отправку» (BACKLOG).
+  // Переезд сам по себе и есть лечение: в новом листе пишется свежая шапка,
+  // колонки собираются заново, статус и last_error гасятся вместе с записью цели.
+  // Поэтому предупреждения здесь нет — и, что важнее, нет кнопки перезалива:
+  // она чистит СТАРЫЙ лист, тот самый, который человек в этот момент покидает.
+  // Красный блок с разрушительным действием над покидаемой таблицей — худшее,
+  // что можно показать посреди правки.
+  if (moving) {
+    return connection.status === 'broken' ? (
+      <p className="text-sm text-muted-foreground">
+        Связка переедет в другой лист — там будет своя шапка, и нынешняя ошибка уйдёт вместе с
+        переездом.
+      </p>
+    ) : null
+  }
   if (connection.status === 'broken') {
     return (
       <div

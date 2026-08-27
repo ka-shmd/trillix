@@ -565,6 +565,35 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
   })
 
+  // Человек уже выбрал другой лист — связка переезжает, и прежняя беда перестаёт
+  // быть её делом. Красный блок здесь не просто лишний: в нём стоит «Перезалить
+  // лист», а перезалив чистит СТАРЫЙ лист — тот самый, который человек покидает.
+  it('выбрал другую цель — предупреждение и перезалив уходят', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [
+          conn({
+            name: 'Архив',
+            spreadsheetId: 'ss-old',
+            status: 'broken',
+            lastError: 'Колонки листа…',
+          }),
+        ],
+      }),
+    )
+    openConnection()
+    expect(screen.getByRole('button', { name: /перезалить лист/i })).toBeTruthy()
+
+    fireEvent.click(screen.getByLabelText('Таблица'))
+    fireEvent.click(screen.getByRole('option', { name: /создать новую таблицу/i }))
+
+    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+    expect(screen.queryByText(/Колонки листа/)).toBeNull()
+    // Молчать совсем тоже нельзя: человек пришёл сюда из-за ошибки.
+    expect(screen.getByText(/ошибка уйдёт вместе с переездом/i)).toBeTruthy()
+  })
+
   // Значок у предупреждения: красный текст в рамке легко принять за подпись поля,
   // а треугольник читается сигналом до того, как текст прочитан.
   it('предупреждение помечено значком', () => {
