@@ -44,8 +44,14 @@ export function IntegrationsView({ formId }: { formId: string }) {
     return <ErrorState title="Не удалось загрузить интеграции." onRetry={() => state.refetch()} />
   }
 
-  const { connections } = state.data
+  const { connections, account } = state.data
   const editing = connections.find((c) => c.id === overlay) ?? null
+  // Аккаунт, потерявший токен, — ЭТОТ, а не «аккаунт пространства»: связки одной
+  // формы могут ехать разными подключениями (и даже чужими). Чужого в списке
+  // спрашивающего нет, и про него мы правды не знаем — считаем, что всё цело:
+  // соврать «сломано» про рабочую связку хуже, чем промолчать.
+  const lost = (connection: FormSheet) =>
+    account.accounts.find((a) => a.id === connection.accountId)?.needsReconnect ?? false
 
   return (
     <div className="flex flex-col gap-12">
@@ -64,7 +70,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
                 <ConnectionRow
                   formId={formId}
                   connection={connection}
-                  accountLost={state.data.account.needsReconnect}
+                  accountLost={lost(connection)}
                   onEdit={() => setOverlay(connection.id)}
                 />
               </li>
@@ -125,7 +131,7 @@ function ConnectionRow({
 }: {
   formId: string
   connection: FormSheet
-  // accountLost — аккаунт пространства требует переподключения. Состояние
+  // accountLost — аккаунт ЭТОЙ связки требует переподключения. Состояние
   // связки при этом всё ещё live: доставка узнает о беде, только когда придёт
   // ответ. Строка обязана сказать правду раньше — иначе человек видит зелёное
   // «синхронизируются» ровно до первого потерянного ответа.
@@ -159,6 +165,11 @@ function ConnectionRow({
           >
             таблицей
           </a>
+          {/* Через чей аккаунт едет связка. Раньше он был один на пространство и
+              называть его в строке было незачем; теперь их сколько угодно, и в
+              команде связку мог завести коллега — без подписи строка не
+              объясняет, почему её нельзя перенастроить. */}
+          {connection.accountEmail && <> · {connection.accountEmail}</>}
         </p>
       </div>
 

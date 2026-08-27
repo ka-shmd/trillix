@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import type { FormIntegrations, FormSheet } from '../../entities/integration'
+import type { ConnectedAccount, FormIntegrations, FormSheet } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
 import { integrationKeys } from './keys'
 
@@ -21,8 +21,8 @@ vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
   return {
     ...actual,
-    listSpreadsheets: (formId: string) =>
-      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(formId),
+    listSpreadsheets: (accountId: string) =>
+      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(accountId),
   }
 })
 
@@ -46,14 +46,24 @@ function popupOutcome(outcome: string) {
 afterEach(cleanup)
 
 const FORM_ID = 'form-1'
+const ACCOUNT_ID = 'acc-1'
+
+// account — подключённый аккаунт человека. Их сколько угодно (ADR §10), поэтому
+// фикстура параметризована: половина новых проверок про ВТОРОЙ.
+function account(patch: Partial<ConnectedAccount> = {}): ConnectedAccount {
+  return {
+    id: ACCOUNT_ID,
+    email: 'author@gmail.com',
+    needsReconnect: false,
+    connectedAt: '2026-08-27T10:00:00Z',
+    ...patch,
+  }
+}
 
 const CONNECTED = {
   enabled: true,
   pickerEnabled: true,
-  connected: true,
-  needsReconnect: false,
-  canManage: true,
-  email: 'author@gmail.com',
+  accounts: [account()],
 }
 
 // conn — связка в состоянии «работает», если не сказано иное.
@@ -61,6 +71,8 @@ function conn(patch: Partial<FormSheet> = {}): FormSheet {
   return {
     id: 'conn-1',
     url: 'https://docs.google.com/spreadsheets/d/x/edit',
+    accountId: ACCOUNT_ID,
+    accountEmail: 'author@gmail.com',
     spreadsheetId: 'ss-old',
     sheetId: 0,
     enabled: true,
@@ -75,9 +87,7 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
     account: {
       enabled: true,
       pickerEnabled: false,
-      connected: false,
-      needsReconnect: false,
-      canManage: true,
+      accounts: [],
     },
     connections: [],
     ...patch,
@@ -104,7 +114,7 @@ function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
   if (seedSpreadsheets) {
-    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID), [
+    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID, ACCOUNT_ID), [
       { id: 'ss-old', name: 'Прошлая форма' },
     ])
   }
@@ -150,7 +160,7 @@ describe('два блока экрана', () => {
   it('доступ к аккаунту потерян — строка связки говорит «заново»', () => {
     renderView(
       state({
-        account: { ...CONNECTED, needsReconnect: true },
+        account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] },
         connections: [conn({ name: 'Архив' })],
       }),
     )
@@ -166,13 +176,7 @@ describe('два блока экрана', () => {
   it('провайдер не настроен на контуре — так написано в окне подключения', () => {
     renderView(
       state({
-        account: {
-          enabled: false,
-          pickerEnabled: false,
-          connected: false,
-          needsReconnect: false,
-          canManage: true,
-        },
+        account: { enabled: false, pickerEnabled: false, accounts: [] },
       }),
     )
     openSetup()
@@ -259,22 +263,62 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
-  it('редактор видит интеграцию, но подключает аккаунт владелец', () => {
+  // Аккаунт Google принадлежит ЧЕЛОВЕКУ, и роль в пространстве его не гейтит
+  // (ADR §10, 2026-08-27). Прежде здесь стоял отказ редактору — сторожим, что он
+  // не вернулся: подключить свой Диск вправе любой, кто дошёл до этого экрана.
+  it('подключение не спрашивает роль в пространстве', () => {
+    renderView(state())
+    openSetup()
+
+    expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
+    expect(screen.queryByText(/может владелец пространства/i)).toBeNull()
+  })
+
+  // Аккаунтов у человека сколько угодно, и выбирает он их там же, где таблицу.
+  // Пункт «Подключить другой аккаунт» стоит В СПИСКЕ: для человека это тот же
+  // вопрос «чьим аккаунтом», а не отдельное действие.
+  it('аккаунт выбирается дропдауном, подключение нового — пунктом в нём', () => {
     renderView(
       state({
         account: {
-          enabled: true,
-          pickerEnabled: false,
-          connected: false,
-          needsReconnect: false,
-          canManage: false,
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
         },
       }),
     )
     openSetup()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
 
-    expect(screen.getByText(/подключить google может владелец/i)).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /подключить google$/i })).toBeNull()
+    expect(screen.getByRole('option', { name: 'author@gmail.com' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: /подключить другой аккаунт/i })).toBeTruthy()
+  })
+
+  // Таблица создана ЭТИМ аккаунтом и другому под scope drive.file не видна
+  // вовсе, поэтому у существующей связки аккаунт показывается, но не меняется.
+  it('у существующей связки аккаунт показан и не выбирается', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ name: 'Архив', accountEmail: 'colleague@gmail.com' })],
+      }),
+    )
+    openConnection()
+
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByText('colleague@gmail.com')).toBeTruthy()
+    // Именно НЕ комбобокс: список аккаунтов здесь означал бы обещание переезда,
+    // которого провайдер не даёт.
+    expect(dialog.queryByRole('combobox', { name: 'Аккаунт Google' })).toBeNull()
+  })
+
+  // Потерянный токен — про КОНКРЕТНЫЙ аккаунт: соседние продолжают работать, и
+  // лечение адресное.
+  it('у выбранного аккаунта потерян доступ — окно зовёт войти заново', () => {
+    renderView(state({ account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] } }))
+    openSetup()
+
+    expect(screen.getByText(/доступ к этому аккаунту потерян/i)).toBeTruthy()
   })
 
   it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {

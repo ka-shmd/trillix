@@ -2,7 +2,12 @@ import { useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { AlertCircle, Loader2 } from 'lucide-react'
 
-import type { FormIntegrations, FormSheet, SpreadsheetRef } from '../../entities/integration'
+import type {
+  ConnectedAccount,
+  FormIntegrations,
+  FormSheet,
+  SpreadsheetRef,
+} from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
 import { integrationKeys } from './keys'
@@ -12,6 +17,7 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
+  useDisconnectAccount,
   useRefreshIntegrations,
   useUpdateConnection,
 } from './queries'
@@ -57,6 +63,8 @@ const NEW_SPREADSHEET = '__new__'
 const BROWSE = '__browse__'
 // NEW_SHEET — «завести новый лист в этой книге».
 const NEW_SHEET = '__new_sheet__'
+// CONNECT — не выбор, а ДЕЙСТВИЕ в списке аккаунтов: пройти согласие Google.
+const CONNECT = '__connect__'
 
 export function GoogleSheetsOverlay({
   formId,
@@ -86,7 +94,7 @@ export function GoogleSheetsOverlay({
   // «выбрал файл на Диске — оверлей перезагрузился, и ничего не произошло»:
   // выбранная книга и набранное имя исчезали ровно в тот момент, когда
   // возвращалась модальность.
-  const setup = useSetupState(connection)
+  const setup = useSetupState(connection, state.account.accounts)
 
   // Что-нибудь ещё едет? Считаем ТОЛЬКО списки самого окна: ключ состояния формы
   // короче на один сегмент, и опрос переноса (раз в 3 секунды, пока связка
@@ -180,6 +188,10 @@ function LoadFailed() {
 // SetupState — набранные настройки подключения. Отдельным хуком, чтобы поля
 // перечислялись один раз, а не расползались по сигнатурам компонентов.
 interface SetupState {
+  // account — id выбранного подключения. Пусто = не выбрано (у нового человека
+  // выбирать не из чего, пока он не подключит первый аккаунт).
+  account: string
+  setAccount: (value: string) => void
   name: string
   setName: (value: string) => void
   spreadsheet: string
@@ -197,7 +209,13 @@ interface SetupState {
 // Правка открывается ТЕМ ЖЕ окном, что и подключение, и поля в нём —
 // сегодняшние значения связки. Второй экран с другой раскладкой заставлял бы
 // человека заново искать, где что: вопросы-то одни и те же.
-function useSetupState(connection: FormSheet | null): SetupState {
+function useSetupState(connection: FormSheet | null, accounts: ConnectedAccount[]): SetupState {
+  // Аккаунт связки при правке НЕ меняется, поэтому при правке он просто её
+  // собственный. При заведении новой берём единственный, если он один, — выбор
+  // из одного варианта человек всё равно делает не думая.
+  const [account, setAccount] = useState(
+    connection ? connection.accountId : (accounts[0]?.id ?? ''),
+  )
   const [name, setName] = useState(connection?.name ?? '')
   const [spreadsheet, setSpreadsheetValue] = useState(
     connection ? connection.spreadsheetId : NEW_SPREADSHEET,
@@ -215,6 +233,15 @@ function useSetupState(connection: FormSheet | null): SetupState {
   )
 
   return {
+    account,
+    setAccount: (value: string) => {
+      setAccount(value)
+      // Сменили аккаунт — прежняя книга лежит в ЧУЖОМ Диске и этому аккаунту
+      // недоступна (scope drive.file): выбор обязан начаться заново.
+      setSpreadsheetValue(NEW_SPREADSHEET)
+      setSheet(NEW_SHEET)
+      setPicked(null)
+    },
     name,
     setName,
     spreadsheet,
@@ -250,16 +277,19 @@ function SetupBody({
   onDone: () => void
   onPickerOpenChange: (open: boolean) => void
 }) {
-  const { account, workspaceId } = state
+  const { account } = state
   const create = useCreateSheet(formId)
   const update = useUpdateConnection(formId)
   const saving = create.isPending || update.isPending
   const failed = create.isError || update.isError
   const failure = create.error ?? update.error
 
-  // Список таблиц имеет смысл только у подключённого аккаунта: это поход к
+  // Список таблиц имеет смысл только у ВЫБРАННОГО аккаунта: это поход к
   // провайдеру его токеном.
-  const sheets = useQuery({ ...spreadsheetsQueryOptions(formId), enabled: account.connected })
+  const sheets = useQuery({
+    ...spreadsheetsQueryOptions(formId, setup.account),
+    enabled: setup.account !== '',
+  })
 
   if (!account.enabled) {
     return (
@@ -269,10 +299,11 @@ function SetupBody({
     )
   }
 
-  if (!account.connected) {
-    return (
-      <ConnectAccount formId={formId} workspaceId={workspaceId} canManage={account.canManage} />
-    )
+  // Ни одного подключения — настраивать нечего: показываем только рассказ и
+  // согласие. Поля, которые всё равно заперты, — обещание работы, которой
+  // человек ещё не может сделать.
+  if (account.accounts.length === 0 && !connection) {
+    return <ConnectAccount formId={formId} />
   }
 
   return (
@@ -293,10 +324,14 @@ function SetupBody({
         />
       </div>
 
-      <ConnectedAccountField formId={formId} workspaceId={workspaceId} account={account} />
+      {connection ? (
+        <LockedAccountField connection={connection} />
+      ) : (
+        <AccountField formId={formId} accounts={account.accounts} setup={setup} />
+      )}
 
       <SpreadsheetField
-        formId={formId}
+        accountId={setup.account}
         setup={setup}
         options={sheets.data ?? []}
         listFailed={sheets.isError}
@@ -309,6 +344,7 @@ function SetupBody({
       {setup.spreadsheet !== NEW_SPREADSHEET && (
         <SheetField
           formId={formId}
+          accountId={setup.account}
           spreadsheetId={setup.spreadsheet}
           value={setup.sheet}
           onChange={setup.setSheet}
@@ -340,7 +376,7 @@ function SetupBody({
         </p>
       )}
 
-      <Button size="lg" disabled={saving} onClick={() => save()}>
+      <Button size="lg" disabled={saving || setup.account === ''} onClick={() => save()}>
         {connection ? 'Сохранить' : 'Подключить Google Таблицы'}
       </Button>
     </div>
@@ -365,7 +401,7 @@ function SetupBody({
       )
       return
     }
-    create.mutate({ name: setup.name, ...target }, { onSuccess: onDone })
+    create.mutate({ accountId: setup.account, name: setup.name, ...target }, { onSuccess: onDone })
   }
 }
 
@@ -375,16 +411,18 @@ function SetupBody({
 // текстом, а рядом всегда есть «создать новый лист».
 function SheetField({
   formId,
+  accountId,
   spreadsheetId,
   value,
   onChange,
 }: {
   formId: string
+  accountId: string
   spreadsheetId: string
   value: string
   onChange: (value: string) => void
 }) {
-  const sheets = useQuery(sheetsQueryOptions(formId, spreadsheetId))
+  const sheets = useQuery(sheetsQueryOptions(formId, accountId, spreadsheetId))
 
   return (
     <div className="flex flex-col gap-2">
@@ -422,14 +460,14 @@ function SheetField({
 // Picker — единственный способ дать выбрать свой файл, не прося доступ ко всему
 // Диску (ADR §10).
 function SpreadsheetField({
-  formId,
+  accountId,
   setup,
   options,
   listFailed,
   pickerEnabled,
   onPickerOpenChange,
 }: {
-  formId: string
+  accountId: string
   setup: SetupState
   options: SpreadsheetRef[]
   listFailed: boolean
@@ -446,7 +484,7 @@ function SpreadsheetField({
     // диалога, у которого погашены pointer-events снаружи, и окажется мёртвым.
     onPickerOpenChange(true)
     try {
-      const chosen = await pickSpreadsheet(await getPickerCredentials(formId))
+      const chosen = await pickSpreadsheet(await getPickerCredentials(accountId))
       // null — окно закрыли, ничего не выбрав. Это не ошибка и не повод что-то
       // менять на экране.
       if (chosen) {
@@ -551,15 +589,11 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
 }
 
 // ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
-function ConnectAccount({
-  formId,
-  workspaceId,
-  canManage,
-}: {
-  formId: string
-  workspaceId: string
-  canManage: boolean
-}) {
+//
+// Права здесь не спрашиваются: человек подключает СВОЙ аккаунт Google, и роль в
+// пространстве на это не влияет (ADR §10, 2026-08-27). Прежде на этом месте
+// стояло «Подключить Google может владелец пространства».
+function ConnectAccount({ formId }: { formId: string }) {
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
   const refresh = useRefreshIntegrations(formId)
   const popup = useOAuthPopup((result) => {
@@ -570,21 +604,13 @@ function ConnectAccount({
     if (result === 'integration_ok') refresh()
   })
 
-  if (!canManage) {
-    return (
-      <p className="text-center text-sm text-muted-foreground">
-        Подключить Google может владелец пространства.
-      </p>
-    )
-  }
-
   return (
     <div className="flex flex-col gap-5">
       {/* Трансграничная передача названа ДО перехода к согласию, а не после:
           ответы уезжают в Google (США), и продукт не делает этого молча (спека
           design/integrations-gsheets.md §10, «Безопасность и 152-ФЗ»). Вторая
-          половина той же меры — `connected_by` в базе: запись, чьим согласием
-          ответы уезжают наружу. */}
+          половина той же меры — user_id в базе: запись, чьим согласием ответы
+          уезжают наружу. */}
       <p className="text-sm text-muted-foreground">
         Ответы, включая персональные данные респондентов, могут быть переданы в сервисы Google.
       </p>
@@ -594,10 +620,10 @@ function ConnectAccount({
           отдельное окно и гасит переход, только если это удалось. */}
       <Button asChild size="lg">
         <a
-          href={startUrl(workspaceId)}
+          href={startUrl}
           onClick={(e) => {
             setOutcome(null)
-            if (popup.open(startUrl(workspaceId))) e.preventDefault()
+            if (popup.open(startUrl)) e.preventDefault()
           }}
         >
           Подключить Google
@@ -614,50 +640,138 @@ function ConnectAccount({
   )
 }
 
-// ConnectedAccountField — от чьего имени пишем. Подключение живёт у
-// ПРОСТРАНСТВА, а не у формы, поэтому здесь оно показывается, а не выбирается:
-// второй аккаунт — отдельная работа (спека §2).
-function ConnectedAccountField({
+// AccountField — каким подключением ехать. СЕЛЕКТ, а не показ одного аккаунта:
+// аккаунтов у человека сколько угодно (личный Диск и рабочий), и выбирает он их
+// здесь же, где выбирает таблицу.
+//
+// Пункт «Подключить другой аккаунт» стоит В СПИСКЕ, а не кнопкой рядом: для
+// человека это третий способ ответить на тот же вопрос «чьим аккаунтом», и
+// разносить их по разным элементам управления значит делать вид, что вопросов
+// два. Тот же приём, что у «Выбрать на Google Диске» в поле таблицы.
+//
+// Отдельной кнопки «Переподключить» нет, и это не пропуск: адрес похода один и
+// тот же, а выбирает аккаунт человек в окне Google — заход тем же обновит
+// строку, другим заведёт вторую. Вторая кнопка обещала бы различие, которого
+// нет ни на бэке, ни у провайдера.
+function AccountField({
   formId,
-  workspaceId,
-  account,
+  accounts,
+  setup,
 }: {
   formId: string
-  workspaceId: string
-  account: FormIntegrations['account']
+  accounts: ConnectedAccount[]
+  setup: SetupState
 }) {
+  const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
   const refresh = useRefreshIntegrations(formId)
-  // Смена аккаунта тоже требует перезапроса — иначе в поле останется прежняя
-  // почта, и человек решит, что смена не сработала.
+  const disconnect = useDisconnectAccount()
   const popup = useOAuthPopup((result) => {
+    setOutcome(result === 'integration_ok' ? null : result)
     if (result === 'integration_ok') refresh()
   })
 
+  const chosen = accounts.find((a) => a.id === setup.account) ?? null
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="integration-account">Аккаунт Google</Label>
+      <Select
+        value={setup.account}
+        onValueChange={(next) => {
+          // CONNECT — действие, а не значение: выбор остаётся прежним, пока
+          // человек не пройдёт согласие в окне Google.
+          if (next === CONNECT) {
+            setOutcome(null)
+            popup.open(startUrl)
+            return
+          }
+          setup.setAccount(next)
+        }}
+      >
+        <SelectTrigger
+          id="integration-account"
+          className="w-full text-base data-[size=default]:h-10"
+        >
+          <SelectValue placeholder="Выберите аккаунт" />
+        </SelectTrigger>
+        <SelectContent>
+          {accounts.length > 0 && (
+            <SelectGroup>
+              <SelectLabel>Мои аккаунты</SelectLabel>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.email}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )}
+          <SelectSeparator />
+          <SelectGroup>
+            <SelectItem value={CONNECT}>
+              {popup.waiting ? 'Ждём подтверждения в окне Google…' : 'Подключить другой аккаунт'}
+            </SelectItem>
+          </SelectGroup>
+        </SelectContent>
+      </Select>
+
+      {/* Потерянный токен важнее всего остального в этом поле: пока он не
+          обновлён, ни одна связка этого аккаунта не работает, а лечение —
+          пройти согласие заново тем же аккаунтом. */}
+      {chosen?.needsReconnect && (
+        <p role="alert" className="text-sm text-destructive">
+          Доступ к этому аккаунту потерян. Выберите «Подключить другой аккаунт» и войдите в него
+          заново.
+        </p>
+      )}
+
+      {chosen && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 self-start px-0 text-xs text-muted-foreground hover:bg-transparent"
+          disabled={disconnect.isPending}
+          onClick={() =>
+            disconnect.mutate(chosen.id, {
+              // Отключение уносит каскадом ВСЕ связки этого аккаунта, поэтому
+              // выбор надо сбросить: остаться на id, которого больше нет,
+              // значит показывать пустой селект как выбранный.
+              onSuccess: () => setup.setAccount(''),
+            })
+          }
+        >
+          Отключить {chosen.email}
+        </Button>
+      )}
+
+      {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
+      {outcome && (
+        <p role="status" className="text-sm text-destructive">
+          {connectFailureText(outcome)}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// LockedAccountField — аккаунт существующей связки. Показывается, но не
+// меняется, и это не упрощение: таблица создана ЭТИМ аккаунтом, а другому она
+// под scope drive.file не видна вовсе. «Сменить аккаунт» здесь означало бы
+// «завести другую таблицу», то есть новую связку, — её и надо завести.
+//
+// Почта показывается и когда аккаунт ЧУЖОЙ: в команде связку заводит один
+// участник, а открывает другой, и без подписи он не поймёт, почему не может её
+// перенастроить.
+function LockedAccountField({ connection }: { connection: FormSheet }) {
   return (
     <div className="flex flex-col gap-2">
       <Label>Аккаунт Google</Label>
-      <div className="flex min-h-10 flex-wrap items-center gap-2 rounded-md border px-3 py-2">
-        <span className="text-base">{account.email}</span>
-        {account.canManage && (
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="ml-auto h-7 text-xs"
-            title="Заменит подключение пространства: таблицы, созданные прежним аккаунтом, перестанут наполняться"
-          >
-            <a
-              href={startUrl(workspaceId)}
-              onClick={(e) => {
-                if (popup.open(startUrl(workspaceId))) e.preventDefault()
-              }}
-            >
-              Сменить аккаунт
-            </a>
-          </Button>
-        )}
+      <div className="flex min-h-10 items-center rounded-md border px-3 py-2">
+        <span className="truncate text-base">{connection.accountEmail}</span>
       </div>
-      {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
+      <p className="text-sm text-muted-foreground">
+        Таблица создана этим аккаунтом и другому недоступна. Чтобы лить ответы через другой аккаунт,
+        подключите ещё одну интеграцию.
+      </p>
     </div>
   )
 }

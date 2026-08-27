@@ -3,6 +3,7 @@ import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query
 import { integrationKeys } from './keys'
 import {
   createSheet,
+  disconnectAccount,
   getFormIntegrations,
   listSheets,
   listSpreadsheets,
@@ -11,7 +12,7 @@ import {
   type ConnectOptions,
 } from './api'
 
-// Состояние интеграций формы одной поездкой: аккаунт пространства и список
+// Состояние интеграций формы одной поездкой: подключения спрашивающего и список
 // связок приезжают вместе — экран показывает их как одно целое.
 export function formIntegrationsQueryOptions(formId: string) {
   return queryOptions({
@@ -26,20 +27,20 @@ export function formIntegrationsQueryOptions(formId: string) {
 
 // Список таблиц запрашивается только когда окно открыто и аккаунт подключён:
 // это поход к провайдеру, и делать его на каждый показ таба незачем.
-export function spreadsheetsQueryOptions(formId: string) {
+export function spreadsheetsQueryOptions(formId: string, accountId: string) {
   return queryOptions({
-    queryKey: integrationKeys.spreadsheets(formId),
-    queryFn: () => listSpreadsheets(formId),
+    queryKey: integrationKeys.spreadsheets(formId, accountId),
+    queryFn: () => listSpreadsheets(accountId),
     staleTime: 30_000,
   })
 }
 
-// Листы выбранной книги. Ключ несёт id книги: выбрал другую — приехали её листы,
-// а не остались чужие.
-export function sheetsQueryOptions(formId: string, spreadsheetId: string) {
+// Листы выбранной книги. Ключ несёт id книги И аккаунта: сменил любое из двух —
+// приехали листы новой пары, а не остались чужие.
+export function sheetsQueryOptions(formId: string, accountId: string, spreadsheetId: string) {
   return queryOptions({
-    queryKey: integrationKeys.sheets(formId, spreadsheetId),
-    queryFn: () => listSheets(formId, spreadsheetId),
+    queryKey: integrationKeys.sheets(formId, accountId, spreadsheetId),
+    queryFn: () => listSheets(accountId, spreadsheetId),
     staleTime: 30_000,
   })
 }
@@ -63,6 +64,18 @@ export function useCreateSheet(formId: string) {
   return useMutation({
     mutationFn: (opts: ConnectOptions) => createSheet(formId, opts),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Отключение аккаунта уносит каскадом связки, которые им ехали, — в том числе у
+// СОСЕДНИХ форм. Поэтому инвалидируется весь корень интеграций, а не ключ этой
+// формы: точечная инвалидация оставила бы на других вкладках связки, которых
+// больше нет.
+export function useDisconnectAccount() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (accountId: string) => disconnectAccount(accountId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.all() }),
   })
 }
 

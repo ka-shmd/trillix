@@ -30,6 +30,9 @@ export function getFormIntegrations(formId: string): Promise<FormIntegrations> {
 
 // ConnectOptions — то, что человек назвал в окне подключения.
 export interface ConnectOptions {
+  // accountId — каким подключением ехать. Обязателен: аккаунтов у человека
+  // сколько угодно, и «подразумеваемого» среди них нет.
+  accountId: string
   name: string
   // Пусто — заводим новую книгу; иначе работаем в выбранной.
   spreadsheetId: string
@@ -43,6 +46,7 @@ export function createSheet(formId: string, opts: ConnectOptions): Promise<FormS
   return apiRequest(`/forms/${formId}/integrations/google`, {
     method: 'POST',
     body: {
+      accountId: opts.accountId,
       name: opts.name,
       spreadsheetId: opts.spreadsheetId,
       sheetId: opts.sheetId,
@@ -53,9 +57,12 @@ export function createSheet(formId: string, opts: ConnectOptions): Promise<FormS
 }
 
 // Листы выбранной книги — второй шаг выбора.
-export async function listSheets(formId: string, spreadsheetId: string): Promise<SheetRef[]> {
+//
+// Адрес по АККАУНТУ, а не по форме: книга лежит в чужом Диске, и право на её
+// оглавление даёт владение аккаунтом, а не роль в пространстве (ADR §10).
+export async function listSheets(accountId: string, spreadsheetId: string): Promise<SheetRef[]> {
   const res = await apiRequest(
-    `/forms/${formId}/integrations/google/sheets?spreadsheetId=${encodeURIComponent(spreadsheetId)}`,
+    `/integrations/google/accounts/${accountId}/sheets?spreadsheetId=${encodeURIComponent(spreadsheetId)}`,
     { schema: sheetListSchema },
   )
   return res.sheets
@@ -64,27 +71,32 @@ export async function listSheets(formId: string, spreadsheetId: string): Promise
 // Credentials окна выбора файла: живой токен Google на час. Запрашиваются по
 // нажатию кнопки, а не при показе экрана, — токен не должен лежать в стейте
 // страницы просто так.
-export function getPickerCredentials(formId: string): Promise<PickerCredentials> {
-  return apiRequest(`/forms/${formId}/integrations/google/picker`, {
+export function getPickerCredentials(accountId: string): Promise<PickerCredentials> {
+  return apiRequest(`/integrations/google/accounts/${accountId}/picker`, {
     schema: pickerCredentialsSchema,
   })
 }
 
 // Таблицы для выбора в окне. Запрашиваются при его открытии: список живёт у
 // провайдера и устаревает, кэшировать его надолго нечестно.
-export async function listSpreadsheets(formId: string): Promise<SpreadsheetRef[]> {
-  const res = await apiRequest(`/forms/${formId}/integrations/google/spreadsheets`, {
+export async function listSpreadsheets(accountId: string): Promise<SpreadsheetRef[]> {
+  const res = await apiRequest(`/integrations/google/accounts/${accountId}/spreadsheets`, {
     schema: spreadsheetListSchema,
   })
   return res.spreadsheets
 }
 
+// Отключить ОДИН свой аккаунт Google. Связки, которые им ехали, уносит каскад —
+// во всех пространствах разом; соседние аккаунты не затронуты.
+export function disconnectAccount(accountId: string): Promise<void> {
+  return apiRequest(`/integrations/google/accounts/${accountId}`, { method: 'DELETE' })
+}
+
 // Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.
 //
-// Перезалива листа и отключения аккаунта пространства здесь нет: ручки на бэке
-// есть (API.md), а входа в интерфейсе им пока не нашли — решение владельца
-// 2026-08-23, места для них записаны в BACKLOG. Держать мёртвый клиент в бандле
-// ради будущей кнопки незачем.
+// Перезалива листа здесь нет: ручка на бэке есть (API.md), а входа в интерфейсе
+// ей пока не нашли — решение владельца 2026-08-23, место записано в BACKLOG.
+// Держать мёртвый клиент в бандле ради будущей кнопки незачем.
 export function unlinkSheet(formId: string, connectionId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/integrations/${connectionId}`, { method: 'DELETE' })
 }
@@ -111,6 +123,9 @@ export function updateConnection(
 // startUrl — адрес, с которого начинается поход за согласием Google. Это не
 // вызов API, а НАВИГАЦИЯ: бэк отвечает редиректом и ставит cookie похода,
 // поэтому адрес нужен ссылкой/окном, а не fetch'ем.
-export function startUrl(workspaceId: string): string {
-  return `/api/v1/workspaces/${workspaceId}/integrations/google/start`
-}
+//
+// Пространства в адресе нет: человек подключает СВОЙ аккаунт, а не аккаунт
+// команды. Один и тот же адрес обслуживает и «подключить ещё один», и
+// «переподключить»: заход тем же аккаунтом Google обновляет строку, другим —
+// заводит вторую, и выбирает это человек в окне Google, а не мы за него.
+export const startUrl = '/api/v1/integrations/google/start'

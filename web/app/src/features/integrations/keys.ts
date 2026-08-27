@@ -9,7 +9,13 @@
 export const integrationKeys = {
   all: () => ['integrations'] as const,
   form: (formId: string) => ['integrations', formId] as const,
-  spreadsheets: (formId: string) => ['integrations', formId, 'spreadsheets'] as const,
-  sheets: (formId: string, spreadsheetId: string) =>
-    ['integrations', formId, 'sheets', spreadsheetId] as const,
+  // Списки живут у АККАУНТА (ручки адресуются им), но ключ всё равно вложен по
+  // ФОРМЕ: от этого зависит индикатор загрузки оверлея, и разносить их значило бы
+  // чинить его вторым механизмом. Плата — список таблиц одного аккаунта едет
+  // заново при открытии окна на другой форме; staleTime гасит это в пределах
+  // сессии, а поход к провайдеру всё равно устаревает.
+  spreadsheets: (formId: string, accountId: string) =>
+    ['integrations', formId, 'spreadsheets', accountId] as const,
+  sheets: (formId: string, accountId: string, spreadsheetId: string) =>
+    ['integrations', formId, 'sheets', accountId, spreadsheetId] as const,
 }
