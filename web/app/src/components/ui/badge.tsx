@@ -17,6 +17,13 @@ const badgeVariants = cva(
           'border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
         ghost: '[a&]:hover:bg-accent [a&]:hover:text-accent-foreground',
         link: 'text-primary underline-offset-4 [a&]:hover:underline',
+        // НАША ПРАВКА (у shadcn этого варианта нет), как `utility` у Button:
+        // метка платной возможности — второй акцент на своей мягкой подложке
+        // (`shared/ProTag.tsx`, docs/DESIGN-SYSTEM.md §6). Живёт вариантом, а не
+        // классами на месте: у `ghost`/`outline` ховер задан как `[a&]:hover:bg-accent`
+        // и специфичнее плоской утилиты — метка-ссылка на наведении серела бы.
+        // Переустановка компонента из shadcn эту правку сотрёт.
+        highlight: 'bg-highlight-soft text-highlight-bright [a&]:hover:bg-highlight/20',
       },
     },
     defaultVariants: {

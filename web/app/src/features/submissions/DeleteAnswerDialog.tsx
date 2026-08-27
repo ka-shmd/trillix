@@ -1,6 +1,6 @@
-import { useDeleteSubmission } from './queries'
+import { useDeletePartial, useDeleteSubmission } from './queries'
+import { ROW_WORDS, type AnswerRow } from './rows'
 import { formatDateTime } from '../../shared/format'
-import { type Submission } from '../../entities/submission'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,39 +12,46 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 
-// Подтверждение удаления ответа. Действие необратимо и уносит чужие данные, поэтому
-// подтверждение обязательно (docs/DESIGN-SYSTEM.md §7).
+// Подтверждение удаления строки раздела «Ответы» — отправленного ответа или
+// незавершённого. Действие необратимо и уносит чужие данные, поэтому подтверждение
+// обязательно (docs/DESIGN-SYSTEM.md §7).
 //
-// ОДИН компонент на оба входа — значок в строке таблицы и кнопку в окне ответа. Формулировка
-// вопроса, перечень мест, откуда ответ исчезнет, и сама мутация обязаны быть одни: два входа,
+// ОДИН компонент на оба входа — значок в строке таблицы и кнопку в окне строки. Формулировка
+// вопроса, перечень мест, откуда строка исчезнет, и сама мутация обязаны быть одни: два входа,
 // удаляющие по-разному, — это два разных обещания на одно действие.
-export function DeleteSubmissionDialog({
+//
+// Обе мутации вызываются ВСЕГДА, нужная выбирается по kind: хук под условием — это
+// сломанный порядок хуков, а не экономия. Ни одна из них ничего не делает до mutate.
+export function DeleteAnswerDialog({
   formId,
-  submission,
+  row,
   open,
   onOpenChange,
   onDeleted,
 }: {
   formId: string
-  submission: Submission
+  row: AnswerRow
   open: boolean
   onOpenChange: (open: boolean) => void
   // Что делает вызывающий после удаления: строка таблицы — ничего (список
-  // инвалидируется мутацией), окно ответа — закрывается, иначе показывало бы
+  // инвалидируется мутацией), окно строки — закрывается, иначе показывало бы
   // удалённое.
   onDeleted?: () => void
 }) {
-  const remove = useDeleteSubmission(formId)
+  const removeSubmission = useDeleteSubmission(formId)
+  const removePartial = useDeletePartial(formId)
+  const remove = row.kind === 'partial' ? removePartial : removeSubmission
+  const words = ROW_WORDS[row.kind]
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            Удалить ответ от {formatDateTime(submission.createdAt)}?
+            Удалить {words.oneLower} от {formatDateTime(row.at)}?
           </AlertDialogTitle>
           <AlertDialogDescription>
-            Это действие необратимо. Ответ исчезнет из таблицы, выгрузки и сводки.
+            Это действие необратимо. {words.deleteHint}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {remove.isError && (
@@ -59,9 +66,9 @@ export function DeleteSubmissionDialog({
             disabled={remove.isPending}
             onClick={(e) => {
               // Окно закрывается САМО по успеху, а не по клику: отказ сервера иначе
-              // остался бы за уже закрытым окном, и ответ выглядел бы удалённым.
+              // остался бы за уже закрытым окном, и строка выглядела бы удалённой.
               e.preventDefault()
-              remove.mutate(submission.id, {
+              remove.mutate(row.id, {
                 onSuccess: () => {
                   onOpenChange(false)
                   onDeleted?.()

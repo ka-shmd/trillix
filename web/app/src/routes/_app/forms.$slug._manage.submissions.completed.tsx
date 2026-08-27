@@ -9,5 +9,5 @@ export const Route = createFileRoute('/_app/forms/$slug/_manage/submissions/comp
 
 function CompletedSubmissionsPage() {
   const { slug } = Route.useParams()
-  return <SubmissionsView slug={slug} />
+  return <SubmissionsView slug={slug} kind="completed" />
 }

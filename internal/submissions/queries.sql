@@ -189,6 +189,74 @@ WHERE p.form_id = $1
 ORDER BY p.updated_at DESC, p.visit_id DESC
 LIMIT $2;
 
+-- name: ListFeedFirstPage :many
+-- Вкладка «Все ответы»: отправленные и незавершённые ОДНИМ списком по времени
+-- (спека design/analytics-tally.md §11). UNION ALL двух выборок, у каждой свой
+-- индекс и свой порядок, — и это записанная цена вкладки.
+--
+-- КЛЮЧ СОРТИРОВКИ — «время последней активности»: у ответа это отправка
+-- (created_at), у черновика — последняя правка (updated_at), то самое, что вкладка
+-- «Частичные» показывает в колонке даты. Сортируй мы черновики по created_at (как
+-- предполагала первая редакция спеки), список выглядел бы перемешанным: колонка
+-- показывала бы одно время, а порядок строился бы по другому. Плюс индекса под
+-- (form_id, created_at) у черновиков нет вовсе.
+--
+-- LIMIT стоит в КАЖДОЙ ветви и ещё раз снаружи: без внутренних Postgres прочитал бы
+-- обе выборки целиком, чтобы отсортировать объединение.
+(
+    SELECT 'submission'::text AS kind, s.id AS row_id, s.created_at AS at,
+           s.created_at AS started_at, NULL::text AS last_block_id,
+           s.answers, fv.version AS form_version
+    FROM submissions s
+    JOIN form_versions fv ON fv.id = s.form_version_id
+    WHERE s.form_id = $1 AND NOT s.over_quota
+    ORDER BY s.created_at DESC, s.id DESC
+    LIMIT sqlc.arg(row_limit)
+)
+UNION ALL
+(
+    SELECT 'partial'::text, p.visit_id, p.updated_at,
+           p.created_at, p.last_block_id,
+           p.answers, fv.version
+    FROM partial_submissions p
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    WHERE p.form_id = $1
+    ORDER BY p.updated_at DESC, p.visit_id DESC
+    LIMIT sqlc.arg(row_limit)
+)
+ORDER BY at DESC, row_id DESC
+LIMIT sqlc.arg(row_limit);
+
+-- name: ListFeedAfter :many
+-- Следующая страница ленты тем же составным курсором (время, id). Условие
+-- применяется В КАЖДОЙ ветви до объединения — иначе оно фильтровало бы уже
+-- склеенный результат, и страница выходила бы короче limit.
+(
+    SELECT 'submission'::text AS kind, s.id AS row_id, s.created_at AS at,
+           s.created_at AS started_at, NULL::text AS last_block_id,
+           s.answers, fv.version AS form_version
+    FROM submissions s
+    JOIN form_versions fv ON fv.id = s.form_version_id
+    WHERE s.form_id = $1 AND NOT s.over_quota
+      AND (s.created_at, s.id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+    ORDER BY s.created_at DESC, s.id DESC
+    LIMIT sqlc.arg(row_limit)
+)
+UNION ALL
+(
+    SELECT 'partial'::text, p.visit_id, p.updated_at,
+           p.created_at, p.last_block_id,
+           p.answers, fv.version
+    FROM partial_submissions p
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    WHERE p.form_id = $1
+      AND (p.updated_at, p.visit_id) < (sqlc.arg(cursor_at)::timestamptz, sqlc.arg(cursor_id)::uuid)
+    ORDER BY p.updated_at DESC, p.visit_id DESC
+    LIMIT sqlc.arg(row_limit)
+)
+ORDER BY at DESC, row_id DESC
+LIMIT sqlc.arg(row_limit);
+
 -- name: CountPartials :one
 -- Сколько черновиков у формы. Нужен вкладке «Незавершённые» и плашке тарифа:
 -- число показывается и тому, кому разбивка закрыта.

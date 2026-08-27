@@ -14,12 +14,16 @@ import { cn } from '@/lib/utils'
 //
 // Пояснение раздела ограничено половиной его ширины — см. комментарий в разметке.
 export function Section({
+  id,
   title,
   description,
   action,
   className,
   children,
 }: {
+  // id — якорь раздела: на него ссылаются хешем извне (образец — вкладка
+  // «Частичные», отправляющая за тумблером сбора в настройки формы).
+  id?: string
   title: React.ReactNode
   description?: React.ReactNode
   action?: React.ReactNode
@@ -27,7 +31,7 @@ export function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className={cn('@container flex flex-col gap-6', className)}>
+    <section id={id} className={cn('@container flex flex-col gap-6', className)}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-xl font-bold tracking-tight">{title}</h2>

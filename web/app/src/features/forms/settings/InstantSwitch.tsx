@@ -35,7 +35,7 @@ export function InstantSwitch({
   const shown = pending ?? checked
 
   return (
-    <div className="mt-4 flex items-center gap-3">
+    <div className="flex items-center gap-3">
       <Switch
         id={id}
         checked={shown}

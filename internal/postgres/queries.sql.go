@@ -2402,6 +2402,169 @@ func (q *Queries) ListEnabledFormIntegrations(ctx context.Context, formID uuid.U
 	return items, nil
 }
 
+const listFeedAfter = `-- name: ListFeedAfter :many
+(
+    SELECT 'submission'::text AS kind, s.id AS row_id, s.created_at AS at,
+           s.created_at AS started_at, NULL::text AS last_block_id,
+           s.answers, fv.version AS form_version
+    FROM submissions s
+    JOIN form_versions fv ON fv.id = s.form_version_id
+    WHERE s.form_id = $1 AND NOT s.over_quota
+      AND (s.created_at, s.id) < ($3::timestamptz, $4::uuid)
+    ORDER BY s.created_at DESC, s.id DESC
+    LIMIT $2
+)
+UNION ALL
+(
+    SELECT 'partial'::text, p.visit_id, p.updated_at,
+           p.created_at, p.last_block_id,
+           p.answers, fv.version
+    FROM partial_submissions p
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    WHERE p.form_id = $1
+      AND (p.updated_at, p.visit_id) < ($3::timestamptz, $4::uuid)
+    ORDER BY p.updated_at DESC, p.visit_id DESC
+    LIMIT $2
+)
+ORDER BY at DESC, row_id DESC
+LIMIT $2
+`
+
+type ListFeedAfterParams struct {
+	FormID   uuid.UUID
+	RowLimit int32
+	CursorAt pgtype.Timestamptz
+	CursorID uuid.UUID
+}
+
+type ListFeedAfterRow struct {
+	Kind        string
+	RowID       uuid.UUID
+	At          pgtype.Timestamptz
+	StartedAt   pgtype.Timestamptz
+	LastBlockID pgtype.Text
+	Answers     []byte
+	FormVersion int32
+}
+
+// Следующая страница ленты тем же составным курсором (время, id). Условие
+// применяется В КАЖДОЙ ветви до объединения — иначе оно фильтровало бы уже
+// склеенный результат, и страница выходила бы короче limit.
+func (q *Queries) ListFeedAfter(ctx context.Context, arg ListFeedAfterParams) ([]ListFeedAfterRow, error) {
+	rows, err := q.db.Query(ctx, listFeedAfter,
+		arg.FormID,
+		arg.RowLimit,
+		arg.CursorAt,
+		arg.CursorID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFeedAfterRow
+	for rows.Next() {
+		var i ListFeedAfterRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.RowID,
+			&i.At,
+			&i.StartedAt,
+			&i.LastBlockID,
+			&i.Answers,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFeedFirstPage = `-- name: ListFeedFirstPage :many
+(
+    SELECT 'submission'::text AS kind, s.id AS row_id, s.created_at AS at,
+           s.created_at AS started_at, NULL::text AS last_block_id,
+           s.answers, fv.version AS form_version
+    FROM submissions s
+    JOIN form_versions fv ON fv.id = s.form_version_id
+    WHERE s.form_id = $1 AND NOT s.over_quota
+    ORDER BY s.created_at DESC, s.id DESC
+    LIMIT $2
+)
+UNION ALL
+(
+    SELECT 'partial'::text, p.visit_id, p.updated_at,
+           p.created_at, p.last_block_id,
+           p.answers, fv.version
+    FROM partial_submissions p
+    JOIN form_versions fv ON fv.id = p.form_version_id
+    WHERE p.form_id = $1
+    ORDER BY p.updated_at DESC, p.visit_id DESC
+    LIMIT $2
+)
+ORDER BY at DESC, row_id DESC
+LIMIT $2
+`
+
+type ListFeedFirstPageParams struct {
+	FormID   uuid.UUID
+	RowLimit int32
+}
+
+type ListFeedFirstPageRow struct {
+	Kind        string
+	RowID       uuid.UUID
+	At          pgtype.Timestamptz
+	StartedAt   pgtype.Timestamptz
+	LastBlockID pgtype.Text
+	Answers     []byte
+	FormVersion int32
+}
+
+// Вкладка «Все ответы»: отправленные и незавершённые ОДНИМ списком по времени
+// (спека design/analytics-tally.md §11). UNION ALL двух выборок, у каждой свой
+// индекс и свой порядок, — и это записанная цена вкладки.
+//
+// КЛЮЧ СОРТИРОВКИ — «время последней активности»: у ответа это отправка
+// (created_at), у черновика — последняя правка (updated_at), то самое, что вкладка
+// «Частичные» показывает в колонке даты. Сортируй мы черновики по created_at (как
+// предполагала первая редакция спеки), список выглядел бы перемешанным: колонка
+// показывала бы одно время, а порядок строился бы по другому. Плюс индекса под
+// (form_id, created_at) у черновиков нет вовсе.
+//
+// LIMIT стоит в КАЖДОЙ ветви и ещё раз снаружи: без внутренних Postgres прочитал бы
+// обе выборки целиком, чтобы отсортировать объединение.
+func (q *Queries) ListFeedFirstPage(ctx context.Context, arg ListFeedFirstPageParams) ([]ListFeedFirstPageRow, error) {
+	rows, err := q.db.Query(ctx, listFeedFirstPage, arg.FormID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFeedFirstPageRow
+	for rows.Next() {
+		var i ListFeedFirstPageRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.RowID,
+			&i.At,
+			&i.StartedAt,
+			&i.LastBlockID,
+			&i.Answers,
+			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormFileKeys = `-- name: ListFormFileKeys :many
 SELECT id, object_key
 FROM submission_files

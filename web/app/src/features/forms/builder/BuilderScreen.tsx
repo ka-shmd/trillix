@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useStore } from 'zustand'
 import { Eye, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
 
@@ -7,7 +8,6 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
 import { PageActions, PageCrumbs } from '../../../shared/page/headerPortals'
 import { DesignDrawer } from './DesignDrawer'
-import { FormSettings } from './FormSettings'
 import { PreviewOverlay } from './PreviewOverlay'
 import { PublishControls } from './PublishControls'
 import { SaveIndicator, ConflictBanner } from './SaveIndicator'
@@ -21,14 +21,10 @@ import { useGlobalChord } from './useGlobalChord'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
-// Что показано вместо полотна. Полотно (edit) — документ из блоков; настройки — то,
-// чего на форме не видно (экран после отправки). Режим локальный: F5 возвращает в
-// редактор, ссылки на настройки нет (решение владельца).
-//
-// Просмотра среди режимов НЕТ: он не занимает место полотна, а наезжает на окно
-// целиком отдельным слоем (`PreviewOverlay`) — и потому живёт собственным флагом,
-// поверх любого режима.
-type Mode = 'edit' | 'settings'
+// Режимов у редактора больше нет: полотно — единственное, что он показывает.
+// Настройки уехали в раздел формы (`/forms/{slug}/settings`, решение владельца
+// 2026-08-26, отменяет прежнее «ссылки на настройки нет»), просмотр наезжает на окно
+// отдельным слоем (`PreviewOverlay`), оформление — шторкой сбоку.
 
 // BuilderScreen — редактор в стиле Tally: чистое документное полотно (SlashEditor),
 // а все элементы управления (статус сохранения, просмотр, публикация) порталятся в
@@ -68,8 +64,8 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   // обложку автор вправе выбрать первым же действием, раньше любой правки полотна, —
   // и тогда форму заводит она (mediaUpload.FormIdSource).
   const uploadTo: FormIdSource = detail.id || (() => ensureForm().then((f) => f.id))
-  const [mode, setMode] = useState<Mode>('edit')
   const [previewOpen, setPreviewOpen] = useState(false)
+  const navigate = useNavigate()
   // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
   // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
   // бы полотно и превратил подбор темы в угадывание.
@@ -170,17 +166,24 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         >
           <Palette className="size-4" /> Оформление
         </Button>
-        {/* Настройки формы — только вход, не тумблер: назад уводит кнопка на
-            самой странице. Тумблер здесь был бы вторым выходом мимо диалога
-            о несохранённых правках — и неочевидным (по иконке не догадаться,
-            что нажать её надо ещё раз). Иконка, а не текст: место в шапке
-            кончается, а сама страница подписана заголовком. */}
+        {/* Настройки — УХОД из редактора в раздел формы, а не режим внутри него.
+            Иконка, а не текст: место в шапке кончается, а страница подписана
+            собственным табом.
+
+            У НЕСОЗДАННОЙ формы адреса ещё нет (ленивое создание,
+            features/forms/draft.ts), поэтому клик её заводит: настройки живут по
+            настоящему slug'у, и вести туда `new` некуда. Форма появляется на
+            сервере на один клик раньше, чем прежде, — цена того, что у настроек
+            есть адрес. */}
         <Button
           variant="ghost"
           size="icon-sm"
-          className={mode === 'settings' ? '' : 'text-muted-foreground'}
-          aria-pressed={mode === 'settings'}
-          onClick={() => setMode('settings')}
+          className="text-muted-foreground"
+          onClick={() => {
+            void ensureForm()
+              .then(({ slug }) => navigate({ to: '/forms/$slug/settings', params: { slug } }))
+              .catch(() => undefined)
+          }}
           aria-label="Настройки формы"
           title="Настройки формы"
         >
@@ -194,9 +197,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
 
       {status === 'conflict' && <ConflictBanner />}
 
-      {mode === 'edit' && (
-        <SlashEditor formId={uploadTo} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
-      )}
+      <SlashEditor formId={uploadTo} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
           иначе `.rf-input{display:none}` из формы погасил бы поля самого кабинета.
@@ -211,26 +212,13 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         title={detail.title}
         canRemoveBadge={canRemoveBadge}
       />
-      {/* Настройки сохраняются кнопкой, а не автосейвом: saveNow уносит их сразу,
-          иначе индикатор ещё 800 мс дебаунса врал бы «не сохранено». */}
-      {mode === 'settings' && (
-        <FormSettings
-          detail={detail}
-          ensureForm={ensureForm}
-          onBack={() => setMode('edit')}
-          onSaved={saveNow}
-        />
-      )}
       {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
           проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,
           и видно, что это два разных элемента. Урок фазы 21 («закрытые диалоги не
           монтировать») тут не работает против нас: он про диалоги, подписанные на
           s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
-          подписана на s.design — он при вводе не меняется. Только в режиме полотна:
-          поверх превью или настроек шторке нечего показывать. */}
-      {mode === 'edit' && (
-        <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={setDesignOpen} />
-      )}
+          подписана на s.design — он при вводе не меняется. */}
+      <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={setDesignOpen} />
     </BuilderStoreContext.Provider>
   )
 }

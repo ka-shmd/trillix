@@ -51,6 +51,7 @@ import {
 } from '@/components/ui/sheet'
 
 import { useFeatureAllowed } from '../../plan/useFeature'
+import { ProTag } from '../../../shared/ProTag'
 
 import { ColorPicker } from './ColorPicker'
 import { CoverRow, LogoRow } from './DesignChrome'
@@ -513,20 +514,6 @@ function Group({
       </h3>
       {children}
     </section>
-  )
-}
-
-// ProTag — метка платной возможности. Ссылка, а не подпись: автор, увидевший её,
-// должен иметь возможность узнать цену тем же жестом, каким заметил ограничение.
-function ProTag() {
-  return (
-    <Link
-      to="/settings/plan"
-      className="text-muted-foreground border-border hover:text-foreground inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium tracking-wide uppercase"
-    >
-      <Lock className="size-3" aria-hidden="true" />
-      Pro
-    </Link>
   )
 }
 

@@ -159,6 +159,40 @@ export function useUpdateCollectPartial() {
 
 // Дубликация создаёт новую форму — инвалидируем список, чтобы копия появилась
 // сверху (остаёмся на дашборде, в редактор не уходим).
+// Экран после отправки — поля СХЕМЫ, а не колонки формы, поэтому правится тем же
+// PATCH'ем черновика, что и бейдж: берём схему целиком, подменяем два поля,
+// отправляем с `updatedAt` (оптимистичная блокировка — правка мимо редактора
+// обязана проиграть чужому автосейву, а не перетереть его молча).
+//
+// Пустые строки кладутся КАК ЕСТЬ, а не выбрасываются: ровно так их печатает
+// `toSchema` стора билдера, и документ, сохранённый отсюда, обязан остаться тем же,
+// каким его сохранил бы редактор.
+export function useUpdateAfterSubmit() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      form,
+      thankYouText,
+      redirectUrl,
+    }: {
+      form: FormDetail
+      thankYouText: string
+      redirectUrl: string
+    }) => {
+      const draftSchema = { ...form.draftSchema, thankYouText, redirectUrl }
+      return saveDraftSchema(form.id, draftSchema, form.updatedAt).then((saved) => ({
+        saved,
+        draftSchema,
+      }))
+    },
+    onSuccess: ({ saved, draftSchema }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(saved.slug), (old) =>
+        old ? { ...old, draftSchema, updatedAt: saved.updatedAt } : old,
+      )
+    },
+  })
+}
+
 /**
  * Бейдж «Сделано в Trillix» — с экрана вставки (решение владельца 2026-08-16).
  *

@@ -3,10 +3,12 @@ import { Eye, Trash2 } from 'lucide-react'
 
 import { type AnswerColumn } from './columns'
 import { formatAnswer } from './answerFormat'
-import { DeleteSubmissionDialog } from './DeleteSubmissionDialog'
+import { DeleteAnswerDialog } from './DeleteAnswerDialog'
+import { ROW_WORDS, rowWords, type AnswerRow } from './rows'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDateTime } from '../../shared/format'
-import { type AnswerFile, type Submission } from '../../entities/submission'
+import { type AnswerFile } from '../../entities/submission'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -17,10 +19,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-// Таблица ответов: СТРОКА — один ответ, КОЛОНКА — один вопрос. Таблица из даты и
-// номера версии показывает ответы только по одному — окном на каждую строку, — и
-// вопрос «что отвечали вот на это» в ней не задать. Значения для колонок ничего не
-// стоят: они уже приезжают со страницей списка, внутри самой строки.
+// Таблица раздела «Ответы»: СТРОКА — одна запись, КОЛОНКА — один вопрос. Таблица из
+// даты и номера версии показывает ответы только по одному — окном на каждую строку,
+// — и вопрос «что отвечали вот на это» в ней не задать. Значения для колонок ничего
+// не стоят: они уже приезжают со страницей списка, внутри самой строки.
+//
+// Записи ДВА ВИДА — отправленный ответ и незавершённый; который перед нами, говорит
+// `row.kind` (`rows.ts`). От него зависят подпись колонки даты и слова действий, а
+// разметка, обрезка и поведение — одни на оба множества.
 //
 // Колонок ДВЕ — их отбирает `previewColumns` (columns.ts).
 //
@@ -87,17 +93,23 @@ export function SubmissionsTable({
   formId,
   onOpen,
 }: {
-  rows: Submission[]
+  rows: AnswerRow[]
   columns: AnswerColumn[]
   files: Record<string, AnswerFile>
   showVersion: boolean
   formId: string
-  onOpen: (s: Submission) => void
+  onOpen: (row: AnswerRow) => void
 }) {
   const lastIndex = columns.length - 1
   // Одно окно подтверждения на таблицу, а не по окну на строку: подтверждают по одному,
   // а сотня смонтированных диалогов — сотня порталов на пустом месте.
-  const [confirming, setConfirming] = useState<Submission | null>(null)
+  const [confirming, setConfirming] = useState<AnswerRow | null>(null)
+  // Слова колонки даты и действий — по составу страницы: один вид строк называет
+  // себя своими словами, смешанный («Все ответы») — нейтральными (`rows.ts`).
+  const words = rowWords(rows)
+  // Метка вида нужна ТОЛЬКО в смешанной таблице: на вкладке «Частичные» все строки
+  // черновики, и повторять это в каждой из них — шум.
+  const marked = words === ROW_WORDS.mixed
 
   return (
     <>
@@ -107,7 +119,9 @@ export function SubmissionsTable({
             {/* Подложка на наведении снята и у шапки: строки на неё не отвечают, и
                 подсвеченная шапка выглядела бы единственным нажимаемым местом таблицы. */}
             <TableRow className="hover:bg-transparent dark:hover:bg-transparent">
-              <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>Дата отправки</TableHead>
+              <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>
+                {words.dateColumn}
+              </TableHead>
               {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
               {columns.map((c, i) => (
                 <TableHead
@@ -123,22 +137,27 @@ export function SubmissionsTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((s) => (
+            {rows.map((row) => (
               <TableRow
-                key={s.id}
+                key={row.id}
                 className="group/row hover:bg-transparent dark:hover:bg-transparent"
               >
                 <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
                   <div className="flex items-center gap-2">
-                    <span>{formatDateTime(s.createdAt)}</span>
+                    <span>{formatDateTime(row.at)}</span>
+                    {marked && row.kind === 'partial' && (
+                      <Badge variant="outline" className="font-normal text-muted-foreground">
+                        не отправлен
+                      </Badge>
+                    )}
                     <span className="ml-auto flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                       <Button
                         variant="ghost"
                         size="icon-sm"
                         className="size-7 text-muted-foreground"
-                        aria-label={`Открыть ответ от ${formatDateTime(s.createdAt)}`}
-                        title="Открыть ответ"
-                        onClick={() => onOpen(s)}
+                        aria-label={`Открыть ${words.oneLower} от ${formatDateTime(row.at)}`}
+                        title={`Открыть ${words.oneLower}`}
+                        onClick={() => onOpen(row)}
                       >
                         <Eye className="size-4" />
                       </Button>
@@ -146,9 +165,9 @@ export function SubmissionsTable({
                         variant="ghost"
                         size="icon-sm"
                         className="size-7 text-muted-foreground hover:text-destructive"
-                        aria-label={`Удалить ответ от ${formatDateTime(s.createdAt)}`}
-                        title="Удалить ответ"
-                        onClick={() => setConfirming(s)}
+                        aria-label={`Удалить ${words.oneLower} от ${formatDateTime(row.at)}`}
+                        title={`Удалить ${words.oneLower}`}
+                        onClick={() => setConfirming(row)}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -157,11 +176,11 @@ export function SubmissionsTable({
                 </TableCell>
                 {showVersion && (
                   <TableCell className={`tabular-nums text-muted-foreground ${DIVIDER}`}>
-                    {s.formVersion}
+                    {row.formVersion}
                   </TableCell>
                 )}
                 {columns.map((c, i) => {
-                  const text = formatAnswer(c.block, s.answers[c.block.id], files)
+                  const text = formatAnswer(c.block, row.answers[c.block.id], files)
                   return (
                     <TableCell
                       key={c.block.id}
@@ -184,9 +203,9 @@ export function SubmissionsTable({
       </div>
 
       {confirming && (
-        <DeleteSubmissionDialog
+        <DeleteAnswerDialog
           formId={formId}
-          submission={confirming}
+          row={confirming}
           open
           onOpenChange={(next) => !next && setConfirming(null)}
         />
