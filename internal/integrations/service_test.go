@@ -28,6 +28,18 @@ var (
 	testStranger = uuid.MustParse("00000000-0000-7000-8000-000000000004")
 )
 
+// Токены провайдера в тестах — ДЛИННЫЕ и приметные, и это не украшение.
+//
+// Проверка «токен не лёг в базу открытым текстом» ищет его байты в шифротексте.
+// AES-GCM выдаёт случайные байты, и короткое «rt» находилось в них само собой
+// примерно раз в пятьсот прогонов — тест падал на ровном месте, а выглядело это
+// как утечка секрета. Длинную строку случай не соберёт никогда.
+const (
+	testRefreshToken = "refresh-token-эталон-для-проверок"
+	testRotatedToken = "refresh-token-эталон-после-ротации"
+	testAccessToken  = "access-token-эталон"
+)
+
 // fakeAccess — права как ответ на ДЕЙСТВИЕ: ровно то, что спрашивает сервис.
 type fakeAccess struct {
 	deny map[domain.Action]error
@@ -267,11 +279,11 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (integrations.To
 	if f.exchangeFn != nil {
 		return f.exchangeFn()
 	}
-	return integrations.Tokens{Access: "at", Refresh: "rt", Scopes: integrations.ScopeDriveFile}, nil
+	return integrations.Tokens{Access: "at", Refresh: testRefreshToken, Scopes: integrations.ScopeDriveFile}, nil
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens, error) {
-	return integrations.Tokens{Access: "at", Refresh: f.rotated}, nil
+	return integrations.Tokens{Access: testAccessToken, Refresh: f.rotated}, nil
 }
 
 func (f *fakeProvider) Account(_ context.Context, _ string) (integrations.Account, error) {
@@ -418,7 +430,7 @@ func TestConnect_StoresSealedToken(t *testing.T) {
 		t.Fatal("подключение не записано")
 	}
 	got := *store.upserted
-	if bytes.Contains(got.RefreshSealed, []byte("rt")) {
+	if bytes.Contains(got.RefreshSealed, []byte(testRefreshToken)) {
 		t.Error("refresh-токен лёг в базу открытым текстом")
 	}
 	if got.ExternalID != "sub-1" || got.Email != "author@gmail.com" {
@@ -490,8 +502,8 @@ func TestDisconnect_RevokesAtProvider(t *testing.T) {
 	if err := svc.Disconnect(context.Background(), testUser, store.upserted.ID); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
-	if provider.revoked != "rt" {
-		t.Errorf("отозван токен %q, ожидался «rt»", provider.revoked)
+	if provider.revoked != testRefreshToken {
+		t.Errorf("отозван токен %q, ожидался эталонный", provider.revoked)
 	}
 }
 
@@ -824,7 +836,7 @@ func TestPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("picker: %v", err)
 	}
-	if cred.AccessToken != "at" || cred.DeveloperKey != "browser-api-key" {
+	if cred.AccessToken != testAccessToken || cred.DeveloperKey != "browser-api-key" {
 		t.Fatalf("credentials = %+v", cred)
 	}
 	if cred.AppID != "442272803444" {
@@ -1037,6 +1049,71 @@ func TestUpdateConnection_MovesToAnotherAccount(t *testing.T) {
 	}
 }
 
+// Связку КОЛЛЕГИ можно переименовать, не трогая её аккаунт.
+//
+// Экран штатно показывает участнику связку, заведённую чужим аккаунтом (иначе он
+// не поймёт, почему её нельзя перенастроить), и подпись у неё правится по
+// form.write. Проверка «аккаунт мой» здесь применяться не должна: аккаунт не
+// меняется, а требовать владения им значит запереть правку насовсем.
+func TestUpdateConnection_RenamesConnectionOfColleague(t *testing.T) {
+	colleague := sealedConn(t)
+	colleague.UserID = testStranger
+
+	link := linkedSheet()
+	link.AccountID, link.SpreadsheetID, link.SheetID = colleague.ID, "ss-old", 5
+	store := &fakeStore{link: link, conn: colleague}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
+
+	sheetID := int32(5)
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name: "Архив",
+			// Окно шлёт цель целиком, в том числе НЕ изменившийся аккаунт коллеги.
+			Target: integrations.ConnectOptions{
+				AccountID: colleague.ID, SpreadsheetID: "ss-old", SheetID: &sheetID,
+			},
+		})
+	if err != nil {
+		t.Fatalf("правка связки коллеги отклонена: %v", err)
+	}
+	if store.settings == nil || store.settings.name != "Архив" {
+		t.Fatalf("подпись не сохранена: %+v", store.settings)
+	}
+	if store.retargeted != nil {
+		t.Error("связка переехала, хотя цель не менялась")
+	}
+}
+
+// Владельца аккаунта сняли с пространства — синхронные операции его токеном
+// прекращаются, а не только фоновая доставка.
+//
+// Иначе оставшийся участник чистит и переписывает ЛИЧНУЮ таблицу бывшего
+// коллеги его же кредом: перезалив идёт в обход сторожа, который стоит в
+// Deliver.
+func TestRefillForm_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	colleague := sealedConn(t)
+	colleague.UserID = testStranger
+
+	link := linkedSheet()
+	link.AccountID = colleague.ID
+	store := &fakeStore{link: link, conn: colleague}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{gone: true}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.RefillForm(context.Background(), testUser, testForm, link.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if provider.cleared != "" {
+		t.Fatalf("вычищена личная таблица бывшего участника: %q", provider.cleared)
+	}
+	if store.backfillFrom != nil {
+		t.Error("перенос начат по аккаунту человека без доступа")
+	}
+}
+
 // ЧУЖОЙ аккаунт связке не назначить и правкой: id приезжает в теле, и правом
 // доступа не является (инвариант 1). До провайдера дело не доходит.
 func TestUpdateConnection_ForeignAccountRefused(t *testing.T) {
@@ -1138,7 +1215,7 @@ func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
 	account := uuid.New()
 	store := &fakeStore{conn: integrations.Connection{ID: account, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
 	store.link = integrations.FormLink{ID: uuid.New(), FormID: testForm, SpreadsheetID: "ss-1"}
-	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: "rt-2"})
+	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: testRotatedToken})
 
 	if _, err := svc.Spreadsheets(context.Background(), testUser, account); err != nil {
 		t.Fatalf("spreadsheets: %v", err)
@@ -1146,7 +1223,7 @@ func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
 	if store.tokenUpdated == nil {
 		t.Fatal("новый refresh-токен провайдера не сохранён")
 	}
-	if bytes.Contains(store.tokenUpdated, []byte("rt-2")) {
+	if bytes.Contains(store.tokenUpdated, []byte(testRotatedToken)) {
 		t.Error("новый токен записан открытым текстом")
 	}
 }

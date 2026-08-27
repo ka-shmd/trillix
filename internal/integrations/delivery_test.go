@@ -291,6 +291,35 @@ func TestDeliver_RefusesAlienColumnInTheMiddle(t *testing.T) {
 	}
 }
 
+// Два вопроса, названные ОДИНАКОВО, — обычная форма, а не диверсия: заголовок
+// вопроса ничем не ограничен, и «Телефон» дважды встречается сплошь и рядом.
+// Пока лист никто не трогал, позиции различают их без всяких подписей.
+//
+// Сторожит регрессию: разбор шапки по подписи объявлял такую форму двусмысленной
+// и ломал связку в первые же секунды — на листе, который продукт создал сам.
+func TestDeliver_DuplicateLabelsOnUntouchedSheet(t *testing.T) {
+	link := linkedSheet()
+	link.Columns = []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Телефон"), col("b2", "Телефон")}
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{sheetHeader: headerOf(link)}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: link.Columns,
+		Row:     []string{"018f", "+7", "+8"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if store.brokenWith != "" {
+		t.Fatalf("связка сломана на ровном месте: %q", store.brokenWith)
+	}
+	got := provider.appended[0]
+	if len(got) != 3 || got[1] != "+7" || got[2] != "+8" {
+		t.Fatalf("строка = %v, ожидались оба «Телефона» по своим местам", got)
+	}
+}
+
 // Два вопроса с ОДИНАКОВОЙ подписью — раскладка по шапке становится
 // двусмысленной, и мы отказываемся вместо того, чтобы взять первый попавшийся.
 //
@@ -301,7 +330,9 @@ func TestDeliver_RefusesAmbiguousHeaderLabels(t *testing.T) {
 	link := linkedSheet()
 	link.Columns = []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Телефон"), col("b2", "Телефон")}
 	store := &fakeStore{link: link, conn: sealedConn(t)}
-	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Телефон", "Телефон"}}
+	// Автор переставил колонки — позиции больше не сходятся, и различить два
+	// «Телефона» нечем.
+	provider := &fakeProvider{sheetHeader: []string{"Телефон", "ID ответа", "Телефон"}}
 	subs := &fakeSubmissions{record: submissions.SheetRecord{
 		Columns: link.Columns,
 		Row:     []string{"018f", "+7", "+8"},

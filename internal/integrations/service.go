@@ -184,6 +184,32 @@ func (s *Service) Status(ctx context.Context, userID uuid.UUID) (Status, error) 
 	return out, nil
 }
 
+// accountForLink — аккаунт, которым УЖЕ едет связка. Не обязан принадлежать
+// спрашивающему: в команде связку заводит один участник, а правит другой, и
+// право на неё даёт form.write.
+//
+// Но членство владельца аккаунта проверяется здесь так же, как на доставке:
+// операция пойдёт ЕГО токеном в ЕГО Диск, и если человека из пространства сняли,
+// делать это нельзя — иначе оставшийся участник чистит и переписывает личную
+// таблицу бывшего коллеги его же кредом. Сторож в Deliver один этого не
+// закрывает: он стоит на фоновом пути, а перезалив и переезд идут синхронно.
+func (s *Service) accountForLink(ctx context.Context, link FormLink) (Connection, error) {
+	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	if err != nil {
+		return Connection{}, fmt.Errorf("account of connection: %w", err)
+	}
+	member, err := s.access.IsMember(ctx, link.WorkspaceID, conn.UserID)
+	if err != nil {
+		return Connection{}, err
+	}
+	if !member {
+		return Connection{}, fmt.Errorf(
+			"%w: аккаунт Google, которым едет это подключение, принадлежит человеку без доступа к пространству. "+
+				"Заведите подключение заново своим аккаунтом", domain.ErrValidation)
+	}
+	return conn, nil
+}
+
 // accountOf — аккаунт спрашивающего по id. ЕДИНСТВЕННАЯ точка проверки «аккаунт
 // мой»: id приезжает из запроса и правом доступа сам по себе не является
 // (инвариант 1). Чужой аккаунт неотличим от несуществующего — один и тот же
@@ -663,9 +689,9 @@ func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UU
 		return err
 	}
 
-	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	conn, err := s.accountForLink(ctx, link)
 	if err != nil {
-		return fmt.Errorf("refill form: %w", err)
+		return err
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
@@ -764,19 +790,26 @@ func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID u
 	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
 		return fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
 	}
-	// Принадлежность названного аккаунта проверяется ДО первой записи, хотя
-	// retarget проверит её ещё раз: иначе правка с чужим аккаунтом успевает
-	// сохранить подпись и падает уже после — человек видит отказ и изменившееся
-	// название разом. Цена — лишнее чтение строки аккаунта на пути правки цели;
-	// это действие человека, а не горячий путь.
+	// Цель разбирается ДО первой записи. Иначе правка с недопустимым аккаунтом
+	// успевает сохранить подпись и падает уже после — человек видит отказ и
+	// изменившееся название разом.
 	//
-	// Частичность на этом не исчезает совсем: отказ ПРОВАЙДЕРА (Google недоступен,
-	// лист занят) по-прежнему приходит после записи подписи. Лечится транзакцией
-	// поверх обеих записей и в эту задачу не входит.
-	if !patch.KeepTarget && patch.Target.AccountID != uuid.Nil {
-		if _, err := s.accountOf(ctx, userID, patch.Target.AccountID); err != nil {
+	// Частичность на этом не исчезает совсем: отказ ПРОВАЙДЕРА (Google
+	// недоступен, лист занят) по-прежнему приходит после записи подписи. Лечится
+	// транзакцией поверх обеих записей и в эту задачу не входит.
+	var link FormLink
+	var conn Connection
+	if !patch.KeepTarget {
+		found, err := s.linkOfForm(ctx, formID, linkID)
+		if err != nil {
 			return err
 		}
+		account, err := s.targetAccount(ctx, userID, found, patch.Target.AccountID)
+		if err != nil {
+			return err
+		}
+		link, conn = found, account
+		patch.Target.AccountID = account.ID
 	}
 
 	n, err := s.repo.UpdateLinkSettings(ctx, s.db, linkID, formID, name, patch.Enabled)
@@ -789,37 +822,36 @@ func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID u
 	if patch.KeepTarget {
 		return nil
 	}
-	return s.retarget(ctx, userID, formID, linkID, patch.Target)
+	return s.retarget(ctx, userID, link, conn, patch.Target)
+}
+
+// targetAccount — каким аккаунтом связка поедет после правки.
+//
+// Два случая, и различать их обязательно. Аккаунт НЕ МЕНЯЕТСЯ (не назван либо
+// назван тот же) — связка остаётся на своём, и требовать, чтобы он принадлежал
+// правящему, нельзя: иначе участник не смог бы переименовать связку коллеги, ту
+// самую, которую экран ему штатно показывает. Аккаунт МЕНЯЕТСЯ — новый обязан
+// быть своим: id приезжает в теле запроса и правом доступа не является.
+func (s *Service) targetAccount(ctx context.Context, userID uuid.UUID, link FormLink, want uuid.UUID) (Connection, error) {
+	if want == uuid.Nil || want == link.AccountID {
+		return s.accountForLink(ctx, link)
+	}
+	return s.accountOf(ctx, userID, want)
 }
 
 // retarget переносит связку в другой лист, если человек выбрал другой.
 //
 // Строки, уже доставленные в прежний лист, остаются там: убирать за человеком в
 // его же таблице — не наше дело, и «переехали» не значит «сотрите прошлое».
-func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID, target ConnectOptions) error {
+func (s *Service) retarget(ctx context.Context, userID uuid.UUID, link FormLink, conn Connection, target ConnectOptions) error {
 	if !s.Enabled() {
 		return domain.ErrNotFound
-	}
-	link, err := s.linkOfForm(ctx, formID, linkID)
-	if err != nil {
-		return err
-	}
-	// Аккаунт не назван — правка пришла не из окна настройки (или из старого
-	// клиента): связка остаётся на своём.
-	if target.AccountID == uuid.Nil {
-		target.AccountID = link.AccountID
 	}
 	if sameTarget(link, target) {
 		return nil
 	}
+	formID := link.FormID
 
-	// Аккаунт берётся из ПРАВКИ, а не из связки: человек вправе перевести её на
-	// другое своё подключение. Проверка принадлежности здесь та же, что при
-	// заведении, — чужой аккаунт связке не назначить (инвариант 1).
-	conn, err := s.accountOf(ctx, userID, target.AccountID)
-	if err != nil {
-		return err
-	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
 		return err
@@ -848,11 +880,11 @@ func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID
 	if target.Backfill {
 		status = StatusBackfilling
 	}
-	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, linkID, formID, conn.ID, sheet, columns, status); err != nil {
+	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, link.ID, formID, conn.ID, sheet, columns, status); err != nil {
 		return err
 	}
 	if target.Backfill {
-		return s.startBackfill(ctx, s.db, linkID)
+		return s.startBackfill(ctx, s.db, link.ID)
 	}
 	return nil
 }
