@@ -5,7 +5,8 @@ import { textFromString, type Block } from '@entities/formSchema'
 
 import { answerColumns, previewColumns } from './columns'
 import { SubmissionsTable } from './SubmissionsTable'
-import { type Submission } from '../../entities/submission'
+import { listRow, partialRow } from './rows'
+import { type PartialSubmission, type Submission } from '../../entities/submission'
 
 afterEach(cleanup)
 
@@ -25,18 +26,38 @@ const BLOCKS = [
 
 const ROWS: Submission[] = [
   {
+    kind: 'submission',
     id: 's1',
     formVersion: 3,
     createdAt: '2026-08-26T09:00:00Z',
+    lastBlockId: '',
     answers: { src: 'o1', rate: '8' },
   },
-  { id: 's2', formVersion: 3, createdAt: '2026-08-25T09:00:00Z', answers: { src: 'o1' } },
+  {
+    kind: 'submission',
+    id: 's2',
+    formVersion: 3,
+    createdAt: '2026-08-25T09:00:00Z',
+    lastBlockId: '',
+    answers: { src: 'o1' },
+  },
+]
+
+const PARTIALS: PartialSubmission[] = [
+  {
+    visitId: 'v1',
+    formVersion: 3,
+    createdAt: '2026-08-26T08:00:00Z',
+    updatedAt: '2026-08-26T09:30:00Z',
+    lastBlockId: 'rate',
+    answers: { src: 'o1' },
+  },
 ]
 
 function renderTable(onOpen = vi.fn()) {
   render(
     <SubmissionsTable
-      rows={ROWS}
+      rows={ROWS.map(listRow)}
       columns={previewColumns(answerColumns(BLOCKS))}
       files={{}}
       showVersion={false}
@@ -95,7 +116,7 @@ describe('таблица ответов', () => {
     const onOpen = renderTable()
     fireEvent.click(screen.getAllByRole('button', { name: /Открыть ответ от/ })[0]!)
     expect(onOpen).toHaveBeenCalledTimes(1)
-    expect(onOpen).toHaveBeenCalledWith(ROWS[0])
+    expect(onOpen).toHaveBeenCalledWith(listRow(ROWS[0]!))
   })
 
   it('у каждой строки есть значок удаления', () => {
@@ -103,5 +124,56 @@ describe('таблица ответов', () => {
     // табуляции, и до удаления не добраться с клавиатуры.
     renderTable()
     expect(screen.getAllByRole('button', { name: /Удалить ответ от/ })).toHaveLength(ROWS.length)
+  })
+
+  it('смешанную страницу подписывает нейтрально и метит незавершённые строки', () => {
+    // Вкладка «Все ответы»: в одной таблице оба вида. «Дата отправки» над
+    // черновиком, который никто не отправлял, — прямое враньё, поэтому колонка
+    // называется нейтрально, а вид строки говорит метка рядом с датой.
+    render(
+      <SubmissionsTable
+        rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
+        columns={previewColumns(answerColumns(BLOCKS))}
+        files={{}}
+        showVersion={false}
+        formId="f1"
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getAllByRole('columnheader')[0]!.textContent).toBe('Дата')
+    expect(screen.getAllByText('не отправлен')).toHaveLength(PARTIALS.length)
+  })
+
+  it('в однородной таблице метки вида нет', () => {
+    // На «Частичных» все строки черновики, и повторять это в каждой — шум.
+    render(
+      <SubmissionsTable
+        rows={PARTIALS.map(partialRow)}
+        columns={previewColumns(answerColumns(BLOCKS))}
+        files={{}}
+        showVersion={false}
+        formId="f1"
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText('не отправлен')).toBeNull()
+  })
+
+  it('незавершённые называет своими словами и показывает время правки, а не отправки', () => {
+    // Та же таблица на два множества (rows.ts): подпись колонки даты и слова действий
+    // берутся из kind строки. Скажи она «Дата отправки» над черновиком — владелец
+    // прочитал бы неотправленное как отправленное.
+    render(
+      <SubmissionsTable
+        rows={PARTIALS.map(partialRow)}
+        columns={previewColumns(answerColumns(BLOCKS))}
+        files={{}}
+        showVersion={false}
+        formId="f1"
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getAllByRole('columnheader')[0]!.textContent).toBe('Последняя правка')
+    expect(screen.getByRole('button', { name: /Удалить незавершённый ответ от/ })).toBeTruthy()
   })
 })

@@ -4,14 +4,15 @@ import { Download } from 'lucide-react'
 
 import { answerColumns, previewColumns, versionsDiffer } from './columns'
 import { submissionsListQueryOptions } from './queries'
-import { submissionsExportUrl } from './api'
+import { submissionsExportUrl, type SubmissionsKind } from './api'
 import { SubmissionPanel } from './SubmissionPanel'
 import { SubmissionsTable } from './SubmissionsTable'
 import { SubmissionsTabs } from './SubmissionsTabs'
+import { listRow, type AnswerRow } from './rows'
 import { formDetailQueryOptions } from '../forms/queries'
 import { pluralAnswers } from '../../shared/format'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
-import { type AnswerFile, type Submission } from '../../entities/submission'
+import { type AnswerFile } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 
@@ -19,26 +20,27 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 // ответ, колонка — один вопрос. Клик по значку строки открывает ответ целиком (там же и
 // удаление), выгрузка всего — кнопкой над таблицей.
 //
-// Компонент, а не маршрут: его рисуют ДВЕ вкладки — «Все ответы» и «Законченные». Пока
-// черновики не читаются ручкой (слайс H спеки, не начат), эти вкладки показывают один и
-// тот же поток: третьего множества в системе просто нет.
-export function SubmissionsView({ slug }: { slug: string }) {
+// Компонент, а не маршрут: его рисуют ДВЕ вкладки, и различает их `kind`. «Все
+// ответы» (`all`) — оба множества одним списком по времени, «Законченные»
+// (`completed`) — только отправленные. Что подмешивать, решает СЕРВЕР: у формы,
+// которая незавершённые не собирает, «Все ответы» вырождаются в список отправленных.
+export function SubmissionsView({ slug, kind }: { slug: string; kind: SubmissionsKind }) {
   // URL адресует форму slug'ом; UUID (formId) для запросов ответов берём из загруженной
   // формы. Список ответов ждёт, пока slug зарезолвится в id (enabled).
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const list = useInfiniteQuery({
-    ...submissionsListQueryOptions(formId ?? ''),
+    ...submissionsListQueryOptions(formId ?? '', kind),
     enabled: formId !== undefined,
   })
   // open управляет видимостью окна, selected — какой ответ показываем. Не обнуляем
   // selected при закрытии: иначе содержимое пропадёт раньше, чем окно доиграет анимацию
   // ухода. Оно остаётся смонтированным до следующего открытия.
   const [open, setOpen] = useState(false)
-  const [selected, setSelected] = useState<Submission | null>(null)
+  const [selected, setSelected] = useState<AnswerRow | null>(null)
 
-  function openSubmission(s: Submission) {
-    setSelected(s)
+  function openRow(row: AnswerRow) {
+    setSelected(row)
     setOpen(true)
   }
 
@@ -65,9 +67,12 @@ export function SubmissionsView({ slug }: { slug: string }) {
         {total > 0 && formId && (
           // Обычная навигация: cookie авторизует, браузер качает файл (не fetch).
           <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
-            <a href={submissionsExportUrl(formId)}>
+            {/* Выгружаются ТОЛЬКО отправленные ответы (незавершённые в CSV не
+                входят, спека §10.5) — на вкладке «Все ответы» об этом говорит
+                подпись, иначе файл молча оказался бы короче таблицы над ним. */}
+            <a href={submissionsExportUrl(formId)} title={exportHint(kind)}>
               <Download className="size-4" />
-              Экспорт CSV
+              {kind === 'all' ? 'Экспорт ответов' : 'Экспорт CSV'}
             </a>
           </Button>
         )}
@@ -96,12 +101,12 @@ export function SubmissionsView({ slug }: { slug: string }) {
       ) : (
         <>
           <SubmissionsTable
-            rows={submissions}
+            rows={submissions.map(listRow)}
             columns={previewColumns(columns)}
             files={files}
             showVersion={versionsDiffer(submissions)}
             formId={formId ?? ''}
-            onOpen={openSubmission}
+            onOpen={openRow}
           />
           {list.hasNextPage && (
             <div className="flex justify-center">
@@ -121,7 +126,7 @@ export function SubmissionsView({ slug }: { slug: string }) {
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
           {selected && (
             <SubmissionPanel
-              submission={selected}
+              row={selected}
               columns={columns}
               files={files}
               formId={formId ?? ''}
@@ -132,4 +137,12 @@ export function SubmissionsView({ slug }: { slug: string }) {
       </Dialog>
     </div>
   )
+}
+
+// Подпись выгрузки: на смешанной вкладке кнопка обязана сказать, что уносит только
+// отправленное.
+function exportHint(kind: SubmissionsKind): string {
+  return kind === 'all'
+    ? 'Выгружаются только отправленные ответы — незавершённые в CSV не входят'
+    : 'Выгрузить ответы в CSV'
 }

@@ -141,7 +141,8 @@ type PartialInput struct {
 type Store interface {
 	UpsertPartial(ctx context.Context, db postgres.DBTX, visitID, formID, versionID uuid.UUID, answers json.RawMessage, lastBlockID *string) error
 	DeletePartialByVisit(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error)
-	ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *PartialCursor) ([]Partial, error)
+	ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *TimeCursor) ([]Partial, error)
+	ListFeed(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *TimeCursor) ([]FeedRow, error)
 	CountPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
 	DeletePartial(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID) (int64, error)
 	DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
@@ -694,6 +695,209 @@ func (s *Service) SavePartial(ctx context.Context, slug string, p PartialInput) 
 // задачей; возвращает число удалённых для лога.
 func (s *Service) CleanupPartials(ctx context.Context) (int64, error) {
 	return s.repo.DeleteOldPartials(ctx, s.db, s.now().UTC().Add(-PartialTTL))
+}
+
+// PartialPage — страница черновиков формы, курсор на следующую (nil на последней)
+// и общее число. Files здесь нет: файлы в черновик не входят вовсе (спека §10.2) —
+// слот файла выдаётся отдельным потоком и считается в квоту хранилища.
+type PartialPage struct {
+	Partials   []Partial
+	NextCursor *TimeCursor
+	Total      int64
+}
+
+// ListPartialsForForm — страница черновиков формы для её автора.
+//
+// Порядок проверок тот же, что у листинга ответов, плюс гейт: сперва forms.Get
+// (чужая/несуществующая → 404 раньше, чем разговор о тарифе), затем право
+// SubmissionsPartial. Гейт здесь ВТОРОЙ раз после тумблера, и это не
+// перестраховка: тумблер мог остаться включённым с прежнего плана, а даунгрейд
+// обязан закрывать и показ, не дожидаясь, пока владелец про него вспомнит.
+func (s *Service) ListPartialsForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (PartialPage, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return PartialPage{}, err
+	}
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.SubmissionsPartial)
+	if err != nil {
+		return PartialPage{}, err
+	}
+	if !d.Allowed {
+		return PartialPage{}, domain.ErrPlanRequired
+	}
+	limit = clampLimit(limit)
+
+	total, err := s.repo.CountPartials(ctx, s.db, formID)
+	if err != nil {
+		return PartialPage{}, err
+	}
+
+	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в
+	// ответ не отдаём, а превращаем в курсор (как у листинга ответов).
+	rows, err := s.repo.ListPartials(ctx, s.db, formID, int32(limit+1), after)
+	if err != nil {
+		return PartialPage{}, err
+	}
+	page := PartialPage{Partials: rows, Total: total}
+	if len(rows) > limit {
+		last := rows[limit-1]
+		page.Partials = rows[:limit]
+		page.NextCursor = &TimeCursor{At: last.UpdatedAt, ID: last.VisitID}
+	}
+	return page, nil
+}
+
+// FeedPage — страница вкладки «Все ответы»: отправленные и незавершённые одним
+// списком по времени.
+type FeedPage struct {
+	Rows       []FeedRow
+	NextCursor *TimeCursor
+	// Total — сколько строк ВИДНО в этой ленте: ответы (без сверхлимитных) плюс
+	// черновики, если форма их сейчас собирает.
+	Total int64
+	// Hidden — ответы, скрытые квотой тарифа (0014). Черновиков не касается: они в
+	// квоту не считаются вовсе.
+	Hidden int64
+	Files  map[string]domain.AnswerFile
+}
+
+// ListFeedForForm — страница вкладки «Все ответы» (спека §11).
+//
+// ЧЕРНОВИКИ ПОДМЕШИВАЮТСЯ, ТОЛЬКО ЕСЛИ ФОРМА ИХ СЕЙЧАС СОБИРАЕТ (тумблер плюс
+// право тарифа) — тем же вопросом, каким это решается при отдаче публичной формы.
+// Иначе «Все ответы» показывали бы ровно то, что прячет соседняя вкладка
+// «Частичные»: у формы со снятым тумблером черновики ещё лежат в базе до чистки, и
+// показать их здесь значило бы обойти и тумблер, и гейт одним переключением вкладки.
+//
+// Гейта на самой ленте поэтому нет: без права подмешивать нечего, и вкладка молча
+// вырождается в список отправленных — то же, что «Законченные».
+func (s *Service) ListFeedForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (FeedPage, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	withPartials, err := s.forms.CollectPartial(ctx, form.WorkspaceID, form.CollectPartial)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	if !withPartials {
+		// Ленты нет — есть обычный листинг ответов. Второй раз объяснять «где
+		// начинается страница» нечем: курсор ленты составной, и первая же
+		// подгрузка на смешанном пути разошлась бы с одноколоночным.
+		return s.feedFromSubmissions(ctx, userID, formID, after, limit)
+	}
+
+	limit = clampLimit(limit)
+	total, hidden, err := s.repo.CountSubmissionsForCabinet(ctx, s.db, formID)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	partials, err := s.repo.CountPartials(ctx, s.db, formID)
+	if err != nil {
+		return FeedPage{}, err
+	}
+
+	rows, err := s.repo.ListFeed(ctx, s.db, formID, int32(limit+1), after)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	page := FeedPage{Rows: rows, Total: total + partials, Hidden: hidden}
+	if len(rows) > limit {
+		last := rows[limit-1]
+		page.Rows = rows[:limit]
+		page.NextCursor = &TimeCursor{At: last.At, ID: last.ID}
+	}
+	if err := s.attachFiles(ctx, &page); err != nil {
+		return FeedPage{}, err
+	}
+	return page, nil
+}
+
+// feedFromSubmissions — та же лента из одних отправленных ответов: форма
+// незавершённые не собирает. Идёт по ленточному запросу, а не по листингу ответов,
+// ровно ради курсора: он обязан остаться составным, иначе страницы одной и той же
+// вкладки склеивались бы по разным правилам.
+func (s *Service) feedFromSubmissions(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (FeedPage, error) {
+	limit = clampLimit(limit)
+	total, hidden, err := s.repo.CountSubmissionsForCabinet(ctx, s.db, formID)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	rows, err := s.repo.ListFeed(ctx, s.db, formID, int32(limit+1), after)
+	if err != nil {
+		return FeedPage{}, err
+	}
+	// Черновики отбрасываются ПОСЛЕ выборки: запрос один на оба случая, а строк
+	// черновиков у формы без сбора либо нет вовсе, либо они доживают срок чистки.
+	kept := rows[:0]
+	for _, r := range rows {
+		if r.Kind == feedKindSubmission {
+			kept = append(kept, r)
+		}
+	}
+	page := FeedPage{Rows: kept, Total: total, Hidden: hidden}
+	if len(kept) > limit {
+		last := kept[limit-1]
+		page.Rows = kept[:limit]
+		page.NextCursor = &TimeCursor{At: last.At, ID: last.ID}
+	}
+	if err := s.attachFiles(ctx, &page); err != nil {
+		return FeedPage{}, err
+	}
+	return page, nil
+}
+
+// attachFiles добавляет к странице имена приложенных файлов — одним запросом на всю
+// страницу, как в листинге ответов. Черновики файлов не заявляют вовсе (спека
+// §10.2), поэтому спрашиваются только строки ответов.
+func (s *Service) attachFiles(ctx context.Context, page *FeedPage) error {
+	if s.files == nil {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(page.Rows))
+	for _, r := range page.Rows {
+		if r.Kind == feedKindSubmission {
+			ids = append(ids, r.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	files, err := s.files.InfoBySubmissions(ctx, ids)
+	if err != nil {
+		return err
+	}
+	page.Files = files
+	return nil
+}
+
+// Метки строк ленты. Зеркалят литералы в queries.sql (ListFeedFirstPage) и поле
+// `kind` в JSON кабинета — разъехавшись, они молча превратили бы половину ленты в
+// строки не того вида.
+const (
+	feedKindSubmission = "submission"
+	feedKindPartial    = "partial"
+)
+
+// DeletePartialForForm удаляет один черновик (спека §10.6: тот же жест, что и
+// удаление ответа). Спрашивается ActionSubmissionDelete — то же действие матрицы
+// прав, что у ответа: это чужой набранный текст, и разница между отправленным и
+// неотправленным для права его стирать несущественна.
+//
+// Гейта тарифа здесь НЕТ намеренно: удалить собранное обязан мочь и тот, у кого
+// показ уже закрыт даунгрейдом, — запрет убрать чужие данные был бы дефектом.
+func (s *Service) DeletePartialForForm(ctx context.Context, userID, formID, visitID uuid.UUID) error {
+	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
+		return err
+	}
+	n, err := s.repo.DeletePartial(ctx, s.db, visitID, formID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 // ListForForm возвращает страницу ответов формы для её автора. Порядок: авторизация

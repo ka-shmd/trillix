@@ -273,7 +273,7 @@ func (Repo) DeletePartialByVisit(ctx context.Context, db postgres.DBTX, visitID,
 }
 
 // ListPartials — страница черновиков формы, новыми сверху. after nil = первая.
-func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *PartialCursor) ([]Partial, error) {
+func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *TimeCursor) ([]Partial, error) {
 	var (
 		rows []postgres.ListPartialsFirstPageRow
 		err  error
@@ -287,8 +287,8 @@ func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID
 		var next []postgres.ListPartialsAfterRow
 		next, err = postgres.New(db).ListPartialsAfter(ctx, postgres.ListPartialsAfterParams{
 			FormID:   formID,
-			CursorAt: pgtype.Timestamptz{Time: after.UpdatedAt, Valid: true},
-			CursorID: after.VisitID,
+			CursorAt: pgtype.Timestamptz{Time: after.At, Valid: true},
+			CursorID: after.ID,
 			Limit:    limit,
 		})
 		rows = make([]postgres.ListPartialsFirstPageRow, len(next))
@@ -308,6 +308,62 @@ func (Repo) ListPartials(ctx context.Context, db postgres.DBTX, formID uuid.UUID
 			LastBlockID: r.LastBlockID.String,
 			CreatedAt:   r.CreatedAt.Time,
 			UpdatedAt:   r.UpdatedAt.Time,
+		}
+	}
+	return out, nil
+}
+
+// FeedRow — строка объединённой ленты «Все ответы»: отправленный ответ или
+// незавершённый, различает их Kind. At — время, по которому лента отсортирована:
+// у ответа отправка, у черновика последняя правка (queries.sql объясняет, почему
+// не created_at у обоих).
+type FeedRow struct {
+	Kind        string
+	ID          uuid.UUID
+	At          time.Time
+	CreatedAt   time.Time
+	LastBlockID string
+	Answers     json.RawMessage
+	FormVersion int32
+}
+
+// ListFeed — страница объединённой ленты, новыми сверху. after nil = первая.
+func (Repo) ListFeed(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, after *TimeCursor) ([]FeedRow, error) {
+	var (
+		rows []postgres.ListFeedFirstPageRow
+		err  error
+	)
+	if after == nil {
+		rows, err = postgres.New(db).ListFeedFirstPage(ctx, postgres.ListFeedFirstPageParams{
+			FormID:   formID,
+			RowLimit: limit,
+		})
+	} else {
+		var next []postgres.ListFeedAfterRow
+		next, err = postgres.New(db).ListFeedAfter(ctx, postgres.ListFeedAfterParams{
+			FormID:   formID,
+			CursorAt: pgtype.Timestamptz{Time: after.At, Valid: true},
+			CursorID: after.ID,
+			RowLimit: limit,
+		})
+		rows = make([]postgres.ListFeedFirstPageRow, len(next))
+		for i, r := range next {
+			rows[i] = postgres.ListFeedFirstPageRow(r)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list feed: %w", err)
+	}
+	out := make([]FeedRow, len(rows))
+	for i, r := range rows {
+		out[i] = FeedRow{
+			Kind:        r.Kind,
+			ID:          r.RowID,
+			At:          r.At.Time,
+			CreatedAt:   r.StartedAt.Time,
+			LastBlockID: r.LastBlockID.String,
+			Answers:     json.RawMessage(r.Answers),
+			FormVersion: r.FormVersion,
 		}
 	}
 	return out, nil
@@ -343,9 +399,12 @@ func (Repo) DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time
 	return n, nil
 }
 
-// PartialCursor — составной курсор листинга черновиков: черновик меняется, пока
-// человек печатает, поэтому монотонного id (как у ответов) здесь мало.
-type PartialCursor struct {
-	UpdatedAt time.Time
-	VisitID   uuid.UUID
+// TimeCursor — составной курсор «время + id последней показанной строки». Нужен
+// там, где монотонного id (как у иммутабельных ответов) мало: черновик МЕНЯЕТСЯ,
+// пока человек печатает, а объединённая лента склеивает два множества с разными
+// id вовсе. Общий на листинг черновиков и на ленту «Все ответы» — курсор у них
+// одинаков и по смыслу, и по кодировке.
+type TimeCursor struct {
+	At time.Time
+	ID uuid.UUID
 }

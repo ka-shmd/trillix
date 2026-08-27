@@ -3,44 +3,56 @@ import { Trash2 } from 'lucide-react'
 
 import { type AnswerColumn } from './columns'
 import { answerFiles, formatAnswer } from './answerFormat'
-import { DeleteSubmissionDialog } from './DeleteSubmissionDialog'
+import { DeleteAnswerDialog } from './DeleteAnswerDialog'
+import { ROW_WORDS, type AnswerRow } from './rows'
 import { formatDateTime } from '../../shared/format'
-import { type AnswerFile, type AnswerValue, type Submission } from '../../entities/submission'
+import { type AnswerFile, type AnswerValue } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
 import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-// Один ответ целиком: вопросы текущей схемы плюс ответы на вопросы прежних версий
-// (block_id, которых в текущей схеме нет) — чтобы собранные данные не прятались.
+// Одна запись целиком — отправленный ответ или незавершённый: вопросы текущей схемы
+// плюс ответы на вопросы прежних версий (block_id, которых в текущей схеме нет) —
+// чтобы собранные данные не прятались.
 //
 // Подписи берутся из того же answerColumns, что и шапка таблицы: окно открывается
 // ИЗ строки, и вопрос обязан называться в обоих местах одинаково. Колонок в таблице
-// две, а вопросов здесь все: окно и есть способ увидеть ответ целиком.
+// две, а вопросов здесь все: окно и есть способ увидеть запись целиком.
 //
-// Удаление есть и здесь, и значком в строке таблицы: решение «этот ответ лишний»
+// Удаление есть и здесь, и значком в строке таблицы: решение «эта запись лишняя»
 // приходит и по двум первым ответам в строке, и по прочитанному целиком. Само окно
-// подтверждения общее (`DeleteSubmissionDialog`) — два входа обязаны обещать одно.
+// подтверждения общее (`DeleteAnswerDialog`) — два входа обязаны обещать одно.
 export function SubmissionPanel({
-  submission,
+  row,
   columns,
   files,
   formId,
   onDeleted,
 }: {
-  submission: Submission
+  row: AnswerRow
   columns: AnswerColumn[]
   files: Record<string, AnswerFile>
   formId: string
   onDeleted: () => void
 }) {
   const knownIds = new Set(columns.map((c) => c.block.id))
-  const extraIds = Object.keys(submission.answers).filter((id) => !knownIds.has(id))
+  const extraIds = Object.keys(row.answers).filter((id) => !knownIds.has(id))
   const [confirming, setConfirming] = useState(false)
+  const words = ROW_WORDS[row.kind]
+  // Вопрос, на котором человек остановился, — единственное, что есть у черновика и
+  // нет у ответа. Подписью, а не строкой списка: это не ответ на вопрос, а место
+  // ухода, и в одном ряду с ответами оно читалось бы как ещё один ответ.
+  const stoppedAt = columns.find((c) => c.block.id === row.lastBlockId)
 
   return (
     <>
       <DialogHeader>
-        <DialogTitle>Ответ от {formatDateTime(submission.createdAt)}</DialogTitle>
-        <DialogDescription>Версия формы: {submission.formVersion}</DialogDescription>
+        <DialogTitle>
+          {words.one} от {formatDateTime(row.at)}
+        </DialogTitle>
+        <DialogDescription>
+          Версия формы: {row.formVersion}
+          {stoppedAt && ` · остановился на вопросе «${stoppedAt.label}»`}
+        </DialogDescription>
       </DialogHeader>
 
       <dl className="flex flex-col gap-4">
@@ -49,9 +61,9 @@ export function SubmissionPanel({
             <dt className="text-sm font-medium">{c.label}</dt>
             <dd className="mt-0.5 text-sm break-words text-muted-foreground">
               {c.block.type === 'file' ? (
-                <FileLinks value={submission.answers[c.block.id]} files={files} />
+                <FileLinks value={row.answers[c.block.id]} files={files} />
               ) : (
-                formatAnswer(c.block, submission.answers[c.block.id]) || '—'
+                formatAnswer(c.block, row.answers[c.block.id]) || '—'
               )}
             </dd>
           </div>
@@ -62,7 +74,7 @@ export function SubmissionPanel({
               {id} <span className="text-muted-foreground">(из прежней версии)</span>
             </dt>
             <dd className="mt-0.5 text-sm break-words text-muted-foreground">
-              {formatAnswer(undefined, submission.answers[id])}
+              {formatAnswer(undefined, row.answers[id])}
             </dd>
           </div>
         ))}
@@ -74,12 +86,12 @@ export function SubmissionPanel({
         onClick={() => setConfirming(true)}
       >
         <Trash2 className="size-4" />
-        Удалить ответ
+        Удалить {words.oneLower}
       </Button>
 
-      <DeleteSubmissionDialog
+      <DeleteAnswerDialog
         formId={formId}
-        submission={submission}
+        row={row}
         open={confirming}
         onOpenChange={setConfirming}
         onDeleted={onDeleted}

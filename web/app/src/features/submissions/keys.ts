@@ -9,11 +9,17 @@ import { type Period } from '../../shared/period'
 // обязан исчезнуть не только из открытого).
 export const submissionKeys = {
   all: () => ['submissions'] as const,
-  list: (formId: string) => ['submissions', 'list', formId] as const,
+  // kind — часть ключа: «Все ответы» и «Законченные» это два РАЗНЫХ множества с
+  // разными курсорами, и общий кеш подсунул бы одной вкладке страницы другой.
+  list: (formId: string, kind: string) => ['submissions', 'list', formId, kind] as const,
+  listAllKinds: (formId: string) => ['submissions', 'list', formId] as const,
   summaryAllPeriods: (formId: string) => ['submissions', 'summary', formId] as const,
   summary: (formId: string, period: Period) => ['submissions', 'summary', formId, period] as const,
   countAllPeriods: (formId: string) => ['submissions', 'count', formId] as const,
   count: (formId: string, period: Period) => ['submissions', 'count', formId, period] as const,
+  // Черновики — свой ключ рядом со списком ответов, а не под ним: это другое
+  // множество, и удаление ответа не имеет права трогать его кеш.
+  partials: (formId: string) => ['submissions', 'partials', formId] as const,
   // Значения одного вопроса лежат ПОД ключом сводки: удаление ответа инвалидирует
   // сводку префиксом, и окно «все ответы» обязано перечитаться вместе с ней —
   // иначе в нём останется ответ, которого уже нет в распределении над ним.

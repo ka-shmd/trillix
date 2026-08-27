@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,11 +27,14 @@ type Middleware = func(http.Handler) http.Handler
 // сводка + удаление).
 type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
+	ListFeedForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (FeedPage, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
 	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
 	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
+	ListPartialsForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (PartialPage, error)
+	DeletePartialForForm(ctx context.Context, userID, formID, visitID uuid.UUID) error
 }
 
 // utf8BOM — метка порядка байтов: Excel без неё принимает UTF-8 CSV за ANSI и
@@ -69,14 +73,27 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
+	// Черновики — СВОЙ корень, а не подпуть /submissions: это другая таблица, другой
+	// курсор и другое право (гейт тарифа). Вкладка кабинета соседняя, данные — нет.
+	mux.Handle("GET /api/v1/forms/{id}/partials", h.requireAuth(http.HandlerFunc(h.listPartials)))
+	mux.Handle("DELETE /api/v1/forms/{id}/partials/{vid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deletePartial))))
 }
 
 // --- DTO ---
 
+// submissionResponse — одна строка раздела «Ответы». Kind различает отправленный
+// ответ и незавершённый: вкладка «Все ответы» отдаёт оба вида, «Законченные» —
+// только первый, а разметка таблицы, окно строки и удаление у них общие.
+//
+// UpdatedAt и LastBlockID есть ТОЛЬКО у черновика (omitempty): у отправленного
+// ответа не было ни правок после отправки, ни места, где человек остановился.
 type submissionResponse struct {
+	Kind        string          `json:"kind"`
 	ID          string          `json:"id"`
 	FormVersion int32           `json:"formVersion"`
 	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   *time.Time      `json:"updatedAt,omitempty"`
+	LastBlockID string          `json:"lastBlockId,omitempty"`
 	Answers     json.RawMessage `json:"answers"`
 }
 
@@ -102,7 +119,18 @@ type fileResponse struct {
 	Size int64  `json:"size"`
 }
 
+// list отдаёт страницу раздела «Ответы». ?kind=all — оба множества одним списком по
+// времени (вкладка «Все ответы»), иначе только отправленные («Законченные»).
+//
+// Курсор у двух видов РАЗНЫЙ (одноколоночный по id против составного), и это
+// намеренно скрыто за одной непрозрачной строкой: клиент курсор не разбирает, а
+// парсер выбирается тем же kind, что и выборка. Курсор чужого вида → 422, как
+// любой битый.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("kind") == "all" {
+		h.listFeed(w, r)
+		return
+	}
 	userID, ok := currentUserID(w, r)
 	if !ok {
 		return
@@ -126,6 +154,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	items := make([]submissionResponse, len(page.Submissions))
 	for i, s := range page.Submissions {
 		items[i] = submissionResponse{
+			Kind:        feedKindSubmission,
 			ID:          s.ID.String(),
 			FormVersion: s.FormVersion,
 			CreatedAt:   s.CreatedAt,
@@ -144,6 +173,146 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		resp.NextCursor = &enc
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// listFeed — вкладка «Все ответы»: отправленные и незавершённые одним списком.
+func (h *Handler) listFeed(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	after, ok := parseTimeCursor(w, r)
+	if !ok {
+		return
+	}
+	limit := parseLimit(r.URL.Query().Get("limit"))
+
+	page, err := h.svc.ListFeedForForm(r.Context(), userID, formID, after, limit)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	items := make([]submissionResponse, len(page.Rows))
+	for i, row := range page.Rows {
+		item := submissionResponse{
+			Kind:        row.Kind,
+			ID:          row.ID.String(),
+			FormVersion: row.FormVersion,
+			CreatedAt:   row.CreatedAt,
+			Answers:     row.Answers,
+		}
+		if row.Kind == feedKindPartial {
+			at := row.At
+			item.UpdatedAt = &at
+			item.LastBlockID = row.LastBlockID
+		}
+		items[i] = item
+	}
+	resp := listResponse{Submissions: items, Total: page.Total, Hidden: page.Hidden}
+	if len(page.Files) > 0 {
+		resp.Files = make(map[string]fileResponse, len(page.Files))
+		for id, f := range page.Files {
+			resp.Files[id] = fileResponse{Name: f.Name, Size: f.Size}
+		}
+	}
+	if page.NextCursor != nil {
+		enc := encodeTimeCursor(*page.NextCursor)
+		resp.NextCursor = &enc
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// partialResponse — один черновик в проекции кабинета. id строки — id ВИЗИТА
+// (черновик принадлежит визиту, а не себе), поэтому поле называется visitId: имя
+// «id» скрыло бы, что удаление и обновление адресуются визитом.
+//
+// updatedAt и createdAt оба: таблица показывает последнюю правку (черновик
+// меняется, пока человек печатает), а окно — ещё и когда он начал.
+type partialResponse struct {
+	VisitID     string    `json:"visitId"`
+	FormVersion int32     `json:"formVersion"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	// LastBlockID — вопрос, на котором человек остановился; пустая строка, если
+	// рендерер его не прислал (старая вкладка, ответ стёрт).
+	LastBlockID string          `json:"lastBlockId"`
+	Answers     json.RawMessage `json:"answers"`
+}
+
+type partialsResponse struct {
+	Partials   []partialResponse `json:"partials"`
+	NextCursor *string           `json:"nextCursor"`
+	Total      int64             `json:"total"`
+}
+
+// listPartials отдаёт страницу черновиков формы. Гейт тарифа — в сервисе, сюда он
+// приходит как domain.ErrPlanRequired (402 plan_required): кабинет рисует по нему
+// плашку, а не коробку ошибки.
+func (h *Handler) listPartials(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	after, ok := parseTimeCursor(w, r)
+	if !ok {
+		return
+	}
+	limit := parseLimit(r.URL.Query().Get("limit"))
+
+	page, err := h.svc.ListPartialsForForm(r.Context(), userID, formID, after, limit)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	items := make([]partialResponse, len(page.Partials))
+	for i, p := range page.Partials {
+		items[i] = partialResponse{
+			VisitID:     p.VisitID.String(),
+			FormVersion: p.FormVersion,
+			CreatedAt:   p.CreatedAt,
+			UpdatedAt:   p.UpdatedAt,
+			LastBlockID: p.LastBlockID,
+			Answers:     p.Answers,
+		}
+	}
+	resp := partialsResponse{Partials: items, Total: page.Total}
+	if page.NextCursor != nil {
+		enc := encodeTimeCursor(*page.NextCursor)
+		resp.NextCursor = &enc
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// deletePartial убирает один черновик. 204 без тела — как удаление ответа.
+func (h *Handler) deletePartial(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	visitID, err := uuid.Parse(r.PathValue("vid"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.DeletePartialForForm(r.Context(), userID, formID, visitID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Сводка. kind — по нему фронт выбирает вид: distribution → buckets, number →
@@ -512,4 +681,48 @@ func decodeCursor(s string) (*Cursor, error) {
 		return nil, fmt.Errorf("cursor: parse id: %w", err)
 	}
 	return &Cursor{ID: id}, nil
+}
+
+// Составной курсор (время, id) — у листинга черновиков и у ленты «Все ответы» он
+// один: там черновик МЕНЯЕТСЯ, пока человек печатает, тут склеены два множества с
+// разными id. Кодируется теми же правилами, что одноколоночный: непрозрачная для
+// клиента base64url-строка.
+const timeCursorSep = "|"
+
+func parseTimeCursor(w http.ResponseWriter, r *http.Request) (*TimeCursor, bool) {
+	raw := r.URL.Query().Get("cursor")
+	if raw == "" {
+		return nil, true
+	}
+	c, err := decodeTimeCursor(raw)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверный курсор", domain.ErrValidation))
+		return nil, false
+	}
+	return c, true
+}
+
+func encodeTimeCursor(c TimeCursor) string {
+	s := c.At.UTC().Format(time.RFC3339Nano) + timeCursorSep + c.ID.String()
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
+}
+
+func decodeTimeCursor(s string) (*TimeCursor, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, err
+	}
+	at, id, ok := strings.Cut(string(raw), timeCursorSep)
+	if !ok {
+		return nil, fmt.Errorf("time cursor: нет разделителя")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return nil, fmt.Errorf("time cursor: parse time: %w", err)
+	}
+	rowID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("time cursor: parse id: %w", err)
+	}
+	return &TimeCursor{At: ts, ID: rowID}, nil
 }

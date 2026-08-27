@@ -24,6 +24,10 @@ type fakeForms struct {
 	owner forms.Owner
 	// partialAllowed — разрешает ли тариф сбор незавершённых ответов.
 	partialAllowed bool
+	// owned — форма, доступ к которой у пользователя ЕСТЬ. nil (умолчание) =
+	// чужая или несуществующая: Get и GetForAction отдают 404, и это верный
+	// умолчательный случай для тестов анти-IDOR.
+	owned *forms.Form
 }
 
 func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
@@ -37,11 +41,17 @@ func (f fakeForms) CollectPartial(_ context.Context, _ uuid.UUID, intent bool) (
 }
 
 func (f fakeForms) Get(context.Context, uuid.UUID, uuid.UUID) (forms.Form, error) {
-	return forms.Form{}, domain.ErrNotFound
+	if f.owned == nil {
+		return forms.Form{}, domain.ErrNotFound
+	}
+	return *f.owned, nil
 }
 
 func (f fakeForms) GetForAction(context.Context, uuid.UUID, uuid.UUID, domain.Action) (forms.Form, error) {
-	return forms.Form{}, domain.ErrNotFound
+	if f.owned == nil {
+		return forms.Form{}, domain.ErrNotFound
+	}
+	return *f.owned, nil
 }
 
 func (f fakeForms) Versions(context.Context, uuid.UUID, uuid.UUID) ([]forms.Version, error) {
@@ -261,5 +271,114 @@ func TestSubmit_QuotaCheckFails_StillAccepts(t *testing.T) {
 	}
 	if store.lastInsert.OverQuota {
 		t.Error("при несостоявшейся проверке ответ помечен сверхлимитным")
+	}
+}
+
+// fakePartialStore — Store для листинга черновиков: отдаёт заданные строки и общее
+// число. Остальные методы не реализованы (встроенный nil-интерфейс) — листинг их
+// не зовёт, и вызов упал бы паникой, а не молча.
+type fakePartialStore struct {
+	Store
+	rows  []Partial
+	total int64
+	// after — курсор, с которым пришли в репозиторий: тест проверяет, что сервис
+	// передал его как есть, а не потерял по дороге.
+	after *TimeCursor
+}
+
+func (f *fakePartialStore) ListPartials(_ context.Context, _ postgres.DBTX, _ uuid.UUID, limit int32, after *TimeCursor) ([]Partial, error) {
+	f.after = after
+	if int(limit) < len(f.rows) {
+		return f.rows[:limit], nil
+	}
+	return f.rows, nil
+}
+
+func (f *fakePartialStore) CountPartials(context.Context, postgres.DBTX, uuid.UUID) (int64, error) {
+	return f.total, nil
+}
+
+// Чужая форма — 404 РАНЬШЕ разговора о тарифе: иначе отказ по тарифу подтверждал бы
+// существование чужой формы (инвариант 1, тот же порядок, что у публикации).
+func TestListPartials_ForeignForm_404BeforePlanGate(t *testing.T) {
+	svc := NewService(nil, nil, fakeForms{}, nil, nil,
+		fakePlans{err: errors.New("тарифы спрашивать не должны были")}, &fakePartialStore{}, "")
+
+	_, err := svc.ListPartialsForForm(context.Background(), uuid.New(), uuid.New(), nil, 0)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидался ErrNotFound", err)
+	}
+}
+
+// Тариф больше не разрешает показ (даунгрейд при включённом тумблере) — 402, а не
+// пустая страница: молча показать ноль черновиков значило бы соврать про данные,
+// которые собраны и лежат.
+func TestListPartials_PlanDenied(t *testing.T) {
+	svc := NewService(nil, nil, fakeForms{owned: &forms.Form{ID: uuid.New(), WorkspaceID: uuid.New()}},
+		nil, nil, fakePlans{allowed: false}, &fakePartialStore{}, "")
+
+	_, err := svc.ListPartialsForForm(context.Background(), uuid.New(), uuid.New(), nil, 0)
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("ошибка = %v, ожидался ErrPlanRequired", err)
+	}
+}
+
+// Страница режется по limit, а курсор строится по ПОСЛЕДНЕЙ ПОКАЗАННОЙ строке, а не
+// по лишней: иначе следующая страница начиналась бы через одну, и одна запись
+// пропадала бы из списка навсегда.
+func TestListPartials_CursorFromLastShownRow(t *testing.T) {
+	older := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	rows := []Partial{
+		{VisitID: uuid.New(), UpdatedAt: older.Add(2 * time.Hour)},
+		{VisitID: uuid.New(), UpdatedAt: older.Add(time.Hour)},
+		{VisitID: uuid.New(), UpdatedAt: older},
+	}
+	store := &fakePartialStore{rows: rows, total: 42}
+	svc := NewService(nil, nil, fakeForms{owned: &forms.Form{ID: uuid.New(), WorkspaceID: uuid.New()}},
+		nil, nil, okPlans(), store, "")
+
+	page, err := svc.ListPartialsForForm(context.Background(), uuid.New(), uuid.New(), nil, 2)
+	if err != nil {
+		t.Fatalf("список: %v", err)
+	}
+	if len(page.Partials) != 2 {
+		t.Fatalf("показано строк = %d, ожидалось 2", len(page.Partials))
+	}
+	if page.Total != 42 {
+		t.Fatalf("total = %d, ожидалось 42", page.Total)
+	}
+	if page.NextCursor == nil {
+		t.Fatal("курсор следующей страницы пуст, а лишняя строка была")
+	}
+	if page.NextCursor.ID != rows[1].VisitID || !page.NextCursor.At.Equal(rows[1].UpdatedAt) {
+		t.Fatalf("курсор указывает не на последнюю показанную строку: %+v", *page.NextCursor)
+	}
+}
+
+// Последняя страница курсора не отдаёт: непустой nextCursor заставил бы кабинет
+// показать «Показать ещё» и сходить за пустотой.
+func TestListPartials_LastPageHasNoCursor(t *testing.T) {
+	store := &fakePartialStore{rows: []Partial{{VisitID: uuid.New()}}, total: 1}
+	svc := NewService(nil, nil, fakeForms{owned: &forms.Form{ID: uuid.New(), WorkspaceID: uuid.New()}},
+		nil, nil, okPlans(), store, "")
+
+	page, err := svc.ListPartialsForForm(context.Background(), uuid.New(), uuid.New(), nil, 50)
+	if err != nil {
+		t.Fatalf("список: %v", err)
+	}
+	if page.NextCursor != nil {
+		t.Fatalf("курсор = %+v, ожидался nil", *page.NextCursor)
+	}
+}
+
+// Удаление черновика спрашивает право УДАЛЯТЬ ОТВЕТЫ, а не читать форму: это чужой
+// набранный текст, и снятая ячейка матрицы прав обязана его защищать (тот же разбор,
+// что у удаления ответа).
+func TestDeletePartial_ForeignForm_404(t *testing.T) {
+	svc := NewService(nil, nil, fakeForms{}, nil, nil, okPlans(), &fakePartialStore{}, "")
+
+	err := svc.DeletePartialForForm(context.Background(), uuid.New(), uuid.New(), uuid.New())
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка = %v, ожидался ErrNotFound", err)
 	}
 }

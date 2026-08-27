@@ -62,9 +62,14 @@ function ManageLayout() {
   // длиннее самого раздела (/submissions/all и далее). Точное сравнение не совпало бы
   // ни разу, и колонка молча осталась бы обычной ширины.
   const matchRoute = useMatchRoute()
+  // Настройки — экран решений, а не данных: у него своя, узкая колонка (четыре
+  // ширины кабинета, `shared/page/PageContainer`). Таблица ответов, наоборот, идёт
+  // без потолка ширины.
   const contentWidth = matchRoute({ to: '/forms/$slug/submissions', fuzzy: true })
     ? 'full'
-    : 'default'
+    : matchRoute({ to: '/forms/$slug/settings' })
+      ? 'narrow'
+      : 'default'
   const workspaceCrumb = useWorkspaceCrumb()
   // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
@@ -256,6 +261,20 @@ function FormTabs({ slug }: { slug: string }) {
         inactiveProps={inactive}
       >
         Интеграции
+      </Link>
+      {/* Настройки — ПОСЛЕДНИЙ таб: это не работа с формой, а её условия, и открывают
+          их редко. Раздел, а не режим редактора (решение владельца 2026-08-26):
+          отсюда у настроек появился адрес, и на тумблер сбора незавершённых можно
+          послать ссылкой со вкладки «Частичные». */}
+      <Link
+        to="/forms/$slug/settings"
+        search={withoutPeriod}
+        params={{ slug }}
+        className={base}
+        activeProps={active}
+        inactiveProps={inactive}
+      >
+        Настройки
       </Link>
     </nav>
   )

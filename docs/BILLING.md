@@ -85,8 +85,11 @@ internal/entitlements/
 └── queries.sql
 
 Потребители (единственные места, где спрашивают «можно ли»):
-  internal/submissions/service.go  Submit   → SubmissionsPerMonth (мягко, §4)
-  internal/visits/service.go       Funnel   → AnalyticsFunnel (отказ 402)
+  internal/submissions/service.go  Submit               → SubmissionsPerMonth (мягко, §4)
+  internal/submissions/service.go  ListPartialsForForm  → SubmissionsPartial (отказ 402)
+  internal/forms/service.go        UpdateCollectPartial → SubmissionsPartial (только на включении)
+  internal/forms/service.go        CollectPartial       → SubmissionsPartial (на отдаче публичной формы)
+  internal/visits/service.go       Funnel               → AnalyticsFunnel (отказ 402)
 
 Кабинет:
   web/app/src/entities/plan.ts                     Zod-схема снимка
@@ -282,7 +285,7 @@ ORDER BY u.submissions DESC NULLS LAST LIMIT 20;
 |---|---|---|---|---|
 | `submissions_per_month` | quota | воркспейс | `submissions.Submit` (мягко) | **работает** |
 | `analytics_funnel` | toggle | воркспейс | `visits.Funnel` (402) | **работает** |
-| `submissions_partial` | toggle | воркспейс | тумблер сбора незавершённых ответов у формы | **единственный ключ, который гейтит СБОР, а не показ** (ADR §10): черновик — содержимое чужого ответа, и собирать его для владельца, который его не увидит, — цена без выгоды. Спрашивается дважды: при включении тумблера и при отдаче публичной формы (даунгрейд останавливает сбор). Выключить тумблер можно на любом плане |
+| `submissions_partial` | toggle | воркспейс | тумблер сбора незавершённых ответов у формы | **единственный ключ, который гейтит СБОР, а не показ** (ADR §10): черновик — содержимое чужого ответа, и собирать его для владельца, который его не увидит, — цена без выгоды. Спрашивается трижды: при включении тумблера, при отдаче публичной формы (даунгрейд останавливает сбор) и при листинге черновиков в кабинете (`GET /forms/{id}/partials` → 402, вкладка «Частичные» рисует предложение включить). Выключить тумблер и удалить черновик можно на любом плане |
 | `analytics_sources` | toggle | воркспейс | секция «Источники» вкладки «Визиты» | закрыта только секция: график, устройства и браузеры остаются, а рядом с плашкой стоит настоящее число визитов с известным источником |
 | `workspaces` | quota | аккаунт | — | ключ заведён, **`CheckAccount` не написан** (нет действия «создать воркспейс», решение владельца 2026-08-01) |
 | `form_design_custom` | toggle | воркспейс | `forms.Publish` (402) | **работает** (фаза 22): гейт на публикации, не на сохранении — черновик со своими цветами живёт на любом тарифе |

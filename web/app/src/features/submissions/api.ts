@@ -1,5 +1,10 @@
 import { apiRequest } from '../../shared/api/client'
-import { submissionsPageSchema, type SubmissionsPage } from '../../entities/submission'
+import {
+  partialSubmissionsPageSchema,
+  submissionsPageSchema,
+  type PartialSubmissionsPage,
+  type SubmissionsPage,
+} from '../../entities/submission'
 import {
   blockAnswersPageSchema,
   formSummarySchema,
@@ -10,14 +15,27 @@ import { submissionsCountSchema, type SubmissionsCount } from '../../entities/su
 import { periodRange, type Period } from '../../shared/period'
 
 // Транспорт submissions: страница ответов парсится Zod-схемой на границе.
-export function listSubmissions(formId: string, cursor?: string): Promise<SubmissionsPage> {
+//
+// kind выбирает МНОЖЕСТВО, а не вид: `all` — отправленные и незавершённые одним
+// списком по времени (вкладка «Все ответы»), `completed` — только отправленные.
+// Курсор внутри у них разный, но клиент его не разбирает: непрозрачная строка
+// уезжает обратно вместе с тем же kind.
+export function listSubmissions(
+  formId: string,
+  kind: SubmissionsKind,
+  cursor?: string,
+): Promise<SubmissionsPage> {
   const params = new URLSearchParams()
+  if (kind === 'all') params.set('kind', 'all')
   if (cursor) params.set('cursor', cursor)
   const query = params.toString()
   return apiRequest(`/forms/${formId}/submissions${query ? `?${query}` : ''}`, {
     schema: submissionsPageSchema,
   })
 }
+
+// Какое множество показывает вкладка раздела «Ответы».
+export type SubmissionsKind = 'all' | 'completed'
 
 // Сводка ответов: агрегат считает сервер, сюда приходят только счётчики. Окно
 // наблюдения режет ответы по времени приёма — как и все экраны аналитики.
@@ -53,6 +71,23 @@ export function getSubmissionsCount(formId: string, period: Period): Promise<Sub
   return apiRequest(`/forms/${formId}/submissions/count${query ? `?${query}` : ''}`, {
     schema: submissionsCountSchema,
   })
+}
+
+// Черновики формы, страницами. Своя ручка, а не ?kind= у листинга ответов: другая
+// таблица, другой курсор (составной) и свой гейт тарифа — 402 отсюда кабинет читает
+// как «показать плашку», а не как сбой.
+export function listPartials(formId: string, cursor?: string): Promise<PartialSubmissionsPage> {
+  const params = new URLSearchParams()
+  if (cursor) params.set('cursor', cursor)
+  const query = params.toString()
+  return apiRequest(`/forms/${formId}/partials${query ? `?${query}` : ''}`, {
+    schema: partialSubmissionsPageSchema,
+  })
+}
+
+// Удаление одного черновика: адресуется id визита (это ключ строки), 204 без тела.
+export function deletePartial(formId: string, visitId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/partials/${visitId}`, { method: 'DELETE' })
 }
 
 // URL CSV-экспорта: обычная навигация браузера (cookie авторизует, файл качается) —
