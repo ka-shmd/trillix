@@ -9,7 +9,14 @@ import { integrationKeys } from './keys'
 
 // Поход к провайдеру идёт в отдельном окне, которого в happy-dom нет. Подменяем
 // хук окна: он отдаёт наверх исход, а тест решает, каким тот будет.
-const popup = vi.hoisted(() => ({ callbacks: [] as ((outcome: string) => void)[] }))
+const popup = vi.hoisted(() => ({
+  callbacks: [] as ((outcome: string) => void)[],
+  // waiting — идёт поход за согласием. Меняется тестом ДО рендера: проверяется
+  // вид окна в этом состоянии, а не переход в него (переход — забота хука, у
+  // него свои тесты).
+  waiting: false,
+  cancelled: false,
+}))
 
 // Список таблиц, который НИКОГДА не приезжает. Ловить «запрос в полёте» на живом
 // fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
@@ -29,7 +36,13 @@ vi.mock('./api', async (importOriginal) => {
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
     popup.callbacks.push(onOutcome)
-    return { waiting: false, open: () => true, cancel: () => {} }
+    return {
+      waiting: popup.waiting,
+      open: () => true,
+      cancel: () => {
+        popup.cancelled = true
+      },
+    }
   },
 }))
 
@@ -43,7 +56,11 @@ function popupOutcome(outcome: string) {
 // на контуре» ≠ «не подключено» ≠ «подключено, но связок нет»), и спутать их
 // значит советовать нажать кнопку, которой не появится.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  popup.waiting = false
+  popup.cancelled = false
+})
 
 const FORM_ID = 'form-1'
 const ACCOUNT_ID = 'acc-1'
@@ -238,6 +255,26 @@ describe('оверлей настройки Google Таблиц', () => {
     } finally {
       hangingList.enabled = false
     }
+  })
+
+  // Ожидание согласия — такое же «окно занято», как и загрузка списков, и
+  // показывается ТЕМ ЖЕ слоем. Отдельная строка в колонке говорила бы про
+  // занятость вторым способом в одном окне, и настройки под ней оставались бы
+  // живыми, пока человек в окне Google.
+  it('идёт поход за согласием — общий слой поверх окна, поля выключены', () => {
+    popup.waiting = true
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    expect(screen.getByText(/ждём подтверждения в окне google/i)).toBeTruthy()
+    // «Отменить» лежит В СЛОЕ: колонка на это время inert, и кнопка в ней была
+    // бы недостижима ни мышью, ни клавиатурой.
+    const cancel = screen.getByRole('button', { name: 'Отменить' })
+    expect(screen.getByLabelText(/название подключения/i).closest('[inert]')).not.toBeNull()
+    expect(cancel.closest('[inert]')).toBeNull()
+
+    fireEvent.click(cancel)
+    expect(popup.cancelled).toBe(true)
   })
 
   it('списки приехали — индикатора нет и поля живые', () => {

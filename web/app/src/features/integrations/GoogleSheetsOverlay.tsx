@@ -93,6 +93,30 @@ export function GoogleSheetsOverlay({
   // возвращалась модальность.
   const setup = useSetupState(connection, state.account.accounts)
 
+  // Поход за согласием живёт ЗДЕСЬ, а не в поле аккаунта, потому что здесь же
+  // живёт слой поверх окна. Ожидание — такое же «окно занято», как и загрузка
+  // списков: человек ушёл в окно Google, и настройки под ним трогать нечего.
+  // Держать для этого вторую строку в колонке значило бы показывать занятость
+  // двумя разными способами в одном окне.
+  const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
+  const refresh = useRefreshIntegrations(formId)
+  const popup = useOAuthPopup((result) => {
+    // Успех подписи не требует — но требует ПЕРЕЗАПРОСА: аккаунт подключился в
+    // соседнем окне, и без этого экран остался бы показывать прежний список, а
+    // человек жал бы кнопку второй раз. Само оно не обновится: refetch по фокусу
+    // React Query слушает visibilitychange, а окно провайдера поверх вкладки
+    // документ в hidden не переводит.
+    setOutcome(result === 'integration_ok' ? null : result)
+    if (result === 'integration_ok') refresh()
+  })
+  // connect — начать поход. Гасит прошлый исход и пробует открыть окно; false
+  // означает «окно не открылось» (узкий экран, блокировщик), и тогда вызывающий
+  // НИЧЕГО не делает, давая отработать обычному переходу по ссылке.
+  const connect = (href: string) => {
+    setOutcome(null)
+    return popup.open(href)
+  }
+
   // Что-нибудь ещё едет? Считаем ТОЛЬКО списки самого окна: ключ состояния формы
   // короче на один сегмент, и опрос переноса (раз в 3 секунды, пока связка
   // переносит накопленные ответы) иначе моргал бы индикатором на ровном месте.
@@ -103,6 +127,10 @@ export function GoogleSheetsOverlay({
       return key.length > own.length && key[0] === own[0] && key[1] === own[1]
     },
   })
+  // Окно занято: либо едут списки, либо человек в окне Google. Состояние одно,
+  // потому что и лечение одно — подождать; различаются только подпись и то, что
+  // у похода есть «Отменить».
+  const busy = loading > 0 || popup.waiting
 
   return (
     <Dialog open modal={!pickerOpen} onOpenChange={(open) => !open && onClose()}>
@@ -122,7 +150,7 @@ export function GoogleSheetsOverlay({
             уезжает на сам DialogContent (у него tabIndex=-1), то есть из окна не
             выпадает. */}
         <div
-          inert={loading > 0}
+          inert={busy}
           className="mx-auto my-auto flex w-full max-w-xl flex-col gap-8 px-6 py-16"
         >
           <header className="flex flex-col items-center gap-3 text-center">
@@ -143,21 +171,37 @@ export function GoogleSheetsOverlay({
             setup={setup}
             onDone={onClose}
             onPickerOpenChange={setPickerOpen}
+            connect={connect}
+            outcome={outcome}
           />
         </div>
 
-        {/* Слой поверх окна, пока едут его списки: половина настроек зависит от
-            того, что приедет (какие таблицы, какие листы), и трогать их раньше
-            значит выбирать из пустого списка. fixed, а не absolute: окно
-            прокручиваемое, и absolute уехал бы вместе с содержимым. */}
-        {loading > 0 && (
+        {/* Слой поверх окна, пока оно занято: едут списки либо идёт поход за
+            согласием. Половина настроек зависит от того, что приедет (какие
+            таблицы, какие листы), и трогать их раньше значит выбирать из пустого
+            списка; на время похода трогать нечего тем более — человек в другом
+            окне. fixed, а не absolute: окно прокручиваемое, и absolute уехал бы
+            вместе с содержимым.
+
+            Слой, а не второй диалог: диалог в диалоге уводит фокус и запирает
+            человека между двумя оверлеями, а окно провайдера и так сверху.
+            «Отменить» лежит ЗДЕСЬ, а не в колонке под слоем: колонка на это
+            время inert, и кнопка в ней была бы недостижима. */}
+        {busy && (
           <div
             className="fixed inset-0 z-10 flex items-center justify-center gap-3 bg-background/85"
             role="status"
             aria-live="polite"
           >
             <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
-            <span className="text-base text-muted-foreground">Загружаем данные Google…</span>
+            <span className="text-base text-muted-foreground">
+              {popup.waiting ? 'Ждём подтверждения в окне Google…' : 'Загружаем данные Google…'}
+            </span>
+            {popup.waiting && (
+              <Button variant="ghost" size="sm" onClick={popup.cancel}>
+                Отменить
+              </Button>
+            )}
           </div>
         )}
       </DialogContent>
@@ -266,6 +310,8 @@ function SetupBody({
   setup,
   onDone,
   onPickerOpenChange,
+  connect,
+  outcome,
 }: {
   formId: string
   state: FormIntegrations
@@ -273,6 +319,9 @@ function SetupBody({
   setup: SetupState
   onDone: () => void
   onPickerOpenChange: (open: boolean) => void
+  // connect — начать поход за согласием. Живёт наверху вместе со слоем ожидания.
+  connect: (href: string) => boolean
+  outcome: OAuthOutcome | null
 }) {
   const { account } = state
   const create = useCreateSheet(formId)
@@ -300,7 +349,7 @@ function SetupBody({
   // согласие. Поля, которые всё равно заперты, — обещание работы, которой
   // человек ещё не может сделать.
   if (account.accounts.length === 0 && !connection) {
-    return <ConnectAccount formId={formId} />
+    return <ConnectAccount connect={connect} outcome={outcome} />
   }
 
   return (
@@ -322,10 +371,11 @@ function SetupBody({
       </div>
 
       <AccountField
-        formId={formId}
         accounts={account.accounts}
         connection={connection}
         setup={setup}
+        connect={connect}
+        outcome={outcome}
       />
 
       <SpreadsheetField
@@ -597,17 +647,13 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
 // Права здесь не спрашиваются: человек подключает СВОЙ аккаунт Google, и роль в
 // пространстве на это не влияет (ADR §10, 2026-08-27). Прежде на этом месте
 // стояло «Подключить Google может владелец пространства».
-function ConnectAccount({ formId }: { formId: string }) {
-  const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
-  const refresh = useRefreshIntegrations(formId)
-  const popup = useOAuthPopup((result) => {
-    // Успех подписи не требует — но требует ПЕРЕЗАПРОСА: аккаунт подключился в
-    // соседнем окне, и без этого экран остался бы показывать «Подключить
-    // Google» при уже подключённом аккаунте, а человек жал бы кнопку второй раз.
-    setOutcome(result === 'integration_ok' ? null : result)
-    if (result === 'integration_ok') refresh()
-  })
-
+function ConnectAccount({
+  connect,
+  outcome,
+}: {
+  connect: (href: string) => boolean
+  outcome: OAuthOutcome | null
+}) {
   return (
     <div className="flex flex-col gap-5">
       {/* Трансграничная передача названа ДО перехода к согласию, а не после:
@@ -626,15 +672,13 @@ function ConnectAccount({ formId }: { formId: string }) {
         <a
           href={startUrl()}
           onClick={(e) => {
-            setOutcome(null)
-            if (popup.open(startUrl())) e.preventDefault()
+            if (connect(startUrl())) e.preventDefault()
           }}
         >
           Подключить Google
         </a>
       </Button>
 
-      {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
       {outcome && (
         <p role="status" className="text-sm text-destructive">
           {connectFailureText(outcome)}
@@ -658,12 +702,12 @@ function ConnectAccount({ formId }: { formId: string }) {
 // настраивает одну связку. Место для него — экран аккаунта, и оно записано в
 // BACKLOG; ручка на бэке есть (API.md).
 function AccountField({
-  formId,
   accounts,
   connection,
   setup,
+  connect,
+  outcome,
 }: {
-  formId: string
   accounts: ConnectedAccount[]
   // connection — правим существующую связку. Нужна ради ЧУЖОГО аккаунта: связку
   // мог завести коллега, его подключения в списке спрашивающего нет, и без
@@ -671,14 +715,9 @@ function AccountField({
   // Тот же приём, что у книги, выбранной в окне Google (`picked` ниже).
   connection: FormSheet | null
   setup: SetupState
+  connect: (href: string) => boolean
+  outcome: OAuthOutcome | null
 }) {
-  const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
-  const refresh = useRefreshIntegrations(formId)
-  const popup = useOAuthPopup((result) => {
-    setOutcome(result === 'integration_ok' ? null : result)
-    if (result === 'integration_ok') refresh()
-  })
-
   const chosen = accounts.find((a) => a.id === setup.account) ?? null
   // Аккаунт связки, которого нет среди своих, — чужой: показываем его пунктом,
   // чтобы поле не выглядело пустым, но выбрать заново после ухода с него нельзя
@@ -716,25 +755,9 @@ function AccountField({
           аккаунт вместо выбора из всех своих. Без выбранного аккаунта
           переподключать нечего — тогда кнопки нет. */}
       <div className="flex flex-wrap items-center gap-4">
-        <AccountAction
-          href={startUrl()}
-          label="Подключить другой аккаунт"
-          waiting={popup.waiting}
-          onOpen={(href) => {
-            setOutcome(null)
-            return popup.open(href)
-          }}
-        />
+        <AccountAction href={startUrl()} label="Подключить другой аккаунт" onOpen={connect} />
         {chosen && (
-          <AccountAction
-            href={startUrl(chosen.id)}
-            label="Переподключить"
-            waiting={popup.waiting}
-            onOpen={(href) => {
-              setOutcome(null)
-              return popup.open(href)
-            }}
-          />
+          <AccountAction href={startUrl(chosen.id)} label="Переподключить" onOpen={connect} />
         )}
       </div>
 
@@ -758,7 +781,6 @@ function AccountField({
         </p>
       )}
 
-      {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
       {outcome && (
         <p role="status" className="text-sm text-destructive">
           {connectFailureText(outcome)}
@@ -778,12 +800,10 @@ function AccountField({
 function AccountAction({
   href,
   label,
-  waiting,
   onOpen,
 }: {
   href: string
   label: string
-  waiting: boolean
   onOpen: (href: string) => boolean
 }) {
   return (
@@ -799,23 +819,9 @@ function AccountAction({
           if (onOpen(href)) e.preventDefault()
         }}
       >
-        {waiting ? 'Ждём подтверждения в окне Google…' : label}
+        {label}
       </a>
     </Button>
-  )
-}
-
-// WaitingNote — ожидание согласия. Не второй модальный слой поверх первого:
-// диалог в диалоге уводит фокус и запирает человека между двумя оверлеями, а
-// окно провайдера и так сверху.
-function WaitingNote({ onCancel }: { onCancel: () => void }) {
-  return (
-    <p className="flex items-center gap-2 text-sm text-muted-foreground">
-      Ждём подтверждения в окне Google…
-      <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onCancel}>
-        Отменить
-      </Button>
-    </p>
   )
 }
 
