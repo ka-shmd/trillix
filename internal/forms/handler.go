@@ -39,6 +39,7 @@ type formsService interface {
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -120,6 +121,22 @@ type formDetailResponse struct {
 	// CollectPartial — тумблер сбора незавершённых ответов. Кабинет рисует по нему
 	// состояние переключателя; включение требует платного тарифа (402).
 	CollectPartial bool `json:"collectPartial"`
+	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
+	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
+	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
+	// стоит там). Живая колонка — перепубликации не требует.
+	LinkPreview *linkPreviewBody `json:"linkPreview"`
+}
+
+// linkPreviewBody — карточка ссылки в теле запроса и ответа. Полный набор полей,
+// не частичный патч: окно кабинета шлёт карточку целиком, пустая строка = «снять
+// переопределение и вернуть дефолт».
+type linkPreviewBody struct {
+	SiteName    string `json:"siteName"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	ImageKey    string `json:"imageKey"`
+	IconKey     string `json:"iconKey"`
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
@@ -160,6 +177,7 @@ type patchRequest struct {
 	CloseSettings      *closeSettingsBody `json:"closeSettings"`
 	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
 	CollectPartial     *bool              `json:"collectPartial"`
+	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
 }
 
 func toFormResponse(f Form) formResponse {
@@ -212,6 +230,23 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		ClosedMessage:      f.ClosedMessage,
 		NotifyOnSubmission: f.NotifyOnSubmission,
 		CollectPartial:     f.CollectPartial,
+		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
+	}
+}
+
+// toLinkPreviewBody — карточка ссылки в тело ответа; nil (не настраивали) остаётся
+// null, а не превращается в объект из пустых строк: «не настраивали» и «настроили
+// пустым» — одно состояние, и в контракте у него одно представление.
+func toLinkPreviewBody(p *domain.LinkPreview) *linkPreviewBody {
+	if p.Empty() {
+		return nil
+	}
+	return &linkPreviewBody{
+		SiteName:    p.SiteName,
+		Title:       p.Title,
+		Description: p.Description,
+		ImageKey:    p.ImageKey,
+		IconKey:     p.IconKey,
 	}
 }
 
@@ -343,6 +378,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.CloseSettings != nil,
 		req.NotifyOnSubmission != nil,
 		req.CollectPartial != nil,
+		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
 		if present {
@@ -350,7 +386,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -378,6 +414,15 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
 	case req.CollectPartial != nil:
 		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
+	case req.LinkPreview != nil:
+		lp := *req.LinkPreview
+		form, err = h.svc.UpdateLinkPreview(r.Context(), userID, formID, &domain.LinkPreview{
+			SiteName:    strings.TrimSpace(lp.SiteName),
+			Title:       strings.TrimSpace(lp.Title),
+			Description: strings.TrimSpace(lp.Description),
+			ImageKey:    strings.TrimSpace(lp.ImageKey),
+			IconKey:     strings.TrimSpace(lp.IconKey),
+		})
 	}
 	if err != nil {
 		httpserver.WriteError(w, r, err)

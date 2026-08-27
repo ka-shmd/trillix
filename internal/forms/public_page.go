@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 )
@@ -50,6 +52,13 @@ const shellMarker = " data-form-shell"
 // вывода и никакого dangerouslySetInnerHTML (инвариант безопасности 4). Собранный
 // index.html вокруг — доверенный (наш билд), склеивается как есть.
 //
+// СВОЯ ИКОНКА ПЕЧАТАЕТСЯ ВТОРЫМ <link rel="icon">, а не заменяет первый. Значок по
+// умолчанию (/favicon.svg) стоит в web/renderer/index.html выше плейсхолдера, и Go
+// разметку вокруг маркера не переписывает принципиально — он её только раздвигает.
+// Из двух одинаковых rel браузеры берут последний объявленный, поэтому своя иконка
+// перебивает дефолтную; при этом в dev, где страницу отдаёт vite и Go не участвует
+// вовсе, значок формы не пропадает.
+//
 // Preload шрифта идёт ПЕРВЫМ: это единственная строка вставки, которая говорит
 // браузеру качать файл, и чем раньше её увидит сканер предзагрузки, тем раньше
 // уйдёт запрос. crossorigin обязателен даже для своего origin — без него шрифт
@@ -59,7 +68,9 @@ var headTmpl = template.Must(template.New("head").Parse(
 		`<title>{{.Title}}</title>` +
 		`<meta name="description" content="{{.MetaDescription}}">` +
 		`{{if .ThemeColor}}<meta name="theme-color" content="{{.ThemeColor}}">{{end}}` +
+		`{{if .Icon}}<link rel="icon" href="{{.Icon}}">{{end}}` +
 		`<meta property="og:type" content="website">` +
+		`{{if .SiteName}}<meta property="og:site_name" content="{{.SiteName}}">{{end}}` +
 		`<meta property="og:title" content="{{.Title}}">` +
 		`{{if .Description}}<meta property="og:description" content="{{.Description}}">{{end}}` +
 		`<meta property="og:image" content="{{.OGImage}}">` +
@@ -76,6 +87,12 @@ type headData struct {
 	MetaDescription string
 	OGImage         string
 	URL             string
+	// SiteName — og:site_name из своей карточки ссылки; пусто → меты нет вовсе
+	// (площадка подставит домен сама, и это лучше, чем наша выдумка).
+	SiteName string
+	// Icon — абсолютный URL своей иконки площадки; пусто → остаётся значок из
+	// разметки рендерера.
+	Icon string
 	// ThemeColor — цвет строки браузера: холст формы. Пусто → меты нет вовсе.
 	ThemeColor string
 	// Preload — URL'ы подмножеств выбранного шрифта в собранной статике.
@@ -275,6 +292,18 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		desc = ogDescription(schema)
 	}
 
+	// Своя карточка ссылки поверх дефолтов. Право тарифа спрашивается ЗДЕСЬ, при
+	// отдаче (а не при сохранении карточки) — тот же приём, что у бейджа: в колонке
+	// намерение автора, в выдаче намерение плюс разрешение.
+	card := h.linkPreview(r, pf.WorkspaceID, pf.LinkPreview)
+
+	title := titleOrFallback(pf.Title)
+	if card != nil && card.Title != "" {
+		title = card.Title
+	}
+	if card != nil && card.Description != "" {
+		desc = truncateRunes(card.Description, maxOGDescriptionLen)
+	}
 	metaDesc := desc
 	if metaDesc == "" {
 		metaDesc = fallbackMetaDescription
@@ -294,13 +323,20 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := headData{
-		Title:           titleOrFallback(pf.Title),
+		Title:           title,
 		Description:     desc,
 		MetaDescription: metaDesc,
 		OGImage:         h.ogImageURL,
 		URL:             h.publicBaseURL + "/r/" + slug,
 		ThemeColor:      domain.DesignThemeColor(design),
 		Preload:         h.fontPreload(doc, design),
+	}
+	if card != nil {
+		data.SiteName = card.SiteName
+		if url := h.mediaURL(card.ImageKey); url != "" {
+			data.OGImage = url
+		}
+		data.Icon = h.mediaURL(card.IconKey)
 	}
 
 	var buf bytes.Buffer
@@ -401,4 +437,33 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// linkPreview — карточка ссылки, действующая для этой выдачи (nil = дефолты).
+// Сбой опроса тарифа не имеет права уронить публичную страницу: остаётся дефолтная
+// карточка, причина уходит в лог с request_id. Выбор тот же, что у бейджа, — при
+// сбое склоняемся к бесплатному поведению, а не к платному.
+func (h *PublicHandler) linkPreview(r *http.Request, workspaceID uuid.UUID, intent *domain.LinkPreview) *domain.LinkPreview {
+	card, err := h.svc.LinkPreviewFor(r.Context(), workspaceID, intent)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("проверка тарифа для карточки ссылки",
+			slog.String("workspace_id", workspaceID.String()), slog.String("error", err.Error()))
+		return nil
+	}
+	return card
+}
+
+// mediaURL — АБСОЛЮТНЫЙ адрес картинки карточки по её ключу в бакете. Абсолютный
+// обязателен: относительный `/media/<key>` краулеры превью не резолвят — они читают
+// мету, не имея базы документа. База — домен рендерера, потому что `/media/*`
+// раздаётся и с него тоже (deploy/caddy/Caddyfile, сниппет media), то есть картинка
+// карточки лежит на том же origin, что и сама форма.
+//
+// Ключ в URL не кодируется: он S3-безопасный по построению (workspaceID/<sha256>.ext,
+// media.Service.put), и лишнее кодирование сломало бы слеш неймспейса.
+func (h *PublicHandler) mediaURL(key string) string {
+	if key == "" {
+		return ""
+	}
+	return h.publicBaseURL + "/media/" + key
 }

@@ -45,6 +45,21 @@ const (
 	// то есть сегодня хватило бы 216 (DPR 3). 512 взято с запасом на смену размера
 	// и не стоит ничего заметного: плоская графика в этих габаритах — единицы КиБ.
 	MaxLogoWidth = 512
+	// MaxPreviewWidth — потолок ширины КАРТИНКИ КАРТОЧКИ ССЫЛКИ (og:image).
+	// 1200 — не наш вкус, а канон площадок: и Open Graph, и Twitter Card
+	// показывают карточку в 1200×630, и всё, что шире, они всё равно ужмут сами,
+	// заплатив трафиком респондента. Ретина-запаса здесь не нужно: карточку
+	// рисует чужой клиент в своих габаритах, а не наша страница.
+	//
+	// Кадрирование до 630 по высоте мы НЕ делаем: обрезать чужую картинку вслепую
+	// значит отрезать половину того, что автор в неё вложил. Непопадание в
+	// пропорцию площадки видно в предпросмотре окна — там та же рамка 1200×630.
+	MaxPreviewWidth = 1200
+	// MaxIconWidth — потолок ширины ИКОНКИ площадки (favicon карточки и вкладки).
+	// Её показывают в 16–32 CSS-px; 256 покрывает любой DPR и заодно тот размер,
+	// в котором иконку берут агрегаторы. Меньше логотипа (512) намеренно: это не
+	// знак страницы, а значок рядом с адресом.
+	MaxIconWidth = 256
 	// MaxAvatarSide — потолок ДЛИННОЙ стороны аватара. Аватар рисуется кружком
 	// (~40 CSS-px в сайдбаре, 96 в настройках), поэтому 512 покрывает любой DPR
 	// с запасом. Потолок здесь на длинной стороне, а не на ширине, как у
@@ -72,10 +87,15 @@ const (
 type Purpose string
 
 const (
-	PurposeBlock  Purpose = "block"
-	PurposeCover  Purpose = "cover"
-	PurposeLogo   Purpose = "logo"
-	PurposeAvatar Purpose = "avatar"
+	PurposeBlock Purpose = "block"
+	PurposeCover Purpose = "cover"
+	PurposeLogo  Purpose = "logo"
+	// PurposePreview и PurposeIcon — картинка и иконка карточки ссылки на форму.
+	// Показывает их не наша страница, а мессенджер или соцсеть, поэтому потолки
+	// у них взяты из канона площадок, а не из вида формы.
+	PurposePreview Purpose = "preview"
+	PurposeIcon    Purpose = "icon"
+	PurposeAvatar  Purpose = "avatar"
 )
 
 // targetWidth — ширина, до которой ужимать картинку этого назначения при
@@ -87,6 +107,10 @@ func (p Purpose) targetWidth(w, h int) int {
 		return MaxCoverWidth
 	case PurposeLogo:
 		return MaxLogoWidth
+	case PurposePreview:
+		return MaxPreviewWidth
+	case PurposeIcon:
+		return MaxIconWidth
 	case PurposeAvatar:
 		if h <= w {
 			return MaxAvatarSide
@@ -118,6 +142,10 @@ func ParsePurpose(s string) (Purpose, error) {
 		return PurposeCover, nil
 	case PurposeLogo:
 		return PurposeLogo, nil
+	case PurposePreview:
+		return PurposePreview, nil
+	case PurposeIcon:
+		return PurposeIcon, nil
 	default:
 		return "", fmt.Errorf("%w: неизвестное назначение картинки %q", domain.ErrValidation, s)
 	}

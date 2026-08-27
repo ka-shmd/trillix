@@ -58,6 +58,9 @@ type fakeStore struct {
 	// Захват настроек закрытия последнего UpdateCloseSettings.
 	lastCloseSettings domain.CloseSettings
 
+	// Захват карточки ссылки последнего UpdateLinkPreview.
+	lastLinkPreview *domain.LinkPreview
+
 	// Тумблер уведомлений (слайс D) и адресат уведомления.
 	lastNotifyEnabled  bool
 	lastCollectPartial bool
@@ -124,6 +127,12 @@ func (f *fakeStore) UpdateCollectPartial(_ context.Context, _ postgres.DBTX, id,
 	f.updated = true
 	f.lastCollectPartial = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, CollectPartial: enabled}, nil
+}
+
+func (f *fakeStore) UpdateFormLinkPreview(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error) {
+	f.updated = true
+	f.lastLinkPreview = p
+	return Form{ID: id, WorkspaceID: workspaceID, LinkPreview: p}, nil
 }
 
 func (f *fakeStore) GetSubmissionOwner(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (Owner, error) {
