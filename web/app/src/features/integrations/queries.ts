@@ -6,6 +6,7 @@ import {
   getFormIntegrations,
   listSheets,
   listSpreadsheets,
+  recheckSheet,
   refillSheet,
   unlinkSheet,
   updateConnection,
@@ -75,6 +76,16 @@ export function useRefillSheet(formId: string) {
   return useMutation({
     mutationFn: (connectionId: string) => refillSheet(formId, connectionId),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Перепроверка меняет состояние связки (или не меняет, и тогда причина в теле
+// отказа) — состояние формы перезапрашивается в обоих случаях.
+export function useRecheckSheet(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId: string) => recheckSheet(formId, connectionId),
+    onSettled: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
 

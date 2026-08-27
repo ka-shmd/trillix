@@ -50,6 +50,24 @@ func (q *Queries) ClaimSubmissionFile(ctx context.Context, arg ClaimSubmissionFi
 	return result.RowsAffected(), nil
 }
 
+const clearFormIntegrationError = `-- name: ClearFormIntegrationError :exec
+UPDATE form_integrations
+SET last_error = NULL,
+    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+WHERE id = $1
+`
+
+// Связка снова годна к записи: гасим причину и возвращаем из broken в live.
+//
+// last_delivered_at НЕ трогаем, хотя MarkFormIntegrationDelivered делает ровно
+// то же самое плюс его: доставки здесь не было, и ставить её время значит врать
+// про ответ, которого не приезжало. Идущий ПЕРЕНОС этой пометкой не сбивается —
+// из backfilling статус не двигается.
+func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearFormIntegrationError, id)
+	return err
+}
+
 const confirmTOTP = `-- name: ConfirmTOTP :exec
 UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1
 `

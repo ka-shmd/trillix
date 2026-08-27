@@ -525,7 +525,7 @@ describe('оверлей настройки Google Таблиц', () => {
   // руками, отставшие колонки, раскладка, за которой мы перестали следовать.
   // Без входа в интерфейс из последней связка становилась тупиком: в кабинете
   // оставалось только удалить её и завести заново.
-  it('перезалив спрашивает подтверждение и честно называет цену', async () => {
+  it('перезапись спрашивает подтверждение, называет цену и закрывает окно', async () => {
     const calls: { url: string; init?: RequestInit }[] = []
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
       calls.push({ url, init })
@@ -539,17 +539,90 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openConnection()
-    fireEvent.click(screen.getByRole('button', { name: /перезалить лист/i }))
+    fireEvent.click(screen.getByRole('button', { name: /перезаписать лист/i }))
 
     // Цена названа: чистится ВЕСЬ лист, включая колонки автора.
     expect(screen.getByText(/включая колонки, которые вы добавили в него сами/i)).toBeTruthy()
 
     // Именно точное имя: рядом стоит кнопка «Перезалить лист», открывшая диалог.
-    fireEvent.click(screen.getByRole('button', { name: /^Перезалить$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Перезаписать$/ }))
     await waitFor(() =>
       expect(calls.some((c) => c.url.endsWith('/refill') && c.init?.method === 'POST')).toBe(true),
     )
+    // Согласился — уводим из настроек: перезапись начала работу над листом, и
+    // держать человека в окне, где нечего больше настраивать, незачем.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     vi.unstubAllGlobals()
+  })
+
+  // Раскладку ломает правка ЛИСТА, а лист — чужая территория: поправив шапку
+  // обратно, человек не имеет способа сказать нам об этом. Без кнопки ему
+  // оставалось бы ждать следующего ответа респондента, чтобы узнать, помогло ли.
+  it('«Проверить снова» перепроверяет лист', async () => {
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /проверить снова/i }))
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith('/recheck') && c.init?.method === 'POST')).toBe(true),
+    )
+    vi.unstubAllGlobals()
+  })
+
+  // «Не помогло» — ответ по существу, а не сбой, и говорится он у самой кнопки:
+  // уехав вниз, к ошибкам сохранения, он потерял бы связь с нажатием.
+  it('перепроверка не помогла — так и сказано у кнопки', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ error: { code: 'validation_failed', message: 'Колонки…' } }),
+          {
+            status: 422,
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      ),
+    )
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /проверить снова/i }))
+
+    await waitFor(() => expect(screen.getByText(/пока не сходится/i)).toBeTruthy())
+    vi.unstubAllGlobals()
+  })
+
+  // Текст предупреждения перечисляет выходы, а не советует «верните как было»:
+  // тот совет был без продолжения — сделать можно, а узнать, помогло ли, нечем.
+  it('предупреждение называет три выхода', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+
+    // По пунктам списка, а не по тексту вообще: «перезаписать лист» есть и на
+    // кнопке рядом, и поиск по странице находит оба.
+    const exits = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
+    expect(exits.some((t) => /вернуть заголовки в листе как были/i.test(t))).toBe(true)
+    expect(exits.some((t) => /выбрать другую таблицу или лист/i.test(t))).toBe(true)
+    expect(exits.some((t) => /перезаписать лист/i.test(t))).toBe(true)
   })
 
   // Перезалив — часть предупреждения, а не самостоятельная кнопка: там, где
@@ -557,12 +630,12 @@ describe('оверлей настройки Google Таблиц', () => {
   it('у работающей и переносящей связки перезалива на экране нет', () => {
     renderView(state({ account: CONNECTED, connections: [conn()] }))
     openConnection()
-    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
     cleanup()
 
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
-    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
   })
 
   // Человек уже выбрал другой лист — связка переезжает, и прежняя беда перестаёт
@@ -583,12 +656,12 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openConnection()
-    expect(screen.getByRole('button', { name: /перезалить лист/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /перезаписать лист/i })).toBeTruthy()
 
     fireEvent.click(screen.getByLabelText('Таблица'))
     fireEvent.click(screen.getByRole('option', { name: /создать новую таблицу/i }))
 
-    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
     expect(screen.queryByText(/Колонки листа/)).toBeNull()
   })
 
@@ -773,7 +846,7 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openConnection()
-    expect(screen.getByRole('button', { name: /перезалить лист/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /перезаписать лист/i })).toBeTruthy()
   })
 
   it('после подключения в окне провайдера состояние перезапрашивается', async () => {

@@ -57,6 +57,7 @@ type integrationsService interface {
 	Picker(ctx context.Context, userID, accountID uuid.UUID) (PickerCredentials, error)
 	DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
+	RecheckForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error
 	StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
@@ -108,6 +109,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.updateConnection))))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/{connectionId}/refill",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.refillForm))))
+	// Перепроверка листа: человек поправил шапку у себя и хочет знать, помогло ли,
+	// не дожидаясь следующего ответа респондента.
+	mux.Handle("POST /api/v1/forms/{id}/integrations/{connectionId}/recheck",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.recheckForm))))
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 
@@ -442,6 +447,20 @@ func (h *Handler) refillForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// recheckForm отвечает 204, если лист снова годен, и 422 с человеческой причиной,
+// если нет: «не помогло» — это ответ по существу, а не сбой.
+func (h *Handler) recheckForm(w http.ResponseWriter, r *http.Request) {
+	user, formID, linkID, ok := h.userFormConnection(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RecheckForm(r.Context(), user.ID, formID, linkID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) disconnectForm(w http.ResponseWriter, r *http.Request) {

@@ -49,6 +49,7 @@ type Store interface {
 	UpdateLinkColumns(ctx context.Context, db postgres.DBTX, id uuid.UUID, columns []domain.SheetColumn) error
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
+	ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 }
 
 var _ Store = Repo{}
@@ -561,7 +562,7 @@ func (s *Service) existingSheet(ctx context.Context, token, spreadsheetID string
 	}
 	if !empty {
 		return Spreadsheet{}, fmt.Errorf(
-			"%w: лист «%s» не пустой — выберите пустой лист или создайте новый",
+			"%w: Лист «%s» не пустой — выберите пустой лист или создайте новый",
 			domain.ErrValidation, sheets[idx].Title)
 	}
 	return sheet, nil
@@ -667,6 +668,61 @@ func sheetTitleForForm(form forms.Form) string {
 		name = name[:80]
 	}
 	return strings.TrimSuffix(string(name), " — ответы") + " · " + form.Slug
+}
+
+// RecheckForm перепроверяет, годен ли лист к записи, и снимает поломку, если
+// годен. Право — ActionFormWrite, как у прочих операций над связкой.
+//
+// Нужен затем, что раскладка ломается ПРАВКОЙ ЛИСТА, а лист — чужая территория:
+// поправив шапку обратно, человек не имеет никакого способа сказать нам об этом.
+// Без этой ручки ему оставалось бы ждать следующего ответа респондента, чтобы
+// узнать, помогло ли, — и получить второй потерянный ответ, если нет.
+//
+// Проверка идёт ТЕМ ЖЕ reconcileColumns, что и доставка, а не своей копией
+// правил: две реализации одного вопроса «годится ли лист» разъедутся, и экран
+// начнёт обещать то, чего доставка не сделает. Побочно это и приводит лист в
+// порядок — дописывает колонки вопросов, появившихся, пока связка стояла.
+//
+// ⚠ Ответы, пришедшие ЗА ВРЕМЯ поломки, снятие статуса не возвращает: их события
+// погашены (§6), и в листе их нет. Лечение для них — перезалив, и экран говорит
+// об этом отдельно.
+func (s *Service) RecheckForm(ctx context.Context, userID, formID, linkID uuid.UUID) error {
+	if !s.Enabled() {
+		return domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return err
+	}
+	conn, err := s.accountForLink(ctx, link)
+	if err != nil {
+		return err
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return err
+	}
+	builder, err := s.columnModel(ctx, userID, formID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := s.reconcileColumns(ctx, token, link, builder.SheetColumns()); err != nil {
+		if !errors.Is(err, ErrPermanent) {
+			return err
+		}
+		// Причина могла смениться, пока человек правил лист: показываем то, что
+		// мешает СЕЙЧАС, а не то, на чём связка встала в прошлый раз.
+		cause := brokenReason(err)
+		if markErr := s.repo.MarkBroken(ctx, s.db, link.ID, cause); markErr != nil {
+			return markErr
+		}
+		return fmt.Errorf("%w: %s", domain.ErrValidation, cause)
+	}
+	return s.repo.ClearError(ctx, s.db, link.ID)
 }
 
 // RefillForm перезаливает лист с нуля: чистит значения, пишет свежую шапку и

@@ -98,6 +98,18 @@ export function refillSheet(formId: string, connectionId: string): Promise<void>
   return apiRequest(`/forms/${formId}/integrations/${connectionId}/refill`, { method: 'POST' })
 }
 
+// Перепроверить, годен ли лист к записи, и снять поломку, если годен.
+//
+// Раскладка ломается ПРАВКОЙ ЛИСТА, а лист — чужая территория: поправив шапку
+// обратно, человек не имеет способа сказать нам об этом. Без этой ручки ему
+// оставалось бы ждать следующего ответа респондента, чтобы узнать, помогло ли.
+//
+// 204 — годен. 422 с человеческой причиной — не помогло: это ответ по существу,
+// и экран показывает его текстом.
+export function recheckSheet(formId: string, connectionId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/integrations/${connectionId}/recheck`, { method: 'POST' })
+}
+
 // Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.
 //
 // Отключения аккаунта здесь нет: ручка на бэке есть (API.md), но она рвёт

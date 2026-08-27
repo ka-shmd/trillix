@@ -145,6 +145,18 @@ SET last_delivered_at = now(), last_error = NULL,
     status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
 WHERE id = $1;
 
+-- name: ClearFormIntegrationError :exec
+-- Связка снова годна к записи: гасим причину и возвращаем из broken в live.
+--
+-- last_delivered_at НЕ трогаем, хотя MarkFormIntegrationDelivered делает ровно
+-- то же самое плюс его: доставки здесь не было, и ставить её время значит врать
+-- про ответ, которого не приезжало. Идущий ПЕРЕНОС этой пометкой не сбивается —
+-- из backfilling статус не двигается.
+UPDATE form_integrations
+SET last_error = NULL,
+    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+WHERE id = $1;
+
 -- name: MarkFormIntegrationBroken :exec
 -- Доставка невозможна без человека (доступ отозван, таблица удалена). Причина
 -- показывается в кабинете; ретраить такое до конца времён смысла нет.

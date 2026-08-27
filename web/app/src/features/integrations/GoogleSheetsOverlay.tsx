@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
-import { AlertCircle, Loader2, Plus, RotateCw, TriangleAlert, Upload } from 'lucide-react'
+import {
+  AlertCircle,
+  Loader2,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  TriangleAlert,
+  Upload,
+} from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
 
@@ -19,6 +27,7 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
+  useRecheckSheet,
   useRefillSheet,
   useRefreshIntegrations,
   useUpdateConnection,
@@ -425,6 +434,7 @@ function SetupBody({
         <ConnectionState
           formId={formId}
           connection={connection}
+          onDone={onDone}
           // Человек уже выбрал другую цель — связка переезжает, и прежний лист
           // вместе со своей бедой перестаёт быть её делом.
           moving={
@@ -703,11 +713,15 @@ function ConnectionState({
   formId,
   connection,
   moving,
+  onDone,
 }: {
   formId: string
   connection: FormSheet
   // moving — в полях выбрана НЕ та цель, что записана у связки.
   moving: boolean
+  // onDone — закрыть оверлей. Перезалив уводит из него: он начинает работу над
+  // листом, и оставаться в настройках после этого не за чем.
+  onDone: () => void
 }) {
   // Перезалив живёт ВНУТРИ предупреждения, а не отдельной кнопкой рядом: причина
   // и выход из неё стоят в одном месте, и человеку не приходится догадываться,
@@ -735,10 +749,26 @@ function ConnectionState({
             {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
           </span>
         </p>
-        {/* Отступ слева равен ширине значка с зазором: кнопка встаёт под текстом,
-            а не под значком, и блок читается одной колонкой. */}
-        <div className="pl-6">
-          <RefillAction formId={formId} connectionId={connection.id} />
+        {/* Отступ слева равен ширине значка с зазором: содержимое встаёт под
+            текстом, а не под значком, и блок читается одной колонкой. */}
+        <div className="flex flex-col gap-3 pl-6">
+          {/* Три выхода списком, и порядок в нём — от безобидного к
+              разрушительному: вернуть шапку (ничего не теряется), сменить цель
+              (прежний лист остаётся как есть), перезаписать (значения листа
+              стираются). Человек читает сверху вниз и берёт первое, что подходит.
+
+              «Верните как было» без продолжения — то, чем этот текст был раньше,
+              — совет без выхода: сделать-то можно, а узнать, помогло ли, было
+              нечем до следующего ответа респондента. Теперь рядом кнопка. */}
+          <ul className="ml-4 list-disc text-sm">
+            <li>вернуть заголовки в листе как были — и нажать «Проверить снова»;</li>
+            <li>выбрать другую таблицу или лист в настройках ниже;</li>
+            <li>перезаписать лист — он соберётся заново по сегодняшней форме.</li>
+          </ul>
+          <div className="flex flex-wrap items-center gap-2">
+            <RecheckAction formId={formId} connectionId={connection.id} />
+            <RefillAction formId={formId} connectionId={connection.id} onDone={onDone} />
+          </div>
         </div>
       </div>
     )
@@ -753,12 +783,20 @@ function ConnectionState({
 // ClearSheet). Формат, ширина колонок и закрепление шапки переживают чистку —
 // чистятся значения, а не лист, — но формула в своей колонке пропадёт вместе с
 // ними. Умолчать об этом значит однажды стереть человеку работу без спроса.
-function RefillAction({ formId, connectionId }: { formId: string; connectionId: string }) {
+function RefillAction({
+  formId,
+  connectionId,
+  onDone,
+}: {
+  formId: string
+  connectionId: string
+  onDone: () => void
+}) {
   const refill = useRefillSheet(formId)
   const [confirming, setConfirming] = useState(false)
 
   return (
-    <div className="flex">
+    <>
       <Button
         variant="outline"
         size="sm"
@@ -767,7 +805,7 @@ function RefillAction({ formId, connectionId }: { formId: string; connectionId: 
         onClick={() => setConfirming(true)}
       >
         <Upload className="size-3.5" />
-        Перезалить лист
+        Перезаписать лист
       </Button>
 
       <AlertDialog open={confirming} onOpenChange={setConfirming}>
@@ -782,13 +820,48 @@ function RefillAction({ formId, connectionId }: { formId: string; connectionId: 
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={() => refill.mutate(connectionId)}>
-              Перезалить
+            {/* Согласился — уводим из настроек: перезалив начал работу над листом,
+                и держать человека в окне, где нечего больше настраивать, незачем.
+                Ход связки он увидит в списке подключений точкой. */}
+            <AlertDialogAction onClick={() => refill.mutate(connectionId, { onSuccess: onDone })}>
+              Перезаписать
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
+  )
+}
+
+// RecheckAction — «я поправил лист, проверьте».
+//
+// Отказ показывается ЗДЕСЬ же, под кнопкой, а не общим текстом внизу окна: он
+// отвечает на конкретное нажатие («не помогло, потому что…»), и уехав вниз, к
+// ошибкам сохранения, потерял бы связь с ним.
+function RecheckAction({ formId, connectionId }: { formId: string; connectionId: string }) {
+  const recheck = useRecheckSheet(formId)
+  const failed = recheck.isError
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        className="h-8 gap-1.5"
+        disabled={recheck.isPending}
+        onClick={() => recheck.mutate(connectionId)}
+      >
+        <RefreshCw className={`size-3.5 ${recheck.isPending ? 'animate-spin' : ''}`} />
+        Проверить снова
+      </Button>
+      {failed && (
+        <span role="status" className="text-sm text-destructive">
+          {recheck.error instanceof ApiError && recheck.error.code === 'validation_failed'
+            ? 'Пока не сходится — смотрите причину выше.'
+            : 'Не удалось проверить. Попробуйте ещё раз.'}
+        </span>
+      )}
+    </>
   )
 }
 

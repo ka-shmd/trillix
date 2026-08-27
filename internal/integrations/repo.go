@@ -298,6 +298,15 @@ func (Repo) MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) e
 	return nil
 }
 
+// ClearError возвращает связку в рабочее состояние: гасит причину и снимает
+// broken. Времени доставки не ставит — её не было.
+func (Repo) ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ClearFormIntegrationError(ctx, id); err != nil {
+		return fmt.Errorf("clear form integration error: %w", err)
+	}
+	return nil
+}
+
 func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error {
 	err := postgres.New(db).MarkFormIntegrationBroken(ctx, postgres.MarkFormIntegrationBrokenParams{
 		ID:        id,

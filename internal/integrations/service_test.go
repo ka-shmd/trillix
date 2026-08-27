@@ -79,8 +79,10 @@ type fakeStore struct {
 	columnsSet []domain.SheetColumn
 	delivered  bool
 	brokenWith string
-	settings   *linkSettings
-	retargeted *integrations.Spreadsheet
+	// errorCleared — связку вернули в рабочее состояние без доставки (перепроверка).
+	errorCleared bool
+	settings     *linkSettings
+	retargeted   *integrations.Spreadsheet
 	// retargetAccount — на чей аккаунт переехала связка. Отдельным полем: смена
 	// аккаунта и смена листа едут одной записью, и проверять надо обе.
 	retargetAccount uuid.UUID
@@ -191,6 +193,12 @@ func (f *fakeStore) StartBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUI
 
 func (f *fakeStore) FinishBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
 	f.backfillDone = true
+	return nil
+}
+
+func (f *fakeStore) ClearError(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.errorCleared = true
+	f.brokenWith = ""
 	return nil
 }
 
@@ -1082,6 +1090,48 @@ func TestUpdateConnection_RenamesConnectionOfColleague(t *testing.T) {
 	}
 	if store.retargeted != nil {
 		t.Error("связка переехала, хотя цель не менялась")
+	}
+}
+
+// Человек поправил шапку у себя — перепроверка снимает поломку, не дожидаясь
+// следующего ответа респондента. Без неё узнать, помогло ли, можно было бы
+// только ценой второго потерянного ответа.
+func TestRecheckForm_ClearsBrokenWhenSheetFollowable(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	// Шапка снова совпадает с колонками связки — как её и вернул автор.
+	provider := &fakeProvider{sheetHeader: headerOf(link)}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	if err := svc.RecheckForm(context.Background(), testUser, testForm, link.ID); err != nil {
+		t.Fatalf("recheck: %v", err)
+	}
+	if !store.errorCleared {
+		t.Fatal("связка осталась сломанной, хотя лист годен")
+	}
+}
+
+// Не помогло — это ответ по существу, а не сбой: 422 с человеческой причиной, и
+// причина берётся СЕГОДНЯШНЯЯ, а не та, на которой связка встала в прошлый раз.
+func TestRecheckForm_KeepsBrokenAndTellsWhy(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Заметка", "Имя", "Почта"}}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.RecheckForm(context.Background(), testUser, testForm, link.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.errorCleared {
+		t.Error("поломка снята, хотя лист по-прежнему не читается")
+	}
+	if !strings.Contains(store.brokenWith, "Колонки листа") {
+		t.Fatalf("причина = %q, ожидалась сегодняшняя", store.brokenWith)
 	}
 }
 
