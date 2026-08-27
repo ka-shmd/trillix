@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import { Code2, Eye, X } from 'lucide-react'
+import { Code2, Eye, TriangleAlert, X } from 'lucide-react'
 
 import { type FormDetail } from '../../../entities/form'
 import {
@@ -17,13 +16,17 @@ import { CodePanel } from './CodePanel'
 import { MockSite } from './MockSite'
 import { SettingsPanel, type EmbedSettings } from './SettingsPanel'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet'
 
-// Экран «Встроить» (/forms/{slug}/embed): слева настройки вставки, справа —
-// страница-макет, в которой форма живёт ТЕМ ЖЕ кодом, что уезжает автору в буфер
-// обмена. Вид вставки приходит из адреса (три кнопки на «Поделиться» ведут сюда
-// каждая на свой), остальные настройки — локальное состояние: они нигде не
-// сохраняются и живут в самом сниппете (ADR §10).
+// Экран «Встроить» (/forms/{slug}/embed) — ОТДЕЛЬНЫЙ РЕЖИМ, а не страница кабинета
+// (решение владельца 2026-08-27). Две области и ничего сверх: слева настройки
+// вставки, справа страница-макет, в которой форма живёт ТЕМ ЖЕ кодом, что уезжает
+// автору в буфер обмена. Ни крошек, ни шапки с заголовком: кабинет вокруг сцены,
+// изображающей чужой сайт, делал бы сцену неправдой.
+//
+// Вид вставки приходит из адреса (три кнопки на «Поделиться» ведут сюда каждая на
+// свой), остальные настройки — локальное состояние: они нигде не сохраняются и живут
+// в самом сниппете (ADR §10).
 
 export function EmbedView({
   form,
@@ -99,39 +102,43 @@ export function EmbedView({
         aria-describedby={undefined}
         className="gap-0 overflow-hidden p-0"
       >
+        {/* Заголовка на экране нет — режим объясняет себя двумя своими областями, — но
+            слою имя нужно: без него Radix ругается, а скринридер не назовёт, куда
+            человек попал. */}
         <SheetTitle className="sr-only">Встроить форму на сайт</SheetTitle>
         <ScrollbarGutterOff />
-        <div className="flex h-dvh flex-col">
-          <header className="flex items-center justify-between border-b px-5 py-3">
-            <div>
-              <h1 className="text-base font-medium">Встроить на сайт</h1>
-              {/* Неопубликованная форма во фрейме отдаёт 404 (инвариант 5: черновик
-                  неотличим от несуществующей), и в макете это выглядит как поломка
-                  вставки. Говорим до того, как автор пойдёт искать причину в коде. */}
-              {form.publishedVersion === null ? (
-                <p className="text-xs text-muted-foreground">
-                  Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем сайте.
-                  Код ниже можно скопировать уже сейчас.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Форма в макете настоящая: заполняется и проверяет поля, но ответ из предпросмотра
-                  не отправляется.
-                </p>
-              )}
+        <div className="flex h-dvh">
+          {/* КОЛОНКА НАСТРОЕК СКРОЛЛИТСЯ, А ГЛАВНОЕ ДЕЙСТВИЕ — НЕТ: у виджета настроек
+              вдвое больше, чем у блока, и уехавшая вниз кнопка «Получить код»
+              означала бы, что до кода надо доскроллить. */}
+          <aside className="flex w-88 shrink-0 flex-col border-r">
+            {/* Выход — ПЕРВЫМ в разметке и первым под Tab: он же единственный, кроме
+                Esc. Подписан словом — крестовина в углу чужой страницы читалась бы
+                как закрытие макета, а не режима. */}
+            <div className="px-5 pt-4">
+              <SheetClose asChild>
+                <Button variant="ghost" size="sm" className="-ml-2 gap-1.5 text-muted-foreground">
+                  <X className="size-4" /> Закрыть
+                </Button>
+              </SheetClose>
             </div>
-            <Button asChild variant="ghost" size="sm" className="gap-1.5">
-              <Link to="/forms/$slug/share" params={{ slug: form.slug }} search={(prev) => prev}>
-                <X className="size-4" /> Закрыть
-              </Link>
-            </Button>
-          </header>
-
-          <div className="flex min-h-0 flex-1">
-            <aside className="w-80 shrink-0 overflow-y-auto border-r p-5">
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-6">
+              <SettingsPanel
+                form={form}
+                mode={mode}
+                onModeChange={onModeChange}
+                settings={settings}
+                onChange={change}
+              />
+            </div>
+            {/* Главное действие экрана — залитая кнопка у самого края (DESIGN-SYSTEM
+                §3): за кодом сюда и приходят. Тумблер, а не вход: макет и код делят
+                одну область, и вернуться нужно тем же жестом. */}
+            <div className="border-t p-5">
               <Button
-                className="mb-5 w-full gap-1.5"
+                className="w-full gap-1.5"
                 variant={showCode ? 'outline' : 'default'}
+                aria-pressed={showCode}
                 onClick={() => setShowCode((v) => !v)}
               >
                 {showCode ? (
@@ -144,30 +151,23 @@ export function EmbedView({
                   </>
                 )}
               </Button>
-              <SettingsPanel
-                form={form}
-                mode={mode}
-                onModeChange={onModeChange}
-                settings={settings}
-                onChange={change}
-              />
-            </aside>
+            </div>
+          </aside>
 
-            <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">
-              {showCode ? (
-                <div className="mx-auto max-w-3xl p-6">
-                  <CodePanel form={form} opts={opts} snippet={snippet} />
-                </div>
-              ) : (
-                // МАКЕТ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ на смену любой настройки: ключ — сам
-                // сниппет. Это не оптимизационная лень, а правда о вставке: на чужом
-                // сайте настройки меняются переписыванием кода и перезагрузкой
-                // страницы, промежуточного состояния «фрейм тот же, атрибуты другие»
-                // не бывает.
-                <PreviewArea snippet={previewSnippet} />
-              )}
-            </main>
-          </div>
+          <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">
+            {showCode ? (
+              <div className="mx-auto max-w-3xl p-6">
+                <CodePanel form={form} opts={opts} snippet={snippet} />
+              </div>
+            ) : (
+              // МАКЕТ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ на смену любой настройки: ключ — сам
+              // сниппет. Это не оптимизационная лень, а правда о вставке: на чужом
+              // сайте настройки меняются переписыванием кода и перезагрузкой
+              // страницы, промежуточного состояния «фрейм тот же, атрибуты другие»
+              // не бывает.
+              <PreviewArea form={form} snippet={previewSnippet} />
+            )}
+          </main>
         </div>
       </SheetContent>
     </Sheet>
@@ -191,16 +191,41 @@ function ScrollbarGutterOff() {
 // PreviewArea — макет с задержкой пересборки: надпись на кнопке виджета вводится
 // посимвольно, и без паузы каждый символ перезагружал бы страницу-макет вместе с
 // формой в ней.
-function PreviewArea({ snippet }: { snippet: string }) {
+//
+// ОГОВОРКА СТОИТ НАД МАКЕТОМ, А НЕ В ШАПКЕ ЭКРАНА: она про то, что автор сейчас
+// видит, — и первой из двух её версий важно попасться на глаза ДО того, как автор
+// пойдёт искать причину пустого фрейма в своём коде.
+function PreviewArea({ form, snippet }: { form: FormDetail; snippet: string }) {
   const [applied, setApplied] = useState(snippet)
   useEffect(() => {
     const timer = setTimeout(() => setApplied(snippet), 350)
     return () => clearTimeout(timer)
   }, [snippet])
 
+  const unpublished = form.publishedVersion === null
+
   return (
-    <div className="h-full p-4">
-      <div className="h-full overflow-hidden rounded-lg border bg-white shadow-sm">
+    <div className="flex h-full flex-col gap-2 p-4">
+      <p className="flex items-start gap-1.5 px-1 text-xs text-muted-foreground">
+        {unpublished ? (
+          <>
+            <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+            {/* Неопубликованная форма во фрейме отдаёт 404 (инвариант 5: черновик
+                неотличим от несуществующей), и в макете это выглядит как поломка
+                вставки. Говорим до того, как автор пойдёт искать причину в коде. */}
+            <span>
+              Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем сайте. Код
+              можно скопировать уже сейчас.
+            </span>
+          </>
+        ) : (
+          <span>
+            Так форма встанет на вашу страницу. В макете она настоящая: заполняется и проверяет
+            поля, но ответ из предпросмотра не отправляется.
+          </span>
+        )}
+      </p>
+      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-white shadow-sm">
         <MockSite snippet={applied} />
       </div>
     </div>
