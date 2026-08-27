@@ -21,10 +21,12 @@ import { useEffect, useRef } from 'react'
 // править её, а не форму. Настоящий текст на ней ровно один — «Ваша страница»: он
 // называет, чья это страница, и без него сцена читается как часть кабинета.
 //
-// СТРАНИЦА СЕРАЯ, А НЕ БЕЛАЯ (решение владельца 2026-08-27), и это не только вкус: у
-// блока фон по умолчанию белый, и на белой странице граница вставки была не видна —
-// то есть тумблер «Прозрачный фон» нечем было проверить. Отсюда же требование к
-// заглушкам: они темнее полотна страницы, иначе на сером фоне их нет вовсе.
+// СТРАНИЦА СЕРАЯ, А НЕ БЕЛАЯ (решение владельца 2026-08-27), и это не только вкус:
+// вставка по умолчанию прозрачная, и на белой странице тумблер «Прозрачный фон» не
+// менял бы ровно ничего — ни включённый, ни выключенный. Серое полотно делает оба его
+// положения видимыми: включён — форма лежит на фоне сайта, выключен — белым
+// прямоугольником поверх него. Отсюда же требование к заглушкам: они темнее полотна
+// страницы, иначе на сером фоне их нет вовсе.
 //
 // ЦВЕТА — ЛИТЕРАЛЫ ТОКЕНОВ КАБИНЕТА В oklch, а не «какой-то серый»: макет живёт в
 // СВОЁМ документе, наших переменных там нет (взять `var(--muted)` неоткуда), а
@@ -36,24 +38,24 @@ const MOCK_STYLES = `
   :root { color-scheme: light }
   body {
     margin: 0;
-    background: oklch(0.97 0.005 80);
+    background: oklch(0.945 0.006 80);
     color: oklch(0.32 0.012 70);
     font-family: system-ui, sans-serif;
   }
   .wrap { margin: 20px 130px }
-  .nav { display: flex; align-items: center; justify-content: space-between; height: 72px }
+  .nav { display: flex; align-items: center; justify-content: space-between; height: 56px }
   .logo { width: 132px; height: 40px; background: oklch(0.895 0.007 80); border-radius: 4px }
   .menu { display: flex; gap: 20px }
   .pill { width: 88px; height: 16px; background: oklch(0.895 0.007 80); border-radius: 4px }
-  .title { margin: 32px 0 0; font-size: 44px; line-height: 1.15; letter-spacing: -0.02em }
-  .lead { margin-top: 20px; max-width: 720px }
-  .line { height: 18px; background: oklch(0.895 0.007 80); border-radius: 4px; margin-top: 14px }
+  .title { margin: 20px 0 0; font-size: 34px; line-height: 1.15; letter-spacing: -0.02em }
+  .lead { margin-top: 14px; max-width: 720px }
+  .line { height: 16px; background: oklch(0.885 0.007 80); border-radius: 4px; margin-top: 10px }
   .line-short { width: 42% }
   .hero { height: 380px; background: oklch(0.895 0.007 80); border-radius: 4px; margin-top: 40px }
   .cards { display: flex; gap: 24px; margin-top: 24px }
   .card { flex: 1; background: oklch(1 0 0); border-radius: 4px; padding: 20px }
   .thumb { height: 180px; background: oklch(0.925 0.006 80); border-radius: 4px }
-  .slot { margin: 56px 0 }
+  .slot { margin: 32px 0 }
   .foot {
     display: flex;
     gap: 24px;
