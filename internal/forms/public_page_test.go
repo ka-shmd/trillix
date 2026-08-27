@@ -537,3 +537,136 @@ func TestPublicHTML_FontsAppearAfterIndex_PreloadRecovers(t *testing.T) {
 		t.Fatalf("preload не восстановился после появления файлов:\n%s", get())
 	}
 }
+
+// --- Своя карточка ссылки (форма /r/{slug}) ---
+//
+// Карточку рисует не наша страница, а мессенджер, и проверить её глазами нельзя:
+// единственное доказательство — мета в отданном HTML. Отсюда три сторожа: карточка
+// применяется, карточка без права тарифа НЕ применяется, и пустое поле карточки
+// оставляет прежний дефолт (а не пустоту).
+
+// linkPreviewSvc — форма со своей карточкой и подставленным правом тарифа.
+func linkPreviewSvc(card *domain.LinkPreview, allowed bool) fakePublicSvc {
+	return fakePublicSvc{
+		pf: PublicForm{
+			Title:       "Опрос читателей",
+			Version:     1,
+			Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+			VersionID:   uuid.New(),
+			LinkPreview: card,
+		},
+		cardAllowed: allowed,
+	}
+}
+
+func linkPreviewHTML(t *testing.T, svc fakePublicSvc) string {
+	t.Helper()
+	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, writeFixtureIndex(t), allowLimiter{}, false)
+	if err != nil {
+		t.Fatalf("NewPublicHandler: %v", err)
+	}
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200", rec.Code)
+	}
+	return rec.Body.String()
+}
+
+func TestPublicHTML_LinkPreviewApplied(t *testing.T) {
+	body := linkPreviewHTML(t, linkPreviewSvc(&domain.LinkPreview{
+		SiteName:    "Журнал «Кот»",
+		Title:       "Каким должен быть февральский номер",
+		Description: "Три минуты, семь вопросов.",
+		ImageKey:    "ws-1/abc123.png",
+		IconKey:     "ws-1/icon456.png",
+	}, true))
+
+	for _, want := range []string{
+		`<meta property="og:site_name" content="Журнал «Кот»">`,
+		`<meta property="og:title" content="Каким должен быть февральский номер">`,
+		`<meta property="og:description" content="Три минуты, семь вопросов.">`,
+		// Абсолютный URL, а не /media/…: краулер превью читает мету без базы документа.
+		`<meta property="og:image" content="` + testBaseURL + `/media/ws-1/abc123.png">`,
+		`<link rel="icon" href="` + testBaseURL + `/media/ws-1/icon456.png">`,
+		// Заголовок вкладки идёт из карточки вместе с og:title — это одно поле.
+		`<title>Каким должен быть февральский номер</title>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("в HTML нет %s:\n%s", want, body)
+		}
+	}
+	// Дефолтная картинка не осталась второй метой: og:image ровно один.
+	if n := strings.Count(body, `property="og:image"`); n != 1 {
+		t.Fatalf("og:image встречается %d раз, ожидался один:\n%s", n, body)
+	}
+	if strings.Contains(body, testOGImage) {
+		t.Fatalf("своя картинка не заменила брендовую заглушку:\n%s", body)
+	}
+}
+
+// Даунгрейд обязан вернуть дефолтную карточку немедленно — не дожидаясь, пока
+// автор вспомнит про настройку. Сохранённая карточка при этом не стирается (её
+// хранит колонка), но на ссылку не действует.
+func TestPublicHTML_LinkPreviewNeedsPlan(t *testing.T) {
+	body := linkPreviewHTML(t, linkPreviewSvc(&domain.LinkPreview{
+		SiteName: "Журнал «Кот»",
+		Title:    "Каким должен быть февральский номер",
+		ImageKey: "ws-1/abc123.png",
+	}, false))
+
+	if strings.Contains(body, "og:site_name") {
+		t.Fatalf("имя площадки применилось без права тарифа:\n%s", body)
+	}
+	if strings.Contains(body, "Каким должен быть февральский номер") {
+		t.Fatalf("заголовок карточки применился без права тарифа:\n%s", body)
+	}
+	if !strings.Contains(body, `<meta property="og:title" content="Опрос читателей">`) {
+		t.Fatalf("без права тарифа og:title обязан быть заголовком формы:\n%s", body)
+	}
+	if !strings.Contains(body, `<meta property="og:image" content="`+testOGImage+`">`) {
+		t.Fatalf("без права тарифа картинка обязана быть брендовой:\n%s", body)
+	}
+}
+
+// Пустое поле карточки = «взять дефолт», а не «показать пустоту». Карточка, в
+// которой автор задал только картинку, обязана оставить прежние заголовок и тизер.
+func TestPublicHTML_LinkPreviewPartialKeepsDefaults(t *testing.T) {
+	svc := linkPreviewSvc(&domain.LinkPreview{ImageKey: "ws-1/abc123.png"}, true)
+	svc.pf.Schema = json.RawMessage(`{"schemaVersion":1,"blocks":[
+		{"id":"b1","type":"label","groupId":"g1","text":[{"t":"Как вам номер?"}]}
+	]}`)
+
+	body := linkPreviewHTML(t, svc)
+	if !strings.Contains(body, `<meta property="og:title" content="Опрос читателей">`) {
+		t.Fatalf("пустой заголовок карточки затёр заголовок формы:\n%s", body)
+	}
+	if !strings.Contains(body, `<meta property="og:description" content="Как вам номер?">`) {
+		t.Fatalf("пустое описание карточки затёрло тизер из подписей:\n%s", body)
+	}
+	if !strings.Contains(body, `/media/ws-1/abc123.png`) {
+		t.Fatalf("картинка карточки не применилась:\n%s", body)
+	}
+	// Своей иконки нет — значок остаётся из разметки рендерера, второго link нет.
+	if n := strings.Count(body, `rel="icon"`); n != 1 {
+		t.Fatalf("rel=icon встречается %d раз, ожидался один (дефолтный):\n%s", n, body)
+	}
+}
+
+// Инъекция через поля карточки: их пишет автор формы, и в атрибут content они
+// обязаны попадать экранированными (инвариант безопасности 4).
+func TestPublicHTML_LinkPreviewEscaped(t *testing.T) {
+	body := linkPreviewHTML(t, linkPreviewSvc(&domain.LinkPreview{
+		SiteName: `"><script>alert(1)</script>`,
+		Title:    `Опрос "лучший" номер`,
+	}, true))
+
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatalf("разметка из имени площадки протекла в HTML:\n%s", body)
+	}
+	if !strings.Contains(body, "&#34;") {
+		t.Fatalf("кавычки заголовка не экранированы:\n%s", body)
+	}
+}

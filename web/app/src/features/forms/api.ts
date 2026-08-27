@@ -8,6 +8,7 @@ import {
   type FormDetail,
   type FormsPage,
   type FormsSort,
+  type LinkPreview,
 } from '../../entities/form'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
@@ -89,6 +90,17 @@ export function updateCollectPartial(id: string, enabled: boolean): Promise<Form
   return apiRequest(`/forms/${id}`, {
     method: 'PATCH',
     body: { collectPartial: enabled },
+    schema: formSchema,
+  })
+}
+
+// Своя карточка ссылки (фасет linkPreview): заменяет карточку целиком, пустое поле
+// = вернуть дефолт. 402 здесь НЕ бывает — сохранять карточку вправе любой тариф, а
+// применяется она к публичной ссылке только на разрешённом плане.
+export function updateLinkPreview(id: string, preview: LinkPreview): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { linkPreview: preview },
     schema: formSchema,
   })
 }

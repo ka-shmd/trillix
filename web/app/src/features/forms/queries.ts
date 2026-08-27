@@ -15,11 +15,17 @@ import {
   unpublishForm,
   updateCloseSettings,
   updateCollectPartial,
+  updateLinkPreview,
   updateFormName,
   updateNotifyOnSubmission,
 } from './api'
 import { saveDraftSchema } from './builder/api'
-import { type CloseSettingsInput, type FormDetail, type FormsSort } from '../../entities/form'
+import {
+  type CloseSettingsInput,
+  type FormDetail,
+  type FormsSort,
+  type LinkPreview,
+} from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
 // через getNextPageParam, курсор непрозрачен для клиента.
@@ -152,6 +158,25 @@ export function useUpdateCollectPartial() {
     onSuccess: (form, { enabled }) => {
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, collectPartial: enabled } : old,
+      )
+    },
+  })
+}
+
+// Своя карточка ссылки. Как и остальные живые настройки: ответ мутации — карточка
+// формы, поэтому свежее значение в detail кладём из отправленного ввода. Пустая
+// карточка кладётся как null — ровно тем же значением её отдаст сервер при
+// следующем чтении, и «сохранил пустое» не должно выглядеть иначе, чем «не
+// настраивал».
+export function useUpdateLinkPreview() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, preview }: { id: string; preview: LinkPreview }) =>
+      updateLinkPreview(id, preview),
+    onSuccess: (form, { preview }) => {
+      const stored = Object.values(preview).some((v) => v !== '') ? preview : null
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, linkPreview: stored } : old,
       )
     },
   })

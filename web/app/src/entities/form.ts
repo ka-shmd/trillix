@@ -54,6 +54,35 @@ export const displayFormTitle = (title: string): string =>
 export const displayFormName = (form: { name: string | null; title: string }): string =>
   form.name && form.name.trim() !== '' ? form.name : displayFormTitle(form.title)
 
+// Карточка ссылки — то, что рисуют мессенджеры и соцсети, получив адрес формы.
+// Каждое поле независимо, пустая строка = «взять дефолт» (заголовок формы, тизер
+// из подписей вопросов, брендовая картинка), а не «показать пустоту». Зеркалит
+// linkPreviewBody из internal/forms/handler.go.
+export const linkPreviewSchema = z.object({
+  siteName: z.string(),
+  title: z.string(),
+  description: z.string(),
+  // Ключи объектов в бакете медиа, а не URL: адрес собирается из ключа (mediaSrc).
+  imageKey: z.string(),
+  iconKey: z.string(),
+})
+
+export type LinkPreview = z.infer<typeof linkPreviewSchema>
+
+// Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
+export const MAX_LINK_PREVIEW_SITE_NAME_LEN = 100
+export const MAX_LINK_PREVIEW_TITLE_LEN = 200
+export const MAX_LINK_PREVIEW_DESCRIPTION_LEN = 500
+
+// Пустая карточка — то же, что её отсутствие: сервер хранит NULL и отдаёт null.
+export const EMPTY_LINK_PREVIEW: LinkPreview = {
+  siteName: '',
+  title: '',
+  description: '',
+  imageKey: '',
+  iconKey: '',
+}
+
 // GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор) +
 // живые настройки закрытия (страница настроек; фаза 8.5 шаг 4).
 export const formDetailSchema = formSchema.extend({
@@ -70,6 +99,10 @@ export const formDetailSchema = formSchema.extend({
   // не отправлял, по умолчанию не включается. Включение требует платного тарифа
   // (единственный гейт продукта, стоящий на сборе, а не на показе).
   collectPartial: z.boolean(),
+  // Своя карточка ссылки; null = не настраивали. Отдаётся независимо от тарифа —
+  // окно кастомизации показывает сохранённое всем, а к самой ссылке карточку
+  // применяет публичный слой (гейт стоит там, как у бейджа).
+  linkPreview: linkPreviewSchema.nullable(),
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>

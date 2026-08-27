@@ -1,13 +1,16 @@
+import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Copy, Share2 } from 'lucide-react'
+import { Copy, Share2, SlidersHorizontal } from 'lucide-react'
 
-import { type Block, plainText } from '@entities/formSchema'
-import { type FormDetail, displayFormTitle } from '../../entities/form'
+import { type FormDetail } from '../../entities/form'
 import { copyFormLink } from './copyLink'
 import { EmbedSection } from './EmbedSection'
-import { publicFormUrl, publicFormHost } from './publicUrl'
+import { LinkPreviewCard } from './LinkPreviewCard'
+import { LinkPreviewDialog } from './LinkPreviewDialog'
+import { publicFormUrl } from './publicUrl'
 import { Section } from '../../shared/page/Section'
 import { EmptyState } from '../../shared/page/states'
+import { ProTag } from '../../shared/ProTag'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -82,54 +85,41 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
         </div>
       </Section>
 
-      <LinkPreview
-        title={displayFormTitle(form.title)}
-        host={publicFormHost()}
-        teaser={linkTeaser(form.draftSchema.blocks)}
-      />
+      <LinkPreview form={form} />
     </div>
   )
 }
 
-// linkTeaser — тизер карточки: заголовки первых трёх непустых блоков через « · ».
-// Зеркалит серверный ogDescriptionFromSchema (internal/forms/public_page.go),
-// формирующий og:description опубликованной версии. Здесь считаем по текущему
-// черновику — приближение, расходится с опубликованным лишь при неопубликованных
-// правках.
-function linkTeaser(blocks: Block[]): string {
-  const labels: string[] = []
-  for (const b of blocks) {
-    // Тизер — из блоков-подписей (title/label), как og:description на бэке.
-    if (b.type !== 'title' && b.type !== 'label') continue
-    // Тизер — текст, не разметка (фаза 14): как og:description на бэке.
-    const label = plainText(b.text).trim()
-    if (!label) continue
-    labels.push(label)
-    if (labels.length === 3) break
-  }
-  return labels.join(' · ')
-}
+// LinkPreview — раздел «Превью ссылки»: карточка, какой её увидит получатель, и
+// вход в её настройку. Кнопка ведёт в окно, а не разворачивает поля здесь: полей
+// пять, у каждого свой предпросмотр, и в колонке шириной в половину экрана они
+// вытеснили бы саму ссылку — то, ради чего на экран и пришли.
+//
+// МЕТКА ПРО СТОИТ У КНОПКИ, а не запирает её: настроить карточку можно на любом
+// тарифе, применяется она только на платном (гейт — при отдаче публичной страницы,
+// как у бейджа). Метка называет тариф и ведёт на страницу тарифов — то есть узнать
+// цену можно тем же жестом, каким заметили ограничение.
+function LinkPreview({ form }: { form: FormDetail }) {
+  const [open, setOpen] = useState(false)
 
-// LinkPreview — предпросмотр карточки ссылки, как её строит сервер из OG-мета
-// (internal/forms/public_page.go, страница /r/{slug}): og:title = название формы,
-// og:description = заголовки первых вопросов. Здесь — приближение того же вида
-// (сервер дополнительно отдаёт og:image); точная отрисовка зависит от площадки.
-function LinkPreview({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
     <Section
       title="Превью ссылки"
-      description="Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от площадки."
+      description="Отправляя ссылку, вы увидите карточку вроде такой — в соцсетях, мессенджерах и поисковой выдаче."
+      action={
+        <div className="flex items-center gap-2">
+          <ProTag />
+          <Button variant="utility" className="gap-2" onClick={() => setOpen(true)}>
+            <SlidersHorizontal className="size-4" />
+            Настроить
+          </Button>
+        </div>
+      }
     >
-      {/* Ни фона, ни рамки — только полоска слева: она не обводит блок, а цитирует
-          вид карточки, которую рисуют мессенджеры. Серая, а не акцентная: акцент в
-          кабинете значит «сюда можно нажать», а это картинка. */}
-      <div className="border-l-4 border-border pl-4">
-        <p className="truncate text-sm text-muted-foreground">{host}</p>
-        <p className="mt-1 text-base font-semibold">{title}</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
-        </p>
-      </div>
+      <LinkPreviewCard form={form} preview={form.linkPreview} />
+      {/* Окно монтируется вместе с разделом, а не по клику: Radix сам держит его
+          закрытым, а условный рендер терял бы набранное при каждом закрытии. */}
+      <LinkPreviewDialog form={form} open={open} onOpenChange={setOpen} />
     </Section>
   )
 }
