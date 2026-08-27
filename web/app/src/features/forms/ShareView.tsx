@@ -8,6 +8,7 @@ import { EmbedSection } from './EmbedSection'
 import { LinkPreviewCard } from './LinkPreviewCard'
 import { LinkPreviewDialog } from './LinkPreviewDialog'
 import { publicFormUrl } from './publicUrl'
+import { useFeatureAllowed } from '../plan/useFeature'
 import { Section } from '../../shared/page/Section'
 import { EmptyState } from '../../shared/page/states'
 import { ProTag } from '../../shared/ProTag'
@@ -118,8 +119,22 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
 // tailwind-merge): строка настройки — продолжение пояснения, а не следующий блок, и
 // на обычных 24 она читалась бы подписью к карточке под ней. Шаг тот же, каким само
 // пояснение отбито от заголовка.
+//
+// РАЗДЕЛ ПОКАЗЫВАЕТ ТО, ЧТО РЕАЛЬНО ОТДАЁТСЯ ПО ССЫЛКЕ, а не то, что автор сохранил.
+// Право спрашивается и здесь, потому что гейт стоит на ВЫДАЧЕ: после даунгрейда
+// публичная страница вернулась к дефолтам, и карточка, нарисованная по сохранённому,
+// показывала бы автору то, чего получатель ссылки не увидит, — то есть предпросмотр
+// перестал бы что-либо доказывать (решение владельца 2026-08-27). Сохранённое при
+// этом не прячется: про него сказано строкой под карточкой, и оно на месте в окне.
+//
+// Окно ведёт себя ИНАЧЕ и намеренно: там предпросмотр показывает набираемый
+// черновик на любом тарифе — иначе настраивать пришлось бы вслепую.
 function LinkPreview({ form }: { form: FormDetail }) {
   const [open, setOpen] = useState(false)
+  // «Пока не знаем — разрешено» (features/plan/useFeature.ts): у платящего автора
+  // карточка не должна мигать дефолтной на каждом открытии экрана.
+  const allowed = useFeatureAllowed('form_link_preview')
+  const inactive = !allowed && form.linkPreview !== null
 
   return (
     <Section
@@ -143,7 +158,15 @@ function LinkPreview({ form }: { form: FormDetail }) {
           </Button>
           <ProTag />
         </div>
-        <LinkPreviewCard form={form} preview={form.linkPreview} />
+        <div className="flex flex-col gap-2">
+          <LinkPreviewCard form={form} preview={allowed ? form.linkPreview : null} />
+          {inactive && (
+            <p className="text-sm text-muted-foreground">
+              Своя карточка сохранена, но по ссылке показывается эта: она применится на платном
+              тарифе.
+            </p>
+          )}
+        </div>
       </div>
       {/* Окно монтируется вместе с разделом, а не по клику: Radix сам держит его
           закрытым, а условный рендер терял бы набранное при каждом закрытии. */}
