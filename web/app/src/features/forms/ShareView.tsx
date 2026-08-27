@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { Copy, Share2, SlidersHorizontal } from 'lucide-react'
+import { Copy, Share2 } from 'lucide-react'
 
 import { type FormDetail } from '../../entities/form'
 import { copyFormLink } from './copyLink'
@@ -95,25 +95,40 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
 // пять, у каждого свой предпросмотр, и в колонке шириной в половину экрана они
 // вытеснили бы саму ссылку — то, ради чего на экран и пришли.
 //
-// МЕТКА ПРО СТОИТ У КНОПКИ, а не запирает её: настроить карточку можно на любом
-// тарифе, применяется она только на платном (гейт — при отдаче публичной страницы,
-// как у бейджа). Метка называет тариф и ведёт на страницу тарифов — то есть узнать
-// цену можно тем же жестом, каким заметили ограничение.
+// МЕТКА ПРО СТОИТ У ЗАГОЛОВКА РАЗДЕЛА и ничего не запирает: настроить карточку можно
+// на любом тарифе, применяется она только на платном (гейт — при отдаче публичной
+// страницы, как у бейджа). Метка называет тариф и ведёт на страницу тарифов — то
+// есть узнать цену можно тем же жестом, каким заметили ограничение. Место у
+// заголовка, а не у органа управления, — то же, что у «Незавершённых ответов» и у
+// групп панели оформления: метка помечает ВОЗМОЖНОСТЬ, а не кнопку.
+//
+// Вход в настройку — ссылка в конце пояснения, а не кнопка в углу раздела: раздел
+// показывает картинку, а не предлагает действие, и залитая кнопка спорила бы за
+// внимание с «Копировать» — единственным здешним делом. Кнопка (а не <a>) потому,
+// что открывает окно, а не ведёт по адресу.
 function LinkPreview({ form }: { form: FormDetail }) {
   const [open, setOpen] = useState(false)
 
   return (
     <Section
-      title="Превью ссылки"
-      description="Отправляя ссылку, вы увидите карточку вроде такой — в соцсетях, мессенджерах и поисковой выдаче."
-      action={
-        <div className="flex items-center gap-2">
+      title={
+        <span className="inline-flex items-center gap-2">
+          Превью ссылки
           <ProTag />
-          <Button variant="utility" className="gap-2" onClick={() => setOpen(true)}>
-            <SlidersHorizontal className="size-4" />
+        </span>
+      }
+      description={
+        <>
+          Отправляя ссылку, вы увидите карточку вроде такой — в соцсетях, мессенджерах и поисковой
+          выдаче.{' '}
+          <Button
+            variant="link"
+            className="h-auto p-0 align-baseline text-sm"
+            onClick={() => setOpen(true)}
+          >
             Настроить
           </Button>
-        </div>
+        </>
       }
     >
       <LinkPreviewCard form={form} preview={form.linkPreview} />
