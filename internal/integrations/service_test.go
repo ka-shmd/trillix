@@ -225,6 +225,11 @@ type fakeProvider struct {
 	// Пусто — как у Google: тот старый токен не меняет.
 	rotated    string
 	exchangeFn func() (integrations.Tokens, error)
+	// accounts — какие аккаунты Google отдавать по очереди. Пусто = всегда один
+	// и тот же, то есть «переподключился тем же». Нужен, чтобы проверить второй
+	// аккаунт: до 0037 он затирал первый, и связки начинали писать чужим токеном.
+	accounts   []integrations.Account
+	accountIdx int
 }
 
 func (f *fakeProvider) Provider() string { return "google" }
@@ -248,7 +253,12 @@ func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens
 }
 
 func (f *fakeProvider) Account(_ context.Context, _ string) (integrations.Account, error) {
-	return integrations.Account{ID: "sub-1", Email: "author@gmail.com"}, nil
+	if len(f.accounts) == 0 {
+		return integrations.Account{ID: "sub-1", Email: "author@gmail.com"}, nil
+	}
+	a := f.accounts[min(f.accountIdx, len(f.accounts)-1)]
+	f.accountIdx++
+	return a, nil
 }
 
 func (f *fakeProvider) Revoke(_ context.Context, refresh string) error {
