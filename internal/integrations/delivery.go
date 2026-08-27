@@ -302,29 +302,181 @@ func (s *Service) deliveryFailed(ctx context.Context, link FormLink, cause error
 // brokenReason — человеческий текст причины для кабинета. Текст ошибки
 // провайдера туда не уходит: он на английском и про HTTP, а читать его будет
 // автор формы.
-func brokenReason(error) string {
+func brokenReason(cause error) string {
+	if errors.Is(cause, ErrSheetLayout) {
+		return "Колонки листа больше не совпадают с вопросами формы — похоже, шапку правили вручную. " +
+			"Верните её как было либо перезалейте лист: писать наугад мы не станем, чтобы ответы не легли под чужие заголовки."
+	}
 	return "Google больше не принимает записи в эту таблицу: доступ отозван или таблица удалена. Переподключите аккаунт и создайте таблицу заново."
 }
 
-// reconcileColumns доводит колонки листа до колонок формы. Правило — колонка
-// ТОЛЬКО ДОБАВЛЯЕТСЯ: удалённый вопрос свою колонку сохраняет (в ней живут
-// ответы прошлых версий), а сдвиг разъехался бы с тем, что автор уже свёл
-// формулами справа.
+// ErrSheetLayout — шапка листа разошлась с тем, что мы умеем в неё писать, и
+// следовать ей безопасно нельзя.
+//
+// Окончательный отказ, а не ретрай: сам собой лист не починится, а писать «как
+// помним» — это класть значения под чужие заголовки. Лечение в руках автора:
+// вернуть колонки как было либо перезалить лист.
+var ErrSheetLayout = fmt.Errorf("%w: раскладка колонок листа не читается", ErrPermanent)
+
+// layoutFromHeader сопоставляет ШАПКУ ЛИСТА с колонками, которые мы помним, и
+// отдаёт наши колонки в порядке листа.
+//
+// Зачем вообще смотреть в лист. Лист принадлежит автору, и он вправе переставить
+// колонки местами или убрать ненужную — Google это разрешает, и справка
+// конкурента прямо это обещает. Запомненный при создании порядок после такой
+// правки врёт, а `values.append` кладёт значения по позициям: строки поедут под
+// чужие заголовки, и заметит это человек не скоро.
+//
+// ⚠ Сопоставление идёт ПО ПОДПИСИ, и это единственное место, где так можно.
+// Правило «колонка ↔ вопрос сопоставляются по ключу, а не по подписи»
+// (INTEGRATIONS §8) сохраняется: здесь сопоставляются не колонка и вопрос, а
+// ячейка шапки и НАША ЖЕ запись о ней — обе описывают один и тот же момент, и
+// ключ достаётся из второй. Настоящая идентичность колонки, переживающая
+// переименование вопроса, — developer metadata Google Sheets; она в очереди
+// (BACKLOG), и до неё правило ниже страхует нас отказом, а не догадкой.
+//
+// Что считается «следовать нельзя»:
+//   - подпись шапки не опознана, а ПОСЛЕ неё идёт опознанная. Писать пришлось бы
+//     с пропуском в середине, а append умеет только сплошную строку от колонки A;
+//   - одна и та же подпись у двух наших колонок и она встретилась в шапке:
+//     какая из них — неизвестно, а угадывать значит однажды угадать неверно.
+//
+// Неопознанный ХВОСТ шапки (автор добавил свою колонку справа — например, с
+// формулой местного времени) законен: мы просто не пишем в него, строка выходит
+// короче ширины листа, и чужие ячейки остаются нетронутыми.
+func layoutFromHeader(header []string, known []domain.SheetColumn) ([]domain.SheetColumn, error) {
+	byLabel := make(map[string][]int, len(known))
+	for i, c := range known {
+		byLabel[c.Label] = append(byLabel[c.Label], i)
+	}
+
+	out := make([]domain.SheetColumn, 0, len(known))
+	used := make([]bool, len(known))
+	alienAt := -1
+	for i, cell := range header {
+		idx := -1
+		for _, candidate := range byLabel[cell] {
+			if used[candidate] {
+				continue
+			}
+			if idx != -1 {
+				// Двусмысленность: две наши колонки с одинаковой подписью, и обе
+				// свободны. Молча взять первую значит однажды перемешать данные.
+				return nil, fmt.Errorf("%w: подпись %q встречается у двух колонок", ErrSheetLayout, cell)
+			}
+			idx = candidate
+		}
+		if idx == -1 {
+			if alienAt == -1 {
+				alienAt = i
+			}
+			continue
+		}
+		if alienAt != -1 {
+			return nil, fmt.Errorf("%w: между нашими колонками появилась посторонняя (позиция %d)", ErrSheetLayout, alienAt+1)
+		}
+		used[idx] = true
+		out = append(out, known[idx])
+	}
+	return out, nil
+}
+
+// reconcileColumns приводит наше представление о колонках к тому, что в листе
+// СЕЙЧАС, и дописывает колонки вопросов, которых в шапке ещё нет.
+//
+// Колонка по-прежнему только добавляется: удалённый вопрос свою колонку в листе
+// сохраняет (в ней живут ответы прошлых версий). Но если колонку убрал САМ
+// АВТОР, она не возвращается — в его таблице распоряжается он.
 func (s *Service) reconcileColumns(ctx context.Context, token string, link FormLink, actual []domain.SheetColumn) ([]domain.SheetColumn, error) {
-	columns := mergeColumns(link.Columns, actual)
-	if len(columns) == len(link.Columns) {
+	header, err := s.google.ReadHeader(ctx, token, spreadsheetOf(link))
+	if err != nil {
+		return nil, err
+	}
+	// Пустая шапка — лист, который автор очистил целиком (или наш же, если
+	// запись шапки при создании не доехала). Пишем свою и продолжаем: это не
+	// расхождение, а отсутствие данных.
+	if len(header) == 0 {
+		if err := s.google.WriteHeader(ctx, token, spreadsheetOf(link), columnLabels(link.Columns)); err != nil {
+			return nil, err
+		}
 		return link.Columns, nil
 	}
 
+	layout, err := layoutFromHeader(header, link.Columns)
+	if err != nil {
+		return nil, err
+	}
+
+	// Колонки, которых в листе больше нет: автор их убрал. Мы их не возвращаем,
+	// но и не забываем — иначе вопрос, чью колонку он удалил, на следующей же
+	// доставке выглядел бы новым и приезжал обратно. И так каждый раз.
+	dropped := columnsMissingFrom(layout, link.Columns)
+
+	// Новый вопрос — тот, которого нет НИ в листе, НИ в нашей памяти. Проверять
+	// только лист нельзя: удалённая автором колонка тоже отсутствует в нём.
+	missing := columnsMissingFrom(append(append([]domain.SheetColumn{}, layout...), dropped...), actual)
+	if len(missing) == 0 {
+		return layout, s.rememberColumns(ctx, link, layout, dropped)
+	}
+
+	// Дописать колонку можно только В КОНЕЦ нашей части. Если справа от неё
+	// стоят чужие колонки автора, места нет: append умеет сплошную строку от
+	// колонки A, и новая колонка либо затрёт чужую, либо оставит пропуск.
+	if len(header) > len(layout) {
+		return nil, fmt.Errorf("%w: справа от наших колонок есть посторонние, новую колонку вопроса дописать некуда", ErrSheetLayout)
+	}
+
+	columns := append(append([]domain.SheetColumn{}, layout...), missing...)
 	// Шапка переписывается целиком: у append нет «допиши колонку», а строка
 	// заголовков в листе одна.
 	if err := s.google.WriteHeader(ctx, token, spreadsheetOf(link), columnLabels(columns)); err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateLinkColumns(ctx, s.db, link.ID, columns); err != nil {
-		return nil, err
+	return columns, s.rememberColumns(ctx, link, columns, dropped)
+}
+
+// rememberColumns сохраняет колонки связки: сначала те, что есть в листе, за
+// ними — убранные автором. Пишем только при расхождении: у формы без правок
+// порядок не меняется годами, а строка связки читается на каждый ответ.
+//
+// Убранные хранятся ХВОСТОМ и в лист не пишутся. Они нужны ровно за тем, чтобы
+// отличать «автор убрал колонку» от «в форме появился новый вопрос»: без этой
+// памяти первое неотличимо от второго, и удалённая колонка возвращалась бы на
+// каждой доставке.
+func (s *Service) rememberColumns(ctx context.Context, link FormLink, inSheet, dropped []domain.SheetColumn) error {
+	columns := append(append([]domain.SheetColumn{}, inSheet...), dropped...)
+	if sameColumns(link.Columns, columns) {
+		return nil
 	}
-	return columns, nil
+	return s.repo.UpdateLinkColumns(ctx, s.db, link.ID, columns)
+}
+
+func sameColumns(a, b []domain.SheetColumn) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Key != b[i].Key {
+			return false
+		}
+	}
+	return true
+}
+
+// columnsMissingFrom — какие из want отсутствуют в have. Порядок сохраняется от
+// want: новые вопросы встают справа в том же порядке, в каком заданы в форме.
+func columnsMissingFrom(have, want []domain.SheetColumn) []domain.SheetColumn {
+	seen := make(map[string]bool, len(have))
+	for _, c := range have {
+		seen[c.Key] = true
+	}
+	var out []domain.SheetColumn
+	for _, c := range want {
+		if !seen[c.Key] {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // alignRow раскладывает значения ответа по колонкам ЛИСТА. Порядок берётся у

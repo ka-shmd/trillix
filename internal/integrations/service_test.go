@@ -227,6 +227,10 @@ type fakeProvider struct {
 	addedTo      string
 	addedTitle   string
 	header       []string
+	// sheetHeader — шапка, которая СЕЙЧАС в листе. Отдельно от header (что мы в
+	// него записали): лист принадлежит автору, и он вправе переставить колонки —
+	// ровно это и проверяется. nil = лист без шапки.
+	sheetHeader  []string
 	appended     [][]string
 	appendCalls  int
 	cleared      string
@@ -243,6 +247,10 @@ type fakeProvider struct {
 	accountIdx int
 	// loginHint — что уехало провайдеру подсказкой «какой аккаунт открывать».
 	loginHint string
+}
+
+func (f *fakeProvider) ReadHeader(_ context.Context, _ string, _ integrations.Spreadsheet) ([]string, error) {
+	return f.sheetHeader, nil
 }
 
 func (f *fakeProvider) Provider() string { return "google" }

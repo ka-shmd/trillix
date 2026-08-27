@@ -75,6 +75,7 @@ type Provider interface {
 	FirstRowEmpty(ctx context.Context, accessToken string, s Spreadsheet) (bool, error)
 	// AppID — номер проекта Google Cloud (для окна выбора файла).
 	AppID() string
+	ReadHeader(ctx context.Context, accessToken string, s Spreadsheet) ([]string, error)
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
 	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
 	AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error

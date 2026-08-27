@@ -495,6 +495,41 @@ func (g *Google) FirstRowEmpty(ctx context.Context, accessToken string, s Spread
 	return true, nil
 }
 
+// ReadHeader читает первую строку листа — ту, что видит автор.
+//
+// Нужна затем, что шапка в листе и шапка, которую мы помним в базе, — разные
+// вещи: лист принадлежит автору, и он вправе переставить или убрать колонку.
+// Без этого чтения строки раскладывались бы по запомненному порядку и молча
+// уезжали под чужие заголовки.
+//
+// Пустые хвостовые ячейки Google не присылает вовсе, поэтому длина результата —
+// это число ЗАПОЛНЕННЫХ колонок шапки, а не ширина листа.
+func (g *Google) ReadHeader(ctx context.Context, accessToken string, s Spreadsheet) ([]string, error) {
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A1:ZZ1"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("integrations google: build values request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		Values [][]any `json:"values"`
+	}
+	if err := g.doAPI(req, &body); err != nil {
+		return nil, fmt.Errorf("integrations google: read header: %w", err)
+	}
+	if len(body.Values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(body.Values[0]))
+	for _, cell := range body.Values[0] {
+		str, _ := cell.(string)
+		out = append(out, str)
+	}
+	return out, nil
+}
+
 // AddSheet заводит НОВЫЙ ЛИСТ в существующей таблице — путь «положить ответы
 // рядом с прошлой формой». Каждая форма получает свой лист: одна книга, разные
 // вкладки, и колонки одной формы не мешаются с колонками другой.
