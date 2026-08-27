@@ -65,6 +65,12 @@ const BROWSE = '__browse__'
 // NEW_SHEET — «завести новый лист в этой книге».
 const NEW_SHEET = '__new_sheet__'
 
+// ConsentTarget — ради чего открыт шаг согласия: подключить ещё один аккаунт
+// (null) либо переподключить названный.
+interface ConsentTarget {
+  account: ConnectedAccount | null
+}
+
 export function GoogleSheetsOverlay({
   formId,
   state,
@@ -101,6 +107,21 @@ export function GoogleSheetsOverlay({
   // Держать для этого вторую строку в колонке значило бы показывать занятость
   // двумя разными способами в одном окне.
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
+  // consent — открыт ШАГ СОГЛАСИЯ: рассказ о том, что уходит в Google, и переход
+  // к нему. Через него идут ВСЕ три пути (первое подключение, ещё один аккаунт,
+  // переподключение), и это не церемония: на этом шаге стоит строка о передаче
+  // персональных данных респондентов (спека design/integrations-gsheets.md §10),
+  // а она обязана предварять КАЖДУЮ выдачу доступа, а не только первую.
+  //
+  // Значение — аккаунт, который переподключают, либо null для нового.
+  //
+  // Провайдер, не настроенный НА КОНТУРЕ, шага не открывает: там кнопки не
+  // появится, и вместо неё экран обязан сказать, что интеграции здесь нет вовсе.
+  const [consent, setConsent] = useState<ConsentTarget | null>(
+    state.account.enabled && state.account.accounts.length === 0 && !connection
+      ? { account: null }
+      : null,
+  )
   const refresh = useRefreshIntegrations(formId)
   const popup = useOAuthPopup((result) => {
     // Успех подписи не требует — но требует ПЕРЕЗАПРОСА: аккаунт подключился в
@@ -109,7 +130,12 @@ export function GoogleSheetsOverlay({
     // React Query слушает visibilitychange, а окно провайдера поверх вкладки
     // документ в hidden не переводит.
     setOutcome(result === 'integration_ok' ? null : result)
-    if (result === 'integration_ok') refresh()
+    if (result === 'integration_ok') {
+      // Согласие получено — шаг отработал, возвращаемся к настройкам. Выбор в
+      // них перескочит на свежий аккаунт сам (эффект ниже).
+      setConsent(null)
+      refresh()
+    }
   })
   // connect — начать поход. Гасит прошлый исход и пробует открыть окно; false
   // означает «окно не открылось» (узкий экран, блокировщик), и тогда вызывающий
@@ -185,16 +211,28 @@ export function GoogleSheetsOverlay({
             </p>
           </header>
 
-          <SetupBody
-            formId={formId}
-            state={state}
-            connection={connection}
-            setup={setup}
-            onDone={onClose}
-            onPickerOpenChange={setPickerOpen}
-            connect={connect}
-            outcome={outcome}
-          />
+          {consent ? (
+            <ConsentStep
+              target={consent}
+              connect={connect}
+              outcome={outcome}
+              // Назад некуда, пока не подключено ничего и правим не связку:
+              // за шагом согласия в этом случае пустой экран настроек.
+              onBack={
+                state.account.accounts.length > 0 || connection ? () => setConsent(null) : null
+              }
+            />
+          ) : (
+            <SetupBody
+              formId={formId}
+              state={state}
+              connection={connection}
+              setup={setup}
+              onDone={onClose}
+              onPickerOpenChange={setPickerOpen}
+              onConsent={setConsent}
+            />
+          )}
         </div>
 
         {/* Слой поверх окна, пока оно занято: едут списки либо идёт поход за
@@ -334,8 +372,7 @@ function SetupBody({
   setup,
   onDone,
   onPickerOpenChange,
-  connect,
-  outcome,
+  onConsent,
 }: {
   formId: string
   state: FormIntegrations
@@ -343,9 +380,9 @@ function SetupBody({
   setup: SetupState
   onDone: () => void
   onPickerOpenChange: (open: boolean) => void
-  // connect — начать поход за согласием. Живёт наверху вместе со слоем ожидания.
-  connect: (href: string) => boolean
-  outcome: OAuthOutcome | null
+  // onConsent — уйти на шаг согласия. Сам поход к провайдеру начинается там:
+  // предупреждение о передаче данных обязано предварять его (спека §10).
+  onConsent: (target: ConsentTarget) => void
 }) {
   const { account } = state
   const create = useCreateSheet(formId)
@@ -367,13 +404,6 @@ function SetupBody({
         На этом контуре интеграция не настроена — обратитесь к администратору.
       </p>
     )
-  }
-
-  // Ни одного подключения — настраивать нечего: показываем только рассказ и
-  // согласие. Поля, которые всё равно заперты, — обещание работы, которой
-  // человек ещё не может сделать.
-  if (account.accounts.length === 0 && !connection) {
-    return <ConnectAccount connect={connect} outcome={outcome} />
   }
 
   return (
@@ -398,8 +428,7 @@ function SetupBody({
         accounts={account.accounts}
         connection={connection}
         setup={setup}
-        connect={connect}
-        outcome={outcome}
+        onConsent={onConsent}
       />
 
       <SpreadsheetField
@@ -666,20 +695,41 @@ function ConnectionState({ connection }: { connection: FormSheet }) {
   return null
 }
 
-// ConnectAccount — первый шаг: рассказ и согласие. Ничего, кроме них, здесь нет.
+// ConsentStep — шаг согласия: что уйдёт в Google и переход к его окну.
+//
+// Через него идут ВСЕ походы к провайдеру — первое подключение, второй аккаунт,
+// переподключение. Не церемония: здесь стоит строка о передаче персональных
+// данных респондентов, и она обязана предварять КАЖДУЮ выдачу доступа. Пока
+// «подключить ещё один» открывал окно Google сразу, эту строку человек видел
+// один раз в жизни — при самом первом подключении.
 //
 // Права здесь не спрашиваются: человек подключает СВОЙ аккаунт Google, и роль в
-// пространстве на это не влияет (ADR §10, 2026-08-27). Прежде на этом месте
-// стояло «Подключить Google может владелец пространства».
-function ConnectAccount({
+// пространстве на это не влияет (ADR §10, 2026-08-27).
+function ConsentStep({
+  target,
   connect,
   outcome,
+  onBack,
 }: {
+  target: ConsentTarget
   connect: (href: string) => boolean
   outcome: OAuthOutcome | null
+  // onBack — вернуться к настройкам. null, когда возвращаться не к чему: до
+  // первого подключения за этим шагом пустой экран.
+  onBack: (() => void) | null
 }) {
+  const account = target.account
+  const href = account ? startUrl(account.id) : startUrl()
+
   return (
     <div className="flex flex-col gap-5">
+      {account && (
+        <p className="text-center text-sm text-muted-foreground">
+          Войдите в <span className="text-foreground">{account.email}</span> ещё раз — доступ к
+          этому аккаунту потерян.
+        </p>
+      )}
+
       {/* Трансграничная передача названа ДО перехода к согласию, а не после:
           ответы уезжают в Google (США), и продукт не делает этого молча (спека
           design/integrations-gsheets.md §10, «Безопасность и 152-ФЗ»). Вторая
@@ -694,14 +744,20 @@ function ConnectAccount({
           отдельное окно и гасит переход, только если это удалось. */}
       <Button asChild size="lg">
         <a
-          href={startUrl()}
+          href={href}
           onClick={(e) => {
-            if (connect(startUrl())) e.preventDefault()
+            if (connect(href)) e.preventDefault()
           }}
         >
-          Подключить Google
+          {account ? 'Подключить заново' : 'Подключить Google'}
         </a>
       </Button>
+
+      {onBack && (
+        <Button variant="ghost" onClick={onBack}>
+          Назад
+        </Button>
+      )}
 
       {outcome && (
         <p role="status" className="text-sm text-destructive">
@@ -729,8 +785,7 @@ function AccountField({
   accounts,
   connection,
   setup,
-  connect,
-  outcome,
+  onConsent,
 }: {
   accounts: ConnectedAccount[]
   // connection — правим существующую связку. Нужна ради ЧУЖОГО аккаунта: связку
@@ -739,8 +794,7 @@ function AccountField({
   // Тот же приём, что у книги, выбранной в окне Google (`picked` ниже).
   connection: FormSheet | null
   setup: SetupState
-  connect: (href: string) => boolean
-  outcome: OAuthOutcome | null
+  onConsent: (target: ConsentTarget) => void
 }) {
   const chosen = accounts.find((a) => a.id === setup.account) ?? null
   // needsRepair — выбранный аккаунт требует починки, и починка эта одна: пройти
@@ -800,17 +854,15 @@ function AccountField({
           они читались бы продолжением формы и спорили с ней за очередь взгляда. */}
       <div className="flex flex-wrap items-center justify-end gap-1">
         <AccountAction
-          href={startUrl()}
           icon={Plus}
           label="Подключить другой аккаунт"
-          onOpen={connect}
+          onClick={() => onConsent({ account: null })}
         />
         {needsRepair && chosen && (
           <AccountAction
-            href={startUrl(chosen.id)}
             icon={RotateCw}
             label="Переподключить"
-            onOpen={connect}
+            onClick={() => onConsent({ account: chosen })}
           />
         )}
       </div>
@@ -834,12 +886,6 @@ function AccountField({
           Доступ к этому аккаунту потерян — нажмите «Переподключить».
         </p>
       )}
-
-      {outcome && (
-        <p role="status" className="text-sm text-destructive">
-          {connectFailureText(outcome)}
-        </p>
-      )}
     </div>
   )
 }
@@ -852,33 +898,29 @@ function AccountField({
 // задача та же, и второй вариант одного и того же читался бы как другой класс
 // кнопки.
 //
-// Именно <a> внутри Button asChild, а не кнопка с onClick: нужен полноценный
-// переход браузера на случай, когда отдельное окно открыть не удалось
-// (блокировщик всплывающих окон), — XHR за редиректом на домен Google не пойдёт.
-// Клик пробует окно и гасит переход, ТОЛЬКО если оно открылось; тот же приём,
-// что у большой кнопки подключения.
+// Обычная кнопка, а не ссылка: наружу она больше не ведёт — открывает шаг
+// согласия, а уже его большая кнопка уходит к провайдеру настоящим переходом
+// (там же и запасной путь на случай заблокированного окна). Прежний <a href> на
+// адрес похода был к тому же ловушкой: средний клик уводил вкладку из кабинета
+// прямо на ручку OAuth.
 function AccountAction({
-  href,
   icon: Icon,
   label,
-  onOpen,
+  onClick,
 }: {
-  href: string
   icon: LucideIcon
   label: string
-  onOpen: (href: string) => boolean
+  onClick: () => void
 }) {
   return (
-    <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-muted-foreground" asChild>
-      <a
-        href={href}
-        onClick={(e) => {
-          if (onOpen(href)) e.preventDefault()
-        }}
-      >
-        <Icon className="size-3.5" />
-        {label}
-      </a>
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 gap-1.5 px-2 text-muted-foreground"
+      onClick={onClick}
+    >
+      <Icon className="size-3.5" />
+      {label}
     </Button>
   )
 }

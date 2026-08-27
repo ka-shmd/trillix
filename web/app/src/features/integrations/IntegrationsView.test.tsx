@@ -331,8 +331,8 @@ describe('оверлей настройки Google Таблиц', () => {
     // У живого аккаунта действие ровно одно. «Переподключить» — лечение, и вне
     // беды оно предлагало бы чинить работающее; функционально оно к соседней
     // ссылке ничего не добавляет (тот же адрес, вся разница — в подсказке).
-    expect(screen.getByRole('link', { name: /подключить другой аккаунт/i })).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /^переподключить$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /подключить другой аккаунт/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^переподключить$/i })).toBeNull()
     // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
     // каскадом связки других форм и пространств, а окно — про одну связку.
     expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
@@ -347,14 +347,50 @@ describe('оверлей настройки Google Таблиц', () => {
   // «Переподключить» с собой едет id выбранного аккаунта, из которого сервер
   // берёт почту для login_hint. Без неё человек снова выбирал бы аккаунт руками
   // — то есть кнопка обещала бы то, чего не делает.
-  it('«Переподключить» несёт id выбранного аккаунта, «подключить другой» — нет', () => {
+  // Оба действия ведут на ШАГ СОГЛАСИЯ, а не прямо в окно Google: на этом шаге
+  // стоит строка о передаче персональных данных, и она обязана предварять каждую
+  // выдачу доступа, а не только первую.
+  it('«Подключить другой» открывает шаг согласия без подсказки', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /подключить другой аккаунт/i }))
+
+    expect(screen.getByText(/персональные данные/i)).toBeTruthy()
+    const go = screen.getByRole('link', { name: /^подключить google$/i })
+    expect(go.getAttribute('href')).not.toContain('accountId')
+    // Настройки на это время убраны: шаг занимает окно целиком.
+    expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
+  })
+
+  // У переподключения тот же шаг, но с подсказкой: сервер возьмёт почту
+  // названного аккаунта и передаст её Google, чтобы человек попал сразу в него.
+  it('«Переподключить» открывает тот же шаг и несёт id аккаунта', () => {
     renderView(state({ account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] } }))
     openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /^переподключить$/i }))
 
-    const add = screen.getByRole('link', { name: /подключить другой аккаунт/i })
-    const again = screen.getByRole('link', { name: /^переподключить$/i })
-    expect(add.getAttribute('href')).not.toContain('accountId')
-    expect(again.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
+    expect(screen.getByText(/персональные данные/i)).toBeTruthy()
+    const go = screen.getByRole('link', { name: /^подключить заново$/i })
+    expect(go.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
+  })
+
+  // Шаг — не тупик: с него можно вернуться к настройкам, не закрывая окно.
+  it('с шага согласия можно вернуться к настройкам', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /подключить другой аккаунт/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }))
+
+    expect(screen.getByLabelText(/название подключения/i)).toBeTruthy()
+  })
+
+  // До первого подключения возвращаться некуда: за шагом пустой экран настроек.
+  it('до первого подключения кнопки «Назад» нет', () => {
+    renderView(state())
+    openSetup()
+
+    expect(screen.getByRole('link', { name: /^подключить google$/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
   })
 
   // Правка открывается ТЕМ ЖЕ окном, что и подключение (INTEGRATIONS §9), — со
@@ -454,7 +490,7 @@ describe('оверлей настройки Google Таблиц', () => {
     )
     openConnection()
 
-    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
   })
 
   // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
@@ -502,8 +538,8 @@ describe('оверлей настройки Google Таблиц', () => {
     openSetup()
 
     expect(screen.getByText(/доступ к этому аккаунту потерян/i)).toBeTruthy()
-    // Лечение — рядом, той же ссылкой: она ведёт именно в этот аккаунт.
-    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
+    // Лечение — рядом, той же кнопкой: она ведёт на шаг согласия этого аккаунта.
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
   })
 
   it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {
