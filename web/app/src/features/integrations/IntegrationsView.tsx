@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Экран «Интеграции» формы — два блока, как у образца (Tally): сверху то, что уже
 // работает, снизу то, что можно подключить.
@@ -155,15 +156,18 @@ function ConnectionRow({
             accountLost={accountLost}
           />
         </p>
+        {/* Строка под названием говорит КУДА, а не КАК: состояние целиком уехало
+            на точку с тултипом. Держать состояние в двух местах значило бы
+            однажды их рассинхронизировать — а места под длинный текст поломки в
+            строке нет, он обрезался бы на середине причины. */}
         <p className="mt-1 text-sm text-muted-foreground">
-          {connectionSummary(connection, accountLost)}{' '}
           <a
             href={connection.url}
             target="_blank"
             rel="noreferrer"
             className="underline underline-offset-2 hover:text-foreground"
           >
-            таблицей
+            Таблица
           </a>
           {/* Через чей аккаунт едет связка. Аккаунтов у человека сколько угодно,
               и в команде связку мог завести коллега — без подписи строка не
@@ -230,11 +234,16 @@ function ConnectionRow({
   )
 }
 
-// StatusDot — состояние связки кружком без подписи: словом его уже говорит строка
-// под названием («Ответы синхронизируются с…», «Записать не удаётся…»), и бейдж
-// рядом повторял бы её вторым голосом.
+// StatusDot — состояние связки: цвет для взгляда, тултип для подробностей.
 //
-// Подпись остаётся у скринридера (`aria-label`) — цвет для него не существует.
+// Текст состояния живёт ЗДЕСЬ, а не строкой под названием: у поломки он длинный
+// (причина плюс что делать), и в строке обрезался бы на середине. На точке он
+// раскрывается целиком по наведению и по фокусу с клавиатуры.
+//
+// Точка ПУЛЬСИРУЕТ, пока состояние требует внимания или работы, — ореолом
+// поверх (`animate-ping`), а не морганием самой точки: моргающий кружок теряется,
+// расходящееся кольцо ловится боковым зрением в списке из десяти строк. У
+// «работает» и «выключено» пульса нет: это покой, и подсвечивать в них нечего.
 //
 // Цвета — токенами (`bg-success`, `bg-warning`): литерал `bg-emerald-500` не имеет
 // тёмного значения и не виден системе.
@@ -247,22 +256,55 @@ function StatusDot({
   enabled: boolean
   accountLost: boolean
 }) {
-  const [color, label] = !enabled
-    ? ['bg-muted-foreground/40', 'Выключено']
-    : status === 'broken' || accountLost
-      ? ['bg-destructive', 'Сломано']
-      : status === 'backfilling'
-        ? ['bg-warning', 'Переносим ответы']
-        : ['bg-success', 'Работает']
+  const [color, label, pulsing] = statusMeta(status, enabled, accountLost)
 
-  return <span className={`size-2 shrink-0 rounded-full ${color}`} role="img" aria-label={label} />
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {/* button, а не span: тултип обязан открываться и с клавиатуры, а до
+            неинтерактивного узла фокус не доходит. type=button — строка лежит
+            вне формы, но кнопка по умолчанию submit, и это ждёт своего часа. */}
+        <button
+          type="button"
+          className="relative flex size-2 shrink-0 cursor-default rounded-full focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label={label}
+        >
+          {pulsing && (
+            <span
+              className={`absolute inline-flex size-full animate-ping rounded-full opacity-75 ${color}`}
+              aria-hidden
+            />
+          )}
+          <span className={`relative inline-flex size-2 rounded-full ${color}`} aria-hidden />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-xs">
+        {statusText(status, enabled, accountLost)}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
-function connectionSummary(connection: FormSheet, accountLost: boolean): string {
-  if (!connection.enabled) return 'Ответы не синхронизируются с'
+function statusMeta(
+  status: FormSheet['status'],
+  enabled: boolean,
+  accountLost: boolean,
+): [string, string, boolean] {
+  if (!enabled) return ['bg-muted-foreground/40', 'Выключено', false]
   // Потерянный аккаунт важнее статуса связки: чинится он, а не она.
-  if (accountLost) return 'Доступ к Google потерян — подключите аккаунт заново; связано с'
-  if (connection.status === 'broken') return 'Записать не удаётся — откройте настройки; связано с'
-  if (connection.status === 'backfilling') return 'Переносим накопленные ответы в'
-  return 'Ответы синхронизируются с'
+  if (status === 'broken' || accountLost) return ['bg-destructive', 'Сломано', true]
+  if (status === 'backfilling') return ['bg-warning', 'Переносим ответы', true]
+  return ['bg-success', 'Работает', false]
+}
+
+function statusText(status: FormSheet['status'], enabled: boolean, accountLost: boolean): string {
+  if (!enabled)
+    return 'Выключено: новые ответы в таблицу не уезжают. Таблица и всё, что уже в неё попало, на месте.'
+  if (accountLost)
+    return 'Доступ к Google потерян — подключите аккаунт заново. До этого ни один ответ не уедет.'
+  if (status === 'broken')
+    return 'Записать в таблицу не удаётся. Откройте настройки подключения — там причина и что с ней делать.'
+  if (status === 'backfilling')
+    return 'Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.'
+  return 'Ответы синхронизируются с таблицей.'
 }

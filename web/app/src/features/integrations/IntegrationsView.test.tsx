@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { ConnectedAccount, FormIntegrations, FormSheet } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { integrationKeys } from './keys'
 
 // Поход к провайдеру идёт в отдельном окне, которого в happy-dom нет. Подменяем
@@ -137,9 +138,13 @@ function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
       { id: 'ss-old', name: 'Прошлая форма' },
     ])
   }
+  // TooltipProvider повторяет окружение приложения: в кабинете его даёт
+  // SidebarProvider выше по дереву. Без него точка состояния роняет рендер.
   render(
     <QueryClientProvider client={qc}>
-      <IntegrationsView formId={FORM_ID} />
+      <TooltipProvider>
+        <IntegrationsView formId={FORM_ID} />
+      </TooltipProvider>
     </QueryClientProvider>,
   )
   return qc
@@ -185,10 +190,15 @@ describe('два блока экрана', () => {
       }),
     )
 
-    expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
     // Связка живая по своему статусу, но кружок обязан быть красным: чинится
     // аккаунт, а не она.
-    expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
+    const dot = screen.getByRole('button', { name: 'Сломано' })
+    // Текст состояния живёт в тултипе: у поломки он длинный, и в строке под
+    // названием обрезался бы на середине причины.
+    fireEvent.focus(dot)
+    // По роли, а не по тексту: Radix рисует содержимое дважды — видимым узлом и
+    // копией для скринридера, и поиск по тексту находит оба.
+    expect(screen.getByRole('tooltip').textContent).toMatch(/Доступ к Google потерян/)
   })
 
   // Состояние аккаунта ушло из каталога в окно подключения: плитка отвечает на
@@ -204,11 +214,29 @@ describe('два блока экрана', () => {
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('состояние связки видно кружком и подписью', () => {
+  it('состояние связки видно кружком, подробности — в тултипе', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
-    expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
-    expect(screen.getByText(/переносим накопленные ответы/i)).toBeTruthy()
+    const dot = screen.getByRole('button', { name: 'Переносим ответы' })
+    fireEvent.focus(dot)
+    expect(screen.getByRole('tooltip').textContent).toMatch(/переносим ответы, которые уже пришли/i)
+  })
+
+  // Точка пульсирует, пока состояние требует внимания или работы. У покоя
+  // («работает», «выключено») пульса нет — иначе он перестал бы что-либо значить.
+  it('пульсирует только то, что требует внимания', () => {
+    const pulses = (el: HTMLElement) => el.querySelector('.animate-ping') !== null
+
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'broken' })] }))
+    expect(pulses(screen.getByRole('button', { name: 'Сломано' }))).toBe(true)
+    cleanup()
+
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+    expect(pulses(screen.getByRole('button', { name: 'Работает' }))).toBe(false)
+    cleanup()
+
+    renderView(state({ account: CONNECTED, connections: [conn({ enabled: false })] }))
+    expect(pulses(screen.getByRole('button', { name: 'Выключено' }))).toBe(false)
   })
 
   it('выключенная связка помечена и не притворяется работающей', () => {
@@ -503,7 +531,13 @@ describe('оверлей настройки Google Таблиц', () => {
       calls.push({ url, init })
       return Promise.resolve(new Response(null, { status: 202 }))
     })
-    renderView(state({ account: CONNECTED, connections: [conn({ name: 'Архив' })] }))
+    // Перезалив живёт ВНУТРИ предупреждения: у работающей связки его нет вовсе.
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ name: 'Архив', status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
     openConnection()
     fireEvent.click(screen.getByRole('button', { name: /перезалить лист/i }))
 
@@ -518,12 +552,34 @@ describe('оверлей настройки Google Таблиц', () => {
     vi.unstubAllGlobals()
   })
 
-  // Второй перезалив поверх идущего писал бы в тот же лист вперемешку с первым.
-  it('пока идёт перенос — перезалить нельзя', () => {
+  // Перезалив — часть предупреждения, а не самостоятельная кнопка: там, где
+  // предупреждения нет, нет и его.
+  it('у работающей и переносящей связки перезалива на экране нет', () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+    openConnection()
+    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+    cleanup()
+
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
-
     expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+  })
+
+  // Значок у предупреждения: красный текст в рамке легко принять за подпись поля,
+  // а треугольник читается сигналом до того, как текст прочитан.
+  it('предупреждение помечено значком', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+
+    const alert = screen
+      .getAllByRole('alert')
+      .find((el) => /Колонки листа/.test(el.textContent ?? ''))
+    expect(alert?.querySelector('svg')).toBeTruthy()
   })
 
   // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
@@ -612,7 +668,9 @@ describe('оверлей настройки Google Таблиц', () => {
     qc.setQueryData(integrationKeys.form(FORM_ID), state({ account: CONNECTED }))
     render(
       <QueryClientProvider client={qc}>
-        <IntegrationsView formId={FORM_ID} />
+        <TooltipProvider>
+          <IntegrationsView formId={FORM_ID} />
+        </TooltipProvider>
       </QueryClientProvider>,
     )
     openSetup()

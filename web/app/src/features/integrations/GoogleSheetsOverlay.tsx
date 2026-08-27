@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
-import { AlertCircle, Loader2, Plus, RotateCw, Upload } from 'lucide-react'
+import { AlertCircle, Loader2, Plus, RotateCw, TriangleAlert, Upload } from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
 
@@ -686,34 +686,41 @@ function SpreadsheetField({
 // задавал, открывая настройки. Когда появится журнал доставок (BACKLOG), время
 // последней уедет туда, где его ищут.
 function ConnectionState({ formId, connection }: { formId: string; connection: FormSheet }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {connection.status === 'broken' && (
-        <p
-          role="alert"
-          className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
-        >
-          {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
+  // Перезалив живёт ВНУТРИ предупреждения, а не отдельной кнопкой рядом: причина
+  // и выход из неё стоят в одном месте, и человеку не приходится догадываться,
+  // что красный текст лечится кнопкой под ним. Из этого следует и обратное — у
+  // работающей связки перезалива на экране нет, хотя он лечит и то, что молчит
+  // (дубль после ретрая, строки, удалённые автором руками). Решение владельца
+  // 2026-08-27; понадобится вход и в спокойном состоянии — ему место рядом с
+  // журналом доставок, там же, где «повторить отправку» (BACKLOG).
+  if (connection.status === 'broken') {
+    return (
+      <div
+        role="alert"
+        className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+      >
+        <p className="flex gap-2 text-sm">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+          <span>
+            {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
+          </span>
         </p>
-      )}
-      {connection.status === 'backfilling' && (
-        <p className="text-sm text-muted-foreground">
-          Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
-        </p>
-      )}
-      {/* Перезалив стоит РЯДОМ С СОСТОЯНИЕМ, а не среди настроек: это лечение
-          того, о чём состояние и сообщает. Показывается всегда, а не только у
-          сломанной связки, — он лечит и то, что молчит: дубль после ретрая
-          (доставка at-least-once), строки, которые автор удалил руками,
-          колонки, отставшие от формы.
-
-          Пока идёт перенос, прятать его не надо, а вот запускать второй поверх
-          первого — надо запретить: они писали бы в один лист вперемешку. */}
-      {connection.status !== 'backfilling' && (
-        <RefillAction formId={formId} connectionId={connection.id} />
-      )}
-    </div>
-  )
+        {/* Отступ слева равен ширине значка с зазором: кнопка встаёт под текстом,
+            а не под значком, и блок читается одной колонкой. */}
+        <div className="pl-6">
+          <RefillAction formId={formId} connectionId={connection.id} />
+        </div>
+      </div>
+    )
+  }
+  if (connection.status === 'backfilling') {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
+      </p>
+    )
+  }
+  return null
 }
 
 // RefillAction — перезалить лист с нуля.
@@ -728,11 +735,11 @@ function RefillAction({ formId, connectionId }: { formId: string; connectionId: 
   const [confirming, setConfirming] = useState(false)
 
   return (
-    <div className="flex justify-end">
+    <div className="flex">
       <Button
-        variant="ghost"
+        variant="outline"
         size="sm"
-        className="h-7 gap-1.5 px-2 text-muted-foreground"
+        className="h-8 gap-1.5"
         disabled={refill.isPending}
         onClick={() => setConfirming(true)}
       >
