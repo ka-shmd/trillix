@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 )
@@ -52,7 +53,7 @@ func WriteHTML(w http.ResponseWriter, r *http.Request, status int, html []byte) 
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code := statusForError(err)
 
-	message := err.Error()
+	message := humanMessage(err)
 	if status >= http.StatusInternalServerError {
 		loggerFrom(r.Context()).Error("request failed", slog.String("error", err.Error()))
 		message = "internal server error"
@@ -67,6 +68,38 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 
 	WriteJSON(w, r, status, errorEnvelope{Error: errorBody{Code: code, Message: message}})
+}
+
+// humanMessage — текст ошибки БЕЗ служебного префикса сентинела.
+//
+// Доменные ошибки заворачиваются как fmt.Errorf("%w: человеческий текст", …),
+// поэтому err.Error() начинается с текста самого сентинела — «validation failed:
+// в первой строке листа…». Этот кусок написан для кода: он английский, он
+// повторяет то, что уже сказано полем `code` конверта, и посреди русского
+// сообщения на экране выглядит утечкой внутренностей. Режем в одном месте — том
+// же, где живёт вся раскладка ошибок на HTTP.
+//
+// Сообщение БЕЗ префикса (сам сентинел без обёртки) остаётся как есть: у него
+// нет человеческой части, и обрезать нечего.
+func humanMessage(err error) string {
+	msg := err.Error()
+	for _, sentinel := range wrappedSentinels {
+		prefix := sentinel.Error() + ": "
+		if after, found := strings.CutPrefix(msg, prefix); found {
+			return after
+		}
+	}
+	return msg
+}
+
+// wrappedSentinels — те доменные ошибки, которые оборачивают человеческий текст.
+// Список короче таблицы ниже намеренно: у остальных обёртки нет, и проверять их
+// на каждом отказе незачем.
+var wrappedSentinels = []error{
+	domain.ErrValidation,
+	domain.ErrConflict,
+	domain.ErrPlanRequired,
+	domain.ErrFormClosed,
 }
 
 // statusForError — единственная таблица соответствия доменных ошибок и HTTP.

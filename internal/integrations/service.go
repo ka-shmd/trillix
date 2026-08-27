@@ -561,7 +561,7 @@ func (s *Service) existingSheet(ctx context.Context, token, spreadsheetID string
 	}
 	if !empty {
 		return Spreadsheet{}, fmt.Errorf(
-			"%w: в первой строке листа «%s» уже есть данные — выберите пустой лист или создайте новый",
+			"%w: лист «%s» не пустой — выберите пустой лист или создайте новый",
 			domain.ErrValidation, sheets[idx].Title)
 	}
 	return sheet, nil

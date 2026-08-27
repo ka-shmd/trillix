@@ -590,8 +590,6 @@ describe('оверлей настройки Google Таблиц', () => {
 
     expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
     expect(screen.queryByText(/Колонки листа/)).toBeNull()
-    // Молчать совсем тоже нельзя: человек пришёл сюда из-за ошибки.
-    expect(screen.getByText(/ошибка уйдёт вместе с переездом/i)).toBeTruthy()
   })
 
   // Значок у предупреждения: красный текст в рамке легко принять за подпись поля,
@@ -757,15 +755,25 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
-  it('состояние связки видно на экране правки первым делом', () => {
+  // Окно отвечает на «куда лить», а не «как идут дела»: рассказа о процессе в нём
+  // нет вовсе. Состояние живёт на точке в списке — там оно видно, не открывая
+  // окна, и держать его в двух местах значило бы однажды их рассинхронизировать.
+  it('о процессе окно правки не рассказывает', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
 
-    // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
-    // что он видит, это что с ней сейчас.
-    expect(
-      within(screen.getByRole('dialog')).getByText(/переносим ответы, которые уже пришли/i),
-    ).toBeTruthy()
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByText(/переносим ответы/i)).toBeNull()
+    // Поломка — исключение: это не отчёт о процессе, а препятствие плюс выход.
+    cleanup()
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    expect(screen.getByRole('button', { name: /перезалить лист/i })).toBeTruthy()
   })
 
   it('после подключения в окне провайдера состояние перезапрашивается', async () => {
