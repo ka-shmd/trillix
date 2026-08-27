@@ -113,18 +113,18 @@ export function EmbedView({
               означала бы, что до кода надо доскроллить.
               Рамки справа нет: колонка белая, страница-макет серая — границу рисует
               сама разница поверхностей, и линия поверх неё была бы вторым забором. */}
-          <aside className="flex w-112 shrink-0 flex-col">
+          <aside className="flex w-125 shrink-0 flex-col">
             {/* Выход — ПЕРВЫМ в разметке и первым под Tab: он же единственный, кроме
                 Esc. Подписан словом — крестовина в углу чужой страницы читалась бы
                 как закрытие макета, а не режима. */}
-            <div className="px-5 pt-4">
+            <div className="px-12.5 pt-5">
               <SheetClose asChild>
                 <Button variant="ghost" size="sm" className="-ml-2 gap-1.5 text-muted-foreground">
                   <X className="size-4" /> Закрыть
                 </Button>
               </SheetClose>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-6">
+            <div className="min-h-0 flex-1 overflow-y-auto px-12.5 py-5">
               <SettingsPanel
                 form={form}
                 mode={mode}
@@ -136,7 +136,7 @@ export function EmbedView({
             {/* Главное действие экрана — залитая кнопка у самого края (DESIGN-SYSTEM
                 §3): за кодом сюда и приходят. Тумблер, а не вход: макет и код делят
                 одну область, и вернуться нужно тем же жестом. */}
-            <div className="border-t p-5">
+            <div className="border-t px-12.5 py-5">
               <Button
                 className="w-full gap-1.5"
                 variant={showCode ? 'outline' : 'default'}
