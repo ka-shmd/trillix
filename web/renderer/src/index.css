@@ -87,8 +87,12 @@ body {
 [data-embed='block'][data-embed-align='left'] .rf-page {
   margin-left: 0;
   margin-right: auto;
-  padding-left: 0;
-  padding-right: 0;
+  /* НЕ НОЛЬ, И ЭТО НЕ ПОЛОВИНЧАТОСТЬ: кольцо фокуса поля рисуется на 4px НАРУЖУ
+     коробки (`--rf-focus-shadow`), а мягкая тень — ещё дальше. При нулевом поле край
+     фрейма срезает их обе, и форма выглядит подрезанной по левому краю. 6px кольцо
+     спасают и на глаз не читаются полем: «влево» остаётся «влево». */
+  padding-left: 6px;
+  padding-right: 6px;
   --rf-align: left;
   --rf-align-items: flex-start;
   --rf-submit-justify: flex-start;
