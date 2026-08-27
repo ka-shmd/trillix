@@ -1,3 +1,5 @@
+import { type ReactNode } from 'react'
+
 import { type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { useUpdateBranding } from '../queries'
@@ -21,7 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Настройки вставки. ВСЕ ОНИ ЖИВУТ В САМОМ СНИППЕТЕ и никогда на сервере (ADR §10):
 // одна форма вставляется в несколько мест по-разному, и серверная копия настроек
@@ -31,6 +35,9 @@ import { Switch } from '@/components/ui/switch'
 // ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ — бейдж внизу: он свойство ФОРМЫ (оформление + тариф), и
 // потому единственный, кто здесь что-то сохраняет. Почему он всё же тут — решение
 // владельца 2026-08-16: автор думает про вид вставки в одном месте.
+//
+// У КАЖДОГО ВИДА ВСТАВКИ СВОЙ НАБОР НАСТРОЕК, и они разведены по трём веткам, а не
+// собраны в один список с условиями у каждой строки: общего у видов — только бейдж.
 
 // Вид вставки в этот объект НЕ входит: он живёт в адресе экрана и приезжает пропом.
 // Держать его ещё и здесь значило бы синхронизировать состояние с URL эффектом —
@@ -52,6 +59,11 @@ export interface EmbedSettings {
   plain: boolean
 }
 
+interface ModeProps {
+  settings: EmbedSettings
+  onChange: (patch: Partial<EmbedSettings>) => void
+}
+
 export function SettingsPanel({
   form,
   mode,
@@ -65,132 +77,76 @@ export function SettingsPanel({
   settings: EmbedSettings
   onChange: (patch: Partial<EmbedSettings>) => void
 }) {
-  const widget = mode === 'widget'
-  const page = mode === 'page'
-  // Виджета без скрипта не существует: показать панель по кнопке голому iframe нечем.
-  const plain = settings.plain && !widget
   // У формы есть разрывы страниц — единственная подсказка выбора не про вкус.
   const multipage = form.draftSchema.blocks.some((b) => b.type === 'page_break')
 
   return (
-    <div className="space-y-5">
-      <div>
-        <Label htmlFor="embed-mode">Вид вставки</Label>
-        <Select value={mode} onValueChange={(v) => onModeChange(v as EmbedMode)}>
-          <SelectTrigger id="embed-mode" className="mt-1 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="block">{MODE_TITLES.block}</SelectItem>
-            <SelectItem value="widget">{MODE_TITLES.widget}</SelectItem>
-            <SelectItem value="page">{MODE_TITLES.page}</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="mt-1.5 text-xs text-muted-foreground">{MODE_HINTS[mode]}</p>
-        {multipage && mode === 'block' && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            У формы есть разрывы страниц — ей обычно лучше подходит «Страница».
-          </p>
-        )}
-      </div>
+    <div className="flex flex-col gap-6">
+      <ModeChoice mode={mode} onModeChange={onModeChange} multipage={multipage} />
+      {mode === 'block' && <BlockSettings settings={settings} onChange={onChange} />}
+      {mode === 'widget' && <WidgetSettings settings={settings} onChange={onChange} />}
+      {mode === 'page' && <PageSettings settings={settings} onChange={onChange} />}
+      <Separator />
+      <BadgeToggle form={form} />
+    </div>
+  )
+}
 
-      {widget && (
-        <>
-          <div>
-            <Label htmlFor="embed-open">Когда открывать</Label>
-            <Select
-              value={settings.open}
-              onValueChange={(v) => onChange({ open: v as OpenTrigger })}
-            >
-              <SelectTrigger id="embed-open" className="mt-1 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(OPEN_TRIGGERS).map(([value, title]) => (
-                  <SelectItem key={value} value={value}>
-                    {title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* Единственная подсказка, которую автор иначе прочтёт как поломку:
-                проверит настройку, закроет панель и не дождётся повторного показа. */}
-            {settings.open !== 'click' && (
-              <p className="mt-1.5 text-xs text-muted-foreground">
-                Откроется один раз за визит. Дальше — по кнопке.
-              </p>
-            )}
-          </div>
-
-          {(settings.open === 'delay' || settings.open === 'scroll') && (
-            <div>
-              <Label htmlFor="embed-open-value">
-                {settings.open === 'delay' ? 'Пауза, секунд' : 'Прокрутка, %'}
-              </Label>
-              <Input
-                id="embed-open-value"
-                type="number"
-                min={1}
-                max={settings.open === 'delay' ? 120 : 100}
-                value={settings.openValue}
-                onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
-                className="mt-1"
-              />
-            </div>
-          )}
-
-          <div>
-            <Label htmlFor="embed-position">Угол экрана</Label>
-            <Select
-              value={settings.position}
-              onValueChange={(v) => onChange({ position: v as WidgetPosition })}
-            >
-              <SelectTrigger id="embed-position" className="mt-1 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries(WIDGET_POSITIONS).map(([value, title]) => (
-                  <SelectItem key={value} value={value}>
-                    {title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <Label htmlFor="embed-label">Надпись на кнопке</Label>
-            <Input
-              id="embed-label"
-              value={settings.label}
-              onChange={(e) => onChange({ label: e.target.value })}
-              className="mt-1"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="embed-width">Ширина панели, px</Label>
-            <Input
-              id="embed-width"
-              type="number"
-              min={280}
-              max={720}
-              value={settings.width}
-              onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
-              className="mt-1"
-            />
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              На телефоне панель раскрывается во весь экран.
-            </p>
-          </div>
-        </>
+// ВЫБОР ВИДА — ТРИ ВКЛАДКИ, а не дропдаун: видов ровно три, они называются одним
+// словом, и это единственный выбор экрана, меняющий его целиком (набор настроек,
+// макет, код). Дропдаун прятал бы два варианта из трёх за нажатием.
+//
+// Значение живёт в адресе (`?mode=`), поэтому вкладки — контролируемые: активной
+// становится не нажатая, а та, на которую увёл роутер. Тем же и работает «Назад».
+function ModeChoice({
+  mode,
+  onModeChange,
+  multipage,
+}: {
+  mode: EmbedMode
+  onModeChange: (mode: EmbedMode) => void
+  multipage: boolean
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Tabs value={mode} onValueChange={(v) => onModeChange(v as EmbedMode)}>
+        <TabsList className="w-full">
+          <TabsTrigger value="block">{MODE_TITLES.block}</TabsTrigger>
+          <TabsTrigger value="widget">{MODE_TITLES.widget}</TabsTrigger>
+          <TabsTrigger value="page">{MODE_TITLES.page}</TabsTrigger>
+        </TabsList>
+      </Tabs>
+      <p className="text-xs text-muted-foreground">{MODE_HINTS[mode]}</p>
+      {multipage && mode === 'block' && (
+        <p className="text-xs text-muted-foreground">
+          У формы есть разрывы страниц — ей обычно лучше подходит «Страница».
+        </p>
       )}
+    </div>
+  )
+}
 
-      {!widget && !page && (
-        <div>
-          <Label htmlFor="embed-height">
-            {plain || !settings.dynamicHeight ? 'Высота, px' : 'Высота до загрузки формы, px'}
-          </Label>
+// БЛОК — форма в потоке чужой страницы. Настройки разложены по трём группам:
+// сколько места занимает, как выглядит, чем вставляется. Плоский список из пяти
+// тумблеров подряд, стоявший здесь раньше, заставлял читать все пять, чтобы найти
+// один (редизайн 2026-08-27).
+function BlockSettings({ settings, onChange }: ModeProps) {
+  // Виджета без скрипта не существует, а у блока — вполне: голый фрейм не умеет
+  // только живую высоту.
+  const plain = settings.plain
+
+  return (
+    <>
+      <Group title="Размер">
+        <Field
+          id="embed-height"
+          label={plain || !settings.dynamicHeight ? 'Высота, px' : 'Высота до загрузки формы, px'}
+          hint={
+            plain || !settings.dynamicHeight
+              ? 'Длинная форма будет скроллиться внутри блока.'
+              : 'Размер, пока форма грузится: дальше её ведёт сама форма.'
+          }
+        >
           <Input
             id="embed-height"
             type="number"
@@ -198,85 +154,191 @@ export function SettingsPanel({
             max={2000}
             value={settings.height}
             onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
-            className="mt-1"
           />
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {plain || !settings.dynamicHeight
-              ? 'Длинная форма будет скроллиться внутри блока.'
-              : 'Размер, пока форма грузится: дальше её ведёт сама форма.'}
-          </p>
-        </div>
-      )}
+        </Field>
+        <Toggle
+          id="embed-dynamic-height"
+          checked={settings.dynamicHeight && !plain}
+          disabled={plain}
+          onChange={(v) => onChange({ dynamicHeight: v })}
+          text="Живая высота"
+          hint={plain ? 'Без скрипта высота не подстраивается.' : 'Блок растёт вместе с формой.'}
+        />
+      </Group>
 
-      <div className="space-y-3 border-t pt-4">
-        {!widget && !page && (
-          <Toggle
-            id="embed-dynamic-height"
-            checked={settings.dynamicHeight && !plain}
-            disabled={plain}
-            onChange={(v) => onChange({ dynamicHeight: v })}
-            text="Живая высота"
-            hint={plain ? 'Без скрипта высота не подстраивается.' : 'Блок растёт вместе с формой.'}
-          />
-        )}
-        {!page && (
-          <Toggle
-            id="embed-hide-title"
-            checked={settings.hideTitle}
-            onChange={(v) => onChange({ hideTitle: v })}
-            text="Скрыть заголовок формы"
-            hint="На странице обычно уже есть свой заголовок над формой."
-          />
-        )}
+      <Group title="Вид">
+        <Toggle
+          id="embed-hide-title"
+          checked={settings.hideTitle}
+          onChange={(v) => onChange({ hideTitle: v })}
+          text="Скрыть заголовок формы"
+          hint="На странице обычно уже есть свой заголовок над формой."
+        />
         {/* Прижатие влево — только у блока: у виджета и страницы поля холста
             отделяют форму от края панели и края экрана, и снимать их там незачем. */}
-        {mode === 'block' && (
-          <Toggle
-            id="embed-align"
-            checked={settings.alignLeft}
-            onChange={(v) => onChange({ alignLeft: v })}
-            text="Выровнять содержимое влево"
-            hint="Форма начнётся от левого края блока, без полей по бокам."
-          />
-        )}
-        {widget ? (
-          <>
-            <Toggle
-              id="embed-overlay"
-              checked={settings.overlay}
-              onChange={(v) => onChange({ overlay: v })}
-              text="Затемнять страницу"
-              hint="Страница за панелью темнеет."
-            />
-            <Toggle
-              id="embed-hide-on-submit"
-              checked={settings.hideOnSubmit}
-              onChange={(v) => onChange({ hideOnSubmit: v })}
-              text="Убрать виджет после отправки"
-              hint="Ответивший больше не увидит кнопку до перезагрузки страницы."
-            />
-          </>
-        ) : (
-          <Toggle
-            id="embed-bg"
-            checked={settings.transparent}
-            onChange={(v) => onChange({ transparent: v })}
-            text="Прозрачный фон"
-            hint="Форма ляжет на фон сайта, а не белым прямоугольником."
-          />
-        )}
-        {!widget && (
-          <Toggle
-            id="embed-plain"
-            checked={plain}
-            onChange={(v) => onChange({ plain: v })}
-            text="Без скрипта, простым iframe"
-            hint="Для сайтов, где запрещены сторонние скрипты."
-          />
+        <Toggle
+          id="embed-align"
+          checked={settings.alignLeft}
+          onChange={(v) => onChange({ alignLeft: v })}
+          text="Выровнять содержимое влево"
+          hint="Форма начнётся от левого края блока, без полей по бокам."
+        />
+        <Toggle
+          id="embed-bg"
+          checked={settings.transparent}
+          onChange={(v) => onChange({ transparent: v })}
+          text="Прозрачный фон"
+          hint="Форма ляжет на фон сайта, а не белым прямоугольником."
+        />
+      </Group>
+
+      <Group title="Код вставки">
+        <Toggle
+          id="embed-plain"
+          checked={plain}
+          onChange={(v) => onChange({ plain: v })}
+          text="Без скрипта, простым iframe"
+          hint="Для сайтов, где запрещены сторонние скрипты."
+        />
+      </Group>
+    </>
+  )
+}
+
+// Виджет и страница ждут своей очереди редизайна (решение владельца 2026-08-27):
+// набор контролов у них прежний, изменился только каркас вокруг.
+function WidgetSettings({ settings, onChange }: ModeProps) {
+  return (
+    <div className="flex flex-col gap-5">
+      <div>
+        <Label htmlFor="embed-open">Когда открывать</Label>
+        <Select value={settings.open} onValueChange={(v) => onChange({ open: v as OpenTrigger })}>
+          <SelectTrigger id="embed-open" className="mt-1 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(OPEN_TRIGGERS).map(([value, title]) => (
+              <SelectItem key={value} value={value}>
+                {title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {/* Единственная подсказка, которую автор иначе прочтёт как поломку:
+            проверит настройку, закроет панель и не дождётся повторного показа. */}
+        {settings.open !== 'click' && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Откроется один раз за визит. Дальше — по кнопке.
+          </p>
         )}
       </div>
 
-      <BadgeToggle form={form} />
+      {(settings.open === 'delay' || settings.open === 'scroll') && (
+        <div>
+          <Label htmlFor="embed-open-value">
+            {settings.open === 'delay' ? 'Пауза, секунд' : 'Прокрутка, %'}
+          </Label>
+          <Input
+            id="embed-open-value"
+            type="number"
+            min={1}
+            max={settings.open === 'delay' ? 120 : 100}
+            value={settings.openValue}
+            onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
+            className="mt-1"
+          />
+        </div>
+      )}
+
+      <div>
+        <Label htmlFor="embed-position">Угол экрана</Label>
+        <Select
+          value={settings.position}
+          onValueChange={(v) => onChange({ position: v as WidgetPosition })}
+        >
+          <SelectTrigger id="embed-position" className="mt-1 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(WIDGET_POSITIONS).map(([value, title]) => (
+              <SelectItem key={value} value={value}>
+                {title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div>
+        <Label htmlFor="embed-label">Надпись на кнопке</Label>
+        <Input
+          id="embed-label"
+          value={settings.label}
+          onChange={(e) => onChange({ label: e.target.value })}
+          className="mt-1"
+        />
+      </div>
+
+      <div>
+        <Label htmlFor="embed-width">Ширина панели, px</Label>
+        <Input
+          id="embed-width"
+          type="number"
+          min={280}
+          max={720}
+          value={settings.width}
+          onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
+          className="mt-1"
+        />
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          На телефоне панель раскрывается во весь экран.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-3 border-t pt-4">
+        <Toggle
+          id="embed-hide-title"
+          checked={settings.hideTitle}
+          onChange={(v) => onChange({ hideTitle: v })}
+          text="Скрыть заголовок формы"
+          hint="На странице обычно уже есть свой заголовок над формой."
+        />
+        <Toggle
+          id="embed-overlay"
+          checked={settings.overlay}
+          onChange={(v) => onChange({ overlay: v })}
+          text="Затемнять страницу"
+          hint="Страница за панелью темнеет."
+        />
+        <Toggle
+          id="embed-hide-on-submit"
+          checked={settings.hideOnSubmit}
+          onChange={(v) => onChange({ hideOnSubmit: v })}
+          text="Убрать виджет после отправки"
+          hint="Ответивший больше не увидит кнопку до перезагрузки страницы."
+        />
+      </div>
+    </div>
+  )
+}
+
+function PageSettings({ settings, onChange }: ModeProps) {
+  return (
+    <div className="flex flex-col gap-3">
+      <Toggle
+        id="embed-bg"
+        checked={settings.transparent}
+        onChange={(v) => onChange({ transparent: v })}
+        text="Прозрачный фон"
+        hint="Форма ляжет на фон сайта, а не белым прямоугольником."
+      />
+      <Toggle
+        id="embed-plain"
+        checked={settings.plain}
+        onChange={(v) => onChange({ plain: v })}
+        text="Без скрипта, простым iframe"
+        hint="Для сайтов, где запрещены сторонние скрипты."
+      />
     </div>
   )
 }
@@ -295,7 +357,7 @@ function BadgeToggle({ form }: { form: FormDetail }) {
   const show = form.draftSchema.design?.branding !== false
 
   return (
-    <div className="border-t pt-4">
+    <Group title="Бейдж Trillix">
       <Toggle
         id="embed-branding"
         checked={show}
@@ -305,22 +367,56 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         hint="Настройка всей формы: действует и на прямую ссылку."
       />
       {!show && !canRemove && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и сработает сразу после
           перехода на платный.
         </p>
       )}
       {form.publishedVersion !== null && (
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           На опубликованной форме применится после следующей публикации.
         </p>
       )}
       {update.isError && (
-        <p className="mt-2 text-xs text-destructive" role="alert">
+        <p className="text-xs text-destructive" role="alert">
           Не удалось сохранить. Если форма открыта в редакторе в другой вкладке — обновите страницу
           и попробуйте ещё раз.
         </p>
       )}
+    </Group>
+  )
+}
+
+// Группа настроек — заголовок и её строки. Одна колонка, в отличие от двухколоночной
+// группы шторки оформления: там контролы короткие (цвет, число), а здесь у каждой
+// строки есть пояснение под ней, и в половину панели оно переносится втрое.
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-sm font-medium">{title}</h3>
+      {children}
+    </section>
+  )
+}
+
+// Поле с подписью НАД контролом и пояснением под ним — тот же порядок, что у строки
+// с тумблером: подпись, контрол, пояснение.
+function Field({
+  id,
+  label,
+  hint,
+  children,
+}: {
+  id: string
+  label: string
+  hint?: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Label htmlFor={id}>{label}</Label>
+      {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
 }
