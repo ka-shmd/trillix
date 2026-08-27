@@ -23,29 +23,43 @@ var (
 	testUser = uuid.MustParse("00000000-0000-7000-8000-000000000001")
 	testWS   = uuid.MustParse("00000000-0000-7000-8000-000000000002")
 	testForm = uuid.MustParse("00000000-0000-7000-8000-000000000003")
+	// testStranger — второй человек. Нужен ровно для одного вопроса, который
+	// появился вместе с личными аккаунтами: «а если аккаунт не мой».
+	testStranger = uuid.MustParse("00000000-0000-7000-8000-000000000004")
+)
+
+// Токены провайдера в тестах — ДЛИННЫЕ и приметные, и это не украшение.
+//
+// Проверка «токен не лёг в базу открытым текстом» ищет его байты в шифротексте.
+// AES-GCM выдаёт случайные байты, и короткое «rt» находилось в них само собой
+// примерно раз в пятьсот прогонов — тест падал на ровном месте, а выглядело это
+// как утечка секрета. Длинную строку случай не соберёт никогда.
+const (
+	testRefreshToken = "refresh-token-эталон-для-проверок"
+	testRotatedToken = "refresh-token-эталон-после-ротации"
+	testAccessToken  = "access-token-эталон"
 )
 
 // fakeAccess — права как ответ на ДЕЙСТВИЕ: ровно то, что спрашивает сервис.
 type fakeAccess struct {
 	deny map[domain.Action]error
+	// gone — человек ушёл из пространства. Нулевое значение = «на месте»: так
+	// подавляющее большинство тестов не обязано знать про сторож доставки.
+	gone bool
 }
 
 func (f fakeAccess) Can(_ context.Context, _, _ uuid.UUID, a domain.Action) error {
 	return f.deny[a]
 }
 
-// editorAccess — редактор: читать интеграции можно, управлять нельзя.
-func editorAccess() fakeAccess {
-	return fakeAccess{deny: map[domain.Action]error{domain.ActionIntegrationManage: domain.ErrForbidden}}
+func (f fakeAccess) IsMember(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return !f.gone, nil
 }
 
-// strangerAccess — не участник: обоим вопросам 404, существование чужого
-// пространства не раскрывается.
-func strangerAccess() fakeAccess {
-	return fakeAccess{deny: map[domain.Action]error{
-		domain.ActionIntegrationRead:   domain.ErrNotFound,
-		domain.ActionIntegrationManage: domain.ErrNotFound,
-	}}
+// readerAccess — участник без права править формы. Связку он завести не может,
+// а собственные аккаунты Google у него свои и от роли не зависят вовсе.
+func readerAccess() fakeAccess {
+	return fakeAccess{deny: map[domain.Action]error{domain.ActionFormWrite: domain.ErrForbidden}}
 }
 
 type fakeStore struct {
@@ -62,27 +76,35 @@ type fakeStore struct {
 	insertedLnk *integrations.NewFormLink
 	unlinked    bool
 
-	columnsSet     []domain.SheetColumn
-	delivered      bool
-	brokenWith     string
-	settings       *linkSettings
-	retargeted     *integrations.Spreadsheet
-	retargetStatus string
-	backfillFrom   *time.Time
-	backfillDone   bool
-	sheetCleared   bool
+	columnsSet []domain.SheetColumn
+	delivered  bool
+	brokenWith string
+	// errorCleared — связку вернули в рабочее состояние без доставки (перепроверка).
+	errorCleared bool
+	settings     *linkSettings
+	retargeted   *integrations.Spreadsheet
+	// retargetAccount — на чей аккаунт переехала связка. Отдельным полем: смена
+	// аккаунта и смена листа едут одной записью, и проверять надо обе.
+	retargetAccount uuid.UUID
+	retargetStatus  string
+	backfillFrom    *time.Time
+	backfillDone    bool
+	sheetCleared    bool
 }
 
-func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) error {
+func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) (uuid.UUID, error) {
 	f.upserted = &c
-	return nil
+	return c.ID, nil
 }
 
-func (f *fakeStore) Get(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) (integrations.Connection, error) {
+func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) ([]integrations.Connection, error) {
 	if f.getErr != nil {
-		return integrations.Connection{}, f.getErr
+		return nil, f.getErr
 	}
-	return f.conn, nil
+	if f.conn.ID == uuid.Nil {
+		return nil, nil
+	}
+	return []integrations.Connection{f.conn}, nil
 }
 
 func (f *fakeStore) UpdateToken(_ context.Context, _ postgres.DBTX, _ uuid.UUID, sealed []byte) error {
@@ -90,7 +112,7 @@ func (f *fakeStore) UpdateToken(_ context.Context, _ postgres.DBTX, _ uuid.UUID,
 	return nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) ([]byte, error) {
+func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) ([]byte, error) {
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
@@ -127,7 +149,8 @@ func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return 1, nil
 }
 
-func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _, accountID uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+	f.retargetAccount = accountID
 	f.retargeted = &sheet
 	f.columnsSet = columns
 	f.retargetStatus = status
@@ -170,6 +193,12 @@ func (f *fakeStore) StartBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUI
 
 func (f *fakeStore) FinishBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
 	f.backfillDone = true
+	return nil
+}
+
+func (f *fakeStore) ClearError(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.errorCleared = true
+	f.brokenWith = ""
 	return nil
 }
 
@@ -218,6 +247,10 @@ type fakeProvider struct {
 	addedTo      string
 	addedTitle   string
 	header       []string
+	// sheetHeader — шапка, которая СЕЙЧАС в листе. Отдельно от header (что мы в
+	// него записали): лист принадлежит автору, и он вправе переставить колонки —
+	// ровно это и проверяется. nil = лист без шапки.
+	sheetHeader  []string
 	appended     [][]string
 	appendCalls  int
 	cleared      string
@@ -227,13 +260,25 @@ type fakeProvider struct {
 	// Пусто — как у Google: тот старый токен не меняет.
 	rotated    string
 	exchangeFn func() (integrations.Tokens, error)
+	// accounts — какие аккаунты Google отдавать по очереди. Пусто = всегда один
+	// и тот же, то есть «переподключился тем же». Нужен, чтобы проверить второй
+	// аккаунт: до 0037 он затирал первый, и связки начинали писать чужим токеном.
+	accounts   []integrations.Account
+	accountIdx int
+	// loginHint — что уехало провайдеру подсказкой «какой аккаунт открывать».
+	loginHint string
+}
+
+func (f *fakeProvider) ReadHeader(_ context.Context, _ string, _ integrations.Spreadsheet) ([]string, error) {
+	return f.sheetHeader, nil
 }
 
 func (f *fakeProvider) Provider() string { return "google" }
 
 func (f *fakeProvider) AppID() string { return "442272803444" }
 
-func (f *fakeProvider) AuthURL(state, _ string) string {
+func (f *fakeProvider) AuthURL(state, _, loginHint string) string {
+	f.loginHint = loginHint
 	return "https://provider.example/auth?state=" + state
 }
 
@@ -242,15 +287,20 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (integrations.To
 	if f.exchangeFn != nil {
 		return f.exchangeFn()
 	}
-	return integrations.Tokens{Access: "at", Refresh: "rt", Scopes: integrations.ScopeDriveFile}, nil
+	return integrations.Tokens{Access: "at", Refresh: testRefreshToken, Scopes: integrations.ScopeDriveFile}, nil
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens, error) {
-	return integrations.Tokens{Access: "at", Refresh: f.rotated}, nil
+	return integrations.Tokens{Access: testAccessToken, Refresh: f.rotated}, nil
 }
 
 func (f *fakeProvider) Account(_ context.Context, _ string) (integrations.Account, error) {
-	return integrations.Account{ID: "sub-1", Email: "author@gmail.com"}, nil
+	if len(f.accounts) == 0 {
+		return integrations.Account{ID: "sub-1", Email: "author@gmail.com"}, nil
+	}
+	a := f.accounts[min(f.accountIdx, len(f.accounts)-1)]
+	f.accountIdx++
+	return a, nil
 }
 
 func (f *fakeProvider) Revoke(_ context.Context, refresh string) error {
@@ -325,50 +375,54 @@ func newFormService(access integrations.Access, store integrations.Store, f inte
 	return integrations.NewService(nil, directTx{}, store, access, f, p, testKey)
 }
 
-// Редактор видит состояние, но кнопки управления не получает. Проверяется
-// именно ЭТО поле, а не роль: экран рисует кнопку по нему.
-func TestStatus_EditorCannotManage(t *testing.T) {
-	svc := newService(editorAccess(), &fakeStore{getErr: pgx.ErrNoRows}, &fakeProvider{})
+// Экран получает СПИСОК подключений спрашивающего. Список, а не одно
+// подключение: аккаунтов у человека сколько угодно (ADR §10, 2026-08-27), и
+// селект в окне связки строится по нему.
+func TestStatus_ListsAccountsOfAsker(t *testing.T) {
+	conn := sealedConn(t)
+	svc := newService(fakeAccess{}, &fakeStore{conn: conn}, &fakeProvider{})
 
-	st, err := svc.Status(context.Background(), testUser, testWS)
+	st, err := svc.Status(context.Background(), testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if st.CanManage {
-		t.Error("редактор получил право управлять интеграцией")
+	if !st.Enabled {
+		t.Fatal("провайдер настроен, а состояние говорит обратное")
 	}
-	if !st.Enabled || st.Connected {
-		t.Errorf("состояние = %+v, ожидалось «настроено, но не подключено»", st)
+	if len(st.Accounts) != 1 || st.Accounts[0].ID != conn.ID {
+		t.Fatalf("аккаунты = %+v, ожидался ровно подключённый", st.Accounts)
 	}
-}
-
-// Не участник не получает даже состояния — и получает 404, а не 403
-// (существование чужого пространства не раскрывается, инвариант 5).
-func TestStatus_StrangerGetsNotFound(t *testing.T) {
-	svc := newService(strangerAccess(), &fakeStore{}, &fakeProvider{})
-
-	_, err := svc.Status(context.Background(), testUser, testWS)
-	if !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
+	if st.Accounts[0].NeedsReconnect {
+		t.Error("свежее подключение помечено как требующее переподключения")
 	}
 }
 
-// Право проверяется ДО похода к провайдеру: иначе редактор проходил бы согласие
-// Google и отдавал приложению доступ к своему Диску, чтобы получить отказ.
-func TestConnect_EditorRefusedBeforeProvider(t *testing.T) {
+// Ничего не подключено — пустой список, а не ошибка: это штатное состояние
+// экрана до первого подключения.
+func TestStatus_NothingConnected(t *testing.T) {
+	svc := newService(fakeAccess{}, &fakeStore{}, &fakeProvider{})
+
+	st, err := svc.Status(context.Background(), testUser)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if !st.Enabled || len(st.Accounts) != 0 {
+		t.Errorf("состояние = %+v, ожидалось «настроено, но пусто»", st)
+	}
+}
+
+// Подключение — действие над СОБОЙ, и роль в пространстве его не гейтит: гейт
+// был бы пуст (личное пространство есть у каждого, и в нём каждый владелец).
+// Сторожит решение 2026-08-27: прежде здесь стоял отказ редактору.
+func TestConnect_NeedsNoWorkspaceRole(t *testing.T) {
 	store := &fakeStore{}
-	provider := &fakeProvider{}
-	svc := newService(editorAccess(), store, provider)
+	svc := newService(readerAccess(), store, &fakeProvider{})
 
-	err := svc.Connect(context.Background(), testUser, testWS, "code", "verifier")
-	if !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("ошибка = %v, ожидалась ErrForbidden", err)
+	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+		t.Fatalf("connect: %v", err)
 	}
-	if provider.exchanged {
-		t.Error("код обменян до проверки права")
-	}
-	if store.upserted != nil {
-		t.Error("подключение записано редактору")
+	if store.upserted == nil {
+		t.Fatal("подключение не записано")
 	}
 }
 
@@ -377,21 +431,54 @@ func TestConnect_StoresSealedToken(t *testing.T) {
 	store := &fakeStore{}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
 
-	if err := svc.Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	if store.upserted == nil {
 		t.Fatal("подключение не записано")
 	}
 	got := *store.upserted
-	if bytes.Contains(got.RefreshSealed, []byte("rt")) {
+	if bytes.Contains(got.RefreshSealed, []byte(testRefreshToken)) {
 		t.Error("refresh-токен лёг в базу открытым текстом")
 	}
 	if got.ExternalID != "sub-1" || got.Email != "author@gmail.com" {
 		t.Errorf("аккаунт записан как %q/%q", got.ExternalID, got.Email)
 	}
-	if got.ConnectedBy != testUser || got.WorkspaceID != testWS {
-		t.Errorf("подключение записано не тому: by=%s ws=%s", got.ConnectedBy, got.WorkspaceID)
+	if got.UserID != testUser {
+		t.Errorf("подключение записано не тому: user=%s", got.UserID)
+	}
+}
+
+// Переподключение НАЗВАННОГО аккаунта уносит провайдеру его почту подсказкой:
+// без неё человек снова выбирал бы аккаунт руками, и «Переподключить» ничем не
+// отличалось бы от «подключить ещё один».
+func TestStartURL_ReconnectPassesLoginHint(t *testing.T) {
+	conn := sealedConn(t)
+	provider := &fakeProvider{}
+	svc := newService(fakeAccess{}, &fakeStore{conn: conn}, provider)
+
+	if _, err := svc.StartURL(context.Background(), testUser, conn.ID, "s", "v"); err != nil {
+		t.Fatalf("start url: %v", err)
+	}
+	if provider.loginHint != conn.Email {
+		t.Errorf("подсказка = %q, ожидалась почта аккаунта %q", provider.loginHint, conn.Email)
+	}
+}
+
+// ЧУЖОЙ аккаунт подсказкой не станет, и отказ здесь не педантизм: подсказка
+// несёт ПОЧТУ, и без проверки перебором id можно было бы вычитать чужие адреса.
+func TestStartURL_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+	provider := &fakeProvider{}
+	svc := newService(fakeAccess{}, &fakeStore{conn: foreign}, provider)
+
+	_, err := svc.StartURL(context.Background(), testUser, foreign.ID, "s", "v")
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if provider.loginHint != "" {
+		t.Errorf("чужая почта уехала провайдеру: %q", provider.loginHint)
 	}
 }
 
@@ -400,7 +487,7 @@ func TestDisconnect_Idempotent(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{deleteErr: pgx.ErrNoRows}, provider)
 
-	if err := svc.Disconnect(context.Background(), testUser, testWS); err != nil {
+	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); err != nil {
 		t.Fatalf("повторное отключение вернуло ошибку: %v", err)
 	}
 	if provider.revoked != "" {
@@ -413,18 +500,18 @@ func TestDisconnect_RevokesAtProvider(t *testing.T) {
 	// Кладём в «базу» настоящий шифротекст (через Connect), чтобы путь
 	// расшифровки при отключении проверялся целиком, а не с подставным байтом.
 	store := &fakeStore{}
-	if err := newService(fakeAccess{}, store, &fakeProvider{}).
-		Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+	if _, err := newService(fakeAccess{}, store, &fakeProvider{}).
+		Connect(context.Background(), testUser, "code", "verifier"); err != nil {
 		t.Fatalf("подготовка: %v", err)
 	}
 
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{deleted: store.upserted.RefreshSealed}, provider)
-	if err := svc.Disconnect(context.Background(), testUser, testWS); err != nil {
+	if err := svc.Disconnect(context.Background(), testUser, store.upserted.ID); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
-	if provider.revoked != "rt" {
-		t.Errorf("отозван токен %q, ожидался «rt»", provider.revoked)
+	if provider.revoked != testRefreshToken {
+		t.Errorf("отозван токен %q, ожидался эталонный", provider.revoked)
 	}
 }
 
@@ -434,32 +521,30 @@ func TestDisconnect_RevokesAtProvider(t *testing.T) {
 func TestDisabledProvider(t *testing.T) {
 	svc := newService(fakeAccess{}, &fakeStore{}, nil)
 
-	st, err := svc.Status(context.Background(), testUser, testWS)
+	st, err := svc.Status(context.Background(), testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if st.Enabled || st.Connected {
+	if st.Enabled || len(st.Accounts) != 0 {
 		t.Errorf("состояние = %+v, ожидалось «не настроено»", st)
 	}
-	if !st.CanManage {
-		t.Error("владелец потерял право управлять из-за ненастроенного провайдера")
-	}
 
-	if _, err := svc.StartURL(context.Background(), testUser, testWS, "s", "v"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.StartURL(context.Background(), testUser, uuid.Nil, "s", "v"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("StartURL = %v, ожидалась ErrNotFound", err)
 	}
-	if err := svc.Connect(context.Background(), testUser, testWS, "c", "v"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.Connect(context.Background(), testUser, "c", "v"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Connect = %v, ожидалась ErrNotFound", err)
 	}
-	if err := svc.Disconnect(context.Background(), testUser, testWS); !errors.Is(err, domain.ErrNotFound) {
+	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Disconnect = %v, ожидалась ErrNotFound", err)
 	}
 }
 
 // defaultOptions — то, с чем окно настроек приходит по умолчанию: новая книга и
-// перенос накопленных ответов включён.
-func defaultOptions() integrations.ConnectOptions {
-	return integrations.ConnectOptions{Backfill: true}
+// перенос накопленных ответов включён. Аккаунт называется явно и умолчания не
+// имеет: их у человека сколько угодно.
+func defaultOptions(account uuid.UUID) integrations.ConnectOptions {
+	return integrations.ConnectOptions{AccountID: account, Backfill: true}
 }
 
 // схема одной версии с одним вопросом — минимум, на котором видно колонки.
@@ -480,7 +565,7 @@ func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
 
-	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(store.conn.ID))
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
@@ -518,12 +603,37 @@ func TestConnectForm_WithoutAccount(t *testing.T) {
 	store := &fakeStore{linkErr: pgx.ErrNoRows, getErr: pgx.ErrNoRows}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(uuid.New()))
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
 	if store.insertedLnk != nil {
 		t.Error("привязка записана без подключённого аккаунта")
+	}
+}
+
+// ЧУЖИМ аккаунтом связку не завести, и отказ неотличим от «аккаунта нет»:
+// иначе перебором id можно было бы узнать, какие подключения есть у соседа.
+//
+// Это главный новый сторож личной модели: аккаунт приезжает в ТЕЛЕ запроса, и
+// без проверки принадлежности участник командного пространства лил бы ответы
+// через чужое подключение (инвариант 1).
+func TestConnectForm_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+	store := &fakeStore{linkErr: pgx.ErrNoRows, conn: foreign}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(foreign.ID))
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if provider.createdTitle != "" {
+		t.Error("таблица создана в чужом Диске")
+	}
+	if store.insertedLnk != nil {
+		t.Error("связка записана на чужой аккаунт")
 	}
 }
 
@@ -534,7 +644,7 @@ func TestConnectForm_SecondConnectionAllowed(t *testing.T) {
 	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
 
-	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions())
+	link, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(store.conn.ID))
 	if err != nil {
 		t.Fatalf("вторая связка отклонена: %v", err)
 	}
@@ -568,7 +678,7 @@ func TestConnectForm_StrangerGetsNotFound(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newFormService(fakeAccess{}, &fakeStore{}, fakeForms{getErr: domain.ErrNotFound}, provider)
 
-	if _, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions()); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(uuid.New())); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
 	if provider.createdTitle != "" {
@@ -599,13 +709,13 @@ func TestDisconnectForm_KeepsSpreadsheet(t *testing.T) {
 func sealedConn(t *testing.T) integrations.Connection {
 	t.Helper()
 	store := &fakeStore{}
-	if err := newService(fakeAccess{}, store, &fakeProvider{}).
-		Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+	if _, err := newService(fakeAccess{}, store, &fakeProvider{}).
+		Connect(context.Background(), testUser, "code", "verifier"); err != nil {
 		t.Fatalf("подготовка подключения: %v", err)
 	}
 	return integrations.Connection{
 		ID:            store.upserted.ID,
-		WorkspaceID:   testWS,
+		UserID:        testUser,
 		Email:         store.upserted.Email,
 		RefreshSealed: store.upserted.RefreshSealed,
 	}
@@ -666,7 +776,7 @@ func TestConnectForm_WithoutBackfill(t *testing.T) {
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
 
 	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
-		integrations.ConnectOptions{Backfill: false})
+		integrations.ConnectOptions{AccountID: store.conn.ID, Backfill: false})
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
@@ -689,7 +799,7 @@ func TestConnectForm_IntoExistingSpreadsheet(t *testing.T) {
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: form, version: json.RawMessage(oneQuestionSchema)}, provider)
 
 	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
-		integrations.ConnectOptions{Name: "Заявки с лендинга", SpreadsheetID: "ss-old", Backfill: true})
+		integrations.ConnectOptions{AccountID: store.conn.ID, Name: "Заявки с лендинга", SpreadsheetID: "ss-old", Backfill: true})
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
@@ -730,11 +840,11 @@ func TestPicker(t *testing.T) {
 	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
 		WithPicker("browser-api-key")
 
-	cred, err := svc.Picker(context.Background(), testUser, testForm)
+	cred, err := svc.Picker(context.Background(), testUser, store.conn.ID)
 	if err != nil {
 		t.Fatalf("picker: %v", err)
 	}
-	if cred.AccessToken != "at" || cred.DeveloperKey != "browser-api-key" {
+	if cred.AccessToken != testAccessToken || cred.DeveloperKey != "browser-api-key" {
 		t.Fatalf("credentials = %+v", cred)
 	}
 	if cred.AppID != "442272803444" {
@@ -745,12 +855,13 @@ func TestPicker(t *testing.T) {
 // Ключ окна выбора не задан на контуре — ручки нет вовсе, и экран кнопку не
 // рисует: обещать выбор, который не откроется, нельзя.
 func TestPicker_NotConfigured(t *testing.T) {
-	svc := newFormService(fakeAccess{}, &fakeStore{conn: sealedConn(t)}, fakeForms{form: linkedForm()}, &fakeProvider{})
+	conn := sealedConn(t)
+	svc := newFormService(fakeAccess{}, &fakeStore{conn: conn}, fakeForms{form: linkedForm()}, &fakeProvider{})
 
-	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.Picker(context.Background(), testUser, conn.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
-	st, err := svc.Status(context.Background(), testUser, testWS)
+	st, err := svc.Status(context.Background(), testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -765,18 +876,30 @@ func TestPicker_WithoutAccount(t *testing.T) {
 	svc := newFormService(fakeAccess{}, &fakeStore{getErr: pgx.ErrNoRows}, fakeForms{form: linkedForm()}, &fakeProvider{}).
 		WithPicker("browser-api-key")
 
-	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrValidation) {
+	if _, err := svc.Picker(context.Background(), testUser, uuid.New()); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
 }
 
-// Чужая форма не раскрывается: 404 и никакого токена.
-func TestPicker_StrangerGetsNotFound(t *testing.T) {
-	svc := newFormService(fakeAccess{}, &fakeStore{}, fakeForms{getErr: domain.ErrNotFound}, &fakeProvider{}).
+// ЧУЖОЙ аккаунт не выдаёт ни токена окна выбора, ни списка файлов, ни листов.
+//
+// Это и есть новая защита взамен снятого гейта по роли, и она сильнее: токен
+// drive.file открывает ВСЕ файлы приложения в аккаунте Google, но получить его
+// теперь можно только на своё подключение — открывать им нечего.
+func TestAccountOperations_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+	svc := newFormService(fakeAccess{}, &fakeStore{conn: foreign}, fakeForms{form: linkedForm()}, &fakeProvider{}).
 		WithPicker("browser-api-key")
 
-	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
+	if _, err := svc.Picker(context.Background(), testUser, foreign.ID); !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("токен окна выбора выдан на чужой аккаунт: %v", err)
+	}
+	if _, err := svc.Spreadsheets(context.Background(), testUser, foreign.ID); !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("список файлов выдан по чужому аккаунту: %v", err)
+	}
+	if _, err := svc.Sheets(context.Background(), testUser, foreign.ID, "ss-old"); !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("листы книги выданы по чужому аккаунту: %v", err)
 	}
 }
 
@@ -788,7 +911,7 @@ func TestConnectForm_IntoExistingSheet(t *testing.T) {
 
 	sheetID := int32(5)
 	link, err := svc.ConnectForm(context.Background(), testUser, testForm,
-		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+		integrations.ConnectOptions{AccountID: store.conn.ID, SpreadsheetID: "ss-old", SheetID: &sheetID})
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
@@ -812,7 +935,7 @@ func TestConnectForm_ExistingSheetNotEmpty(t *testing.T) {
 
 	sheetID := int32(5)
 	_, err := svc.ConnectForm(context.Background(), testUser, testForm,
-		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+		integrations.ConnectOptions{AccountID: store.conn.ID, SpreadsheetID: "ss-old", SheetID: &sheetID})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
@@ -831,7 +954,7 @@ func TestConnectForm_UnknownSheet(t *testing.T) {
 
 	sheetID := int32(999)
 	_, err := svc.ConnectForm(context.Background(), testUser, testForm,
-		integrations.ConnectOptions{SpreadsheetID: "ss-old", SheetID: &sheetID})
+		integrations.ConnectOptions{AccountID: store.conn.ID, SpreadsheetID: "ss-old", SheetID: &sheetID})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
@@ -892,27 +1015,210 @@ func TestUpdateConnection_Retarget(t *testing.T) {
 	}
 }
 
-// Токен окна выбора и список файлов аккаунта — только владельцу.
+// Существующую связку можно перевести на ДРУГОЙ свой аккаунт — вместе с целью.
 //
-// Scope drive.file даёт полный доступ ко ВСЕМ файлам, созданным приложением в
-// этом аккаунте Google, безотносительно пространства: редактор командного
-// пространства с таким токеном прочитал бы и стёр таблицы ответов из личного
-// пространства владельца, где он не участник.
-func TestPickerAndSpreadsheets_OwnerOnly(t *testing.T) {
+// Раздельно нельзя физически: под scope drive.file таблица видна только тому
+// аккаунту, который её создал, поэтому смена аккаунта без перевыбора цели дала
+// бы запись чужим токеном в невидимый ему файл. Экран это и показывает: сменил
+// аккаунт — список таблиц перечитался, и новую надо назвать.
+func TestUpdateConnection_MovesToAnotherAccount(t *testing.T) {
+	first := sealedConn(t)
+	second := sealedConn(t)
+	second.Email = "work@gmail.com"
+
+	link := linkedSheet()
+	link.AccountID, link.SpreadsheetID, link.SheetID = first.ID, "ss-old", 5
+	// Фейк отдаёт по id один аккаунт — пусть это будет ВТОРОЙ: именно его сервис
+	// обязан спросить, получив его id в правке.
+	store := &fakeStore{link: link, conn: second}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name: "Рабочий Диск",
+			Target: integrations.ConnectOptions{
+				AccountID: second.ID, SpreadsheetID: "", Backfill: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if store.retargeted == nil {
+		t.Fatal("связка не переехала")
+	}
+	if store.retargetAccount != second.ID {
+		t.Fatalf("аккаунт связки = %s, ожидался второй (%s)", store.retargetAccount, second.ID)
+	}
+	// Таблица заводится ЗАНОВО, в Диске нового аккаунта: прежняя ему не видна.
+	if provider.createdTitle == "" {
+		t.Error("таблица в новом аккаунте не заведена")
+	}
+}
+
+// Связку КОЛЛЕГИ можно переименовать, не трогая её аккаунт.
+//
+// Экран штатно показывает участнику связку, заведённую чужим аккаунтом (иначе он
+// не поймёт, почему её нельзя перенастроить), и подпись у неё правится по
+// form.write. Проверка «аккаунт мой» здесь применяться не должна: аккаунт не
+// меняется, а требовать владения им значит запереть правку насовсем.
+func TestUpdateConnection_RenamesConnectionOfColleague(t *testing.T) {
+	colleague := sealedConn(t)
+	colleague.UserID = testStranger
+
+	link := linkedSheet()
+	link.AccountID, link.SpreadsheetID, link.SheetID = colleague.ID, "ss-old", 5
+	store := &fakeStore{link: link, conn: colleague}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{})
+
+	sheetID := int32(5)
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name: "Архив",
+			// Окно шлёт цель целиком, в том числе НЕ изменившийся аккаунт коллеги.
+			Target: integrations.ConnectOptions{
+				AccountID: colleague.ID, SpreadsheetID: "ss-old", SheetID: &sheetID,
+			},
+		})
+	if err != nil {
+		t.Fatalf("правка связки коллеги отклонена: %v", err)
+	}
+	if store.settings == nil || store.settings.name != "Архив" {
+		t.Fatalf("подпись не сохранена: %+v", store.settings)
+	}
+	if store.retargeted != nil {
+		t.Error("связка переехала, хотя цель не менялась")
+	}
+}
+
+// Человек поправил шапку у себя — перепроверка снимает поломку, не дожидаясь
+// следующего ответа респондента. Без неё узнать, помогло ли, можно было бы
+// только ценой второго потерянного ответа.
+func TestRecheckForm_ClearsBrokenWhenSheetFollowable(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	// Шапка снова совпадает с колонками связки — как её и вернул автор.
+	provider := &fakeProvider{sheetHeader: headerOf(link)}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	if err := svc.RecheckForm(context.Background(), testUser, testForm, link.ID); err != nil {
+		t.Fatalf("recheck: %v", err)
+	}
+	if !store.errorCleared {
+		t.Fatal("связка осталась сломанной, хотя лист годен")
+	}
+}
+
+// Не помогло — это ответ по существу, а не сбой: 422 с человеческой причиной, и
+// причина берётся СЕГОДНЯШНЯЯ, а не та, на которой связка встала в прошлый раз.
+func TestRecheckForm_KeepsBrokenAndTellsWhy(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Заметка", "Имя", "Почта"}}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.RecheckForm(context.Background(), testUser, testForm, link.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.errorCleared {
+		t.Error("поломка снята, хотя лист по-прежнему не читается")
+	}
+	if !strings.Contains(store.brokenWith, "Колонки листа") {
+		t.Fatalf("причина = %q, ожидалась сегодняшняя", store.brokenWith)
+	}
+}
+
+// Владельца аккаунта сняли с пространства — синхронные операции его токеном
+// прекращаются, а не только фоновая доставка.
+//
+// Иначе оставшийся участник чистит и переписывает ЛИЧНУЮ таблицу бывшего
+// коллеги его же кредом: перезалив идёт в обход сторожа, который стоит в
+// Deliver.
+func TestRefillForm_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	colleague := sealedConn(t)
+	colleague.UserID = testStranger
+
+	link := linkedSheet()
+	link.AccountID = colleague.ID
+	store := &fakeStore{link: link, conn: colleague}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{gone: true}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.RefillForm(context.Background(), testUser, testForm, link.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if provider.cleared != "" {
+		t.Fatalf("вычищена личная таблица бывшего участника: %q", provider.cleared)
+	}
+	if store.backfillFrom != nil {
+		t.Error("перенос начат по аккаунту человека без доступа")
+	}
+}
+
+// ЧУЖОЙ аккаунт связке не назначить и правкой: id приезжает в теле, и правом
+// доступа не является (инвариант 1). До провайдера дело не доходит.
+func TestUpdateConnection_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+
+	link := linkedSheet()
+	link.SpreadsheetID = "ss-old"
+	store := &fakeStore{link: link, conn: foreign}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Target: integrations.ConnectOptions{AccountID: foreign.ID, SpreadsheetID: ""},
+		})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.retargeted != nil {
+		t.Error("связка переехала на чужой аккаунт")
+	}
+	if provider.createdTitle != "" {
+		t.Error("таблица создана в чужом Диске")
+	}
+	// Отказ приходит ДО первой записи: иначе подпись сохранилась бы, и человек
+	// увидел бы ошибку вместе с изменившимся названием.
+	if store.settings != nil {
+		t.Error("подпись сохранена, хотя правка отклонена")
+	}
+}
+
+// Операции над СВОИМ аккаунтом ролью в пространстве не гейтятся вовсе: аккаунт
+// личный, и человек без права править формы всё равно вправе смотреть свой Диск
+// и подключать свои таблицы. Сторожит решение 2026-08-27 — прежде здесь стоял
+// отказ редактору по ActionIntegrationManage.
+func TestAccountOperations_IgnoreWorkspaceRole(t *testing.T) {
 	store := &fakeStore{conn: sealedConn(t)}
-	svc := newFormService(editorAccess(), store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+	svc := newFormService(readerAccess(), store, fakeForms{form: linkedForm()}, &fakeProvider{}).
 		WithPicker("browser-api-key")
 
-	if _, err := svc.Picker(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("токен окна выбора выдан редактору: %v", err)
+	if _, err := svc.Picker(context.Background(), testUser, store.conn.ID); err != nil {
+		t.Errorf("токен окна выбора закрыт ролью: %v", err)
 	}
-	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("список файлов аккаунта выдан редактору: %v", err)
+	if _, err := svc.Spreadsheets(context.Background(), testUser, store.conn.ID); err != nil {
+		t.Errorf("список своих файлов закрыт ролью: %v", err)
+	}
+	if _, err := svc.Sheets(context.Background(), testUser, store.conn.ID, "ss-old"); err != nil {
+		t.Errorf("листы своей книги закрыты ролью: %v", err)
 	}
 
-	// Листы КОНКРЕТНОЙ книги редактору по-прежнему доступны: книга уже названа.
-	if _, err := svc.Sheets(context.Background(), testUser, testForm, "ss-old"); err != nil {
-		t.Fatalf("листы книги закрыты для редактора: %v", err)
+	// А вот завести СВЯЗКУ он не может: это правка формы.
+	_, err := svc.ConnectForm(context.Background(), testUser, testForm, defaultOptions(store.conn.ID))
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Errorf("связку завёл тот, кому нельзя править форму: %v", err)
 	}
 }
 
@@ -922,32 +1228,33 @@ func TestPickerAndSpreadsheets_OwnerOnly(t *testing.T) {
 // узнаёт о беде из потерянного ответа респондента.
 func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 	sealed := sealedRefreshToken(t)
+	account := uuid.New()
 
 	live := newService(fakeAccess{}, &fakeStore{
-		conn: integrations.Connection{Email: "author@gmail.com", RefreshSealed: sealed},
+		conn: integrations.Connection{ID: account, UserID: testUser, Email: "author@gmail.com", RefreshSealed: sealed},
 	}, &fakeProvider{})
-	st, err := live.Status(context.Background(), testUser, testWS)
+	st, err := live.Status(context.Background(), testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if !st.Connected || st.NeedsReconnect {
-		t.Errorf("рабочее подключение = %+v, ожидалось connected без переподключения", st)
+	if len(st.Accounts) != 1 || st.Accounts[0].NeedsReconnect {
+		t.Errorf("рабочее подключение = %+v, ожидалось без переподключения", st.Accounts)
 	}
 
 	// Тот же шифротекст, но открывать его нечем: так выглядит строка, пережившая
 	// смену секрета.
 	stale := newService(fakeAccess{}, &fakeStore{
-		conn: integrations.Connection{Email: "author@gmail.com", RefreshSealed: append([]byte{0}, sealed...)},
+		conn: integrations.Connection{ID: account, UserID: testUser, Email: "author@gmail.com", RefreshSealed: append([]byte{0}, sealed...)},
 	}, &fakeProvider{})
-	st, err = stale.Status(context.Background(), testUser, testWS)
+	st, err = stale.Status(context.Background(), testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if !st.NeedsReconnect {
-		t.Error("нерасшифровываемый токен не потребовал переподключения")
+	if len(st.Accounts) != 1 {
+		t.Fatalf("аккаунты = %+v — строка подключения обязана остаться в списке", st.Accounts)
 	}
-	if !st.Connected {
-		t.Error("строка подключения есть — Connected обязан остаться true, лечение отличает NeedsReconnect")
+	if !st.Accounts[0].NeedsReconnect {
+		t.Error("нерасшифровываемый токен не потребовал переподключения")
 	}
 }
 
@@ -955,27 +1262,29 @@ func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 // новый токен означает подключение, которое умрёт, когда провайдер погасит
 // старый.
 func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
-	store := &fakeStore{conn: integrations.Connection{RefreshSealed: sealedRefreshToken(t)}}
+	account := uuid.New()
+	store := &fakeStore{conn: integrations.Connection{ID: account, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
 	store.link = integrations.FormLink{ID: uuid.New(), FormID: testForm, SpreadsheetID: "ss-1"}
-	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: "rt-2"})
+	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: testRotatedToken})
 
-	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); err != nil {
+	if _, err := svc.Spreadsheets(context.Background(), testUser, account); err != nil {
 		t.Fatalf("spreadsheets: %v", err)
 	}
 	if store.tokenUpdated == nil {
 		t.Fatal("новый refresh-токен провайдера не сохранён")
 	}
-	if bytes.Contains(store.tokenUpdated, []byte("rt-2")) {
+	if bytes.Contains(store.tokenUpdated, []byte(testRotatedToken)) {
 		t.Error("новый токен записан открытым текстом")
 	}
 }
 
 // Google новый refresh не присылает — лишней записи в базу быть не должно.
 func TestAccessToken_UnchangedRefreshIsNotRewritten(t *testing.T) {
-	store := &fakeStore{conn: integrations.Connection{RefreshSealed: sealedRefreshToken(t)}}
+	account := uuid.New()
+	store := &fakeStore{conn: integrations.Connection{ID: account, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
 
-	if _, err := svc.Spreadsheets(context.Background(), testUser, testForm); err != nil {
+	if _, err := svc.Spreadsheets(context.Background(), testUser, account); err != nil {
 		t.Fatalf("spreadsheets: %v", err)
 	}
 	if store.tokenUpdated != nil {
@@ -989,7 +1298,7 @@ func sealedRefreshToken(t *testing.T) []byte {
 	t.Helper()
 	store := &fakeStore{}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
-	if err := svc.Connect(context.Background(), testUser, testWS, "code", "verifier"); err != nil {
+	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	return store.upserted.RefreshSealed

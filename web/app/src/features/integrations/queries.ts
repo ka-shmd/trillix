@@ -6,12 +6,14 @@ import {
   getFormIntegrations,
   listSheets,
   listSpreadsheets,
+  recheckSheet,
+  refillSheet,
   unlinkSheet,
   updateConnection,
   type ConnectOptions,
 } from './api'
 
-// Состояние интеграций формы одной поездкой: аккаунт пространства и список
+// Состояние интеграций формы одной поездкой: подключения спрашивающего и список
 // связок приезжают вместе — экран показывает их как одно целое.
 export function formIntegrationsQueryOptions(formId: string) {
   return queryOptions({
@@ -26,20 +28,20 @@ export function formIntegrationsQueryOptions(formId: string) {
 
 // Список таблиц запрашивается только когда окно открыто и аккаунт подключён:
 // это поход к провайдеру, и делать его на каждый показ таба незачем.
-export function spreadsheetsQueryOptions(formId: string) {
+export function spreadsheetsQueryOptions(formId: string, accountId: string) {
   return queryOptions({
-    queryKey: integrationKeys.spreadsheets(formId),
-    queryFn: () => listSpreadsheets(formId),
+    queryKey: integrationKeys.spreadsheets(formId, accountId),
+    queryFn: () => listSpreadsheets(accountId),
     staleTime: 30_000,
   })
 }
 
-// Листы выбранной книги. Ключ несёт id книги: выбрал другую — приехали её листы,
-// а не остались чужие.
-export function sheetsQueryOptions(formId: string, spreadsheetId: string) {
+// Листы выбранной книги. Ключ несёт id книги И аккаунта: сменил любое из двух —
+// приехали листы новой пары, а не остались чужие.
+export function sheetsQueryOptions(formId: string, accountId: string, spreadsheetId: string) {
   return queryOptions({
-    queryKey: integrationKeys.sheets(formId, spreadsheetId),
-    queryFn: () => listSheets(formId, spreadsheetId),
+    queryKey: integrationKeys.sheets(formId, accountId, spreadsheetId),
+    queryFn: () => listSheets(accountId, spreadsheetId),
     staleTime: 30_000,
   })
 }
@@ -66,6 +68,27 @@ export function useCreateSheet(formId: string) {
   })
 }
 
+// Перезалив отвечает 202: работа НАЧАТА, а не сделана — она идёт пачками в
+// фоне. Инвалидация нужна сразу, чтобы связка перешла в «переносим ответы» и
+// экран начал опрашивать состояние (см. refetchInterval выше).
+export function useRefillSheet(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId: string) => refillSheet(formId, connectionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Перепроверка меняет состояние связки (или не меняет, и тогда причина в теле
+// отказа) — состояние формы перезапрашивается в обоих случаях.
+export function useRecheckSheet(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId: string) => recheckSheet(formId, connectionId),
+    onSettled: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
 export function useUnlinkSheet(formId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -80,6 +103,10 @@ export interface ConnectionPatch {
   id: string
   name: string
   enabled: boolean
+  // accountId едет ВМЕСТЕ с целью и без неё смысла не имеет: под scope
+  // drive.file таблица видна только своему аккаунту, поэтому «сменить аккаунт,
+  // оставив лист» — сломанная связка, а не настройка.
+  accountId?: string
   spreadsheetId?: string
   sheetId?: number | null
   backfill?: boolean

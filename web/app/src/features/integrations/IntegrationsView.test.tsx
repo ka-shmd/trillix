@@ -1,15 +1,23 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import type { FormIntegrations, FormSheet } from '../../entities/integration'
+import type { ConnectedAccount, FormIntegrations, FormSheet } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { integrationKeys } from './keys'
 
 // Поход к провайдеру идёт в отдельном окне, которого в happy-dom нет. Подменяем
 // хук окна: он отдаёт наверх исход, а тест решает, каким тот будет.
-const popup = vi.hoisted(() => ({ callbacks: [] as ((outcome: string) => void)[] }))
+const popup = vi.hoisted(() => ({
+  callbacks: [] as ((outcome: string) => void)[],
+  // waiting — идёт поход за согласием. Меняется тестом ДО рендера: проверяется
+  // вид окна в этом состоянии, а не переход в него (переход — забота хука, у
+  // него свои тесты).
+  waiting: false,
+  cancelled: false,
+}))
 
 // Список таблиц, который НИКОГДА не приезжает. Ловить «запрос в полёте» на живом
 // fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
@@ -21,15 +29,21 @@ vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
   return {
     ...actual,
-    listSpreadsheets: (formId: string) =>
-      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(formId),
+    listSpreadsheets: (accountId: string) =>
+      hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(accountId),
   }
 })
 
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
     popup.callbacks.push(onOutcome)
-    return { waiting: false, open: () => true, cancel: () => {} }
+    return {
+      waiting: popup.waiting,
+      open: () => true,
+      cancel: () => {
+        popup.cancelled = true
+      },
+    }
   },
 }))
 
@@ -43,17 +57,31 @@ function popupOutcome(outcome: string) {
 // на контуре» ≠ «не подключено» ≠ «подключено, но связок нет»), и спутать их
 // значит советовать нажать кнопку, которой не появится.
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  popup.waiting = false
+  popup.cancelled = false
+})
 
 const FORM_ID = 'form-1'
+const ACCOUNT_ID = 'acc-1'
+
+// account — подключённый аккаунт человека. Их сколько угодно (ADR §10), поэтому
+// фикстура параметризована: половина новых проверок про ВТОРОЙ.
+function account(patch: Partial<ConnectedAccount> = {}): ConnectedAccount {
+  return {
+    id: ACCOUNT_ID,
+    email: 'author@gmail.com',
+    needsReconnect: false,
+    connectedAt: '2026-08-27T10:00:00Z',
+    ...patch,
+  }
+}
 
 const CONNECTED = {
   enabled: true,
   pickerEnabled: true,
-  connected: true,
-  needsReconnect: false,
-  canManage: true,
-  email: 'author@gmail.com',
+  accounts: [account()],
 }
 
 // conn — связка в состоянии «работает», если не сказано иное.
@@ -61,6 +89,8 @@ function conn(patch: Partial<FormSheet> = {}): FormSheet {
   return {
     id: 'conn-1',
     url: 'https://docs.google.com/spreadsheets/d/x/edit',
+    accountId: ACCOUNT_ID,
+    accountEmail: 'author@gmail.com',
     spreadsheetId: 'ss-old',
     sheetId: 0,
     enabled: true,
@@ -75,9 +105,7 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
     account: {
       enabled: true,
       pickerEnabled: false,
-      connected: false,
-      needsReconnect: false,
-      canManage: true,
+      accounts: [],
     },
     connections: [],
     ...patch,
@@ -100,19 +128,26 @@ function newTestClient() {
 // seedSpreadsheets=false оставляет список таблиц НЕпосеянным — запрос уходит и
 // остаётся в полёте. Это единственный способ поймать состояние «что-то ещё едет»,
 // ради которого в окне есть индикатор.
+// Отдаёт клиент: часть проверок доигрывает приезд НОВЫХ данных (аккаунт
+// подключился в соседнем окне) — для этого их надо положить в кеш после рендера.
 function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
   if (seedSpreadsheets) {
-    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID), [
+    qc.setQueryData(integrationKeys.spreadsheets(FORM_ID, ACCOUNT_ID), [
       { id: 'ss-old', name: 'Прошлая форма' },
     ])
   }
+  // TooltipProvider повторяет окружение приложения: в кабинете его даёт
+  // SidebarProvider выше по дереву. Без него точка состояния роняет рендер.
   render(
     <QueryClientProvider client={qc}>
-      <IntegrationsView formId={FORM_ID} />
+      <TooltipProvider>
+        <IntegrationsView formId={FORM_ID} />
+      </TooltipProvider>
     </QueryClientProvider>,
   )
+  return qc
 }
 
 // Два входа в оверлей: из каталога — подключить ещё одну связку, из строки
@@ -140,6 +175,9 @@ describe('два блока экрана', () => {
 
     expect(screen.getByText('Мои подключения')).toBeTruthy()
     expect(screen.getByText('Архив')).toBeTruthy()
+    // Строка говорит, зачем связка и куда ведёт ссылка; состояние — на точке.
+    expect(screen.getByText(/ответы синхронизируются с/i)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'таблицей' })).toBeTruthy()
     // Каталог не исчезает: подключить вторую связку — законное действие.
     expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
   })
@@ -150,15 +188,20 @@ describe('два блока экрана', () => {
   it('доступ к аккаунту потерян — строка связки говорит «заново»', () => {
     renderView(
       state({
-        account: { ...CONNECTED, needsReconnect: true },
+        account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] },
         connections: [conn({ name: 'Архив' })],
       }),
     )
 
-    expect(screen.getByText(/Доступ к Google потерян/)).toBeTruthy()
     // Связка живая по своему статусу, но кружок обязан быть красным: чинится
     // аккаунт, а не она.
-    expect(screen.getByRole('img', { name: 'Сломано' })).toBeTruthy()
+    const dot = screen.getByRole('button', { name: 'Сломано' })
+    // Текст состояния живёт в тултипе: у поломки он длинный, и в строке под
+    // названием обрезался бы на середине причины.
+    fireEvent.focus(dot)
+    // По роли, а не по тексту: Radix рисует содержимое дважды — видимым узлом и
+    // копией для скринридера, и поиск по тексту находит оба.
+    expect(screen.getByRole('tooltip').textContent).toMatch(/Доступ к Google потерян/)
   })
 
   // Состояние аккаунта ушло из каталога в окно подключения: плитка отвечает на
@@ -166,13 +209,7 @@ describe('два блока экрана', () => {
   it('провайдер не настроен на контуре — так написано в окне подключения', () => {
     renderView(
       state({
-        account: {
-          enabled: false,
-          pickerEnabled: false,
-          connected: false,
-          needsReconnect: false,
-          canManage: true,
-        },
+        account: { enabled: false, pickerEnabled: false, accounts: [] },
       }),
     )
     openSetup()
@@ -180,11 +217,29 @@ describe('два блока экрана', () => {
     expect(screen.getByText(/на этом контуре интеграция не настроена/i)).toBeTruthy()
   })
 
-  it('состояние связки видно кружком и подписью', () => {
+  it('состояние связки видно кружком, подробности — в тултипе', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
 
-    expect(screen.getByLabelText('Переносим ответы')).toBeTruthy()
-    expect(screen.getByText(/переносим накопленные ответы/i)).toBeTruthy()
+    const dot = screen.getByRole('button', { name: 'Переносим ответы' })
+    fireEvent.focus(dot)
+    expect(screen.getByRole('tooltip').textContent).toMatch(/переносим ответы, которые уже пришли/i)
+  })
+
+  // Точка пульсирует, пока состояние требует внимания или работы. У покоя
+  // («работает», «выключено») пульса нет — иначе он перестал бы что-либо значить.
+  it('пульсирует только то, что требует внимания', () => {
+    const pulses = (el: HTMLElement) => el.querySelector('.animate-ping') !== null
+
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'broken' })] }))
+    expect(pulses(screen.getByRole('button', { name: 'Сломано' }))).toBe(true)
+    cleanup()
+
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+    expect(pulses(screen.getByRole('button', { name: 'Работает' }))).toBe(false)
+    cleanup()
+
+    renderView(state({ account: CONNECTED, connections: [conn({ enabled: false })] }))
+    expect(pulses(screen.getByRole('button', { name: 'Выключено' }))).toBe(false)
   })
 
   it('выключенная связка помечена и не притворяется работающей', () => {
@@ -236,6 +291,26 @@ describe('оверлей настройки Google Таблиц', () => {
     }
   })
 
+  // Ожидание согласия — такое же «окно занято», как и загрузка списков, и
+  // показывается ТЕМ ЖЕ слоем. Отдельная строка в колонке говорила бы про
+  // занятость вторым способом в одном окне, и настройки под ней оставались бы
+  // живыми, пока человек в окне Google.
+  it('идёт поход за согласием — общий слой поверх окна, поля выключены', () => {
+    popup.waiting = true
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    expect(screen.getByText(/ждём подтверждения в окне google/i)).toBeTruthy()
+    // «Отменить» лежит В СЛОЕ: колонка на это время inert, и кнопка в ней была
+    // бы недостижима ни мышью, ни клавиатурой.
+    const cancel = screen.getByRole('button', { name: 'Отменить' })
+    expect(screen.getByLabelText(/название подключения/i).closest('[inert]')).not.toBeNull()
+    expect(cancel.closest('[inert]')).toBeNull()
+
+    fireEvent.click(cancel)
+    expect(popup.cancelled).toBe(true)
+  })
+
   it('списки приехали — индикатора нет и поля живые', () => {
     renderView(state({ account: CONNECTED }))
     openSetup()
@@ -259,22 +334,415 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
-  it('редактор видит интеграцию, но подключает аккаунт владелец', () => {
+  // Аккаунт Google принадлежит ЧЕЛОВЕКУ, и роль в пространстве его не гейтит
+  // (ADR §10): подключить свой Диск вправе любой, кто дошёл до этого экрана.
+  // Отказ по роли на этом экране — регрессия, и тест стоит именно за этим.
+  it('подключение не спрашивает роль в пространстве', () => {
+    renderView(state())
+    openSetup()
+
+    expect(screen.getByRole('link', { name: /подключить google$/i })).toBeTruthy()
+    expect(screen.queryByText(/может владелец пространства/i)).toBeNull()
+  })
+
+  // Аккаунтов у человека сколько угодно, и выбирает он их там же, где таблицу.
+  // В СПИСКЕ только аккаунты: работа с подключением стоит под ним ссылками, а не
+  // пунктами выбора (решение владельца 2026-08-27, образец — Tally).
+  it('в списке аккаунтов только аккаунты, действия — под ним', () => {
     renderView(
       state({
         account: {
-          enabled: true,
-          pickerEnabled: false,
-          connected: false,
-          needsReconnect: false,
-          canManage: false,
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
         },
       }),
     )
     openSetup()
 
-    expect(screen.getByText(/подключить google может владелец/i)).toBeTruthy()
-    expect(screen.queryByRole('link', { name: /подключить google$/i })).toBeNull()
+    // У живого аккаунта действие ровно одно. «Переподключить» — лечение, и вне
+    // беды оно предлагало бы чинить работающее; функционально оно к соседней
+    // ссылке ничего не добавляет (тот же адрес, вся разница — в подсказке).
+    expect(screen.getByRole('button', { name: /подключить другой аккаунт/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^переподключить$/i })).toBeNull()
+    // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
+    // каскадом связки других форм и пространств, а окно — про одну связку.
+    expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
+
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+    expect(screen.getByRole('option', { name: 'author@gmail.com' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /подключить другой аккаунт/i })).toBeNull()
+  })
+
+  // Обе ссылки ведут на один адрес согласия, и различает их подсказка: у
+  // «Переподключить» с собой едет id выбранного аккаунта, из которого сервер
+  // берёт почту для login_hint. Без неё человек снова выбирал бы аккаунт руками
+  // — то есть кнопка обещала бы то, чего не делает.
+  // Оба действия ведут на ШАГ СОГЛАСИЯ, а не прямо в окно Google: на этом шаге
+  // стоит строка о передаче персональных данных, и она обязана предварять каждую
+  // выдачу доступа, а не только первую.
+  it('«Подключить другой» открывает шаг согласия без подсказки', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /подключить другой аккаунт/i }))
+
+    expect(screen.getByText(/персональные данные/i)).toBeTruthy()
+    const go = screen.getByRole('link', { name: /^подключить google$/i })
+    expect(go.getAttribute('href')).not.toContain('accountId')
+    // Настройки на это время убраны: шаг занимает окно целиком.
+    expect(screen.queryByLabelText(/название подключения/i)).toBeNull()
+  })
+
+  // У переподключения тот же шаг, но с подсказкой: сервер возьмёт почту
+  // названного аккаунта и передаст её Google, чтобы человек попал сразу в него.
+  it('«Переподключить» открывает тот же шаг и несёт id аккаунта', () => {
+    renderView(state({ account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] } }))
+    openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /^переподключить$/i }))
+
+    expect(screen.getByText(/персональные данные/i)).toBeTruthy()
+    const go = screen.getByRole('link', { name: /^подключить заново$/i })
+    expect(go.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
+  })
+
+  // Шаг — не тупик: с него можно вернуться к настройкам, не закрывая окно.
+  it('с шага согласия можно вернуться к настройкам', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+    fireEvent.click(screen.getByRole('button', { name: /подключить другой аккаунт/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }))
+
+    expect(screen.getByLabelText(/название подключения/i)).toBeTruthy()
+  })
+
+  // До первого подключения возвращаться некуда: за шагом пустой экран настроек.
+  it('до первого подключения кнопки «Назад» нет', () => {
+    renderView(state())
+    openSetup()
+
+    expect(screen.getByRole('link', { name: /^подключить google$/i })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
+  })
+
+  // Правка открывается ТЕМ ЖЕ окном, что и подключение (INTEGRATIONS §9), — со
+  // всеми теми же полями, включая выбор аккаунта. Аккаунт существующей связки
+  // менять можно: под drive.file это переезд вместе с таблицей, а не «оставить
+  // лист, сменить владельца».
+  it('у существующей связки аккаунт выбирается тем же полем', () => {
+    renderView(
+      state({
+        account: {
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+        },
+        connections: [conn({ name: 'Архив' })],
+      }),
+    )
+    openConnection()
+
+    const dialog = within(screen.getByRole('dialog'))
+    const select = dialog.getByLabelText('Аккаунт Google')
+    expect(select.textContent).toContain('author@gmail.com')
+
+    fireEvent.click(select)
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+  })
+
+  // Человек нажал «подключить другой» ради нового аккаунта — он и должен остаться
+  // выбранным. Иначе он делает вторым действием то, чего добивался первым.
+  it('подключил новый аккаунт — выбранным становится он', async () => {
+    const qc = renderView(state({ account: CONNECTED }))
+    openSetup()
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('author@gmail.com')
+
+    // Так выглядит возвращение из окна Google: состояние перезапросилось и
+    // приехало со вторым подключением.
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({
+          account: {
+            ...CONNECTED,
+            accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+          },
+        }),
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com'),
+    )
+  })
+
+  // Переподключение прежнего аккаунта выбор НЕ трогает: новых id оно не даёт, а
+  // человек может чинить один аккаунт, настраивая связку на другом. Сторожит
+  // выбор «по новому id» против соблазна взять последний в списке — порядок идёт
+  // по connected_at, и переподключённый тоже уезжает в конец.
+  it('переподключил прежний аккаунт — выбор остаётся где был', async () => {
+    const two = {
+      ...CONNECTED,
+      accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+    }
+    const qc = renderView(state({ account: two }))
+    openSetup()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+    fireEvent.click(screen.getByRole('option', { name: 'work@gmail.com' }))
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com')
+
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({
+          account: {
+            ...CONNECTED,
+            // Тот же состав, но первый переподключён и уехал в конец списка.
+            accounts: [
+              account({ id: 'acc-2', email: 'work@gmail.com' }),
+              account({ connectedAt: '2026-08-27T12:00:00Z' }),
+            ],
+          },
+        }),
+      )
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('Аккаунт Google')).toBeTruthy())
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com')
+  })
+
+  // Вторая причина показать лечение: человек отозвал доступ в своём Google.
+  // Токен при этом цел (needsReconnect=false), но провайдер отвечает
+  // invalid_grant, и связка краснеет — узнаём по её статусу.
+  it('связка сломана — «Переподключить» появляется у её аккаунта', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Доступ отозван.' })],
+      }),
+    )
+    openConnection()
+
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
+  })
+
+  // Перезалив — общее лекарство: дубль после ретрая, строки, удалённые автором
+  // руками, отставшие колонки, раскладка, за которой мы перестали следовать.
+  // Без входа в интерфейс из последней связка становилась тупиком: в кабинете
+  // оставалось только удалить её и завести заново.
+  it('перезапись спрашивает подтверждение, называет цену и закрывает окно', async () => {
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 202 }))
+    })
+    // Перезалив живёт ВНУТРИ предупреждения: у работающей связки его нет вовсе.
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ name: 'Архив', status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /перезаписать лист/i }))
+
+    // Цена названа: чистится ВЕСЬ лист, включая колонки автора.
+    expect(screen.getByText(/включая колонки, которые вы добавили в него сами/i)).toBeTruthy()
+
+    // Именно точное имя: рядом стоит кнопка «Перезалить лист», открывшая диалог.
+    fireEvent.click(screen.getByRole('button', { name: /^Перезаписать$/ }))
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith('/refill') && c.init?.method === 'POST')).toBe(true),
+    )
+    // Согласился — уводим из настроек: перезапись начала работу над листом, и
+    // держать человека в окне, где нечего больше настраивать, незачем.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    vi.unstubAllGlobals()
+  })
+
+  // Раскладку ломает правка ЛИСТА, а лист — чужая территория: поправив шапку
+  // обратно, человек не имеет способа сказать нам об этом. Без кнопки ему
+  // оставалось бы ждать следующего ответа респондента, чтобы узнать, помогло ли.
+  it('«Обновить статус» перепроверяет лист', async () => {
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 204 }))
+    })
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /обновить статус/i }))
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith('/recheck') && c.init?.method === 'POST')).toBe(true),
+    )
+    vi.unstubAllGlobals()
+  })
+
+  // «Не помогло» — ответ по существу, а не сбой, и говорится он у самой кнопки:
+  // уехав вниз, к ошибкам сохранения, он потерял бы связь с нажатием.
+  it('перепроверка не помогла — так и сказано у кнопки', async () => {
+    const broken = state({
+      account: CONNECTED,
+      connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+    })
+    // Отказом отвечает ТОЛЬКО перепроверка: она инвалидирует состояние формы, и
+    // если валить заодно его, экран уйдёт в «не удалось загрузить» — проверять
+    // будет нечего.
+    vi.stubGlobal('fetch', (url: string) =>
+      Promise.resolve(
+        String(url).endsWith('/recheck')
+          ? new Response(
+              JSON.stringify({ error: { code: 'validation_failed', message: 'Колонки…' } }),
+              { status: 422, headers: { 'Content-Type': 'application/json' } },
+            )
+          : new Response(JSON.stringify(broken), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+      ),
+    )
+    renderView(broken)
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /обновить статус/i }))
+
+    await waitFor(() => expect(screen.getByText(/пока не сходится/i)).toBeTruthy())
+
+    // И не роняет соседнюю кнопку на строку ниже: строка отказа идёт ПОД рядом,
+    // а не элементом в нём — иначе её ширина ломает раскладку ряда.
+    const row = screen.getByRole('button', { name: /обновить статус/i }).parentElement
+    expect(row?.contains(screen.getByRole('button', { name: /перезаписать лист/i }))).toBe(true)
+    expect(row?.contains(screen.getByText(/пока не сходится/i))).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
+  // Текст предупреждения перечисляет выходы, а не советует «верните как было»:
+  // тот совет был без продолжения — сделать можно, а узнать, помогло ли, нечем.
+  it('предупреждение называет три выхода', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+
+    // По пунктам списка, а не по тексту вообще: «перезаписать лист» есть и на
+    // кнопке рядом, и поиск по странице находит оба.
+    const exits = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
+    expect(screen.getByText('Варианты исправления')).toBeTruthy()
+    expect(exits.some((t) => /вернуть заголовки/i.test(t))).toBe(true)
+    expect(exits.some((t) => /выбрать другую таблицу или лист/i.test(t))).toBe(true)
+    expect(exits.some((t) => /перезаписать лист/i.test(t))).toBe(true)
+  })
+
+  // Перезалив — часть предупреждения, а не самостоятельная кнопка: там, где
+  // предупреждения нет, нет и его.
+  it('у работающей и переносящей связки перезалива на экране нет', () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+    openConnection()
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
+    cleanup()
+
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    openConnection()
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
+  })
+
+  // Человек уже выбрал другой лист — связка переезжает, и прежняя беда перестаёт
+  // быть её делом. Красный блок здесь не просто лишний: в нём стоит «Перезалить
+  // лист», а перезалив чистит СТАРЫЙ лист — тот самый, который человек покидает.
+  it('выбрал другую цель — предупреждение и перезалив уходят', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [
+          conn({
+            name: 'Архив',
+            spreadsheetId: 'ss-old',
+            status: 'broken',
+            lastError: 'Колонки листа…',
+          }),
+        ],
+      }),
+    )
+    openConnection()
+    expect(screen.getByRole('button', { name: /перезаписать лист/i })).toBeTruthy()
+
+    fireEvent.click(screen.getByLabelText('Таблица'))
+    fireEvent.click(screen.getByRole('option', { name: /создать новую таблицу/i }))
+
+    expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
+    expect(screen.queryByText(/Колонки листа/)).toBeNull()
+  })
+
+  // Значок у предупреждения: красный текст в рамке легко принять за подпись поля,
+  // а треугольник читается сигналом до того, как текст прочитан.
+  it('предупреждение помечено значком', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+
+    const alert = screen
+      .getAllByRole('alert')
+      .find((el) => /Колонки листа/.test(el.textContent ?? ''))
+    expect(alert?.querySelector('svg')).toBeTruthy()
+  })
+
+  // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
+  // поле «Таблица» сбрасывается. Экран обязан сказать это до сохранения, иначе
+  // человек ждёт, что данные останутся в прежнем листе.
+  it('сменил аккаунт — окно предупреждает о переезде и сбрасывает таблицу', () => {
+    renderView(
+      state({
+        account: {
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+        },
+        connections: [conn({ name: 'Архив', spreadsheetId: 'ss-old' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+    fireEvent.click(screen.getByRole('option', { name: 'work@gmail.com' }))
+
+    expect(screen.getByText(/прежняя таблица другому аккаунту недоступна/i)).toBeTruthy()
+    expect(screen.getByLabelText('Таблица').textContent).toContain('Создать новую таблицу')
+  })
+
+  // Связку мог завести коллега: его подключения в списке спрашивающего нет, и
+  // без отдельного пункта поле выглядело бы пустым — «через кого едет» пропало
+  // бы с экрана вовсе.
+  it('чужой аккаунт связки виден в поле и подписан', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [
+          conn({ name: 'Архив', accountId: 'acc-colleague', accountEmail: 'colleague@gmail.com' }),
+        ],
+      }),
+    )
+    openConnection()
+
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('colleague@gmail.com')
+  })
+
+  // Потерянный токен — про КОНКРЕТНЫЙ аккаунт: соседние продолжают работать, и
+  // лечение адресное.
+  it('у выбранного аккаунта потерян доступ — окно зовёт войти заново', () => {
+    renderView(state({ account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] } }))
+    openSetup()
+
+    expect(screen.getByText(/доступ к этому аккаунту потерян/i)).toBeTruthy()
+    // Лечение — рядом, той же кнопкой: она ведёт на шаг согласия этого аккаунта.
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
   })
 
   it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {
@@ -314,7 +782,9 @@ describe('оверлей настройки Google Таблиц', () => {
     qc.setQueryData(integrationKeys.form(FORM_ID), state({ account: CONNECTED }))
     render(
       <QueryClientProvider client={qc}>
-        <IntegrationsView formId={FORM_ID} />
+        <TooltipProvider>
+          <IntegrationsView formId={FORM_ID} />
+        </TooltipProvider>
       </QueryClientProvider>,
     )
     openSetup()
@@ -372,15 +842,25 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.queryByRole('button', { name: /подключить google таблицы/i })).toBeNull()
   })
 
-  it('состояние связки видно на экране правки первым делом', () => {
+  // Окно отвечает на «куда лить», а не «как идут дела»: рассказа о процессе в нём
+  // нет вовсе. Состояние живёт на точке в списке — там оно видно, не открывая
+  // окна, и держать его в двух местах значило бы однажды их рассинхронизировать.
+  it('о процессе окно правки не рассказывает', () => {
     renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
     openConnection()
 
-    // Человек открыл связку, скорее всего, потому что что-то не так, — и первое,
-    // что он видит, это что с ней сейчас.
-    expect(
-      within(screen.getByRole('dialog')).getByText(/переносим ответы, которые уже пришли/i),
-    ).toBeTruthy()
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByText(/переносим ответы/i)).toBeNull()
+    // Поломка — исключение: это не отчёт о процессе, а препятствие плюс выход.
+    cleanup()
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+      }),
+    )
+    openConnection()
+    expect(screen.getByRole('button', { name: /перезаписать лист/i })).toBeTruthy()
   })
 
   it('после подключения в окне провайдера состояние перезапрашивается', async () => {

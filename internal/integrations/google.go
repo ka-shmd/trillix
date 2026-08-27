@@ -138,7 +138,14 @@ func (g *Google) AppID() string {
 // refresh-токена не будет вовсе, а без consent провайдер не отдаёт его повторно
 // тому, кто уже соглашался. Переподключение (сменил аккаунт, отозвал доступ)
 // тогда давало бы интеграцию, живущую ровно час.
-func (g *Google) AuthURL(state, verifier string) string {
+//
+// loginHint — почта аккаунта, который человек переподключает. Пусто — Google
+// показывает свой выбор аккаунтов, и это путь «подключить ещё один».
+//
+// Подсказка не является гарантией и правом тоже не является: человек волен
+// выбрать в окне Google другой аккаунт, и тогда подключится другой. Поэтому она
+// и не проверяется на возврате — что подключилось, то и записываем.
+func (g *Google) AuthURL(state, verifier, loginHint string) string {
 	q := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {g.clientID},
@@ -149,6 +156,9 @@ func (g *Google) AuthURL(state, verifier string) string {
 		"code_challenge_method": {"S256"},
 		"access_type":           {"offline"},
 		"prompt":                {"consent"},
+	}
+	if loginHint != "" {
+		q.Set("login_hint", loginHint)
 	}
 	return g.authURL + "?" + q.Encode()
 }
@@ -483,6 +493,41 @@ func (g *Google) FirstRowEmpty(ctx context.Context, accessToken string, s Spread
 		}
 	}
 	return true, nil
+}
+
+// ReadHeader читает первую строку листа — ту, что видит автор.
+//
+// Нужна затем, что шапка в листе и шапка, которую мы помним в базе, — разные
+// вещи: лист принадлежит автору, и он вправе переставить или убрать колонку.
+// Без этого чтения строки раскладывались бы по запомненному порядку и молча
+// уезжали под чужие заголовки.
+//
+// Пустые хвостовые ячейки Google не присылает вовсе, поэтому длина результата —
+// это число ЗАПОЛНЕННЫХ колонок шапки, а не ширина листа.
+func (g *Google) ReadHeader(ctx context.Context, accessToken string, s Spreadsheet) ([]string, error) {
+	u := g.sheetsURL + "/" + url.PathEscape(s.ID) + "/values/" +
+		url.PathEscape(a1Range(s.Title, "A1:ZZ1"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("integrations google: build values request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	var body struct {
+		Values [][]any `json:"values"`
+	}
+	if err := g.doAPI(req, &body); err != nil {
+		return nil, fmt.Errorf("integrations google: read header: %w", err)
+	}
+	if len(body.Values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(body.Values[0]))
+	for _, cell := range body.Values[0] {
+		str, _ := cell.(string)
+		out = append(out, str)
+	}
+	return out, nil
 }
 
 // AddSheet заводит НОВЫЙ ЛИСТ в существующей таблице — путь «положить ответы

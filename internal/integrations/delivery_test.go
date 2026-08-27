@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,8 +70,71 @@ func linkedSheet() integrations.FormLink {
 	}
 }
 
+// headerOf — шапка листа, совпадающая с колонками связки: обычное состояние,
+// пока автор её не трогал.
+func headerOf(link integrations.FormLink) []string {
+	out := make([]string, 0, len(link.Columns))
+	for _, c := range link.Columns {
+		out = append(out, c.Label)
+	}
+	return out
+}
+
 func deliveryService(store *fakeStore, provider *fakeProvider, subs *fakeSubmissions, out *fakeOutbox) *integrations.Service {
 	return newFormService(fakeAccess{}, store, fakeForms{}, provider).WithDelivery(out, subs)
+}
+
+// Человека сняли с пространства — связка его аккаунтом останавливается и
+// краснеет, а не льёт ответы команды в Диск бывшего участника.
+//
+// Это плата за личные аккаунты, названная в ADR §10 и закрытая сторожем: без
+// него снятие доступа не останавливало бы поток наружу вовсе. Событие ГАСИТСЯ
+// (nil, а не ошибка): членство очередь не вернёт, и ретраить нечего.
+func TestDeliver_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа")},
+		Row:     []string{"018f"},
+	}}
+	svc := newFormService(fakeAccess{gone: true}, store, fakeForms{}, provider).
+		WithDelivery(&fakeOutbox{}, subs)
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("событие ушло на ретрай вместо того, чтобы погаснуть: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("ответ уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не помечена сломанной — владелец не узнает причину")
+	}
+}
+
+// Тот же сторож обязан гасить и ПЕРЕНОС: догрузка ушедшего участника — та же
+// утечка, только пачкой. Проверяется отдельно, потому что перенос разбирается
+// выше тумблера и легко оказаться выше сторожа.
+func TestDeliverBackfill_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{gone: true}, store, fakeForms{}, provider).
+		WithDelivery(out, &fakeSubmissions{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос ушёл на ретрай вместо того, чтобы погаснуть: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("перенос уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	if out.payload != nil {
+		t.Fatal("поставлена следующая пачка переноса — он не остановился")
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не помечена сломанной")
+	}
 }
 
 // Ответ доезжает строкой в порядке КОЛОНОК ЛИСТА, и привязка помечается
@@ -103,7 +167,7 @@ func TestDeliver_AppendsRow(t *testing.T) {
 // переписывается, порядок прежних колонок не меняется.
 func TestDeliver_AddsColumnForNewQuestion(t *testing.T) {
 	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
-	provider := &fakeProvider{}
+	provider := &fakeProvider{sheetHeader: headerOf(store.link)}
 	subs := &fakeSubmissions{record: submissions.SheetRecord{
 		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта"), col("b3", "Телефон")},
 		Row:     []string{"018f", "Ирина", "i@example.com", "+7"},
@@ -124,12 +188,206 @@ func TestDeliver_AddsColumnForNewQuestion(t *testing.T) {
 	}
 }
 
+// Автор переставил колонки в листе — строки идут за ШАПКОЙ, а не за тем, что мы
+// запомнили при создании.
+//
+// Справка конкурента это прямо разрешает («вы можете изменять колонки в таблице,
+// перемещая или удаляя их»), а до этой правки мы писали по запомненному порядку:
+// значения молча ложились под чужие заголовки, и замечал это автор, а не мы.
+func TestDeliver_FollowsReorderedHeader(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	// Автор поменял местами «Имя» и «Почту».
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Почта", "Имя"}}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+		Row:     []string{"018f", "Ирина", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	got := provider.appended[0]
+	if len(got) != 3 || got[1] != "i@example.com" || got[2] != "Ирина" {
+		t.Fatalf("строка = %v, ожидался порядок ШАПКИ, а не запомненный", got)
+	}
+	// Новый порядок запоминается: иначе он перечитывался бы на каждый ответ и
+	// расходился бы с тем, что показывает кабинет.
+	if len(store.columnsSet) != 3 || store.columnsSet[1].Key != "b2" {
+		t.Fatalf("колонки = %+v, ожидался сохранённый порядок листа", store.columnsSet)
+	}
+	// Шапку НЕ переписываем: автор её такой и сделал.
+	if provider.header != nil {
+		t.Errorf("шапка переписана поверх авторской: %v", provider.header)
+	}
+}
+
+// Автор убрал колонку из листа — она не возвращается. В своей таблице
+// распоряжается он; «колонка только добавляется» — это про вопросы формы, а не
+// про правки автора.
+func TestDeliver_FollowsDeletedColumn(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Почта"}}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+		Row:     []string{"018f", "Ирина", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	got := provider.appended[0]
+	if len(got) != 2 || got[1] != "i@example.com" {
+		t.Fatalf("строка = %v, ожидались две колонки по шапке", got)
+	}
+}
+
+// Своя колонка автора СПРАВА от наших законна: в неё мы просто не пишем, строка
+// выходит короче ширины листа. Именно так автор добавляет формулу местного
+// времени — справка конкурента это и советует.
+func TestDeliver_LeavesAlienTailAlone(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{
+		sheetHeader: []string{"ID ответа", "Имя", "Почта", "Местное время"},
+	}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+		Row:     []string{"018f", "Ирина", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if got := provider.appended[0]; len(got) != 3 {
+		t.Fatalf("строка = %v, ожидались три колонки — в чужую не пишем", got)
+	}
+}
+
+// Своя колонка автора справа + новый вопрос в форме = дописать некуда. Отказ
+// тот же, а СОВЕТ другой: «верните шапку как было» здесь означал бы «удалите
+// свою колонку», поэтому текст зовёт перезалить лист.
+func TestDeliver_NoRoomForNewColumnTellsToRefill(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{
+		sheetHeader: []string{"ID ответа", "Имя", "Почта", "Местное время"},
+	}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{
+			col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта"), col("b3", "Телефон"),
+		},
+		Row: []string{"018f", "Ирина", "i@example.com", "+7"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("отказ ушёл на ретрай: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("строка записана вслепую: %v", provider.appended)
+	}
+	if provider.header != nil {
+		t.Errorf("шапка переписана поверх авторской колонки: %v", provider.header)
+	}
+	// У этого случая СВОЯ причина: общий текст про «шапку правили вручную» здесь
+	// врал бы — колонку автор добавил, а сломал её новый вопрос в форме.
+	if !strings.Contains(store.brokenWith, "дописать заголовок некуда") {
+		t.Fatalf("причина = %q, ожидалась своя, а не общая про шапку", store.brokenWith)
+	}
+}
+
+// Чужая колонка ПОСРЕДИ наших — повод остановиться, а не гадать: append умеет
+// только сплошную строку от колонки A, и пропуск в середине означал бы, что всё
+// правее уехало на одну ячейку. Связка краснеет человеческим текстом.
+func TestDeliver_RefusesAlienColumnInTheMiddle(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{
+		sheetHeader: []string{"ID ответа", "Комментарий", "Имя", "Почта"},
+	}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта")},
+		Row:     []string{"018f", "Ирина", "i@example.com"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	// Событие ГАСИТСЯ: сам собой лист не починится, ретраить нечего.
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("отказ ушёл на ретрай: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("строка записана вслепую: %v", provider.appended)
+	}
+	if !strings.Contains(store.brokenWith, "Колонки листа") {
+		t.Fatalf("причина = %q, ожидался человеческий текст про шапку", store.brokenWith)
+	}
+}
+
+// Два вопроса, названные ОДИНАКОВО, — обычная форма, а не диверсия: заголовок
+// вопроса ничем не ограничен, и «Телефон» дважды встречается сплошь и рядом.
+// Пока лист никто не трогал, позиции различают их без всяких подписей.
+//
+// Сторожит регрессию: разбор шапки по подписи объявлял такую форму двусмысленной
+// и ломал связку в первые же секунды — на листе, который продукт создал сам.
+func TestDeliver_DuplicateLabelsOnUntouchedSheet(t *testing.T) {
+	link := linkedSheet()
+	link.Columns = []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Телефон"), col("b2", "Телефон")}
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{sheetHeader: headerOf(link)}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: link.Columns,
+		Row:     []string{"018f", "+7", "+8"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if store.brokenWith != "" {
+		t.Fatalf("связка сломана на ровном месте: %q", store.brokenWith)
+	}
+	got := provider.appended[0]
+	if len(got) != 3 || got[1] != "+7" || got[2] != "+8" {
+		t.Fatalf("строка = %v, ожидались оба «Телефона» по своим местам", got)
+	}
+}
+
+// Два вопроса с ОДИНАКОВОЙ подписью — раскладка по шапке становится
+// двусмысленной, и мы отказываемся вместо того, чтобы взять первый попавшийся.
+//
+// Это цена сопоставления по подписи (ключей в шапке нет, см. layoutFromHeader):
+// молчаливая догадка здесь означала бы перепутанные ответы на два похожих
+// вопроса — ошибку, которую в таблице не видно.
+func TestDeliver_RefusesAmbiguousHeaderLabels(t *testing.T) {
+	link := linkedSheet()
+	link.Columns = []domain.SheetColumn{col("_id", "ID ответа"), col("b1", "Телефон"), col("b2", "Телефон")}
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	// Автор переставил колонки — позиции больше не сходятся, и различить два
+	// «Телефона» нечем.
+	provider := &fakeProvider{sheetHeader: []string{"Телефон", "ID ответа", "Телефон"}}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: link.Columns,
+		Row:     []string{"018f", "+7", "+8"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("отказ ушёл на ретрай: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("строка записана вслепую: %v", provider.appended)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не помечена сломанной — автор не узнает причину")
+	}
+}
+
 // Вопрос удалён из формы: его колонка ОСТАЁТСЯ на месте с пустой ячейкой.
 // Иначе значения уехали бы на одну влево — под чужой заголовок, и увидел бы это
 // автор, а не мы.
 func TestDeliver_KeepsColumnOfDeletedQuestion(t *testing.T) {
 	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
-	provider := &fakeProvider{}
+	provider := &fakeProvider{sheetHeader: headerOf(store.link)}
 	subs := &fakeSubmissions{record: submissions.SheetRecord{
 		Columns: []domain.SheetColumn{col("_id", "ID ответа"), col("b2", "Почта")},
 		Row:     []string{"018f", "i@example.com"},

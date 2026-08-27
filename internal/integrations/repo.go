@@ -18,72 +18,82 @@ import (
 // RefreshSealed — ШИФРОТЕКСТ и остаётся им везде выше repo: расшифровка живёт в
 // одном месте (Service.accessToken), и ни один DTO транспорта этого поля не
 // содержит. Мина: добавите его в ответ API — отдадите наружу ключ от чужого Диска.
+//
+// UserID — чьё подключение. С 0037 это ОДИН факт в трёх ролях: ключ владения
+// (аккаунтов у человека сколько угодно), запись аудита «чьим согласием ответы
+// уезжают наружу» (152-ФЗ) и правило «ушёл человек — ушло подключение»
+// (FK ON DELETE CASCADE на users). Пространства аккаунт не знает вовсе.
 type Connection struct {
 	ID            uuid.UUID
-	WorkspaceID   uuid.UUID
+	UserID        uuid.UUID
 	Provider      string
 	ExternalID    string
 	Email         string
 	RefreshSealed []byte
 	Scopes        string
-	ConnectedBy   uuid.UUID
 	ConnectedAt   time.Time
 }
 
 // NewConnection — что нужно записать при подключении.
 type NewConnection struct {
 	ID            uuid.UUID
-	WorkspaceID   uuid.UUID
+	UserID        uuid.UUID
 	Provider      string
 	ExternalID    string
 	Email         string
 	RefreshSealed []byte
 	Scopes        string
-	ConnectedBy   uuid.UUID
 }
 
 // Repo — доступ к данным интеграций поверх sqlc. Методы принимают исполнителя
 // (пул или транзакция) и логики не содержат.
 type Repo struct{}
 
-func (Repo) Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) error {
-	err := postgres.New(db).UpsertIntegrationAccount(ctx, postgres.UpsertIntegrationAccountParams{
+// Upsert подключает аккаунт и отдаёт id ПЕРЕЖИВШЕЙ строки.
+//
+// Мина: при повторном заходе тем же аккаунтом Google выживает старая строка, и
+// её id отличается от c.ID. Вернёте свой — отдадите экрану аккаунт, которого в
+// базе нет, и следующий же выбор в селекте упрётся в 404.
+func (Repo) Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) (uuid.UUID, error) {
+	id, err := postgres.New(db).UpsertIntegrationAccount(ctx, postgres.UpsertIntegrationAccountParams{
 		ID:                c.ID,
-		WorkspaceID:       c.WorkspaceID,
+		UserID:            c.UserID,
 		Provider:          c.Provider,
 		ExternalAccountID: c.ExternalID,
 		ExternalEmail:     c.Email,
 		RefreshToken:      c.RefreshSealed,
 		Scopes:            c.Scopes,
-		ConnectedBy:       c.ConnectedBy,
 	})
 	if err != nil {
-		return fmt.Errorf("upsert integration account: %w", err)
+		return uuid.Nil, fmt.Errorf("upsert integration account: %w", err)
 	}
-	return nil
+	return id, nil
 }
 
-func (Repo) Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) (Connection, error) {
-	row, err := postgres.New(db).GetIntegrationAccount(ctx, postgres.GetIntegrationAccountParams{
-		WorkspaceID: workspaceID,
-		Provider:    provider,
+// ListByUser — аккаунты человека у провайдера. Пустой список — штатное
+// состояние экрана, а не ошибка: до первого подключения он именно такой.
+func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) ([]Connection, error) {
+	rows, err := postgres.New(db).ListIntegrationAccountsByUser(ctx, postgres.ListIntegrationAccountsByUserParams{
+		UserID:   userID,
+		Provider: provider,
 	})
 	if err != nil {
-		// pgx.ErrNoRows пробрасывается как есть: «нет подключения» — не ошибка
-		// уровня repo, и решает это вызывающий (для экрана это штатное состояние).
-		return Connection{}, err
+		return nil, fmt.Errorf("list integration accounts: %w", err)
 	}
-	return Connection{
-		ID:            row.ID,
-		WorkspaceID:   row.WorkspaceID,
-		Provider:      row.Provider,
-		ExternalID:    row.ExternalAccountID,
-		Email:         row.ExternalEmail,
-		RefreshSealed: row.RefreshToken,
-		Scopes:        row.Scopes,
-		ConnectedBy:   row.ConnectedBy,
-		ConnectedAt:   row.ConnectedAt.Time,
-	}, nil
+	out := make([]Connection, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, Connection{
+			ID:            row.ID,
+			UserID:        row.UserID,
+			Provider:      row.Provider,
+			ExternalID:    row.ExternalAccountID,
+			Email:         row.ExternalEmail,
+			RefreshSealed: row.RefreshToken,
+			Scopes:        row.Scopes,
+			ConnectedAt:   row.ConnectedAt.Time,
+		})
+	}
+	return out, nil
 }
 
 // UpdateToken перезаписывает шифротекст refresh-токена подключения.
@@ -98,11 +108,13 @@ func (Repo) UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sea
 	return nil
 }
 
-// Delete удаляет подключение и отдаёт шифротекст токена — на отзыв у провайдера.
-func (Repo) Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error) {
+// Delete удаляет ОДИН аккаунт человека и отдаёт шифротекст токена — на отзыв у
+// провайдера. userID в условии обязателен: id приезжает из адреса и правом
+// доступа не является (инвариант 1).
+func (Repo) Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) ([]byte, error) {
 	sealed, err := postgres.New(db).DeleteIntegrationAccount(ctx, postgres.DeleteIntegrationAccountParams{
-		WorkspaceID: workspaceID,
-		Provider:    provider,
+		ID:     id,
+		UserID: userID,
 	})
 	if err != nil {
 		return nil, err
@@ -113,10 +125,14 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID,
 // FormLink — привязка формы к таблице (с полями аккаунта, нужными экрану и
 // доставке: за ними иначе пришлось бы ехать вторым запросом).
 type FormLink struct {
-	ID              uuid.UUID
-	FormID          uuid.UUID
-	AccountID       uuid.UUID
-	WorkspaceID     uuid.UUID
+	ID          uuid.UUID
+	FormID      uuid.UUID
+	AccountID   uuid.UUID
+	WorkspaceID uuid.UUID
+	// AccountUserID — чей аккаунт везёт эту связку. По нему сторож доставки
+	// проверяет, что человек всё ещё участник пространства формы: аккаунт личный,
+	// и уход из команды обязан останавливать поток ответов в его Диск (ADR §10).
+	AccountUserID   uuid.UUID
 	AccountEmail    string
 	Name            string
 	SpreadsheetID   string
@@ -179,7 +195,7 @@ func (Repo) ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (
 	for _, row := range rows {
 		link, err := toFormLink(formIntegrationRow{
 			ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-			ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled,
+			UserID: row.UserID, ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled,
 			SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 			SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
 			BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
@@ -237,7 +253,7 @@ func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Fo
 	}
 	return toFormLink(formIntegrationRow{
 		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
-		ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+		UserID: row.UserID, ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
 		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
 		LastDeliveredAt: row.LastDeliveredAt.Time,
@@ -251,13 +267,12 @@ func (Repo) GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 	}
 	return Connection{
 		ID:            row.ID,
-		WorkspaceID:   row.WorkspaceID,
+		UserID:        row.UserID,
 		Provider:      row.Provider,
 		ExternalID:    row.ExternalAccountID,
 		Email:         row.ExternalEmail,
 		RefreshSealed: row.RefreshToken,
 		Scopes:        row.Scopes,
-		ConnectedBy:   row.ConnectedBy,
 		ConnectedAt:   row.ConnectedAt.Time,
 	}, nil
 }
@@ -283,6 +298,15 @@ func (Repo) MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) e
 	return nil
 }
 
+// ClearError возвращает связку в рабочее состояние: гасит причину и снимает
+// broken. Времени доставки не ставит — её не было.
+func (Repo) ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ClearFormIntegrationError(ctx, id); err != nil {
+		return fmt.Errorf("clear form integration error: %w", err)
+	}
+	return nil
+}
+
 func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error {
 	err := postgres.New(db).MarkFormIntegrationBroken(ctx, postgres.MarkFormIntegrationBrokenParams{
 		ID:        id,
@@ -298,6 +322,7 @@ func (Repo) MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, caus
 // по id): sqlc генерирует им разные типы, а собирается FormLink из них одинаково.
 type formIntegrationRow struct {
 	ID, FormID, AccountID, WorkspaceID uuid.UUID
+	UserID                             uuid.UUID
 	ExternalEmail, Name                string
 	Enabled                            bool
 	SpreadsheetID, SpreadsheetUrl      string
@@ -317,6 +342,7 @@ func toFormLink(row formIntegrationRow) (FormLink, error) {
 		FormID:          row.FormID,
 		AccountID:       row.AccountID,
 		WorkspaceID:     row.WorkspaceID,
+		AccountUserID:   row.UserID,
 		AccountEmail:    row.ExternalEmail,
 		Name:            row.Name,
 		SpreadsheetID:   row.SpreadsheetID,
@@ -352,7 +378,10 @@ func (Repo) FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 
 // UpdateLinkTarget переносит связку в другой лист: адрес, колонки и статус
 // меняются разом, прошлая ошибка гасится.
-func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+// UpdateLinkTarget переносит связку на другую цель. accountID едет вместе с
+// листом, а не отдельным методом: разделить их значит позволить записать связку,
+// у которой аккаунт не видит своей же таблицы.
+func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
 	raw, err := json.Marshal(columns)
 	if err != nil {
 		return 0, fmt.Errorf("marshal columns: %w", err)
@@ -360,6 +389,7 @@ func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID u
 	n, err := postgres.New(db).UpdateFormIntegrationTarget(ctx, postgres.UpdateFormIntegrationTargetParams{
 		ID:             id,
 		FormID:         formID,
+		AccountID:      accountID,
 		SpreadsheetID:  sheet.ID,
 		SpreadsheetUrl: sheet.URL,
 		SheetID:        sheet.SheetID,

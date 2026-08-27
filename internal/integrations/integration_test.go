@@ -106,20 +106,25 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 }
 
 type accountDTO struct {
-	Enabled        bool   `json:"enabled"`
-	Connected      bool   `json:"connected"`
-	NeedsReconnect bool   `json:"needsReconnect"`
+	Enabled  bool               `json:"enabled"`
+	Accounts []connectedAcctDTO `json:"accounts"`
+}
+
+type connectedAcctDTO struct {
+	ID             string `json:"id"`
 	Email          string `json:"email"`
+	NeedsReconnect bool   `json:"needsReconnect"`
 	ConnectedAt    string `json:"connectedAt"`
-	CanManage      bool   `json:"canManage"`
 }
 
 type sheetDTO struct {
-	ID      string `json:"id"`
-	URL     string `json:"url"`
-	Enabled bool   `json:"enabled"`
-	Name    string `json:"name"`
-	Status  string `json:"status"`
+	ID           string `json:"id"`
+	URL          string `json:"url"`
+	AccountID    string `json:"accountId"`
+	AccountEmail string `json:"accountEmail"`
+	Enabled      bool   `json:"enabled"`
+	Name         string `json:"name"`
+	Status       string `json:"status"`
 }
 
 type formStatusDTO struct {
@@ -149,34 +154,28 @@ func TestIntegrations_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	seedAccountWithForeignToken(t, wsID)
+	seedAccountWithForeignToken(t, "owner@example.com")
 
 	got := formStatus(t, owner, srv, newForm(t, wsID, "f-stale"))
 
-	if !got.Account.Connected {
-		t.Error("строка подключения есть — connected обязан остаться true")
+	if len(got.Account.Accounts) != 1 {
+		t.Fatalf("аккаунты = %+v — строка подключения обязана остаться в списке", got.Account.Accounts)
 	}
-	if !got.Account.NeedsReconnect {
-		t.Fatalf("аккаунт = %+v, ожидалось требование переподключиться", got.Account)
+	if !got.Account.Accounts[0].NeedsReconnect {
+		t.Fatalf("аккаунт = %+v, ожидалось требование переподключиться", got.Account.Accounts[0])
 	}
 }
 
 // seedAccountWithForeignToken кладёт подключение с шифротекстом, который ключом
 // контура не открывается. Пройти для этого настоящий OAuth нельзя — он запечатал
 // бы токен правильным ключом.
-func seedAccountWithForeignToken(t *testing.T, wsID string) {
+func seedAccountWithForeignToken(t *testing.T, email string) {
 	t.Helper()
-	var userID string
-	err := testPool.QueryRow(context.Background(),
-		`SELECT personal_user_id FROM workspaces WHERE id = $1`, wsID).Scan(&userID)
-	if err != nil {
-		t.Fatalf("владелец пространства: %v", err)
-	}
-	_, err = testPool.Exec(context.Background(),
+	_, err := testPool.Exec(context.Background(),
 		`INSERT INTO integration_accounts
-		 (id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by)
-		 VALUES ($1, $2, 'google', 'sub-1', 'author@gmail.com', $3, '', $4)`,
-		uuid.New(), wsID, []byte("шифротекст от прошлого секрета"), userID)
+		 (id, user_id, provider, external_account_id, external_email, refresh_token, scopes)
+		 SELECT $1, id, 'google', 'sub-1', 'author@gmail.com', $3, '' FROM users WHERE email = $2`,
+		uuid.New(), email, []byte("шифротекст от прошлого секрета"))
 	if err != nil {
 		t.Fatalf("insert integration account: %v", err)
 	}
@@ -196,8 +195,10 @@ func newForm(t *testing.T, wsID, slug string) string {
 	return id
 }
 
-// Владелец видит настроенный, но не подключённый провайдер — и кнопку.
-func TestIntegrations_OwnerSeesManageable(t *testing.T) {
+// Провайдер настроен, но ничего не подключено — пустой список аккаунтов. Это
+// штатное состояние экрана, а не ошибка, и отличается от «интеграции здесь нет»
+// (Enabled=false) лечением: там кнопки не появится вовсе.
+func TestIntegrations_NothingConnectedYet(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
@@ -205,8 +206,8 @@ func TestIntegrations_OwnerSeesManageable(t *testing.T) {
 
 	got := formStatus(t, owner, srv, newForm(t, wsID, "f-owner"))
 
-	if !got.Account.Enabled || got.Account.Connected || !got.Account.CanManage {
-		t.Fatalf("аккаунт = %+v, ожидалось «настроено, не подключено, управляемо»", got.Account)
+	if !got.Account.Enabled || len(got.Account.Accounts) != 0 {
+		t.Fatalf("аккаунт = %+v, ожидалось «настроено, ничего не подключено»", got.Account)
 	}
 	if len(got.Connections) != 0 {
 		t.Fatalf("связки = %+v, ожидался пустой список", got.Connections)
@@ -216,32 +217,84 @@ func TestIntegrations_OwnerSeesManageable(t *testing.T) {
 	}
 }
 
-// Редактор видит состояние, но управлять не может — ни полем ответа, ни ручкой.
-func TestIntegrations_EditorSeesButCannotManage(t *testing.T) {
+// Редактор командного пространства подключает СВОЙ аккаунт Google и льёт в него
+// ответы чужой формы. Так решено 2026-08-27 (ADR §10): аккаунт личный, и роль в
+// пространстве его не гейтит — прежде здесь стоял отказ 403.
+//
+// Второй половиной решения владелец видит в списке связок чужую почту: связку
+// завёл не он, и без подписи «через кого» она выглядела бы интеграцией, которой
+// нет ни в чьём селекте.
+func TestIntegrations_EditorLinksOwnAccount(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
-	registerUser(t, srv, "owner@example.com")
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+	formID := newForm(t, wsID, "f-editor")
+
+	editorAccount := connectAccount(t, editor, srv)
+
+	// В селекте у редактора — его аккаунт; у владельца не подключено ничего.
+	if got := formStatus(t, editor, srv, formID).Account; len(got.Accounts) != 1 {
+		t.Fatalf("аккаунты редактора = %+v, ожидался ровно свой", got.Accounts)
+	}
+	if got := formStatus(t, owner, srv, formID).Account; len(got.Accounts) != 0 {
+		t.Fatalf("аккаунты владельца = %+v — чужое подключение попало в его селект", got.Accounts)
+	}
+
+	r := linkForm(t, editor, srv, formID, editorAccount)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка редактором: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Владелец связку ВИДИТ и знает, чьим аккаунтом она едет.
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 || conns[0].AccountID != editorAccount {
+		t.Fatalf("связки глазами владельца = %+v", conns)
+	}
+	if conns[0].AccountEmail == "" {
+		t.Error("связка не подписана почтой аккаунта — через кого она едет, непонятно")
+	}
+}
+
+// Чужой аккаунт связке не назначить: id приезжает в теле запроса и правом
+// доступа не является. Отказ неотличим от «такого аккаунта нет» — иначе
+// перебором id можно было бы узнать, что подключено у соседа.
+func TestIntegrations_ForeignAccountRefused(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 	editor := registerUser(t, srv, "editor@example.com")
 	addMember(t, wsID, "editor@example.com", "editor")
 
-	got := formStatus(t, editor, srv, newForm(t, wsID, "f-editor"))
-	if !got.Account.Enabled || got.Account.CanManage {
-		t.Fatalf("аккаунт глазами редактора = %+v, ожидалось «видит, но не управляет»", got.Account)
-	}
+	editorAccount := connectAccount(t, editor, srv)
+	formID := newForm(t, wsID, "f-foreign")
 
-	// Ручка подключения — не «кнопка спрятана», а отказ на сервере.
-	r := do(t, editor, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations/google/start")
-	if r.StatusCode != http.StatusForbidden {
-		t.Fatalf("start редактором: статус %d, ожидалось 403", r.StatusCode)
+	r := linkForm(t, owner, srv, formID, editorAccount)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("привязка чужим аккаунтом: статус %d, ожидалось 422", r.StatusCode)
 	}
 	closeBody(t, r)
 
-	r = deleteWithCSRF(t, editor, srv, "/api/v1/workspaces/"+wsID+"/integrations/google")
-	if r.StatusCode != http.StatusForbidden {
-		t.Fatalf("отключение редактором: статус %d, ожидалось 403", r.StatusCode)
+	// И отключить чужой аккаунт тоже нельзя — 204 по идемпотентности, но строка
+	// на месте: молчаливый отказ не подтверждает существование чужого.
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/integrations/google/accounts/"+editorAccount)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("отключение чужого: статус %d, ожидалось 204", r.StatusCode)
 	}
 	closeBody(t, r)
+
+	var left int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM integration_accounts WHERE id = $1`, editorAccount).Scan(&left); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if left != 1 {
+		t.Fatal("чужой аккаунт отключён из соседнего кабинета")
+	}
 }
 
 // Чужой не участник получает 404, а не 403: существование чужого пространства
@@ -282,16 +335,14 @@ func TestIntegrations_ConnectFlow(t *testing.T) {
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 
-	state := startFlow(t, owner, srv, wsID)
-	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/integrations/google/callback?code=auth-code&state="+state)
-	assertOutcome(t, r, "integration_ok")
+	accountID := connectAccount(t, owner, srv)
 
 	var sealed []byte
 	var email, provider string
-	var connectedBy uuid.UUID
+	var userID uuid.UUID
 	err := testPool.QueryRow(context.Background(),
-		`SELECT refresh_token, external_email, provider, connected_by FROM integration_accounts WHERE workspace_id = $1`,
-		wsID).Scan(&sealed, &email, &provider, &connectedBy)
+		`SELECT refresh_token, external_email, provider, user_id FROM integration_accounts WHERE id = $1`,
+		accountID).Scan(&sealed, &email, &provider, &userID)
 	if err != nil {
 		t.Fatalf("подключение не записано: %v", err)
 	}
@@ -303,11 +354,11 @@ func TestIntegrations_ConnectFlow(t *testing.T) {
 	}
 
 	got := formStatus(t, owner, srv, newForm(t, wsID, "f-connected")).Account
-	if !got.Connected || got.Email != "author@gmail.com" || got.ConnectedAt == "" {
+	if len(got.Accounts) != 1 || got.Accounts[0].Email != "author@gmail.com" || got.Accounts[0].ConnectedAt == "" {
 		t.Fatalf("состояние после подключения = %+v", got)
 	}
 
-	r = deleteWithCSRF(t, owner, srv, "/api/v1/workspaces/"+wsID+"/integrations/google")
+	r := deleteWithCSRF(t, owner, srv, "/api/v1/integrations/google/accounts/"+accountID)
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("отключение: статус %d, ожидалось 204", r.StatusCode)
 	}
@@ -315,7 +366,7 @@ func TestIntegrations_ConnectFlow(t *testing.T) {
 
 	var left int
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM integration_accounts WHERE workspace_id = $1`, wsID).Scan(&left); err != nil {
+		`SELECT count(*) FROM integration_accounts`).Scan(&left); err != nil {
 		t.Fatalf("count: %v", err)
 	}
 	if left != 0 {
@@ -323,22 +374,93 @@ func TestIntegrations_ConnectFlow(t *testing.T) {
 	}
 
 	// Повторное отключение идемпотентно — вторая вкладка не должна краснеть.
-	r = deleteWithCSRF(t, owner, srv, "/api/v1/workspaces/"+wsID+"/integrations/google")
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/integrations/google/accounts/"+accountID)
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("повторное отключение: статус %d, ожидалось 204", r.StatusCode)
 	}
 	closeBody(t, r)
 }
 
-// Подсунутый чужой code с несовпадающим state не подключает ничего: это защита
-// от CSRF, без неё атакующий подключает СВОЙ Google к чужому пространству.
-func TestIntegrations_CallbackRejectsForeignState(t *testing.T) {
+// ГЛАВНАЯ проверка задачи: второй аккаунт ДОБАВЛЯЕТСЯ, а не затирает первый, и
+// связки первого продолжают ехать им же.
+//
+// До 0037 повторное подключение переписывало ту же строку по
+// ON CONFLICT (workspace_id, provider), сохраняя её id: связки продолжали на неё
+// ссылаться, считались рабочими и начинали писать чужим токеном в таблицы,
+// которых тот не видит (scope drive.file), то есть краснели разом.
+func TestIntegrations_SecondAccountDoesNotReplaceFirst(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{accounts: []integrations.Account{
+		{ID: "sub-1", Email: "personal@gmail.com"},
+		{ID: "sub-2", Email: "work@gmail.com"},
+	}}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+
+	first := connectAccount(t, owner, srv)
+	formID := newForm(t, wsID, "f-two-accounts")
+	r := linkForm(t, owner, srv, formID, first)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка к первому аккаунту: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	second := connectAccount(t, owner, srv)
+	if second == first {
+		t.Fatal("второй аккаунт Google переписал первый — ровно тот дефект, ради которого сделано 0037")
+	}
+
+	got := formStatus(t, owner, srv, formID)
+	if len(got.Account.Accounts) != 2 {
+		t.Fatalf("аккаунты = %+v, ожидалось два", got.Account.Accounts)
+	}
+	if len(got.Connections) != 1 || got.Connections[0].AccountID != first {
+		t.Fatalf("связка = %+v — она обязана остаться на первом аккаунте", got.Connections)
+	}
+	if got.Connections[0].AccountEmail != "personal@gmail.com" {
+		t.Errorf("почта связки = %q, ожидалась первого аккаунта", got.Connections[0].AccountEmail)
+	}
+
+	// Отключение ВТОРОГО не трогает связки первого: каскад идёт по account_id.
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/integrations/google/accounts/"+second)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("отключение второго: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+	if got := formStatus(t, owner, srv, formID); len(got.Connections) != 1 {
+		t.Fatalf("связок после отключения соседнего аккаунта = %d, ожидалась одна", len(got.Connections))
+	}
+}
+
+// Повторный заход ТЕМ ЖЕ аккаунтом Google обновляет строку, а не плодит вторую:
+// так лечится отозванное согласие и пережившая ротацию ключа запись.
+func TestIntegrations_ReconnectSameAccountUpdatesRow(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 
-	startFlow(t, owner, srv, wsID)
+	first := connectAccount(t, owner, srv)
+	second := connectAccount(t, owner, srv)
+
+	if first != second {
+		t.Fatalf("переподключение тем же аккаунтом завело вторую строку: %s → %s", first, second)
+	}
+	got := formStatus(t, owner, srv, newForm(t, wsID, "f-reconnect")).Account
+	if len(got.Accounts) != 1 {
+		t.Fatalf("аккаунты = %+v, ожидался ровно один", got.Accounts)
+	}
+}
+
+// Подсунутый чужой code с несовпадающим state не подключает ничего: это защита
+// от CSRF, без неё атакующий подключает СВОЙ Google к чужому кабинету.
+func TestIntegrations_CallbackRejectsForeignState(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+
+	startFlow(t, owner, srv)
 	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/integrations/google/callback?code=auth-code&state=подделка")
 	assertOutcome(t, r, "integration_expired")
 
@@ -364,20 +486,17 @@ func TestIntegrations_CallbackWithoutIntent(t *testing.T) {
 }
 
 // Привязка формы: таблица создаётся, строка ложится в БД, состояние формы
-// показывает ссылку. Редактор это МОЖЕТ — право на привязку идёт под правкой
-// форм, а не под управлением аккаунтом.
+// показывает ссылку. Связок у формы сколько угодно, и удаление одной не трогает
+// соседнюю.
 func TestIntegrations_LinkFormToSheet(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
-
-	editor := registerUser(t, srv, "editor@example.com")
-	addMember(t, wsID, "editor@example.com", "editor")
+	accountID := connectAccount(t, owner, srv)
 	formID := newForm(t, wsID, "f-link")
 
-	r := postWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("привязка редактором: статус %d, ожидалось 201", r.StatusCode)
 	}
@@ -396,7 +515,7 @@ func TestIntegrations_LinkFormToSheet(t *testing.T) {
 
 	// Вторая связка законна — в том числе в ту же книгу: интеграция это правило
 	// доставки, а не состояние формы.
-	r = postWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r = linkForm(t, owner, srv, formID, accountID)
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("вторая связка: статус %d, ожидалось 201", r.StatusCode)
 	}
@@ -405,7 +524,7 @@ func TestIntegrations_LinkFormToSheet(t *testing.T) {
 		t.Fatalf("связок = %d, ожидалось две", len(got.Connections))
 	}
 
-	r = deleteWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID)
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID)
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("отвязка: статус %d, ожидалось 204", r.StatusCode)
 	}
@@ -424,7 +543,7 @@ func TestIntegrations_LinkWithoutAccount(t *testing.T) {
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
 
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+newForm(t, wsID, "f-noacc")+"/integrations/google")
+	r := linkForm(t, owner, srv, newForm(t, wsID, "f-noacc"), uuid.New().String())
 	if r.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("статус = %d, ожидалось 422", r.StatusCode)
 	}
@@ -438,16 +557,16 @@ func TestIntegrations_DisconnectCascadesToForms(t *testing.T) {
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 	formID := newForm(t, wsID, "f-cascade")
 
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
 	}
 	closeBody(t, r)
 
-	r = deleteWithCSRF(t, owner, srv, "/api/v1/workspaces/"+wsID+"/integrations/google")
+	r = deleteWithCSRF(t, owner, srv, "/api/v1/integrations/google/accounts/"+accountID)
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("отключение аккаунта: статус %d, ожидалось 204", r.StatusCode)
 	}
@@ -463,13 +582,35 @@ func TestIntegrations_DisconnectCascadesToForms(t *testing.T) {
 	}
 }
 
-// connectAccount проходит поход за согласием целиком: старт, колбэк, проверка
-// исхода. Дальше тесты работают с подключённым пространством.
-func connectAccount(t *testing.T, c *http.Client, srv *httptest.Server, wsID string) {
+// connectAccount проходит поход за согласием целиком и отдаёт id подключения:
+// адресоваться к аккаунту теперь надо явно, «подразумеваемого» больше нет.
+func connectAccount(t *testing.T, c *http.Client, srv *httptest.Server) string {
 	t.Helper()
-	state := startFlow(t, c, srv, wsID)
+	state := startFlow(t, c, srv)
 	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/integrations/google/callback?code=auth-code&state="+state)
 	assertOutcome(t, r, "integration_ok")
+
+	// Свежайшее подключение этого браузера. Колбэк — навигация и id не отдаёт
+	// (он редиректит на служебный экран), поэтому берём из базы.
+	var id string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id FROM integration_accounts ORDER BY connected_at DESC, id DESC LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("подключение не записано: %v", err)
+	}
+	return id
+}
+
+// linkForm привязывает форму к таблице названного аккаунта. Тело обязательно:
+// accountId подразумевать нечем.
+func linkForm(t *testing.T, c *http.Client, srv *httptest.Server, formID, accountID string) *http.Response {
+	t.Helper()
+	return postBodyWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		`{"accountId":"`+accountID+`"}`)
+}
+
+// linkBody — тело привязки с дополнительными настройками окна.
+func linkBody(accountID, rest string) string {
+	return `{"accountId":"` + accountID + `",` + rest + `}`
 }
 
 func postWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.Response {
@@ -497,11 +638,128 @@ func postBodyWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, 
 	return resp
 }
 
+// Существующую связку можно перевести на ДРУГОЙ свой аккаунт — вместе с целью.
+//
+// Раздельно нельзя физически (drive.file: прежняя таблица новому аккаунту не
+// видна), поэтому account_id и лист переезжают одной записью. Строки, уже
+// доставленные в прежний лист, остаются там.
+func TestIntegrations_MoveConnectionToAnotherAccount(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{accounts: []integrations.Account{
+		{ID: "sub-1", Email: "personal@gmail.com"},
+		{ID: "sub-2", Email: "work@gmail.com"},
+	}}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+
+	first := connectAccount(t, owner, srv)
+	second := connectAccount(t, owner, srv)
+	formID := newForm(t, wsID, "f-move")
+
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(first, `"backfill":false`))
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID,
+		`{"name":"Рабочий Диск","accountId":"`+second+`","spreadsheetId":"","backfill":false}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("перевод на другой аккаунт: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 {
+		t.Fatalf("связок = %d, ожидалась одна: перевод не должен плодить вторую", len(conns))
+	}
+	if conns[0].AccountID != second || conns[0].AccountEmail != "work@gmail.com" {
+		t.Fatalf("связка = %+v, ожидался второй аккаунт", conns[0])
+	}
+	if conns[0].ID != sheet.ID {
+		t.Error("id связки сменился — переехала не она, а новая")
+	}
+}
+
+// Чужим аккаунтом связку не перевести, и отказ приходит ДО первой записи: иначе
+// подпись сохранилась бы, а человек увидел бы ошибку вместе с новым названием.
+func TestIntegrations_MoveConnectionToForeignAccountRefused(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+
+	ownerAccount := connectAccount(t, owner, srv)
+	editorAccount := connectAccount(t, editor, srv)
+	formID := newForm(t, wsID, "f-move-foreign")
+
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(ownerAccount, `"backfill":false`))
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID,
+		`{"name":"Чужой","accountId":"`+editorAccount+`","spreadsheetId":"","backfill":false}`)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("перевод на чужой аккаунт: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 || conns[0].AccountID != ownerAccount {
+		t.Fatalf("связка = %+v, ожидалась на прежнем аккаунте", conns)
+	}
+	if conns[0].Name == "Чужой" {
+		t.Error("подпись сохранена, хотя правка отклонена")
+	}
+}
+
+// Переподключение отличается от «подключить ещё один» ровно подсказкой: адрес
+// один, а accountId в параметре заставляет сервер передать провайдеру почту
+// названного аккаунта. Чужой аккаунт подсказкой не станет — иначе перебором id
+// вычитывались бы чужие адреса.
+func TestIntegrations_StartWithReconnectHint(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	accountID := connectAccount(t, owner, srv)
+
+	provider.loginHint = ""
+	r := do(t, owner, http.MethodGet,
+		srv.URL+"/api/v1/integrations/google/start?accountId="+accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusFound {
+		t.Fatalf("start: статус %d, ожидалось 302", r.StatusCode)
+	}
+	if provider.loginHint != "author@gmail.com" {
+		t.Errorf("подсказка = %q, ожидалась почта аккаунта", provider.loginHint)
+	}
+
+	// Чужой аккаунт: 422 и никакой почты наружу.
+	stranger := registerUser(t, srv, "stranger@example.com")
+	provider.loginHint = ""
+	r = do(t, stranger, http.MethodGet,
+		srv.URL+"/api/v1/integrations/google/start?accountId="+accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("start с чужим аккаунтом: статус %d, ожидалось 422", r.StatusCode)
+	}
+	if provider.loginHint != "" {
+		t.Errorf("чужая почта уехала провайдеру: %q", provider.loginHint)
+	}
+}
+
 // startFlow проходит первый шаг и отдаёт state, который сервер положил в cookie
 // (он же уехал в ссылку провайдера).
-func startFlow(t *testing.T, c *http.Client, srv *httptest.Server, wsID string) string {
+func startFlow(t *testing.T, c *http.Client, srv *httptest.Server) string {
 	t.Helper()
-	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/integrations/google/start")
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/integrations/google/start")
 	defer closeBody(t, r)
 	if r.StatusCode != http.StatusFound {
 		t.Fatalf("start: статус %d, ожидалось 302", r.StatusCode)
@@ -658,11 +916,11 @@ func TestIntegrations_DeliverSubmission(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-deliver")
 	versionID := publishVersion(t, formID)
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
 	}
@@ -720,6 +978,70 @@ func TestIntegrations_NoEventForUnlinkedForm(t *testing.T) {
 // enqueueDelivery ставит событие доставки так же, как это делает приём ответа
 // после коммита. Через HTTP это шло бы публичной ручкой с антиспам-токеном —
 // тест про доставку, а не про приём.
+// Участника сняли с пространства — связка его аккаунтом Google встаёт, а
+// владелец видит причину текстом. Это плата за личные аккаунты, названная в
+// ADR §10 и закрытая сторожем доставки: без него ответы команды продолжали бы
+// течь в Диск бывшего участника.
+func TestIntegrations_DeliveryStopsAfterMemberRemoved(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+
+	editorAccount := connectAccount(t, editor, srv)
+	formID := newForm(t, wsID, "f-left")
+	versionID := publishVersion(t, formID)
+	r := postBodyWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(editorAccount, `"backfill":false`))
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	removeMember(t, wsID, "editor@example.com")
+
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(provider.appended) != 0 {
+		t.Fatalf("ответ уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 || conns[0].Status != "broken" {
+		t.Fatalf("связка = %+v, ожидался статус broken", conns)
+	}
+
+	// Событие ПОГАШЕНО, а не отложено: членство очередь не вернёт, и вечный
+	// ретрай означал бы стук в чужой API до конца времён.
+	var pending int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE sent_at IS NULL AND channel = $1`,
+		integrations.ChannelSheets).Scan(&pending); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("в очереди осталось %d событий — сторож отправил их на ретрай", pending)
+	}
+}
+
+// removeMember снимает доступ напрямую: проходить ручку кабинета ради проверки
+// доставки было бы тестом про участников, а не про интеграции.
+func removeMember(t *testing.T, wsID, email string) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`DELETE FROM workspace_members
+		  WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)`,
+		wsID, email)
+	if err != nil {
+		t.Fatalf("снятие участника: %v", err)
+	}
+}
+
 func enqueueDelivery(t *testing.T, _ *httptest.Server, formID, subID string) {
 	t.Helper()
 	if err := testIntegrations.EnqueueSubmission(context.Background(),
@@ -770,14 +1092,14 @@ func TestIntegrations_BackfillOnConnect(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-backfill")
 	versionID := publishVersion(t, formID)
 	first := newSubmission(t, formID, versionID, `{"b1":"Первый"}`)
 	second := newSubmission(t, formID, versionID, `{"b1":"Второй"}`)
 
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
 	}
@@ -822,13 +1144,13 @@ func TestIntegrations_Refill(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-refill")
 	versionID := publishVersion(t, formID)
 	newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
 
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	var sheet sheetDTO
 	decode(t, r, &sheet)
 	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
@@ -862,14 +1184,14 @@ func TestIntegrations_ConnectWithOptions(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-options")
 	versionID := publishVersion(t, formID)
 	newSubmission(t, formID, versionID, `{"b1":"Старый ответ"}`)
 
 	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
-		`{"name":"Заявки с лендинга","spreadsheetId":"","backfill":false}`)
+		linkBody(accountID, `"name":"Заявки с лендинга","spreadsheetId":"","backfill":false`))
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
 	}
@@ -902,9 +1224,7 @@ func TestIntegrations_ListSpreadsheets(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
-	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
-	formID := newForm(t, wsID, "f-list")
+	accountID := connectAccount(t, owner, srv)
 
 	var got struct {
 		Spreadsheets []struct {
@@ -912,33 +1232,26 @@ func TestIntegrations_ListSpreadsheets(t *testing.T) {
 			Name string `json:"name"`
 		} `json:"spreadsheets"`
 	}
-	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations/google/spreadsheets"), &got)
+	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/integrations/google/accounts/"+accountID+"/spreadsheets"), &got)
 
 	if len(got.Spreadsheets) != 1 || got.Spreadsheets[0].ID != "ss-old" {
 		t.Fatalf("список таблиц = %+v", got.Spreadsheets)
 	}
 }
 
-// Аккаунт не подключён — окно всё равно открывается, и список приходит пустым,
-// а не ошибкой: выбирать пока не из чего, но это не сбой.
-func TestIntegrations_ListSpreadsheetsWithoutAccount(t *testing.T) {
+// Список спрашивают у КОНКРЕТНОГО аккаунта, и несуществующий отвечает 422, а не
+// пустым списком: окно сначала выбирает аккаунт, и спрашивать список до выбора
+// незачем.
+func TestIntegrations_ListSpreadsheetsOfUnknownAccount(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
-	wsID := personalWorkspace(t)
-	formID := newForm(t, wsID, "f-list-empty")
 
-	r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations/google/spreadsheets")
-	if r.StatusCode != http.StatusOK {
-		closeBody(t, r)
-		t.Fatalf("статус = %d, ожидалось 200", r.StatusCode)
-	}
-	var got struct {
-		Spreadsheets []struct{} `json:"spreadsheets"`
-	}
-	decode(t, r, &got)
-	if len(got.Spreadsheets) != 0 {
-		t.Fatalf("список = %+v, ожидался пустой", got.Spreadsheets)
+	r := do(t, owner, http.MethodGet,
+		srv.URL+"/api/v1/integrations/google/accounts/"+uuid.New().String()+"/spreadsheets")
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус = %d, ожидалось 422", r.StatusCode)
 	}
 }
 
@@ -951,12 +1264,12 @@ func TestIntegrations_ToggleConnection(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-toggle")
 	versionID := publishVersion(t, formID)
 	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
-		`{"name":"","spreadsheetId":"","sheetId":null,"backfill":false}`)
+		linkBody(accountID, `"name":"","spreadsheetId":"","sheetId":null,"backfill":false`))
 	var sheet sheetDTO
 	decode(t, r, &sheet)
 
@@ -1001,13 +1314,13 @@ func TestIntegrations_TwoConnectionsBothDeliver(t *testing.T) {
 	srv := newStack(t, provider)
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-two")
 	versionID := publishVersion(t, formID)
 	for range 2 {
 		r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
-			`{"name":"","spreadsheetId":"","sheetId":null,"backfill":false}`)
+			linkBody(accountID, `"name":"","spreadsheetId":"","sheetId":null,"backfill":false`))
 		if r.StatusCode != http.StatusCreated {
 			t.Fatalf("связка: статус %d, ожидалось 201", r.StatusCode)
 		}
@@ -1029,11 +1342,11 @@ func TestIntegrations_ConnectionOfAnotherForm(t *testing.T) {
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
 	wsID := personalWorkspace(t)
-	connectAccount(t, owner, srv, wsID)
+	accountID := connectAccount(t, owner, srv)
 
 	formID := newForm(t, wsID, "f-mine")
 	otherID := newForm(t, wsID, "f-other")
-	r := postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google")
+	r := linkForm(t, owner, srv, formID, accountID)
 	var sheet sheetDTO
 	decode(t, r, &sheet)
 

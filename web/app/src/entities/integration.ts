@@ -3,28 +3,33 @@ import { z } from 'zod'
 // Интеграции формы (фаза 25). Зеркалит Go-DTO internal/integrations/handler.go —
 // правка одной стороны требует правки другой.
 
-// Состояние подключённого аккаунта в пространстве формы.
+// Один подключённый аккаунт Google. Аккаунт принадлежит ЧЕЛОВЕКУ, а не
+// пространству (ADR §10, 2026-08-27), и их у него сколько угодно.
+export const connectedAccountSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  // needsReconnect — подключение есть, но пользоваться им нельзя: refresh-токен
+  // на бэке не расшифровывается (сменился ключ контура). Лечение другое, чем у
+  // «аккаунта нет», — «подключите ЗАНОВО», и до этого не работает ни одна
+  // связка этого аккаунта.
+  needsReconnect: z.boolean().default(false),
+  connectedAt: z.string(),
+})
+
+// Подключения СПРАШИВАЮЩЕГО — то, из чего он выбирает в окне связки. Не
+// «аккаунт пространства»: в команде каждый видит здесь свои.
 export const integrationAccountSchema = z.object({
   // enabled — настроен ли провайдер НА КОНТУРЕ (ключи в окружении бэка).
-  // Отдельно от connected: «интеграции здесь нет вовсе» и «есть, но не
-  // подключена» — разные экраны, и путать их значит советовать человеку нажать
-  // кнопку, которой у него не появится.
+  // Отдельно от пустого списка: «интеграции здесь нет вовсе» и «есть, но ничего
+  // не подключено» — разные экраны, и путать их значит советовать человеку
+  // нажать кнопку, которой у него не появится.
   enabled: z.boolean(),
   // pickerEnabled — настроено ли окно выбора файла на Диске (нужен отдельный
   // ключ). Отдельно от enabled: интеграция работает и без него — просто без
   // «выбрать существующую чужую таблицу».
   pickerEnabled: z.boolean().default(false),
-  connected: z.boolean(),
-  // needsReconnect — подключение есть, но пользоваться им нельзя: refresh-токен
-  // на бэке не расшифровывается (сменился ключ контура). Отдельно от connected,
-  // потому что лечение другое — «подключите ЗАНОВО», и до этого не работает ни
-  // одна связка формы.
-  needsReconnect: z.boolean().default(false),
-  email: z.string().optional(),
-  connectedAt: z.string().optional(),
-  // canManage — может ли СПРАШИВАЮЩИЙ подключать и отключать аккаунт. Кнопка
-  // рисуется по нему, а не по роли: матрица прав живёт на бэке (web/CLAUDE.md).
-  canManage: z.boolean(),
+  // Пустой список — состояние экрана, а не ошибка.
+  accounts: z.array(connectedAccountSchema).default([]),
 })
 
 // Статус привязки формы к таблице.
@@ -35,6 +40,12 @@ export const formSheetSchema = z.object({
   // сколько угодно, в том числе в одну и ту же книгу.
   id: z.string(),
   url: z.string(),
+  // accountId и accountEmail — каким подключением едет связка. Почта нужна и
+  // когда аккаунт ЧУЖОЙ: в команде связку заводит один участник, а смотрит
+  // другой, и без подписи «через кого» он увидит интеграцию, которой нет в его
+  // селекте.
+  accountId: z.string(),
+  accountEmail: z.string(),
   // spreadsheetId и sheetId — текущая цель. Экран правки открывается тем же
   // окном, что и подключение, и обязан показать в полях то, что уже выбрано.
   spreadsheetId: z.string(),
@@ -82,6 +93,7 @@ export const sheetListSchema = z.object({
 
 export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>
 export type SheetRef = z.infer<typeof sheetRefSchema>
+export type ConnectedAccount = z.infer<typeof connectedAccountSchema>
 export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>

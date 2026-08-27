@@ -35,17 +35,15 @@ const (
 // список участников editor ВИДИТ (знать, с кем работаешь, безобидно).
 var roleActions = map[Role]map[domain.Action]bool{
 	RoleOwner: {
-		domain.ActionFormRead:          true,
-		domain.ActionFormWrite:         true,
-		domain.ActionFormDelete:        true,
-		domain.ActionSubmissionDelete:  true,
-		domain.ActionBillingView:       true,
-		domain.ActionMemberRead:        true,
-		domain.ActionMemberManage:      true,
-		domain.ActionWorkspaceManage:   true,
-		domain.ActionWorkspaceDelete:   true,
-		domain.ActionIntegrationRead:   true,
-		domain.ActionIntegrationManage: true,
+		domain.ActionFormRead:         true,
+		domain.ActionFormWrite:        true,
+		domain.ActionFormDelete:       true,
+		domain.ActionSubmissionDelete: true,
+		domain.ActionBillingView:      true,
+		domain.ActionMemberRead:       true,
+		domain.ActionMemberManage:     true,
+		domain.ActionWorkspaceManage:  true,
+		domain.ActionWorkspaceDelete:  true,
 	},
 	RoleEditor: {
 		domain.ActionFormRead:         true,
@@ -57,11 +55,6 @@ var roleActions = map[Role]map[domain.Action]bool{
 		domain.ActionMemberManage:     false,
 		domain.ActionWorkspaceManage:  false,
 		domain.ActionWorkspaceDelete:  false,
-		domain.ActionIntegrationRead:  true,
-		// Подключение аккаунта Google — решение о вывозе персональных данных
-		// респондентов наружу; его принимает владелец пространства, а не тот,
-		// кому доверили править формы.
-		domain.ActionIntegrationManage: false,
 	},
 }
 
@@ -79,8 +72,6 @@ var AllActions = []domain.Action{
 	domain.ActionMemberManage,
 	domain.ActionWorkspaceManage,
 	domain.ActionWorkspaceDelete,
-	domain.ActionIntegrationRead,
-	domain.ActionIntegrationManage,
 }
 
 // allows — чистое решение по матрице, без БД: роль + действие → можно ли.
@@ -182,6 +173,28 @@ func (s *Service) checkFrozen(ctx context.Context, acc AccessContext) error {
 		return domain.ErrWorkspaceFrozen
 	}
 	return nil
+}
+
+// IsMember — состоит ли человек в пространстве. Голое членство, БЕЗ вопроса о
+// правах и БЕЗ проверки заморозки, и оба отличия намеренные.
+//
+// Единственный потребитель — фоновая доставка интеграций: аккаунт Google личный
+// (ADR §10), и связку, заведённую ушедшим участником, поток ответов обязан
+// потерять. Спросить это через Can нельзя дважды. Во-первых, Can отвечает про
+// ДЕЙСТВИЕ, и «есть ли у него form.read» — не тот вопрос: роли меняются, а
+// правило про уход остаётся. Во-вторых, Can гасит замороженное пространство, а
+// доставка ответа — продолжение публичного приёма, который заморозку не
+// спрашивает (см. checkFrozen): иначе даунгрейд владельца молча ломал бы
+// интеграции, о которых в решении про заморозку речи не было.
+func (s *Service) IsMember(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error) {
+	_, err := s.repo.AccessContext(ctx, s.db, workspaceID, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // AllowedActions — что этому человеку можно в этом пространстве. Нужен
