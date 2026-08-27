@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { AlertCircle, Loader2 } from 'lucide-react'
 
@@ -116,6 +116,25 @@ export function GoogleSheetsOverlay({
     setOutcome(null)
     return popup.open(href)
   }
+
+  // Только что подключённый аккаунт становится выбранным.
+  //
+  // Человек нажал «подключить» ради него — оставить выбор на прежнем значит
+  // заставить его сделать вторым действием то, чего он и добивался первым; а
+  // когда подключений не было вовсе, выбор оставался пустым и кнопка сохранения
+  // запертой.
+  //
+  // Отличаем по НОВОМУ id, а не по «последний в списке»: переподключение
+  // прежнего аккаунта тоже двигает его в конец (порядок — по connected_at), но
+  // новых id не добавляет, и трогать выбор в этом случае нельзя — человек может
+  // чинить один аккаунт, настраивая связку на другом.
+  const seenAccounts = useRef(new Set(state.account.accounts.map((a) => a.id)))
+  const { setAccount } = setup
+  useEffect(() => {
+    const added = state.account.accounts.find((a) => !seenAccounts.current.has(a.id))
+    for (const a of state.account.accounts) seenAccounts.current.add(a.id)
+    if (added) setAccount(added.id)
+  }, [state.account.accounts, setAccount])
 
   // Что-нибудь ещё едет? Считаем ТОЛЬКО списки самого окна: ключ состояния формы
   // короче на один сегмент, и опрос переноса (раз в 3 секунды, пока связка
@@ -275,14 +294,17 @@ function useSetupState(connection: FormSheet | null, accounts: ConnectedAccount[
 
   return {
     account,
-    setAccount: (value: string) => {
+    // useCallback не украшение: эта функция уходит в зависимости эффекта,
+    // выбирающего только что подключённый аккаунт, и пересоздание её каждым
+    // рендером гоняло бы эффект вхолостую.
+    setAccount: useCallback((value: string) => {
       setAccount(value)
       // Сменили аккаунт — прежняя книга лежит в ЧУЖОМ Диске и этому аккаунту
       // недоступна (scope drive.file): выбор обязан начаться заново.
       setSpreadsheetValue(NEW_SPREADSHEET)
       setSheet(NEW_SHEET)
       setPicked(null)
-    },
+    }, []),
     name,
     setName,
     spreadsheet,

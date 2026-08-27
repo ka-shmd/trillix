@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { ConnectedAccount, FormIntegrations, FormSheet } from '../../entities/integration'
@@ -127,6 +127,8 @@ function newTestClient() {
 // seedSpreadsheets=false оставляет список таблиц НЕпосеянным — запрос уходит и
 // остаётся в полёте. Это единственный способ поймать состояние «что-то ещё едет»,
 // ради которого в окне есть индикатор.
+// Отдаёт клиент: часть проверок доигрывает приезд НОВЫХ данных (аккаунт
+// подключился в соседнем окне) — для этого их надо положить в кеш после рендера.
 function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
@@ -140,6 +142,7 @@ function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
       <IntegrationsView formId={FORM_ID} />
     </QueryClientProvider>,
   )
+  return qc
 }
 
 // Два входа в оверлей: из каталога — подключить ещё одну связку, из строки
@@ -374,6 +377,67 @@ describe('оверлей настройки Google Таблиц', () => {
 
     fireEvent.click(select)
     expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+  })
+
+  // Человек нажал «подключить другой» ради нового аккаунта — он и должен остаться
+  // выбранным. Иначе он делает вторым действием то, чего добивался первым.
+  it('подключил новый аккаунт — выбранным становится он', async () => {
+    const qc = renderView(state({ account: CONNECTED }))
+    openSetup()
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('author@gmail.com')
+
+    // Так выглядит возвращение из окна Google: состояние перезапросилось и
+    // приехало со вторым подключением.
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({
+          account: {
+            ...CONNECTED,
+            accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+          },
+        }),
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com'),
+    )
+  })
+
+  // Переподключение прежнего аккаунта выбор НЕ трогает: новых id оно не даёт, а
+  // человек может чинить один аккаунт, настраивая связку на другом. Сторожит
+  // выбор «по новому id» против соблазна взять последний в списке — порядок идёт
+  // по connected_at, и переподключённый тоже уезжает в конец.
+  it('переподключил прежний аккаунт — выбор остаётся где был', async () => {
+    const two = {
+      ...CONNECTED,
+      accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+    }
+    const qc = renderView(state({ account: two }))
+    openSetup()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+    fireEvent.click(screen.getByRole('option', { name: 'work@gmail.com' }))
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com')
+
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({
+          account: {
+            ...CONNECTED,
+            // Тот же состав, но первый переподключён и уехал в конец списка.
+            accounts: [
+              account({ id: 'acc-2', email: 'work@gmail.com' }),
+              account({ connectedAt: '2026-08-27T12:00:00Z' }),
+            ],
+          },
+        }),
+      )
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('Аккаунт Google')).toBeTruthy())
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com')
   })
 
   // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
