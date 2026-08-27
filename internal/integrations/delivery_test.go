@@ -73,6 +73,59 @@ func deliveryService(store *fakeStore, provider *fakeProvider, subs *fakeSubmiss
 	return newFormService(fakeAccess{}, store, fakeForms{}, provider).WithDelivery(out, subs)
 }
 
+// Человека сняли с пространства — связка его аккаунтом останавливается и
+// краснеет, а не льёт ответы команды в Диск бывшего участника.
+//
+// Это плата за личные аккаунты, названная в ADR §10 и закрытая сторожем: без
+// него снятие доступа не останавливало бы поток наружу вовсе. Событие ГАСИТСЯ
+// (nil, а не ошибка): членство очередь не вернёт, и ретраить нечего.
+func TestDeliver_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{col("_id", "ID ответа")},
+		Row:     []string{"018f"},
+	}}
+	svc := newFormService(fakeAccess{gone: true}, store, fakeForms{}, provider).
+		WithDelivery(&fakeOutbox{}, subs)
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("событие ушло на ретрай вместо того, чтобы погаснуть: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("ответ уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не помечена сломанной — владелец не узнает причину")
+	}
+}
+
+// Тот же сторож обязан гасить и ПЕРЕНОС: догрузка ушедшего участника — та же
+// утечка, только пачкой. Проверяется отдельно, потому что перенос разбирается
+// выше тумблера и легко оказаться выше сторожа.
+func TestDeliverBackfill_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{gone: true}, store, fakeForms{}, provider).
+		WithDelivery(out, &fakeSubmissions{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос ушёл на ретрай вместо того, чтобы погаснуть: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("перенос уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	if out.payload != nil {
+		t.Fatal("поставлена следующая пачка переноса — он не остановился")
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не помечена сломанной")
+	}
+}
+
 // Ответ доезжает строкой в порядке КОЛОНОК ЛИСТА, и привязка помечается
 // доставленной.
 func TestDeliver_AppendsRow(t *testing.T) {

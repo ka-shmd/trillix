@@ -25,6 +25,9 @@ import (
 // ErrForbidden (403).
 type Access interface {
 	Can(ctx context.Context, workspaceID, userID uuid.UUID, action domain.Action) error
+	// IsMember — голое членство, без вопроса о правах. Нужно доставке: аккаунт
+	// Google личный, и связку ушедшего участника поток ответов обязан потерять.
+	IsMember(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error)
 }
 
 // Store — доступ к данным, объявленный потребителем. Реализация — Repo.

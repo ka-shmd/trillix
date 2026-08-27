@@ -861,6 +861,70 @@ func TestIntegrations_NoEventForUnlinkedForm(t *testing.T) {
 // enqueueDelivery ставит событие доставки так же, как это делает приём ответа
 // после коммита. Через HTTP это шло бы публичной ручкой с антиспам-токеном —
 // тест про доставку, а не про приём.
+// Участника сняли с пространства — связка его аккаунтом Google встаёт, а
+// владелец видит причину текстом. Это плата за личные аккаунты, названная в
+// ADR §10 и закрытая сторожем доставки: без него ответы команды продолжали бы
+// течь в Диск бывшего участника.
+func TestIntegrations_DeliveryStopsAfterMemberRemoved(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+
+	editorAccount := connectAccount(t, editor, srv)
+	formID := newForm(t, wsID, "f-left")
+	versionID := publishVersion(t, formID)
+	r := postBodyWithCSRF(t, editor, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(editorAccount, `"backfill":false`))
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	removeMember(t, wsID, "editor@example.com")
+
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	if len(provider.appended) != 0 {
+		t.Fatalf("ответ уехал в Диск бывшего участника: %v", provider.appended)
+	}
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 || conns[0].Status != "broken" {
+		t.Fatalf("связка = %+v, ожидался статус broken", conns)
+	}
+
+	// Событие ПОГАШЕНО, а не отложено: членство очередь не вернёт, и вечный
+	// ретрай означал бы стук в чужой API до конца времён.
+	var pending int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE sent_at IS NULL AND channel = $1`,
+		integrations.ChannelSheets).Scan(&pending); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("в очереди осталось %d событий — сторож отправил их на ретрай", pending)
+	}
+}
+
+// removeMember снимает доступ напрямую: проходить ручку кабинета ради проверки
+// доставки было бы тестом про участников, а не про интеграции.
+func removeMember(t *testing.T, wsID, email string) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`DELETE FROM workspace_members
+		  WHERE workspace_id = $1 AND user_id = (SELECT id FROM users WHERE email = $2)`,
+		wsID, email)
+	if err != nil {
+		t.Fatalf("снятие участника: %v", err)
+	}
+}
+
 func enqueueDelivery(t *testing.T, _ *httptest.Server, formID, subID string) {
 	t.Helper()
 	if err := testIntegrations.EnqueueSubmission(context.Background(),

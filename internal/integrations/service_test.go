@@ -31,10 +31,17 @@ var (
 // fakeAccess — права как ответ на ДЕЙСТВИЕ: ровно то, что спрашивает сервис.
 type fakeAccess struct {
 	deny map[domain.Action]error
+	// gone — человек ушёл из пространства. Нулевое значение = «на месте»: так
+	// подавляющее большинство тестов не обязано знать про сторож доставки.
+	gone bool
 }
 
 func (f fakeAccess) Can(_ context.Context, _, _ uuid.UUID, a domain.Action) error {
 	return f.deny[a]
+}
+
+func (f fakeAccess) IsMember(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return !f.gone, nil
 }
 
 // readerAccess — участник без права править формы. Связку он завести не может,
