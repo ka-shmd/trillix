@@ -33,6 +33,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // Настройки любой связки живут в полноэкранном оверлее: у интеграции есть
 // решения, которые принимают ДО первой записи в чужие данные, и в списке они
 // превратились бы в цепочку кнопок, каждая из которых уже что-то поменяла.
+
+// SERVICE_ICON — размер логотипа сервиса, общий для обоих блоков экрана. Знак
+// один и тот же, и разный кегль в списке подключений и в каталоге читался бы как
+// два разных сервиса. Константа, а не два одинаковых литерала: они разъезжаются
+// ровно тогда, когда один из блоков правят.
+const SERVICE_ICON = 'size-10'
+
 export function IntegrationsView({ formId }: { formId: string }) {
   const state = useQuery(formIntegrationsQueryOptions(formId))
   // overlay — что открыто: 'new' (подключаем ещё одну) либо id связки (правим).
@@ -90,7 +97,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
             они обещают срок, которого никто не давал. */}
         <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
           <li className="flex flex-col items-start">
-            <GoogleSheetsIcon className="size-8" />
+            <GoogleSheetsIcon className={SERVICE_ICON} />
             <p className="mt-2 text-base font-semibold">Google Таблицы</p>
             <p className="mt-1 text-sm text-muted-foreground">Отправляйте ответы в таблицу</p>
             <Button
@@ -146,7 +153,7 @@ function ConnectionRow({
 
   return (
     <div className="flex items-center gap-3 py-3">
-      <GoogleSheetsIcon className="size-7 shrink-0" />
+      <GoogleSheetsIcon className={`${SERVICE_ICON} shrink-0`} />
       <div className="min-w-0 flex-1">
         <p className="flex items-center gap-2 text-base font-semibold">
           <span className="truncate">{name}</span>
@@ -172,7 +179,7 @@ function ConnectionRow({
             rel="noreferrer"
             className="underline underline-offset-2 hover:text-foreground"
           >
-            этой таблицей
+            таблицей
           </a>
           {/* Через чей аккаунт едет связка. Аккаунтов у человека сколько угодно,
               и в команде связку мог завести коллега — без подписи строка не
