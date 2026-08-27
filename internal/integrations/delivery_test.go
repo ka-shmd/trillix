@@ -265,6 +265,36 @@ func TestDeliver_LeavesAlienTailAlone(t *testing.T) {
 	}
 }
 
+// Своя колонка автора справа + новый вопрос в форме = дописать некуда. Отказ
+// тот же, а СОВЕТ другой: «верните шапку как было» здесь означал бы «удалите
+// свою колонку», поэтому текст зовёт перезалить лист.
+func TestDeliver_NoRoomForNewColumnTellsToRefill(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{
+		sheetHeader: []string{"ID ответа", "Имя", "Почта", "Местное время"},
+	}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{
+		Columns: []domain.SheetColumn{
+			col("_id", "ID ответа"), col("b1", "Имя"), col("b2", "Почта"), col("b3", "Телефон"),
+		},
+		Row: []string{"018f", "Ирина", "i@example.com", "+7"},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("отказ ушёл на ретрай: %v", err)
+	}
+	if len(provider.appended) != 0 {
+		t.Fatalf("строка записана вслепую: %v", provider.appended)
+	}
+	if provider.header != nil {
+		t.Errorf("шапка переписана поверх авторской колонки: %v", provider.header)
+	}
+	if !strings.Contains(store.brokenWith, "Перезалейте лист") {
+		t.Fatalf("причина = %q, ожидался совет перезалить, а не «верните как было»", store.brokenWith)
+	}
+}
+
 // Чужая колонка ПОСРЕДИ наших — повод остановиться, а не гадать: append умеет
 // только сплошную строку от колонки A, и пропуск в середине означал бы, что всё
 // правее уехало на одну ячейку. Связка краснеет человеческим текстом.

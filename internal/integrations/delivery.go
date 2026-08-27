@@ -303,6 +303,11 @@ func (s *Service) deliveryFailed(ctx context.Context, link FormLink, cause error
 // провайдера туда не уходит: он на английском и про HTTP, а читать его будет
 // автор формы.
 func brokenReason(cause error) string {
+	if errors.Is(cause, ErrSheetNoRoom) {
+		return "В форме появился новый вопрос, а справа в листе стоит ваша собственная колонка — " +
+			"дописать заголовок некуда, не сдвинув её. Перезалейте лист: он соберётся заново по сегодняшней форме, " +
+			"свою колонку добавьте после этого."
+	}
 	if errors.Is(cause, ErrSheetLayout) {
 		return "Колонки листа больше не совпадают с вопросами формы — похоже, шапку правили вручную. " +
 			"Верните её как было либо перезалейте лист: писать наугад мы не станем, чтобы ответы не легли под чужие заголовки."
@@ -317,6 +322,12 @@ func brokenReason(cause error) string {
 // помним» — это класть значения под чужие заголовки. Лечение в руках автора:
 // вернуть колонки как было либо перезалить лист.
 var ErrSheetLayout = fmt.Errorf("%w: раскладка колонок листа не читается", ErrPermanent)
+
+// ErrSheetNoRoom — новую колонку вопроса некуда дописать: справа от наших стоит
+// колонка автора. Отдельно от ErrSheetLayout, хотя и вложен в него: причина
+// другая и лечение другое, а один общий текст на оба случая советовал бы автору
+// «вернуть шапку как было», то есть удалить свою же колонку.
+var ErrSheetNoRoom = fmt.Errorf("%w: справа от наших колонок стоит чужая", ErrSheetLayout)
 
 // layoutOf — наши колонки в порядке листа.
 //
@@ -453,7 +464,7 @@ func (s *Service) reconcileColumns(ctx context.Context, token string, link FormL
 	// стоят чужие колонки автора, места нет: append умеет сплошную строку от
 	// колонки A, и новая колонка либо затрёт чужую, либо оставит пропуск.
 	if len(header) > len(layout) {
-		return nil, fmt.Errorf("%w: справа от наших колонок есть посторонние, новую колонку вопроса дописать некуда", ErrSheetLayout)
+		return nil, fmt.Errorf("%w: ширина шапки %d при %d наших колонках", ErrSheetNoRoom, len(header), len(layout))
 	}
 
 	columns := append(append([]domain.SheetColumn{}, layout...), missing...)

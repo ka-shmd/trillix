@@ -640,9 +640,8 @@ func (s *Service) Picker(ctx context.Context, userID, accountID uuid.UUID) (Pick
 // Spreadsheets — таблицы, которые приложение создавало в этом аккаунте Google.
 //
 // Список не ограничен пространством и ограничен быть не может: под drive.file в
-// нём лежат все созданные нами файлы этого аккаунта. Раньше это требовало роли
-// владельца (список раскрывал имена форм соседних пространств) — теперь список
-// свой собственный, и раскрывать в нём человеку нечего.
+// нём лежат все созданные нами файлы этого аккаунта. Роли для него не нужно —
+// аккаунт свой, и раскрывать в нём человеку нечего.
 func (s *Service) Spreadsheets(ctx context.Context, userID, accountID uuid.UUID) ([]SpreadsheetRef, error) {
 	if !s.Enabled() {
 		return nil, domain.ErrNotFound
