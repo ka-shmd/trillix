@@ -321,11 +321,12 @@ function SetupBody({
         />
       </div>
 
-      {connection ? (
-        <LockedAccountField connection={connection} />
-      ) : (
-        <AccountField formId={formId} accounts={account.accounts} setup={setup} />
-      )}
+      <AccountField
+        formId={formId}
+        accounts={account.accounts}
+        connection={connection}
+        setup={setup}
+      />
 
       <SpreadsheetField
         accountId={setup.account}
@@ -393,7 +394,13 @@ function SetupBody({
     }
     if (connection) {
       update.mutate(
-        { id: connection.id, name: setup.name, enabled: connection.enabled, ...target },
+        {
+          id: connection.id,
+          name: setup.name,
+          enabled: connection.enabled,
+          accountId: setup.account,
+          ...target,
+        },
         { onSuccess: onDone },
       )
       return
@@ -653,10 +660,16 @@ function ConnectAccount({ formId }: { formId: string }) {
 function AccountField({
   formId,
   accounts,
+  connection,
   setup,
 }: {
   formId: string
   accounts: ConnectedAccount[]
+  // connection — правим существующую связку. Нужна ради ЧУЖОГО аккаунта: связку
+  // мог завести коллега, его подключения в списке спрашивающего нет, и без
+  // отдельного пункта Select показал бы пустое поле вместо «через кого едет».
+  // Тот же приём, что у книги, выбранной в окне Google (`picked` ниже).
+  connection: FormSheet | null
   setup: SetupState
 }) {
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
@@ -667,6 +680,13 @@ function AccountField({
   })
 
   const chosen = accounts.find((a) => a.id === setup.account) ?? null
+  // Аккаунт связки, которого нет среди своих, — чужой: показываем его пунктом,
+  // чтобы поле не выглядело пустым, но выбрать заново после ухода с него нельзя
+  // (токена этого аккаунта у спрашивающего нет).
+  const foreign =
+    connection && !accounts.some((a) => a.id === connection.accountId)
+      ? { id: connection.accountId, email: connection.accountEmail }
+      : null
 
   return (
     <div className="flex flex-col gap-2">
@@ -679,6 +699,9 @@ function AccountField({
           <SelectValue placeholder="Выберите аккаунт" />
         </SelectTrigger>
         <SelectContent>
+          {foreign && (
+            <SelectItem value={foreign.id}>{foreign.email} — подключение коллеги</SelectItem>
+          )}
           {accounts.map((a) => (
             <SelectItem key={a.id} value={a.id}>
               {a.email}
@@ -714,6 +737,17 @@ function AccountField({
           />
         )}
       </div>
+
+      {/* Смена аккаунта у существующей связки — это переезд: таблица прежнего
+          аккаунта новому под scope drive.file не видна, и поле «Таблица» уже
+          сбросилось на «создать новую». Сказать это вслух обязательно — иначе
+          человек сохранит правку, ожидая, что данные останутся в прежнем листе. */}
+      {connection && setup.account !== connection.accountId && (
+        <p className="text-sm text-muted-foreground">
+          Прежняя таблица другому аккаунту недоступна — выберите или создайте таблицу в новом.
+          Строки, уже доставленные в старую, останутся там.
+        </p>
+      )}
 
       {/* Потерянный токен важнее всего остального в этом поле: пока он не
           обновлён, ни одна связка этого аккаунта не работает, а лечение — рядом,
@@ -768,29 +802,6 @@ function AccountAction({
         {waiting ? 'Ждём подтверждения в окне Google…' : label}
       </a>
     </Button>
-  )
-}
-
-// LockedAccountField — аккаунт существующей связки. Показывается, но не
-// меняется, и это не упрощение: таблица создана ЭТИМ аккаунтом, а другому она
-// под scope drive.file не видна вовсе. «Сменить аккаунт» здесь означало бы
-// «завести другую таблицу», то есть новую связку, — её и надо завести.
-//
-// Почта показывается и когда аккаунт ЧУЖОЙ: в команде связку заводит один
-// участник, а открывает другой, и без подписи он не поймёт, почему не может её
-// перенастроить.
-function LockedAccountField({ connection }: { connection: FormSheet }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <Label>Аккаунт Google</Label>
-      <div className="flex min-h-10 items-center rounded-md border px-3 py-2">
-        <span className="truncate text-base">{connection.accountEmail}</span>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Таблица создана этим аккаунтом и другому недоступна. Чтобы лить ответы через другой аккаунт,
-        подключите ещё одну интеграцию.
-      </p>
-    </div>
   )
 }
 

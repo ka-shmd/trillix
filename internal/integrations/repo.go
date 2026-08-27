@@ -369,7 +369,10 @@ func (Repo) FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 
 // UpdateLinkTarget переносит связку в другой лист: адрес, колонки и статус
 // меняются разом, прошлая ошибка гасится.
-func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+// UpdateLinkTarget переносит связку на другую цель. accountID едет вместе с
+// листом, а не отдельным методом: разделить их значит позволить записать связку,
+// у которой аккаунт не видит своей же таблицы.
+func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
 	raw, err := json.Marshal(columns)
 	if err != nil {
 		return 0, fmt.Errorf("marshal columns: %w", err)
@@ -377,6 +380,7 @@ func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID u
 	n, err := postgres.New(db).UpdateFormIntegrationTarget(ctx, postgres.UpdateFormIntegrationTargetParams{
 		ID:             id,
 		FormID:         formID,
+		AccountID:      accountID,
 		SpreadsheetID:  sheet.ID,
 		SpreadsheetUrl: sheet.URL,
 		SheetID:        sheet.SheetID,

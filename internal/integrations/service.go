@@ -42,7 +42,7 @@ type Store interface {
 	EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
-	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error)
+	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error)
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
 	StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error
 	FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
@@ -735,9 +735,16 @@ func (s *Service) DisconnectForm(ctx context.Context, userID, formID, linkID uui
 type ConnectionPatch struct {
 	Name    string
 	Enabled bool
-	// Target — куда лить. Совпал с текущим — связка остаётся на месте, и мы не
-	// трогаем ни лист, ни колонки. Отличается — связка ПЕРЕЕЗЖАЕТ: в новом
-	// листе пишется шапка, колонки собираются заново.
+	// Target — куда лить: АККАУНТ и лист вместе. Совпали с текущими — связка
+	// остаётся на месте, и мы не трогаем ни лист, ни колонки. Отличается хоть
+	// одно — связка ПЕРЕЕЗЖАЕТ: в новом листе пишется шапка, колонки собираются
+	// заново.
+	//
+	// Аккаунт и лист неразделимы не по прихоти экрана: под scope drive.file
+	// таблица видна только создавшему её аккаунту, поэтому «сменить аккаунт,
+	// оставив лист» — это запись чужим токеном в невидимый ему файл, то есть 404
+	// и красная связка. Человек в окне видит то же самое: сменил аккаунт —
+	// список таблиц перечитался под новый.
 	Target ConnectOptions
 	// RetargetOnly — правка пришла без выбора цели (например, только тумблер из
 	// списка). Тогда цель не трогаем вовсе.
@@ -755,6 +762,20 @@ func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID u
 	name := strings.TrimSpace(patch.Name)
 	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
 		return fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
+	}
+	// Принадлежность названного аккаунта проверяется ДО первой записи, хотя
+	// retarget проверит её ещё раз: иначе правка с чужим аккаунтом успевает
+	// сохранить подпись и падает уже после — человек видит отказ и изменившееся
+	// название разом. Цена — лишнее чтение строки аккаунта на пути правки цели;
+	// это действие человека, а не горячий путь.
+	//
+	// Частичность на этом не исчезает совсем: отказ ПРОВАЙДЕРА (Google недоступен,
+	// лист занят) по-прежнему приходит после записи подписи. Лечится транзакцией
+	// поверх обеих записей и в эту задачу не входит.
+	if !patch.KeepTarget && patch.Target.AccountID != uuid.Nil {
+		if _, err := s.accountOf(ctx, userID, patch.Target.AccountID); err != nil {
+			return err
+		}
 	}
 
 	n, err := s.repo.UpdateLinkSettings(ctx, s.db, linkID, formID, name, patch.Enabled)
@@ -782,13 +803,21 @@ func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID
 	if err != nil {
 		return err
 	}
+	// Аккаунт не назван — правка пришла не из окна настройки (или из старого
+	// клиента): связка остаётся на своём.
+	if target.AccountID == uuid.Nil {
+		target.AccountID = link.AccountID
+	}
 	if sameTarget(link, target) {
 		return nil
 	}
 
-	conn, err := s.repo.GetAccountByID(ctx, s.db, link.AccountID)
+	// Аккаунт берётся из ПРАВКИ, а не из связки: человек вправе перевести её на
+	// другое своё подключение. Проверка принадлежности здесь та же, что при
+	// заведении, — чужой аккаунт связке не назначить (инвариант 1).
+	conn, err := s.accountOf(ctx, userID, target.AccountID)
 	if err != nil {
-		return fmt.Errorf("retarget connection: %w", err)
+		return err
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
@@ -818,7 +847,7 @@ func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID
 	if target.Backfill {
 		status = StatusBackfilling
 	}
-	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, linkID, formID, sheet, columns, status); err != nil {
+	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, linkID, formID, conn.ID, sheet, columns, status); err != nil {
 		return err
 	}
 	if target.Backfill {
@@ -827,9 +856,17 @@ func (s *Service) retarget(ctx context.Context, userID, formID, linkID uuid.UUID
 	return nil
 }
 
-// sameTarget отвечает, указывает ли правка на тот же лист, что уже привязан.
-// Пустой SpreadsheetID означает «завести новую книгу» — это всегда переезд.
+// sameTarget отвечает, указывает ли правка на ту же пару «аккаунт + лист», что
+// уже привязана. Пустой SpreadsheetID означает «завести новую книгу» — это
+// всегда переезд.
+//
+// Аккаунт участвует в сравнении наравне с листом: тот же id таблицы у ДРУГОГО
+// аккаунта — это другой файл в другом Диске (человек мог выбрать через окно
+// Google расшаренную копию), и «ничего не изменилось» здесь было бы неправдой.
 func sameTarget(link FormLink, target ConnectOptions) bool {
+	if target.AccountID != link.AccountID {
+		return false
+	}
 	if target.SpreadsheetID == "" || target.SpreadsheetID != link.SpreadsheetID {
 		return false
 	}

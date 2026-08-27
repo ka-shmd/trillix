@@ -64,15 +64,18 @@ type fakeStore struct {
 	insertedLnk *integrations.NewFormLink
 	unlinked    bool
 
-	columnsSet     []domain.SheetColumn
-	delivered      bool
-	brokenWith     string
-	settings       *linkSettings
-	retargeted     *integrations.Spreadsheet
-	retargetStatus string
-	backfillFrom   *time.Time
-	backfillDone   bool
-	sheetCleared   bool
+	columnsSet []domain.SheetColumn
+	delivered  bool
+	brokenWith string
+	settings   *linkSettings
+	retargeted *integrations.Spreadsheet
+	// retargetAccount — на чей аккаунт переехала связка. Отдельным полем: смена
+	// аккаунта и смена листа едут одной записью, и проверять надо обе.
+	retargetAccount uuid.UUID
+	retargetStatus  string
+	backfillFrom    *time.Time
+	backfillDone    bool
+	sheetCleared    bool
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) (uuid.UUID, error) {
@@ -132,7 +135,8 @@ func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return 1, nil
 }
 
-func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _, accountID uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+	f.retargetAccount = accountID
 	f.retargeted = &sheet
 	f.columnsSet = columns
 	f.retargetStatus = status
@@ -980,6 +984,80 @@ func TestUpdateConnection_Retarget(t *testing.T) {
 	}
 	if store.retargetStatus != integrations.StatusBackfilling || store.backfillFrom == nil {
 		t.Errorf("перенос не начат: статус %q", store.retargetStatus)
+	}
+}
+
+// Существующую связку можно перевести на ДРУГОЙ свой аккаунт — вместе с целью.
+//
+// Раздельно нельзя физически: под scope drive.file таблица видна только тому
+// аккаунту, который её создал, поэтому смена аккаунта без перевыбора цели дала
+// бы запись чужим токеном в невидимый ему файл. Экран это и показывает: сменил
+// аккаунт — список таблиц перечитался, и новую надо назвать.
+func TestUpdateConnection_MovesToAnotherAccount(t *testing.T) {
+	first := sealedConn(t)
+	second := sealedConn(t)
+	second.Email = "work@gmail.com"
+
+	link := linkedSheet()
+	link.AccountID, link.SpreadsheetID, link.SheetID = first.ID, "ss-old", 5
+	// Фейк отдаёт по id один аккаунт — пусть это будет ВТОРОЙ: именно его сервис
+	// обязан спросить, получив его id в правке.
+	store := &fakeStore{link: link, conn: second}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, provider)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name: "Рабочий Диск",
+			Target: integrations.ConnectOptions{
+				AccountID: second.ID, SpreadsheetID: "", Backfill: true,
+			},
+		})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if store.retargeted == nil {
+		t.Fatal("связка не переехала")
+	}
+	if store.retargetAccount != second.ID {
+		t.Fatalf("аккаунт связки = %s, ожидался второй (%s)", store.retargetAccount, second.ID)
+	}
+	// Таблица заводится ЗАНОВО, в Диске нового аккаунта: прежняя ему не видна.
+	if provider.createdTitle == "" {
+		t.Error("таблица в новом аккаунте не заведена")
+	}
+}
+
+// ЧУЖОЙ аккаунт связке не назначить и правкой: id приезжает в теле, и правом
+// доступа не является (инвариант 1). До провайдера дело не доходит.
+func TestUpdateConnection_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+
+	link := linkedSheet()
+	link.SpreadsheetID = "ss-old"
+	store := &fakeStore{link: link, conn: foreign}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Target: integrations.ConnectOptions{AccountID: foreign.ID, SpreadsheetID: ""},
+		})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if store.retargeted != nil {
+		t.Error("связка переехала на чужой аккаунт")
+	}
+	if provider.createdTitle != "" {
+		t.Error("таблица создана в чужом Диске")
+	}
+	// Отказ приходит ДО первой записи: иначе подпись сохранилась бы, и человек
+	// увидел бы ошибку вместе с изменившимся названием.
+	if store.settings != nil {
+		t.Error("подпись сохранена, хотя правка отклонена")
 	}
 }
 

@@ -359,9 +359,14 @@ func (h *Handler) spreadsheets(w http.ResponseWriter, r *http.Request) {
 //
 // spreadsheetId отсутствует в теле — цель не трогаем вовсе (так шлёт тумблер из
 // списка). Присутствует и отличается от текущей — связка переезжает.
+//
+// accountId едет вместе с целью: сменить аккаунт, не перевыбрав таблицу, нельзя
+// физически (drive.file), поэтому отдельного поля «только аккаунт» нет. Не
+// назван — связка остаётся на своём аккаунте.
 type connectionRequest struct {
 	Name          string  `json:"name"`
 	Enabled       *bool   `json:"enabled"`
+	AccountID     string  `json:"accountId"`
 	SpreadsheetID *string `json:"spreadsheetId"`
 	SheetID       *int32  `json:"sheetId"`
 	Backfill      *bool   `json:"backfill"`
@@ -393,6 +398,14 @@ func (h *Handler) updateConnection(w http.ResponseWriter, r *http.Request) {
 			SpreadsheetID: *req.SpreadsheetID,
 			SheetID:       req.SheetID,
 			Backfill:      req.Backfill != nil && *req.Backfill,
+		}
+		if req.AccountID != "" {
+			accountID, err := uuid.Parse(req.AccountID)
+			if err != nil {
+				httpserver.WriteError(w, r, fmt.Errorf("%w: не выбран аккаунт Google", domain.ErrValidation))
+				return
+			}
+			patch.Target.AccountID = accountID
 		}
 	}
 

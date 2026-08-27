@@ -80,6 +80,10 @@ export interface ConnectionPatch {
   id: string
   name: string
   enabled: boolean
+  // accountId едет ВМЕСТЕ с целью и без неё смысла не имеет: под scope
+  // drive.file таблица видна только своему аккаунту, поэтому «сменить аккаунт,
+  // оставив лист» — сломанная связка, а не настройка.
+  accountId?: string
   spreadsheetId?: string
   sheetId?: number | null
   backfill?: boolean

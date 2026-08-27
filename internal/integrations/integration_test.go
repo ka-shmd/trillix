@@ -638,6 +638,87 @@ func postBodyWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, 
 	return resp
 }
 
+// Существующую связку можно перевести на ДРУГОЙ свой аккаунт — вместе с целью.
+//
+// Раздельно нельзя физически (drive.file: прежняя таблица новому аккаунту не
+// видна), поэтому account_id и лист переезжают одной записью. Строки, уже
+// доставленные в прежний лист, остаются там.
+func TestIntegrations_MoveConnectionToAnotherAccount(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{accounts: []integrations.Account{
+		{ID: "sub-1", Email: "personal@gmail.com"},
+		{ID: "sub-2", Email: "work@gmail.com"},
+	}}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+
+	first := connectAccount(t, owner, srv)
+	second := connectAccount(t, owner, srv)
+	formID := newForm(t, wsID, "f-move")
+
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(first, `"backfill":false`))
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("привязка: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID,
+		`{"name":"Рабочий Диск","accountId":"`+second+`","spreadsheetId":"","backfill":false}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("перевод на другой аккаунт: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 {
+		t.Fatalf("связок = %d, ожидалась одна: перевод не должен плодить вторую", len(conns))
+	}
+	if conns[0].AccountID != second || conns[0].AccountEmail != "work@gmail.com" {
+		t.Fatalf("связка = %+v, ожидался второй аккаунт", conns[0])
+	}
+	if conns[0].ID != sheet.ID {
+		t.Error("id связки сменился — переехала не она, а новая")
+	}
+}
+
+// Чужим аккаунтом связку не перевести, и отказ приходит ДО первой записи: иначе
+// подпись сохранилась бы, а человек увидел бы ошибку вместе с новым названием.
+func TestIntegrations_MoveConnectionToForeignAccountRefused(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	editor := registerUser(t, srv, "editor@example.com")
+	addMember(t, wsID, "editor@example.com", "editor")
+
+	ownerAccount := connectAccount(t, owner, srv)
+	editorAccount := connectAccount(t, editor, srv)
+	formID := newForm(t, wsID, "f-move-foreign")
+
+	r := postBodyWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/google",
+		linkBody(ownerAccount, `"backfill":false`))
+	var sheet sheetDTO
+	decode(t, r, &sheet)
+
+	r = patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID,
+		`{"name":"Чужой","accountId":"`+editorAccount+`","spreadsheetId":"","backfill":false}`)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("перевод на чужой аккаунт: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	conns := formStatus(t, owner, srv, formID).Connections
+	if len(conns) != 1 || conns[0].AccountID != ownerAccount {
+		t.Fatalf("связка = %+v, ожидалась на прежнем аккаунте", conns)
+	}
+	if conns[0].Name == "Чужой" {
+		t.Error("подпись сохранена, хотя правка отклонена")
+	}
+}
+
 // Переподключение отличается от «подключить ещё один» ровно подсказкой: адрес
 // один, а accountId в параметре заставляет сервер передать провайдеру почту
 // названного аккаунта. Чужой аккаунт подсказкой не станет — иначе перебором id

@@ -106,6 +106,7 @@ export function updateConnection(
   patch: {
     name: string
     enabled: boolean
+    accountId?: string
     spreadsheetId?: string
     sheetId?: number | null
     backfill?: boolean

@@ -4382,14 +4382,15 @@ func (q *Queries) UpdateFormIntegrationSettings(ctx context.Context, arg UpdateF
 
 const updateFormIntegrationTarget = `-- name: UpdateFormIntegrationTarget :execrows
 UPDATE form_integrations
-SET spreadsheet_id = $3, spreadsheet_url = $4, sheet_id = $5, sheet_title = $6,
-    columns = $7, status = $8, backfill_before = NULL, last_error = NULL
+SET account_id = $3, spreadsheet_id = $4, spreadsheet_url = $5, sheet_id = $6,
+    sheet_title = $7, columns = $8, status = $9, backfill_before = NULL, last_error = NULL
 WHERE id = $1 AND form_id = $2
 `
 
 type UpdateFormIntegrationTargetParams struct {
 	ID             uuid.UUID
 	FormID         uuid.UUID
+	AccountID      uuid.UUID
 	SpreadsheetID  string
 	SpreadsheetUrl string
 	SheetID        int32
@@ -4401,10 +4402,17 @@ type UpdateFormIntegrationTargetParams struct {
 // Связка переезжает в другой лист (правка на том же экране, что и подключение).
 // Строки, уже доставленные в прежний лист, остаются там: продукт не убирает за
 // человеком в его же таблице.
+//
+// account_id переезжает ВМЕСТЕ с целью и отдельно не меняется: под scope
+// drive.file таблица видна только тому аккаунту, который её создал (или которому
+// её выдали через окно выбора), поэтому «сменить аккаунт, оставив лист» — это
+// запись чужим токеном в файл, которого он не видит, то есть 404 и красная
+// связка. Одно поле без другого здесь означает сломанную интеграцию.
 func (q *Queries) UpdateFormIntegrationTarget(ctx context.Context, arg UpdateFormIntegrationTargetParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateFormIntegrationTarget,
 		arg.ID,
 		arg.FormID,
+		arg.AccountID,
 		arg.SpreadsheetID,
 		arg.SpreadsheetUrl,
 		arg.SheetID,

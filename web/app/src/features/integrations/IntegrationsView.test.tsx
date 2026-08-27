@@ -315,22 +315,66 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(again.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
   })
 
-  // Таблица создана ЭТИМ аккаунтом и другому под scope drive.file не видна
-  // вовсе, поэтому у существующей связки аккаунт показывается, но не меняется.
-  it('у существующей связки аккаунт показан и не выбирается', () => {
+  // Правка открывается ТЕМ ЖЕ окном, что и подключение (INTEGRATIONS §9), — со
+  // всеми теми же полями, включая выбор аккаунта. Аккаунт существующей связки
+  // менять можно: под drive.file это переезд вместе с таблицей, а не «оставить
+  // лист, сменить владельца».
+  it('у существующей связки аккаунт выбирается тем же полем', () => {
     renderView(
       state({
-        account: CONNECTED,
-        connections: [conn({ name: 'Архив', accountEmail: 'colleague@gmail.com' })],
+        account: {
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+        },
+        connections: [conn({ name: 'Архив' })],
       }),
     )
     openConnection()
 
     const dialog = within(screen.getByRole('dialog'))
-    expect(dialog.getByText('colleague@gmail.com')).toBeTruthy()
-    // Именно НЕ комбобокс: список аккаунтов здесь означал бы обещание переезда,
-    // которого провайдер не даёт.
-    expect(dialog.queryByRole('combobox', { name: 'Аккаунт Google' })).toBeNull()
+    const select = dialog.getByLabelText('Аккаунт Google')
+    expect(select.textContent).toContain('author@gmail.com')
+
+    fireEvent.click(select)
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+  })
+
+  // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
+  // поле «Таблица» сбрасывается. Экран обязан сказать это до сохранения, иначе
+  // человек ждёт, что данные останутся в прежнем листе.
+  it('сменил аккаунт — окно предупреждает о переезде и сбрасывает таблицу', () => {
+    renderView(
+      state({
+        account: {
+          ...CONNECTED,
+          accounts: [account(), account({ id: 'acc-2', email: 'work@gmail.com' })],
+        },
+        connections: [conn({ name: 'Архив', spreadsheetId: 'ss-old' })],
+      }),
+    )
+    openConnection()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+    fireEvent.click(screen.getByRole('option', { name: 'work@gmail.com' }))
+
+    expect(screen.getByText(/прежняя таблица другому аккаунту недоступна/i)).toBeTruthy()
+    expect(screen.getByLabelText('Таблица').textContent).toContain('Создать новую таблицу')
+  })
+
+  // Связку мог завести коллега: его подключения в списке спрашивающего нет, и
+  // без отдельного пункта поле выглядело бы пустым — «через кого едет» пропало
+  // бы с экрана вовсе.
+  it('чужой аккаунт связки виден в поле и подписан', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [
+          conn({ name: 'Архив', accountId: 'acc-colleague', accountEmail: 'colleague@gmail.com' }),
+        ],
+      }),
+    )
+    openConnection()
+
+    expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('colleague@gmail.com')
   })
 
   // Потерянный токен — про КОНКРЕТНЫЙ аккаунт: соседние продолжают работать, и
