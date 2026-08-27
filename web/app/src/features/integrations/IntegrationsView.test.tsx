@@ -582,27 +582,37 @@ describe('оверлей настройки Google Таблиц', () => {
   // «Не помогло» — ответ по существу, а не сбой, и говорится он у самой кнопки:
   // уехав вниз, к ошибкам сохранения, он потерял бы связь с нажатием.
   it('перепроверка не помогла — так и сказано у кнопки', async () => {
-    vi.stubGlobal('fetch', () =>
+    const broken = state({
+      account: CONNECTED,
+      connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
+    })
+    // Отказом отвечает ТОЛЬКО перепроверка: она инвалидирует состояние формы, и
+    // если валить заодно его, экран уйдёт в «не удалось загрузить» — проверять
+    // будет нечего.
+    vi.stubGlobal('fetch', (url: string) =>
       Promise.resolve(
-        new Response(
-          JSON.stringify({ error: { code: 'validation_failed', message: 'Колонки…' } }),
-          {
-            status: 422,
-            headers: { 'Content-Type': 'application/json' },
-          },
-        ),
+        String(url).endsWith('/recheck')
+          ? new Response(
+              JSON.stringify({ error: { code: 'validation_failed', message: 'Колонки…' } }),
+              { status: 422, headers: { 'Content-Type': 'application/json' } },
+            )
+          : new Response(JSON.stringify(broken), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
       ),
     )
-    renderView(
-      state({
-        account: CONNECTED,
-        connections: [conn({ status: 'broken', lastError: 'Колонки листа…' })],
-      }),
-    )
+    renderView(broken)
     openConnection()
     fireEvent.click(screen.getByRole('button', { name: /обновить статус/i }))
 
     await waitFor(() => expect(screen.getByText(/пока не сходится/i)).toBeTruthy())
+
+    // И не роняет соседнюю кнопку на строку ниже: строка отказа идёт ПОД рядом,
+    // а не элементом в нём — иначе её ширина ломает раскладку ряда.
+    const row = screen.getByRole('button', { name: /обновить статус/i }).parentElement
+    expect(row?.contains(screen.getByRole('button', { name: /перезаписать лист/i }))).toBe(true)
+    expect(row?.contains(screen.getByText(/пока не сходится/i))).toBe(false)
     vi.unstubAllGlobals()
   })
 
@@ -620,6 +630,7 @@ describe('оверлей настройки Google Таблиц', () => {
     // По пунктам списка, а не по тексту вообще: «перезаписать лист» есть и на
     // кнопке рядом, и поиск по странице находит оба.
     const exits = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
+    expect(screen.getByText('Варианты исправления')).toBeTruthy()
     expect(exits.some((t) => /вернуть заголовки/i.test(t))).toBe(true)
     expect(exits.some((t) => /выбрать другую таблицу или лист/i.test(t))).toBe(true)
     expect(exits.some((t) => /перезаписать лист/i.test(t))).toBe(true)

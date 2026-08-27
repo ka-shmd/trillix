@@ -738,21 +738,42 @@ function ConnectionState({
     return null
   }
   if (connection.status === 'broken') {
-    return (
-      <div
-        role="alert"
-        className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
-      >
-        <p className="flex gap-2 text-sm">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
-          <span>
-            {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
-          </span>
-        </p>
-        {/* Отступ слева равен ширине значка с зазором: содержимое встаёт под
+    return <BrokenState formId={formId} connection={connection} onDone={onDone} />
+  }
+  return null
+}
+
+// BrokenState — препятствие и выходы из него.
+//
+// Перепроверка живёт ЗДЕСЬ, а не в своей кнопке: её отказ — строка на всю
+// ширину, и внутри кнопки она растягивала бы её как элемент ряда, роняя соседнюю
+// на строку ниже. Кнопки стоят рядом, отказ — под ними.
+function BrokenState({
+  formId,
+  connection,
+  onDone,
+}: {
+  formId: string
+  connection: FormSheet
+  onDone: () => void
+}) {
+  const recheck = useRecheckSheet(formId)
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3"
+    >
+      <p className="flex gap-2 text-sm">
+        <TriangleAlert className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
+        <span>
+          {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
+        </span>
+      </p>
+      {/* Отступ слева равен ширине значка с зазором: содержимое встаёт под
             текстом, а не под значком, и блок читается одной колонкой. */}
-        <div className="flex flex-col gap-3 pl-6">
-          {/* Три выхода списком, и порядок в нём — от безобидного к
+      <div className="flex flex-col gap-3 pl-6">
+        {/* Три выхода списком, и порядок в нём — от безобидного к
               разрушительному: вернуть заголовки (ничего не теряется), сменить
               цель (прежний лист остаётся как есть), перезаписать (значения листа
               стираются). Человек читает сверху вниз и берёт первое, что подходит.
@@ -760,23 +781,37 @@ function ConnectionState({
               Пункты короткие и без объяснений: это перечень возможностей, а не
               инструкция. Причина сказана строкой выше, подробности каждого шага
               человек видит там, где шаг делается. */}
-          <ul className="ml-4 list-disc text-sm">
-            <li>вернуть заголовки</li>
-            <li>выбрать другую таблицу или лист в настройках ниже</li>
-            <li>перезаписать лист</li>
-          </ul>
-          {/* items-start, а не items-center: под «Обновить статус» появляется
-              строка отказа, и при центрировании она тянула бы кнопку вниз, а
-              соседняя оставалась бы на месте — две кнопки на разных уровнях. */}
-          <div className="flex flex-wrap items-start gap-2">
-            <RecheckAction formId={formId} connectionId={connection.id} />
-            <RefillAction formId={formId} connectionId={connection.id} onDone={onDone} />
-          </div>
+        <p className="text-sm font-semibold">Варианты исправления</p>
+        <ul className="ml-4 list-disc text-sm">
+          <li>вернуть заголовки</li>
+          <li>выбрать другую таблицу или лист в настройках ниже</li>
+          <li>перезаписать лист</li>
+        </ul>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            disabled={recheck.isPending}
+            onClick={() => recheck.mutate(connection.id)}
+          >
+            <RefreshCw className={`size-3.5 ${recheck.isPending ? 'animate-spin' : ''}`} />
+            Обновить статус
+          </Button>
+          <RefillAction formId={formId} connectionId={connection.id} onDone={onDone} />
         </div>
+        {/* Отказ — ПОД рядом, а не в нём: строка во всю ширину, и элементом
+              ряда она роняла бы соседнюю кнопку на следующую строку. */}
+        {recheck.isError && (
+          <p role="status" className="text-sm text-destructive">
+            {recheck.error instanceof ApiError && recheck.error.code === 'validation_failed'
+              ? 'Пока не сходится — смотрите причину выше.'
+              : 'Не удалось проверить. Попробуйте ещё раз.'}
+          </p>
+        )}
       </div>
-    )
-  }
-  return null
+    </div>
+  )
 }
 
 // RefillAction — перезалить лист с нуля.
@@ -833,40 +868,6 @@ function RefillAction({
         </AlertDialogContent>
       </AlertDialog>
     </>
-  )
-}
-
-// RecheckAction — «я поправил лист, проверьте».
-//
-// Отказ показывается ЗДЕСЬ же, под кнопкой, а не общим текстом внизу окна: он
-// отвечает на конкретное нажатие («не помогло, потому что…»), и уехав вниз, к
-// ошибкам сохранения, потерял бы связь с ним.
-function RecheckAction({ formId, connectionId }: { formId: string; connectionId: string }) {
-  const recheck = useRecheckSheet(formId)
-  const failed = recheck.isError
-
-  // Своя колонка, а не два элемента в общем ряду кнопок: отказ появляется ПОД
-  // своей кнопкой и соседнюю не двигает.
-  return (
-    <div className="flex flex-col items-start gap-1.5">
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-8 gap-1.5"
-        disabled={recheck.isPending}
-        onClick={() => recheck.mutate(connectionId)}
-      >
-        <RefreshCw className={`size-3.5 ${recheck.isPending ? 'animate-spin' : ''}`} />
-        Обновить статус
-      </Button>
-      {failed && (
-        <span role="status" className="text-sm text-destructive">
-          {recheck.error instanceof ApiError && recheck.error.code === 'validation_failed'
-            ? 'Пока не сходится — смотрите причину выше.'
-            : 'Не удалось проверить. Попробуйте ещё раз.'}
-        </span>
-      )}
-    </div>
   )
 }
 
