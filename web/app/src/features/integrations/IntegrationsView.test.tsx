@@ -175,6 +175,9 @@ describe('два блока экрана', () => {
 
     expect(screen.getByText('Мои подключения')).toBeTruthy()
     expect(screen.getByText('Архив')).toBeTruthy()
+    // Строка говорит, зачем связка и куда ведёт ссылка; состояние — на точке.
+    expect(screen.getByText(/ответы синхронизируются с/i)).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'этой таблицей' })).toBeTruthy()
     // Каталог не исчезает: подключить вторую связку — законное действие.
     expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
   })
