@@ -28,11 +28,11 @@ const (
 	// возвратом. HttpOnly; SameSite=Lax обязателен, чтобы cookie доехала на
 	// top-level GET-редиректе с домена Google (Strict её не отдаст).
 	stateCookie = "integration_state"
-	// intentCookie несёт подписанное «этот поход начат ВОТ ЭТИМ человеком для
-	// ВОТ ЭТОГО пространства». Ставится только эндпоинтом за RequireAuth — в
-	// этом вся защита: пространство в параметре колбэка означало бы, что жертву
-	// можно заманить пройти согласие и подключить свой Google к чужому
-	// пространству, получив поток чужих ответов себе на Диск.
+	// intentCookie несёт подписанное «этот поход начат ВОТ ЭТИМ человеком».
+	// Ставится только эндпоинтом за RequireAuth, и в этом вся защита: сессии на
+	// колбэке провайдера нет, а «кому записать подключение» из параметра запроса
+	// означало бы, что жертву можно заманить пройти согласие и подключить её
+	// Google к аккаунту атакующего.
 	intentCookie = "integration_intent"
 	// intentLabel — метка назначения подписи. Ключ общий (FORM_TOKEN_SECRET), и
 	// без метки подпись из одного контекста принималась бы в другом.
@@ -52,15 +52,15 @@ type Middleware = func(http.Handler) http.Handler
 type integrationsService interface {
 	FormStatus(ctx context.Context, userID, formID uuid.UUID) (FormStatus, error)
 	ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error)
-	Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error)
-	Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsheetID string) ([]SheetRef, error)
-	Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error)
+	Spreadsheets(ctx context.Context, userID, accountID uuid.UUID) ([]SpreadsheetRef, error)
+	Sheets(ctx context.Context, userID, accountID uuid.UUID, spreadsheetID string) ([]SheetRef, error)
+	Picker(ctx context.Context, userID, accountID uuid.UUID) (PickerCredentials, error)
 	DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error
-	StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error)
-	Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error
-	Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error
+	StartURL(ctx context.Context, state, verifier string) (string, error)
+	Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
+	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
 }
 
 // Handler — приватный транспорт интеграций.
@@ -85,9 +85,14 @@ func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, ap
 	}
 }
 
-// Routes регистрирует приватные эндпоинты. Адреса — по пространству, а не по
-// форме: подключённый аккаунт принадлежит пространству (ADR §10), и адрес по
-// форме означал бы, что отключение одной формы гасит интеграцию у соседних.
+// Routes регистрирует приватные эндпоинты.
+//
+// Два семейства адресов, и граница между ними не вкусовая. Аккаунт принадлежит
+// ЧЕЛОВЕКУ (ADR §10), поэтому всё, что делается с самим подключением —
+// подключить, отключить, спросить его таблицы и листы, открыть окно выбора
+// файла, — живёт под /integrations и не имеет в адресе ни формы, ни
+// пространства: их упоминание там врало бы про область действия. Под формой
+// остаётся только СВЯЗКА — правило доставки её ответов.
 func (h *Handler) Routes(mux *http.ServeMux) {
 	// Экран интеграций живёт у ФОРМЫ, поэтому и читается одной поездкой по её
 	// адресу: пространство формы резолвит сервер. Иначе кабинет обязан был бы
@@ -95,20 +100,6 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// того, что сервер и так знает.
 	mux.Handle("GET /api/v1/forms/{id}/integrations",
 		h.requireAuth(http.HandlerFunc(h.formStatus)))
-	// Список таблиц для окна настроек: только созданные нами (scope drive.file),
-	// поэтому чужих файлов Диска он не раскрывает.
-	mux.Handle("GET /api/v1/forms/{id}/integrations/google/spreadsheets",
-		h.requireAuth(http.HandlerFunc(h.spreadsheets)))
-	// Credentials окна выбора файла на Диске. Отдельной ручкой, а не в состоянии:
-	// в ответе живой access-токен Google, и раздавать его на каждый показ таба
-	// нельзя — только по нажатию кнопки выбора.
-	// Листы выбранной книги — второй шаг выбора. Книга приезжает параметром, а не
-	// сегментом пути: её id — чужая строка произвольного вида, и в пути он
-	// требовал бы экранирования на каждом клиенте.
-	mux.Handle("GET /api/v1/forms/{id}/integrations/google/sheets",
-		h.requireAuth(http.HandlerFunc(h.sheets)))
-	mux.Handle("GET /api/v1/forms/{id}/integrations/google/picker",
-		h.requireAuth(http.HandlerFunc(h.picker)))
 	mux.Handle("POST /api/v1/forms/{id}/integrations/google",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.connectForm))))
 	// Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько
@@ -119,30 +110,53 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.refillForm))))
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
-	mux.Handle("GET /api/v1/workspaces/{id}/integrations/google/start",
+
+	mux.Handle("GET /api/v1/integrations/google/start",
 		h.requireAuth(http.HandlerFunc(h.start)))
 	// Колбэк без RequireAuth: сюда возвращается браузер по редиректу Google, и
 	// JSON-ошибка 401 в окне 560×680 оставила бы человека на origin API без
-	// пути назад. Доказательство намерения — подписанная HttpOnly-cookie, а
-	// право на пространство сервис всё равно проверяет заново (Connect).
+	// пути назад. Доказательство личности — подписанная HttpOnly-cookie.
 	mux.Handle("GET /api/v1/integrations/google/callback", http.HandlerFunc(h.callback))
-	mux.Handle("DELETE /api/v1/workspaces/{id}/integrations/google",
+	mux.Handle("DELETE /api/v1/integrations/google/accounts/{accountId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnect))))
+	// Список таблиц аккаунта: только созданные нами (scope drive.file), поэтому
+	// чужих файлов Диска он не раскрывает — и это СВОЙ аккаунт спрашивающего.
+	mux.Handle("GET /api/v1/integrations/google/accounts/{accountId}/spreadsheets",
+		h.requireAuth(http.HandlerFunc(h.spreadsheets)))
+	// Листы выбранной книги — второй шаг выбора. Книга приезжает параметром, а не
+	// сегментом пути: её id — чужая строка произвольного вида, и в пути он
+	// требовал бы экранирования на каждом клиенте.
+	mux.Handle("GET /api/v1/integrations/google/accounts/{accountId}/sheets",
+		h.requireAuth(http.HandlerFunc(h.sheets)))
+	// Credentials окна выбора файла на Диске. Отдельной ручкой, а не в состоянии:
+	// в ответе живой access-токен Google, и раздавать его на каждый показ таба
+	// нельзя — только по нажатию кнопки выбора.
+	mux.Handle("GET /api/v1/integrations/google/accounts/{accountId}/picker",
+		h.requireAuth(http.HandlerFunc(h.picker)))
 }
 
+// accountResponse — подключения СПРАШИВАЮЩЕГО: то, из чего он выбирает в окне
+// связки. Не «аккаунт пространства»: с ADR §10 (2026-08-27) аккаунт личный, и в
+// команде каждый видит здесь свои.
 type accountResponse struct {
 	Enabled bool `json:"enabled"`
 	// PickerEnabled — настроено ли окно выбора файла на Диске (нужен отдельный
 	// API-key). Экран рисует по нему кнопку выбора.
 	PickerEnabled bool `json:"pickerEnabled"`
-	Connected     bool `json:"connected"`
+	// Accounts — пустой список означает «ничего не подключено» и является
+	// штатным состоянием экрана. От Enabled=false он отличается лечением: там
+	// кнопки не появится вовсе, здесь она и есть весь следующий шаг.
+	Accounts []connectedAccountResponse `json:"accounts"`
+}
+
+type connectedAccountResponse struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
 	// NeedsReconnect — подключение есть, но пользоваться им нельзя: refresh-токен
 	// не расшифровывается ключом контура (ротация FORM_TOKEN_SECRET). Экран
 	// обязан сказать «подключите заново», а не рисовать зелёное «подключено».
-	NeedsReconnect bool    `json:"needsReconnect"`
-	Email          string  `json:"email,omitempty"`
-	ConnectedAt    *string `json:"connectedAt,omitempty"`
-	CanManage      bool    `json:"canManage"`
+	NeedsReconnect bool   `json:"needsReconnect"`
+	ConnectedAt    string `json:"connectedAt"`
 }
 
 // sheetResponse — привязка формы. Отдельным объектом (а не полями вперемешку с
@@ -151,6 +165,13 @@ type accountResponse struct {
 type sheetResponse struct {
 	ID  string `json:"id"`
 	URL string `json:"url"`
+	// AccountID и AccountEmail — каким подключением едет связка. Экрану нужны оба
+	// и по разным поводам: id подсвечивает выбор в селекте, почта подписывает
+	// строку в списке. Почта обязательна и когда аккаунт ЧУЖОЙ: в команде связку
+	// заводит один участник, а смотрит другой, и без подписи «через кого» он
+	// увидит интеграцию, которой нет в его селекте.
+	AccountID    string `json:"accountId"`
+	AccountEmail string `json:"accountEmail"`
 	// SpreadsheetID и SheetID — текущая цель. Экран правки открывается тем же
 	// окном, что и подключение, и обязан показать в полях то, что уже выбрано.
 	SpreadsheetID   string  `json:"spreadsheetId"`
@@ -185,17 +206,18 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	resp := formStatusResponse{
 		WorkspaceID: st.WorkspaceID.String(),
 		Account: accountResponse{
-			Enabled:        st.Account.Enabled,
-			PickerEnabled:  st.Account.PickerEnabled,
-			Connected:      st.Account.Connected,
-			NeedsReconnect: st.Account.NeedsReconnect,
-			Email:          st.Account.Email,
-			CanManage:      st.Account.CanManage,
+			Enabled:       st.Account.Enabled,
+			PickerEnabled: st.Account.PickerEnabled,
+			Accounts:      make([]connectedAccountResponse, 0, len(st.Account.Accounts)),
 		},
 	}
-	if st.Account.Connected {
-		at := st.Account.ConnectedAt.UTC().Format(time.RFC3339)
-		resp.Account.ConnectedAt = &at
+	for _, a := range st.Account.Accounts {
+		resp.Account.Accounts = append(resp.Account.Accounts, connectedAccountResponse{
+			ID:             a.ID.String(),
+			Email:          a.Email,
+			NeedsReconnect: a.NeedsReconnect,
+			ConnectedAt:    a.ConnectedAt.UTC().Format(time.RFC3339),
+		})
 	}
 	resp.Connections = make([]sheetResponse, 0, len(st.Connections))
 	for _, link := range st.Connections {
@@ -204,10 +226,15 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
-// connectRequest — настройки из окна подключения. Тело необязательно: без него
-// работают умолчания (новая таблица, перенос включён) — так же, как в окне.
+// connectRequest — настройки из окна подключения.
+//
+// Тело стало ОБЯЗАТЕЛЬНЫМ (прежде работало без него): accountId подразумевать
+// нечем — аккаунтов у человека сколько угодно, и «первый попавшийся» отправил бы
+// ответы не в тот Диск молча.
 type connectRequest struct {
-	Name string `json:"name"`
+	// AccountID — каким подключением ехать.
+	AccountID string `json:"accountId"`
+	Name      string `json:"name"`
 	// SpreadsheetID пуст — новая книга; иначе работаем в названной.
 	SpreadsheetID string `json:"spreadsheetId"`
 	// SheetID — существующий лист книги; отсутствует = завести новый.
@@ -223,20 +250,25 @@ func (h *Handler) connectForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := ConnectOptions{Backfill: true}
-	if r.ContentLength != 0 {
-		r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-		dec := json.NewDecoder(r.Body)
-		dec.DisallowUnknownFields()
-		var req connectRequest
-		if err := dec.Decode(&req); err != nil {
-			httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
-			return
-		}
-		opts.Name, opts.SpreadsheetID, opts.SheetID = req.Name, req.SpreadsheetID, req.SheetID
-		if req.Backfill != nil {
-			opts.Backfill = *req.Backfill
-		}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req connectRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	accountID, err := uuid.Parse(req.AccountID)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: не выбран аккаунт Google", domain.ErrValidation))
+		return
+	}
+	opts := ConnectOptions{
+		AccountID:     accountID,
+		Name:          req.Name,
+		SpreadsheetID: req.SpreadsheetID,
+		SheetID:       req.SheetID,
+		Backfill:      req.Backfill == nil || *req.Backfill,
 	}
 
 	link, err := h.svc.ConnectForm(r.Context(), user.ID, formID, opts)
@@ -253,12 +285,12 @@ type sheetRefResponse struct {
 }
 
 func (h *Handler) sheets(w http.ResponseWriter, r *http.Request) {
-	user, formID, ok := h.userAndForm(w, r)
+	user, accountID, ok := h.userAndAccount(w, r)
 	if !ok {
 		return
 	}
 
-	list, err := h.svc.Sheets(r.Context(), user.ID, formID, r.URL.Query().Get("spreadsheetId"))
+	list, err := h.svc.Sheets(r.Context(), user.ID, accountID, r.URL.Query().Get("spreadsheetId"))
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -277,12 +309,12 @@ type pickerResponse struct {
 }
 
 func (h *Handler) picker(w http.ResponseWriter, r *http.Request) {
-	user, formID, ok := h.userAndForm(w, r)
+	user, accountID, ok := h.userAndAccount(w, r)
 	if !ok {
 		return
 	}
 
-	cred, err := h.svc.Picker(r.Context(), user.ID, formID)
+	cred, err := h.svc.Picker(r.Context(), user.ID, accountID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -300,12 +332,12 @@ type spreadsheetResponse struct {
 }
 
 func (h *Handler) spreadsheets(w http.ResponseWriter, r *http.Request) {
-	user, formID, ok := h.userAndForm(w, r)
+	user, accountID, ok := h.userAndAccount(w, r)
 	if !ok {
 		return
 	}
 
-	list, err := h.svc.Spreadsheets(r.Context(), user.ID, formID)
+	list, err := h.svc.Spreadsheets(r.Context(), user.ID, accountID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -412,6 +444,8 @@ func toSheetResponse(l FormLink) *sheetResponse {
 	out := &sheetResponse{
 		ID:            l.ID.String(),
 		URL:           l.SpreadsheetURL,
+		AccountID:     l.AccountID.String(),
+		AccountEmail:  l.AccountEmail,
 		SpreadsheetID: l.SpreadsheetID,
 		SheetID:       l.SheetID,
 		Enabled:       l.Enabled,
@@ -427,8 +461,9 @@ func toSheetResponse(l FormLink) *sheetResponse {
 }
 
 func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
-	user, wsID, ok := h.userAndWorkspace(w, r)
+	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
 
@@ -443,14 +478,14 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.svc.StartURL(r.Context(), user.ID, wsID, state, verifier)
+	url, err := h.svc.StartURL(r.Context(), state, verifier)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	h.setFlowCookie(w, stateCookie, state+":"+verifier)
-	h.setFlowCookie(w, intentCookie, h.signIntent(user.ID, wsID))
+	h.setFlowCookie(w, intentCookie, h.signIntent(user.ID))
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
@@ -459,7 +494,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 	// нельзя — http.Redirect к тому моменту уже записал заголовки, и Set-Cookie
 	// не уехал бы, оставив state жить все 15 минут TTL.
 	h.expireCookie(w, stateCookie)
-	userID, wsID, haveIntent := h.readIntent(r)
+	userID, haveIntent := h.readIntent(r)
 	h.expireCookie(w, intentCookie)
 
 	// Человек нажал «Отклонить» на экране согласия — это не авария.
@@ -478,7 +513,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Сверка state — защита от CSRF: без неё чужой код можно подсунуть человеку
-	// и подключить к его пространству аккаунт атакующего.
+	// и подключить к его кабинету аккаунт атакующего.
 	if subtle.ConstantTimeCompare([]byte(state), []byte(r.URL.Query().Get("state"))) != 1 {
 		h.finish(w, r, outcomeExpired)
 		return
@@ -489,7 +524,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := h.svc.Connect(r.Context(), userID, wsID, code, verifier)
+	_, err := h.svc.Connect(r.Context(), userID, code, verifier)
 	switch {
 	case err == nil:
 		h.finish(w, r, outcomeOK)
@@ -509,32 +544,33 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) disconnect(w http.ResponseWriter, r *http.Request) {
-	user, wsID, ok := h.userAndWorkspace(w, r)
+	user, accountID, ok := h.userAndAccount(w, r)
 	if !ok {
 		return
 	}
-	if err := h.svc.Disconnect(r.Context(), user.ID, wsID); err != nil {
+	if err := h.svc.Disconnect(r.Context(), user.ID, accountID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// userAndWorkspace достаёт из запроса того, кто спрашивает, и пространство из
-// адреса. Неразбираемый id → 404 (несуществующее пространство, без раскрытия),
-// а не 400: право доступа к нему всё равно проверяется дальше.
-func (h *Handler) userAndWorkspace(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, bool) {
+// userAndAccount достаёт из запроса того, кто спрашивает, и аккаунт из адреса.
+// Неразбираемый id → 404 без раскрытия, а не 400: принадлежность аккаунта всё
+// равно проверяет сервис, и «битый uuid» не заслуживает отдельного ответа, по
+// которому можно отличать существующие подключения от несуществующих.
+func (h *Handler) userAndAccount(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, bool) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return auth.User{}, uuid.Nil, false
 	}
-	wsID, err := uuid.Parse(r.PathValue("id"))
+	accountID, err := uuid.Parse(r.PathValue("accountId"))
 	if err != nil {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
 		return auth.User{}, uuid.Nil, false
 	}
-	return user, wsID, true
+	return user, accountID, true
 }
 
 // userAndForm — то же для адресов по форме. Неразбираемый id → 404: право на
@@ -612,46 +648,44 @@ func (h *Handler) readFlowCookie(r *http.Request, name string) (first, second st
 	return a, b, true
 }
 
-// signIntent подписывает «кто и для какого пространства начал поход» со сроком.
-func (h *Handler) signIntent(userID, workspaceID uuid.UUID) string {
-	payload := fmt.Sprintf("%s:%s:%d", userID, workspaceID, time.Now().Add(flowTTL).Unix())
+// signIntent подписывает «кто начал поход» со сроком. Пространства в намерении
+// больше нет: подключение принадлежит человеку, и записывать его некуда, кроме
+// как на него самого (ADR §10).
+func (h *Handler) signIntent(userID uuid.UUID) string {
+	payload := fmt.Sprintf("%s:%d", userID, time.Now().Add(flowTTL).Unix())
 	return payload + ":" + base64.RawURLEncoding.EncodeToString(h.intentMAC(payload))
 }
 
 // readIntent достаёт намерение из запроса. Битая подпись, истёкший срок и
 // отсутствие cookie неразличимы снаружи — все они означают «похода не было».
-func (h *Handler) readIntent(r *http.Request) (userID, workspaceID uuid.UUID, ok bool) {
+func (h *Handler) readIntent(r *http.Request) (userID uuid.UUID, ok bool) {
 	c, err := r.Cookie(intentCookie)
 	if err != nil {
-		return uuid.Nil, uuid.Nil, false
+		return uuid.Nil, false
 	}
 	i := strings.LastIndex(c.Value, ":")
 	if i < 0 {
-		return uuid.Nil, uuid.Nil, false
+		return uuid.Nil, false
 	}
 	payload, sig := c.Value[:i], c.Value[i+1:]
 	want, err := base64.RawURLEncoding.DecodeString(sig)
 	if err != nil || !hmac.Equal(want, h.intentMAC(payload)) {
-		return uuid.Nil, uuid.Nil, false
+		return uuid.Nil, false
 	}
 
 	parts := strings.Split(payload, ":")
-	if len(parts) != 3 {
-		return uuid.Nil, uuid.Nil, false
+	if len(parts) != 2 {
+		return uuid.Nil, false
 	}
-	exp, err := strconv.ParseInt(parts[2], 10, 64)
+	exp, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil || time.Now().After(time.Unix(exp, 0)) {
-		return uuid.Nil, uuid.Nil, false
+		return uuid.Nil, false
 	}
 	userID, err = uuid.Parse(parts[0])
 	if err != nil {
-		return uuid.Nil, uuid.Nil, false
+		return uuid.Nil, false
 	}
-	workspaceID, err = uuid.Parse(parts[1])
-	if err != nil {
-		return uuid.Nil, uuid.Nil, false
-	}
-	return userID, workspaceID, true
+	return userID, true
 }
 
 func (h *Handler) intentMAC(payload string) []byte {

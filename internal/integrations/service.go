@@ -29,9 +29,9 @@ type Access interface {
 
 // Store — доступ к данным, объявленный потребителем. Реализация — Repo.
 type Store interface {
-	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) error
-	Get(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) (Connection, error)
-	Delete(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, provider string) ([]byte, error)
+	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) (uuid.UUID, error)
+	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) ([]Connection, error)
+	Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) ([]byte, error)
 	UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sealed []byte) error
 	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
@@ -84,7 +84,7 @@ type Transactor interface {
 	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
 }
 
-// Service — подключение внешних аккаунтов к пространству.
+// Service — подключение внешних аккаунтов человека и доставка в них.
 type Service struct {
 	db     postgres.DBTX
 	tx     Transactor
@@ -121,157 +121,150 @@ func (s *Service) WithPicker(apiKey string) *Service {
 // текстом: dev-контур без проекта в Google Cloud обязан оставаться рабочим.
 func (s *Service) Enabled() bool { return s.google != nil }
 
-// Status — состояние подключения пространства.
-type Status struct {
-	// Enabled — настроен ли провайдер на этом контуре (ключи в env). Отдельно
-	// от Connected: «интеграции здесь нет вовсе» и «есть, но не подключена» —
-	// разные экраны, и путать их значит советовать человеку нажать кнопку,
-	// которой у него не появится.
-	Enabled bool
-	// PickerEnabled — настроено ли окно выбора файла на Диске (WithPicker).
-	PickerEnabled bool
-	Connected     bool
+// ConnectedAccount — подключённый аккаунт человека глазами экрана. Имя длиннее
+// напрашивающегося Account: так зовётся профиль, который отдаёт сам провайдер
+// (google.go), и путать «что мы храним» с «что нам ответил Google» дорого.
+type ConnectedAccount struct {
+	ID    uuid.UUID
+	Email string
 	// NeedsReconnect — строка подключения есть, но refresh-токен ею больше не
 	// расшифровывается: ключ шифрования выведен из FORM_TOKEN_SECRET, и его
 	// ротация оставляет за собой шифротекст, которым нельзя пользоваться
-	// (secretbox.go). Отдельно от Connected, потому что лечение другое: не
-	// «подключите», а «подключите ЗАНОВО», и до этого ни одна связка работать не
+	// (secretbox.go). Лечение другое, чем у «нет аккаунта»: не «подключите», а
+	// «подключите ЗАНОВО», и до этого ни одна связка этого аккаунта работать не
 	// будет. Без этого поля экран показывал бы зелёное «подключено», а падало бы
 	// всё подряд — молча, до первого ответа респондента.
 	NeedsReconnect bool
-	Email          string
-	ConnectedBy    uuid.UUID
 	ConnectedAt    time.Time
-	// CanManage — может ли спрашивающий подключать и отключать. Экран рисует
-	// кнопку по нему, а не по роли: роль вне internal/workspaces не спрашивают.
-	CanManage bool
 }
 
-// Status читает состояние. Право на чтение — ActionIntegrationRead: видеть,
-// подключён ли аккаунт, вправе любой участник (иначе редактор не поймёт, почему
-// ответы куда-то едут), а менять — нет.
-func (s *Service) Status(ctx context.Context, userID, workspaceID uuid.UUID) (Status, error) {
-	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionIntegrationRead); err != nil {
-		return Status{}, err
-	}
+// Status — подключения СПРАШИВАЮЩЕГО, то, из чего он выбирает в окне связки.
+type Status struct {
+	// Enabled — настроен ли провайдер на этом контуре (ключи в env). Отдельно от
+	// пустого списка: «интеграции здесь нет вовсе» и «есть, но ничего не
+	// подключено» — разные экраны, и путать их значит советовать человеку нажать
+	// кнопку, которой у него не появится.
+	Enabled bool
+	// PickerEnabled — настроено ли окно выбора файла на Диске (WithPicker).
+	PickerEnabled bool
+	// Accounts — аккаунты человека у этого провайдера, в порядке подключения.
+	// Пустой список — штатное состояние экрана, а не ошибка.
+	Accounts []ConnectedAccount
+}
 
-	canManage, err := s.canManage(ctx, workspaceID, userID)
-	if err != nil {
-		return Status{}, err
-	}
+// Status читает подключения человека.
+//
+// Прав пространства здесь не спрашивают вовсе: с миграции 0037 аккаунт
+// принадлежит человеку (ADR §10), и «мои подключения» — вопрос о себе. Роль в
+// какой бы то ни было команде на ответ не влияет.
+func (s *Service) Status(ctx context.Context, userID uuid.UUID) (Status, error) {
 	if !s.Enabled() {
-		return Status{CanManage: canManage}, nil
+		return Status{}, nil
 	}
-	picker := s.PickerAvailable()
-
-	conn, err := s.repo.Get(ctx, s.db, workspaceID, s.google.Provider())
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Нет подключения — штатное состояние экрана, а не ошибка.
-		return Status{Enabled: true, PickerEnabled: picker, CanManage: canManage}, nil
-	}
+	conns, err := s.repo.ListByUser(ctx, s.db, userID, s.google.Provider())
 	if err != nil {
 		return Status{}, fmt.Errorf("integration status: %w", err)
 	}
-	// Расшифровка — не поход к провайдеру, а AES-GCM над сотней байт: платить
-	// за неё показом таба дешевле, чем врать про рабочее подключение.
-	_, tokenErr := openToken(s.key, conn.RefreshSealed)
-
-	return Status{
-		Enabled:        true,
-		PickerEnabled:  picker,
-		Connected:      true,
-		NeedsReconnect: tokenErr != nil,
-		Email:          conn.Email,
-		ConnectedBy:    conn.ConnectedBy,
-		ConnectedAt:    conn.ConnectedAt,
-		CanManage:      canManage,
-	}, nil
-}
-
-// canManage отвечает на «можно ли управлять» без отказа наружу: для экрана это
-// не ошибка, а состояние кнопки. Отличать отказ в праве от сбоя БД обязательно —
-// иначе упавший запрос показал бы редактору чужие возможности как свои.
-func (s *Service) canManage(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error) {
-	err := s.access.Can(ctx, workspaceID, userID, domain.ActionIntegrationManage)
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, domain.ErrForbidden):
-		return false, nil
-	default:
-		return false, err
+	out := Status{Enabled: true, PickerEnabled: s.PickerAvailable(), Accounts: make([]ConnectedAccount, 0, len(conns))}
+	for _, c := range conns {
+		// Расшифровка — не поход к провайдеру, а AES-GCM над сотней байт: платить
+		// за неё показом таба дешевле, чем врать про рабочее подключение.
+		_, tokenErr := openToken(s.key, c.RefreshSealed)
+		out.Accounts = append(out.Accounts, ConnectedAccount{
+			ID:             c.ID,
+			Email:          c.Email,
+			NeedsReconnect: tokenErr != nil,
+			ConnectedAt:    c.ConnectedAt,
+		})
 	}
+	return out, nil
 }
 
-// StartURL — ссылка на экран согласия провайдера. Право спрашивается ДО ухода к
-// провайдеру: иначе редактор проходил бы согласие Google, чтобы получить отказ
-// на возврате, уже отдав приложению доступ к своему Диску.
-func (s *Service) StartURL(ctx context.Context, userID, workspaceID uuid.UUID, state, verifier string) (string, error) {
+// accountOf — аккаунт спрашивающего по id. ЕДИНСТВЕННАЯ точка проверки «аккаунт
+// мой»: id приезжает из запроса и правом доступа сам по себе не является
+// (инвариант 1). Чужой аккаунт неотличим от несуществующего — один и тот же
+// текст на оба случая, чтобы отказ не подтверждал существование чужого.
+func (s *Service) accountOf(ctx context.Context, userID, accountID uuid.UUID) (Connection, error) {
+	conn, err := s.repo.GetAccountByID(ctx, s.db, accountID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && conn.UserID != userID) {
+		return Connection{}, fmt.Errorf("%w: аккаунт Google не подключён", domain.ErrValidation)
+	}
+	if err != nil {
+		return Connection{}, fmt.Errorf("integration account: %w", err)
+	}
+	return conn, nil
+}
+
+// StartURL — ссылка на экран согласия провайдера.
+//
+// Прав пространства не спрашивает: человек подключает СВОЙ аккаунт Google, и
+// гейт по роли здесь был бы пуст — личное пространство есть у каждого, и в нём
+// каждый владелец (ADR §10, решение 2026-08-27).
+func (s *Service) StartURL(_ context.Context, state, verifier string) (string, error) {
 	if !s.Enabled() {
 		return "", domain.ErrNotFound
-	}
-	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionIntegrationManage); err != nil {
-		return "", err
 	}
 	return s.google.AuthURL(state, verifier), nil
 }
 
 // Connect завершает подключение: меняет код на токены, узнаёт аккаунт и кладёт
-// refresh шифротекстом.
+// refresh шифротекстом. Отдаёт id аккаунта — экран подсвечивает свежий.
 //
-// Право проверяется ПОВТОРНО, а не считается доказанным подписанной cookie
-// похода: между началом и возвратом человека могли лишить роли, и cookie об этом
-// не знает (инвариант 1 — id из запроса правом доступа не является).
-func (s *Service) Connect(ctx context.Context, userID, workspaceID uuid.UUID, code, verifier string) error {
+// Проверять здесь больше нечего, и это следствие модели, а не упущение:
+// подключение своего аккаунта Google требует быть собой, а не иметь роль. Кто
+// начал поход, говорит подписанная cookie (сессии на колбэке провайдера нет), и
+// её подпись — то же доказательство личности, что раньше.
+//
+// Повторный заход ТЕМ ЖЕ аккаунтом Google обновляет строку, а не заводит
+// вторую: арбитр ON CONFLICT — внешний аккаунт. Другим аккаунтом — заводит, и в
+// этом вся задача: прежде он затирал первый, оставляя связки писать чужим
+// токеном в таблицы, которых тот не видит.
+func (s *Service) Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error) {
 	if !s.Enabled() {
-		return domain.ErrNotFound
-	}
-	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionIntegrationManage); err != nil {
-		return err
+		return uuid.Nil, domain.ErrNotFound
 	}
 
 	tokens, err := s.google.Exchange(ctx, code, verifier)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	account, err := s.google.Account(ctx, tokens.Access)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 	sealed, err := sealToken(s.key, tokens.Refresh)
 	if err != nil {
-		return err
+		return uuid.Nil, err
 	}
 
 	return s.repo.Upsert(ctx, s.db, NewConnection{
 		ID:            domain.NewID(),
-		WorkspaceID:   workspaceID,
+		UserID:        userID,
 		Provider:      s.google.Provider(),
 		ExternalID:    account.ID,
 		Email:         account.Email,
 		RefreshSealed: sealed,
 		Scopes:        tokens.Scopes,
-		ConnectedBy:   userID,
 	})
 }
 
-// Disconnect отключает аккаунт от пространства. Привязки форм уносит каскад БД.
+// Disconnect отключает ОДИН аккаунт человека. Связки, которые им ехали, уносит
+// каскад БД — во всех пространствах разом: иначе форма осталась бы привязанной к
+// таблице, писать в которую больше нечем. Соседние аккаунты не затронуты.
 //
 // Отзыв согласия у провайдера — best effort и НЕ гейтит удаление: недоступный
 // Google не должен запирать человека в подключении, которое он разрывает.
 // Неудача уходит в лог — там же, где её увидит человек за логом.
-func (s *Service) Disconnect(ctx context.Context, userID, workspaceID uuid.UUID) error {
+func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) error {
 	if !s.Enabled() {
 		return domain.ErrNotFound
 	}
-	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionIntegrationManage); err != nil {
-		return err
-	}
 
-	sealed, err := s.repo.Delete(ctx, s.db, workspaceID, s.google.Provider())
+	sealed, err := s.repo.Delete(ctx, s.db, accountID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Отключать нечего — уже отключено. Идемпотентно: повторный запрос из
-		// второй вкладки не должен краснеть.
+		// Отключать нечего — уже отключено (или аккаунт чужой, что снаружи
+		// неотличимо). Идемпотентно: повторный запрос из второй вкладки не
+		// должен краснеть.
 		return nil
 	}
 	if err != nil {
@@ -283,12 +276,12 @@ func (s *Service) Disconnect(ctx context.Context, userID, workspaceID uuid.UUID)
 		// Токен не расшифровался (ротация ключа) — отзывать нечего, но строки
 		// уже нет, и это правильный исход: человек отключился.
 		httpserver.LoggerFrom(ctx).Warn("integration token not decrypted on disconnect",
-			slog.String("workspace_id", workspaceID.String()))
+			slog.String("account_id", accountID.String()))
 		return nil
 	}
 	if err := s.google.Revoke(ctx, refresh); err != nil {
 		httpserver.LoggerFrom(ctx).Warn("integration token not revoked at provider",
-			slog.String("workspace_id", workspaceID.String()),
+			slog.String("account_id", accountID.String()),
 			slog.String("error", err.Error()))
 	}
 	return nil
@@ -318,11 +311,14 @@ type Forms interface {
 	Versions(ctx context.Context, userID, formID uuid.UUID) ([]forms.Version, error)
 }
 
-// FormStatus — всё, что нужно табу «Интеграции» одной поездкой: состояние
-// аккаунта пространства и СПИСОК связок этой формы.
+// FormStatus — всё, что нужно табу «Интеграции» одной поездкой: подключения
+// СПРАШИВАЮЩЕГО (из них он выбирает) и СПИСОК связок этой формы.
 type FormStatus struct {
 	WorkspaceID uuid.UUID
-	Account     Status
+	// Account — аккаунты спрашивающего, а не пространства: в команде каждый
+	// видит в селекте свои. Чужой аккаунт, которым едет соседняя связка, в этом
+	// списке не появится — экран показывает его почтой самой связки.
+	Account Status
 	// Connections — подключённые связки, в порядке подключения. Их сколько
 	// угодно, в том числе в одну и ту же книгу: интеграция это правило доставки,
 	// а не состояние формы.
@@ -337,7 +333,7 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 		return FormStatus{}, err
 	}
 
-	account, err := s.Status(ctx, userID, form.WorkspaceID)
+	account, err := s.Status(ctx, userID)
 	if err != nil {
 		return FormStatus{}, err
 	}
@@ -354,6 +350,10 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 // подключение — одно осознанное действие, а не цепочка кнопок, каждая из
 // которых уже что-то поменяла.
 type ConnectOptions struct {
+	// AccountID — каким подключением ехать. Обязателен: аккаунтов у человека
+	// сколько угодно, и «подразумеваемого» среди них нет. Проверяется на
+	// принадлежность спрашивающему (accountOf) — id из тела правом не является.
+	AccountID uuid.UUID
 	// Name — необязательная подпись связки. Пусто — экран показывает имя
 	// провайдера.
 	Name string
@@ -378,9 +378,9 @@ const MaxConnectionNameLen = 80
 // ConnectForm заводит таблицу в Диске подключённого аккаунта и привязывает к ней
 // форму.
 //
-// Право — ActionFormWrite, а не ActionIntegrationManage: решение «вывозить ли
-// ответы наружу» уже принято владельцем при подключении аккаунта, а выбрать, для
-// какой формы завести таблицу, вправе тот, кто эти формы и правит.
+// Права два, и они про разное: ActionFormWrite на форму (кто её правит, тот
+// решает, куда едут её ответы) и принадлежность аккаунта спрашивающему. Роль в
+// пространстве про аккаунт не спрашивают — он личный (ADR §10).
 func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opts ConnectOptions) (FormLink, error) {
 	if !s.Enabled() {
 		return FormLink{}, domain.ErrNotFound
@@ -397,12 +397,9 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		return FormLink{}, err
 	}
 
-	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return FormLink{}, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
-	}
+	conn, err := s.accountOf(ctx, userID, opts.AccountID)
 	if err != nil {
-		return FormLink{}, fmt.Errorf("connect form: %w", err)
+		return FormLink{}, err
 	}
 
 	builder, err := s.columnModel(ctx, userID, formID)
@@ -467,6 +464,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		AccountID:      conn.ID,
 		Enabled:        true,
 		WorkspaceID:    form.WorkspaceID,
+		AccountUserID:  conn.UserID,
 		AccountEmail:   conn.Email,
 		SpreadsheetID:  sheet.ID,
 		SpreadsheetURL: sheet.URL,
@@ -526,30 +524,19 @@ func (s *Service) existingSheet(ctx context.Context, token, spreadsheetID string
 
 // Sheets — листы выбранной книги: второй шаг выбора («положить в существующий
 // лист или завести новый»).
-func (s *Service) Sheets(ctx context.Context, userID, formID uuid.UUID, spreadsheetID string) ([]SheetRef, error) {
+//
+// Спрашивается про АККАУНТ, а не про форму: книга лежит в чужом Диске, и право
+// на её оглавление даёт владение аккаунтом, а не роль в каком-либо пространстве.
+func (s *Service) Sheets(ctx context.Context, userID, accountID uuid.UUID, spreadsheetID string) ([]SheetRef, error) {
 	if !s.Enabled() {
 		return nil, domain.ErrNotFound
 	}
 	if spreadsheetID == "" {
 		return nil, fmt.Errorf("%w: таблица не выбрана", domain.ErrValidation)
 	}
-	form, err := s.forms.Get(ctx, userID, formID)
+	conn, err := s.accountOf(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
-	}
-	// Листы КОНКРЕТНОЙ книги — под правкой форм: сама книга уже названа, и
-	// перечисление её вкладок не раскрывает ничего за пределами того, что
-	// редактор и так собирается использовать.
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
-		return nil, err
-	}
-
-	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list sheets: %w", err)
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
@@ -580,30 +567,19 @@ func (s *Service) PickerAvailable() bool { return s.Enabled() && s.pickerKey != 
 
 // Picker выдаёт браузеру credentials окна выбора.
 //
-// Право — ActionIntegrationManage, то есть ВЛАДЕЛЕЦ, а не всякий, кто правит
-// формы. Причина в том, что именно уезжает в браузер: access-токен со scope
-// drive.file — это полный доступ (чтение, запись, удаление) ко ВСЕМ файлам,
-// созданным приложением в этом аккаунте Google, безотносительно пространства.
-// Редактор командного пространства с таким токеном прочитал бы и стёр таблицы
-// ответов из личного пространства владельца, где он не участник.
-func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerCredentials, error) {
+// Право — принадлежность аккаунта спрашивающему, и это сильнее прежнего гейта по
+// роли, а не слабее. То, что уезжает в браузер, — access-токен со scope
+// drive.file, то есть полный доступ ко ВСЕМ файлам, созданным приложением в этом
+// аккаунте Google. Пока аккаунт принадлежал пространству, «свой» токен открывал
+// чужие таблицы, и спасала только роль владельца; теперь человек получает токен
+// исключительно на СВОЙ аккаунт, и открыть чужое им нечего (ADR §10).
+func (s *Service) Picker(ctx context.Context, userID, accountID uuid.UUID) (PickerCredentials, error) {
 	if !s.PickerAvailable() {
 		return PickerCredentials{}, domain.ErrNotFound
 	}
-	form, err := s.forms.Get(ctx, userID, formID)
+	conn, err := s.accountOf(ctx, userID, accountID)
 	if err != nil {
 		return PickerCredentials{}, err
-	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionIntegrationManage); err != nil {
-		return PickerCredentials{}, err
-	}
-
-	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return PickerCredentials{}, fmt.Errorf("%w: аккаунт Google не подключён к пространству", domain.ErrValidation)
-	}
-	if err != nil {
-		return PickerCredentials{}, fmt.Errorf("picker credentials: %w", err)
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
@@ -618,30 +594,17 @@ func (s *Service) Picker(ctx context.Context, userID, formID uuid.UUID) (PickerC
 
 // Spreadsheets — таблицы, которые приложение создавало в этом аккаунте Google.
 //
-// Право — ActionIntegrationManage, как у окна выбора, и по той же причине:
-// список НЕ ограничен пространством. Чужих файлов человека в нём нет (scope
-// drive.file), но есть таблицы других пространств того же аккаунта — имена форм
-// и клиентов, которых редактор этого пространства видеть не должен.
-func (s *Service) Spreadsheets(ctx context.Context, userID, formID uuid.UUID) ([]SpreadsheetRef, error) {
+// Список не ограничен пространством и ограничен быть не может: под drive.file в
+// нём лежат все созданные нами файлы этого аккаунта. Раньше это требовало роли
+// владельца (список раскрывал имена форм соседних пространств) — теперь список
+// свой собственный, и раскрывать в нём человеку нечего.
+func (s *Service) Spreadsheets(ctx context.Context, userID, accountID uuid.UUID) ([]SpreadsheetRef, error) {
 	if !s.Enabled() {
 		return nil, domain.ErrNotFound
 	}
-	form, err := s.forms.Get(ctx, userID, formID)
+	conn, err := s.accountOf(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
-	}
-	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionIntegrationManage); err != nil {
-		return nil, err
-	}
-
-	conn, err := s.repo.Get(ctx, s.db, form.WorkspaceID, s.google.Provider())
-	if errors.Is(err, pgx.ErrNoRows) {
-		// Аккаунт не подключён — выбирать не из чего. Пустой список, а не
-		// ошибка: окно настроек открывается и до подключения.
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("list spreadsheets: %w", err)
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
@@ -962,7 +925,7 @@ func (s *Service) keepRotatedToken(ctx context.Context, conn Connection, used, f
 	}
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("rotated refresh token not stored",
-			slog.String("workspace_id", conn.WorkspaceID.String()),
+			slog.String("account_id", conn.ID.String()),
 			slog.String("error", err.Error()))
 	}
 }

@@ -789,20 +789,23 @@ func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) 
 
 const deleteIntegrationAccount = `-- name: DeleteIntegrationAccount :one
 DELETE FROM integration_accounts
-WHERE workspace_id = $1 AND provider = $2
+WHERE id = $1 AND user_id = $2
 RETURNING refresh_token
 `
 
 type DeleteIntegrationAccountParams struct {
-	WorkspaceID uuid.UUID
-	Provider    string
+	ID     uuid.UUID
+	UserID uuid.UUID
 }
 
-// Отключение. RETURNING отдаёт токен на отзыв у провайдера: прочитать его
-// отдельным запросом ДО удаления значит открыть окно, в котором строка уже
-// прочитана, но ещё жива. Формы, привязанные к этому аккаунту, уносит каскад.
+// Отключение ОДНОГО аккаунта. RETURNING отдаёт токен на отзыв у провайдера:
+// прочитать его отдельным запросом ДО удаления значит открыть окно, в котором
+// строка уже прочитана, но ещё жива. Связки этого аккаунта уносит каскад.
+//
+// user_id в условии не украшение: id аккаунта приезжает из адреса и правом
+// доступа не является (инвариант 1). Чужой аккаунт отсюда не отключить.
 func (q *Queries) DeleteIntegrationAccount(ctx context.Context, arg DeleteIntegrationAccountParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.WorkspaceID, arg.Provider)
+	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.ID, arg.UserID)
 	var refresh_token []byte
 	err := row.Scan(&refresh_token)
 	return refresh_token, err
@@ -1604,9 +1607,10 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
 WHERE fi.id = $1
 `
 
@@ -1626,6 +1630,7 @@ type GetFormIntegrationByIDRow struct {
 	LastError       pgtype.Text
 	LastDeliveredAt pgtype.Timestamptz
 	WorkspaceID     uuid.UUID
+	UserID          uuid.UUID
 	ExternalEmail   string
 }
 
@@ -1651,59 +1656,42 @@ func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (Get
 		&i.LastError,
 		&i.LastDeliveredAt,
 		&i.WorkspaceID,
+		&i.UserID,
 		&i.ExternalEmail,
-	)
-	return i, err
-}
-
-const getIntegrationAccount = `-- name: GetIntegrationAccount :one
-SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
-FROM integration_accounts
-WHERE workspace_id = $1 AND provider = $2
-`
-
-type GetIntegrationAccountParams struct {
-	WorkspaceID uuid.UUID
-	Provider    string
-}
-
-// Подключение пространства. refresh_token едет шифротекстом и наружу модуля не
-// выходит: расшифровывает его только сервис, и только чтобы сходить к провайдеру.
-func (q *Queries) GetIntegrationAccount(ctx context.Context, arg GetIntegrationAccountParams) (IntegrationAccount, error) {
-	row := q.db.QueryRow(ctx, getIntegrationAccount, arg.WorkspaceID, arg.Provider)
-	var i IntegrationAccount
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Provider,
-		&i.ExternalAccountID,
-		&i.ExternalEmail,
-		&i.RefreshToken,
-		&i.Scopes,
-		&i.ConnectedBy,
-		&i.ConnectedAt,
 	)
 	return i, err
 }
 
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
-SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
 FROM integration_accounts
 WHERE id = $1
 `
 
-func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (IntegrationAccount, error) {
+type GetIntegrationAccountByIDRow struct {
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	Provider          string
+	ExternalAccountID string
+	ExternalEmail     string
+	RefreshToken      []byte
+	Scopes            string
+	ConnectedAt       pgtype.Timestamptz
+}
+
+// Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
+// «аккаунт мой» перед выдачей токена или списка файлов.
+func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (GetIntegrationAccountByIDRow, error) {
 	row := q.db.QueryRow(ctx, getIntegrationAccountByID, id)
-	var i IntegrationAccount
+	var i GetIntegrationAccountByIDRow
 	err := row.Scan(
 		&i.ID,
-		&i.WorkspaceID,
+		&i.UserID,
 		&i.Provider,
 		&i.ExternalAccountID,
 		&i.ExternalEmail,
 		&i.RefreshToken,
 		&i.Scopes,
-		&i.ConnectedBy,
 		&i.ConnectedAt,
 	)
 	return i, err
@@ -2658,9 +2646,10 @@ func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFo
 const listFormIntegrations = `-- name: ListFormIntegrations :many
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
 WHERE fi.form_id = $1
 ORDER BY fi.id
 `
@@ -2681,6 +2670,7 @@ type ListFormIntegrationsRow struct {
 	LastError       pgtype.Text
 	LastDeliveredAt pgtype.Timestamptz
 	WorkspaceID     uuid.UUID
+	UserID          uuid.UUID
 	ExternalEmail   string
 }
 
@@ -2688,8 +2678,10 @@ type ListFormIntegrationsRow struct {
 // состояние формы). Порядок по id: UUIDv7 монотонен по времени, значит в списке
 // они идут в порядке подключения и не прыгают при перерисовке.
 //
-// workspace_id приезжает джойном из аккаунта: он нужен, чтобы спросить право, а
-// второй запрос за ним означал бы окно между проверкой и действием.
+// workspace_id приезжает джойном из ФОРМЫ, а не из аккаунта: с 0037 аккаунт
+// принадлежит человеку и пространства не знает вовсе. Право спрашивается по
+// пространству формы, а user_id аккаунта едет рядом — по нему сторож доставки
+// проверяет, что владелец аккаунта всё ещё участник этого пространства.
 func (q *Queries) ListFormIntegrations(ctx context.Context, formID uuid.UUID) ([]ListFormIntegrationsRow, error) {
 	rows, err := q.db.Query(ctx, listFormIntegrations, formID)
 	if err != nil {
@@ -2715,6 +2707,7 @@ func (q *Queries) ListFormIntegrations(ctx context.Context, formID uuid.UUID) ([
 			&i.LastError,
 			&i.LastDeliveredAt,
 			&i.WorkspaceID,
+			&i.UserID,
 			&i.ExternalEmail,
 		); err != nil {
 			return nil, err
@@ -2997,6 +2990,64 @@ func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListI
 			&i.ProviderUserID,
 			&i.ProviderEmail,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationAccountsByUser = `-- name: ListIntegrationAccountsByUser :many
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+FROM integration_accounts
+WHERE user_id = $1 AND provider = $2
+ORDER BY connected_at, id
+`
+
+type ListIntegrationAccountsByUserParams struct {
+	UserID   uuid.UUID
+	Provider string
+}
+
+type ListIntegrationAccountsByUserRow struct {
+	ID                uuid.UUID
+	UserID            uuid.UUID
+	Provider          string
+	ExternalAccountID string
+	ExternalEmail     string
+	RefreshToken      []byte
+	Scopes            string
+	ConnectedAt       pgtype.Timestamptz
+}
+
+// Аккаунты человека — то, из чего он выбирает в окне связки. refresh_token едет
+// шифротекстом и наружу модуля не выходит: расшифровывает его только сервис, и
+// только чтобы сходить к провайдеру.
+//
+// Порядок по connected_at: подключённый первым стоит первым и не прыгает при
+// перерисовке, а свежеподключённый оказывается внизу — там, где его ищут.
+func (q *Queries) ListIntegrationAccountsByUser(ctx context.Context, arg ListIntegrationAccountsByUserParams) ([]ListIntegrationAccountsByUserRow, error) {
+	rows, err := q.db.Query(ctx, listIntegrationAccountsByUser, arg.UserID, arg.Provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIntegrationAccountsByUserRow
+	for rows.Next() {
+		var i ListIntegrationAccountsByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Provider,
+			&i.ExternalAccountID,
+			&i.ExternalEmail,
+			&i.RefreshToken,
+			&i.Scopes,
+			&i.ConnectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4517,7 +4568,7 @@ type UpdateIntegrationAccountTokenParams struct {
 }
 
 // Провайдер прислал новый refresh взамен использованного. Меняется ТОЛЬКО
-// токен: connected_at и connected_by остаются прежними — ротация на стороне
+// токен: connected_at и user_id остаются прежними — ротация на стороне
 // провайдера не является новым подключением и не должна выглядеть им на экране.
 func (q *Queries) UpdateIntegrationAccountToken(ctx context.Context, arg UpdateIntegrationAccountTokenParams) error {
 	_, err := q.db.Exec(ctx, updateIntegrationAccountToken, arg.ID, arg.RefreshToken)
@@ -4657,48 +4708,52 @@ func (q *Queries) UpsertFormVisit(ctx context.Context, arg UpsertFormVisitParams
 	return err
 }
 
-const upsertIntegrationAccount = `-- name: UpsertIntegrationAccount :exec
+const upsertIntegrationAccount = `-- name: UpsertIntegrationAccount :one
 
 INSERT INTO integration_accounts (
-    id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (workspace_id, provider) DO UPDATE SET
-    external_account_id = EXCLUDED.external_account_id,
-    external_email      = EXCLUDED.external_email,
-    refresh_token       = EXCLUDED.refresh_token,
-    scopes              = EXCLUDED.scopes,
-    connected_by        = EXCLUDED.connected_by,
-    connected_at        = now()
+    id, user_id, provider, external_account_id, external_email, refresh_token, scopes
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
+    external_email = EXCLUDED.external_email,
+    refresh_token  = EXCLUDED.refresh_token,
+    scopes         = EXCLUDED.scopes,
+    connected_at   = now()
+RETURNING id
 `
 
 type UpsertIntegrationAccountParams struct {
 	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
+	UserID            uuid.UUID
 	Provider          string
 	ExternalAccountID string
 	ExternalEmail     string
 	RefreshToken      []byte
 	Scopes            string
-	ConnectedBy       uuid.UUID
 }
 
-// Запросы модуля integrations. Схема — migrations/0029_integrations. Генерация: `make sqlc`.
-// Подключение аккаунта. Повторное подключение (сменил аккаунт Google, отозвал
-// доступ, переподключается после ротации ключа) ЗАМЕНЯЕТ строку, а не плодит
-// вторую: одно подключение на провайдера в пространстве — рамка MVP, и она же
-// уникальный индекс, служащий здесь арбитром ON CONFLICT.
-func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegrationAccountParams) error {
-	_, err := q.db.Exec(ctx, upsertIntegrationAccount,
+// Запросы модуля integrations. Схема — migrations/0029_integrations + 0037
+// (подключение принадлежит человеку). Генерация: `make sqlc`.
+// Подключение аккаунта. Арбитр ON CONFLICT — ВНЕШНИЙ аккаунт, а не провайдер:
+// аккаунтов Google у человека сколько угодно, но повторный заход тем же
+// аккаунтом (переподключение после отзыва доступа или ротации ключа) обязан
+// обновить строку, а не завести вторую с тем же Диском.
+//
+// Мина: RETURNING id отдаёт id ПЕРЕЖИВШЕЙ строки, а не сгенерированный вызовом.
+// При обновлении они разные, и взять свой значило бы вернуть экрану аккаунт,
+// которого в базе нет.
+func (q *Queries) UpsertIntegrationAccount(ctx context.Context, arg UpsertIntegrationAccountParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, upsertIntegrationAccount,
 		arg.ID,
-		arg.WorkspaceID,
+		arg.UserID,
 		arg.Provider,
 		arg.ExternalAccountID,
 		arg.ExternalEmail,
 		arg.RefreshToken,
 		arg.Scopes,
-		arg.ConnectedBy,
 	)
-	return err
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const upsertPartialSubmission = `-- name: UpsertPartialSubmission :exec

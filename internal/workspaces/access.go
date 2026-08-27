@@ -35,17 +35,15 @@ const (
 // список участников editor ВИДИТ (знать, с кем работаешь, безобидно).
 var roleActions = map[Role]map[domain.Action]bool{
 	RoleOwner: {
-		domain.ActionFormRead:          true,
-		domain.ActionFormWrite:         true,
-		domain.ActionFormDelete:        true,
-		domain.ActionSubmissionDelete:  true,
-		domain.ActionBillingView:       true,
-		domain.ActionMemberRead:        true,
-		domain.ActionMemberManage:      true,
-		domain.ActionWorkspaceManage:   true,
-		domain.ActionWorkspaceDelete:   true,
-		domain.ActionIntegrationRead:   true,
-		domain.ActionIntegrationManage: true,
+		domain.ActionFormRead:         true,
+		domain.ActionFormWrite:        true,
+		domain.ActionFormDelete:       true,
+		domain.ActionSubmissionDelete: true,
+		domain.ActionBillingView:      true,
+		domain.ActionMemberRead:       true,
+		domain.ActionMemberManage:     true,
+		domain.ActionWorkspaceManage:  true,
+		domain.ActionWorkspaceDelete:  true,
 	},
 	RoleEditor: {
 		domain.ActionFormRead:         true,
@@ -57,11 +55,6 @@ var roleActions = map[Role]map[domain.Action]bool{
 		domain.ActionMemberManage:     false,
 		domain.ActionWorkspaceManage:  false,
 		domain.ActionWorkspaceDelete:  false,
-		domain.ActionIntegrationRead:  true,
-		// Подключение аккаунта Google — решение о вывозе персональных данных
-		// респондентов наружу; его принимает владелец пространства, а не тот,
-		// кому доверили править формы.
-		domain.ActionIntegrationManage: false,
 	},
 }
 
@@ -79,8 +72,6 @@ var AllActions = []domain.Action{
 	domain.ActionMemberManage,
 	domain.ActionWorkspaceManage,
 	domain.ActionWorkspaceDelete,
-	domain.ActionIntegrationRead,
-	domain.ActionIntegrationManage,
 }
 
 // allows — чистое решение по матрице, без БД: роль + действие → можно ли.

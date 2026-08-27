@@ -89,13 +89,12 @@ type FormVisit struct {
 
 type IntegrationAccount struct {
 	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
 	Provider          string
 	ExternalAccountID string
 	ExternalEmail     string
 	RefreshToken      []byte
 	Scopes            string
-	ConnectedBy       uuid.UUID
+	UserID            uuid.UUID
 	ConnectedAt       pgtype.Timestamptz
 }
 

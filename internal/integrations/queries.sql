@@ -1,40 +1,52 @@
--- Запросы модуля integrations. Схема — migrations/0029_integrations. Генерация: `make sqlc`.
+-- Запросы модуля integrations. Схема — migrations/0029_integrations + 0037
+-- (подключение принадлежит человеку). Генерация: `make sqlc`.
 
--- name: UpsertIntegrationAccount :exec
--- Подключение аккаунта. Повторное подключение (сменил аккаунт Google, отозвал
--- доступ, переподключается после ротации ключа) ЗАМЕНЯЕТ строку, а не плодит
--- вторую: одно подключение на провайдера в пространстве — рамка MVP, и она же
--- уникальный индекс, служащий здесь арбитром ON CONFLICT.
+-- name: UpsertIntegrationAccount :one
+-- Подключение аккаунта. Арбитр ON CONFLICT — ВНЕШНИЙ аккаунт, а не провайдер:
+-- аккаунтов Google у человека сколько угодно, но повторный заход тем же
+-- аккаунтом (переподключение после отзыва доступа или ротации ключа) обязан
+-- обновить строку, а не завести вторую с тем же Диском.
+--
+-- Мина: RETURNING id отдаёт id ПЕРЕЖИВШЕЙ строки, а не сгенерированный вызовом.
+-- При обновлении они разные, и взять свой значило бы вернуть экрану аккаунт,
+-- которого в базе нет.
 INSERT INTO integration_accounts (
-    id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-ON CONFLICT (workspace_id, provider) DO UPDATE SET
-    external_account_id = EXCLUDED.external_account_id,
-    external_email      = EXCLUDED.external_email,
-    refresh_token       = EXCLUDED.refresh_token,
-    scopes              = EXCLUDED.scopes,
-    connected_by        = EXCLUDED.connected_by,
-    connected_at        = now();
+    id, user_id, provider, external_account_id, external_email, refresh_token, scopes
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
+    external_email = EXCLUDED.external_email,
+    refresh_token  = EXCLUDED.refresh_token,
+    scopes         = EXCLUDED.scopes,
+    connected_at   = now()
+RETURNING id;
 
--- name: GetIntegrationAccount :one
--- Подключение пространства. refresh_token едет шифротекстом и наружу модуля не
--- выходит: расшифровывает его только сервис, и только чтобы сходить к провайдеру.
-SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+-- name: ListIntegrationAccountsByUser :many
+-- Аккаунты человека — то, из чего он выбирает в окне связки. refresh_token едет
+-- шифротекстом и наружу модуля не выходит: расшифровывает его только сервис, и
+-- только чтобы сходить к провайдеру.
+--
+-- Порядок по connected_at: подключённый первым стоит первым и не прыгает при
+-- перерисовке, а свежеподключённый оказывается внизу — там, где его ищут.
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
 FROM integration_accounts
-WHERE workspace_id = $1 AND provider = $2;
+WHERE user_id = $1 AND provider = $2
+ORDER BY connected_at, id;
 
 -- name: UpdateIntegrationAccountToken :exec
 -- Провайдер прислал новый refresh взамен использованного. Меняется ТОЛЬКО
--- токен: connected_at и connected_by остаются прежними — ротация на стороне
+-- токен: connected_at и user_id остаются прежними — ротация на стороне
 -- провайдера не является новым подключением и не должна выглядеть им на экране.
 UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1;
 
 -- name: DeleteIntegrationAccount :one
--- Отключение. RETURNING отдаёт токен на отзыв у провайдера: прочитать его
--- отдельным запросом ДО удаления значит открыть окно, в котором строка уже
--- прочитана, но ещё жива. Формы, привязанные к этому аккаунту, уносит каскад.
+-- Отключение ОДНОГО аккаунта. RETURNING отдаёт токен на отзыв у провайдера:
+-- прочитать его отдельным запросом ДО удаления значит открыть окно, в котором
+-- строка уже прочитана, но ещё жива. Связки этого аккаунта уносит каскад.
+--
+-- user_id в условии не украшение: id аккаунта приезжает из адреса и правом
+-- доступа не является (инвариант 1). Чужой аккаунт отсюда не отключить.
 DELETE FROM integration_accounts
-WHERE workspace_id = $1 AND provider = $2
+WHERE id = $1 AND user_id = $2
 RETURNING refresh_token;
 
 -- name: InsertFormIntegration :exec
@@ -49,13 +61,16 @@ INSERT INTO form_integrations (
 -- состояние формы). Порядок по id: UUIDv7 монотонен по времени, значит в списке
 -- они идут в порядке подключения и не прыгают при перерисовке.
 --
--- workspace_id приезжает джойном из аккаунта: он нужен, чтобы спросить право, а
--- второй запрос за ним означал бы окно между проверкой и действием.
+-- workspace_id приезжает джойном из ФОРМЫ, а не из аккаунта: с 0037 аккаунт
+-- принадлежит человеку и пространства не знает вовсе. Право спрашивается по
+-- пространству формы, а user_id аккаунта едет рядом — по нему сторож доставки
+-- проверяет, что владелец аккаунта всё ещё участник этого пространства.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
 WHERE fi.form_id = $1
 ORDER BY fi.id;
 
@@ -93,13 +108,16 @@ UPDATE form_integrations SET name = $3, enabled = $4 WHERE id = $1 AND form_id =
 -- в новую таблицу.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, ia.workspace_id, ia.external_email
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
 WHERE fi.id = $1;
 
 -- name: GetIntegrationAccountByID :one
-SELECT id, workspace_id, provider, external_account_id, external_email, refresh_token, scopes, connected_by, connected_at
+-- Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
+-- «аккаунт мой» перед выдачей токена или списка файлов.
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
 FROM integration_accounts
 WHERE id = $1;
 
