@@ -38,6 +38,9 @@ type fakePublicSvc struct {
 	// partialAllowed — разрешает ли тариф сбор незавершённых (submissions_partial).
 	partialAllowed bool
 	partialErr     error
+	// cardAllowed — разрешает ли тариф свою карточку ссылки (form_link_preview).
+	cardAllowed bool
+	cardErr     error
 }
 
 func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, error) {
@@ -69,6 +72,22 @@ func (f fakePublicSvc) CollectPartial(_ context.Context, _ uuid.UUID, intent boo
 		return false, nil
 	}
 	return f.partialAllowed, f.partialErr
+}
+
+// LinkPreviewFor повторяет ПРАВИЛО сервиса, а не его результат: карточки нет —
+// тариф не спрашивается вовсе; есть — решает подставленное право. Сбой опроса
+// оставляет дефолты (карточка nil), как и настоящий сервис.
+func (f fakePublicSvc) LinkPreviewFor(_ context.Context, _ uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error) {
+	if p.Empty() {
+		return nil, nil
+	}
+	if f.cardErr != nil {
+		return nil, f.cardErr
+	}
+	if !f.cardAllowed {
+		return nil, nil
+	}
+	return p, nil
 }
 
 var testSecret = []byte("dev-only-form-token-secret-not-a-real-key")

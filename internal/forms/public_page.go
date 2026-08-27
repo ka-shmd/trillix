@@ -2,7 +2,6 @@ package forms
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -11,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
@@ -50,6 +51,13 @@ const shellMarker = " data-form-shell"
 // вывода и никакого dangerouslySetInnerHTML (инвариант безопасности 4). Собранный
 // index.html вокруг — доверенный (наш билд), склеивается как есть.
 //
+// СВОЯ ИКОНКА ПЕЧАТАЕТСЯ ВТОРЫМ <link rel="icon">, а не заменяет первый. Значок по
+// умолчанию (/favicon.svg) стоит в web/renderer/index.html выше плейсхолдера, и Go
+// разметку вокруг маркера не переписывает принципиально — он её только раздвигает.
+// Из двух одинаковых rel браузеры берут последний объявленный, поэтому своя иконка
+// перебивает дефолтную; при этом в dev, где страницу отдаёт vite и Go не участвует
+// вовсе, значок формы не пропадает.
+//
 // Preload шрифта идёт ПЕРВЫМ: это единственная строка вставки, которая говорит
 // браузеру качать файл, и чем раньше её увидит сканер предзагрузки, тем раньше
 // уйдёт запрос. crossorigin обязателен даже для своего origin — без него шрифт
@@ -57,11 +65,13 @@ const shellMarker = " data-form-shell"
 var headTmpl = template.Must(template.New("head").Parse(
 	`{{range .Preload}}<link rel="preload" as="font" type="font/woff2" crossorigin href="{{.}}">{{end}}` +
 		`<title>{{.Title}}</title>` +
-		`<meta name="description" content="{{.MetaDescription}}">` +
+		`<meta name="description" content="{{.Description}}">` +
 		`{{if .ThemeColor}}<meta name="theme-color" content="{{.ThemeColor}}">{{end}}` +
+		`{{if .Icon}}<link rel="icon" href="{{.Icon}}">{{end}}` +
 		`<meta property="og:type" content="website">` +
+		`<meta property="og:site_name" content="{{.SiteName}}">` +
 		`<meta property="og:title" content="{{.Title}}">` +
-		`{{if .Description}}<meta property="og:description" content="{{.Description}}">{{end}}` +
+		`<meta property="og:description" content="{{.Description}}">` +
 		`<meta property="og:image" content="{{.OGImage}}">` +
 		`<meta property="og:url" content="{{.URL}}">` +
 		`<meta name="twitter:card" content="summary_large_image">`,
@@ -69,13 +79,18 @@ var headTmpl = template.Must(template.New("head").Parse(
 
 type headData struct {
 	Title string
-	// Description — тизер для og:description (заголовки блоков); может быть пустым,
-	// тогда og:description опускается. MetaDescription — стандартный <meta
-	// name="description">, всегда непустой (SEO): тот же тизер или фолбэк.
-	Description     string
-	MetaDescription string
-	OGImage         string
-	URL             string
+	// Description — og:description и <meta name="description"> одной строкой: с
+	// появлением поля описания в карточке ссылки различать их стало нечем, а два
+	// значения на одну мысль расходятся при первой же правке.
+	Description string
+	OGImage     string
+	URL         string
+	// SiteName — имя площадки над заголовком карточки; всегда непусто (дефолт —
+	// имя сервиса).
+	SiteName string
+	// Icon — абсолютный URL своей иконки площадки; пусто → остаётся значок из
+	// разметки рендерера.
+	Icon string
 	// ThemeColor — цвет строки браузера: холст формы. Пусто → меты нет вовсе.
 	ThemeColor string
 	// Preload — URL'ы подмножеств выбранного шрифта в собранной статике.
@@ -85,9 +100,21 @@ type headData struct {
 // maxOGDescriptionLen — потолок длины og:description (превью всё равно обрезают).
 const maxOGDescriptionLen = 200
 
-// fallbackMetaDescription — <meta name="description"> для формы без заполненных
-// заголовков вопросов (пустой тизер): описание страницы для поисковиков.
-const fallbackMetaDescription = "Онлайн-форма — заполните и отправьте ответ."
+// Дефолты карточки ссылки — то, что видит получатель ссылки на форму, автор которой
+// карточку не настраивал (или настраивал, но тариф её не разрешает).
+//
+// ЗЕРКАЛО: те же две строки объявлены в web/app/src/entities/form.ts
+// (LINK_PREVIEW_SITE_NAME, LINK_PREVIEW_DESCRIPTION) — по ним кабинет рисует
+// предпросмотр и заполняет окно настройки. Разойдутся — предпросмотр начнёт врать
+// про то, что увидит получатель, а заметить это можно только отправив себе ссылку.
+const (
+	defaultSiteName = "Trillix"
+	// defaultDescription — общий текст, а НЕ тизер из заголовков первых вопросов
+	// (решение владельца 2026-08-27, отменяет прежнее поведение): у формы появилось
+	// своё поле описания, и держать рядом второй, выводимый источник значило бы
+	// объяснять автору, почему в окне одно, а по ссылке другое.
+	defaultDescription = "Форма на Trillix — соберите свою за пару минут."
+)
 
 // fallbackFormTitle — <title> вкладки и og:title формы, у которой автор заголовок
 // стёр (фаза 15). На самой странице заголовка тогда нет вовсе — так решил автор, —
@@ -265,19 +292,33 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Схема разбирается ОДИН раз на все три её роли в этом ответе: тизер описания,
-	// оформление оболочки и шрифт для preload. Разбор отказоустойчив — битая схема
-	// даёт страницу без тизера и без оформления, а не 500.
+	// Схема разбирается ради оформления оболочки и шрифта для preload. Разбор
+	// отказоустойчив — битая схема даёт страницу без оформления, а не 500.
 	var design *domain.FormDesign
-	var desc string
 	if schema, err := domain.ValidateSchema(pf.Schema); err == nil {
 		design = schema.Design
-		desc = ogDescription(schema)
 	}
 
-	metaDesc := desc
-	if metaDesc == "" {
-		metaDesc = fallbackMetaDescription
+	// Своя карточка ссылки поверх дефолтов. Право тарифа спрашивается ЗДЕСЬ, при
+	// отдаче (а не при сохранении карточки) — тот же приём, что у бейджа: в колонке
+	// намерение автора, в выдаче намерение плюс разрешение.
+	card := h.linkPreview(r, pf.WorkspaceID, pf.LinkPreview)
+
+	title := titleOrFallback(pf.Title)
+	desc := defaultDescription
+	siteName := defaultSiteName
+	if card != nil {
+		// Пустое поле карточки = «оставить дефолт», а не «показать пустоту»: карточка,
+		// у которой заполнен один заголовок, — законное и частое состояние.
+		if card.Title != "" {
+			title = card.Title
+		}
+		if card.Description != "" {
+			desc = truncateRunes(card.Description, maxOGDescriptionLen)
+		}
+		if card.SiteName != "" {
+			siteName = card.SiteName
+		}
 	}
 
 	// prefix + <атрибуты оболочки> + mid + <голова формы> + tail. Рендерим в буфер:
@@ -294,13 +335,19 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := headData{
-		Title:           titleOrFallback(pf.Title),
-		Description:     desc,
-		MetaDescription: metaDesc,
-		OGImage:         h.ogImageURL,
-		URL:             h.publicBaseURL + "/r/" + slug,
-		ThemeColor:      domain.DesignThemeColor(design),
-		Preload:         h.fontPreload(doc, design),
+		Title:       title,
+		Description: desc,
+		SiteName:    siteName,
+		OGImage:     h.ogImageURL,
+		URL:         h.publicBaseURL + "/r/" + slug,
+		ThemeColor:  domain.DesignThemeColor(design),
+		Preload:     h.fontPreload(doc, design),
+	}
+	if card != nil {
+		if url := h.mediaURL(card.ImageKey); url != "" {
+			data.OGImage = url
+		}
+		data.Icon = h.mediaURL(card.IconKey)
 	}
 
 	var buf bytes.Buffer
@@ -359,41 +406,6 @@ func (h *PublicHandler) fontPreload(doc *indexDoc, d *domain.FormDesign) []strin
 	return out
 }
 
-// ogDescriptionFromSchema — тизер по сырой схеме. Отдельно от ogDescription, потому
-// что схему для страницы формы разбирает getHTML (ей нужен ещё и design), а тесту
-// разбора удобнее сырой JSON.
-func ogDescriptionFromSchema(schema json.RawMessage) string {
-	s, err := domain.ValidateSchema(schema)
-	if err != nil {
-		return ""
-	}
-	return ogDescription(s)
-}
-
-// ogDescription собирает подзаголовок превью из формы: тексты первых блоков-подписей
-// (title/label) через « · ». Отдельного поля описания у формы нет, поэтому берём
-// осмысленный тизер из её содержимого. Схему, которую не удалось разобрать, сюда не
-// передают вовсе — тизер тогда пуст, а страница отдаётся как обычно.
-func ogDescription(s domain.FormSchema) string {
-	labels := make([]string, 0, 3)
-	for _, b := range s.Blocks {
-		if b.Type != domain.BlockTitle && b.Type != domain.BlockLabel {
-			continue
-		}
-		// Плоский текст: og:description читают краулеры и соцсети, разметке там места
-		// нет (фаза 14).
-		text := strings.TrimSpace(domain.PlainText(b.Text))
-		if text == "" {
-			continue
-		}
-		labels = append(labels, text)
-		if len(labels) == 3 {
-			break
-		}
-	}
-	return truncateRunes(strings.Join(labels, " · "), maxOGDescriptionLen)
-}
-
 // truncateRunes обрезает строку до n рун (не байт — кириллица), добавляя «…».
 func truncateRunes(s string, n int) string {
 	r := []rune(s)
@@ -401,4 +413,33 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// linkPreview — карточка ссылки, действующая для этой выдачи (nil = дефолты).
+// Сбой опроса тарифа не имеет права уронить публичную страницу: остаётся дефолтная
+// карточка, причина уходит в лог с request_id. Выбор тот же, что у бейджа, — при
+// сбое склоняемся к бесплатному поведению, а не к платному.
+func (h *PublicHandler) linkPreview(r *http.Request, workspaceID uuid.UUID, intent *domain.LinkPreview) *domain.LinkPreview {
+	card, err := h.svc.LinkPreviewFor(r.Context(), workspaceID, intent)
+	if err != nil {
+		httpserver.LoggerFrom(r.Context()).Error("проверка тарифа для карточки ссылки",
+			slog.String("workspace_id", workspaceID.String()), slog.String("error", err.Error()))
+		return nil
+	}
+	return card
+}
+
+// mediaURL — АБСОЛЮТНЫЙ адрес картинки карточки по её ключу в бакете. Абсолютный
+// обязателен: относительный `/media/<key>` краулеры превью не резолвят — они читают
+// мету, не имея базы документа. База — домен рендерера, потому что `/media/*`
+// раздаётся и с него тоже (deploy/caddy/Caddyfile, сниппет media), то есть картинка
+// карточки лежит на том же origin, что и сама форма.
+//
+// Ключ в URL не кодируется: он S3-безопасный по построению (workspaceID/<sha256>.ext,
+// media.Service.put), и лишнее кодирование сломало бы слеш неймспейса.
+func (h *PublicHandler) mediaURL(key string) string {
+	if key == "" {
+		return ""
+	}
+	return h.publicBaseURL + "/media/" + key
 }

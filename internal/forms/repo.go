@@ -67,8 +67,12 @@ type Form struct {
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
 	NotifyOnSubmission bool
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// LinkPreview — своя карточка ссылки (nil = не настраивали → дефолты публичной
+	// страницы). Живая колонка, как настройки закрытия; заполняют только
+	// Get/GetBySlug — её читает окно кастомизации на экране «Поделиться».
+	LinkPreview *domain.LinkPreview
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // ListRow — строка списка вместе с ключом сортировки, по которому её выдала БД
@@ -113,6 +117,10 @@ type PublicForm struct {
 	// колонка: включается без перепубликации. Право тарифа спрашивает service — и
 	// при включении, и при отдаче публичной формы.
 	CollectPartial bool
+	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
+	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
+	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
+	LinkPreview *domain.LinkPreview
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -165,6 +173,28 @@ func ptrTime(v pgtype.Timestamptz) *time.Time {
 	}
 	t := v.Time
 	return &t
+}
+
+// linkPreviewFromJSON разбирает колонку forms.link_preview: NULL или пустой JSON →
+// nil («карточку не настраивали», публичный слой берёт дефолты).
+//
+// БИТЫЙ JSON ДАЁТ nil, А НЕ ОШИБКУ, и это то же правило, по которому публичная
+// страница переживает неразбираемую схему: карточка ссылки — украшение выдачи, и
+// испорченная строка обязана стоить дефолтного превью, а не пятисотки на форме,
+// которая исправно принимает ответы. Записываем сюда только мы и только через
+// ValidateLinkPreview, поэтому ветка недостижима в здоровой базе.
+func linkPreviewFromJSON(raw []byte) *domain.LinkPreview {
+	if len(raw) == 0 {
+		return nil
+	}
+	var p domain.LinkPreview
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil
+	}
+	if p.Empty() {
+		return nil
+	}
+	return &p
 }
 
 // pgTime переводит *time.Time в pgtype.Timestamptz для параметров: nil → NULL.
@@ -280,6 +310,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
+		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -313,6 +344,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
+		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -543,6 +575,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
 		CollectPartial:     row.CollectPartial,
+		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
 
@@ -617,6 +650,40 @@ func (Repo) SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("set form closed: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormLinkPreview заменяет карточку ссылки формы в пределах воркспейса.
+// Пустая карточка нормализуется в NULL — «не настраивали» обязано иметь ровно одно
+// представление в колонке, иначе читателю приходится знать оба (domain.Empty).
+// pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error) {
+	var raw []byte
+	if !p.Empty() {
+		var err error
+		raw, err = json.Marshal(p)
+		if err != nil {
+			return Form{}, fmt.Errorf("marshal link preview: %w", err)
+		}
+	}
+	row, err := postgres.New(db).UpdateFormLinkPreview(ctx, postgres.UpdateFormLinkPreviewParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		LinkPreview: raw,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form link_preview: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

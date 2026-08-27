@@ -1456,6 +1456,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.link_preview,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1481,6 +1482,7 @@ type GetFormRow struct {
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
+	LinkPreview           []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1510,6 +1512,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
+		&i.LinkPreview,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1533,6 +1536,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.link_preview,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1558,6 +1562,7 @@ type GetFormBySlugRow struct {
 	ClosedMessage         pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
+	LinkPreview           []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1589,6 +1594,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
+		&i.LinkPreview,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1828,6 +1834,11 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
     -- останавливать сбор, как у бейджа).
     f.collect_partial,
+    -- link_preview: своя карточка ссылки (имя площадки, заголовок, описание,
+    -- картинка, иконка). Живая колонка, как collect_partial: правка карточки
+    -- обязана доезжать до мессенджера без перепубликации. Право тарифа поверх неё
+    -- спрашивает сервис — карточка это свойство ВЫДАЧИ, а не документа.
+    f.link_preview,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1851,6 +1862,7 @@ type GetPublicFormBySlugRow struct {
 	ClosedMessage      pgtype.Text
 	NotifyOnSubmission bool
 	CollectPartial     bool
+	LinkPreview        []byte
 	SubmissionCount    int64
 }
 
@@ -1886,6 +1898,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.ClosedMessage,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
+		&i.LinkPreview,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -4352,6 +4365,55 @@ func (q *Queries) UpdateFormIntegrationTarget(ctx context.Context, arg UpdateFor
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateFormLinkPreview = `-- name: UpdateFormLinkPreview :one
+UPDATE forms
+SET link_preview = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormLinkPreviewParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	LinkPreview []byte
+}
+
+type UpdateFormLinkPreviewRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
+// Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
+// кабинета шлёт карточку ЦЕЛИКОМ (не патч по полю), поэтому здесь замена значения,
+// а не слияние JSONB; пустая карточка нормализуется в NULL на стороне repo. Тариф
+// здесь НЕ спрашивается вовсе: сохранять карточку вправе любой план, а разрешение
+// проверяется при отдаче публичной страницы. В пределах воркспейса (анти-IDOR);
+// 0 строк (чужая/нет формы) → service трактует как 404.
+func (q *Queries) UpdateFormLinkPreview(ctx context.Context, arg UpdateFormLinkPreviewParams) (UpdateFormLinkPreviewRow, error) {
+	row := q.db.QueryRow(ctx, updateFormLinkPreview, arg.ID, arg.WorkspaceID, arg.LinkPreview)
+	var i UpdateFormLinkPreviewRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateFormName = `-- name: UpdateFormName :one

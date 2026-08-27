@@ -76,6 +76,7 @@ type Store interface {
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
+	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
 	UpdateFormDraftSchema(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, schema json.RawMessage, mirrorTitle *string, expectedUpdatedAt time.Time) (Form, error)
 	DeleteForm(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
@@ -426,6 +427,63 @@ func (s *Service) UpdateCollectPartial(ctx context.Context, userID, formID uuid.
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// UpdateLinkPreview заменяет карточку ссылки формы (имя площадки, заголовок,
+// описание, картинка, иконка). Порядок как у UpdateCloseSettings: валидация ввода,
+// проверка доступа (чужая/нет формы → 404), затем UPDATE.
+//
+// ТАРИФ ЗДЕСЬ НЕ СПРАШИВАЕТСЯ, и это не забывчивость. Гейт стоит при отдаче
+// публичной страницы (LinkPreviewFor ниже) — так автор на любом плане может
+// настроить карточку и увидеть предпросмотр, то есть узнать, за что ему предлагают
+// платить. Отказ на сохранении означал бы покупку вслепую; кроме того, апгрейд
+// обязан оживлять уже сохранённое, а не требовать набрать всё заново.
+func (s *Service) UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error) {
+	if err := domain.ValidateLinkPreview(p); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormLinkPreview(ctx, s.db, form.ID, form.WorkspaceID, p)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// LinkPreviewFor — карточка ссылки, действующая для ЭТОЙ формы прямо сейчас: nil
+// значит «показывать дефолты» (имя сервиса, заголовок формы, общий слоган, брендовая
+// картинка).
+//
+// Решается ПРИ ОТДАЧЕ, а не при сохранении, и это тот же приём, что у бейджа
+// (ShowBadge) и сбора черновиков (CollectPartial): в колонке лежит НАМЕРЕНИЕ
+// автора, а факт — намерение плюс разрешение тарифа. Даунгрейд возвращает
+// дефолтную карточку немедленно, апгрейд оживляет сохранённую без единой правки.
+//
+// Цена на публичном пути нулевая для большинства форм: карточку не настраивали —
+// спрашивать нечего, в БД не идём вовсе. Платит только форма со своей карточкой, и
+// ровно одним чтением по первичным ключам.
+func (s *Service) LinkPreviewFor(ctx context.Context, workspaceID uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error) {
+	if p.Empty() {
+		return nil, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormLinkPreview)
+	if err != nil {
+		// «Спросить не удалось» — не «можно» (BILLING.md §9). Форма отдаётся с
+		// дефолтной карточкой: сбой тарифов не имеет права ронять публичную
+		// страницу, а дефолтное превью у платящего — меньшее из зол, чем платная
+		// возможность, розданная по ошибке.
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, nil
+	}
+	return p, nil
 }
 
 // CollectPartial — собирать ли черновики у ЭТОЙ публичной формы прямо сейчас.

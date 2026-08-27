@@ -1,13 +1,17 @@
+import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Copy, Share2 } from 'lucide-react'
 
-import { type Block, plainText } from '@entities/formSchema'
-import { type FormDetail, displayFormTitle } from '../../entities/form'
+import { type FormDetail } from '../../entities/form'
 import { copyFormLink } from './copyLink'
 import { EmbedSection } from './EmbedSection'
-import { publicFormUrl, publicFormHost } from './publicUrl'
+import { LinkPreviewCard } from './LinkPreviewCard'
+import { LinkPreviewDialog } from './LinkPreviewDialog'
+import { publicFormUrl } from './publicUrl'
+import { useFeatureAllowed } from '../plan/useFeature'
 import { Section } from '../../shared/page/Section'
 import { EmptyState } from '../../shared/page/states'
+import { ProTag } from '../../shared/ProTag'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -55,8 +59,13 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
 
   // Превью — СОСЕДНИЙ РАЗДЕЛ, а не содержимое этого: колонки заведены выше Section,
   // поэтому оба заголовка стоят на одной линии.
+  //
+  // 60/40, а не пополам: слева живёт сама ссылка — длинная строка в моноширинном
+  // наборе плюс кнопка копирования, и в половине колонки адрес обрезался бы ровно
+  // там, ради чего на экран и пришли. Справа картинка, которая тянется по ширине и
+  // остаётся читаемой в любой из двух долей.
   return (
-    <div className="grid gap-8 md:grid-cols-2 md:items-start">
+    <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-start">
       <Section
         title="Ссылка на форму"
         description={
@@ -82,54 +91,86 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
         </div>
       </Section>
 
-      <LinkPreview
-        title={displayFormTitle(form.title)}
-        host={publicFormHost()}
-        teaser={linkTeaser(form.draftSchema.blocks)}
-      />
+      <LinkPreview form={form} />
     </div>
   )
 }
 
-// linkTeaser — тизер карточки: заголовки первых трёх непустых блоков через « · ».
-// Зеркалит серверный ogDescriptionFromSchema (internal/forms/public_page.go),
-// формирующий og:description опубликованной версии. Здесь считаем по текущему
-// черновику — приближение, расходится с опубликованным лишь при неопубликованных
-// правках.
-function linkTeaser(blocks: Block[]): string {
-  const labels: string[] = []
-  for (const b of blocks) {
-    // Тизер — из блоков-подписей (title/label), как og:description на бэке.
-    if (b.type !== 'title' && b.type !== 'label') continue
-    // Тизер — текст, не разметка (фаза 14): как og:description на бэке.
-    const label = plainText(b.text).trim()
-    if (!label) continue
-    labels.push(label)
-    if (labels.length === 3) break
-  }
-  return labels.join(' · ')
-}
+// LinkPreview — раздел «Превью ссылки»: карточка, какой её увидит получатель, и
+// вход в её настройку. Кнопка ведёт в окно, а не разворачивает поля здесь: полей
+// пять, у каждого свой предпросмотр, и в колонке шириной в половину экрана они
+// вытеснили бы саму ссылку — то, ради чего на экран и пришли.
+//
+// ВХОД В НАСТРОЙКУ — СВОЯ СТРОКА ПОД ПОЯСНЕНИЕМ, а не кнопка в углу раздела: раздел
+// показывает картинку, а не предлагает действие, и залитая кнопка спорила бы за
+// внимание с «Копировать» — единственным здешним делом. Ссылка, а не абзац текста,
+// потому что это единственное здесь нажимаемое; кнопка, а не <a>, — потому что
+// открывает окно, а не ведёт по адресу. Подчёркивание постоянное, а не на наведении:
+// строка стоит среди приглушённого текста и иначе не читается ссылкой.
+//
+// МЕТКА ПРО СТОИТ РЯДОМ СО ССЫЛКОЙ и ничего не запирает: настроить карточку можно на
+// любом тарифе, применяется она только на платном (гейт — при отдаче публичной
+// страницы, как у бейджа). Метка называет тариф и ведёт на страницу тарифов — то
+// есть узнать цену можно тем же жестом, каким заметили ограничение. Место рядом со
+// ссылкой, а не у заголовка: она помечает не раздел (превью видно всем), а ту
+// возможность, к которой ссылка ведёт.
+//
+// ПРОСВЕТ РАЗДЕЛА СЖАТ ДО 4 (`className="gap-1"` перебивает `gap-6` Section через
+// tailwind-merge): строка настройки — продолжение пояснения, а не следующий блок, и
+// на обычных 24 она читалась бы подписью к карточке под ней. Шаг тот же, каким само
+// пояснение отбито от заголовка.
+//
+// РАЗДЕЛ ПОКАЗЫВАЕТ ТО, ЧТО РЕАЛЬНО ОТДАЁТСЯ ПО ССЫЛКЕ, а не то, что автор сохранил.
+// Право спрашивается и здесь, потому что гейт стоит на ВЫДАЧЕ: после даунгрейда
+// публичная страница вернулась к дефолтам, и карточка, нарисованная по сохранённому,
+// показывала бы автору то, чего получатель ссылки не увидит, — то есть предпросмотр
+// перестал бы что-либо доказывать (решение владельца 2026-08-27). Сохранённое при
+// этом не прячется: про него сказано строкой под карточкой, и оно на месте в окне.
+//
+// Окно ведёт себя ИНАЧЕ и намеренно: там предпросмотр показывает набираемый
+// черновик на любом тарифе — иначе настраивать пришлось бы вслепую.
+function LinkPreview({ form }: { form: FormDetail }) {
+  const [open, setOpen] = useState(false)
+  // «Пока не знаем — разрешено» (features/plan/useFeature.ts): у платящего автора
+  // карточка не должна мигать дефолтной на каждом открытии экрана.
+  const allowed = useFeatureAllowed('form_link_preview')
+  const inactive = !allowed && form.linkPreview !== null
 
-// LinkPreview — предпросмотр карточки ссылки, как её строит сервер из OG-мета
-// (internal/forms/public_page.go, страница /r/{slug}): og:title = название формы,
-// og:description = заголовки первых вопросов. Здесь — приближение того же вида
-// (сервер дополнительно отдаёт og:image); точная отрисовка зависит от площадки.
-function LinkPreview({ title, host, teaser }: { title: string; host: string; teaser: string }) {
   return (
     <Section
       title="Превью ссылки"
-      description="Так карточка выглядит при пересылке в мессенджерах и соцсетях. Точный вид зависит от площадки."
+      description="Отправляя ссылку, вы увидите карточку вроде такой — в соцсетях, мессенджерах и поисковой выдаче."
+      className="gap-1"
     >
-      {/* Ни фона, ни рамки — только полоска слева: она не обводит блок, а цитирует
-          вид карточки, которую рисуют мессенджеры. Серая, а не акцентная: акцент в
-          кабинете значит «сюда можно нажать», а это картинка. */}
-      <div className="border-l-4 border-border pl-4">
-        <p className="truncate text-sm text-muted-foreground">{host}</p>
-        <p className="mt-1 text-base font-semibold">{title}</p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {teaser || 'Онлайн-форма — заполните и отправьте ответ.'}
-        </p>
+      {/* 16 между строкой настройки и карточкой — просвет «между элементами блока»
+          из ритма кабинета (DESIGN-SYSTEM). */}
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-2">
+          {/* Подчёркивание СНИМАЕТСЯ на наведении — тот же жест, что у ссылок
+              полотна (BlockRow, CoverEditor): постоянная черта делает строку
+              ссылкой, её исчезновение отвечает на курсор. */}
+          <Button
+            variant="link"
+            className="h-auto p-0 text-sm underline hover:no-underline"
+            onClick={() => setOpen(true)}
+          >
+            Настроить
+          </Button>
+          <ProTag />
+        </div>
+        <div className="flex flex-col gap-2">
+          <LinkPreviewCard form={form} preview={allowed ? form.linkPreview : null} />
+          {inactive && (
+            <p className="text-sm text-muted-foreground">
+              Своя карточка сохранена, но по ссылке показывается эта: она применится на платном
+              тарифе.
+            </p>
+          )}
+        </div>
       </div>
+      {/* Окно монтируется вместе с разделом, а не по клику: Radix сам держит его
+          закрытым, а условный рендер терял бы набранное при каждом закрытии. */}
+      <LinkPreviewDialog form={form} open={open} onOpenChange={setOpen} />
     </Section>
   )
 }

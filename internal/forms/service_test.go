@@ -58,6 +58,9 @@ type fakeStore struct {
 	// Захват настроек закрытия последнего UpdateCloseSettings.
 	lastCloseSettings domain.CloseSettings
 
+	// Захват карточки ссылки последнего UpdateLinkPreview.
+	lastLinkPreview *domain.LinkPreview
+
 	// Тумблер уведомлений (слайс D) и адресат уведомления.
 	lastNotifyEnabled  bool
 	lastCollectPartial bool
@@ -124,6 +127,12 @@ func (f *fakeStore) UpdateCollectPartial(_ context.Context, _ postgres.DBTX, id,
 	f.updated = true
 	f.lastCollectPartial = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, CollectPartial: enabled}, nil
+}
+
+func (f *fakeStore) UpdateFormLinkPreview(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error) {
+	f.updated = true
+	f.lastLinkPreview = p
+	return Form{ID: id, WorkspaceID: workspaceID, LinkPreview: p}, nil
 }
 
 func (f *fakeStore) GetSubmissionOwner(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (Owner, error) {
@@ -1390,4 +1399,68 @@ type countingPlans struct{ calls int }
 func (p *countingPlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.Key) (entitlements.Decision, error) {
 	p.calls++
 	return entitlements.Decision{Allowed: true}, nil
+}
+
+// --- Своя карточка ссылки: сохранение свободно, применение платно ---
+
+func TestUpdateLinkPreview_SavesOnAnyPlan(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	card := &domain.LinkPreview{Title: "Февральский номер", ImageKey: "ws/abc.png"}
+	if _, err := svc.UpdateLinkPreview(context.Background(), domain.NewID(), domain.NewID(), card); err != nil {
+		t.Fatalf("сохранение карточки обязано проходить на любом тарифе: %v", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на сохранении (%v) — гейт обязан стоять при отдаче", plans.gotKeys)
+	}
+	if store.lastLinkPreview == nil || store.lastLinkPreview.Title != "Февральский номер" {
+		t.Fatalf("в репозиторий уехала не та карточка: %+v", store.lastLinkPreview)
+	}
+}
+
+func TestUpdateLinkPreview_TooLongTitle_Rejected(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := newTestService(store)
+
+	card := &domain.LinkPreview{Title: strings.Repeat("я", domain.MaxLinkPreviewTitleLen+1)}
+	_, err := svc.UpdateLinkPreview(context.Background(), domain.NewID(), domain.NewID(), card)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation (лимит считается в рунах)", err)
+	}
+	if store.updated {
+		t.Fatal("запись прошла при невалидной карточке")
+	}
+}
+
+func TestLinkPreviewFor_GateAtDelivery(t *testing.T) {
+	card := &domain.LinkPreview{Title: "Февральский номер"}
+
+	// Карточки нет — тариф не спрашивается вовсе (цена гейта на публичном пути).
+	plans := &fakePlans{allowed: true}
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
+	got, err := svc.LinkPreviewFor(context.Background(), domain.NewID(), nil)
+	if err != nil || got != nil {
+		t.Fatalf("пустая карточка: got=%+v err=%v", got, err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен у формы без карточки: %v", plans.gotKeys)
+	}
+
+	// Есть карточка и право — применяется.
+	got, err = svc.LinkPreviewFor(context.Background(), domain.NewID(), card)
+	if err != nil || got == nil || got.Title != "Февральский номер" {
+		t.Fatalf("карточка с правом: got=%+v err=%v", got, err)
+	}
+	if len(plans.gotKeys) != 1 || plans.gotKeys[0] != entitlements.FormLinkPreview {
+		t.Fatalf("спрошен не тот ключ: %v", plans.gotKeys)
+	}
+
+	// Даунгрейд — карточка перестаёт применяться, хотя и осталась в колонке.
+	denied := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
+	got, err = denied.LinkPreviewFor(context.Background(), domain.NewID(), card)
+	if err != nil || got != nil {
+		t.Fatalf("после даунгрейда карточка обязана перестать действовать: got=%+v err=%v", got, err)
+	}
 }

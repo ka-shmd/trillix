@@ -321,6 +321,8 @@ func TestUpload_PurposeВыбираетПотолокШирины(t *testing.T) 
 		{"блок — ширина колонки", PurposeBlock, MaxImageWidth},
 		{"обложка — ширина окна", PurposeCover, MaxCoverWidth},
 		{"логотип — свой мелкий потолок", PurposeLogo, MaxLogoWidth},
+		{"карточка ссылки — канон площадок", PurposePreview, MaxPreviewWidth},
+		{"иконка площадки — значок у адреса", PurposeIcon, MaxIconWidth},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,6 +373,13 @@ func TestParsePurpose(t *testing.T) {
 	}
 	if p, err := ParsePurpose("cover"); err != nil || p != PurposeCover {
 		t.Fatalf("ParsePurpose(cover) = %q, %v", p, err)
+	}
+	// Назначения карточки ссылки разбираются полем формы — их шлёт окно кабинета.
+	if p, err := ParsePurpose("preview"); err != nil || p != PurposePreview {
+		t.Fatalf("ParsePurpose(preview) = %q, %v", p, err)
+	}
+	if p, err := ParsePurpose("icon"); err != nil || p != PurposeIcon {
+		t.Fatalf("ParsePurpose(icon) = %q, %v", p, err)
 	}
 	// Опечатка — 422, а не молчаливый откат к block: иначе обложка уезжает в
 	// хранилище ужатой до ширины колонки, и замечают это глазами через неделю.

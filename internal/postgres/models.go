@@ -42,6 +42,7 @@ type Form struct {
 	ClosedMessage      pgtype.Text
 	NotifyOnSubmission bool
 	CollectPartial     bool
+	LinkPreview        []byte
 }
 
 type FormIntegration struct {

@@ -79,6 +79,15 @@ const (
 	// вовсе. Заведён безлимитным у всех планов — включается одним UPDATE (§6
 	// BILLING.md), как и остальные гейты.
 	StoragePerWorkspace Key = "storage_per_workspace"
+	// FormLinkPreview — своя карточка ссылки формы: имя площадки, заголовок,
+	// описание, картинка и иконка в превью, которое рисуют мессенджеры и соцсети.
+	//
+	// ГЕЙТ ПРИРОДЫ БЕЙДЖА, а не оформления: спрашивается ПРИ ОТДАЧЕ публичной
+	// страницы, а не при сохранении карточки. Настроить и увидеть предпросмотр
+	// может кто угодно (иначе за возможность платят вслепую), но на саму ссылку
+	// карточка действует, только пока тариф её разрешает; даунгрейд возвращает
+	// дефолты, апгрейд оживляет уже сохранённое, ничего не стирая.
+	FormLinkPreview Key = "form_link_preview"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -153,6 +162,7 @@ var CatalogOrder = []Key{
 	FormDesignCustom,
 	FormCustomCSS,
 	FormBranding,
+	FormLinkPreview,
 	StoragePerWorkspace,
 	Workspaces,
 }
@@ -168,4 +178,5 @@ var Catalog = map[Key]Feature{
 	FormCustomCSS:       {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Свой CSS"},
 	FormBranding:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Без бейджа Trillix"},
 	SubmissionsPartial:  {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Незавершённые ответы"},
+	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 }

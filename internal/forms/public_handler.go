@@ -31,6 +31,9 @@ type publicFormService interface {
 	// CollectPartial — собирать ли черновики у этой формы прямо сейчас: намерение
 	// автора (тумблер) плюс разрешение тарифа.
 	CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error)
+	// LinkPreviewFor — своя карточка ссылки, действующая прямо сейчас: намерение
+	// автора плюс разрешение тарифа. nil = дефолты страницы.
+	LinkPreviewFor(ctx context.Context, workspaceID uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error)
 }
 
 // PublicHandler — публичный транспорт форм (без авторизации и CSRF): отдаёт схему

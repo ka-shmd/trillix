@@ -54,6 +54,71 @@ export const displayFormTitle = (title: string): string =>
 export const displayFormName = (form: { name: string | null; title: string }): string =>
   form.name && form.name.trim() !== '' ? form.name : displayFormTitle(form.title)
 
+// Карточка ссылки — то, что рисуют мессенджеры и соцсети, получив адрес формы.
+// Каждое поле независимо, пустая строка = «взять дефолт» (имя сервиса, заголовок
+// формы, общий слоган, брендовая картинка), а не «показать пустоту». Зеркалит
+// linkPreviewBody из internal/forms/handler.go.
+export const linkPreviewSchema = z.object({
+  siteName: z.string(),
+  title: z.string(),
+  description: z.string(),
+  // Ключи объектов в бакете медиа, а не URL: адрес собирается из ключа (mediaSrc).
+  imageKey: z.string(),
+  iconKey: z.string(),
+})
+
+export type LinkPreview = z.infer<typeof linkPreviewSchema>
+
+// Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
+export const MAX_LINK_PREVIEW_SITE_NAME_LEN = 100
+export const MAX_LINK_PREVIEW_TITLE_LEN = 200
+export const MAX_LINK_PREVIEW_DESCRIPTION_LEN = 500
+
+// Пустая карточка — то же, что её отсутствие: сервер хранит NULL и отдаёт null.
+export const EMPTY_LINK_PREVIEW: LinkPreview = {
+  siteName: '',
+  title: '',
+  description: '',
+  imageKey: '',
+  iconKey: '',
+}
+
+// Дефолты карточки — то, что увидит получатель ссылки на форму, автор которой
+// карточку не настраивал.
+//
+// ЗЕРКАЛО: те же две строки объявлены в internal/forms/public_page.go
+// (defaultSiteName, defaultDescription) — именно их подставляет публичная страница.
+// Разойдутся — предпросмотр начнёт врать про то, что увидит получатель, а заметить
+// это можно только отправив себе ссылку.
+export const LINK_PREVIEW_SITE_NAME = 'Trillix'
+export const LINK_PREVIEW_DESCRIPTION = 'Форма на Trillix — соберите свою за пару минут.'
+
+// FALLBACK_FORM_TITLE — заголовок в мете у формы, где автор стёр заголовок. Зеркалит
+// fallbackFormTitle там же. Не то же, что «Без названия» в колонке кабинета: то
+// плейсхолдер для автора, а это текст, который увидит посторонний.
+export const FALLBACK_FORM_TITLE = 'Форма'
+
+// resolveLinkPreview — карточка, которую РЕАЛЬНО отдаст публичная страница: поверх
+// дефолтов ложатся непустые поля своей карточки. Одна функция на предпросмотр и на
+// заполнение окна настройки: окно показывает то же, что раздел, а раздел — то же,
+// что мессенджер.
+//
+// Зеркалит подстановку из getHTML (internal/forms/public_page.go). Картинок здесь
+// нет: их дефолт — файл, а не строка, и подставляет его сам компонент карточки.
+export function resolveLinkPreview(
+  form: { title: string },
+  saved: LinkPreview | null,
+): LinkPreview {
+  const title = isUntitled(form.title) ? FALLBACK_FORM_TITLE : form.title
+  return {
+    siteName: saved?.siteName || LINK_PREVIEW_SITE_NAME,
+    title: saved?.title || title,
+    description: saved?.description || LINK_PREVIEW_DESCRIPTION,
+    imageKey: saved?.imageKey ?? '',
+    iconKey: saved?.iconKey ?? '',
+  }
+}
+
 // GET /forms/{id}: карточка + черновик схемы (билдер гидрирует им свой стор) +
 // живые настройки закрытия (страница настроек; фаза 8.5 шаг 4).
 export const formDetailSchema = formSchema.extend({
@@ -70,6 +135,10 @@ export const formDetailSchema = formSchema.extend({
   // не отправлял, по умолчанию не включается. Включение требует платного тарифа
   // (единственный гейт продукта, стоящий на сборе, а не на показе).
   collectPartial: z.boolean(),
+  // Своя карточка ссылки; null = не настраивали. Отдаётся независимо от тарифа —
+  // окно кастомизации показывает сохранённое всем, а к самой ссылке карточку
+  // применяет публичный слой (гейт стоит там, как у бейджа).
+  linkPreview: linkPreviewSchema.nullable(),
 })
 
 export type FormDetail = z.infer<typeof formDetailSchema>
