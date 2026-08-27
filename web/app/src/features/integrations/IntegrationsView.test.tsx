@@ -493,6 +493,39 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
   })
 
+  // Перезалив — общее лекарство: дубль после ретрая, строки, удалённые автором
+  // руками, отставшие колонки, раскладка, за которой мы перестали следовать.
+  // Без входа в интерфейс из последней связка становилась тупиком: в кабинете
+  // оставалось только удалить её и завести заново.
+  it('перезалив спрашивает подтверждение и честно называет цену', async () => {
+    const calls: { url: string; init?: RequestInit }[] = []
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      calls.push({ url, init })
+      return Promise.resolve(new Response(null, { status: 202 }))
+    })
+    renderView(state({ account: CONNECTED, connections: [conn({ name: 'Архив' })] }))
+    openConnection()
+    fireEvent.click(screen.getByRole('button', { name: /перезалить лист/i }))
+
+    // Цена названа: чистится ВЕСЬ лист, включая колонки автора.
+    expect(screen.getByText(/включая колонки, которые вы добавили в него сами/i)).toBeTruthy()
+
+    // Именно точное имя: рядом стоит кнопка «Перезалить лист», открывшая диалог.
+    fireEvent.click(screen.getByRole('button', { name: /^Перезалить$/ }))
+    await waitFor(() =>
+      expect(calls.some((c) => c.url.endsWith('/refill') && c.init?.method === 'POST')).toBe(true),
+    )
+    vi.unstubAllGlobals()
+  })
+
+  // Второй перезалив поверх идущего писал бы в тот же лист вперемешку с первым.
+  it('пока идёт перенос — перезалить нельзя', () => {
+    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    openConnection()
+
+    expect(screen.queryByRole('button', { name: /перезалить лист/i })).toBeNull()
+  })
+
   // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
   // поле «Таблица» сбрасывается. Экран обязан сказать это до сохранения, иначе
   // человек ждёт, что данные останутся в прежнем листе.

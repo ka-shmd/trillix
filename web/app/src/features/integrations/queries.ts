@@ -6,6 +6,7 @@ import {
   getFormIntegrations,
   listSheets,
   listSpreadsheets,
+  refillSheet,
   unlinkSheet,
   updateConnection,
   type ConnectOptions,
@@ -62,6 +63,17 @@ export function useCreateSheet(formId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (opts: ConnectOptions) => createSheet(formId, opts),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Перезалив отвечает 202: работа НАЧАТА, а не сделана — она идёт пачками в
+// фоне. Инвалидация нужна сразу, чтобы связка перешла в «переносим ответы» и
+// экран начал опрашивать состояние (см. refetchInterval выше).
+export function useRefillSheet(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (connectionId: string) => refillSheet(formId, connectionId),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

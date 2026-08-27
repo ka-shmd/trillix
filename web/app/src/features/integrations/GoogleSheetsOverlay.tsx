@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
-import { AlertCircle, Loader2, Plus, RotateCw } from 'lucide-react'
+import { AlertCircle, Loader2, Plus, RotateCw, Upload } from 'lucide-react'
 
 import type { LucideIcon } from 'lucide-react'
 
@@ -19,11 +19,22 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
+  useRefillSheet,
   useRefreshIntegrations,
   useUpdateConnection,
 } from './queries'
 import { ApiError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -410,7 +421,7 @@ function SetupBody({
     <div className="flex flex-col gap-6">
       {/* Состояние существующей связки — первым делом: человек открыл её, скорее
           всего, потому что что-то не так. */}
-      {connection && <ConnectionState connection={connection} />}
+      {connection && <ConnectionState formId={formId} connection={connection} />}
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="integration-name">Название подключения</Label>
@@ -674,25 +685,81 @@ function SpreadsheetField({
 // то, ради чего связку заводили, второе отвечает на вопрос, которого никто не
 // задавал, открывая настройки. Когда появится журнал доставок (BACKLOG), время
 // последней уедет туда, где его ищут.
-function ConnectionState({ connection }: { connection: FormSheet }) {
-  if (connection.status === 'broken') {
-    return (
-      <p
-        role="alert"
-        className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+function ConnectionState({ formId, connection }: { formId: string; connection: FormSheet }) {
+  return (
+    <div className="flex flex-col gap-2">
+      {connection.status === 'broken' && (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm"
+        >
+          {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
+        </p>
+      )}
+      {connection.status === 'backfilling' && (
+        <p className="text-sm text-muted-foreground">
+          Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
+        </p>
+      )}
+      {/* Перезалив стоит РЯДОМ С СОСТОЯНИЕМ, а не среди настроек: это лечение
+          того, о чём состояние и сообщает. Показывается всегда, а не только у
+          сломанной связки, — он лечит и то, что молчит: дубль после ретрая
+          (доставка at-least-once), строки, которые автор удалил руками,
+          колонки, отставшие от формы.
+
+          Пока идёт перенос, прятать его не надо, а вот запускать второй поверх
+          первого — надо запретить: они писали бы в один лист вперемешку. */}
+      {connection.status !== 'backfilling' && (
+        <RefillAction formId={formId} connectionId={connection.id} />
+      )}
+    </div>
+  )
+}
+
+// RefillAction — перезалить лист с нуля.
+//
+// Спрашивает подтверждение, и вопрос не формальный: перезалив чистит значения
+// ВСЕГО листа, включая колонки, которые автор завёл себе сам (`A:ZZZ` в
+// ClearSheet). Формат, ширина колонок и закрепление шапки переживают чистку —
+// чистятся значения, а не лист, — но формула в своей колонке пропадёт вместе с
+// ними. Умолчать об этом значит однажды стереть человеку работу без спроса.
+function RefillAction({ formId, connectionId }: { formId: string; connectionId: string }) {
+  const refill = useRefillSheet(formId)
+  const [confirming, setConfirming] = useState(false)
+
+  return (
+    <div className="flex justify-end">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-muted-foreground"
+        disabled={refill.isPending}
+        onClick={() => setConfirming(true)}
       >
-        {connection.lastError || 'Записать в таблицу не удаётся. Переподключите аккаунт.'}
-      </p>
-    )
-  }
-  if (connection.status === 'backfilling') {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Переносим ответы, которые уже пришли. Новые встанут в очередь и попадут в таблицу следом.
-      </p>
-    )
-  }
-  return null
+        <Upload className="size-3.5" />
+        Перезалить лист
+      </Button>
+
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Перезалить лист заново?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Все значения листа будут стёрты — включая колонки, которые вы добавили в него сами, —
+              и записаны заново: свежая шапка и все ответы формы. Оформление, ширина колонок и
+              закрепление строк останутся.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={() => refill.mutate(connectionId)}>
+              Перезалить
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
 }
 
 // ConsentStep — шаг согласия: что уйдёт в Google и переход к его окну.
