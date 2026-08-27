@@ -64,10 +64,22 @@ export function LinkPreviewDialog({
   const update = useUpdateLinkPreview()
   const set = (patch: Partial<LinkPreview>) => setDraft((d) => ({ ...d, ...patch }))
 
+  // Закрытие ВЫБРАСЫВАЕТ набранное — и «Отмена», и крестик, и Escape. Без этого
+  // окно, закрытое без сохранения, при следующем открытии показывало бы брошенный
+  // черновик вместо сохранённой карточки: снаружи это читается как «оно всё-таки
+  // сохранилось». Картинка, успевшая загрузиться, остаётся в хранилище сиротой —
+  // ровно как у обложки и логотипа (TD-16).
+  function close() {
+    setDraft(saved)
+    onOpenChange(false)
+  }
+
   function save() {
     update.mutate(
       { id: form.id, preview: draft },
       {
+        // Закрываем БЕЗ сброса черновика: сохранённое значение приедет в деталь
+        // формы, и сверка с ней сама подтянет карточку в оба состояния.
         onSuccess: () => onOpenChange(false),
         onError: () => toast.error('Не удалось сохранить карточку. Попробуйте ещё раз.'),
       },
@@ -75,7 +87,7 @@ export function LinkPreviewDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
       {/* Шире стандартных sm:max-w-lg: окно двухколоночное, и предпросмотр в
           колонку с полями не встаёт. На узком экране колонки складываются в одну,
           предпросмотр уезжает вниз — под поля, которые его меняют. */}
@@ -162,7 +174,7 @@ export function LinkPreviewDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" onClick={close}>
             Отмена
           </Button>
           <Button onClick={save} disabled={update.isPending}>
