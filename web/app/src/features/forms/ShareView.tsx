@@ -58,8 +58,13 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
 
   // Превью — СОСЕДНИЙ РАЗДЕЛ, а не содержимое этого: колонки заведены выше Section,
   // поэтому оба заголовка стоят на одной линии.
+  //
+  // 60/40, а не пополам: слева живёт сама ссылка — длинная строка в моноширинном
+  // наборе плюс кнопка копирования, и в половине колонки адрес обрезался бы ровно
+  // там, ради чего на экран и пришли. Справа картинка, которая тянется по ширине и
+  // остаётся читаемой в любой из двух долей.
   return (
-    <div className="grid gap-8 md:grid-cols-2 md:items-start">
+    <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-start">
       <Section
         title="Ссылка на форму"
         description={
@@ -108,6 +113,11 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
 // есть узнать цену можно тем же жестом, каким заметили ограничение. Место рядом со
 // ссылкой, а не у заголовка: она помечает не раздел (превью видно всем), а ту
 // возможность, к которой ссылка ведёт.
+//
+// ПРОСВЕТ РАЗДЕЛА СЖАТ ДО 4 (`className="gap-1"` перебивает `gap-6` Section через
+// tailwind-merge): строка настройки — продолжение пояснения, а не следующий блок, и
+// на обычных 24 она читалась бы подписью к карточке под ней. Шаг тот же, каким само
+// пояснение отбито от заголовка.
 function LinkPreview({ form }: { form: FormDetail }) {
   const [open, setOpen] = useState(false)
 
@@ -115,14 +125,18 @@ function LinkPreview({ form }: { form: FormDetail }) {
     <Section
       title="Превью ссылки"
       description="Отправляя ссылку, вы увидите карточку вроде такой — в соцсетях, мессенджерах и поисковой выдаче."
+      className="gap-1"
     >
       {/* 16 между строкой настройки и карточкой — просвет «между элементами блока»
-          из ритма кабинета (DESIGN-SYSTEM); 24 до пояснения даёт сам Section. */}
+          из ритма кабинета (DESIGN-SYSTEM). */}
       <div className="flex flex-col gap-4">
         <div className="flex items-center gap-2">
+          {/* Подчёркивание СНИМАЕТСЯ на наведении — тот же жест, что у ссылок
+              полотна (BlockRow, CoverEditor): постоянная черта делает строку
+              ссылкой, её исчезновение отвечает на курсор. */}
           <Button
             variant="link"
-            className="h-auto p-0 text-sm underline"
+            className="h-auto p-0 text-sm underline hover:no-underline"
             onClick={() => setOpen(true)}
           >
             Настроить
