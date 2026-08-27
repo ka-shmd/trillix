@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIsFetching, useQuery } from '@tanstack/react-query'
-import { AlertCircle, Loader2 } from 'lucide-react'
+import { AlertCircle, Loader2, Plus, RotateCw } from 'lucide-react'
+
+import type { LucideIcon } from 'lucide-react'
 
 import type {
   ConnectedAccount,
@@ -776,10 +778,23 @@ function AccountField({
           провайдеру подсказкой (login_hint), и человек попадает сразу в нужный
           аккаунт вместо выбора из всех своих. Без выбранного аккаунта
           переподключать нечего — тогда кнопки нет. */}
-      <div className="flex flex-wrap items-center gap-4">
-        <AccountAction href={startUrl()} label="Подключить другой аккаунт" onOpen={connect} />
+      {/* Действия прижаты ВПРАВО и набраны мельче подписи поля: это не третий
+          вопрос анкеты, а обслуживание того, что уже выбрано. Слева под селектом
+          они читались бы продолжением формы и спорили с ней за очередь взгляда. */}
+      <div className="flex flex-wrap items-center justify-end gap-4">
+        <AccountAction
+          href={startUrl()}
+          icon={Plus}
+          label="Подключить другой аккаунт"
+          onOpen={connect}
+        />
         {chosen && (
-          <AccountAction href={startUrl(chosen.id)} label="Переподключить" onOpen={connect} />
+          <AccountAction
+            href={startUrl(chosen.id)}
+            icon={RotateCw}
+            label="Переподключить"
+            onOpen={connect}
+          />
         )}
       </div>
 
@@ -821,19 +836,27 @@ function AccountField({
 // что у большой кнопки подключения.
 function AccountAction({
   href,
+  icon: Icon,
   label,
   onOpen,
 }: {
   href: string
+  icon: LucideIcon
   label: string
   onOpen: (href: string) => boolean
 }) {
   return (
+    // size="xs" — та самая ступень шкалы «12/500» (docs/DESIGN-SYSTEM.md): кегль и
+    // вес приезжают вариантом, а не плоскими утилитами, и вместе с ними — размер
+    // значка (12px). Правим ТЕМ ЖЕ вариантом, каким задано: `p-0` не гасит
+    // `has-[>svg]:px-1.5` из размера — модификатор у них разный, и tailwind-merge
+    // считает их разными свойствами. Без второй строки кнопка со значком получила
+    // бы боковые поля и встала бы не по краю.
     <Button
       asChild
       variant="link"
-      size="sm"
-      className="h-auto p-0 text-sm text-muted-foreground hover:text-foreground"
+      size="xs"
+      className="h-auto p-0 text-muted-foreground/70 hover:text-foreground has-[>svg]:px-0"
     >
       <a
         href={href}
@@ -841,6 +864,7 @@ function AccountAction({
           if (onOpen(href)) e.preventDefault()
         }}
       >
+        <Icon aria-hidden />
         {label}
       </a>
     </Button>
