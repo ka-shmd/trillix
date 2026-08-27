@@ -328,9 +328,11 @@ describe('оверлей настройки Google Таблиц', () => {
     )
     openSetup()
 
-    // Обе ссылки на месте: подключить ещё один и переподключить выбранный.
+    // У живого аккаунта действие ровно одно. «Переподключить» — лечение, и вне
+    // беды оно предлагало бы чинить работающее; функционально оно к соседней
+    // ссылке ничего не добавляет (тот же адрес, вся разница — в подсказке).
     expect(screen.getByRole('link', { name: /подключить другой аккаунт/i })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /^переподключить$/i })).toBeNull()
     // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
     // каскадом связки других форм и пространств, а окно — про одну связку.
     expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
@@ -346,7 +348,7 @@ describe('оверлей настройки Google Таблиц', () => {
   // берёт почту для login_hint. Без неё человек снова выбирал бы аккаунт руками
   // — то есть кнопка обещала бы то, чего не делает.
   it('«Переподключить» несёт id выбранного аккаунта, «подключить другой» — нет', () => {
-    renderView(state({ account: CONNECTED }))
+    renderView(state({ account: { ...CONNECTED, accounts: [account({ needsReconnect: true })] } }))
     openSetup()
 
     const add = screen.getByRole('link', { name: /подключить другой аккаунт/i })
@@ -438,6 +440,21 @@ describe('оверлей настройки Google Таблиц', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Аккаунт Google')).toBeTruthy())
     expect(screen.getByLabelText('Аккаунт Google').textContent).toContain('work@gmail.com')
+  })
+
+  // Вторая причина показать лечение: человек отозвал доступ в своём Google.
+  // Токен при этом цел (needsReconnect=false), но провайдер отвечает
+  // invalid_grant, и связка краснеет — узнаём по её статусу.
+  it('связка сломана — «Переподключить» появляется у её аккаунта', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'Доступ отозван.' })],
+      }),
+    )
+    openConnection()
+
+    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
   })
 
   // Смена аккаунта — это переезд: прежняя таблица новому аккаунту не видна, и
