@@ -18,17 +18,22 @@ import { useEffect, useRef } from 'react'
 // Скелет страницы: серые области вместо текста и картинок. Своя разметка, а не копия
 // чужого лендинга, — сцена обязана быть узнаваемо ненастоящей, иначе автор начнёт
 // править её, а не форму.
+//
+// СТРАНИЦА СЕРАЯ, А НЕ БЕЛАЯ (решение владельца 2026-08-27), и это не только вкус: у
+// блока фон по умолчанию белый, и на белой странице граница вставки была не видна —
+// то есть тумблер «Прозрачный фон» нечем было проверить. Отсюда же требование к
+// заглушкам: они темнее полотна страницы, иначе на сером фоне их нет вовсе.
 const MOCK_STYLES = `
   :root { color-scheme: light }
-  body { margin: 0; background: #ffffff; font-family: system-ui, sans-serif }
-  .wrap { max-width: 880px; margin: 0 auto; padding: 24px 24px 64px }
-  .bar { height: 44px; background: #e9eaee; border-radius: 8px }
-  .line { height: 14px; background: #eceef2; border-radius: 999px; margin-top: 12px }
+  body { margin: 0; background: #f2f3f5; font-family: system-ui, sans-serif }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 32px 40px 80px }
+  .bar { height: 44px; background: #dfe1e6; border-radius: 4px }
+  .line { height: 14px; background: #e4e6ea; border-radius: 4px; margin-top: 12px }
   .line-short { width: 42% }
   .cols { display: flex; gap: 16px; margin-top: 24px }
-  .box { flex: 1; height: 140px; background: #eceef2; border-radius: 12px }
+  .box { flex: 1; height: 140px; background: #e4e6ea; border-radius: 4px }
   .slot { margin: 32px 0 }
-  .foot { height: 180px; background: #f1f2f5; border-radius: 12px; margin-top: 32px }
+  .foot { height: 180px; background: #e4e6ea; border-radius: 4px; margin-top: 32px }
 `
 
 export function MockSite({ snippet }: { snippet: string }) {
@@ -47,7 +52,7 @@ export function MockSite({ snippet }: { snippet: string }) {
 
     const frame = host.ownerDocument.createElement('iframe')
     frame.title = 'Страница сайта с формой'
-    frame.className = 'block h-full w-full border-0 bg-white'
+    frame.className = 'block h-full w-full border-0'
     host.append(frame)
 
     // Документ у пустого фрейма есть сразу после вставки в дерево — это тот же
