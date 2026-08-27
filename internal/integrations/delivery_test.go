@@ -290,8 +290,10 @@ func TestDeliver_NoRoomForNewColumnTellsToRefill(t *testing.T) {
 	if provider.header != nil {
 		t.Errorf("шапка переписана поверх авторской колонки: %v", provider.header)
 	}
-	if !strings.Contains(store.brokenWith, "Перезалейте лист") {
-		t.Fatalf("причина = %q, ожидался совет перезалить, а не «верните как было»", store.brokenWith)
+	// У этого случая СВОЯ причина: общий текст про «шапку правили вручную» здесь
+	// врал бы — колонку автор добавил, а сломал её новый вопрос в форме.
+	if !strings.Contains(store.brokenWith, "дописать заголовок некуда") {
+		t.Fatalf("причина = %q, ожидалась своя, а не общая про шапку", store.brokenWith)
 	}
 }
 

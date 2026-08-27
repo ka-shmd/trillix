@@ -558,7 +558,7 @@ describe('оверлей настройки Google Таблиц', () => {
   // Раскладку ломает правка ЛИСТА, а лист — чужая территория: поправив шапку
   // обратно, человек не имеет способа сказать нам об этом. Без кнопки ему
   // оставалось бы ждать следующего ответа респондента, чтобы узнать, помогло ли.
-  it('«Проверить снова» перепроверяет лист', async () => {
+  it('«Обновить статус» перепроверяет лист', async () => {
     const calls: { url: string; init?: RequestInit }[] = []
     vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
       calls.push({ url, init })
@@ -571,7 +571,7 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openConnection()
-    fireEvent.click(screen.getByRole('button', { name: /проверить снова/i }))
+    fireEvent.click(screen.getByRole('button', { name: /обновить статус/i }))
 
     await waitFor(() =>
       expect(calls.some((c) => c.url.endsWith('/recheck') && c.init?.method === 'POST')).toBe(true),
@@ -600,7 +600,7 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openConnection()
-    fireEvent.click(screen.getByRole('button', { name: /проверить снова/i }))
+    fireEvent.click(screen.getByRole('button', { name: /обновить статус/i }))
 
     await waitFor(() => expect(screen.getByText(/пока не сходится/i)).toBeTruthy())
     vi.unstubAllGlobals()
@@ -620,7 +620,7 @@ describe('оверлей настройки Google Таблиц', () => {
     // По пунктам списка, а не по тексту вообще: «перезаписать лист» есть и на
     // кнопке рядом, и поиск по странице находит оба.
     const exits = screen.getAllByRole('listitem').map((li) => li.textContent ?? '')
-    expect(exits.some((t) => /вернуть заголовки в листе как были/i.test(t))).toBe(true)
+    expect(exits.some((t) => /вернуть заголовки/i.test(t))).toBe(true)
     expect(exits.some((t) => /выбрать другую таблицу или лист/i.test(t))).toBe(true)
     expect(exits.some((t) => /перезаписать лист/i.test(t))).toBe(true)
   })
