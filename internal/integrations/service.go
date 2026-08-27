@@ -58,7 +58,7 @@ var _ Store = Repo{}
 // Online, Airtable) станет вторая реализация без правки сервиса.
 type Provider interface {
 	Provider() string
-	AuthURL(state, verifier string) string
+	AuthURL(state, verifier, loginHint string) string
 	Exchange(ctx context.Context, code, verifier string) (Tokens, error)
 	Refresh(ctx context.Context, refresh string) (Tokens, error)
 	Account(ctx context.Context, accessToken string) (Account, error)
@@ -203,11 +203,26 @@ func (s *Service) accountOf(ctx context.Context, userID, accountID uuid.UUID) (C
 // Прав пространства не спрашивает: человек подключает СВОЙ аккаунт Google, и
 // гейт по роли здесь был бы пуст — личное пространство есть у каждого, и в нём
 // каждый владелец (ADR §10, решение 2026-08-27).
-func (s *Service) StartURL(_ context.Context, state, verifier string) (string, error) {
+//
+// reconnect — id СВОЕГО аккаунта, который переподключают: его почта уезжает
+// провайдеру подсказкой, и человек попадает сразу в нужный аккаунт вместо
+// выбора из всех своих. В этом вся разница между «подключить ещё один» и
+// «переподключить»: адрес и обработка возврата у них одни и те же. Чужой или
+// несуществующий id — отказ, а не молчаливое игнорирование: подсказка несёт
+// ЧУЖУЮ ПОЧТУ, и отдавать её по перебору id нельзя.
+func (s *Service) StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error) {
 	if !s.Enabled() {
 		return "", domain.ErrNotFound
 	}
-	return s.google.AuthURL(state, verifier), nil
+	hint := ""
+	if reconnect != uuid.Nil {
+		conn, err := s.accountOf(ctx, userID, reconnect)
+		if err != nil {
+			return "", err
+		}
+		hint = conn.Email
+	}
+	return s.google.AuthURL(state, verifier, hint), nil
 }
 
 // Connect завершает подключение: меняет код на токены, узнаёт аккаунт и кладёт

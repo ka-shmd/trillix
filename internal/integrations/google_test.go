@@ -97,7 +97,7 @@ func newFakeGoogle(t *testing.T, f *fakeGoogle) *Google {
 func TestGoogle_AuthURL(t *testing.T) {
 	g := NewGoogle("client-id", "secret", "https://app.example/cb")
 
-	raw := g.AuthURL("state-value", "verifier-value")
+	raw := g.AuthURL("state-value", "verifier-value", "")
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("ссылка не парсится: %v", err)
@@ -124,6 +124,30 @@ func TestGoogle_AuthURL(t *testing.T) {
 	// PKCE: в ссылку уезжает ХЭШ verifier'а, а не он сам.
 	if q.Get("code_challenge") == "verifier-value" || q.Get("code_challenge") == "" {
 		t.Errorf("code_challenge = %q — verifier не хэширован", q.Get("code_challenge"))
+	}
+}
+
+// Переподключение несёт провайдеру подсказку, какой аккаунт открывать. Без неё
+// человек снова выбирал бы из всех своих, то есть кнопка «Переподключить»
+// обещала бы то, чего не делает; пустая подсказка параметра не добавляет вовсе —
+// это путь «подключить ещё один».
+func TestGoogle_AuthURL_LoginHint(t *testing.T) {
+	g := NewGoogle("client-id", "secret", "https://app.example/cb")
+
+	withHint, err := url.Parse(g.AuthURL("s", "v", "work@gmail.com"))
+	if err != nil {
+		t.Fatalf("ссылка не парсится: %v", err)
+	}
+	if got := withHint.Query().Get("login_hint"); got != "work@gmail.com" {
+		t.Errorf("login_hint = %q, ожидалась почта аккаунта", got)
+	}
+
+	plain, err := url.Parse(g.AuthURL("s", "v", ""))
+	if err != nil {
+		t.Fatalf("ссылка не парсится: %v", err)
+	}
+	if _, ok := plain.Query()["login_hint"]; ok {
+		t.Error("пустая подсказка уехала параметром — Google откроет пустой выбор аккаунта")
 	}
 }
 

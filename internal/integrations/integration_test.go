@@ -638,6 +638,42 @@ func postBodyWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, 
 	return resp
 }
 
+// Переподключение отличается от «подключить ещё один» ровно подсказкой: адрес
+// один, а accountId в параметре заставляет сервер передать провайдеру почту
+// названного аккаунта. Чужой аккаунт подсказкой не станет — иначе перебором id
+// вычитывались бы чужие адреса.
+func TestIntegrations_StartWithReconnectHint(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	accountID := connectAccount(t, owner, srv)
+
+	provider.loginHint = ""
+	r := do(t, owner, http.MethodGet,
+		srv.URL+"/api/v1/integrations/google/start?accountId="+accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusFound {
+		t.Fatalf("start: статус %d, ожидалось 302", r.StatusCode)
+	}
+	if provider.loginHint != "author@gmail.com" {
+		t.Errorf("подсказка = %q, ожидалась почта аккаунта", provider.loginHint)
+	}
+
+	// Чужой аккаунт: 422 и никакой почты наружу.
+	stranger := registerUser(t, srv, "stranger@example.com")
+	provider.loginHint = ""
+	r = do(t, stranger, http.MethodGet,
+		srv.URL+"/api/v1/integrations/google/start?accountId="+accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("start с чужим аккаунтом: статус %d, ожидалось 422", r.StatusCode)
+	}
+	if provider.loginHint != "" {
+		t.Errorf("чужая почта уехала провайдеру: %q", provider.loginHint)
+	}
+}
+
 // startFlow проходит первый шаг и отдаёт state, который сервер положил в cookie
 // (он же уехал в ссылку провайдера).
 func startFlow(t *testing.T, c *http.Client, srv *httptest.Server) string {

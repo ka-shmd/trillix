@@ -58,7 +58,7 @@ type integrationsService interface {
 	DisconnectForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error
-	StartURL(ctx context.Context, state, verifier string) (string, error)
+	StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
 	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
 }
@@ -111,6 +111,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 
+	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
+	// общий, а различает их необязательный accountId — почта названного аккаунта
+	// уезжает провайдеру подсказкой, и человек попадает сразу в нужный аккаунт.
 	mux.Handle("GET /api/v1/integrations/google/start",
 		h.requireAuth(http.HandlerFunc(h.start)))
 	// Колбэк без RequireAuth: сюда возвращается браузер по редиректу Google, и
@@ -478,7 +481,20 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := h.svc.StartURL(r.Context(), state, verifier)
+	// accountId необязателен и приезжает ПАРАМЕТРОМ, а не сегментом: без него
+	// это «подключить ещё один», и городить ради необязательного значения второй
+	// адрес незачем. Битый uuid — 404, как и везде: по нему нельзя отличать
+	// существующие подключения от несуществующих.
+	var reconnect uuid.UUID
+	if raw := r.URL.Query().Get("accountId"); raw != "" {
+		reconnect, err = uuid.Parse(raw)
+		if err != nil {
+			httpserver.WriteError(w, r, domain.ErrNotFound)
+			return
+		}
+	}
+
+	url, err := h.svc.StartURL(r.Context(), user.ID, reconnect, state, verifier)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

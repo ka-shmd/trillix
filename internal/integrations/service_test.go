@@ -237,13 +237,16 @@ type fakeProvider struct {
 	// аккаунт: до 0037 он затирал первый, и связки начинали писать чужим токеном.
 	accounts   []integrations.Account
 	accountIdx int
+	// loginHint — что уехало провайдеру подсказкой «какой аккаунт открывать».
+	loginHint string
 }
 
 func (f *fakeProvider) Provider() string { return "google" }
 
 func (f *fakeProvider) AppID() string { return "442272803444" }
 
-func (f *fakeProvider) AuthURL(state, _ string) string {
+func (f *fakeProvider) AuthURL(state, _, loginHint string) string {
+	f.loginHint = loginHint
 	return "https://provider.example/auth?state=" + state
 }
 
@@ -414,6 +417,39 @@ func TestConnect_StoresSealedToken(t *testing.T) {
 	}
 }
 
+// Переподключение НАЗВАННОГО аккаунта уносит провайдеру его почту подсказкой:
+// без неё человек снова выбирал бы аккаунт руками, и «Переподключить» ничем не
+// отличалось бы от «подключить ещё один».
+func TestStartURL_ReconnectPassesLoginHint(t *testing.T) {
+	conn := sealedConn(t)
+	provider := &fakeProvider{}
+	svc := newService(fakeAccess{}, &fakeStore{conn: conn}, provider)
+
+	if _, err := svc.StartURL(context.Background(), testUser, conn.ID, "s", "v"); err != nil {
+		t.Fatalf("start url: %v", err)
+	}
+	if provider.loginHint != conn.Email {
+		t.Errorf("подсказка = %q, ожидалась почта аккаунта %q", provider.loginHint, conn.Email)
+	}
+}
+
+// ЧУЖОЙ аккаунт подсказкой не станет, и отказ здесь не педантизм: подсказка
+// несёт ПОЧТУ, и без проверки перебором id можно было бы вычитать чужие адреса.
+func TestStartURL_ForeignAccountRefused(t *testing.T) {
+	foreign := sealedConn(t)
+	foreign.UserID = testStranger
+	provider := &fakeProvider{}
+	svc := newService(fakeAccess{}, &fakeStore{conn: foreign}, provider)
+
+	_, err := svc.StartURL(context.Background(), testUser, foreign.ID, "s", "v")
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
+	}
+	if provider.loginHint != "" {
+		t.Errorf("чужая почта уехала провайдеру: %q", provider.loginHint)
+	}
+}
+
 // Отключение идемпотентно: второй запрос из соседней вкладки не должен краснеть.
 func TestDisconnect_Idempotent(t *testing.T) {
 	provider := &fakeProvider{}
@@ -461,7 +497,7 @@ func TestDisabledProvider(t *testing.T) {
 		t.Errorf("состояние = %+v, ожидалось «не настроено»", st)
 	}
 
-	if _, err := svc.StartURL(context.Background(), "s", "v"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.StartURL(context.Background(), testUser, uuid.Nil, "s", "v"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("StartURL = %v, ожидалась ErrNotFound", err)
 	}
 	if _, err := svc.Connect(context.Background(), testUser, "c", "v"); !errors.Is(err, domain.ErrNotFound) {

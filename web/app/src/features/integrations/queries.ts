@@ -3,7 +3,6 @@ import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query
 import { integrationKeys } from './keys'
 import {
   createSheet,
-  disconnectAccount,
   getFormIntegrations,
   listSheets,
   listSpreadsheets,
@@ -64,18 +63,6 @@ export function useCreateSheet(formId: string) {
   return useMutation({
     mutationFn: (opts: ConnectOptions) => createSheet(formId, opts),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
-  })
-}
-
-// Отключение аккаунта уносит каскадом связки, которые им ехали, — в том числе у
-// СОСЕДНИХ форм. Поэтому инвалидируется весь корень интеграций, а не ключ этой
-// формы: точечная инвалидация оставила бы на других вкладках связки, которых
-// больше нет.
-export function useDisconnectAccount() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (accountId: string) => disconnectAccount(accountId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.all() }),
   })
 }
 

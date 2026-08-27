@@ -138,7 +138,14 @@ func (g *Google) AppID() string {
 // refresh-токена не будет вовсе, а без consent провайдер не отдаёт его повторно
 // тому, кто уже соглашался. Переподключение (сменил аккаунт, отозвал доступ)
 // тогда давало бы интеграцию, живущую ровно час.
-func (g *Google) AuthURL(state, verifier string) string {
+//
+// loginHint — почта аккаунта, который человек переподключает. Пусто — Google
+// показывает свой выбор аккаунтов, и это путь «подключить ещё один».
+//
+// Подсказка не является гарантией и правом тоже не является: человек волен
+// выбрать в окне Google другой аккаунт, и тогда подключится другой. Поэтому она
+// и не проверяется на возврате — что подключилось, то и записываем.
+func (g *Google) AuthURL(state, verifier, loginHint string) string {
 	q := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {g.clientID},
@@ -149,6 +156,9 @@ func (g *Google) AuthURL(state, verifier string) string {
 		"code_challenge_method": {"S256"},
 		"access_type":           {"offline"},
 		"prompt":                {"consent"},
+	}
+	if loginHint != "" {
+		q.Set("login_hint", loginHint)
 	}
 	return g.authURL + "?" + q.Encode()
 }

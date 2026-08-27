@@ -275,9 +275,9 @@ describe('оверлей настройки Google Таблиц', () => {
   })
 
   // Аккаунтов у человека сколько угодно, и выбирает он их там же, где таблицу.
-  // Пункт «Подключить другой аккаунт» стоит В СПИСКЕ: для человека это тот же
-  // вопрос «чьим аккаунтом», а не отдельное действие.
-  it('аккаунт выбирается дропдауном, подключение нового — пунктом в нём', () => {
+  // В СПИСКЕ только аккаунты: работа с подключением стоит под ним ссылками, а не
+  // пунктами выбора (решение владельца 2026-08-27, образец — Tally).
+  it('в списке аккаунтов только аккаунты, действия — под ним', () => {
     renderView(
       state({
         account: {
@@ -287,11 +287,32 @@ describe('оверлей настройки Google Таблиц', () => {
       }),
     )
     openSetup()
-    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
 
+    // Обе ссылки на месте: подключить ещё один и переподключить выбранный.
+    expect(screen.getByRole('link', { name: /подключить другой аккаунт/i })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
+    // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
+    // каскадом связки других форм и пространств, а окно — про одну связку.
+    expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
+
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
     expect(screen.getByRole('option', { name: 'author@gmail.com' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
-    expect(screen.getByRole('option', { name: /подключить другой аккаунт/i })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: /подключить другой аккаунт/i })).toBeNull()
+  })
+
+  // Обе ссылки ведут на один адрес согласия, и различает их подсказка: у
+  // «Переподключить» с собой едет id выбранного аккаунта, из которого сервер
+  // берёт почту для login_hint. Без неё человек снова выбирал бы аккаунт руками
+  // — то есть кнопка обещала бы то, чего не делает.
+  it('«Переподключить» несёт id выбранного аккаунта, «подключить другой» — нет', () => {
+    renderView(state({ account: CONNECTED }))
+    openSetup()
+
+    const add = screen.getByRole('link', { name: /подключить другой аккаунт/i })
+    const again = screen.getByRole('link', { name: /^переподключить$/i })
+    expect(add.getAttribute('href')).not.toContain('accountId')
+    expect(again.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
   })
 
   // Таблица создана ЭТИМ аккаунтом и другому под scope drive.file не видна
@@ -319,6 +340,8 @@ describe('оверлей настройки Google Таблиц', () => {
     openSetup()
 
     expect(screen.getByText(/доступ к этому аккаунту потерян/i)).toBeTruthy()
+    // Лечение — рядом, той же ссылкой: она ведёт именно в этот аккаунт.
+    expect(screen.getByRole('link', { name: /^переподключить$/i })).toBeTruthy()
   })
 
   it('выбор таблицы — один дропдаун: новая, наши и «выбрать на Диске»', () => {

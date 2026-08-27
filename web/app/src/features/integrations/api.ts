@@ -86,17 +86,14 @@ export async function listSpreadsheets(accountId: string): Promise<SpreadsheetRe
   return res.spreadsheets
 }
 
-// Отключить ОДИН свой аккаунт Google. Связки, которые им ехали, уносит каскад —
-// во всех пространствах разом; соседние аккаунты не затронуты.
-export function disconnectAccount(accountId: string): Promise<void> {
-  return apiRequest(`/integrations/google/accounts/${accountId}`, { method: 'DELETE' })
-}
-
 // Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.
 //
-// Перезалива листа здесь нет: ручка на бэке есть (API.md), а входа в интерфейсе
-// ей пока не нашли — решение владельца 2026-08-23, место записано в BACKLOG.
-// Держать мёртвый клиент в бандле ради будущей кнопки незачем.
+// Ни перезалива листа, ни отключения аккаунта здесь нет: ручки на бэке есть
+// (API.md), а входа в интерфейсе им пока не нашли — места записаны в BACKLOG.
+// Отключение к тому же рвёт подключение ЦЕЛИКОМ и каскадом уносит связки всех
+// форм и пространств, которые им ехали, — окну настройки одной связки такой
+// кнопки не положено (решение владельца 2026-08-27). Держать мёртвый клиент в
+// бандле ради будущей кнопки незачем.
 export function unlinkSheet(formId: string, connectionId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/integrations/${connectionId}`, { method: 'DELETE' })
 }
@@ -125,7 +122,13 @@ export function updateConnection(
 // поэтому адрес нужен ссылкой/окном, а не fetch'ем.
 //
 // Пространства в адресе нет: человек подключает СВОЙ аккаунт, а не аккаунт
-// команды. Один и тот же адрес обслуживает и «подключить ещё один», и
-// «переподключить»: заход тем же аккаунтом Google обновляет строку, другим —
-// заводит вторую, и выбирает это человек в окне Google, а не мы за него.
-export const startUrl = '/api/v1/integrations/google/start'
+// команды.
+//
+// reconnect — id переподключаемого аккаунта. Адрес у обоих действий один: разницу
+// делает эта подсказка — сервер берёт почту названного аккаунта и передаёт её
+// Google (login_hint), чтобы человек попал сразу в нужный аккаунт, а не выбирал
+// из всех своих. Без неё это «подключить ещё один».
+export function startUrl(reconnect?: string): string {
+  const base = '/api/v1/integrations/google/start'
+  return reconnect ? `${base}?accountId=${encodeURIComponent(reconnect)}` : base
+}

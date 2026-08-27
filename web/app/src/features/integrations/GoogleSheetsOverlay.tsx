@@ -17,7 +17,6 @@ import {
   sheetsQueryOptions,
   spreadsheetsQueryOptions,
   useCreateSheet,
-  useDisconnectAccount,
   useRefreshIntegrations,
   useUpdateConnection,
 } from './queries'
@@ -63,8 +62,6 @@ const NEW_SPREADSHEET = '__new__'
 const BROWSE = '__browse__'
 // NEW_SHEET — «завести новый лист в этой книге».
 const NEW_SHEET = '__new_sheet__'
-// CONNECT — не выбор, а ДЕЙСТВИЕ в списке аккаунтов: пройти согласие Google.
-const CONNECT = '__connect__'
 
 export function GoogleSheetsOverlay({
   formId,
@@ -620,10 +617,10 @@ function ConnectAccount({ formId }: { formId: string }) {
           отдельное окно и гасит переход, только если это удалось. */}
       <Button asChild size="lg">
         <a
-          href={startUrl}
+          href={startUrl()}
           onClick={(e) => {
             setOutcome(null)
-            if (popup.open(startUrl)) e.preventDefault()
+            if (popup.open(startUrl())) e.preventDefault()
           }}
         >
           Подключить Google
@@ -644,15 +641,15 @@ function ConnectAccount({ formId }: { formId: string }) {
 // аккаунтов у человека сколько угодно (личный Диск и рабочий), и выбирает он их
 // здесь же, где выбирает таблицу.
 //
-// Пункт «Подключить другой аккаунт» стоит В СПИСКЕ, а не кнопкой рядом: для
-// человека это третий способ ответить на тот же вопрос «чьим аккаунтом», и
-// разносить их по разным элементам управления значит делать вид, что вопросов
-// два. Тот же приём, что у «Выбрать на Google Диске» в поле таблицы.
+// Два действия стоят ПОД списком, а не пунктами в нём (образец — Tally): это не
+// ответы на вопрос «чьим аккаунтом», а работа с самим подключением. Пункт-действие
+// внутри списка оправдан у поля таблицы («Выбрать на Google Диске» — третий способ
+// назвать таблицу), здесь же он смешал бы выбор с настройкой.
 //
-// Отдельной кнопки «Переподключить» нет, и это не пропуск: адрес похода один и
-// тот же, а выбирает аккаунт человек в окне Google — заход тем же обновит
-// строку, другим заведёт вторую. Вторая кнопка обещала бы различие, которого
-// нет ни на бэке, ни у провайдера.
+// «Отключить аккаунт» здесь НЕТ намеренно: отключение рвёт подключение целиком и
+// каскадом уносит связки всех форм и пространств, которые им ехали, — а окно
+// настраивает одну связку. Место для него — экран аккаунта, и оно записано в
+// BACKLOG; ручка на бэке есть (API.md).
 function AccountField({
   formId,
   accounts,
@@ -664,7 +661,6 @@ function AccountField({
 }) {
   const [outcome, setOutcome] = useState<OAuthOutcome | null>(null)
   const refresh = useRefreshIntegrations(formId)
-  const disconnect = useDisconnectAccount()
   const popup = useOAuthPopup((result) => {
     setOutcome(result === 'integration_ok' ? null : result)
     if (result === 'integration_ok') refresh()
@@ -675,19 +671,7 @@ function AccountField({
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="integration-account">Аккаунт Google</Label>
-      <Select
-        value={setup.account}
-        onValueChange={(next) => {
-          // CONNECT — действие, а не значение: выбор остаётся прежним, пока
-          // человек не пройдёт согласие в окне Google.
-          if (next === CONNECT) {
-            setOutcome(null)
-            popup.open(startUrl)
-            return
-          }
-          setup.setAccount(next)
-        }}
-      >
+      <Select value={setup.account} onValueChange={setup.setAccount}>
         <SelectTrigger
           id="integration-account"
           className="w-full text-base data-[size=default]:h-10"
@@ -695,52 +679,49 @@ function AccountField({
           <SelectValue placeholder="Выберите аккаунт" />
         </SelectTrigger>
         <SelectContent>
-          {accounts.length > 0 && (
-            <SelectGroup>
-              <SelectLabel>Мои аккаунты</SelectLabel>
-              {accounts.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  {a.email}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          )}
-          <SelectSeparator />
-          <SelectGroup>
-            <SelectItem value={CONNECT}>
-              {popup.waiting ? 'Ждём подтверждения в окне Google…' : 'Подключить другой аккаунт'}
+          {accounts.map((a) => (
+            <SelectItem key={a.id} value={a.id}>
+              {a.email}
             </SelectItem>
-          </SelectGroup>
+          ))}
         </SelectContent>
       </Select>
 
+      {/* Обе кнопки ведут на ОДИН адрес согласия, и это не дубль: у
+          «Переподключить» с собой едет id выбранного аккаунта, его почта уходит
+          провайдеру подсказкой (login_hint), и человек попадает сразу в нужный
+          аккаунт вместо выбора из всех своих. Без выбранного аккаунта
+          переподключать нечего — тогда кнопки нет. */}
+      <div className="flex flex-wrap items-center gap-4">
+        <AccountAction
+          href={startUrl()}
+          label="Подключить другой аккаунт"
+          waiting={popup.waiting}
+          onOpen={(href) => {
+            setOutcome(null)
+            return popup.open(href)
+          }}
+        />
+        {chosen && (
+          <AccountAction
+            href={startUrl(chosen.id)}
+            label="Переподключить"
+            waiting={popup.waiting}
+            onOpen={(href) => {
+              setOutcome(null)
+              return popup.open(href)
+            }}
+          />
+        )}
+      </div>
+
       {/* Потерянный токен важнее всего остального в этом поле: пока он не
-          обновлён, ни одна связка этого аккаунта не работает, а лечение —
-          пройти согласие заново тем же аккаунтом. */}
+          обновлён, ни одна связка этого аккаунта не работает, а лечение — рядом,
+          кнопкой «Переподключить». */}
       {chosen?.needsReconnect && (
         <p role="alert" className="text-sm text-destructive">
-          Доступ к этому аккаунту потерян. Выберите «Подключить другой аккаунт» и войдите в него
-          заново.
+          Доступ к этому аккаунту потерян — нажмите «Переподключить».
         </p>
-      )}
-
-      {chosen && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 self-start px-0 text-xs text-muted-foreground hover:bg-transparent"
-          disabled={disconnect.isPending}
-          onClick={() =>
-            disconnect.mutate(chosen.id, {
-              // Отключение уносит каскадом ВСЕ связки этого аккаунта, поэтому
-              // выбор надо сбросить: остаться на id, которого больше нет,
-              // значит показывать пустой селект как выбранный.
-              onSuccess: () => setup.setAccount(''),
-            })
-          }
-        >
-          Отключить {chosen.email}
-        </Button>
       )}
 
       {popup.waiting && <WaitingNote onCancel={popup.cancel} />}
@@ -750,6 +731,43 @@ function AccountField({
         </p>
       )}
     </div>
+  )
+}
+
+// AccountAction — ссылка-действие под списком аккаунтов.
+//
+// Именно <a> внутри Button asChild, а не кнопка с onClick: нужен полноценный
+// переход браузера на случай, когда отдельное окно открыть не удалось
+// (блокировщик всплывающих окон), — XHR за редиректом на домен Google не пойдёт.
+// Клик пробует окно и гасит переход, ТОЛЬКО если оно открылось; тот же приём,
+// что у большой кнопки подключения.
+function AccountAction({
+  href,
+  label,
+  waiting,
+  onOpen,
+}: {
+  href: string
+  label: string
+  waiting: boolean
+  onOpen: (href: string) => boolean
+}) {
+  return (
+    <Button
+      asChild
+      variant="link"
+      size="sm"
+      className="h-auto p-0 text-sm text-muted-foreground hover:text-foreground"
+    >
+      <a
+        href={href}
+        onClick={(e) => {
+          if (onOpen(href)) e.preventDefault()
+        }}
+      >
+        {waiting ? 'Ждём подтверждения в окне Google…' : label}
+      </a>
+    </Button>
   )
 }
 
