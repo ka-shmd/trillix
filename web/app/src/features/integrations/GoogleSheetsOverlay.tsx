@@ -761,11 +761,14 @@ function ConnectionState({
               инструкция. Причина сказана строкой выше, подробности каждого шага
               человек видит там, где шаг делается. */}
           <ul className="ml-4 list-disc text-sm">
-            <li>вернуть заголовки;</li>
-            <li>выбрать другую таблицу или лист в настройках ниже;</li>
-            <li>перезаписать лист.</li>
+            <li>вернуть заголовки</li>
+            <li>выбрать другую таблицу или лист в настройках ниже</li>
+            <li>перезаписать лист</li>
           </ul>
-          <div className="flex flex-wrap items-center gap-2">
+          {/* items-start, а не items-center: под «Обновить статус» появляется
+              строка отказа, и при центрировании она тянула бы кнопку вниз, а
+              соседняя оставалась бы на месте — две кнопки на разных уровнях. */}
+          <div className="flex flex-wrap items-start gap-2">
             <RecheckAction formId={formId} connectionId={connection.id} />
             <RefillAction formId={formId} connectionId={connection.id} onDone={onDone} />
           </div>
@@ -842,8 +845,10 @@ function RecheckAction({ formId, connectionId }: { formId: string; connectionId:
   const recheck = useRecheckSheet(formId)
   const failed = recheck.isError
 
+  // Своя колонка, а не два элемента в общем ряду кнопок: отказ появляется ПОД
+  // своей кнопкой и соседнюю не двигает.
   return (
-    <>
+    <div className="flex flex-col items-start gap-1.5">
       <Button
         variant="outline"
         size="sm"
@@ -861,7 +866,7 @@ function RecheckAction({ formId, connectionId }: { formId: string; connectionId:
             : 'Не удалось проверить. Попробуйте ещё раз.'}
         </span>
       )}
-    </>
+    </div>
   )
 }
 
