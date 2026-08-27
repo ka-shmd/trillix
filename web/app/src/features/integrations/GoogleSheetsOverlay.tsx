@@ -781,7 +781,7 @@ function AccountField({
       {/* Действия прижаты ВПРАВО и набраны мельче подписи поля: это не третий
           вопрос анкеты, а обслуживание того, что уже выбрано. Слева под селектом
           они читались бы продолжением формы и спорили с ней за очередь взгляда. */}
-      <div className="flex flex-wrap items-center justify-end gap-4">
+      <div className="flex flex-wrap items-center justify-end gap-1">
         <AccountAction
           href={startUrl()}
           icon={Plus}
@@ -827,7 +827,13 @@ function AccountField({
   )
 }
 
-// AccountAction — ссылка-действие под списком аккаунтов.
+// AccountAction — действие с подключением под списком аккаунтов.
+//
+// Вид взят у «Изменить» в строке формы (features/forms/FormRow.tsx) — это уже
+// сложившийся в кабинете облик компактного действия со значком: ghost, поэтому
+// на наведении подложка, а не подчёркивание. Свой облик здесь заводить незачем:
+// задача та же, и второй вариант одного и того же читался бы как другой класс
+// кнопки.
 //
 // Именно <a> внутри Button asChild, а не кнопка с onClick: нужен полноценный
 // переход браузера на случай, когда отдельное окно открыть не удалось
@@ -846,25 +852,14 @@ function AccountAction({
   onOpen: (href: string) => boolean
 }) {
   return (
-    // size="xs" — та самая ступень шкалы «12/500» (docs/DESIGN-SYSTEM.md): кегль и
-    // вес приезжают вариантом, а не плоскими утилитами, и вместе с ними — размер
-    // значка (12px). Правим ТЕМ ЖЕ вариантом, каким задано: `p-0` не гасит
-    // `has-[>svg]:px-1.5` из размера — модификатор у них разный, и tailwind-merge
-    // считает их разными свойствами. Без второй строки кнопка со значком получила
-    // бы боковые поля и встала бы не по краю.
-    <Button
-      asChild
-      variant="link"
-      size="xs"
-      className="h-auto p-0 text-muted-foreground/70 hover:text-foreground has-[>svg]:px-0"
-    >
+    <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-muted-foreground" asChild>
       <a
         href={href}
         onClick={(e) => {
           if (onOpen(href)) e.preventDefault()
         }}
       >
-        <Icon aria-hidden />
+        <Icon className="size-3.5" />
         {label}
       </a>
     </Button>
