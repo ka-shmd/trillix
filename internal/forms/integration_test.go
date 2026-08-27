@@ -372,6 +372,58 @@ func TestForms_CloseSettings(t *testing.T) {
 		`{"closeAt":null,"responseLimit":5,"closedMessage":""}`, http.StatusNotFound)
 }
 
+// Своя карточка ссылки (PATCH {linkPreview}): фасет доходит до сервиса, GET-деталь
+// её возвращает, набор заменяется целиком (пустая карточка = настройка снята),
+// слишком длинное поле → 422, чужая форма → 404.
+//
+// Тариф здесь НЕ участвует и участвовать не должен: сохранять карточку вправе любой
+// план, а право её применить спрашивается при отдаче публичной страницы. Отдельный
+// сторож этому — TestUpdateLinkPreview_SavesOnAnyPlan в юнитах сервиса.
+func TestForms_LinkPreview(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-preview@example.com")
+	bob := registerUser(t, srv, "bob-preview@example.com")
+
+	form := createForm(t, alice, srv, "Опрос читателей")
+
+	// Форма без карточки — в детали null, а не объект из пустых строк.
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.LinkPreview != nil {
+		t.Fatalf("у новой формы linkPreview = %+v, ожидался null", d.LinkPreview)
+	}
+
+	patchLinkPreview(t, alice, srv, form.ID,
+		`{"siteName":"Журнал «Кот»","title":"Февральский номер","description":"Три минуты.","imageKey":"ws/a.png","iconKey":"ws/i.png"}`,
+		http.StatusOK)
+
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if d.LinkPreview == nil {
+		t.Fatal("карточка не вернулась в детали формы")
+	}
+	if d.LinkPreview.SiteName != "Журнал «Кот»" || d.LinkPreview.Title != "Февральский номер" {
+		t.Fatalf("в детали не та карточка: %+v", d.LinkPreview)
+	}
+	if d.LinkPreview.ImageKey != "ws/a.png" || d.LinkPreview.IconKey != "ws/i.png" {
+		t.Fatalf("ключи картинок не сохранились: %+v", d.LinkPreview)
+	}
+
+	// Слишком длинный заголовок → 422 (лимит в рунах, кириллица считается верно).
+	patchLinkPreview(t, alice, srv, form.ID,
+		`{"siteName":"","title":"`+strings.Repeat("я", domain.MaxLinkPreviewTitleLen+1)+`","description":"","imageKey":"","iconKey":""}`,
+		http.StatusUnprocessableEntity)
+
+	// Карточка из пустых строк = снять настройку: в колонке NULL, в детали null.
+	patchLinkPreview(t, alice, srv, form.ID,
+		`{"siteName":"","title":"","description":"","imageKey":"","iconKey":""}`, http.StatusOK)
+	if cleared := getFormDetail(t, alice, srv, form.ID, http.StatusOK); cleared.LinkPreview != nil {
+		t.Fatalf("после сброса linkPreview = %+v, ожидался null", cleared.LinkPreview)
+	}
+
+	// Чужую форму не настроить (404, существование не раскрывается).
+	patchLinkPreview(t, bob, srv, form.ID,
+		`{"siteName":"Чужой","title":"","description":"","imageKey":"","iconKey":""}`, http.StatusNotFound)
+}
+
 // Автосейв билдера: валидная схема сохраняется (канонизированной, updated_at
 // сдвигается), мусор → 422, устаревший updated_at → 409, схема без updated_at → 422.
 func TestForms_DraftSchemaAutosave(t *testing.T) {
@@ -1021,6 +1073,13 @@ type formDetailDTO struct {
 	CloseAt       *string         `json:"closeAt"`
 	ResponseLimit *int            `json:"responseLimit"`
 	ClosedMessage *string         `json:"closedMessage"`
+	LinkPreview   *struct {
+		SiteName    string `json:"siteName"`
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		ImageKey    string `json:"imageKey"`
+		IconKey     string `json:"iconKey"`
+	} `json:"linkPreview"`
 }
 
 type listDTO struct {
@@ -1108,6 +1167,15 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 }
 
 // patchCloseSettings шлёт PATCH {closeSettings: <objJSON>} — живые настройки закрытия.
+func patchLinkPreview(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) {
+	t.Helper()
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"linkPreview":`+objJSON+`}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH linkPreview: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
 func patchCloseSettings(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) formDTO {
 	t.Helper()
 	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"closeSettings":`+objJSON+`}`, csrf(t, c, srv.URL))
