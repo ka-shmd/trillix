@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { embedCode, frameUrl, prefillSnippet, type SnippetOptions } from '../embedSnippet'
+import { embedCode, frameUrl, openSnippet, type SnippetOptions } from '../embedSnippet'
 import { highlight, type Token, type TokenKind } from './highlight'
 
 const base: SnippetOptions = {
@@ -58,29 +58,26 @@ describe('highlight: сниппет вставки', () => {
 })
 
 describe('highlight: вызов из кода', () => {
-  const fields = [
-    { blockId: 'blk_1', caption: 'Ваше имя' },
-    { blockId: 'blk_2', caption: "Кавычка 'внутри' подписи" },
-  ]
-  const code = prefillSnippet(base, fields)
+  const code = openSnippet(base)
 
   it('не теряет и не задваивает ни одного символа', () => {
     expect(joined(highlight(code))).toBe(code)
   })
 
-  it('красит имя объекта, ключи, строки и комментарии', () => {
+  it('красит имя объекта, ключи и строки', () => {
     expect(kinds(code, 'tag')).toEqual(['Trillix'])
     expect(kinds(code, 'attr')).toContain('form')
-    expect(kinds(code, 'attr')).toContain('prefill')
+    expect(kinds(code, 'attr')).toContain('mode')
     expect(kinds(code, 'string')).toContain("'opros'")
   })
 
-  // Подпись вопроса пишет автор, и кавычка в ней не должна открывать строковый
-  // литерал: комментарий съеден до конца строки раньше.
-  it('кавычка в подписи не рвёт разбор', () => {
-    const comment = kinds(code, 'comment')
-    expect(comment).toContain("// Кавычка 'внутри' подписи")
-    expect(kinds(code, 'string')).not.toContain("'внутри'")
+  // Правило комментария осталось в грамматике: наш вывод его больше не содержит, но
+  // кавычка в чужой строке не должна открывать литерал, если код туда однажды вернут.
+  it('кавычка внутри комментария не рвёт разбор', () => {
+    const withComment = `${code} // Кавычка 'внутри' подписи`
+    expect(joined(highlight(withComment))).toBe(withComment)
+    expect(kinds(withComment, 'comment')).toEqual(["// Кавычка 'внутри' подписи"])
+    expect(kinds(withComment, 'string')).not.toContain("'внутри'")
   })
 })
 

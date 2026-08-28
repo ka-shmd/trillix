@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { textFromString, type Block } from '@entities/formSchema'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
   embedCode,
   frameUrl,
   iframeSnippet,
-  prefillFields,
-  prefillSnippet,
+  openSnippet,
   scriptSnippet,
   type SnippetOptions,
 } from './embedSnippet'
@@ -18,14 +16,6 @@ const base: SnippetOptions = {
   slug: 'opros',
   mode: 'block',
 }
-
-const block = (over: Partial<Block>): Block =>
-  ({
-    id: 'blk_1',
-    groupId: 'g1',
-    type: 'short_text',
-    ...over,
-  }) as Block
 
 describe('scriptSnippet', () => {
   it('блок — один тег со ссылкой на загрузчик того же домена, что и форма', () => {
@@ -203,49 +193,13 @@ describe('iframeSnippet', () => {
   })
 })
 
-describe('prefillFields', () => {
-  const blocks: Block[] = [
-    block({ id: 'blk_t1', groupId: 'g1', type: 'label', text: textFromString('Ваша почта') }),
-    block({ id: 'blk_f1', groupId: 'g1', type: 'email' }),
-    block({ id: 'blk_t2', groupId: 'g2', type: 'label', text: textFromString('Комментарий') }),
-    block({ id: 'blk_f2', groupId: 'g2', type: 'long_text' }),
-    block({ id: 'blk_img', groupId: 'g3', type: 'image' }),
-  ]
-
-  it('только отвечаемые блоки, с подписью своего вопроса', () => {
-    expect(prefillFields(blocks)).toEqual([
-      { blockId: 'blk_f1', caption: 'Ваша почта' },
-      { blockId: 'blk_f2', caption: 'Комментарий' },
-    ])
-  })
-
-  // Ответ multi_choice — массив id вариантов, а предзаполнение передаёт строку:
-  // предложи мы его здесь, посетитель увидел бы группу без единой галочки и получил
-  // бы «ожидался список вариантов» на поле, которого не касался.
-  it('вопрос с несколькими вариантами не предлагается', () => {
-    const multi = [
-      block({ id: 'blk_t', groupId: 'gm', type: 'label', text: textFromString('Языки') }),
-      block({ id: 'blk_m', groupId: 'gm', type: 'multi_choice' }),
-      block({ id: 'blk_s', groupId: 'gs', type: 'single_choice' }),
-    ]
-    expect(prefillFields(multi).map((f) => f.blockId)).toEqual(['blk_s'])
-  })
-
-  it('вопрос без заголовка всё равно предзаполняем', () => {
-    const naked = [block({ id: 'blk_x', groupId: 'g9', type: 'short_text' })]
-    expect(prefillFields(naked)).toEqual([{ blockId: 'blk_x', caption: 'Без заголовка' }])
-  })
-})
-
-describe('prefillSnippet', () => {
-  it('отдаёт объект целиком, с подписями в комментариях', () => {
-    const code = prefillSnippet(base, [{ blockId: 'blk_f1', caption: 'Ваша почта' }])
+describe('openSnippet', () => {
+  it('вызов из кода — форма и вид, без предзаполнения', () => {
+    const code = openSnippet(base)
     expect(code).toContain("form: 'opros'")
-    expect(code).toContain("'blk_f1': '', // Ваша почта")
-  })
-
-  it('форма без вопросов — вызов без предзаполнения', () => {
-    expect(prefillSnippet(base, [])).not.toContain('prefill')
+    expect(code).toContain("mode: 'block'")
+    // Список полей уехал в вики: экран отдаёт вызов, а не инструкцию к нему.
+    expect(code).not.toContain('prefill')
   })
 })
 

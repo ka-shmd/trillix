@@ -217,7 +217,7 @@ export function EmbedView({
           >
             {showCode ? (
               <div className="px-[130px] py-5">
-                <CodePanel form={form} opts={opts} snippet={snippet} />
+                <CodePanel opts={opts} snippet={snippet} />
               </div>
             ) : (
               // МАКЕТ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ на смену любой настройки: ключ — сам

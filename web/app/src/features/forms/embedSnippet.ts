@@ -1,7 +1,5 @@
 import { z } from 'zod'
 
-import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
-
 // Сборка кода для вставки формы на чужой сайт (фаза 20). Чистые функции: экран
 // «Встроить» только показывает то, что здесь собрано, а юниты проверяют главное —
 // что сниппет ведёт туда же, куда публичная ссылка, и что пользовательский текст
@@ -287,48 +285,14 @@ export function iframeSnippet(opts: SnippetOptions): string {
   return `<iframe src="${escapeAttr(src)}" title="${escapeAttr(frameTitle(opts))}"${size} style="${style}"></iframe>`
 }
 
-/** Одно предзаполняемое поле: id блока и подпись, которой вопрос назван в форме. */
-export interface PrefillField {
-  blockId: string
-  caption: string
-}
-
 /**
- * prefillFields — вопросы формы, которые хост может заполнить заранее.
+ * openSnippet — вызов вставки из кода приложения.
  *
- * Только отвечаемые блоки: у подписи и картинки ответа нет, заполнять нечего.
- * Подпись берётся из группы вопроса — той же строки, которой вопрос назван в CSV.
- *
- * **`multi_choice` исключён**: его ответ — массив id вариантов, а предзаполнение
- * передаёт строку. Предложи мы его здесь — разработчик вписал бы значение, рендерер
- * молча нарисовал бы «ничего не выбрано» (клиентской проверки у choice-типов нет), и
- * посетитель получил бы «ожидался список вариантов» на поле, которого не касался.
- * Рендерер такие значения отбрасывает независимо от этого списка (`applyPrefill`).
+ * СПИСКА ПРЕДЗАПОЛНЯЕМЫХ ПОЛЕЙ ЗДЕСЬ БОЛЬШЕ НЕТ (решение владельца 2026-08-28):
+ * экран кода отдаёт вызов, а не инструкцию к нему. Само предзаполнение никуда не
+ * делось — оно живёт в загрузчике и рендерере (`prefill` в `MountOptions`, EMBED §7),
+ * просто ключи и их ловушки объясняет вики, а не панель кабинета.
  */
-export function prefillFields(blocks: Block[]): PrefillField[] {
-  const captions = new Map<string, string>()
-  for (const block of blocks) {
-    if (block.type !== 'title' && block.type !== 'label') continue
-    const text = plainText(block.text).trim()
-    if (text && !captions.has(block.groupId)) captions.set(block.groupId, text)
-  }
-  return blocks
-    .filter((block) => isAnswerableType(block.type) && block.type !== 'multi_choice')
-    .map((block) => ({
-      blockId: block.id,
-      caption: captions.get(block.groupId) ?? 'Без заголовка',
-    }))
-}
-
-/**
- * prefillSnippet — готовый вызов с объектом предзаполнения.
- *
- * Отдаём объект ЦЕЛИКОМ, со всеми полями и подписями в комментариях: ключ — id
- * блока (`blk_` + UUID), и собирать его по одному из интерфейса было бы мучением.
- * Скопировал, вписал свои переменные, лишние строки удалил.
- */
-export function prefillSnippet(opts: SnippetOptions, fields: PrefillField[]): string {
-  const lines = fields.map((f) => `    '${f.blockId}': '', // ${f.caption}`)
-  const body = lines.length > 0 ? `\n  prefill: {\n${lines.join('\n')}\n  },` : ''
-  return `Trillix.open({\n  form: '${opts.slug}',\n  mode: '${opts.mode}',${body}\n})`
+export function openSnippet(opts: SnippetOptions): string {
+  return `Trillix.open({\n  form: '${opts.slug}',\n  mode: '${opts.mode}',\n})`
 }
