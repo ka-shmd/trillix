@@ -2,6 +2,7 @@ import { type ReactNode } from 'react'
 
 import { type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
+import { ProTag } from '../../../shared/ProTag'
 import { useUpdateBranding } from '../queries'
 import {
   DEFAULT_BLOCK_HEIGHT,
@@ -313,6 +314,14 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         onChange={(v) => update.mutate({ form, show: v })}
         text="Брендинг Trillix"
         tip="Показывать «Сделано в Trillix» на вашей форме"
+        // МЕТКА СТОИТ ВСЕГДА, а не только у бесплатного тарифа, и это не небрежность.
+        // Во-первых, она называет условие, при котором настройка СРАБОТАЕТ, а не
+        // запрещает её трогать: снять бейдж в черновике можно на любом тарифе, гейт
+        // стоит при отдаче формы. Во-вторых, `useFeatureAllowed` сегодня отвечает
+        // «можно» всем — гейты продукта реализованы, но открыты (BILLING §6), — и
+        // метка под условием `!canRemove` не показалась бы вообще никому. Тот же
+        // приём и по тому же доводу у карточки ссылки на «Поделиться».
+        pro
       />
       {!show && !canRemove && (
         <p className="text-xs text-muted-foreground">
@@ -369,6 +378,7 @@ function Toggle({
   onChange,
   text,
   tip,
+  pro = false,
   disabled = false,
 }: {
   id: string
@@ -377,6 +387,8 @@ function Toggle({
   text: string
   /** Пояснение под значком вопроса — там, где подписи мало, а строки под ней нет. */
   tip?: string
+  /** Метка платной возможности. Ничего не запирает — называет тариф (BILLING §6). */
+  pro?: boolean
   disabled?: boolean
 }) {
   return (
@@ -385,6 +397,7 @@ function Toggle({
         <Label htmlFor={id} className="font-normal">
           {text}
         </Label>
+        {pro && <ProTag />}
         {tip && (
           <Tooltip>
             {/* Настоящая кнопка, а не значок: тултип обязан открываться и с
