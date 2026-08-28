@@ -124,7 +124,7 @@ export function EmbedView({
           <aside className="flex w-125 shrink-0 flex-col overflow-y-auto px-12.5 py-5">
             <section className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold">Встраивание</h2>
+                <h2 className="text-xl font-bold">Встраивание</h2>
                 {/* Выход из режима. Крестовина без подписи — жест закрытия читается
                     сам, а место рядом с заголовком не оставляет сомнений, что
                     закрывается экран, а не макет. */}
@@ -146,7 +146,11 @@ export function EmbedView({
                     вернуться нужно тем же жестом. */}
                 <Button
                   className="w-full gap-1.5"
-                  variant={showCode ? 'outline' : 'default'}
+                  // Чёрная, а не синяя: синий в кабинете значит «главное действие
+                  // экрана», а главное здесь — сама вставка, которую автор
+                  // настраивает; код это то, чем её забирают (DESIGN-SYSTEM §«цвет»).
+                  variant={showCode ? 'outline' : 'utility'}
+                  size="sm"
                   aria-pressed={showCode}
                   onClick={() => setShowCode((v) => !v)}
                 >
@@ -168,8 +172,7 @@ export function EmbedView({
                 <CopyButton
                   text={frameUrl(opts)}
                   label="Скопировать ссылку встраивания"
-                  variant="outline"
-                  size="default"
+                  variant="ghost"
                   className="w-full"
                 />
               </div>
@@ -178,7 +181,7 @@ export function EmbedView({
             <Separator className="my-6" />
 
             <section className="flex flex-col gap-4">
-              <h2 className="text-base font-semibold">Опции</h2>
+              <h2 className="text-xl font-bold">Опции</h2>
               <SettingsPanel form={form} mode={mode} settings={settings} onChange={change} />
             </section>
           </aside>
