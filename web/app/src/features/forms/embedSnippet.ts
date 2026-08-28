@@ -122,11 +122,33 @@ export const DEFAULT_BLOCK_HEIGHT = 520
 /** Ширина панели виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
 export const DEFAULT_WIDGET_WIDTH = 376
 
+/** Ширина окна по центру — зеркалит `DEFAULT_CENTER_WIDTH` загрузчика (потолок холста). */
+export const DEFAULT_CENTER_WIDGET_WIDTH = 860
+
 /**
- * ПАНЕЛЬ КАБИНЕТА НАЧИНАЕТ БЕЗ ЗАТЕМНЕНИЯ, а загрузчик без атрибута его показывает, и
- * это не расхождение: умолчание загрузчика — часть бессрочного контракта `v1.js`, где
- * вставки без атрибута уже работают на чужих сайтах. Поэтому кабинет пишет
- * `data-overlay="none"` явным атрибутом, а не переворачивает умолчание.
+ * widgetDefaults — умолчания вида ПО РАСПОЛОЖЕНИЮ (решение владельца 2026-08-28):
+ * панель в углу и окно по центру начинают с разных ширины и затемнения.
+ *
+ * Ширина: в центре экрана колонка в 376 читается панелью, потерявшей свой угол.
+ * Затемнение: панель — продолжение кнопки сайта, и потемневшая страница вокруг неё
+ * спорит с этим жестом; окно по центру, наоборот, перехватывает внимание целиком, и
+ * без подложки оно висит над чужой вёрсткой без всякой связи с ней.
+ *
+ * Ширина ЗЕРКАЛИТ `defaultWidth` загрузчика, и зеркало это несущее: `widgetAttrs`
+ * пишет `data-width`, только когда автор отошёл от умолчания, — разъедься числа, и
+ * поле в кабинете показывало бы одно, а посетитель видел бы другое.
+ */
+export function widgetDefaults(position: WidgetPosition): { width: number; overlay: boolean } {
+  return position === 'center'
+    ? { width: DEFAULT_CENTER_WIDGET_WIDTH, overlay: true }
+    : { width: DEFAULT_WIDGET_WIDTH, overlay: false }
+}
+
+/**
+ * ПАНЕЛЬ В УГЛУ НАЧИНАЕТ БЕЗ ЗАТЕМНЕНИЯ (`widgetDefaults`), а загрузчик без атрибута
+ * его показывает, и это не расхождение: умолчание загрузчика — часть бессрочного
+ * контракта `v1.js`, где вставки без атрибута уже работают на чужих сайтах. Поэтому
+ * кабинет пишет `data-overlay="none"` явным атрибутом, а не переворачивает умолчание.
  */
 
 /** Умолчания автооткрытия — зеркалят одноимённые значения загрузчика. */
@@ -207,7 +229,11 @@ function widgetAttrs(opts: SnippetOptions): string[] {
   if (opts.position && opts.position !== 'bottom-right') {
     attrs.push(`data-position="${opts.position}"`)
   }
-  if (opts.width && opts.width !== DEFAULT_WIDGET_WIDTH) attrs.push(`data-width="${opts.width}"`)
+  // Умолчание считается от РАСПОЛОЖЕНИЯ, а не от одного числа: у окна по центру своя
+  // ширина, и запиши мы её атрибутом — сниппет нёс бы `data-width="860"` там, где
+  // загрузчик и так возьмёт 860.
+  const fallback = widgetDefaults(opts.position ?? 'bottom-right').width
+  if (opts.width && opts.width !== fallback) attrs.push(`data-width="${opts.width}"`)
   if (opts.overlay === false) attrs.push('data-overlay="none"')
   if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   if (opts.transparent) attrs.push('data-bg="transparent"')

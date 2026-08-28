@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEFAULT_CENTER_WIDTH,
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
   DEFAULT_WIDTH,
@@ -11,6 +12,7 @@ import {
   readFrameMessage,
   scriptOrigin,
   type MountOptions,
+  type WidgetPosition,
 } from './api'
 
 const attrs = (map: Record<string, string>) => ({
@@ -431,6 +433,43 @@ describe('optionsFromAttrs: своя кнопка загрузчика', () => {
   it('data-button="none" — кнопки нет', () => {
     const opts = optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', 'data-button': 'none' }))
     expect(opts?.button).toBe(false)
+  })
+})
+
+describe('ширина и скролл — по расположению', () => {
+  const widget = (map: Record<string, string> = {}) =>
+    optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', ...map }))
+  const widgetSrc = (position?: WidgetPosition) =>
+    frameSrc('https://f.trillix.ru', { form: 'opros', mode: 'widget', position }, '')
+
+  // Умолчание ширины у угла и у центра разное (решение владельца 2026-08-28), и
+  // кабинет на это опирается: `data-width` он пишет, только когда автор отошёл от
+  // умолчания СВОЕГО расположения. Сойдись оба умолчания к 376 — окно по центру
+  // молча стало бы панелью.
+  it('окно по центру шире панели в углу', () => {
+    expect(widget()?.width).toBe(DEFAULT_WIDTH)
+    expect(widget({ 'data-position': 'center' })?.width).toBe(DEFAULT_CENTER_WIDTH)
+  })
+
+  it('data-width перебивает умолчание любого расположения', () => {
+    expect(widget({ 'data-position': 'center', 'data-width': '480' })?.width).toBe(480)
+  })
+
+  // `scroll=frame` говорит фрейму, что низ у него постоянный: по этому параметру
+  // рендерер прижимает бейдж площадки к нижнему краю панели.
+  it('панель в углу прокручивает форму внутри фрейма, окно по центру — нет', () => {
+    expect(widgetSrc()).toContain('scroll=frame')
+    expect(widgetSrc('bottom-left')).toContain('scroll=frame')
+    expect(widgetSrc('center')).not.toContain('scroll=frame')
+  })
+
+  it('блок и страница прокручивают хоста — параметра нет', () => {
+    expect(frameSrc('https://f.trillix.ru', { form: 'opros', mode: 'block' }, '')).not.toContain(
+      'scroll',
+    )
+    expect(frameSrc('https://f.trillix.ru', { form: 'opros', mode: 'page' }, '')).not.toContain(
+      'scroll',
+    )
   })
 })
 

@@ -136,6 +136,7 @@ export function FormView({
   // документе (main.tsx) и правила в index.css: оно про раскладку холста, а не про
   // блоки, и в разметке ему делать нечего.
   const hideTitle = embed?.hideTitle ?? false
+  const selfScroll = embed?.selfScroll ?? false
   // Заголовок формы — блок документа (фаза 15), но рисуется вне потока вопросов:
   // <h1> перед .rf-form, со своим ритмом. Общий разделитель на три поверхности.
   // Версии, опубликованные до фазы, блока не несут — тогда заголовок приезжает
@@ -267,15 +268,17 @@ export function FormView({
   // сообщением `page` (он подтянет фрейм, только если тот ушёл выше вида). Фокус
   // ставим с preventScroll — иначе браузер сам уведёт чужую страницу к фрейму, и
   // выйдет два прыжка на один переход. `window.scrollTo` остаётся только в режиме
-  // 'page': там фрейм ростом с вьюпорт и скроллится сам.
+  // 'page': там фрейм ростом с вьюпорт и скроллится сам — и в панели виджета, где
+  // фрейм тоже сам себе скролл-контейнер (`scroll=frame`): просить хост двигать то,
+  // что лежит внутри нас, бессмысленно, а новый шаг начинается с середины прошлого.
   const pageRef = useRef<HTMLDivElement | null>(null)
   const navigated = useRef(false)
   useEffect(() => {
     if (!navigated.current) return
-    if (bridge === null || bridge.mode === 'page') window.scrollTo({ top: 0 })
+    if (bridge === null || bridge.mode === 'page' || selfScroll) window.scrollTo({ top: 0 })
     pageRef.current?.focus({ preventScroll: bridge !== null })
     bridge?.page(page)
-  }, [page, bridge])
+  }, [page, bridge, selfScroll])
 
   // ИСТОРИИ ШАГОВ НЕТ (решение владельца 2026-08-22): переход не пишет запись через
   // pushState, слушателя popstate нет, и системная «Назад» уводит СО СТРАНИЦЫ, как на
