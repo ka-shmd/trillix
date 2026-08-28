@@ -15,6 +15,9 @@
 //   <script async src="https://f.trillix.ru/embed/v1.js"></script>
 // Место фрейма в этой форме держит разметка, поэтому вставка не прыгает при загрузке,
 // а сам фрейм виден автору — его можно двигать и стилизовать, не трогая наш код.
+// Тот же обход подбирает фрейм, построенный чужим редактором по «ссылке для вставки»
+// (Notion, Ghost, Canva): адрес ему не меняют, но высота начинает следовать за формой,
+// как только на страницу добавлен тег загрузчика.
 //
 // Стили везде назначаются через CSSOM (`el.style.x = …`), а не атрибутом style: на
 // сайте со строгой CSP без 'unsafe-inline' атрибут был бы отброшен и виджет остался
@@ -114,8 +117,9 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
 }
 
 /**
- * loadEmbeds — поднять фреймы двухтеговой вставки: те, у кого есть `data-trillix-src`
- * и ещё нет `src`.
+ * loadEmbeds — взять под управление фреймы страницы, ведущие на наш origin: и
+ * размеченные `data-trillix-src` (двухтеговый сниппет), и построенные чужим
+ * редактором по «ссылке для вставки».
  *
  * Публичный метод (`Trillix.loadEmbeds()`), а не только внутренний вызов: фрейм может
  * появиться после загрузки — карточка товара в SPA, вкладка, аккордеон, — и поднять
@@ -125,10 +129,7 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
  * больше не видит.
  */
 function loadEmbeds(): void {
-  const frames = document.querySelectorAll<HTMLIFrameElement>(
-    'iframe[data-trillix-src]:not([src])',
-  )
-  for (const frame of Array.from(frames)) adoptFrame(frame)
+  for (const frame of Array.from(document.querySelectorAll('iframe'))) adoptFrame(frame)
 }
 
 /**
@@ -140,22 +141,33 @@ function loadEmbeds(): void {
  * атрибут `height`.
  */
 function adoptFrame(frame: HTMLIFrameElement): void {
-  const adoption = frameAdoption(ORIGIN, frame, window.location.search)
+  if (mounted.some((m) => m.frame === frame)) return
+  // ДВА ИСТОЧНИКА АДРЕСА, и разница между ними принципиальная. `data-trillix-src` —
+  // наш сниппет: адрес ещё не тронут, его ставим мы. Обычный `src` — фрейм, который
+  // построил чужой редактор по «ссылке для вставки» (Notion, Ghost, Canva): он уже
+  // грузится, и трогать его адрес нельзя — перезапись перезагрузила бы форму, стерев
+  // набранное. Оттуда берём только настройки, ради подстройки высоты.
+  const declared = frame.getAttribute('data-trillix-src')
+  const address = declared ?? frame.getAttribute('src')
+  const adoption = frameAdoption(ORIGIN, address, frame, window.location.search)
   if (adoption === null) return
-  frame.src = adoption.src
-  if (frame.title === '') frame.title = 'Форма'
-  // Высоту у блока ведёт содержимое, поэтому внутренний скролл там лишний — то же
-  // правило, что у собранного нами фрейма (`createFrame`). У страницы фрейм ростом с
-  // вьюпорт и скроллится сам.
-  if (adoption.opts.mode !== 'page' && adoption.opts.dynamicHeight !== false) {
-    frame.scrolling = 'no'
-  }
-  // «Страница» запирает прокрутку хозяина: за фиксированным фреймом прокручивать
-  // нечего, а незапертая страница уезжала бы колесом поверх формы. Замок живёт,
-  // пока живёт вставка, — снимать его закрытию виджета не даёт `pageMounted`.
-  if (adoption.opts.mode === 'page') {
-    pageMounted = true
-    lockScroll()
+
+  if (declared !== null && frame.getAttribute('src') === null) {
+    frame.src = adoption.src
+    if (frame.title === '') frame.title = 'Форма'
+    // Высоту у блока ведёт содержимое, поэтому внутренний скролл там лишний — то же
+    // правило, что у собранного нами фрейма (`createFrame`). У страницы фрейм ростом
+    // с вьюпорт и скроллится сам.
+    if (adoption.opts.mode !== 'page' && adoption.opts.dynamicHeight !== false) {
+      frame.scrolling = 'no'
+    }
+    // «Страница» запирает прокрутку хозяина: за фиксированным фреймом прокручивать
+    // нечего, а незапертая страница уезжала бы колесом поверх формы. Замок живёт,
+    // пока живёт вставка, — снимать его закрытию виджета не даёт `pageMounted`.
+    if (adoption.opts.mode === 'page') {
+      pageMounted = true
+      lockScroll()
+    }
   }
   mounted.push({ frame, opts: adoption.opts, handlers: {} })
 }
@@ -485,10 +497,7 @@ function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
     const scrollable = document.documentElement.scrollHeight - window.innerHeight
     // Страница короче экрана прокручивается нулём: считать долю не от чего, и ждать
     // прокрутки бессмысленно — показываем сразу.
-    const passed =
-      scrollable <= 0
-        ? 100
-        : (window.scrollY / scrollable) * 100
+    const passed = scrollable <= 0 ? 100 : (window.scrollY / scrollable) * 100
     if (passed >= (opts.openValue || DEFAULT_OPEN_SCROLL)) fire()
   }
   // Уход со страницы: курсор вышел через ВЕРХНЮЮ границу окна — к вкладкам и адресной

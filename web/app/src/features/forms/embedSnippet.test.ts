@@ -4,6 +4,7 @@ import { textFromString, type Block } from '@entities/formSchema'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
+  embedCode,
   frameUrl,
   iframeSnippet,
   prefillFields,
@@ -245,5 +246,53 @@ describe('prefillSnippet', () => {
 
   it('форма без вопросов — вызов без предзаполнения', () => {
     expect(prefillSnippet(base, [])).not.toContain('prefill')
+  })
+})
+
+describe('embedCode', () => {
+  it('блок — фрейм с адресом в data-trillix-src плюс тег загрузчика', () => {
+    const code = embedCode(base)
+    expect(code).toContain('<iframe data-trillix-src="https://f.trillix.ru/r/opros?embed=block"')
+    expect(code).toContain('<script async src="https://f.trillix.ru/embed/v1.js"></script>')
+    // Пустой src обязателен: иначе браузер начнёт грузить форму раньше, чем
+    // загрузчик подставит метки источника хост-страницы.
+    expect(code).not.toContain(' src="https://f.trillix.ru/r/')
+  })
+
+  // Геометрия атрибутами, а не style: строгая CSP отбрасывает атрибут style, и блок
+  // остался бы фреймом в 150 пикселей по умолчанию браузера.
+  it('у блока размер атрибутами, у страницы — фиксированным слоем', () => {
+    expect(embedCode(base)).toContain(`width="100%" height="${DEFAULT_BLOCK_HEIGHT}"`)
+    expect(embedCode(base)).not.toContain('style=')
+    expect(embedCode({ ...base, mode: 'page' })).toContain('position:fixed')
+  })
+
+  it('своя высота и выключенная подстройка едут во фрейм', () => {
+    const code = embedCode({ ...base, height: 900, dynamicHeight: false })
+    expect(code).toContain('height="900"')
+    expect(code).toContain('data-dynamic-height="0"')
+    // Умолчание не пишется: атрибут без него означает ровно то же самое.
+    expect(embedCode(base)).not.toContain('data-dynamic-height')
+  })
+
+  it('настройки вида уезжают в адрес фрейма, а не в атрибуты', () => {
+    const code = embedCode({ ...base, hideTitle: true, alignLeft: true, transparent: true })
+    expect(code).toContain('hideTitle=1')
+    expect(code).toContain('align=left')
+    expect(code).toContain('bg=transparent')
+    expect(code).not.toContain('data-hide-title')
+  })
+
+  // У виджета в потоке страницы ничего не стоит: готовый фрейм был бы фреймом,
+  // который никогда не показывают.
+  it('виджет остаётся одним тегом скрипта', () => {
+    const code = embedCode({ ...base, mode: 'widget', label: 'Оставить заявку' })
+    expect(code).toContain('data-trillix-widget="opros"')
+    expect(code).not.toContain('<iframe')
+  })
+
+  it('предпросмотр отличается ровно флагом в адресе фрейма', () => {
+    expect(embedCode({ ...base, preview: true })).toContain('preview=1')
+    expect(embedCode(base)).not.toContain('preview=1')
   })
 })

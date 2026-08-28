@@ -77,10 +77,14 @@ test('форма живёт блоком и виджетом на посторо
 
   // 1. Кабинет отдаёт готовый сниппет — берём его из интерфейса, а не собираем руками:
   // так тест ловит расхождение между тем, что показано владельцу, и тем, что работает.
-  await page.goto(`/forms/${form.slug}/share`)
+  // Код лежит за тумблером «Получить код»: макет вставки и код делят одну область.
+  await page.goto(`/forms/${form.slug}/embed`)
+  await page.getByRole('button', { name: 'Получить код' }).click()
   const snippet = await page.getByLabel('Код для вставки').inputValue()
   expect(snippet).toContain('/embed/v1.js')
-  expect(snippet).toContain(`data-trillix-form="${form.slug}"`)
+  // Блок — двухтеговая вставка: фрейм с адресом в data-trillix-src (пустой `src`
+  // обязателен, иначе браузер начнёт грузить форму мимо загрузчика) плюс загрузчик.
+  expect(snippet).toContain(`data-trillix-src="${RENDERER}/r/${form.slug}?embed=block"`)
 
   // ── Блок на постороннем сайте ────────────────────────────────────────────────
   const visitor = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -110,10 +114,18 @@ test('форма живёт блоком и виджетом на посторо
   await expect(frame.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
 
   // ── Виджет ───────────────────────────────────────────────────────────────────
-  const widgetSnippet = snippet.replace(
-    `data-trillix-form="${form.slug}"`,
-    `data-trillix-widget="${form.slug}" data-label="Оставить заявку"`,
-  )
+  // Сниппет виджета берётся ТЕМ ЖЕ ПУТЁМ, что и блочный, — переключением вида в
+  // кабинете, а не правкой строки: у видов теперь разный формат вставки (у виджета
+  // один тег скрипта, у блока фрейм плюс загрузчик), и подмена атрибута в чужой
+  // строке проверяла бы выдумку теста, а не то, что кабинет отдаёт владельцу.
+  // Экран кода остаётся открытым: настройки живут в колонке слева и переключение
+  // вида его не закрывает — второй раз жать «Получить код» не нужно (да и нельзя:
+  // это тумблер, и подпись у него теперь другая).
+  await page.getByRole('tab', { name: 'Виджет' }).click()
+  await page.getByLabel('Надпись на кнопке').fill('Оставить заявку')
+  const widgetSnippet = await page.getByLabel('Код для вставки').inputValue()
+  expect(widgetSnippet).toContain(`data-trillix-widget="${form.slug}"`)
+  expect(widgetSnippet).toContain('data-label="Оставить заявку"')
   const widgetPage = await visitor.newPage()
   await widgetPage.route(HOST_PAGE, (route) =>
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: hostHtml(widgetSnippet) }),

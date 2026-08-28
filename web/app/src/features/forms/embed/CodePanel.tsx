@@ -5,12 +5,36 @@ import { type FormDetail } from '../../../entities/form'
 import {
   frameUrl,
   iframeSnippet,
+  loaderTag,
   prefillFields,
   prefillSnippet,
+  type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+
+// ТЕКСТЫ ПЕРВОГО РАЗДЕЛА — СВОИ НА КАЖДЫЙ ВИД. Общее «вставьте этот HTML на
+// страницу» верно для всех трёх и не помогает ни одному: у блока речь о месте в
+// потоке, у виджета место в разметке не решает ничего (угол задаёт настройка), а
+// страница забирает чужую страницу целиком, и знать это надо ДО вставки, а не после.
+const PASTE: Record<EmbedMode, { what: string; where: string }> = {
+  block: {
+    what: 'Вставьте этот HTML туда, где на странице должна появиться форма.',
+    where:
+      'Куда вставлять: в Тильде — блок «HTML» (T123), в WordPress — блок «Произвольный HTML» (не визуальный редактор, он экранирует код), в остальных конструкторах — любое поле для HTML-кода.',
+  },
+  widget: {
+    what: 'Вставьте этот HTML один раз на страницу — кнопка встанет в угол, форма откроется поверх содержимого.',
+    where:
+      'Место в разметке кнопку не двигает: угол задаётся настройкой «Положение», поэтому годится подвал сайта или поле «код перед </body>». Два таких тега на странице дадут две кнопки.',
+  },
+  page: {
+    what: 'Вставьте этот HTML на отдельную страницу сайта — форма займёт её целиком.',
+    where:
+      'Остальное содержимое той страницы видно не будет: вставка накрывает её фиксированным слоем и запирает прокрутку. Поэтому нужен пустой адрес, а не страница с шапкой и подвалом.',
+  },
+}
 
 // Код вставки. Разложен по уровням, потому что у встраивания две несовместимые
 // аудитории: владелец сайта на Тильде, которому нужно скопировать одну строку, и
@@ -32,23 +56,17 @@ export function CodePanel({
     <div className="space-y-8">
       <section>
         <h2 className="text-base font-medium">Код для вставки</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Вставьте этот HTML на страницу, где должна появиться форма.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">{PASTE[opts.mode].what}</p>
         <Textarea
           readOnly
           aria-label="Код для вставки"
           value={snippet}
-          rows={3}
+          rows={opts.mode === 'widget' ? 3 : 4}
           className="mt-3 font-mono text-xs"
           onFocus={(e) => e.currentTarget.select()}
         />
         <CopyButton text={snippet} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Куда вставлять: в Тильде — блок «HTML» (T123), в WordPress — блок «Произвольный HTML» (не
-          визуальный редактор, он экранирует код), в остальных конструкторах — любое поле для
-          HTML-кода.
-        </p>
+        <p className="mt-3 text-sm text-muted-foreground">{PASTE[opts.mode].where}</p>
       </section>
 
       {/* ССЫЛКА ТОЛЬКО У БЛОКА (та же граница, что у кнопки на панели, — EmbedView):
@@ -72,9 +90,18 @@ export function CodePanel({
           />
           <CopyButton text={frameUrl(opts)} className="mt-2" />
           <p className="mt-3 text-sm text-muted-foreground">
-            Высота у такой вставки фиксированная: подстраивать её под длину формы умеет только
-            загрузчик из кода выше.
+            Высота у такой вставки фиксированная. Чтобы она подстраивалась под длину формы, добавьте
+            на страницу ещё и тег загрузчика — он найдёт фрейм сам.
           </p>
+          <Textarea
+            readOnly
+            aria-label="Тег загрузчика"
+            value={loaderTag(opts.baseUrl)}
+            rows={2}
+            className="mt-3 font-mono text-xs"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <CopyButton text={loaderTag(opts.baseUrl)} className="mt-2" />
         </section>
       )}
 
@@ -82,8 +109,9 @@ export function CodePanel({
         <section>
           <h2 className="text-base font-medium">Без скрипта</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Виджета в этом
-            варианте не существует, а высота остаётся фиксированной.
+            {opts.mode === 'page'
+              ? 'Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Форма так же накрывает страницу, но прокрутка под ней не запирается: увести колесом на содержимое сайта посетитель сможет.'
+              : 'Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Высота у него остаётся фиксированной: подстраивать её под длину формы умеет только загрузчик.'}
           </p>
           <Textarea
             readOnly
@@ -103,8 +131,10 @@ export function CodePanel({
           Загрузчик заводит <code className="font-mono text-xs">window.Trillix</code> с методами{' '}
           <code className="font-mono text-xs">mount</code>,{' '}
           <code className="font-mono text-xs">open</code> и{' '}
-          <code className="font-mono text-xs">close</code>. Это нужно, когда форма открывается по
-          событию приложения, а не по клику на кнопку в разметке.
+          <code className="font-mono text-xs">close</code>.{' '}
+          {opts.mode === 'widget'
+            ? 'Это нужно, когда форма открывается по событию приложения — после онбординга, по таймеру внутри SPA, — а не по клику на кнопку в разметке.'
+            : 'Это нужно, когда контейнер под форму появляется уже после загрузки страницы или когда значения полей известны приложению.'}
         </p>
         <Textarea
           readOnly

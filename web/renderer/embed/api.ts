@@ -191,6 +191,11 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
  * собрал кабинет, — поэтому здесь не сборка, а ПРОВЕРКА чужой строки и добавление
  * того, чего в кабинете быть не могло: меток источника хост-страницы.
  *
+ * Адрес приходит ПАРАМЕТРОМ, а не читается из узла, потому что мест у него два:
+ * `data-trillix-src` у фрейма из нашего сниппета и обычный `src` у фрейма, который
+ * построил по «ссылке для вставки» чужой редактор (Notion, Ghost, Canva). Второму
+ * адрес менять нельзя — он уже загружен, — и вызывающий берёт оттуда только `opts`.
+ *
  * null = фрейм не наш (нет атрибута, битый адрес, чужой origin, путь не `/r/{slug}`).
  * Проверка origin обязательна: загрузчик не должен становиться универсальным
  * подъёмником фреймов по адресу из разметки чужой страницы.
@@ -202,11 +207,12 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
  */
 export function frameAdoption(
   origin: string,
+  address: string | null,
   el: AttrSource,
   hostSearch: string,
 ): { src: string; opts: MountOptions } | null {
-  const raw = el.getAttribute('data-trillix-src')
-  if (origin === '' || !isHttpUrl(raw)) return null
+  if (origin === '' || !isHttpUrl(address)) return null
+  const raw = address
   const url = new URL(raw)
   if (url.origin !== origin || !url.pathname.startsWith('/r/')) return null
   const form = decodeURIComponent(url.pathname.slice('/r/'.length))

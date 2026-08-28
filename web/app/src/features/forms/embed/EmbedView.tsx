@@ -6,8 +6,8 @@ import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
   DEFAULT_WIDGET_WIDTH,
+  embedCode,
   frameUrl,
-  scriptSnippet,
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
@@ -93,11 +93,11 @@ export function EmbedView({
   // вызовом из кода приложения (CodePanel). Тумблера «Без скрипта» здесь нет
   // (решение владельца 2026-08-27): выбор способа вставки делается там, где видны
   // все три способа сразу, а не настройкой, тихо меняющей и код, и предпросмотр.
-  const snippet = scriptSnippet(opts)
+  const snippet = embedCode(opts)
   // В макет уезжает тот же сниппет плюс флаг предпросмотра — единственное отличие
   // исполняемого кода от показанного (MockSite).
   const previewOpts: SnippetOptions = { ...opts, preview: true }
-  const previewSnippet = scriptSnippet(previewOpts)
+  const previewSnippet = embedCode(previewOpts)
 
   return (
     // ЭКРАН ПОВЕРХ КАБИНЕТА, а не область внутри него, — тем же слоем и по тому же

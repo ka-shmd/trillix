@@ -169,6 +169,60 @@ export function scriptSnippet(opts: SnippetOptions): string {
 }
 
 /**
+ * embedCode — ВСТАВКА, КОТОРУЮ КОПИРУЕТ АВТОР. Своя на каждый вид.
+ *
+ * Блок и страница — два тега: готовый `<iframe>` плюс загрузчик. Место фрейма держит
+ * разметка, поэтому чужая страница не прыгает, когда фрейм появляется, а сам фрейм
+ * автору виден: его можно двигать и оборачивать, не разбираясь в нашем коде.
+ * Настройки вида уезжают в адрес фрейма — тот же, что и в «ссылке для вставки».
+ *
+ * Виджет — по-прежнему ОДИН тег скрипта: в потоке страницы ему нечего занимать,
+ * кнопку и модалку строит загрузчик. Готовый `<iframe>` там был бы фреймом,
+ * который никогда не показывают.
+ *
+ * Обе формы поднимает один и тот же `embed/v1.js` (§2 EMBED.md).
+ */
+export function embedCode(opts: SnippetOptions): string {
+  if (opts.mode === 'widget') return scriptSnippet(opts)
+  return `${frameTag(opts)}\n${loaderTag(opts.baseUrl)}`
+}
+
+/**
+ * loaderTag — тег загрузчика отдельно от фрейма.
+ *
+ * Нужен и сам по себе: тот, кто вставил форму ссылкой в Notion-подобный редактор,
+ * добавляет этот тег на страницу ради подстройки высоты — фрейм у него уже есть.
+ */
+export function loaderTag(baseUrl: string): string {
+  return `<script async src="${escapeAttr(loaderUrl(baseUrl))}"></script>`
+}
+
+/**
+ * frameTag — фрейм двухтеговой вставки: адрес в `data-trillix-src`, а не в `src`.
+ *
+ * Пустой `src` не случайность и не «загрузим потом»: браузер начал бы грузить форму
+ * до того, как загрузчик успел подставить метки источника хост-страницы, и половина
+ * визитов пришла бы без них. Загрузчик проставляет адрес сам (`frameAdoption`).
+ *
+ * Геометрия — АТРИБУТАМИ, а не `style`, у всех режимов, кроме страницы: строгая CSP
+ * без 'unsafe-inline' в `style-src` отбрасывает атрибут style, и блок остался бы
+ * фреймом в 150 пикселей по умолчанию браузера. Странице деваться некуда — «во весь
+ * вьюпорт» атрибутами не выражается.
+ */
+function frameTag(opts: SnippetOptions): string {
+  const attrs = [`data-trillix-src="${escapeAttr(frameUrl(opts))}"`, 'loading="lazy"']
+  if (opts.mode === 'page') {
+    attrs.push('style="position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483000"')
+  } else {
+    attrs.push(`width="100%" height="${opts.height ?? DEFAULT_BLOCK_HEIGHT}" frameborder="0"`)
+    // Пишется только выключение: умолчание загрузчика — «высота следует за
+    // содержимым», и вставки без атрибута обязаны вести себя как раньше.
+    if (opts.dynamicHeight === false) attrs.push('data-dynamic-height="0"')
+  }
+  return `<iframe ${attrs.join(' ')} title="Форма"></iframe>`
+}
+
+/**
  * frameUrl — адрес формы во фрейме: то же, что строит загрузчик (`frameSrc`).
  *
  * Отдаётся автору и как «ссылка для вставки» (Notion, Ghost, Canva умеют вставлять

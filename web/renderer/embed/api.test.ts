@@ -319,10 +319,11 @@ describe('frameSrc: кто исполняет переход', () => {
 
 describe('frameAdoption', () => {
   const ORIGIN = 'https://f.trillix.ru'
-  const src = (value: string) => attrs({ 'data-trillix-src': value })
+  const adopt = (address: string | null, map: Record<string, string> = {}) =>
+    frameAdoption(ORIGIN, address, attrs(map), '')
 
   it('поднимает фрейм по адресу своего origin', () => {
-    const got = frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=block`), '')
+    const got = adopt(`${ORIGIN}/r/opros?embed=block`)
     expect(got?.src).toBe(`${ORIGIN}/r/opros?embed=block`)
     expect(got?.opts).toMatchObject({ form: 'opros', mode: 'block', dynamicHeight: true })
   })
@@ -330,28 +331,33 @@ describe('frameAdoption', () => {
   // Загрузчик не универсальный подъёмник фреймов: адрес пишут в разметке чужой
   // страницы, и чужой origin оттуда поднимать нельзя.
   it('чужой origin, битый адрес и путь не /r/ — не наш фрейм', () => {
-    expect(frameAdoption(ORIGIN, src('https://evil.example/r/opros?embed=block'), '')).toBeNull()
-    expect(frameAdoption(ORIGIN, src('javascript:alert(1)'), '')).toBeNull()
-    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/embed/v1.js`), '')).toBeNull()
-    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/`), '')).toBeNull()
-    expect(frameAdoption(ORIGIN, attrs({}), '')).toBeNull()
+    expect(adopt('https://evil.example/r/opros?embed=block')).toBeNull()
+    expect(adopt('javascript:alert(1)')).toBeNull()
+    expect(adopt(`${ORIGIN}/embed/v1.js`)).toBeNull()
+    expect(adopt(`${ORIGIN}/r/`)).toBeNull()
+    expect(adopt(null)).toBeNull()
   })
 
   // Пустой origin — загрузчик не смог прочитать собственный адрес; поднимать некуда.
   it('без origin загрузчика фрейм не поднимается', () => {
-    expect(frameAdoption('', src(`${ORIGIN}/r/opros?embed=block`), '')).toBeNull()
+    expect(frameAdoption('', `${ORIGIN}/r/opros?embed=block`, attrs({}), '')).toBeNull()
   })
 
   it('режим читается из адреса, а не из атрибутов', () => {
-    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=page`), '')?.opts.mode).toBe('page')
+    expect(adopt(`${ORIGIN}/r/opros?embed=page`)?.opts.mode).toBe('page')
     // Виджет фреймом в потоке быть не может — ведёт себя как блок.
-    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=widget`), '')?.opts.mode).toBe('block')
+    expect(adopt(`${ORIGIN}/r/opros?embed=widget`)?.opts.mode).toBe('block')
   })
 
   // Метки источника лендинга в кабинете неизвестны — их добавляет загрузчик, ровно
   // как и в адресе, который он собирает сам (frameSrc).
   it('подставляет метки источника хост-страницы', () => {
-    const got = frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=block`), '?utm_source=vk&ref=x')
+    const got = frameAdoption(
+      ORIGIN,
+      `${ORIGIN}/r/opros?embed=block`,
+      attrs({}),
+      '?utm_source=vk&ref=x',
+    )
     expect(got?.src).toContain('utm_source=vk')
     expect(got?.src).not.toContain('ref=x')
   })
@@ -359,7 +365,8 @@ describe('frameAdoption', () => {
   it('метку, уже написанную в адресе, не переписывает', () => {
     const got = frameAdoption(
       ORIGIN,
-      src(`${ORIGIN}/r/opros?embed=block&utm_source=letter`),
+      `${ORIGIN}/r/opros?embed=block&utm_source=letter`,
+      attrs({}),
       '?utm_source=vk',
     )
     expect(got?.src).toContain('utm_source=letter')
@@ -367,14 +374,14 @@ describe('frameAdoption', () => {
   })
 
   it('высота — из атрибута фрейма, мусор даёт умолчание', () => {
-    const withHeight = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, height: '900' }
-    expect(frameAdoption(ORIGIN, attrs(withHeight), '')?.opts.height).toBe(900)
-    const percent = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, height: '100%' }
-    expect(frameAdoption(ORIGIN, attrs(percent), '')?.opts.height).toBe(DEFAULT_HEIGHT)
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, { height: '900' })?.opts.height).toBe(900)
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, { height: '100%' })?.opts.height).toBe(
+      DEFAULT_HEIGHT,
+    )
   })
 
   it('data-dynamic-height="0" останавливает подстройку высоты', () => {
-    const off = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, 'data-dynamic-height': '0' }
-    expect(frameAdoption(ORIGIN, attrs(off), '')?.opts.dynamicHeight).toBe(false)
+    const off = { 'data-dynamic-height': '0' }
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, off)?.opts.dynamicHeight).toBe(false)
   })
 })
