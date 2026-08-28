@@ -1,4 +1,5 @@
-import { type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { Link } from '@tanstack/react-router'
 
 import { type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
@@ -15,6 +16,16 @@ import {
 } from '../embedSnippet'
 import { CircleHelp } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -296,14 +307,18 @@ function PageSettings({ settings, onChange }: ModeProps) {
 // вставки, и действует на все вставки и на прямую ссылку разом. Переехал сюда из шторки
 // оформления (решение владельца 2026-08-16).
 //
-// Гейт у него ДРУГОЙ природы, чем у остального оформления: публикацию он не держит
-// (снять намерение можно на любом тарифе), а срабатывает при отдаче формы — поэтому на
-// бесплатном тарифе выключенный переключатель честно предупреждает, что бейдж всё
-// равно останется.
+// Гейт у него ДРУГОЙ природы, чем у остального оформления: публикацию он не держит, а
+// срабатывает при отдаче формы. С 2026-08-27 (решение владельца) он ещё и единственный
+// в кабинете, который держит сам КОНТРОЛ: снять бейдж на бесплатном тарифе нельзя —
+// вместо сохранённого намерения открывается окно с предложением тарифа. Прежний
+// порядок «намерение сохраняется, а бейдж всё равно остаётся» объяснялся строкой под
+// тумблером, и строка эта читалась оправданием.
 function BadgeToggle({ form }: { form: FormDetail }) {
   const canRemove = useFeatureAllowed('form_branding')
   const update = useUpdateBranding()
   const show = form.draftSchema.design?.branding !== false
+  // Разговор о тарифе вместо отказа: см. PlanUpsell ниже.
+  const [upsell, setUpsell] = useState(false)
 
   return (
     <Row>
@@ -311,7 +326,16 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         id="embed-branding"
         checked={show}
         disabled={update.isPending}
-        onChange={(v) => update.mutate({ form, show: v })}
+        onChange={(v) => {
+          // ПОПЫТКА СНЯТЬ БЕЙДЖ НА БЕСПЛАТНОМ ТАРИФЕ НИЧЕГО НЕ МЕНЯЕТ и открывает
+          // окно с предложением (решение владельца 2026-08-27). Включить бейдж
+          // обратно можно всегда — гейт стоит только на его снятии.
+          if (!v && !canRemove) {
+            setUpsell(true)
+            return
+          }
+          update.mutate({ form, show: v })
+        }}
         text="Брендинг Trillix"
         tip="Показывать «Сделано в Trillix» на вашей форме"
         // МЕТКА СТОИТ ВСЕГДА, а не только у бесплатного тарифа, и это не небрежность.
@@ -323,12 +347,6 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         // приём и по тому же доводу у карточки ссылки на «Поделиться».
         pro
       />
-      {!show && !canRemove && (
-        <p className="text-xs text-muted-foreground">
-          На бесплатном тарифе бейдж остаётся на форме. Настройка сохранится и сработает сразу после
-          перехода на платный.
-        </p>
-      )}
       {form.publishedVersion !== null && (
         <p className="text-xs text-muted-foreground">
           На опубликованной форме применится после следующей публикации.
@@ -340,7 +358,46 @@ function BadgeToggle({ form }: { form: FormDetail }) {
           и попробуйте ещё раз.
         </p>
       )}
+      <PlanUpsell open={upsell} onOpenChange={setUpsell} />
     </Row>
+  )
+}
+
+// ОКНО ВМЕСТО ОТКАЗА. Тумблер, который молча не двигается, читается как поломка, а
+// строка «это на платном тарифе» под ним — как оправдание; окно называет, что даёт
+// тариф, и ведёт туда, где видна цена. Открывается только на попытку СНЯТЬ бейдж:
+// вернуть его на место можно на любом тарифе.
+//
+// Сегодня оно не открывается ни у кого: гейты продукта реализованы, но открыты всем
+// планам (BILLING §6) — `useFeatureAllowed` отвечает «можно». Закроют гейт одним
+// UPDATE'ом, и окно заработает без выкатки фронта.
+function PlanUpsell({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Форма без брендинга — на платном тарифе</DialogTitle>
+          <DialogDescription>
+            На платном тарифе с формы уходит подпись «Сделано в Trillix» — и на встроенной вставке,
+            и на прямой ссылке. Там же снимаются лимиты на ответы и открывается своё оформление.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="ghost">Не сейчас</Button>
+          </DialogClose>
+          <Button asChild>
+            <Link to="/settings/plan">Посмотреть тарифы</Link>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
