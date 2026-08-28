@@ -83,10 +83,10 @@ export function SettingsPanel({
   )
 }
 
-// БЛОК — форма в потоке чужой страницы. Настройки разложены по трём группам:
-// сколько места занимает, как выглядит, чем вставляется. Плоский список из пяти
-// тумблеров подряд, стоявший здесь раньше, заставлял читать все пять, чтобы найти
-// один (редизайн 2026-08-27).
+// БЛОК — форма в потоке чужой страницы. Настройки идут тремя связками — сколько
+// места занимает, как выглядит, чем вставляется, — но БЕЗ ЗАГОЛОВКОВ (решение
+// владельца 2026-08-27): связки различает просвет, а подписи над двумя-тремя
+// строками сами становились шумом, от которого их заводили.
 function BlockSettings({ settings, onChange }: ModeProps) {
   // Виджета без скрипта не существует, а у блока — вполне: голый фрейм не умеет
   // только живую высоту.
@@ -94,16 +94,8 @@ function BlockSettings({ settings, onChange }: ModeProps) {
 
   return (
     <>
-      <Group title="Размер">
-        <Field
-          id="embed-height"
-          label={plain || !settings.dynamicHeight ? 'Высота, px' : 'Высота до загрузки формы, px'}
-          hint={
-            plain || !settings.dynamicHeight
-              ? 'Длинная форма будет скроллиться внутри блока.'
-              : 'Размер, пока форма грузится: дальше её ведёт сама форма.'
-          }
-        >
+      <Group>
+        <Field id="embed-height" label="Высота">
           <Input
             id="embed-height"
             type="number"
@@ -123,7 +115,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
         />
       </Group>
 
-      <Group title="Вид">
+      <Group>
         <Toggle
           id="embed-hide-title"
           checked={settings.hideTitle}
@@ -149,7 +141,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
         />
       </Group>
 
-      <Group title="Код вставки">
+      <Group>
         <Toggle
           id="embed-plain"
           checked={plain}
@@ -314,7 +306,7 @@ function BadgeToggle({ form }: { form: FormDetail }) {
   const show = form.draftSchema.design?.branding !== false
 
   return (
-    <Group title="Бейдж Trillix">
+    <Group>
       <Toggle
         id="embed-branding"
         checked={show}
@@ -344,36 +336,18 @@ function BadgeToggle({ form }: { form: FormDetail }) {
   )
 }
 
-// Группа настроек — заголовок и её строки. Одна колонка, в отличие от двухколоночной
-// группы шторки оформления: там контролы короткие (цвет, число), а здесь у каждой
-// строки есть пояснение под ней, и в половину панели оно переносится втрое.
-function Group({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-3">
-      <h3 className="text-sm font-medium">{title}</h3>
-      {children}
-    </section>
-  )
+// Связка настроек — просвет вокруг и ничего больше: заголовков у связок нет
+// (решение владельца 2026-08-27), их работу делает ритм колонки.
+function Group({ children }: { children: ReactNode }) {
+  return <section className="flex flex-col gap-3">{children}</section>
 }
 
-// Поле с подписью НАД контролом и пояснением под ним — тот же порядок, что у строки
-// с тумблером: подпись, контрол, пояснение.
-function Field({
-  id,
-  label,
-  hint,
-  children,
-}: {
-  id: string
-  label: string
-  hint?: string
-  children: ReactNode
-}) {
+// Поле с подписью над контролом — тот же порядок, что у строки с тумблером.
+function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
       <Label htmlFor={id}>{label}</Label>
       {children}
-      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
 }
