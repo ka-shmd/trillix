@@ -21,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
 // Настройки вставки. ВСЕ ОНИ ЖИВУТ В САМОМ СНИППЕТЕ и никогда на сервере (ADR §10):
@@ -72,21 +71,24 @@ export function SettingsPanel({
   settings: EmbedSettings
   onChange: (patch: Partial<EmbedSettings>) => void
 }) {
+  // СТРОКИ РАЗДЕЛЕНЫ ЧЕРТОЙ (решение владельца 2026-08-27), и черту рисует
+  // контейнер (`divide-y`), а не строки: ветки вида отдают строки фрагментом, то
+  // есть в DOM они прямые дети этого div'а, и выключенная условием строка уносит
+  // свою черту сама. Строка, рисующая линию сверху, оставила бы её висеть.
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col divide-y">
       {mode === 'block' && <BlockSettings settings={settings} onChange={onChange} />}
       {mode === 'widget' && <WidgetSettings settings={settings} onChange={onChange} />}
       {mode === 'page' && <PageSettings settings={settings} onChange={onChange} />}
-      <Separator />
       <BadgeToggle form={form} />
     </div>
   )
 }
 
-// БЛОК — форма в потоке чужой страницы. Настройки идут тремя связками — сколько
-// места занимает, как выглядит, чем вставляется, — но БЕЗ ЗАГОЛОВКОВ (решение
-// владельца 2026-08-27): связки различает просвет, а подписи над двумя-тремя
-// строками сами становились шумом, от которого их заводили.
+// БЛОК — форма в потоке чужой страницы. Настройки идут списком строк, разделённых
+// чертой: заголовков у связок нет и пояснений под строками нет (решения владельца
+// 2026-08-27) — подпись над двумя-тремя строками сама становилась шумом, от которого
+// её заводили, а что делает настройка, показывает макет справа.
 function BlockSettings({ settings, onChange }: ModeProps) {
   // Виджета без скрипта не существует, а у блока — вполне: голый фрейм не умеет
   // только живую высоту.
@@ -94,7 +96,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
 
   return (
     <>
-      <Group>
+      <Row>
         <Field id="embed-height" label="Высота">
           {/* Единица измерения — В ПОЛЕ, а не в подписи: «Высота» отвечает на «что»,
               «px» на «в чём», и вместе они читаются одной строкой. Кегль и вес у них
@@ -120,51 +122,50 @@ function BlockSettings({ settings, onChange }: ModeProps) {
             </span>
           </div>
         </Field>
+      </Row>
+      <Row>
         <Toggle
           id="embed-dynamic-height"
           checked={settings.dynamicHeight && !plain}
           disabled={plain}
           onChange={(v) => onChange({ dynamicHeight: v })}
           text="Живая высота"
-          hint={plain ? 'Без скрипта высота не подстраивается.' : 'Блок растёт вместе с формой.'}
         />
-      </Group>
-
-      <Group>
+      </Row>
+      <Row>
         <Toggle
           id="embed-hide-title"
           checked={settings.hideTitle}
           onChange={(v) => onChange({ hideTitle: v })}
           text="Скрыть заголовок формы"
-          hint="На странице обычно уже есть свой заголовок над формой."
         />
-        {/* Прижатие влево — только у блока: у виджета и страницы поля холста
-            отделяют форму от края панели и края экрана, и снимать их там незачем. */}
+      </Row>
+      {/* Прижатие влево — только у блока: у виджета и страницы поля холста
+          отделяют форму от края панели и края экрана, и снимать их там незачем. */}
+      <Row>
         <Toggle
           id="embed-align"
           checked={settings.alignLeft}
           onChange={(v) => onChange({ alignLeft: v })}
           text="Выровнять содержимое влево"
-          hint="Форма начнётся от левого края блока, без полей по бокам."
         />
+      </Row>
+      <Row>
         <Toggle
           id="embed-bg"
           checked={settings.transparent}
           onChange={(v) => onChange({ transparent: v })}
           text="Прозрачный фон"
-          hint="Форма ляжет на фон сайта, а не белым прямоугольником."
         />
-      </Group>
-
-      <Group>
+      </Row>
+      <Row>
         <Toggle
           id="embed-plain"
           checked={plain}
           onChange={(v) => onChange({ plain: v })}
           text="Без скрипта, простым iframe"
-          hint="Для сайтов, где запрещены сторонние скрипты."
         />
-      </Group>
+      </Row>
     </>
   )
 }
@@ -173,137 +174,140 @@ function BlockSettings({ settings, onChange }: ModeProps) {
 // набор контролов у них прежний, изменился только каркас вокруг.
 function WidgetSettings({ settings, onChange }: ModeProps) {
   return (
-    <div className="flex flex-col gap-5">
-      <div>
-        <Label htmlFor="embed-open">Когда открывать</Label>
-        <Select value={settings.open} onValueChange={(v) => onChange({ open: v as OpenTrigger })}>
-          <SelectTrigger id="embed-open" className="mt-1 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(OPEN_TRIGGERS).map(([value, title]) => (
-              <SelectItem key={value} value={value}>
-                {title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {/* Единственная подсказка, которую автор иначе прочтёт как поломку:
-            проверит настройку, закроет панель и не дождётся повторного показа. */}
-        {settings.open !== 'click' && (
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Откроется один раз за визит. Дальше — по кнопке.
-          </p>
-        )}
-      </div>
+    <>
+      <Row>
+        <Field id="embed-open" label="Когда открывать">
+          <Select value={settings.open} onValueChange={(v) => onChange({ open: v as OpenTrigger })}>
+            <SelectTrigger id="embed-open" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(OPEN_TRIGGERS).map(([value, title]) => (
+                <SelectItem key={value} value={value}>
+                  {title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {/* Единственная подсказка, которую автор иначе прочтёт как поломку:
+              проверит настройку, закроет панель и не дождётся повторного показа. */}
+          {settings.open !== 'click' && (
+            <p className="text-xs text-muted-foreground">
+              Откроется один раз за визит. Дальше — по кнопке.
+            </p>
+          )}
+        </Field>
+      </Row>
 
       {(settings.open === 'delay' || settings.open === 'scroll') && (
-        <div>
-          <Label htmlFor="embed-open-value">
-            {settings.open === 'delay' ? 'Пауза, секунд' : 'Прокрутка, %'}
-          </Label>
-          <Input
+        <Row>
+          <Field
             id="embed-open-value"
-            type="number"
-            min={1}
-            max={settings.open === 'delay' ? 120 : 100}
-            value={settings.openValue}
-            onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
-            className="mt-1"
-          />
-        </div>
+            label={settings.open === 'delay' ? 'Пауза, секунд' : 'Прокрутка, %'}
+          >
+            <Input
+              id="embed-open-value"
+              type="number"
+              min={1}
+              max={settings.open === 'delay' ? 120 : 100}
+              value={settings.openValue}
+              onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
+            />
+          </Field>
+        </Row>
       )}
 
-      <div>
-        <Label htmlFor="embed-position">Угол экрана</Label>
-        <Select
-          value={settings.position}
-          onValueChange={(v) => onChange({ position: v as WidgetPosition })}
-        >
-          <SelectTrigger id="embed-position" className="mt-1 w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(WIDGET_POSITIONS).map(([value, title]) => (
-              <SelectItem key={value} value={value}>
-                {title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      <Row>
+        <Field id="embed-position" label="Угол экрана">
+          <Select
+            value={settings.position}
+            onValueChange={(v) => onChange({ position: v as WidgetPosition })}
+          >
+            <SelectTrigger id="embed-position" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(WIDGET_POSITIONS).map(([value, title]) => (
+                <SelectItem key={value} value={value}>
+                  {title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </Row>
 
-      <div>
-        <Label htmlFor="embed-label">Надпись на кнопке</Label>
-        <Input
-          id="embed-label"
-          value={settings.label}
-          onChange={(e) => onChange({ label: e.target.value })}
-          className="mt-1"
-        />
-      </div>
+      <Row>
+        <Field id="embed-label" label="Надпись на кнопке">
+          <Input
+            id="embed-label"
+            value={settings.label}
+            onChange={(e) => onChange({ label: e.target.value })}
+          />
+        </Field>
+      </Row>
 
-      <div>
-        <Label htmlFor="embed-width">Ширина панели, px</Label>
-        <Input
-          id="embed-width"
-          type="number"
-          min={280}
-          max={720}
-          value={settings.width}
-          onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
-          className="mt-1"
-        />
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          На телефоне панель раскрывается во весь экран.
-        </p>
-      </div>
+      <Row>
+        <Field id="embed-width" label="Ширина панели, px">
+          <Input
+            id="embed-width"
+            type="number"
+            min={280}
+            max={720}
+            value={settings.width}
+            onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
+          />
+        </Field>
+      </Row>
 
-      <div className="flex flex-col gap-3 border-t pt-4">
+      <Row>
         <Toggle
           id="embed-hide-title"
           checked={settings.hideTitle}
           onChange={(v) => onChange({ hideTitle: v })}
           text="Скрыть заголовок формы"
-          hint="На странице обычно уже есть свой заголовок над формой."
         />
+      </Row>
+      <Row>
         <Toggle
           id="embed-overlay"
           checked={settings.overlay}
           onChange={(v) => onChange({ overlay: v })}
           text="Затемнять страницу"
-          hint="Страница за панелью темнеет."
         />
+      </Row>
+      <Row>
         <Toggle
           id="embed-hide-on-submit"
           checked={settings.hideOnSubmit}
           onChange={(v) => onChange({ hideOnSubmit: v })}
           text="Убрать виджет после отправки"
-          hint="Ответивший больше не увидит кнопку до перезагрузки страницы."
         />
-      </div>
-    </div>
+      </Row>
+    </>
   )
 }
 
 function PageSettings({ settings, onChange }: ModeProps) {
   return (
-    <div className="flex flex-col gap-3">
-      <Toggle
-        id="embed-bg"
-        checked={settings.transparent}
-        onChange={(v) => onChange({ transparent: v })}
-        text="Прозрачный фон"
-        hint="Форма ляжет на фон сайта, а не белым прямоугольником."
-      />
-      <Toggle
-        id="embed-plain"
-        checked={settings.plain}
-        onChange={(v) => onChange({ plain: v })}
-        text="Без скрипта, простым iframe"
-        hint="Для сайтов, где запрещены сторонние скрипты."
-      />
-    </div>
+    <>
+      <Row>
+        <Toggle
+          id="embed-bg"
+          checked={settings.transparent}
+          onChange={(v) => onChange({ transparent: v })}
+          text="Прозрачный фон"
+        />
+      </Row>
+      <Row>
+        <Toggle
+          id="embed-plain"
+          checked={settings.plain}
+          onChange={(v) => onChange({ plain: v })}
+          text="Без скрипта, простым iframe"
+        />
+      </Row>
+    </>
   )
 }
 
@@ -321,14 +325,13 @@ function BadgeToggle({ form }: { form: FormDetail }) {
   const show = form.draftSchema.design?.branding !== false
 
   return (
-    <Group>
+    <Row>
       <Toggle
         id="embed-branding"
         checked={show}
         disabled={update.isPending}
         onChange={(v) => update.mutate({ form, show: v })}
         text="Показывать «Сделано в Trillix»"
-        hint="Настройка всей формы: действует и на прямую ссылку."
       />
       {!show && !canRemove && (
         <p className="text-xs text-muted-foreground">
@@ -347,22 +350,22 @@ function BadgeToggle({ form }: { form: FormDetail }) {
           и попробуйте ещё раз.
         </p>
       )}
-    </Group>
+    </Row>
   )
 }
 
-// Связка настроек — просвет вокруг и ничего больше: заголовков у связок нет
-// (решение владельца 2026-08-27), их работу делает ритм колонки.
-function Group({ children }: { children: ReactNode }) {
-  return <section className="flex flex-col gap-3">{children}</section>
+// Строка списка настроек. Черту между строками рисует контейнер (`divide-y`), здесь
+// только вертикальный воздух вокруг содержимого.
+function Row({ children }: { children: ReactNode }) {
+  return <div className="flex flex-col gap-2 py-4">{children}</div>
 }
 
-// Поле с подписью над контролом — тот же порядок, что у строки с тумблером. Просвет
-// 8, а не 4: четвёрка в ритме кабинета означает «заголовок и его подпись», то есть
-// склеивает две строки в одну пару, а подпись и поле ввода — соседи (DESIGN-SYSTEM §5).
+// Поле с подписью над контролом. Просвет 8, а не 4: четвёрка в ритме кабинета
+// означает «заголовок и его подпись», то есть склеивает две строки в одну пару, а
+// подпись и поле ввода — соседи (DESIGN-SYSTEM §5).
 function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2">
+    <>
       {/* Вес обычный, а не 600 из шкалы: рядом стоят подписи тумблеров, у них он тоже
           обычный, и полужирная строка над полем читалась бы заголовком связки — тем
           самым, который отсюда убрали. */}
@@ -370,34 +373,34 @@ function Field({ id, label, children }: { id: string; label: string; children: R
         {label}
       </Label>
       {children}
-    </div>
+    </>
   )
 }
 
+// ТУМБЛЕР СПРАВА, ПОДПИСЬ СЛЕВА (решение владельца 2026-08-27): все переключатели
+// колонки встают в один столбец у правого края, и состояние настроек читается одним
+// движением глаза сверху вниз — при тумблере слева его приходится искать за подписью
+// разной длины. Пояснений под строкой нет: их работу делит подпись и сам предпросмотр
+// справа, который показывает результат переключения.
 function Toggle({
   id,
   checked,
   onChange,
   text,
-  hint,
   disabled = false,
 }: {
   id: string
   checked: boolean
   onChange: (value: boolean) => void
   text: string
-  hint: string
   disabled?: boolean
 }) {
   return (
-    <div>
-      <div className="flex items-center gap-2">
-        <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
-        <Label htmlFor={id} className="font-normal">
-          {text}
-        </Label>
-      </div>
-      <p className="mt-1 ml-10 text-xs text-muted-foreground">{hint}</p>
+    <div className="flex items-center justify-between gap-4">
+      <Label htmlFor={id} className="font-normal">
+        {text}
+      </Label>
+      <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
     </div>
   )
 }
