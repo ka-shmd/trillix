@@ -76,7 +76,7 @@ export function MentionMenu({
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => onActiveChange(i)}
                 onClick={() => onPick(item)}
-                className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm ${
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
                   i === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                 }`}
               >

@@ -61,7 +61,7 @@ export function SlashMenu({
               return (
                 <div key={item.key}>
                   {heading && (
-                    <div className="px-2 py-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
                       {BLOCK_GROUP_LABELS[item.group]}
                     </div>
                   )}
@@ -75,7 +75,7 @@ export function SlashMenu({
                     onMouseDown={(e) => e.preventDefault()}
                     onMouseEnter={() => onActiveChange(i)}
                     onClick={() => onPick(item)}
-                    className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm ${
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
                       i === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                     }`}
                   >

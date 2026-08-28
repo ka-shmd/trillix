@@ -63,7 +63,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
 
   return (
     <>
-      <div className="flex items-center gap-2 border-b p-3 pr-14">
+      <div className="flex items-center gap-2 border-b p-4 pr-14">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -81,7 +81,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
           type="button"
           onClick={() => activeMeta && onPick(activeMeta)}
           disabled={!activeMeta}
-          className="shrink-0 gap-1.5"
+          className="shrink-0"
         >
           Добавить <ArrowRight className="size-4" />
         </Button>
@@ -100,7 +100,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
               // намеренно присутствует в двух группах, поэтому имя группы — часть
               // смысла пункта, а не оформление.
               <div key={g} className="mb-2" role="group" aria-label={BLOCK_GROUP_LABELS[g]}>
-                <div className="px-2 py-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
                   {BLOCK_GROUP_LABELS[g]}
                 </div>
                 {items.map((b) => (
@@ -110,7 +110,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
                     onClick={() => setActiveKey(b.key)}
                     onDoubleClick={() => onPick(b)}
                     onFocus={() => setActiveKey(b.key)}
-                    className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm ${
+                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
                       shown === b.key ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
                     }`}
                   >
@@ -130,7 +130,7 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
         <div className="flex flex-1 flex-col overflow-y-auto">
           {activeMeta && (
             <>
-              <div className="p-5">
+              <div className="p-4">
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">{activeMeta.icon}</span>
                   <h3 className="text-base font-semibold">{activeMeta.label}</h3>
@@ -138,8 +138,8 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
                 <p className="mt-2 text-sm text-muted-foreground">{activeMeta.description}</p>
               </div>
 
-              <div className="border-t p-5">
-                <div className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="border-t p-4">
+                <div className="mb-2 text-xs text-muted-foreground">
                   Пример
                 </div>
                 <BlockField block={sampleBlock(activeMeta.type)} captionText="Ваш вопрос" />
