@@ -250,6 +250,22 @@ describe('prefillSnippet', () => {
 })
 
 describe('embedCode', () => {
+  it('фрейм назван формой, а не словом «Форма»', () => {
+    expect(embedCode({ ...base, title: 'Заявка на монтаж' })).toContain('title="Заявка на монтаж"')
+    // Кавычка в названии иначе оборвала бы атрибут и превратила остаток в мусор.
+    expect(embedCode({ ...base, title: 'Опрос "Лето"' })).toContain(
+      'title="Опрос &quot;Лето&quot;"',
+    )
+    // Название без кабинета (тесты, будущие вызовы) — запасное слово.
+    expect(embedCode(base)).toContain('title="Форма"')
+  })
+
+  // Старые атрибуты HTML4: их берут движки, которые до сих пор рисуют фрейму рамку
+  // и внутренние поля, а `style` на таком сайте может быть отброшен политикой.
+  it('у фрейма сняты рамка и внутренние поля старыми атрибутами', () => {
+    expect(embedCode(base)).toContain('frameborder="0" marginheight="0" marginwidth="0"')
+  })
+
   it('блок — фрейм с адресом в data-trillix-src плюс тег загрузчика', () => {
     const code = embedCode(base)
     expect(code).toContain('<iframe data-trillix-src="https://f.trillix.ru/r/opros?embed=block"')

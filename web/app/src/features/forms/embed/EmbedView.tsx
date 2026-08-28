@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Code2, Eye, TriangleAlert, X } from 'lucide-react'
 
-import { type FormDetail } from '../../../entities/form'
+import { displayFormTitle, type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
@@ -75,6 +75,7 @@ export function EmbedView({
     baseUrl,
     slug: form.slug,
     mode,
+    title: displayFormTitle(form.title),
     label: settings.label,
     position: settings.position,
     transparent: settings.transparent,
@@ -199,9 +200,23 @@ export function EmbedView({
             </section>
           </aside>
 
-          <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">
+          {/* ПОЛОТНО КОДА ТЁМНОЕ (решение владельца 2026-08-28) и занимает ту же
+              колонку, что содержимое макета: 130 по бокам, 20 сверху — те же числа,
+              что у `.wrap` в MockSite. Экран остаётся одним и тем же местом при
+              переключении тумблера «Получить код»: меняется поверхность, а не
+              раскладка, и глазу не приходится искать колонку заново. Тёмное — чтобы
+              код читался чужой площадкой, а не ещё одной карточкой кабинета
+              (`--code`, своя пара токенов: `--utility` в тёмной теме
+              переворачивается). */}
+          <main
+            className={
+              showCode
+                ? 'min-w-0 flex-1 overflow-y-auto bg-code text-code-foreground'
+                : 'min-w-0 flex-1 overflow-y-auto bg-muted/30'
+            }
+          >
             {showCode ? (
-              <div className="mx-auto max-w-3xl p-6">
+              <div className="px-[130px] py-5">
                 <CodePanel form={form} opts={opts} snippet={snippet} />
               </div>
             ) : (

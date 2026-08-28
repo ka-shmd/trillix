@@ -56,17 +56,17 @@ export function CodePanel({
     <div className="space-y-8">
       <section>
         <h2 className="text-base font-medium">Код для вставки</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{PASTE[opts.mode].what}</p>
+        <p className="mt-1 text-sm text-code-muted">{PASTE[opts.mode].what}</p>
         <Textarea
           readOnly
           aria-label="Код для вставки"
           value={snippet}
           rows={opts.mode === 'widget' ? 3 : 4}
-          className="mt-3 font-mono text-xs"
+          className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
           onFocus={(e) => e.currentTarget.select()}
         />
         <CopyButton text={snippet} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">{PASTE[opts.mode].where}</p>
+        <p className="mt-3 text-sm text-code-muted">{PASTE[opts.mode].where}</p>
       </section>
 
       {/* ССЫЛКА ТОЛЬКО У БЛОКА (та же граница, что у кнопки на панели, — EmbedView):
@@ -77,7 +77,7 @@ export function CodePanel({
       {opts.mode === 'block' && (
         <section>
           <h2 className="text-base font-medium">Ссылка для вставки</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-code-muted">
             Для редакторов, которые сами делают фрейм по адресу, — Notion, Ghost, Canva.
           </p>
           <Textarea
@@ -85,11 +85,11 @@ export function CodePanel({
             aria-label="Ссылка для вставки"
             value={frameUrl(opts)}
             rows={2}
-            className="mt-3 font-mono text-xs"
+            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
             onFocus={(e) => e.currentTarget.select()}
           />
           <CopyButton text={frameUrl(opts)} className="mt-2" />
-          <p className="mt-3 text-sm text-muted-foreground">
+          <p className="mt-3 text-sm text-code-muted">
             Высота у такой вставки фиксированная. Чтобы она подстраивалась под длину формы, добавьте
             на страницу ещё и тег загрузчика — он найдёт фрейм сам.
           </p>
@@ -98,7 +98,7 @@ export function CodePanel({
             aria-label="Тег загрузчика"
             value={loaderTag(opts.baseUrl)}
             rows={2}
-            className="mt-3 font-mono text-xs"
+            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
             onFocus={(e) => e.currentTarget.select()}
           />
           <CopyButton text={loaderTag(opts.baseUrl)} className="mt-2" />
@@ -108,7 +108,7 @@ export function CodePanel({
       {opts.mode !== 'widget' && (
         <section>
           <h2 className="text-base font-medium">Без скрипта</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-code-muted">
             {opts.mode === 'page'
               ? 'Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Форма так же накрывает страницу, но прокрутка под ней не запирается: увести колесом на содержимое сайта посетитель сможет.'
               : 'Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Высота у него остаётся фиксированной: подстраивать её под длину формы умеет только загрузчик.'}
@@ -118,7 +118,7 @@ export function CodePanel({
             aria-label="Код без скрипта"
             value={iframeSnippet(opts)}
             rows={3}
-            className="mt-3 font-mono text-xs"
+            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
             onFocus={(e) => e.currentTarget.select()}
           />
           <CopyButton text={iframeSnippet(opts)} className="mt-2" />
@@ -127,7 +127,7 @@ export function CodePanel({
 
       <section>
         <h2 className="text-base font-medium">Из кода приложения</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-code-muted">
           Загрузчик заводит <code className="font-mono text-xs">window.Trillix</code> с методами{' '}
           <code className="font-mono text-xs">mount</code>,{' '}
           <code className="font-mono text-xs">open</code> и{' '}
@@ -141,11 +141,11 @@ export function CodePanel({
           aria-label="Вызов из кода"
           value={prefillSnippet(opts, fields)}
           rows={Math.min(4 + fields.length, 14)}
-          className="mt-3 font-mono text-xs"
+          className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
           onFocus={(e) => e.currentTarget.select()}
         />
         <CopyButton text={prefillSnippet(opts, fields)} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
+        <p className="mt-3 text-sm text-code-muted">
           Предзаполнение подставляет значения в вопросы, которые вы добавили сами, — новых полей оно
           не создаёт. Ключ — идентификатор вопроса.{' '}
           <strong className="font-medium">Если удалить вопрос и создать заново</strong>, ключ
@@ -153,7 +153,7 @@ export function CodePanel({
           пересоздавайте. Ключи взяты из черновика: по только что добавленному вопросу
           предзаполнение заработает после публикации формы, а до неё будет игнорироваться.
         </p>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-sm text-code-muted">
           Вопросы с несколькими вариантами ответа в списке не появляются: их ответ — набор
           вариантов, а не строка, и предзаполнить его нечем. Значения приходят из браузера, поэтому
           подставленная почта — это «что передал сайт», а не подтверждённый адрес.

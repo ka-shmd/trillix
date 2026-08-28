@@ -52,6 +52,12 @@ export interface SnippetOptions {
   baseUrl: string
   slug: string
   mode: EmbedMode
+  /**
+   * Название формы — оно же `title` фрейма: его читает скринридер и показывает
+   * браузер вместо не загрузившегося фрейма. Безымянная форма даёт «Форма»
+   * (`displayFormTitle`), поэтому пустым это поле в кабинете не бывает.
+   */
+  title?: string
   /** Надпись на кнопке виджета: вводит владелец формы, поэтому экранируется. */
   label?: string
   position?: WidgetPosition
@@ -214,12 +220,33 @@ function frameTag(opts: SnippetOptions): string {
   if (opts.mode === 'page') {
     attrs.push('style="position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483000"')
   } else {
-    attrs.push(`width="100%" height="${opts.height ?? DEFAULT_BLOCK_HEIGHT}" frameborder="0"`)
+    // frameborder и margin* — атрибуты из HTML4, которых нет в современном
+    // стандарте, и стоят они здесь не по недосмотру: рамку и внутренние поля фрейма
+    // старые движки (в том числе встроенные браузеры мессенджеров) до сих пор берут
+    // оттуда, а `style` на таком сайте может быть отброшен политикой. Цена — три
+    // атрибута; выгода — блок без белой рамки и без отступа в 10 пикселей у тех, у
+    // кого он иначе появится. Тот же набор в сниппете Tally.
+    attrs.push(
+      `width="100%" height="${opts.height ?? DEFAULT_BLOCK_HEIGHT}" frameborder="0" marginheight="0" marginwidth="0"`,
+    )
     // Пишется только выключение: умолчание загрузчика — «высота следует за
     // содержимым», и вставки без атрибута обязаны вести себя как раньше.
     if (opts.dynamicHeight === false) attrs.push('data-dynamic-height="0"')
   }
-  return `<iframe ${attrs.join(' ')} title="Форма"></iframe>`
+  return `<iframe ${attrs.join(' ')} title="${escapeAttr(frameTitle(opts))}"></iframe>`
+}
+
+/**
+ * frameTitle — что стоит в `title` фрейма: НАЗВАНИЕ ФОРМЫ, а не слово «Форма».
+ *
+ * Атрибут читает скринридер и показывает браузер вместо не загрузившегося фрейма, а
+ * на чужой странице вставок может быть несколько — «Форма», «Форма», «Форма» не
+ * различает их никак. Кабинет всегда передаёт непустую строку (`displayFormTitle`
+ * подставляет «Форма» безымянной), но генератор зовут и из тестов — отсюда запасное
+ * значение здесь.
+ */
+function frameTitle(opts: SnippetOptions): string {
+  return opts.title !== undefined && opts.title.trim() !== '' ? opts.title : 'Форма'
 }
 
 /**
@@ -257,7 +284,7 @@ export function iframeSnippet(opts: SnippetOptions): string {
       : 'border:0'
   const size =
     opts.mode === 'page' ? '' : ` width="100%" height="${opts.height ?? PLAIN_IFRAME_HEIGHT}"`
-  return `<iframe src="${escapeAttr(src)}" title="Форма"${size} style="${style}"></iframe>`
+  return `<iframe src="${escapeAttr(src)}" title="${escapeAttr(frameTitle(opts))}"${size} style="${style}"></iframe>`
 }
 
 /** Одно предзаполняемое поле: id блока и подпись, которой вопрос назван в форме. */

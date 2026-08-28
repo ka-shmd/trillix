@@ -95,14 +95,16 @@ test('форма живёт блоком и виджетом на посторо
   )
   await host.goto(HOST_PAGE)
 
-  const frame = host.frameLocator('iframe[title="Форма"]')
+  // Фрейм блока назван САМОЙ ФОРМОЙ (её название уезжает в title сниппета) — в
+  // отличие от фрейма виджета ниже, который строит загрузчик и называет «Форма».
+  const frame = host.frameLocator(`iframe[title="${formTitle}"]`)
   const field = frame.getByLabel(Q1)
   // Видимое поле внутри фрейма и есть доказательство, что заголовки ослаблены: при
   // прежних SAMEORIGIN/'self' здесь был бы пустой прямоугольник.
   await expect(field).toBeVisible()
 
   // 2. Авторесайз: фрейм перестал быть стартовой высотой и подстроился под форму.
-  const frameEl = host.locator('iframe[title="Форма"]')
+  const frameEl = host.locator(`iframe[title="${formTitle}"]`)
   await expect
     .poll(async () => (await frameEl.boundingBox())?.height ?? 0, { timeout: 10_000 })
     .not.toBe(520)
