@@ -50,7 +50,7 @@ export function CaptionChip({
         onClick={onAddCaption}
         className="pointer-events-auto flex items-center gap-1.5 whitespace-nowrap rounded hover:text-foreground"
       >
-        <kbd className="rounded border border-border bg-muted px-1 py-px font-sans text-[11px] leading-4 text-foreground/70">
+        <kbd className="rounded border border-border bg-muted px-1 py-px font-sans text-xs leading-4 text-foreground/70">
           {formatLabel(item.label)}
         </kbd>
         {item.short ?? item.hint}

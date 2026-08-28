@@ -31,6 +31,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -204,9 +205,9 @@ export function DesignDrawer({
           <SheetDescription>Как форма выглядит у респондента.</SheetDescription>
         </SheetHeader>
 
-        <div className="grid gap-5 px-4 pb-10">
+        <div className="grid gap-6 px-4 pb-6">
           {!canCustomize && (
-            <p className="text-muted-foreground bg-muted/50 flex gap-2 rounded-md p-3 text-sm">
+            <p className="text-muted-foreground bg-muted/50 flex gap-2 rounded-md p-4 text-sm">
               <Lock className="mt-0.5 size-4 shrink-0" />
               <span>
                 Своё оформление — на платном тарифе. Настроить и посмотреть можно уже сейчас,
@@ -417,7 +418,7 @@ export function DesignDrawer({
                 maxLength={MAX_CUSTOM_CSS_LEN}
                 spellCheck={false}
                 rows={8}
-                className="font-mono text-xs"
+                className="font-mono text-sm"
                 placeholder={'.my-block .rf-input {\n  border-radius: 0;\n}'}
               />
             </Wide>
@@ -507,8 +508,8 @@ function Group({
   locked?: boolean
 }) {
   return (
-    <section className="grid grid-cols-2 gap-x-3 gap-y-3">
-      <h3 className="col-span-2 flex items-center gap-1.5 text-sm font-medium">
+    <section className="grid grid-cols-2 gap-x-4 gap-y-4">
+      <h3 className="col-span-2 flex items-center gap-2 text-base font-semibold">
         {title}
         {locked && <ProTag />}
       </h3>
@@ -529,7 +530,7 @@ function Wide({ children }: { children: ReactNode }) {
 function Field({ label, id, children }: { label: string; id: string; children: ReactNode }) {
   return (
     <div className="grid gap-1">
-      <Label htmlFor={id} className="text-muted-foreground text-xs font-normal">
+      <Label htmlFor={id}>
         {label}
       </Label>
       {children}
@@ -587,13 +588,10 @@ function ColorRow({
 }) {
   return (
     <div className="grid gap-1">
-      <span className="text-muted-foreground text-xs">{title}</span>
+      <span className="text-sm font-semibold">{title}</span>
       <Popover>
         <PopoverTrigger asChild>
-          <button
-            type="button"
-            className="border-input hover:bg-accent flex h-8 items-center gap-2 rounded-md border px-2 text-sm"
-          >
+          <Button variant="outline" size="sm" className="w-full justify-start px-2 font-normal">
             <span
               className="size-4 shrink-0 rounded-sm border"
               // Незаданный цвет показывается шашечками, а не белым квадратом: белый
@@ -610,7 +608,7 @@ function ColorRow({
               }
             />
             <span className="truncate">{value ?? 'по теме'}</span>
-          </button>
+          </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="w-64">
           <ColorPicker

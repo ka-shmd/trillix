@@ -20,6 +20,11 @@ import {
 // SettingRow — подпись слева, контрол справа. Подпись — настоящий <label> только у
 // одиночного контрола (htmlFor); у пары (диапазон шкалы: «от» и «до») подписи свои у
 // каждого select'а, поэтому строка ограничивается текстом-заголовком.
+//
+// `px-3` зеркалит отступ пункта cmdk (`p-1` у группы + `px-2` у пункта = 12px):
+// строки настроек стоят в том же поповере, что и пункты меню, и при другом значении
+// подписи разъезжаются с ними по левому краю. Значение ритма §5 здесь ни при чём —
+// это выравнивание по вендоренному компоненту.
 export function SettingRow({
   label,
   htmlFor,
@@ -30,7 +35,7 @@ export function SettingRow({
   children: ReactNode
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+    <div className="flex items-center justify-between gap-4 px-3 py-2 text-sm">
       {htmlFor ? (
         <label htmlFor={htmlFor} className="text-muted-foreground shrink-0">
           {label}
@@ -38,7 +43,7 @@ export function SettingRow({
       ) : (
         <span className="text-muted-foreground shrink-0">{label}</span>
       )}
-      <div className="flex min-w-0 items-center gap-1.5">{children}</div>
+      <div className="flex min-w-0 items-center gap-2">{children}</div>
     </div>
   )
 }

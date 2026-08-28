@@ -1844,7 +1844,7 @@ function StepButtonEditor({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72">
-          <Label htmlFor={fieldId} className="text-sm font-medium">
+          <Label htmlFor={fieldId}>
             {fieldLabel}
           </Label>
           <Input
@@ -1853,9 +1853,9 @@ function StepButtonEditor({
             placeholder={label}
             maxLength={MAX_SUBMIT_LABEL_LEN}
             onChange={(e) => onChange(e.target.value)}
-            className="mt-1.5"
+            className="mt-2"
           />
-          <p className="mt-1.5 text-xs text-muted-foreground">{hint}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{hint}</p>
         </PopoverContent>
       </Popover>
     </span>
