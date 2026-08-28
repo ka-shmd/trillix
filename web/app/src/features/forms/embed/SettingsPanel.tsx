@@ -96,14 +96,27 @@ function BlockSettings({ settings, onChange }: ModeProps) {
     <>
       <Group>
         <Field id="embed-height" label="Высота">
-          <Input
-            id="embed-height"
-            type="number"
-            min={200}
-            max={2000}
-            value={settings.height}
-            onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
-          />
+          {/* Единица измерения — В ПОЛЕ, а не в подписи: «Высота» отвечает на «что»,
+              «px» на «в чём», и вместе они читаются одной строкой. Стрелки счётчика
+              скрыты, потому что встают ровно туда же — к правому краю поля; набор
+              числа они и так не ускоряют.
+              Кегль поднят ТЕМ ЖЕ вариантом, каким задан у компонента (`md:text-sm`):
+              плоский `text-base` его не пересилил бы. */}
+          <div className="relative">
+            <Input
+              id="embed-height"
+              type="number"
+              inputMode="numeric"
+              min={200}
+              max={2000}
+              value={settings.height}
+              onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
+              className="pr-9 [appearance:textfield] md:text-base [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+              px
+            </span>
+          </div>
         </Field>
         <Toggle
           id="embed-dynamic-height"
