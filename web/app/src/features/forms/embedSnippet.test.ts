@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEFAULT_BLOCK_HEIGHT,
+  DEFAULT_CENTER_WIDGET_WIDTH,
   DEFAULT_WIDGET_WIDTH,
   embedCode,
   frameUrl,
@@ -136,6 +137,22 @@ describe('scriptSnippet: настройки виджета', () => {
     expect(tuned).toContain('data-position="top-left"')
     expect(tuned).toContain('data-width="420"')
     expect(tuned).toContain('data-overlay="none"')
+  })
+
+  // Умолчание ширины у угла и у центра РАЗНОЕ (`widgetDefaults`), и сравнивается
+  // именно со своим: запиши мы `data-width="640"` у центра, сниппет нёс бы атрибут,
+  // повторяющий умолчание загрузчика, а 376 у центра, наоборот, молча превратило бы
+  // окно в панель шириной с угол.
+  it('ширина сравнивается с умолчанием СВОЕГО расположения', () => {
+    const centered = scriptSnippet({
+      ...widget,
+      position: 'center',
+      width: DEFAULT_CENTER_WIDGET_WIDTH,
+    })
+    expect(centered).toContain('data-position="center"')
+    expect(centered).not.toContain('data-width')
+    const narrow = scriptSnippet({ ...widget, position: 'center', width: DEFAULT_WIDGET_WIDTH })
+    expect(narrow).toContain(`data-width="${DEFAULT_WIDGET_WIDTH}"`)
   })
 
   // Триггер и его число едут парой: «через паузу» без числа означало бы «через

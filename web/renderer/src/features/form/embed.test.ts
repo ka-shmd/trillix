@@ -8,7 +8,7 @@ import {
   type HostMessage,
 } from './embed'
 
-const plain = { hideTitle: false, alignLeft: false, preview: false }
+const plain = { hideTitle: false, alignLeft: false, selfScroll: false, preview: false }
 
 describe('readEmbed', () => {
   it('читает режим и прозрачность', () => {
@@ -43,6 +43,14 @@ describe('readEmbed', () => {
     expect(off?.hideTitle).toBe(false)
     expect(off?.alignLeft).toBe(false)
     expect(off?.preview).toBe(false)
+  })
+
+  // Панель виджета прокручивает форму внутри фрейма и говорит об этом параметром: от
+  // него зависит и прижатый к низу бейдж, и переход к началу нового шага.
+  it('scroll=frame — фрейм прокручивает себя сам', () => {
+    expect(readEmbed('?embed=widget&scroll=frame')?.selfScroll).toBe(true)
+    expect(readEmbed('?embed=widget')?.selfScroll).toBe(false)
+    expect(readEmbed('?embed=widget&scroll=1')?.selfScroll).toBe(false)
   })
 
   it('без параметра — обычная страница', () => {

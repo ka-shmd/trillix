@@ -14,6 +14,7 @@ if (embed) {
   document.documentElement.dataset.embed = embed.mode
   if (embed.transparent) document.documentElement.dataset.embedBg = 'transparent'
   if (embed.alignLeft) document.documentElement.dataset.embedAlign = 'left'
+  if (embed.selfScroll) document.documentElement.dataset.embedScroll = 'frame'
 }
 
 // Мост заводится, только если мы действительно во фрейме. Вид — по параметру

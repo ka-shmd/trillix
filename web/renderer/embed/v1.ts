@@ -28,13 +28,14 @@ import {
   DEFAULT_LABEL,
   DEFAULT_OPEN_DELAY,
   DEFAULT_OPEN_SCROLL,
-  DEFAULT_WIDTH,
+  defaultWidth,
   frameAdoption,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
   readFrameMessage,
   scriptOrigin,
+  selfScrollWidget,
   type MountOptions,
 } from './api'
 
@@ -79,7 +80,14 @@ function handleOf(entry: Mounted, close: () => void): EmbedHandle {
   }
 }
 
-function createFrame(opts: MountOptions): HTMLIFrameElement {
+/**
+ * createFrame — фрейм формы. `innerScroll` — прокручивает ли фрейм себя сам.
+ *
+ * Флаг нужен ровно панели виджета (`selfScrollWidget`): там форма прокручивается
+ * ВНУТРИ фрейма, а `scrolling="no"` отнял бы у неё эту возможность вовсе — длинная
+ * форма осталась бы обрезанной по нижнему краю панели.
+ */
+function createFrame(opts: MountOptions, innerScroll = false): HTMLIFrameElement {
   const frame = document.createElement('iframe')
   frame.src = frameSrc(ORIGIN, opts, window.location.search)
   // Название обязательно: без него скринридер объявляет фрейм безымянным.
@@ -97,7 +105,7 @@ function createFrame(opts: MountOptions): HTMLIFrameElement {
     // Скролл внутри фрейма запрещаем только там, где высоту ведёт содержимое. С
     // выключенным `data-dynamic-height` фрейм остаётся заданного роста, и прокрутка
     // формы обязана остаться — иначе длинная форма просто обрезается.
-    if (opts.dynamicHeight !== false) frame.scrolling = 'no'
+    if (opts.dynamicHeight !== false && !innerScroll) frame.scrolling = 'no'
   }
   return frame
 }
@@ -274,6 +282,14 @@ function closeWidget() {
 function buildWidget(opts: MountOptions): Mounted {
   const corner = opts.position ?? 'bottom-right'
   const dim = opts.overlay !== false
+  // ПАНЕЛЬ В УГЛУ ПРОКРУЧИВАЕТ ФОРМУ ВНУТРИ ФРЕЙМА, окно по центру — снаружи собой
+  // (решение владельца 2026-08-28, `selfScrollWidget`). Разница нужна бейджу
+  // площадки: он прижат к низу панели, а низ у фрейма есть только тогда, когда фрейм
+  // перестал расти вслед за содержимым. Здесь из этого следуют три строки — колонка
+  // flex, обрезка вместо прокрутки и `min-height: 0` у фрейма, — и каждая обязательна:
+  // без первых двух панель прокручивалась бы дважды, без третьей фрейм не ужался бы
+  // под потолок панели (у заменяемого элемента автоминимум равен его высоте).
+  const pinned = selfScrollWidget(opts)
 
   const overlay = document.createElement('div')
   overlay.style.position = 'fixed'
@@ -296,7 +312,11 @@ function buildWidget(opts: MountOptions): Mounted {
   dialog.style.background = '#ffffff'
   dialog.style.borderRadius = '12px'
   dialog.style.width = '100%'
-  dialog.style.overflowY = 'auto'
+  dialog.style.overflowY = pinned ? 'hidden' : 'auto'
+  if (pinned) {
+    dialog.style.display = 'flex'
+    dialog.style.flexDirection = 'column'
+  }
   dialog.style.boxShadow = '0 24px 64px rgba(15, 23, 42, 0.35)'
   // Полоса прокрутки панели — тонкая и приглушённая: системная широкая полоса в окне
   // шириной 376 съедает край формы и выглядит как часть чужого сайта, а не наша.
@@ -307,16 +327,16 @@ function buildWidget(opts: MountOptions): Mounted {
   dialog.style.setProperty('scrollbar-width', 'thin')
   dialog.style.setProperty('scrollbar-color', 'rgba(15, 23, 42, 0.25) transparent')
 
-  // КРЕСТИК ЖИВЁТ НА ОБЁРТКЕ, А НЕ ВНУТРИ ПАНЕЛИ, и это не про вёрстку: панель — это
-  // скролл-контейнер длинной формы, и лежащий внутри неё крестик уезжал вверх вместе с
-  // содержимым. Человек, прокрутивший форму до середины, оставался без способа её
-  // закрыть — кроме Esc, о котором он не знает. Обёртка не скроллится, поэтому кнопка
-  // стоит на месте — и только на ней он может выступать за край панели, не попадая под
-  // её `overflow-y: auto`.
+  // КРЕСТИК СТОИТ ВНУТРИ ПАНЕЛИ, В ЕЁ ПРАВОМ ВЕРХНЕМ УГЛУ (решение владельца
+  // 2026-08-28), но живёт по-прежнему НА ОБЁРТКЕ, а не в самой панели, и это не
+  // вёрстка ради вёрстки: панель бывает скролл-контейнером (окно по центру), и
+  // лежащий внутри неё крестик уезжал бы вверх вместе с содержимым — прокрутивший
+  // форму человек остался бы без способа её закрыть, кроме Esc, о котором он не знает.
+  // Обёртка не скроллится никогда, поэтому кнопка стоит на месте в обеих геометриях.
   //
-  // ФОН НЕПРОЗРАЧНЫЙ: кнопка наполовину висит над чужой страницей, наполовину над
-  // формой (часто над обложкой), и полупрозрачная плашка с тёмным глифом на тёмном
-  // фоне просто исчезала. Белый круг с тенью читается на любом из трёх.
+  // ФОН НЕПРОЗРАЧНЫЙ: кнопка лежит над формой, часто над обложкой, и полупрозрачная
+  // плашка с тёмным глифом на тёмном фоне просто исчезала. Белый круг с тенью
+  // читается на любом фоне.
   const close = document.createElement('button')
   close.type = 'button'
   close.setAttribute('aria-label', 'Закрыть форму')
@@ -335,16 +355,19 @@ function buildWidget(opts: MountOptions): Mounted {
   close.style.zIndex = '2'
   close.addEventListener('click', closeWidget)
 
-  // ОБЁРТКА нужна ради крестика: он висит на углу панели, ВЫСТУПАЯ за её край, а у
-  // самой панели `overflow-y: auto` — там его бы срезало. Заодно обёртка не
-  // скроллится, поэтому кнопка стоит на месте, пока длинная форма прокручивается.
-  // Ничего не прячет и задаёт ширину, панель занимает её целиком.
+  // ОБЁРТКА нужна ради крестика: она не скроллится, поэтому кнопка стоит на месте,
+  // пока длинная форма прокручивается. Ничего не прячет и задаёт ширину, панель
+  // занимает её целиком.
   const panel = document.createElement('div')
   panel.style.position = 'relative'
   panel.style.width = '100%'
   panel.style.pointerEvents = 'auto'
 
-  const frame = createFrame(opts)
+  const frame = createFrame(opts, pinned)
+  // Фрейм ужимается до потолка панели, а не растягивает её собой: высота приезжает
+  // сообщением `resize` и остаётся основой flex, поэтому короткая форма по-прежнему
+  // даёт панель по себе, а длинная упирается в потолок и прокручивается внутри.
+  if (pinned) frame.style.minHeight = '0'
   dialog.appendChild(frame)
   panel.appendChild(dialog)
   panel.appendChild(close)
@@ -368,7 +391,9 @@ function buildWidget(opts: MountOptions): Mounted {
     overlay.style.alignItems = full || centered ? 'center' : top ? 'flex-start' : 'flex-end'
     overlay.style.justifyContent = full || centered ? 'center' : left ? 'flex-start' : 'flex-end'
 
-    panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
+    // Умолчание ширины — по расположению: окно по центру шире панели в углу
+    // (`defaultWidth`). Атрибут `data-width` его перебивает, как и раньше.
+    panel.style.maxWidth = full ? 'none' : (opts.width ?? defaultWidth(corner)) + 'px'
     panel.style.height = full ? '100%' : 'auto'
     dialog.style.borderRadius = full ? '0' : '12px'
     // ПАНЕЛЬ НИЖЕ ВЬЮПОРТА, а не во всю его высоту (правка владельца 2026-08-16):
@@ -378,11 +403,11 @@ function buildWidget(opts: MountOptions): Mounted {
     dialog.style.maxHeight = full ? '100dvh' : 'min(680px, calc(100dvh - 48px))'
     dialog.style.minHeight = full ? '100dvh' : '0'
 
-    // На весь экран крестик встаёт внутрь угла: снаружи у формы во весь вьюпорт места
-    // нет — кнопка ушла бы за край экрана.
-    close.style.top = full ? '12px' : '-14px'
-    close.style.left = full ? '12px' : '-14px'
   }
+  // Крестик стоит в одном месте при любой геометрии — внутри правого верхнего угла
+  // панели, — поэтому его положение и не пересчитывается вместе с ней.
+  close.style.top = '12px'
+  close.style.right = '12px'
   place()
   narrow.addEventListener('change', place)
 

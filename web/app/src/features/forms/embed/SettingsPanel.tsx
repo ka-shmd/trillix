@@ -7,9 +7,9 @@ import { ProTag } from '../../../shared/ProTag'
 import { useUpdateBranding } from '../queries'
 import {
   DEFAULT_BLOCK_HEIGHT,
-  DEFAULT_WIDGET_WIDTH,
   OPEN_TRIGGERS,
   WIDGET_POSITIONS,
+  widgetDefaults,
   type EmbedMode,
   type OpenTrigger,
   type WidgetPosition,
@@ -163,6 +163,9 @@ const FIELD_TEXT = 'text-base font-medium md:text-base'
 // Виджет и страница ждут своей очереди редизайна (решение владельца 2026-08-27):
 // набор контролов у них прежний, изменился только каркас вокруг.
 function WidgetSettings({ settings, onChange }: ModeProps) {
+  // Окно по центру — не панель, потерявшая угол: у него своя ширина и своё умолчание
+  // затемнения (`widgetDefaults`). Отсюда и разные подписи с потолком поля ниже.
+  const centered = settings.position === 'center'
   return (
     <>
       <Row>
@@ -212,7 +215,15 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
         <Field id="embed-position" label="Расположение">
           <Select
             value={settings.position}
-            onValueChange={(v) => onChange({ position: v as WidgetPosition })}
+            // Смена расположения приносит СВОИ умолчания вида: иначе окно по центру
+            // открывалось бы шириной панели в углу и без затемнения, то есть тем
+            // видом, от которого его и отличают.
+            onValueChange={(v) =>
+              onChange({
+                position: v as WidgetPosition,
+                ...widgetDefaults(v as WidgetPosition),
+              })
+            }
           >
             <SelectTrigger id="embed-position" className={`w-full ${FIELD_TEXT}`}>
               <SelectValue />
@@ -229,16 +240,20 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
       </Row>
 
       <Row>
-        <Field id="embed-width" label="Ширина панели">
+        <Field id="embed-width" label={centered ? 'Ширина окна' : 'Ширина панели'}>
           <WithUnit unit="px">
             <Input
               id="embed-width"
               type="number"
               inputMode="numeric"
               min={280}
-              max={720}
+              max={centered ? 960 : 720}
               value={settings.width}
-              onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
+              onChange={(e) =>
+                onChange({
+                  width: Number(e.target.value) || widgetDefaults(settings.position).width,
+                })
+              }
               className={`pr-9 ${FIELD_TEXT}`}
             />
           </WithUnit>

@@ -102,6 +102,37 @@ export const DEFAULT_HEIGHT = 520
  */
 export const DEFAULT_WIDTH = 376
 
+/**
+ * Ширина ОКНА ПО ЦЕНТРУ (решение владельца 2026-08-28). Своё число, а не общее с
+ * панелью: в центре экрана колонка в 376 читается панелью, потерявшей свой угол, —
+ * длинные варианты выбора и шкалы ломаются там ровно так же, как в углу, но места
+ * вокруг стоит вся страница.
+ */
+export const DEFAULT_CENTER_WIDTH = 640
+
+/** Умолчание ширины — по расположению: угол и центр это разные размеры одной вставки. */
+export function defaultWidth(position: WidgetPosition): number {
+  return position === 'center' ? DEFAULT_CENTER_WIDTH : DEFAULT_WIDTH
+}
+
+/**
+ * selfScrollWidget — прокручивает ли ФОРМА СЕБЯ САМА внутри фрейма.
+ *
+ * Верно у панели в углу и неверно у окна по центру (решение владельца 2026-08-28), и
+ * разница эта не про скролл, а про БЕЙДЖ ПЛОЩАДКИ: прижать его к низу панели можно
+ * только там, где у фрейма есть постоянный низ. Пока фрейм растёт по содержимому, а
+ * прокручивает его панель снаружи, «низ фрейма» — это конец длинной формы, и бейдж
+ * уезжает вместе с ним.
+ *
+ * Обе половины решения читают одну функцию: загрузчик по ней строит геометрию панели,
+ * `frameSrc` — кладёт в адрес `scroll=frame`, по которому рендерер прижимает бейдж.
+ * Разъедься они, панель прокручивалась бы внутри, а бейдж стоял бы в ряду с кнопкой —
+ * то есть ровно посередине двух видов.
+ */
+export function selfScrollWidget(opts: MountOptions): boolean {
+  return opts.mode === 'widget' && (opts.position ?? 'bottom-right') !== 'center'
+}
+
 // Метки источника — закрытый список, тот же, что у рендерера и сервера. Произвольные
 // параметры чужой страницы в аналитику не уезжают.
 const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term']
@@ -139,6 +170,9 @@ export function frameSrc(origin: string, opts: MountOptions, hostSearch: string)
   if (opts.hideTitle) params.set('hideTitle', '1')
   if (opts.alignLeft) params.set('align', 'left')
   if (opts.preview) params.set('preview', '1')
+  // Кто кого прокручивает — знание фрейма, а не только загрузчика: от него зависят и
+  // прижатый к низу бейдж, и переход к началу шага (`selfScrollWidget`).
+  if (selfScrollWidget(opts)) params.set('scroll', 'frame')
   const host = new URLSearchParams(hostSearch)
   for (const key of UTM_KEYS) {
     const value = host.get(key)
@@ -180,6 +214,9 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   if (form === null || form === '') return null
   const label = el.getAttribute('data-label')
   const trigger = el.getAttribute('data-open')
+  // Расположение читается ДО ширины: умолчание ширины у угла и у центра разное
+  // (`defaultWidth`), и порядок этих двух строк — единственное, что их связывает.
+  const position = readPosition(el.getAttribute('data-position'))
   return {
     form,
     mode: widget ? 'widget' : el.getAttribute('data-mode') === 'page' ? 'page' : 'block',
@@ -194,8 +231,8 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
     alignLeft: el.getAttribute('data-align') === 'left',
     preview: el.getAttribute('data-preview') === '1',
     label: label !== null && label !== '' ? label : DEFAULT_LABEL,
-    position: readPosition(el.getAttribute('data-position')),
-    width: size(el.getAttribute('data-width'), DEFAULT_WIDTH),
+    position,
+    width: size(el.getAttribute('data-width'), defaultWidth(position)),
     overlay: el.getAttribute('data-overlay') !== 'none',
     open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
     openValue: size(el.getAttribute('data-open-value'), 0),

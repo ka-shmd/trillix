@@ -5,10 +5,10 @@ import { displayFormTitle, type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
-  DEFAULT_WIDGET_WIDTH,
   embedCode,
   frameUrl,
   previewCode,
+  widgetDefaults,
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
@@ -57,10 +57,10 @@ export function EmbedView({
     alignLeft: true,
     height: DEFAULT_BLOCK_HEIGHT,
     dynamicHeight: true,
-    width: DEFAULT_WIDGET_WIDTH,
-    // Затемнения по умолчанию НЕТ: панель в углу — продолжение кнопки, а не перехват
-    // страницы, и потемневший сайт вокруг неё противоречит самому жесту.
-    overlay: false,
+    // Ширина и затемнение — умолчания ПРАВОГО НИЖНЕГО УГЛА, с которого экран
+    // начинается; смена расположения приносит свои (`widgetDefaults`), и вписаны они
+    // там, а не здесь: два места с одними и теми же числами разъезжаются молча.
+    ...widgetDefaults('bottom-right'),
     open: 'click',
     openValue: DEFAULT_OPEN_DELAY,
     hideOnSubmit: false,
