@@ -11,8 +11,8 @@ import {
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
+import { highlight, type TokenKind } from './highlight'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 
 // ТЕКСТЫ ПЕРВОГО РАЗДЕЛА — СВОИ НА КАЖДЫЙ ВИД. Общее «вставьте этот HTML на
 // страницу» верно для всех трёх и не помогает ни одному: у блока речь о месте в
@@ -57,15 +57,7 @@ export function CodePanel({
       <section>
         <h2 className="text-base font-medium">Код для вставки</h2>
         <p className="mt-1 text-sm text-code-muted">{PASTE[opts.mode].what}</p>
-        <Textarea
-          readOnly
-          aria-label="Код для вставки"
-          value={snippet}
-          rows={opts.mode === 'widget' ? 3 : 4}
-          className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={snippet} className="mt-2" />
+        <CodeBlock label="Код для вставки" code={snippet} />
         <p className="mt-3 text-sm text-code-muted">{PASTE[opts.mode].where}</p>
       </section>
 
@@ -91,37 +83,13 @@ export function CodePanel({
             фрейм готовым тегом — для сайта, где сторонние скрипты запрещены строгой политикой
             безопасности.
           </p>
-          <Textarea
-            readOnly
-            aria-label="Ссылка для вставки"
-            value={frameUrl(opts)}
-            rows={2}
-            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <CopyButton text={frameUrl(opts)} className="mt-2" />
-          <Textarea
-            readOnly
-            aria-label="Код без скрипта"
-            value={iframeSnippet(opts)}
-            rows={3}
-            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <CopyButton text={iframeSnippet(opts)} className="mt-2" />
+          <CodeBlock label="Ссылка для вставки" code={frameUrl(opts)} />
+          <CodeBlock label="Код без скрипта" code={iframeSnippet(opts)} />
           <p className="mt-3 text-sm text-code-muted">
             Высота у обеих вставок фиксированная. Чтобы она подстраивалась под длину формы, добавьте
             на страницу ещё и тег загрузчика — он найдёт фрейм сам.
           </p>
-          <Textarea
-            readOnly
-            aria-label="Тег загрузчика"
-            value={loaderTag(opts.baseUrl)}
-            rows={2}
-            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <CopyButton text={loaderTag(opts.baseUrl)} className="mt-2" />
+          <CodeBlock label="Тег загрузчика" code={loaderTag(opts.baseUrl)} />
         </section>
       )}
 
@@ -133,15 +101,7 @@ export function CodePanel({
             Форма так же накрывает страницу, но прокрутка под ней не запирается: увести колесом на
             содержимое сайта посетитель сможет.
           </p>
-          <Textarea
-            readOnly
-            aria-label="Код без скрипта"
-            value={iframeSnippet(opts)}
-            rows={3}
-            className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <CopyButton text={iframeSnippet(opts)} className="mt-2" />
+          <CodeBlock label="Код без скрипта" code={iframeSnippet(opts)} />
         </section>
       )}
 
@@ -156,15 +116,7 @@ export function CodePanel({
             ? 'Это нужно, когда форма открывается по событию приложения — после онбординга, по таймеру внутри SPA, — а не по клику на кнопку в разметке.'
             : 'Это нужно, когда контейнер под форму появляется уже после загрузки страницы или когда значения полей известны приложению.'}
         </p>
-        <Textarea
-          readOnly
-          aria-label="Вызов из кода"
-          value={prefillSnippet(opts, fields)}
-          rows={Math.min(4 + fields.length, 14)}
-          className="mt-3 border-code-border bg-code-foreground/5 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={prefillSnippet(opts, fields)} className="mt-2" />
+        <CodeBlock label="Вызов из кода" code={prefillSnippet(opts, fields)} />
         <p className="mt-3 text-sm text-code-muted">
           Предзаполнение подставляет значения в вопросы, которые вы добавили сами, — новых полей оно
           не создаёт. Ключ — идентификатор вопроса.{' '}
@@ -183,6 +135,68 @@ export function CodePanel({
   )
 }
 
+/**
+ * CodeBlock — код на экране вставки: `<pre>` с подсветкой и кнопкой копирования в
+ * правом верхнем углу.
+ *
+ * ПОЛЕ ВВОДА ВМЕСТО КОДА БЫЛО ЛОЖЬЮ ФОРМЫ: `<textarea readonly>` выглядит местом,
+ * куда пишут, и предлагает каретку там, где менять нечего. Заодно у него нужно было
+ * угадывать `rows` — число строк заранее не известно (сниппет виджета короче
+ * блочного, вызов из кода растёт со списком вопросов), и промах давал либо пустоту
+ * под кодом, либо внутренний скролл в три строки.
+ *
+ * СТРОКИ ПЕРЕНОСЯТСЯ, А НЕ УЕЗЖАЮТ В ГОРИЗОНТАЛЬНЫЙ СКРОЛЛ (`break-all`): сниппет —
+ * одна длинная строка с адресом, и спрятать её половину за краем значит спрятать
+ * ровно то, что автор пришёл проверить. Разрыв в любом месте адрес не портит:
+ * копируется он кнопкой, а не выделением.
+ *
+ * КНОПКА ВНУТРИ БЛОКА, А НЕ ПОД НИМ (решение владельца 2026-08-28): у блоков разной
+ * высоты кнопка снизу оказывается каждый раз в новом месте, а угол — один и тот же
+ * для всех. Отсюда и отступ справа у самого кода: без него длинная строка подтекала
+ * бы под кнопку.
+ *
+ * Подсветка — своя (`highlight.ts`), токены превращаются в `<span>`; строкой разметка
+ * не собирается, `dangerouslySetInnerHTML` запрещён во всём репозитории (инвариант 4).
+ */
+function CodeBlock({ label, code }: { label: string; code: string }) {
+  return (
+    <div className="relative mt-3">
+      {/* tabIndex — чтобы до блока доходила клавиатура: aria-label называет его там,
+          где заголовок раздела отделён от кода абзацем. */}
+      <pre
+        tabIndex={0}
+        aria-label={label}
+        className="rounded-md border border-code-border bg-code-foreground/5 py-3 pr-14 pl-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"
+      >
+        <code>
+          {highlight(code).map((token, i) => (
+            <span key={i} className={TOKEN_COLORS[token.kind]}>
+              {token.text}
+            </span>
+          ))}
+        </code>
+      </pre>
+      <CopyButton
+        text={code}
+        label={`Скопировать: ${label.toLowerCase()}`}
+        iconOnly
+        variant="ghost"
+        className="absolute top-1.5 right-1.5 text-code-muted hover:bg-code-foreground/10 hover:text-code-foreground"
+      />
+    </div>
+  )
+}
+
+// Цвет по виду токена. Пустая строка у `plain` — чернила полотна, а не «цвет по
+// умолчанию»: отдельный класс на каждый знак препинания раздул бы разметку вдвое.
+const TOKEN_COLORS: Record<TokenKind, string> = {
+  tag: 'text-code-tag',
+  attr: 'text-code-attr',
+  string: 'text-code-string',
+  comment: 'text-code-muted',
+  plain: '',
+}
+
 // Кнопка «скопировать» — одна на экран: куски кода здесь и ссылка встраивания в
 // панели слева (у блока). Подпись и вид приходят пропами, ответ на нажатие — общий: два
 // одинаковых буфера с разным поведением после клика читались бы как две разные
@@ -193,19 +207,28 @@ export function CopyButton({
   label = 'Копировать',
   className,
   variant,
-  size = 'sm',
+  size,
+  iconOnly = false,
 }: {
   text: string
   label?: string
   className?: string
   variant?: React.ComponentProps<typeof Button>['variant']
   size?: React.ComponentProps<typeof Button>['size']
+  /**
+   * Только значок: внутри блока кода, где подпись отняла бы у кода треть строки.
+   * Подпись при этом не исчезает — уезжает в `aria-label` и всплывающую подсказку
+   * браузера, иначе кнопка осталась бы безымянной для скринридера.
+   */
+  iconOnly?: boolean
 }) {
   const [copied, setCopied] = useState(false)
   return (
     <Button
       variant={variant}
-      size={size}
+      size={size ?? (iconOnly ? 'icon-sm' : 'sm')}
+      aria-label={iconOnly ? label : undefined}
+      title={iconOnly ? label : undefined}
       className={className}
       onClick={() => {
         navigator.clipboard
@@ -221,11 +244,11 @@ export function CopyButton({
     >
       {copied ? (
         <>
-          <Check className="size-4" /> Скопировано
+          <Check className="size-4" /> {iconOnly ? '' : 'Скопировано'}
         </>
       ) : (
         <>
-          <Copy className="size-4" /> {label}
+          <Copy className="size-4" /> {iconOnly ? '' : label}
         </>
       )}
     </Button>

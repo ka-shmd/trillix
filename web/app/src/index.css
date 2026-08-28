@@ -108,6 +108,14 @@
   --code-foreground: oklch(0.96 0.005 80);
   --code-muted: oklch(0.72 0.014 75);
   --code-border: oklch(1 0 0 / 12%);
+  /* Синтаксис — ТРИ цвета, а не палитра редактора: в наших сниппетах различаются тег,
+     имя атрибута и строка, остальное чернила. Комментарий берёт `--code-muted` —
+     заводить ему свой оттенок значило бы завести цвет-двойник. Значения одинаковы в
+     обеих темах: полотно кода тёмное всегда. Контраст на полотне — 8.1:1, 10.9:1,
+     9.7:1 (замер в DESIGN-SYSTEM §6). */
+  --code-tag: oklch(0.74 0.13 250);
+  --code-attr: oklch(0.83 0.11 85);
+  --code-string: oklch(0.78 0.12 150);
   --highlight: oklch(0.55 0.2 300);
   --highlight-foreground: oklch(0.985 0.004 80);
   --highlight-soft: oklch(0.94 0.03 300);
@@ -162,6 +170,9 @@
   --code-foreground: oklch(0.96 0.005 80);
   --code-muted: oklch(0.72 0.014 75);
   --code-border: oklch(1 0 0 / 12%);
+  --code-tag: oklch(0.74 0.13 250);
+  --code-attr: oklch(0.83 0.11 85);
+  --code-string: oklch(0.78 0.12 150);
   --highlight: oklch(0.68 0.16 300);
   --highlight-foreground: oklch(0.19 0.006 70);
   --highlight-soft: oklch(0.32 0.07 300);
@@ -216,6 +227,9 @@
   --color-code-foreground: var(--code-foreground);
   --color-code-muted: var(--code-muted);
   --color-code-border: var(--code-border);
+  --color-code-tag: var(--code-tag);
+  --color-code-attr: var(--code-attr);
+  --color-code-string: var(--code-string);
   --color-highlight: var(--highlight);
   --color-highlight-foreground: var(--highlight-foreground);
   --color-highlight-soft: var(--highlight-soft);

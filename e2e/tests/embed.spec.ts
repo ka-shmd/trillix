@@ -80,7 +80,10 @@ test('форма живёт блоком и виджетом на посторо
   // Код лежит за тумблером «Получить код»: макет вставки и код делят одну область.
   await page.goto(`/forms/${form.slug}/embed`)
   await page.getByRole('button', { name: 'Получить код' }).click()
-  const snippet = await page.getByLabel('Код для вставки').inputValue()
+  // Код лежит в `<pre>`, а не в поле ввода: читаем текст, а не значение. `exact`
+  // обязателен — иначе под подпись подходит и кнопка «Скопировать: код для вставки».
+  const snippet =
+    (await page.getByLabel('Код для вставки', { exact: true }).textContent()) ?? ''
   expect(snippet).toContain('/embed/v1.js')
   // Блок — двухтеговая вставка: фрейм с адресом в data-trillix-src (пустой `src`
   // обязателен, иначе браузер начнёт грузить форму мимо загрузчика) плюс загрузчик.
@@ -125,7 +128,8 @@ test('форма живёт блоком и виджетом на посторо
   // это тумблер, и подпись у него теперь другая).
   await page.getByRole('tab', { name: 'Виджет' }).click()
   await page.getByLabel('Надпись на кнопке').fill('Оставить заявку')
-  const widgetSnippet = await page.getByLabel('Код для вставки').inputValue()
+  const widgetSnippet =
+    (await page.getByLabel('Код для вставки', { exact: true }).textContent()) ?? ''
   expect(widgetSnippet).toContain(`data-trillix-widget="${form.slug}"`)
   expect(widgetSnippet).toContain('data-label="Оставить заявку"')
   const widgetPage = await visitor.newPage()
