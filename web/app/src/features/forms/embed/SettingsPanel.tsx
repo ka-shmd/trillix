@@ -363,7 +363,12 @@ function Group({ children }: { children: ReactNode }) {
 function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor={id}>{label}</Label>
+      {/* Вес обычный, а не 600 из шкалы: рядом стоят подписи тумблеров, у них он тоже
+          обычный, и полужирная строка над полем читалась бы заголовком связки — тем
+          самым, который отсюда убрали. */}
+      <Label htmlFor={id} className="font-normal">
+        {label}
+      </Label>
       {children}
     </div>
   )
