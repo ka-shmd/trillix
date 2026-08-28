@@ -49,13 +49,13 @@ export function PreviewOverlay({
   onOpenChange,
   store,
   title,
-  canRemoveBadge,
+  badge,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   store: StoreApi<BuilderStore>
   title: string
-  canRemoveBadge: boolean
+  badge: boolean
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -84,7 +84,7 @@ export function PreviewOverlay({
             документа фрейма — сам фрейм (событие через границу документов не
             всплывает, а курсор автора почти всегда внутри формы). */}
         <PreviewFrame store={store} onEscape={() => onOpenChange(false)}>
-          <PreviewPane title={title} canRemoveBadge={canRemoveBadge} />
+          <PreviewPane title={title} badge={badge} />
         </PreviewFrame>
       </SheetContent>
     </Sheet>

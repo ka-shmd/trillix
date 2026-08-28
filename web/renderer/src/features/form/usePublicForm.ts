@@ -21,8 +21,9 @@ export type FormState =
 // Загрузка опубликованной формы по slug. Без TanStack Query (зона экономии
 // рендерера) — useState + useEffect. Пустой slug не ходит в сеть: сразу notfound.
 //
-// preview — предпросмотр автора из билдера (`?preview=1`): токен не запрашивается
-// вовсе, потому что отправка в этом режиме останавливается до сети.
+// preview — предпросмотр автора (`?preview=1`): токен не запрашивается вовсе, потому
+// что отправка в этом режиме останавливается до сети, а сама форма читается мимо
+// кэша — живые настройки автор обязан видеть сразу (fetchPublicForm).
 export function usePublicForm(slug: string, preview: boolean): FormState {
   // Пустой slug решается на рендере (не ходим в сеть) — без синхронного setState
   // в эффекте. Непустой начинает с loading, эффект догрузит.
@@ -41,7 +42,7 @@ export function usePublicForm(slug: string, preview: boolean): FormState {
     // Отказ ЛЮБОГО из двух — экран ошибки, а не форма без токена: без токена ответ
     // принять нельзя, и честнее сказать это сразу, чем дать человеку заполнить форму
     // и упереться в отказ на кнопке «Отправить».
-    Promise.all([fetchPublicForm(slug), preview ? Promise.resolve(null) : fetchFormToken()])
+    Promise.all([fetchPublicForm(slug, preview), preview ? Promise.resolve(null) : fetchFormToken()])
       .then(([r, token]) => {
         if (!active) return
         // fetchPublicForm уже разложил ответ на ok/closed/notfound — переносим как есть.

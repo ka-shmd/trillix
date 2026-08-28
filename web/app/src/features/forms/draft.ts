@@ -53,6 +53,8 @@ export function newFormDetail(): FormDetail {
     // Сбор незавершённых у новой формы выключен: собирать то, что человек не
     // отправлял, по умолчанию нельзя.
     collectPartial: false,
+    // Бейдж у новой формы стоит — дефолт колонки `forms.branding`.
+    branding: true,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.
     linkPreview: null,
   }

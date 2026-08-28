@@ -1477,7 +1477,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview,
+    f.link_preview, f.branding,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1504,6 +1504,7 @@ type GetFormRow struct {
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
+	Branding              bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1534,6 +1535,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
+		&i.Branding,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1557,7 +1559,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview,
+    f.link_preview, f.branding,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1584,6 +1586,7 @@ type GetFormBySlugRow struct {
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
+	Branding              bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1616,6 +1619,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
+		&i.Branding,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1845,6 +1849,11 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- обязана доезжать до мессенджера без перепубликации. Право тарифа поверх неё
     -- спрашивает сервис — карточка это свойство ВЫДАЧИ, а не документа.
     f.link_preview,
+    -- branding: намерение автора о бейдже «Сделано в Trillix» (0038). Живая
+    -- колонка, как collect_partial: тумблер обязан доезжать до респондента без
+    -- перепубликации — бейдж не часть документа, а свойство выдачи. Право тарифа
+    -- поверх намерения спрашивает сервис (даунгрейд возвращает бейдж сам).
+    f.branding,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1869,6 +1878,7 @@ type GetPublicFormBySlugRow struct {
 	NotifyOnSubmission bool
 	CollectPartial     bool
 	LinkPreview        []byte
+	Branding           bool
 	SubmissionCount    int64
 }
 
@@ -1905,6 +1915,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
+		&i.Branding,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -4188,6 +4199,52 @@ type StartFormIntegrationBackfillParams struct {
 func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
 	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
+}
+
+const updateFormBranding = `-- name: UpdateFormBranding :one
+UPDATE forms
+SET branding = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormBrandingParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Branding    bool
+}
+
+type UpdateFormBrandingRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер бейджа «Сделано в Trillix» (ADR §10, миграция 0038). Живая колонка, а не
+// поле схемы: намерение обязано доезжать до респондента без перепубликации. Тариф
+// здесь НЕ спрашивается — право проверяется при отдаче публичной формы, и снять
+// бейдж в кабинете вправе любой план (кабинет при этом сам держит контрол, EMBED §10).
+func (q *Queries) UpdateFormBranding(ctx context.Context, arg UpdateFormBrandingParams) (UpdateFormBrandingRow, error) {
+	row := q.db.QueryRow(ctx, updateFormBranding, arg.ID, arg.WorkspaceID, arg.Branding)
+	var i UpdateFormBrandingRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one

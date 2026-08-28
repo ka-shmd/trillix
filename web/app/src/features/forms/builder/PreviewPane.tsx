@@ -18,7 +18,7 @@ import { planForm, withVisibleOptions } from '@fields/logic'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
 import { customStyleSheet } from '@fields/customCss'
-import { designClasses, designToVars, showFormBadge } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
 import { StepBar } from '@fields/stepBar'
@@ -28,21 +28,20 @@ import { useBuilderStore } from './storeContext'
 // Превью — форма как её увидит респондент: заголовок, поля стора и кнопка отправки.
 // Тот же вид (rf-*), что и у рендерера и у редактора — WYSIWYG. Заголовок приходит
 // пропом (forms.title сохраняется отдельно от схемы), кнопка/блоки — из стора.
-export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemoveBadge: boolean }) {
+export function PreviewPane({ title, badge }: { title: string; badge: boolean }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const cover = useBuilderStore((s) => s.cover)
   const logo = useBuilderStore((s) => s.logo)
   const design = useBuilderStore((s) => s.design)
-  // Бейдж площадки — часть того, что увидит респондент, значит часть превью. Правило
-  // общее с сервером (showFormBadge): намерение автора плюс разрешение тарифа. Первая
+  // Бейдж площадки — часть того, что увидит респондент, значит часть превью. Первая
   // редакция слайса 6 нарисовала бейдж только у респондента, и превью — единственное
   // место, где автор смотрит на форму его глазами, — про бейдж молчало.
   //
-  // Тариф приходит ПРОПОМ, а не хуком отсюда: превью — чистый вид стора, и тянуть в
-  // него запрос чужой фичи значит требовать провайдер Query от каждого, кто его
-  // рисует (включая тесты раскладки, которым до тарифов дела нет).
-  const badge = showFormBadge(design, canRemoveBadge)
+  // Решение приходит ПРОПОМ уже готовым (showFormBadge у вызывающего): бейдж не в
+  // сторе — намерение живёт свойством формы, а не документом (ADR §10), — и тянуть
+  // сюда и форму, и снимок тарифа значит требовать провайдер Query от каждого, кто
+  // рисует превью, включая тесты раскладки.
   // Тот же вывод, что у респондента: правила автора плюс сторож согласия. Пусто,
   // если автор ничего не писал, — печатать один сторож незачем.
   const customCss = customStyleSheet(design?.css)

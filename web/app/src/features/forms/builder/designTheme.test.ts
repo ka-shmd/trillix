@@ -85,46 +85,34 @@ describe('withTheme', () => {
   })
 })
 
-describe('resetToTheme — бейдж', () => {
-  it('переживает сброс оформления', () => {
-    // Сброс возвращает к готовой теме ОФОРМЛЕНИЕ; бейдж — не оформление, а
-    // покупка. Первая редакция его теряла: автор соглашался «сбросить цвета» и
-    // молча получал бейдж обратно на форму.
-    const design = { theme: 'dark', palette: { accent: '#12ab34' }, branding: false } as const
-    expect(resetToTheme('dark', design)).toEqual({ theme: 'dark', branding: false })
-    expect(resetToTheme('light', design)).toEqual({ branding: false })
-  })
-
-  it('без снятого бейджа сброс даёт ровно готовую тему', () => {
+describe('resetToTheme — сброс до готовой темы', () => {
+  it('даёт ровно готовую тему', () => {
     expect(resetToTheme('light', { palette: { accent: '#12ab34' } })).toBeUndefined()
     expect(resetToTheme('dark', { palette: { accent: '#12ab34' } })).toEqual({ theme: 'dark' })
   })
 })
 
 describe('resetToTheme — свой CSS', () => {
-  it('переживает сброс вместе с бейджем', () => {
+  it('переживает сброс', () => {
     // Диалог обещает сбросить цвета, шрифт, лэйаут, поля и кнопки — и только их.
     // CSS автора это не оформление, а код: терять его от смены темы значит стереть
     // работу, о которой в диалоге не сказано ни слова.
     const design = {
       theme: 'dark',
       palette: { accent: '#12ab34' },
-      branding: false,
       css: '.rf-page{padding:0}',
     } as const
-    expect(resetToTheme('light', design)).toEqual({ branding: false, css: '.rf-page{padding:0}' })
+    expect(resetToTheme('light', design)).toEqual({ css: '.rf-page{padding:0}' })
     expect(resetToTheme('dark', design)).toEqual({
       theme: 'dark',
-      branding: false,
       css: '.rf-page{padding:0}',
     })
   })
 
-  it('CSS и бейдж не делают тему пользовательской', () => {
+  it('CSS не делает тему пользовательской', () => {
     // Иначе автор, не тронувший ни одного цвета, видел бы в дропдауне
     // «Пользовательскую» — и не смог бы объяснить, что именно он настроил.
     expect(hasCustomFields({ css: '.a{}' })).toBe(false)
-    expect(hasCustomFields({ branding: false })).toBe(false)
     expect(currentTheme({ css: '.a{}', theme: 'dark' })).toBe('dark')
   })
 })

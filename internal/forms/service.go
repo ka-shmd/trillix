@@ -75,6 +75,7 @@ type Store interface {
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
+	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -388,6 +389,28 @@ func (s *Service) UpdateNotifyOnSubmission(ctx context.Context, userID, formID u
 		return Form{}, err
 	}
 	updated, err := s.repo.UpdateFormNotifyOnSubmission(ctx, s.db, form.ID, form.WorkspaceID, enabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateBranding переключает бейдж «Сделано в Trillix» (ADR §10, миграция 0038).
+//
+// ТАРИФ ЗДЕСЬ НЕ СПРАШИВАЕТСЯ, и это не забывчивость — тот же порядок, что у
+// карточки ссылки: право стоит при ОТДАЧЕ публичной формы (ShowBadge), поэтому
+// намерение сохраняется на любом плане и оживает сразу после апгрейда, а даунгрейд
+// возвращает бейдж, ничего не стирая. Контрол при этом кабинет держит сам (EMBED
+// §10): на бесплатном тарифе тумблер не выключается, а открывает разговор о тарифе.
+func (s *Service) UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateBranding(ctx, s.db, form.ID, form.WorkspaceID, show)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound
@@ -734,19 +757,22 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 
 // ShowBadge — показывать ли бейдж «Сделано в Trillix» на публичной форме.
 //
-// РЕШАЕТСЯ ПРИ ОТДАЧЕ, А НЕ ПРИ ПУБЛИКАЦИИ, и это осознанно (спека §9.4). В схеме
-// лежит только НАМЕРЕНИЕ автора (`design.branding: false`), а факт — намерение плюс
-// разрешение тарифа. Положи мы факт в снапшот, один месяц оплаты навсегда снял бы
-// бейдж со всех опубликованных в этот месяц форм: это не подписка, а разовая
-// покупка. Обратная сторона того же решения — даунгрейд возвращает бейдж на уже
-// опубликованную форму, в отличие от цветов, которые снапшот переживают.
+// РЕШАЕТСЯ ПРИ ЗАХОДЕ НА ФОРМУ — и намерение, и право. Намерение приезжает живой
+// колонкой forms.branding (intent: true = показывать), а не полем схемы: бейдж не
+// часть документа, как вопрос или заголовок, и снимать его перепубликацией формы
+// автор не обязан (ADR §10, миграция 0038).
 //
-// ЦЕНА ГЕЙТА НА ГОРЯЧЕМ ПУБЛИЧНОМ ПУТИ (тот самый вопрос спеки) оказалась нулевой
-// для большинства форм: без намерения автора спрашивать нечего — бейдж стоит, и в
-// БД мы не идём вовсе. Платит только форма, которая бейдж снимала, и ровно одним
-// чтением по первичным ключам.
-func (s *Service) ShowBadge(ctx context.Context, workspaceID uuid.UUID, design *domain.FormDesign) (bool, error) {
-	if design == nil || design.Branding == nil {
+// Факт — намерение плюс разрешение тарифа. Положи мы факт в снапшот, один месяц
+// оплаты навсегда снял бы бейдж со всех опубликованных в этот месяц форм: это не
+// подписка, а разовая покупка. Обратная сторона того же решения — даунгрейд
+// возвращает бейдж на уже опубликованную форму, в отличие от цветов, которые
+// снапшот переживают.
+//
+// ЦЕНА ГЕЙТА НА ГОРЯЧЕМ ПУБЛИЧНОМ ПУТИ оказалась нулевой для большинства форм: без
+// намерения автора спрашивать нечего — бейдж стоит, и в БД мы не идём вовсе. Платит
+// только форма, которая бейдж снимала, и ровно одним чтением по первичным ключам.
+func (s *Service) ShowBadge(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error) {
+	if intent {
 		return true, nil
 	}
 	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormBranding)

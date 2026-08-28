@@ -63,6 +63,15 @@ type Form struct {
 	// CollectPartial — собирать ли незавершённые ответы (спека §10.0): тумблер
 	// формы, живая колонка. Кабинету нужен, чтобы нарисовать состояние тумблера.
 	CollectPartial bool
+	// Branding — показывать ли бейдж «Сделано в Trillix» (ADR §10, миграция 0038):
+	// намерение автора, живая колонка. Кабинету нужен для состояния тумблера.
+	//
+	// ⚠ МИНА: заполняют только Get/GetBySlug, как и настройки закрытия. У результатов
+	// мутаций и у строк списка здесь false — а false у ЭТОГО поля значит «бейдж
+	// снят», то есть молчаливая ложь, а не безобидный ноль. Читать его можно только
+	// из ответа Get/GetBySlug; кабинет так и делает (в карточке формы поля нет
+	// вовсе — formSchema его не объявляет, и Zod его срежет).
+	Branding bool
 	// NotifyOnSubmission — слать ли владельцу письмо о новом ответе (слайс D; живая
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
@@ -117,6 +126,11 @@ type PublicForm struct {
 	// колонка: включается без перепубликации. Право тарифа спрашивает service — и
 	// при включении, и при отдаче публичной формы.
 	CollectPartial bool
+	// Branding — намерение автора о бейдже «Сделано в Trillix» (ADR §10, миграция
+	// 0038): true = показывать. Живая колонка, а не поле схемы, ровно затем, чтобы
+	// тумблер доезжал до респондента без перепубликации. Факт (намерение плюс право
+	// тарифа) считает service.ShowBadge при отдаче.
+	Branding bool
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -310,6 +324,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
+		Branding:              row.Branding,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
@@ -344,6 +359,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		ClosedMessage:         ptrStr(row.ClosedMessage),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
+		Branding:              row.Branding,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
@@ -575,6 +591,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
 		CollectPartial:     row.CollectPartial,
+		Branding:           row.Branding,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -684,6 +701,30 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form link_preview: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateBranding переключает бейдж «Сделано в Trillix». Тариф здесь не при чём:
+// право спрашивается при отдаче публичной формы (service.ShowBadge).
+func (Repo) UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormBranding(ctx, postgres.UpdateFormBrandingParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Branding:    show,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form branding: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

@@ -64,6 +64,7 @@ type fakeStore struct {
 	// Тумблер уведомлений (слайс D) и адресат уведомления.
 	lastNotifyEnabled  bool
 	lastCollectPartial bool
+	lastBranding       bool
 	owner              Owner
 	ownerErr           error
 
@@ -121,6 +122,12 @@ func (f *fakeStore) UpdateFormNotifyOnSubmission(_ context.Context, _ postgres.D
 	f.updated = true
 	f.lastNotifyEnabled = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, NotifyOnSubmission: enabled}, nil
+}
+
+func (f *fakeStore) UpdateBranding(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
+	f.updated = true
+	f.lastBranding = show
+	return Form{ID: id, WorkspaceID: workspaceID, Branding: show}, nil
 }
 
 func (f *fakeStore) UpdateCollectPartial(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
@@ -696,21 +703,25 @@ func TestPublish_ThemeOnly_PublishesOnAnyPlan(t *testing.T) {
 	}
 }
 
-// Бейдж гейтится НЕ на публикации, а при отдаче: снимать его намерением автор может
-// на любом тарифе, а сработает ли намерение — решает выдача.
-func TestPublish_BrandingIntent_DoesNotGate(t *testing.T) {
-	store := &fakeStore{
-		form:        Form{WorkspaceID: domain.NewID(), DraftSchema: designDraft(`{"branding":false}`)},
-		nextVersion: 1,
-	}
+// Бейдж публикацию не трогает вовсе: намерение живёт колонкой формы (ADR §10), в
+// документе его нет, и спрашивать тариф на публикации не из-за чего.
+func TestUpdateBranding_NeedsNoPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
 	plans := &fakePlans{allowed: false}
 	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
 
-	if _, err := svc.Publish(context.Background(), domain.NewID(), domain.NewID()); err != nil {
-		t.Fatalf("намерение снять бейдж не должно мешать публикации: %v", err)
+	form, err := svc.UpdateBranding(context.Background(), uuid.New(), store.form.ID, false)
+	if err != nil {
+		t.Fatalf("снять бейдж вправе любой тариф — право спрашивается при отдаче: %v", err)
+	}
+	if form.Branding {
+		t.Fatal("намерение не доехало до колонки")
+	}
+	if store.lastBranding {
+		t.Fatal("в стор ушло не то значение")
 	}
 	if len(plans.gotKeys) != 0 {
-		t.Fatalf("тариф спрошен на публикации из-за бейджа: %v", plans.gotKeys)
+		t.Fatalf("тариф спрошен на смене тумблера: %v", plans.gotKeys)
 	}
 }
 
@@ -1226,14 +1237,12 @@ func TestShowBadge_NoIntent_DoesNotAskPlans(t *testing.T) {
 	plans := &fakePlans{allowed: true}
 	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
 
-	for _, design := range []*domain.FormDesign{nil, {}, {Theme: "dark"}} {
-		show, err := svc.ShowBadge(context.Background(), domain.NewID(), design)
-		if err != nil {
-			t.Fatalf("ShowBadge: %v", err)
-		}
-		if !show {
-			t.Fatalf("без намерения автора бейдж обязан стоять (design=%+v)", design)
-		}
+	show, err := svc.ShowBadge(context.Background(), domain.NewID(), true)
+	if err != nil {
+		t.Fatalf("ShowBadge: %v", err)
+	}
+	if !show {
+		t.Fatal("автор бейдж не снимал — он обязан стоять")
 	}
 	if len(plans.gotKeys) != 0 {
 		t.Fatalf("тариф спрошен там, где спрашивать нечего: %v", plans.gotKeys)
@@ -1241,12 +1250,9 @@ func TestShowBadge_NoIntent_DoesNotAskPlans(t *testing.T) {
 }
 
 func TestShowBadge_IntentAsksPlanAndObeysIt(t *testing.T) {
-	no := false
-	design := &domain.FormDesign{Branding: &no}
-
 	plans := &fakePlans{allowed: true} // тариф разрешает снять
 	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, plans)
-	show, err := svc.ShowBadge(context.Background(), domain.NewID(), design)
+	show, err := svc.ShowBadge(context.Background(), domain.NewID(), false)
 	if err != nil {
 		t.Fatalf("ShowBadge: %v", err)
 	}
@@ -1258,9 +1264,9 @@ func TestShowBadge_IntentAsksPlanAndObeysIt(t *testing.T) {
 	}
 
 	// Даунгрейд возвращает бейдж на уже опубликованную форму — в отличие от цветов,
-	// которые уехали в снапшот. Это и есть «гейт другой природы» (спека §9.4).
+	// которые уехали в снапшот. Это и есть «гейт другой природы» (ADR §10).
 	svc = NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
-	show, err = svc.ShowBadge(context.Background(), domain.NewID(), design)
+	show, err = svc.ShowBadge(context.Background(), domain.NewID(), false)
 	if err != nil {
 		t.Fatalf("ShowBadge: %v", err)
 	}

@@ -94,6 +94,17 @@ export function updateCollectPartial(id: string, enabled: boolean): Promise<Form
   })
 }
 
+// Тумблер бейджа «Сделано в Trillix» (фасет branding): true = показывать. 402 здесь
+// НЕ бывает — намерение сохраняется на любом тарифе, а сработает ли оно, решает
+// отдача публичной формы. Контрол на бесплатном плане держит сам кабинет.
+export function updateBranding(id: string, show: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { branding: show },
+    schema: formSchema,
+  })
+}
+
 // Своя карточка ссылки (фасет linkPreview): заменяет карточку целиком, пустое поле
 // = вернуть дефолт. 402 здесь НЕ бывает — сохранять карточку вправе любой тариф, а
 // применяется она к публичной ссылке только на разрешённом плане.

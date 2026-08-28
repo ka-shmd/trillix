@@ -35,7 +35,7 @@ function preview(s: FormSchema) {
   store.getState().hydrate(s)
   render(
     <BuilderStoreContext.Provider value={store}>
-      <PreviewPane title="Анкета" canRemoveBadge={false} />
+      <PreviewPane title="Анкета" badge={false} />
     </BuilderStoreContext.Provider>,
   )
   return document.querySelector('.rf-form')!

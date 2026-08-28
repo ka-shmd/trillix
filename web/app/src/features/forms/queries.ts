@@ -13,6 +13,7 @@ import {
   listForms,
   publishForm,
   unpublishForm,
+  updateBranding,
   updateCloseSettings,
   updateCollectPartial,
   updateLinkPreview,
@@ -218,40 +219,23 @@ export function useUpdateAfterSubmit() {
   })
 }
 
-/**
- * Бейдж «Сделано в Trillix» — с экрана вставки (решение владельца 2026-08-16).
- *
- * Правит ЧЕРНОВИК формы тем же PATCH'ем схемы, что автосейв билдера: бейдж — свойство
- * оформления, а не вставки, и настройка одна на все вставки и на прямую ссылку. На
- * живой форме сработает после публикации (схема снапшотится) — экран говорит об этом
- * строкой рядом.
- *
- * Гейт тарифа (`form_branding`) здесь не проверяется: он на ОТДАЧЕ публичной формы
- * (BILLING.md), а намерение автора сохраняется на любом тарифе и срабатывает сразу
- * после перехода на платный. Панель предупреждает словами, как это делала шторка.
- */
+// Бейдж «Сделано в Trillix» — тумблер с экрана вставки (решение владельца 2026-08-16).
+//
+// ЖИВОЕ свойство формы, а не поле схемы (ADR §10, миграция 0038): PATCH формы, а не
+// сохранение черновика, и на опубликованной форме тумблер срабатывает СРАЗУ —
+// перепубликации он не ждёт. Как и остальные живые настройки, ответ мутации — карточка
+// формы, поэтому свежее значение в detail кладём из отправленного ввода.
+//
+// Гейт тарифа (`form_branding`) здесь не проверяется: он на ОТДАЧЕ публичной формы
+// (BILLING.md), а намерение автора сохраняется на любом тарифе и срабатывает сразу
+// после перехода на платный. Сам контрол на бесплатном плане держит панель.
 export function useUpdateBranding() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ form, show }: { form: FormDetail; show: boolean }) => {
-      const design = { ...(form.draftSchema.design ?? {}) }
-      // «Показывать» — ОТСУТСТВИЕ ключа: второго представления у этого состояния нет,
-      // того же требует валидатор (`design.branding` принимает только false).
-      if (show) delete design.branding
-      else design.branding = false
-      const draftSchema = {
-        ...form.draftSchema,
-        design: Object.keys(design).length > 0 ? design : undefined,
-      }
-      return saveDraftSchema(form.id, draftSchema, form.updatedAt).then((saved) => ({
-        saved,
-        draftSchema,
-      }))
-    },
-    onSuccess: ({ saved, draftSchema }) => {
-      qc.invalidateQueries({ queryKey: formKeys.list() })
-      qc.setQueryData<FormDetail>(formKeys.detail(saved.slug), (old) =>
-        old ? { ...old, draftSchema, updatedAt: saved.updatedAt } : old,
+    mutationFn: ({ id, show }: { id: string; show: boolean }) => updateBranding(id, show),
+    onSuccess: (form, { show }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, branding: show } : old,
       )
     },
   })

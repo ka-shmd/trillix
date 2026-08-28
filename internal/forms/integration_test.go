@@ -318,6 +318,82 @@ func TestForms_UpdateName(t *testing.T) {
 	patchName(t, bob, srv, form.ID, "взлом", http.StatusNotFound)
 }
 
+// Бейдж «Сделано в Trillix» — ЖИВОЕ свойство формы (ADR §10, миграция 0038): тумблер
+// доезжает до респондента БЕЗ перепубликации, и это единственное, ради чего намерение
+// уехало из схемы в колонку. Проверяется снаружи, тем же путём, каким пойдёт
+// респондент: публичная выдача до и после переключения при одной публикации.
+func TestForms_Branding_AppliesWithoutRepublish(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-branding@example.com")
+	bob := registerUser(t, srv, "bob-branding@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	// План с правом снимать бейдж: у free его нет (0019), и без этой строки тест
+	// доказывал бы гейт, а не переезд намерения в колонку.
+	setBrandingGate(t, form.Slug, true)
+
+	// Новая форма — бейдж стоит.
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); !d.Branding {
+		t.Fatal("у новой формы тумблер бейджа обязан быть включён")
+	}
+	pub, etag := getPublicOK(t, anon, srv, form.Slug)
+	if !pub.ShowBadge {
+		t.Fatal("публичная форма отдана без бейджа до всякой настройки")
+	}
+
+	// Снимаем бейдж и НЕ публикуем заново.
+	patchBranding(t, alice, srv, form.ID, false, http.StatusOK)
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Branding {
+		t.Fatal("тумблер не сохранился")
+	}
+
+	after, etagAfter := getPublicOK(t, anon, srv, form.Slug)
+	if after.ShowBadge {
+		t.Fatal("бейдж остался на публичной форме после переключения — намерение снова ждёт публикации")
+	}
+	if after.Version != pub.Version {
+		t.Fatalf("версия формы изменилась (%d → %d) — тумблер не имеет права публиковать", pub.Version, after.Version)
+	}
+	// ETag обязан разойтись: состояние бейджа — часть представления, и без этого
+	// уже открывавший форму респондент получал бы 304 с прежним телом.
+	if etag == etagAfter {
+		t.Fatalf("ETag не изменился вместе с бейджем: %s", etag)
+	}
+
+	// Даунгрейд возвращает бейдж на уже опубликованную форму сам: право
+	// спрашивается при заходе, а не при публикации. Намерение при этом не
+	// стирается — апгрейд обязан оживить его без единой правки.
+	setBrandingGate(t, form.Slug, false)
+	downgraded, _ := getPublicOK(t, anon, srv, form.Slug)
+	if !downgraded.ShowBadge {
+		t.Fatal("после даунгрейда бейдж обязан вернуться без перепубликации")
+	}
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Branding {
+		t.Fatal("даунгрейд стёр намерение автора — апгрейд его не оживит")
+	}
+	setBrandingGate(t, form.Slug, true)
+
+	// Включить обратно — так же, одним PATCH.
+	patchBranding(t, alice, srv, form.ID, true, http.StatusOK)
+	back, _ := getPublicOK(t, anon, srv, form.Slug)
+	if !back.ShowBadge {
+		t.Fatal("бейдж не вернулся после обратного переключения")
+	}
+
+	// Два фасета за один PATCH → 422; чужая форма → 404 (существование не
+	// раскрывается), как у остальных живых настроек.
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"branding":false,"collectPartial":true}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+	patchBranding(t, bob, srv, form.ID, false, http.StatusNotFound)
+}
+
 // Живые настройки закрытия (PATCH {closeSettings}): фасет доходит до сервиса,
 // GET-деталь их возвращает, набор заменяется целиком (пустое = снято), невалидный
 // лимит → 422, два фасета за раз → 422, чужая форма → 404.
@@ -1076,6 +1152,7 @@ type formDetailDTO struct {
 	CloseAt       *string         `json:"closeAt"`
 	ResponseLimit *int            `json:"responseLimit"`
 	ClosedMessage *string         `json:"closedMessage"`
+	Branding      bool            `json:"branding"`
 	LinkPreview   *struct {
 		SiteName    string `json:"siteName"`
 		Title       string `json:"title"`
@@ -1169,6 +1246,45 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 	return f
 }
 
+// setBrandingGate открывает или закрывает право снимать бейдж на плане владельца
+// формы — тем же UPDATE, каким гейт двигают на проде.
+func setBrandingGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{form_branding}', $1::jsonb)
+		 WHERE code = (SELECT s.plan_code FROM subscriptions s
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
+		value, slug); err != nil {
+		t.Fatalf("set branding gate: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{form_branding}', 'false')
+			 WHERE code IN ('free', 'legacy_free')`); err != nil {
+			t.Fatalf("reset branding gate: %v", err)
+		}
+	})
+}
+
+// patchBranding шлёт PATCH {branding: <show>} — живой тумблер бейджа.
+func patchBranding(t *testing.T, c *http.Client, srv *httptest.Server, id string, show bool, wantStatus int) {
+	t.Helper()
+	body := `{"branding":false}`
+	if show {
+		body = `{"branding":true}`
+	}
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH branding: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
 // patchCloseSettings шлёт PATCH {closeSettings: <objJSON>} — живые настройки закрытия.
 func patchLinkPreview(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) {
 	t.Helper()
@@ -1200,7 +1316,8 @@ type publicFormDTO struct {
 	Schema  json.RawMessage `json:"schema"`
 	// Token остаётся полем DTO, чтобы тест мог доказать его ОТСУТСТВИЕ в
 	// кэшируемом теле: токен выдаёт отдельная некэшируемая ручка (ADR §10).
-	Token string `json:"token"`
+	Token     string `json:"token"`
+	ShowBadge bool   `json:"showBadge"`
 }
 
 // getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.
