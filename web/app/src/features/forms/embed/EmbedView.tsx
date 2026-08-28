@@ -124,7 +124,7 @@ export function EmbedView({
           <aside className="flex w-125 shrink-0 flex-col overflow-y-auto px-12.5 py-5">
             <section className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-3xl font-extrabold tracking-tight">Встраивание</h2>
+                <h2 className="text-3xl font-semibold tracking-tight">Встраивание</h2>
                 {/* Выход из режима. Крестовина без подписи — жест закрытия читается
                     сам, а место рядом с заголовком не оставляет сомнений, что
                     закрывается экран, а не макет. */}
@@ -181,7 +181,7 @@ export function EmbedView({
             <Separator className="my-6" />
 
             <section className="flex flex-col gap-4">
-              <h2 className="text-3xl font-extrabold tracking-tight">Опции</h2>
+              <h2 className="text-3xl font-semibold tracking-tight">Опции</h2>
               <SettingsPanel form={form} mode={mode} settings={settings} onChange={change} />
             </section>
           </aside>
