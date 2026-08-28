@@ -95,7 +95,7 @@ export function FormatBar({
         top: rect.top - BAR_H >= 8 ? rect.top - BAR_H : rect.bottom + 8,
         zIndex: 50,
       }}
-      className="flex items-center gap-0.5 rounded-md border bg-popover p-1 shadow-md"
+      className="flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
       onMouseDown={keepFocus}
     >
       {linkOpen ? (
@@ -124,7 +124,7 @@ export function FormatBar({
             </button>
           ))}
 
-          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
 
           <ColorButton
             label="Цвет текста"
@@ -155,7 +155,7 @@ export function FormatBar({
             </span>
           </ColorButton>
 
-          <span className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
+          <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
 
           <button
             type="button"
@@ -368,7 +368,7 @@ function LinkEditor({
         placeholder="https://example.com"
         aria-label="Адрес ссылки"
         aria-invalid={!valid || undefined}
-        className="h-7 w-64 text-xs"
+        className="h-7 w-64 text-sm"
         onMouseDown={(e) => e.stopPropagation()}
       />
       <Button size="sm" className="h-7" disabled={!valid} onClick={submit}>

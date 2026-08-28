@@ -52,7 +52,7 @@ export function ShortcutSheet({
         <DialogDescription className="sr-only">
           Клавиши текущей строки полотна и клавиши, работающие везде.
         </DialogDescription>
-        <div className="mt-2 flex flex-col gap-5">
+        <div className="mt-2 flex flex-col gap-6">
           {ctx && here.length > 0 && <Section title={CONTEXT_TITLES[ctx]} list={here} />}
           <Section title="Везде на полотне" list={common} />
         </div>
@@ -70,10 +70,10 @@ function Section({
 }) {
   return (
     <section>
-      <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+      <h3 className="mb-2 text-base font-semibold">
         {title}
       </h3>
-      <dl className="flex flex-col gap-1.5">
+      <dl className="flex flex-col gap-2">
         {list.map((s) => (
           <div key={s.label} className="flex items-baseline justify-between gap-4">
             <dd className="order-2 text-sm text-muted-foreground">{s.hint}</dd>

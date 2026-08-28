@@ -301,7 +301,7 @@ export function ColorPicker({
           // Поле фокус берёт намеренно — как поле адреса ссылки: диапазон выделения уже
           // лежит в состоянии строки, схлопывание живого ему не вредит.
           onMouseDown={(e) => e.stopPropagation()}
-          className="h-7 flex-1 font-mono text-xs"
+          className="h-7 flex-1 font-mono text-sm"
         />
         <Button
           variant="ghost"

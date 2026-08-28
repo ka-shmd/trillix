@@ -205,7 +205,7 @@ export function PreviewPane({ title, badge }: { title: string; badge: boolean })
             // ложью. Автору она нужна — иначе просмотр упирается в тупик.
             <button
               type="button"
-              className="mt-6 text-xs text-muted-foreground underline hover:text-foreground"
+              className="mt-6 text-sm text-muted-foreground underline hover:text-foreground"
               onClick={() => setDone(false)}
             >
               ← Вернуться к форме

@@ -1,5 +1,6 @@
 import { Loader2, TriangleAlert, type LucideIcon } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { type SaveStatus } from './useAutosave'
 
@@ -41,14 +42,14 @@ export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry
   // Ошибка — кнопка (повтор автосейва); остальные состояния информационны (span).
   const trigger =
     status === 'error' ? (
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-sm"
         onClick={onRetry}
         aria-label={label}
-        className="flex size-8 items-center justify-center rounded-md hover:bg-accent"
       >
         <Icon className={`size-4 ${className}`} />
-      </button>
+      </Button>
     ) : (
       <span
         role="status"

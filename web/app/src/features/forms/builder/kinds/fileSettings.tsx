@@ -8,6 +8,8 @@ import {
   type FileFamily,
 } from '@entities/formSchema'
 
+import { Checkbox } from '@/components/ui/checkbox'
+
 import { useBuilderStore } from '../storeContext'
 import { SelectSetting, SettingRow } from './settings'
 
@@ -65,18 +67,17 @@ export function FileSettings({ block }: { block: Block }) {
         />
       </SettingRow>
       <SettingRow label="Принимать">
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           {FILE_FAMILIES.map((family) => {
             const on = accept.length === 0 || accept.includes(family)
             return (
               <label
                 key={family}
-                className="flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs"
+                className="flex items-center gap-2 rounded border px-2 py-1 text-sm"
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={on}
-                  onChange={(e) => toggleFamily(family, e.target.checked)}
+                  onCheckedChange={(v) => toggleFamily(family, v === true)}
                 />
                 {FAMILY_TITLES[family]}
               </label>

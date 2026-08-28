@@ -110,7 +110,7 @@ function Cell({
 }) {
   return (
     <div className={`grid gap-1 ${className}`}>
-      <Label htmlFor={id} className="text-muted-foreground text-[10px] font-normal">
+      <Label htmlFor={id}>
         {label}
       </Label>
       {children}
