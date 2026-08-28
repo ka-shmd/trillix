@@ -23,7 +23,7 @@ it('снимает жёлоб полосы прокрутки на время п
       onOpenChange={() => {}}
       store={store}
       title="Анкета"
-      canRemoveBadge={false}
+      badge={false}
     />
   )
 

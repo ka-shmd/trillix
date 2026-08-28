@@ -47,12 +47,12 @@ func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, erro
 	return f.pf, f.err
 }
 
-// ShowBadge в фейке повторяет ПРАВИЛО, а не результат: нет намерения — бейдж
-// стоит; есть намерение — решает подставленный тариф (badgeAllowed). Фейк,
+// ShowBadge в фейке повторяет ПРАВИЛО, а не результат: автор бейдж не снимал —
+// бейдж стоит; снимал — решает подставленный тариф (badgeAllowed). Фейк,
 // возвращающий константу, пропустил бы ровно тот дефект, ради которого поле и
 // заведено, — потерянное намерение автора.
-func (f fakePublicSvc) ShowBadge(_ context.Context, _ uuid.UUID, design *domain.FormDesign) (bool, error) {
-	if design == nil || design.Branding == nil {
+func (f fakePublicSvc) ShowBadge(_ context.Context, _ uuid.UUID, intent bool) (bool, error) {
+	if intent {
 		return true, nil
 	}
 	if f.badgeErr != nil {
@@ -280,17 +280,15 @@ func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	}
 }
 
-// --- Бейдж «Сделано в Trillix» (фаза 22, слайс 6) ---
+// --- Бейдж «Сделано в Trillix» (фаза 22, слайс 6; намерение переехало в живую
+// колонку 2026-08-28, ADR §10) ---
 //
-// Решение принимается ПРИ ОТДАЧЕ: намерение автора из схемы плюс разрешение
-// тарифа. Отсюда три утверждения ниже.
+// Решение принимается ПРИ ЗАХОДЕ НА ФОРМУ: намерение автора из колонки формы плюс
+// разрешение тарифа. Отсюда три утверждения ниже.
 
 func brandingForm(t *testing.T, removed bool, allowed bool) fakePublicSvc {
 	t.Helper()
 	schema := `{"schemaVersion":1,"blocks":[]}`
-	if removed {
-		schema = `{"schemaVersion":1,"blocks":[],"design":{"branding":false}}`
-	}
 	if _, err := domain.ValidateSchema(json.RawMessage(schema)); err != nil {
 		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)
 	}
@@ -298,6 +296,9 @@ func brandingForm(t *testing.T, removed bool, allowed bool) fakePublicSvc {
 		pf: PublicForm{
 			Title: "Опрос", Version: 1, Schema: json.RawMessage(schema),
 			VersionID: uuid.New(), Status: domain.FormStatusPublished,
+			// Схема о бейдже не знает вовсе: намерение живёт колонкой, поэтому
+			// снятый бейдж — это `Branding: false`, а не ключ в документе.
+			Branding: !removed,
 		},
 		badgeAllowed: allowed,
 	}

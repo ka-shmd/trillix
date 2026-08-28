@@ -3,6 +3,8 @@ import { useNavigate } from '@tanstack/react-router'
 import { useStore } from 'zustand'
 import { Eye, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
 
+import { showFormBadge } from '@fields/design'
+
 import { displayFormName, type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
@@ -36,10 +38,13 @@ import { Button } from '@/components/ui/button'
 // detail тогда синтетическая, detail.id пуст, и всё, что адресует форму по id,
 // спрашивает ensureForm — она заводит форму по первой надобности.
 export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: DraftCreation }) {
-  // Тариф спрашивается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
+  // Бейдж решается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
   // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
-  // потребовался бы каждому, кто его рисует, включая тесты раскладки.
+  // потребовался бы каждому, кто его рисует, включая тесты раскладки. Намерение
+  // автора — живое свойство формы (detail.branding), тумблер его правит на экране
+  // вставки, и перепубликации оно не ждёт (ADR §10).
   const canRemoveBadge = useFeatureAllowed('form_branding')
+  const badge = showFormBadge(detail.branding, canRemoveBadge)
   const [store] = useState(() => {
     const s = createBuilderStore()
     s.getState().hydrate(detail.draftSchema)
@@ -210,7 +215,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         onOpenChange={setPreviewOpen}
         store={store}
         title={detail.title}
-        canRemoveBadge={canRemoveBadge}
+        badge={badge}
       />
       {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
           проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,

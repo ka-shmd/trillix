@@ -24,7 +24,7 @@ function renderPreview(blocks: Block[], title = 'Анкета') {
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   return render(
     <BuilderStoreContext.Provider value={store}>
-      <PreviewPane title={title} canRemoveBadge={false} />
+      <PreviewPane title={title} badge={false} />
     </BuilderStoreContext.Provider>,
   )
 }

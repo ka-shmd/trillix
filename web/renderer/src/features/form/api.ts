@@ -48,9 +48,15 @@ export type LoadResult =
   | { status: 'closed'; title: string; message: string; showBadge: boolean }
   | { status: 'notfound' }
 
-export async function fetchPublicForm(slug: string): Promise<LoadResult> {
+// preview — предпросмотр автора (`?preview=1`, макет экрана «Встроить»). Он и только
+// он ходит МИМО КЭША: ответ публичной формы кэшируется на минуту, а бейдж и сбор
+// черновиков — живые свойства формы (ADR §10), и автор, переключивший тумблер, обязан
+// увидеть результат сейчас, а не через минуту. Респондент читает тот же ответ с
+// прежним кэшем: платить временем загрузки формы за удобство автора незачем.
+export async function fetchPublicForm(slug: string, preview = false): Promise<LoadResult> {
   const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}`, {
     headers: { Accept: 'application/json' },
+    cache: preview ? 'no-store' : 'default',
   })
   if (res.status === 404) {
     return { status: 'notfound' }

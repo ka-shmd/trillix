@@ -56,16 +56,15 @@ export const COVER_COLORS = [
 
 export const DEFAULT_COVER_COLOR = COVER_COLORS[4]
 
-// patchTop — заменить поле ВЕРХНЕГО уровня (тема, шрифт, бейдж). Отдельно от patch,
+// patchTop — заменить поле ВЕРХНЕГО уровня (тема, шрифт, свой CSS). Отдельно от patch,
 // потому что это не группа: `font` стал скаляром, когда шрифт свели к одному на
 // форму, и звать для него групповую правку значило бы получить `{font: {'': 'inter'}}`.
 //
-// Схлопывание пустого — то же самое и по той же причине (см. patch ниже). У `branding`
-// оно же выражает «показывать бейдж»: снятие ключа и есть включённый бейдж.
+// Схлопывание пустого — то же самое и по той же причине (см. patch ниже).
 export function patchTop(
   design: FormDesign | undefined,
-  key: 'theme' | 'font' | 'branding' | 'css',
-  value: string | false | undefined,
+  key: 'theme' | 'font' | 'css',
+  value: string | undefined,
 ): FormDesign | undefined {
   const next: Record<string, unknown> = { ...design }
   if (value === undefined) delete next[key]

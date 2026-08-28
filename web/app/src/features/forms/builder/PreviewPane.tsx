@@ -18,7 +18,7 @@ import { planForm, withVisibleOptions } from '@fields/logic'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
 import { customStyleSheet } from '@fields/customCss'
-import { designClasses, designToVars, showFormBadge } from '@fields/design'
+import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
 import { StepBar } from '@fields/stepBar'
@@ -28,21 +28,20 @@ import { useBuilderStore } from './storeContext'
 // Превью — форма как её увидит респондент: заголовок, поля стора и кнопка отправки.
 // Тот же вид (rf-*), что и у рендерера и у редактора — WYSIWYG. Заголовок приходит
 // пропом (forms.title сохраняется отдельно от схемы), кнопка/блоки — из стора.
-export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemoveBadge: boolean }) {
+export function PreviewPane({ title, badge }: { title: string; badge: boolean }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const cover = useBuilderStore((s) => s.cover)
   const logo = useBuilderStore((s) => s.logo)
   const design = useBuilderStore((s) => s.design)
-  // Бейдж площадки — часть того, что увидит респондент, значит часть превью. Правило
-  // общее с сервером (showFormBadge): намерение автора плюс разрешение тарифа. Первая
+  // Бейдж площадки — часть того, что увидит респондент, значит часть превью. Первая
   // редакция слайса 6 нарисовала бейдж только у респондента, и превью — единственное
   // место, где автор смотрит на форму его глазами, — про бейдж молчало.
   //
-  // Тариф приходит ПРОПОМ, а не хуком отсюда: превью — чистый вид стора, и тянуть в
-  // него запрос чужой фичи значит требовать провайдер Query от каждого, кто его
-  // рисует (включая тесты раскладки, которым до тарифов дела нет).
-  const badge = showFormBadge(design, canRemoveBadge)
+  // Решение приходит ПРОПОМ уже готовым (showFormBadge у вызывающего): бейдж не в
+  // сторе — намерение живёт свойством формы, а не документом (ADR §10), — и тянуть
+  // сюда и форму, и снимок тарифа значит требовать провайдер Query от каждого, кто
+  // рисует превью, включая тесты раскладки.
   // Тот же вывод, что у респондента: правила автора плюс сторож согласия. Пусто,
   // если автор ничего не писал, — печатать один сторож незачем.
   const customCss = customStyleSheet(design?.css)
@@ -213,28 +212,35 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             </button>
           ) : (
             <div className="rf-nav">
-              {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
-                автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
-              {plan.blocked && page === lastPage ? null : page < lastPage ? (
-                <button
-                  type="button"
-                  className="rf-submit rf-next"
-                  onClick={() => setPage(page + 1)}
-                >
-                  {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
-                </button>
-              ) : (
-                // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
-                // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
-                // остаётся без обработчика — как и была.
-                <button
-                  type="button"
-                  className="rf-submit"
-                  onClick={thankYou ? () => setDone(true) : undefined}
-                >
-                  {label}
-                </button>
-              )}
+              {/* Коробка кнопки — та же, что у респондента (FormView): рядом с кнопкой
+                стоит бейдж площадки, и выравнивание задаётся внутри коробки. */}
+              <div className="rf-nav-main">
+                {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+                  автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
+                {plan.blocked && page === lastPage ? null : page < lastPage ? (
+                  <button
+                    type="button"
+                    className="rf-submit rf-next"
+                    onClick={() => setPage(page + 1)}
+                  >
+                    {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
+                  </button>
+                ) : (
+                  // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
+                  // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
+                  // остаётся без обработчика — как и была.
+                  <button
+                    type="button"
+                    className="rf-submit"
+                    onClick={thankYou ? () => setDone(true) : undefined}
+                  >
+                    {label}
+                  </button>
+                )}
+              </div>
+              {/* Бейдж — в строке с кнопкой, как у респондента. Ряд рисуется только до
+                отправки, поэтому на экране «Спасибо» бейдж стоит ниже сам по себе. */}
+              {badge && <Badge />}
             </div>
           )}
           {/* Линии шагов — тот же компонент и то же место, что у респондента: некликабельны
@@ -242,7 +248,7 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             листает превью только вперёд, ровно как респондент. На экране после отправки
             шагов нет: он не шаг формы. */}
           {!done && <StepBar pages={pages.length} page={page} />}
-          {badge && <Badge />}
+          {badge && done && <Badge />}
         </div>
       </div>
     </MentionContext.Provider>

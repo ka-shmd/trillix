@@ -43,6 +43,7 @@ type Form struct {
 	NotifyOnSubmission bool
 	CollectPartial     bool
 	LinkPreview        []byte
+	Branding           bool
 }
 
 type FormIntegration struct {

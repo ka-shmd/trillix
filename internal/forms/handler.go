@@ -39,6 +39,7 @@ type formsService interface {
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
@@ -121,6 +122,11 @@ type formDetailResponse struct {
 	// CollectPartial — тумблер сбора незавершённых ответов. Кабинет рисует по нему
 	// состояние переключателя; включение требует платного тарифа (402).
 	CollectPartial bool `json:"collectPartial"`
+	// Branding — показывать ли бейдж «Сделано в Trillix» (ADR §10). Только в детали
+	// формы: у списка и мутаций здесь false, а false значит «бейдж снят» (мина
+	// описана у Form.Branding). Карточка формы этого поля не читает — её Zod-тип на
+	// фронте его не объявляет и срезает.
+	Branding bool `json:"branding"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -177,6 +183,7 @@ type patchRequest struct {
 	CloseSettings      *closeSettingsBody `json:"closeSettings"`
 	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
 	CollectPartial     *bool              `json:"collectPartial"`
+	Branding           *bool              `json:"branding"`
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
 }
 
@@ -230,6 +237,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		ClosedMessage:      f.ClosedMessage,
 		NotifyOnSubmission: f.NotifyOnSubmission,
 		CollectPartial:     f.CollectPartial,
+		Branding:           f.Branding,
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 	}
 }
@@ -378,6 +386,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.CloseSettings != nil,
 		req.NotifyOnSubmission != nil,
 		req.CollectPartial != nil,
+		req.Branding != nil,
 		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
@@ -386,7 +395,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -414,6 +423,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
 	case req.CollectPartial != nil:
 		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
+	case req.Branding != nil:
+		form, err = h.svc.UpdateBranding(r.Context(), userID, formID, *req.Branding)
 	case req.LinkPreview != nil:
 		lp := *req.LinkPreview
 		form, err = h.svc.UpdateLinkPreview(r.Context(), userID, formID, &domain.LinkPreview{

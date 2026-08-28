@@ -51,7 +51,7 @@ function renderPreview(blocks: Block[]) {
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   return render(
     <BuilderStoreContext.Provider value={store}>
-      <PreviewPane title="Анкета" canRemoveBadge={false} />
+      <PreviewPane title="Анкета" badge={false} />
     </BuilderStoreContext.Provider>,
   )
 }
@@ -193,7 +193,7 @@ describe('находки ревью', () => {
     })
     render(
       <BuilderStoreContext.Provider value={store}>
-        <PreviewPane title="Анкета" canRemoveBadge={false} />
+        <PreviewPane title="Анкета" badge={false} />
       </BuilderStoreContext.Provider>,
     )
     // `includes` осмыслен только у множественного выбора: у single_choice правило

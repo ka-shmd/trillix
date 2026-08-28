@@ -93,18 +93,6 @@ describe('PALETTE_FIELDS', () => {
   })
 })
 
-describe('patchTop — бейдж', () => {
-  it('выключенный переключатель пишет false, включённый снимает ключ', () => {
-    // «Показывать» выражается ОТСУТСТВИЕМ ключа: второе представление того же
-    // состояния валидатор не примет (design.branding допускает только false).
-    expect(patchTop(undefined, 'branding', false)).toEqual({ branding: false })
-    expect(patchTop({ branding: false }, 'branding', undefined)).toBeUndefined()
-    expect(patchTop({ theme: 'dark', branding: false }, 'branding', undefined)).toEqual({
-      theme: 'dark',
-    })
-  })
-})
-
 // ХРОМ СТРАНИЦЫ — правка размеров логотипа и обложки. Отдельно от patch: объект
 // хрома держит саму картинку и до undefined не схлопывается.
 describe('patchLogo / patchCoverHeight', () => {

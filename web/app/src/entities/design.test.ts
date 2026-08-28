@@ -36,7 +36,6 @@ describe('designSchema — валидатор', () => {
     'кегль на нижней границе': { layout: { fontSize: MIN_FONT_SIZE } },
     'кегль на верхней границе': { layout: { fontSize: MAX_FONT_SIZE } },
     'радиус ноль — прямые углы': { controls: { radius: 0 } },
-    'бейдж снят': { branding: false },
     'свой CSS': { css: '.rf-page { padding: 0 }' },
   }
 
@@ -47,9 +46,9 @@ describe('designSchema — валидатор', () => {
     'цвет короткой формой': { palette: { canvas: '#abc' } },
     'цвет свободной нотацией': { palette: { field: 'rgb(0,0,0)' } },
     'шрифт вне списка': { font: 'comic' },
-    // «Показывать бейдж» выражается отсутствием ключа: true — второе представление
-    // того же состояния, и принимать его нельзя.
-    'бейдж true': { branding: true },
+    // Бейджа в оформлении больше нет: намерение живёт живым свойством формы (ADR
+    // §10). Ключ обязан отвергаться, иначе на один вопрос отвечали бы два места.
+    'бейдж в оформлении': { branding: false },
     // `</` — второй рубеж после текстового узла React: единственная точка, где
     // авторский текст соседствует с HTML по существу.
     'CSS с закрывающим тегом': { css: '</style><script>alert(1)</script>' },
@@ -227,10 +226,12 @@ describe('showFormBadge', () => {
     // Правило одно на две стороны: сервер печатает его респонденту, кабинет считает
     // тем же выражением для превью. Разойдись они — превью показывало бы автору не ту
     // форму, которую увидят люди (ровно этот дефект и нашёлся в слайсе 6).
-    expect(showFormBadge(undefined, true)).toBe(true)
-    expect(showFormBadge({}, true)).toBe(true)
-    expect(showFormBadge({ theme: 'dark' }, true)).toBe(true)
-    expect(showFormBadge({ branding: false }, false)).toBe(true)
-    expect(showFormBadge({ branding: false }, true)).toBe(false)
+    //
+    // Намерение приезжает флагом формы, а не оформлением: бейдж не в документе (ADR
+    // §10), и снимается он без перепубликации.
+    expect(showFormBadge(true, true)).toBe(true)
+    expect(showFormBadge(true, false)).toBe(true)
+    expect(showFormBadge(false, false)).toBe(true)
+    expect(showFormBadge(false, true)).toBe(false)
   })
 })
