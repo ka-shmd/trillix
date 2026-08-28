@@ -97,11 +97,13 @@ function BlockSettings({ settings, onChange }: ModeProps) {
       <Group>
         <Field id="embed-height" label="Высота">
           {/* Единица измерения — В ПОЛЕ, а не в подписи: «Высота» отвечает на «что»,
-              «px» на «в чём», и вместе они читаются одной строкой. Стрелки счётчика
-              скрыты, потому что встают ровно туда же — к правому краю поля; набор
-              числа они и так не ускоряют.
+              «px» на «в чём», и вместе они читаются одной строкой. Кегль и вес у них
+              общие — иначе «px» читается не концом строки, а меткой поверх неё.
               Кегль поднят ТЕМ ЖЕ вариантом, каким задан у компонента (`md:text-sm`):
-              плоский `text-base` его не пересилил бы. */}
+              плоский `text-base` его не пересилил бы.
+              ПОЛЕ СПРАВА ОСТАВЛЯЕТ МЕСТО ДВОИМ: стрелки счётчика браузер рисует у
+              правого края СОДЕРЖИМОГО, то есть внутри этого отступа, а «px» стоит
+              правее — в самом отступе. Уменьшишь `pr` — они наедут друг на друга. */}
           <div className="relative">
             <Input
               id="embed-height"
@@ -111,9 +113,9 @@ function BlockSettings({ settings, onChange }: ModeProps) {
               max={2000}
               value={settings.height}
               onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
-              className="pr-9 [appearance:textfield] md:text-base [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              className="pr-9 font-medium md:text-base"
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-base font-medium text-muted-foreground">
               px
             </span>
           </div>
