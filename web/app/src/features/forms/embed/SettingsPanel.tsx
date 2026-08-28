@@ -357,10 +357,12 @@ function Group({ children }: { children: ReactNode }) {
   return <section className="flex flex-col gap-3">{children}</section>
 }
 
-// Поле с подписью над контролом — тот же порядок, что у строки с тумблером.
+// Поле с подписью над контролом — тот же порядок, что у строки с тумблером. Просвет
+// 8, а не 4: четвёрка в ритме кабинета означает «заголовок и его подпись», то есть
+// склеивает две строки в одну пару, а подпись и поле ввода — соседи (DESIGN-SYSTEM §5).
 function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       {children}
     </div>
