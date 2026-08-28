@@ -54,7 +54,7 @@ export function SlashMenu({
       >
         <div ref={listRef} role="listbox" className="max-h-72 overflow-y-auto p-1">
           {items.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-muted-foreground">Ничего не найдено</p>
+            <p className="px-2 py-4 text-sm text-muted-foreground">Ничего не найдено</p>
           ) : (
             items.map((item, i) => {
               const heading = i === 0 || items[i - 1]!.group !== item.group
