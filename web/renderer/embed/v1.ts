@@ -334,9 +334,9 @@ function buildWidget(opts: MountOptions): Mounted {
   // форму человек остался бы без способа её закрыть, кроме Esc, о котором он не знает.
   // Обёртка не скроллится никогда, поэтому кнопка стоит на месте в обеих геометриях.
   //
-  // ФОН НЕПРОЗРАЧНЫЙ: кнопка лежит над формой, часто над обложкой, и полупрозрачная
-  // плашка с тёмным глифом на тёмном фоне просто исчезала. Белый круг с тенью
-  // читается на любом фоне.
+  // ПЛАШКИ ПОД ГЛИФОМ НЕТ (решение владельца 2026-08-28): белый круг с тенью нужен был
+  // кнопке, висевшей ПОЛОВИНОЙ над чужой страницей — внутри панели ему не на чем
+  // читаться, кроме самой формы, и он выглядит вторым элементом управления над ней.
   const close = document.createElement('button')
   close.type = 'button'
   close.setAttribute('aria-label', 'Закрыть форму')
@@ -345,13 +345,11 @@ function buildWidget(opts: MountOptions): Mounted {
   close.style.width = '28px'
   close.style.height = '28px'
   close.style.border = '0'
-  close.style.borderRadius = '999px'
-  close.style.background = '#ffffff'
+  close.style.background = 'transparent'
   close.style.color = '#0f172a'
-  close.style.fontSize = '18px'
+  close.style.fontSize = '22px'
   close.style.lineHeight = '1'
   close.style.cursor = 'pointer'
-  close.style.boxShadow = '0 2px 8px rgba(15, 23, 42, 0.35)'
   close.style.zIndex = '2'
   close.addEventListener('click', closeWidget)
 
