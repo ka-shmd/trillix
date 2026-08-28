@@ -122,8 +122,8 @@ export const DEFAULT_BLOCK_HEIGHT = 520
 /** Ширина панели виджета — зеркалит `DEFAULT_WIDTH` загрузчика. */
 export const DEFAULT_WIDGET_WIDTH = 376
 
-/** Ширина окна по центру — зеркалит `DEFAULT_CENTER_WIDTH` загрузчика. */
-export const DEFAULT_CENTER_WIDGET_WIDTH = 640
+/** Ширина окна по центру — зеркалит `DEFAULT_CENTER_WIDTH` загрузчика (потолок холста). */
+export const DEFAULT_CENTER_WIDGET_WIDTH = 860
 
 /**
  * widgetDefaults — умолчания вида ПО РАСПОЛОЖЕНИЮ (решение владельца 2026-08-28):
@@ -230,8 +230,8 @@ function widgetAttrs(opts: SnippetOptions): string[] {
     attrs.push(`data-position="${opts.position}"`)
   }
   // Умолчание считается от РАСПОЛОЖЕНИЯ, а не от одного числа: у окна по центру своя
-  // ширина, и запиши мы её атрибутом — сниппет нёс бы `data-width="640"` там, где
-  // загрузчик и так возьмёт 640.
+  // ширина, и запиши мы её атрибутом — сниппет нёс бы `data-width="860"` там, где
+  // загрузчик и так возьмёт 860.
   const fallback = widgetDefaults(opts.position ?? 'bottom-right').width
   if (opts.width && opts.width !== fallback) attrs.push(`data-width="${opts.width}"`)
   if (opts.overlay === false) attrs.push('data-overlay="none"')

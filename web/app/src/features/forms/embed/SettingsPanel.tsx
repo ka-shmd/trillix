@@ -247,7 +247,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
               type="number"
               inputMode="numeric"
               min={280}
-              max={centered ? 960 : 720}
+              max={centered ? 1100 : 720}
               value={settings.width}
               onChange={(e) =>
                 onChange({
