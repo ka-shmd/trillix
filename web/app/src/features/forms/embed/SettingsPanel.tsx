@@ -100,8 +100,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
           {/* Единица измерения — В ПОЛЕ, а не в подписи: «Высота» отвечает на «что»,
               «px» на «в чём», и вместе они читаются одной строкой. Кегль и вес у них
               общие — иначе «px» читается не концом строки, а меткой поверх неё.
-              Кегль поднят ТЕМ ЖЕ вариантом, каким задан у компонента (`md:text-sm`):
-              плоский `text-base` его не пересилил бы.
+              Кегль — общий с полями виджета (`FIELD_TEXT` ниже).
               ПОЛЕ СПРАВА ОСТАВЛЯЕТ МЕСТО ДВОИМ: стрелки счётчика браузер рисует у
               правого края СОДЕРЖИМОГО, то есть внутри этого отступа, а «px» стоит
               правее — в самом отступе. Уменьшишь `pr` — они наедут друг на друга. */}
@@ -114,7 +113,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
               max={2000}
               value={settings.height}
               onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
-              className="pr-9 font-medium md:text-base"
+              className={`pr-9 ${FIELD_TEXT}`}
             />
             <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-base font-medium text-muted-foreground">
               px
@@ -160,6 +159,16 @@ function BlockSettings({ settings, onChange }: ModeProps) {
   )
 }
 
+/**
+ * Кегль набранного значения — 16/500, как у поля «Высота» у блока.
+ *
+ * Умолчание shadcn — `text-base md:text-sm`, то есть на десктопе 14: рядом с полем
+ * блока это читалось двумя разными панелями. Кегль поднимается ТЕМ ЖЕ вариантом,
+ * каким задан у компонента (`md:text-base`) — плоский `text-base` не пересилил бы
+ * `md:text-sm`, класс на элементе был бы, а вида нет (web/CLAUDE.md).
+ */
+const FIELD_TEXT = 'font-medium md:text-base'
+
 // Виджет и страница ждут своей очереди редизайна (решение владельца 2026-08-27):
 // набор контролов у них прежний, изменился только каркас вокруг.
 function WidgetSettings({ settings, onChange }: ModeProps) {
@@ -202,6 +211,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
               max={settings.open === 'delay' ? 120 : 100}
               value={settings.openValue}
               onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
+              className={FIELD_TEXT}
             />
           </Field>
         </Row>
@@ -233,6 +243,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
             id="embed-label"
             value={settings.label}
             onChange={(e) => onChange({ label: e.target.value })}
+            className={FIELD_TEXT}
           />
         </Field>
       </Row>
@@ -246,6 +257,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
             max={720}
             value={settings.width}
             onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
+            className={FIELD_TEXT}
           />
         </Field>
       </Row>
