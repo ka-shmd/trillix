@@ -6,16 +6,19 @@ import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
   DEFAULT_WIDGET_WIDTH,
+  frameUrl,
   iframeSnippet,
   scriptSnippet,
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
 import { publicFormUrl } from '../publicUrl'
-import { CodePanel } from './CodePanel'
+import { CodePanel, CopyButton } from './CodePanel'
 import { MockSite } from './MockSite'
+import { ModeChoice } from './ModeChoice'
 import { SettingsPanel, type EmbedSettings } from './SettingsPanel'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet'
 
 // Экран «Встроить» (/forms/{slug}/embed) — ОТДЕЛЬНЫЙ РЕЖИМ, а не страница кабинета
@@ -112,52 +115,72 @@ export function EmbedView({
         <SheetTitle className="sr-only">Встроить форму на сайт</SheetTitle>
         <ScrollbarGutterOff />
         <div className="flex h-dvh">
-          {/* КОЛОНКА НАСТРОЕК СКРОЛЛИТСЯ, А ГЛАВНОЕ ДЕЙСТВИЕ — НЕТ: у виджета настроек
-              вдвое больше, чем у блока, и уехавшая вниз кнопка «Получить код»
-              означала бы, что до кода надо доскроллить.
+          {/* КОЛОНКА — ДВА РАЗДЕЛА (решение владельца 2026-08-27): «Встраивание» —
+              что вставляем и чем это забрать (вид, код, ссылка), «Опции» — как оно
+              выглядит. Разница между ними не в важности, а в природе: первый раздел
+              одинаков у всех трёх видов, второй у каждого свой.
               Рамки справа нет: колонка белая, страница-макет серая — границу рисует
               сама разница поверхностей, и линия поверх неё была бы вторым забором. */}
-          <aside className="flex w-125 shrink-0 flex-col">
-            {/* Выход — ПЕРВЫМ в разметке и первым под Tab: он же единственный, кроме
-                Esc. Подписан словом — крестовина в углу чужой страницы читалась бы
-                как закрытие макета, а не режима. */}
-            <div className="px-12.5 pt-5">
-              <SheetClose asChild>
-                <Button variant="ghost" size="sm" className="-ml-2 gap-1.5 text-muted-foreground">
-                  <X className="size-4" /> Закрыть
+          <aside className="flex w-125 shrink-0 flex-col overflow-y-auto px-12.5 py-5">
+            <section className="flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold">Встраивание</h2>
+                {/* Выход из режима. Крестовина без подписи — жест закрытия читается
+                    сам, а место рядом с заголовком не оставляет сомнений, что
+                    закрывается экран, а не макет. */}
+                <SheetClose asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="-mr-2 text-muted-foreground"
+                    aria-label="Закрыть"
+                    title="Закрыть"
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </SheetClose>
+              </div>
+              <ModeChoice form={form} mode={mode} onModeChange={onModeChange} />
+              <div className="flex flex-col gap-2">
+                {/* Код — тумблер, а не вход: макет и код делят одну область, и
+                    вернуться нужно тем же жестом. */}
+                <Button
+                  className="w-full gap-1.5"
+                  variant={showCode ? 'outline' : 'default'}
+                  aria-pressed={showCode}
+                  onClick={() => setShowCode((v) => !v)}
+                >
+                  {showCode ? (
+                    <>
+                      <Eye className="size-4" /> Вернуться к предпросмотру
+                    </>
+                  ) : (
+                    <>
+                      <Code2 className="size-4" /> Получить код
+                    </>
+                  )}
                 </Button>
-              </SheetClose>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-12.5 py-5">
-              <SettingsPanel
-                form={form}
-                mode={mode}
-                onModeChange={onModeChange}
-                settings={settings}
-                onChange={change}
-              />
-            </div>
-            {/* Главное действие экрана — залитая кнопка у самого края (DESIGN-SYSTEM
-                §3): за кодом сюда и приходят. Тумблер, а не вход: макет и код делят
-                одну область, и вернуться нужно тем же жестом. */}
-            <div className="border-t px-12.5 py-5">
-              <Button
-                className="w-full gap-1.5"
-                variant={showCode ? 'outline' : 'default'}
-                aria-pressed={showCode}
-                onClick={() => setShowCode((v) => !v)}
-              >
-                {showCode ? (
-                  <>
-                    <Eye className="size-4" /> Вернуться к предпросмотру
-                  </>
-                ) : (
-                  <>
-                    <Code2 className="size-4" /> Получить код
-                  </>
-                )}
-              </Button>
-            </div>
+                {/* Ссылка на фрейм — второй способ забрать вставку, для редакторов,
+                    которые делают фрейм сами (Notion, Ghost, Canva). Она же есть
+                    внутри кода отдельным разделом; здесь — потому что за ней
+                    приходят так же часто, как за кодом, и открывать ради неё экран
+                    кода незачем. */}
+                <CopyButton
+                  text={frameUrl(opts)}
+                  label="Скопировать ссылку встраивания"
+                  variant="outline"
+                  size="default"
+                  className="w-full"
+                />
+              </div>
+            </section>
+
+            <Separator className="my-6" />
+
+            <section className="flex flex-col gap-4">
+              <h2 className="text-base font-semibold">Опции</h2>
+              <SettingsPanel form={form} mode={mode} settings={settings} onChange={change} />
+            </section>
           </aside>
 
           <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">

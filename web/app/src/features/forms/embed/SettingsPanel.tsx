@@ -6,8 +6,6 @@ import { useUpdateBranding } from '../queries'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
-  MODE_HINTS,
-  MODE_TITLES,
   OPEN_TRIGGERS,
   WIDGET_POSITIONS,
   type EmbedMode,
@@ -25,7 +23,6 @@ import {
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Настройки вставки. ВСЕ ОНИ ЖИВУТ В САМОМ СНИППЕТЕ и никогда на сервере (ADR §10):
 // одна форма вставляется в несколько мест по-разному, и серверная копия настроек
@@ -67,61 +64,21 @@ interface ModeProps {
 export function SettingsPanel({
   form,
   mode,
-  onModeChange,
   settings,
   onChange,
 }: {
   form: FormDetail
   mode: EmbedMode
-  onModeChange: (mode: EmbedMode) => void
   settings: EmbedSettings
   onChange: (patch: Partial<EmbedSettings>) => void
 }) {
-  // У формы есть разрывы страниц — единственная подсказка выбора не про вкус.
-  const multipage = form.draftSchema.blocks.some((b) => b.type === 'page_break')
-
   return (
     <div className="flex flex-col gap-6">
-      <ModeChoice mode={mode} onModeChange={onModeChange} multipage={multipage} />
       {mode === 'block' && <BlockSettings settings={settings} onChange={onChange} />}
       {mode === 'widget' && <WidgetSettings settings={settings} onChange={onChange} />}
       {mode === 'page' && <PageSettings settings={settings} onChange={onChange} />}
       <Separator />
       <BadgeToggle form={form} />
-    </div>
-  )
-}
-
-// ВЫБОР ВИДА — ТРИ ВКЛАДКИ, а не дропдаун: видов ровно три, они называются одним
-// словом, и это единственный выбор экрана, меняющий его целиком (набор настроек,
-// макет, код). Дропдаун прятал бы два варианта из трёх за нажатием.
-//
-// Значение живёт в адресе (`?mode=`), поэтому вкладки — контролируемые: активной
-// становится не нажатая, а та, на которую увёл роутер. Тем же и работает «Назад».
-function ModeChoice({
-  mode,
-  onModeChange,
-  multipage,
-}: {
-  mode: EmbedMode
-  onModeChange: (mode: EmbedMode) => void
-  multipage: boolean
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <Tabs value={mode} onValueChange={(v) => onModeChange(v as EmbedMode)}>
-        <TabsList className="w-full">
-          <TabsTrigger value="block">{MODE_TITLES.block}</TabsTrigger>
-          <TabsTrigger value="widget">{MODE_TITLES.widget}</TabsTrigger>
-          <TabsTrigger value="page">{MODE_TITLES.page}</TabsTrigger>
-        </TabsList>
-      </Tabs>
-      <p className="text-xs text-muted-foreground">{MODE_HINTS[mode]}</p>
-      {multipage && mode === 'block' && (
-        <p className="text-xs text-muted-foreground">
-          У формы есть разрывы страниц — ей обычно лучше подходит «Страница».
-        </p>
-      )}
     </div>
   )
 }

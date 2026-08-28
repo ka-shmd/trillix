@@ -125,11 +125,28 @@ export function CodePanel({
   )
 }
 
-export function CopyButton({ text, className }: { text: string; className?: string }) {
+// Кнопка «скопировать» — одна на экран: четыре куска кода здесь и ссылка встраивания
+// в панели слева. Подпись и вид приходят пропами, состояние «Готово» — общее: два
+// одинаковых буфера с разным поведением после нажатия читались бы как две разные
+// кнопки.
+export function CopyButton({
+  text,
+  label = 'Копировать',
+  className,
+  variant,
+  size = 'sm',
+}: {
+  text: string
+  label?: string
+  className?: string
+  variant?: React.ComponentProps<typeof Button>['variant']
+  size?: React.ComponentProps<typeof Button>['size']
+}) {
   const [copied, setCopied] = useState(false)
   return (
     <Button
-      size="sm"
+      variant={variant}
+      size={size}
       className={className}
       onClick={() => {
         navigator.clipboard
@@ -143,7 +160,7 @@ export function CopyButton({ text, className }: { text: string; className?: stri
           })
       }}
     >
-      {copied ? 'Готово' : 'Копировать'}
+      {copied ? 'Готово' : label}
     </Button>
   )
 }
