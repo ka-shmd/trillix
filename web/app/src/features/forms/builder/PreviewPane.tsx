@@ -213,28 +213,35 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             </button>
           ) : (
             <div className="rf-nav">
-              {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
-                автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
-              {plan.blocked && page === lastPage ? null : page < lastPage ? (
-                <button
-                  type="button"
-                  className="rf-submit rf-next"
-                  onClick={() => setPage(page + 1)}
-                >
-                  {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
-                </button>
-              ) : (
-                // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
-                // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
-                // остаётся без обработчика — как и была.
-                <button
-                  type="button"
-                  className="rf-submit"
-                  onClick={thankYou ? () => setDone(true) : undefined}
-                >
-                  {label}
-                </button>
-              )}
+              {/* Коробка кнопки — та же, что у респондента (FormView): рядом с кнопкой
+                стоит бейдж площадки, и выравнивание задаётся внутри коробки. */}
+              <div className="rf-nav-main">
+                {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+                  автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
+                {plan.blocked && page === lastPage ? null : page < lastPage ? (
+                  <button
+                    type="button"
+                    className="rf-submit rf-next"
+                    onClick={() => setPage(page + 1)}
+                  >
+                    {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
+                  </button>
+                ) : (
+                  // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
+                  // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
+                  // остаётся без обработчика — как и была.
+                  <button
+                    type="button"
+                    className="rf-submit"
+                    onClick={thankYou ? () => setDone(true) : undefined}
+                  >
+                    {label}
+                  </button>
+                )}
+              </div>
+              {/* Бейдж — в строке с кнопкой, как у респондента. Ряд рисуется только до
+                отправки, поэтому на экране «Спасибо» бейдж стоит ниже сам по себе. */}
+              {badge && <Badge />}
             </div>
           )}
           {/* Линии шагов — тот же компонент и то же место, что у респондента: некликабельны
@@ -242,7 +249,7 @@ export function PreviewPane({ title, canRemoveBadge }: { title: string; canRemov
             листает превью только вперёд, ровно как респондент. На экране после отправки
             шагов нет: он не шаг формы. */}
           {!done && <StepBar pages={pages.length} page={page} />}
-          {badge && <Badge />}
+          {badge && done && <Badge />}
         </div>
       </div>
     </MentionContext.Provider>

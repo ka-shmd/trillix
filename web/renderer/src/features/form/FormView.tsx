@@ -687,29 +687,39 @@ export function FormView({
             «Далее». Иначе форма собирала бы неполные ответы у тех, кто дошёл до
             середины: кнопка отправки посреди шагов читается как «готово». */}
           <div className="rf-nav">
-            {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
-              отправить нельзя. Кнопки нет вовсе, а не disabled — отключённая кнопка
-              обещает, что вот-вот станет доступной. Сервер это же состояние проверяет
-              сам (NormalizeAnswers): спрятанная разметкой кнопка не защищает от curl. */}
-            {plan.blocked && page === lastPage ? null : page < lastPage ? (
-              <button
-                className="rf-submit rf-next"
-                type="button"
-                onClick={onNext}
-                disabled={locked}
-              >
-                {nextLabel}
-              </button>
-            ) : (
-              <button
-                className="rf-submit"
-                type="button"
-                onClick={() => void onSubmit()}
-                disabled={phase === 'submitting'}
-              >
-                {phase === 'submitting' ? 'Отправка…' : submitLabel}
-              </button>
-            )}
+            {/* Кнопка лежит в своей коробке ряда: рядом с ней стоит бейдж площадки, и
+              выравнивание кнопки задаётся внутри коробки, а не всем рядом (fields.css,
+              .rf-nav-main). Коробка рисуется и без бейджа — ряд из одной кнопки
+              выглядит так же, как до неё. */}
+            <div className="rf-nav-main">
+              {/* Действие «скрыть кнопку» обрывает обход на этой странице: идти некуда и
+                отправить нельзя. Кнопки нет вовсе, а не disabled — отключённая кнопка
+                обещает, что вот-вот станет доступной. Сервер это же состояние проверяет
+                сам (NormalizeAnswers): спрятанная разметкой кнопка не защищает от curl. */}
+              {plan.blocked && page === lastPage ? null : page < lastPage ? (
+                <button
+                  className="rf-submit rf-next"
+                  type="button"
+                  onClick={onNext}
+                  disabled={locked}
+                >
+                  {nextLabel}
+                </button>
+              ) : (
+                <button
+                  className="rf-submit"
+                  type="button"
+                  onClick={() => void onSubmit()}
+                  disabled={phase === 'submitting'}
+                >
+                  {phase === 'submitting' ? 'Отправка…' : submitLabel}
+                </button>
+              )}
+            </div>
+            {/* Бейдж — в одной строке с кнопкой, у противоположного края (решение
+              владельца 2026-08-28). Кнопка во всю ширину занимает строку целиком, и
+              бейдж переносится под неё — переносом ряда, а не своей веткой. */}
+            {form.showBadge && <Badge />}
           </div>
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Не кнопки: ход назад снят целиком (2026-08-22), линии остались
@@ -732,9 +742,6 @@ export function FormView({
           {collectPartial && (
             <p className="form-note">Форма сохраняет введённое, даже если вы её не отправите.</p>
           )}
-          {/* Бейдж — последней строкой страницы, под линиями шагов: он про площадку,
-            а не про форму, и лезть выше содержимого автора ему незачем. */}
-          {form.showBadge && <Badge />}
         </main>
       </MentionContext.Provider>
     </UploaderProvider>
