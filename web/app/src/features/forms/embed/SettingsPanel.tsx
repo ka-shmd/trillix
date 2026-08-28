@@ -51,8 +51,6 @@ export interface EmbedSettings {
   open: OpenTrigger
   openValue: number
   hideOnSubmit: boolean
-  /** Вставка без загрузчика — голым `<iframe>`; у виджета невозможна. */
-  plain: boolean
 }
 
 interface ModeProps {
@@ -90,10 +88,6 @@ export function SettingsPanel({
 // 2026-08-27) — подпись над двумя-тремя строками сама становилась шумом, от которого
 // её заводили, а что делает настройка, показывает макет справа.
 function BlockSettings({ settings, onChange }: ModeProps) {
-  // Виджета без скрипта не существует, а у блока — вполне: голый фрейм не умеет
-  // только живую высоту.
-  const plain = settings.plain
-
   return (
     <>
       <Row>
@@ -126,8 +120,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
       <Row>
         <Toggle
           id="embed-dynamic-height"
-          checked={settings.dynamicHeight && !plain}
-          disabled={plain}
+          checked={settings.dynamicHeight}
           onChange={(v) => onChange({ dynamicHeight: v })}
           text="Живая высота"
         />
@@ -156,14 +149,6 @@ function BlockSettings({ settings, onChange }: ModeProps) {
           checked={settings.transparent}
           onChange={(v) => onChange({ transparent: v })}
           text="Прозрачный фон"
-        />
-      </Row>
-      <Row>
-        <Toggle
-          id="embed-plain"
-          checked={plain}
-          onChange={(v) => onChange({ plain: v })}
-          text="Без скрипта, простым iframe"
         />
       </Row>
     </>
@@ -297,14 +282,6 @@ function PageSettings({ settings, onChange }: ModeProps) {
           checked={settings.transparent}
           onChange={(v) => onChange({ transparent: v })}
           text="Прозрачный фон"
-        />
-      </Row>
-      <Row>
-        <Toggle
-          id="embed-plain"
-          checked={settings.plain}
-          onChange={(v) => onChange({ plain: v })}
-          text="Без скрипта, простым iframe"
         />
       </Row>
     </>
