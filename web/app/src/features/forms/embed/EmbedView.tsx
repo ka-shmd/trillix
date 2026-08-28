@@ -225,7 +225,7 @@ export function EmbedView({
               // сайте настройки меняются переписыванием кода и перезагрузкой
               // страницы, промежуточного состояния «фрейм тот же, атрибуты другие»
               // не бывает.
-              <PreviewArea form={form} snippet={previewSnippet} />
+              <PreviewArea form={form} snippet={previewSnippet} mode={mode} />
             )}
           </main>
         </div>
@@ -260,7 +260,15 @@ function ScrollbarGutterOff() {
 // форме, и только оно: во фрейме такая форма отдаёт 404 (инвариант 5: черновик
 // неотличим от несуществующей), то есть выглядит как поломка вставки. Говорим до
 // того, как автор пойдёт искать причину в своём коде.
-function PreviewArea({ form, snippet }: { form: FormDetail; snippet: string }) {
+function PreviewArea({
+  form,
+  snippet,
+  mode,
+}: {
+  form: FormDetail
+  snippet: string
+  mode: EmbedMode
+}) {
   const [applied, setApplied] = useState(snippet)
   useEffect(() => {
     const timer = setTimeout(() => setApplied(snippet), 350)
@@ -279,7 +287,7 @@ function PreviewArea({ form, snippet }: { form: FormDetail; snippet: string }) {
         </p>
       )}
       <div className="min-h-0 flex-1">
-        <MockSite snippet={applied} />
+        <MockSite snippet={applied} mode={mode} />
       </div>
     </div>
   )

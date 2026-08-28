@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 
+import { type EmbedMode } from '../embedSnippet'
+
 // МАКЕТ ЧУЖОГО САЙТА — отдельный документ, и это обязательное условие, а не приём
 // оформления: виджет ставит кнопку и модалку через `position: fixed`, и в документе
 // кабинета они накрыли бы собой весь экран. Свой документ ограничивает их фреймом,
@@ -56,6 +58,8 @@ const MOCK_STYLES = `
   .card { flex: 1; background: oklch(1 0 0); border-radius: 4px; padding: 20px }
   .thumb { height: 180px; background: oklch(0.925 0.006 80); border-radius: 4px }
   .slot { margin: 32px 0 }
+  /* Слот «страницы»: полей нет — фрейм всё равно ложится фиксированным слоем. */
+  .slot-bare { margin: 0 }
   .foot {
     display: flex;
     gap: 24px;
@@ -67,7 +71,7 @@ const MOCK_STYLES = `
   .foot-col { flex: 1 }
 `
 
-export function MockSite({ snippet }: { snippet: string }) {
+export function MockSite({ snippet, mode }: { snippet: string; mode: EmbedMode }) {
   const hostRef = useRef<HTMLDivElement>(null)
 
   // ФРЕЙМ СОЗДАЁТСЯ ЭФФЕКТОМ И УНОСИТСЯ ВМЕСТЕ С НИМ, а не живёт в разметке. Причина
@@ -95,20 +99,31 @@ export function MockSite({ snippet }: { snippet: string }) {
       style.textContent = MOCK_STYLES
       doc.head.append(style)
 
-      const wrap = box(doc, 'wrap')
-      // ФОРМА СТОИТ СРАЗУ ПОД ВВОДНЫМ АБЗАЦЕМ, а содержимое страницы — под ней, и
-      // порядок этот несущий: за видом формы на экран и приходят. Стоило поставить
-      // перед ней большую картинку, как форма уехала за сгиб — в правой половине
-      // виден был макет без единственного, ради чего он нарисован.
-      const slot = box(doc, 'slot')
-      wrap.append(nav(doc), title(doc), lead(doc), slot, box(doc, 'hero'), cards(doc), foot(doc))
-      doc.body.append(wrap)
+      // У «СТРАНИЦЫ» МАКЕТА НЕТ ВОВСЕ (решение владельца 2026-08-28): этот вид
+      // ЗАМЕЩАЕТ содержимое чужой страницы, и рисовать под ним шапку с карточками
+      // значит показывать то, чего посетитель не увидит никогда. Заметно это стало
+      // из-за прозрачного фона формы (умолчание панели): заглушки просвечивали
+      // сквозь неё, и сцена читалась как «форма поверх сайта» — то есть как блок.
+      // Полотно при этом остаётся серым, а не белым: на нём видно, что делает
+      // тумблер «Прозрачный фон», ради которого цвет и выбирался.
+      const slot = box(doc, mode === 'page' ? 'slot-bare' : 'slot')
+      if (mode === 'page') {
+        doc.body.append(slot)
+      } else {
+        // ФОРМА СТОИТ СРАЗУ ПОД ВВОДНЫМ АБЗАЦЕМ, а содержимое страницы — под ней, и
+        // порядок этот несущий: за видом формы на экран и приходят. Стоило поставить
+        // перед ней большую картинку, как форма уехала за сгиб — в правой половине
+        // виден был макет без единственного, ради чего он нарисован.
+        const wrap = box(doc, 'wrap')
+        wrap.append(nav(doc), title(doc), lead(doc), slot, box(doc, 'hero'), cards(doc), foot(doc))
+        doc.body.append(wrap)
+      }
 
       insertSnippet(doc, slot, snippet)
     }
 
     return () => frame.remove()
-  }, [snippet])
+  }, [snippet, mode])
 
   return <div ref={hostRef} className="h-full w-full" />
 }
