@@ -77,10 +77,17 @@ test('форма живёт блоком и виджетом на посторо
 
   // 1. Кабинет отдаёт готовый сниппет — берём его из интерфейса, а не собираем руками:
   // так тест ловит расхождение между тем, что показано владельцу, и тем, что работает.
-  await page.goto(`/forms/${form.slug}/share`)
-  const snippet = await page.getByLabel('Код для вставки').inputValue()
+  // Код лежит за тумблером «Получить код»: макет вставки и код делят одну область.
+  await page.goto(`/forms/${form.slug}/embed`)
+  await page.getByRole('button', { name: 'Получить код' }).click()
+  // Код лежит в `<pre>`, а не в поле ввода: читаем текст, а не значение. `exact`
+  // обязателен — иначе под подпись подходит и кнопка «Скопировать: код для вставки».
+  const snippet =
+    (await page.getByLabel('Код для вставки', { exact: true }).textContent()) ?? ''
   expect(snippet).toContain('/embed/v1.js')
-  expect(snippet).toContain(`data-trillix-form="${form.slug}"`)
+  // Блок — двухтеговая вставка: фрейм с адресом в data-trillix-src (пустой `src`
+  // обязателен, иначе браузер начнёт грузить форму мимо загрузчика) плюс загрузчик.
+  expect(snippet).toContain(`data-trillix-src="${RENDERER}/r/${form.slug}?embed=block"`)
 
   // ── Блок на постороннем сайте ────────────────────────────────────────────────
   const visitor = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -91,14 +98,16 @@ test('форма живёт блоком и виджетом на посторо
   )
   await host.goto(HOST_PAGE)
 
-  const frame = host.frameLocator('iframe[title="Форма"]')
+  // Фрейм блока назван САМОЙ ФОРМОЙ (её название уезжает в title сниппета) — в
+  // отличие от фрейма виджета ниже, который строит загрузчик и называет «Форма».
+  const frame = host.frameLocator(`iframe[title="${formTitle}"]`)
   const field = frame.getByLabel(Q1)
   // Видимое поле внутри фрейма и есть доказательство, что заголовки ослаблены: при
   // прежних SAMEORIGIN/'self' здесь был бы пустой прямоугольник.
   await expect(field).toBeVisible()
 
   // 2. Авторесайз: фрейм перестал быть стартовой высотой и подстроился под форму.
-  const frameEl = host.locator('iframe[title="Форма"]')
+  const frameEl = host.locator(`iframe[title="${formTitle}"]`)
   await expect
     .poll(async () => (await frameEl.boundingBox())?.height ?? 0, { timeout: 10_000 })
     .not.toBe(520)
@@ -110,16 +119,30 @@ test('форма живёт блоком и виджетом на посторо
   await expect(frame.getByRole('heading', { name: 'Спасибо!' })).toBeVisible()
 
   // ── Виджет ───────────────────────────────────────────────────────────────────
-  const widgetSnippet = snippet.replace(
-    `data-trillix-form="${form.slug}"`,
-    `data-trillix-widget="${form.slug}" data-label="Оставить заявку"`,
-  )
+  // Сниппет виджета берётся ТЕМ ЖЕ ПУТЁМ, что и блочный, — переключением вида в
+  // кабинете, а не правкой строки: у видов теперь разный формат вставки (у виджета
+  // один тег скрипта, у блока фрейм плюс загрузчик), и подмена атрибута в чужой
+  // строке проверяла бы выдумку теста, а не то, что кабинет отдаёт владельцу.
+  // Экран кода остаётся открытым: настройки живут в колонке слева и переключение
+  // вида его не закрывает — второй раз жать «Получить код» не нужно (да и нельзя:
+  // это тумблер, и подпись у него теперь другая).
+  await page.getByRole('tab', { name: 'Виджет' }).click()
+  const widgetSnippet =
+    (await page.getByLabel('Код для вставки', { exact: true }).textContent()) ?? ''
+  // Всплывающая форма по клику — загрузчик плюс КНОПКА САЙТА: своей кнопки загрузчик
+  // больше не рисует, и тега скрипта с настройками у этой формы вставки нет.
+  expect(widgetSnippet).toContain('/embed/v1.js')
+  expect(widgetSnippet).toContain(`data-trillix-open="${form.slug}"`)
+  expect(widgetSnippet).not.toContain('data-trillix-widget')
   const widgetPage = await visitor.newPage()
   await widgetPage.route(HOST_PAGE, (route) =>
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: hostHtml(widgetSnippet) }),
   )
   await widgetPage.goto(HOST_PAGE)
 
+  // Кнопка на странице ровно одна — та, что приехала в сниппете. Вторая означала бы,
+  // что загрузчик по-прежнему рисует свою поверх кнопки сайта.
+  await expect(widgetPage.getByRole('button')).toHaveCount(1)
   const trigger = widgetPage.getByRole('button', { name: 'Оставить заявку' })
   await expect(trigger).toBeVisible()
   // До нажатия формы нет вовсе: фрейм создаётся в момент открытия, иначе визит

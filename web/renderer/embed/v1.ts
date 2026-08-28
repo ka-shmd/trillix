@@ -3,10 +3,21 @@
 // обратно совместимые; всё, что ломает вставленные сниппеты, обязано стать v2.js
 // (design/embed.md §3).
 //
-// Сниппет — один тег, без парного div:
+// У сниппета ДВЕ формы, и обе обязаны работать вечно.
+//
+// Однотеговая — скрипт сам вставляет фрейм на своё место:
 //   <script src="https://f.trillix.ru/embed/v1.js" data-trillix-form="opros" async></script>
 //   <script src="…/v1.js" data-trillix-widget="opros" data-label="Оставить заявку" async></script>
 //   <script src="…/v1.js" data-trillix-form="opros" data-mode="page" async></script>
+//
+// Двухтеговая — фрейм написан в разметке, загрузчик его усыновляет (`loadEmbeds`):
+//   <iframe data-trillix-src="…/r/opros?embed=block" width="100%" height="520"></iframe>
+//   <script async src="https://f.trillix.ru/embed/v1.js"></script>
+// Место фрейма в этой форме держит разметка, поэтому вставка не прыгает при загрузке,
+// а сам фрейм виден автору — его можно двигать и стилизовать, не трогая наш код.
+// Тот же обход подбирает фрейм, построенный чужим редактором по «ссылке для вставки»
+// (Notion, Ghost, Canva): адрес ему не меняют, но высота начинает следовать за формой,
+// как только на страницу добавлен тег загрузчика.
 //
 // Стили везде назначаются через CSSOM (`el.style.x = …`), а не атрибутом style: на
 // сайте со строгой CSP без 'unsafe-inline' атрибут был бы отброшен и виджет остался
@@ -18,6 +29,7 @@ import {
   DEFAULT_OPEN_DELAY,
   DEFAULT_OPEN_SCROLL,
   DEFAULT_WIDTH,
+  frameAdoption,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -102,6 +114,62 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
     const i = mounted.indexOf(entry)
     if (i >= 0) mounted.splice(i, 1)
   })
+}
+
+/**
+ * loadEmbeds — взять под управление фреймы страницы, ведущие на наш origin: и
+ * размеченные `data-trillix-src` (двухтеговый сниппет), и построенные чужим
+ * редактором по «ссылке для вставки».
+ *
+ * Публичный метод (`Trillix.loadEmbeds()`), а не только внутренний вызов: фрейм может
+ * появиться после загрузки — карточка товара в SPA, вкладка, аккордеон, — и поднять
+ * его тогда некому. Тот же метод и у Tally, и по той же причине.
+ *
+ * Повторный вызов безопасен: усыновлённому фрейму проставлен `src`, и селектор его
+ * больше не видит.
+ */
+function loadEmbeds(): void {
+  for (const frame of Array.from(document.querySelectorAll('iframe'))) adoptFrame(frame)
+}
+
+/**
+ * adoptFrame — чужой по происхождению узел становится нашей вставкой.
+ *
+ * РЕГИСТРАЦИЯ В РЕЕСТРЕ ОБЯЗАТЕЛЬНА, и это не бухгалтерия: `onFrameMessage` ищет
+ * отправителя среди `mounted`, и фрейм мимо реестра не получил бы ни подстройки
+ * высоты, ни подтяжки страницы при смене шага — форма молча осталась бы ростом в
+ * атрибут `height`.
+ */
+function adoptFrame(frame: HTMLIFrameElement): void {
+  if (mounted.some((m) => m.frame === frame)) return
+  // ДВА ИСТОЧНИКА АДРЕСА, и разница между ними принципиальная. `data-trillix-src` —
+  // наш сниппет: адрес ещё не тронут, его ставим мы. Обычный `src` — фрейм, который
+  // построил чужой редактор по «ссылке для вставки» (Notion, Ghost, Canva): он уже
+  // грузится, и трогать его адрес нельзя — перезапись перезагрузила бы форму, стерев
+  // набранное. Оттуда берём только настройки, ради подстройки высоты.
+  const declared = frame.getAttribute('data-trillix-src')
+  const address = declared ?? frame.getAttribute('src')
+  const adoption = frameAdoption(ORIGIN, address, frame, window.location.search)
+  if (adoption === null) return
+
+  if (declared !== null && frame.getAttribute('src') === null) {
+    frame.src = adoption.src
+    if (frame.title === '') frame.title = 'Форма'
+    // Высоту у блока ведёт содержимое, поэтому внутренний скролл там лишний — то же
+    // правило, что у собранного нами фрейма (`createFrame`). У страницы фрейм ростом
+    // с вьюпорт и скроллится сам.
+    if (adoption.opts.mode !== 'page' && adoption.opts.dynamicHeight !== false) {
+      frame.scrolling = 'no'
+    }
+    // «Страница» запирает прокрутку хозяина: за фиксированным фреймом прокручивать
+    // нечего, а незапертая страница уезжала бы колесом поверх формы. Замок живёт,
+    // пока живёт вставка, — снимать его закрытию виджета не даёт `pageMounted`.
+    if (adoption.opts.mode === 'page') {
+      pageMounted = true
+      lockScroll()
+    }
+  }
+  mounted.push({ frame, opts: adoption.opts, handlers: {} })
 }
 
 /**
@@ -286,15 +354,19 @@ function buildWidget(opts: MountOptions): Mounted {
   const narrow = window.matchMedia('(max-width: 640px)')
   const place = () => {
     const full = opts.mode === 'page' || narrow.matches
+    // ЦЕНТР — ОКНО, А НЕ УГОЛ: то же полотно, только выравнивание по обеим осям
+    // посередине. Отдельной ветки геометрии ему не нужно — панель у угла и окно по
+    // центру отличаются ровно двумя значениями flex.
+    const centered = corner === 'center'
     const top = corner === 'top-right' || corner === 'top-left'
     const left = corner === 'bottom-left' || corner === 'top-left'
 
     overlay.style.padding = full ? '0' : '24px'
-    // Раскладка одна на все четыре угла: flex-контейнер во весь вьюпорт и два
+    // Раскладка одна на все положения: flex-контейнер во весь вьюпорт и два
     // выравнивания. Позиционировать панель координатами было бы то же самое, но в
-    // четырёх ветках вместо двух строк.
-    overlay.style.alignItems = full ? 'center' : top ? 'flex-start' : 'flex-end'
-    overlay.style.justifyContent = full ? 'center' : left ? 'flex-start' : 'flex-end'
+    // пяти ветках вместо двух строк.
+    overlay.style.alignItems = full || centered ? 'center' : top ? 'flex-start' : 'flex-end'
+    overlay.style.justifyContent = full || centered ? 'center' : left ? 'flex-start' : 'flex-end'
 
     panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
     panel.style.height = full ? '100%' : 'auto'
@@ -411,8 +483,10 @@ function createButton(opts: MountOptions) {
 // того, как её закрыли, читается не как второй шанс, а как повод уйти с сайта; поэтому
 // сработавший триггер снимает свои подписки и больше не наблюдает ни за чем.
 //
-// Кнопка при этом остаётся: закрывший форму человек должен иметь способ вернуться.
-function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
+// Кнопка при этом остаётся, если она вообще есть: закрывший форму человек должен иметь
+// способ вернуться. У вставки без своей кнопки этот способ — элемент сайта, к которому
+// её прицепил владелец.
+function armTrigger(opts: MountOptions, button: HTMLButtonElement | null) {
   const trigger = opts.open ?? 'click'
   if (trigger === 'click') return
 
@@ -429,10 +503,7 @@ function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
     const scrollable = document.documentElement.scrollHeight - window.innerHeight
     // Страница короче экрана прокручивается нулём: считать долю не от чего, и ждать
     // прокрутки бессмысленно — показываем сразу.
-    const passed =
-      scrollable <= 0
-        ? 100
-        : (window.scrollY / scrollable) * 100
+    const passed = scrollable <= 0 ? 100 : (window.scrollY / scrollable) * 100
     if (passed >= (opts.openValue || DEFAULT_OPEN_SCROLL)) fire()
   }
   // Уход со страницы: курсор вышел через ВЕРХНЮЮ границу окна — к вкладкам и адресной
@@ -483,7 +554,12 @@ function listen() {
     const form = trigger.getAttribute('data-trillix-open')
     if (!form) return
     event.preventDefault()
-    open({ form, mode: 'widget' }, trigger as HTMLElement)
+    // НАСТРОЙКИ ЧИТАЮТСЯ С САМОГО ЭЛЕМЕНТА: с 2026-08-28 кабинет печатает их
+    // атрибутами на кнопке сайта (расположение, ширина, затемнение), и без разбора
+    // форма открывалась бы с умолчаниями — то есть не так, как автор её настроил.
+    // Запасной вариант оставлен для кнопок, размеченных до этого одним атрибутом.
+    const opts = optionsFromAttrs(trigger) ?? { form, mode: 'widget' as const }
+    open({ ...opts, mode: 'widget' }, trigger as HTMLElement)
   })
 
   window.addEventListener('message', onFrameMessage)
@@ -559,7 +635,12 @@ function attach(script: Element): void {
   const opts = optionsFromAttrs(script)
   if (!opts) return
   if (opts.mode === 'widget') {
-    armTrigger(opts, createButton(opts))
+    // СВОЯ КНОПКА — ТОЛЬКО У СТАРЫХ ВСТАВОК. Сниппет кабинета с 2026-08-28 несёт
+    // `data-button="none"` и открывается элементом сайта (`data-trillix-open`) или
+    // вызовом из кода; тег скрипта в этой форме нужен ради автооткрытия. Вставки,
+    // стоящие на чужих сайтах с прошлых месяцев, атрибута не несут — им кнопка
+    // по-прежнему рисуется, иначе форма разом стала бы на них недоступной.
+    armTrigger(opts, opts.button === false ? null : createButton(opts))
     return
   }
   // «Страница» ничего не вставляет в поток: она накрывает чужую страницу целиком, и
@@ -585,6 +666,8 @@ declare global {
       mount(target: Element, opts: MountOptions): EmbedHandle | null
       open(opts: MountOptions, from?: HTMLElement | null): EmbedHandle | null
       close(): void
+      /** Поднять фреймы `data-trillix-src`, появившиеся после загрузки страницы. */
+      loadEmbeds(): void
       /** Внутреннее: второй экземпляр файла отдаёт свой сниппет первому. */
       attach?(script: Element): void
     }
@@ -600,8 +683,29 @@ declare global {
 const prior = window.Trillix
 if (prior?.attach) {
   if (current) prior.attach(current)
+  // Фреймы второй формы сниппета ищет ПЕРВЫЙ экземпляр — реестр и подписки живут
+  // там; второй только просит его посмотреть ещё раз. Осторожно, через `?.`: первым
+  // мог оказаться загрузчик соседнего контура (страница с формами двух доменов), и
+  // метода этого у него может не быть вовсе.
+  prior.loadEmbeds?.()
 } else {
   listen()
-  window.Trillix = { mount, open, close: closeWidget, attach }
+  window.Trillix = { mount, open, close: closeWidget, loadEmbeds, attach }
   if (current) attach(current)
+  scanEmbeds()
+}
+
+/**
+ * scanEmbeds — обход фреймов двухтеговой вставки на старте.
+ *
+ * Загрузчик стоит с `async`, то есть выполняется КОГДА УГОДНО относительно разбора
+ * документа: фрейм, написанный ниже по странице, в этот момент может ещё не
+ * существовать. Поэтому обход повторяется по `DOMContentLoaded` — иначе вставка
+ * поднималась бы через раз, в зависимости от скорости сети.
+ */
+function scanEmbeds(): void {
+  loadEmbeds()
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadEmbeds, { once: true })
+  }
 }

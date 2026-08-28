@@ -8,8 +8,13 @@
 /** Как форма показана на чужой странице. */
 export type EmbedMode = 'block' | 'widget' | 'page'
 
-/** Угол, в котором стоит кнопка виджета. */
-export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+/**
+ * Где показывается всплывающая форма: панель в углу или окно по центру.
+ *
+ * Четыре угла — контракт v1: кабинет с 2026-08-28 предлагает только правый нижний и
+ * центр, но вставки с `top-left` и прочими живут на чужих сайтах и обязаны работать.
+ */
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center'
 
 /**
  * Что открывает виджет: клик по кнопке или одно из наблюдений за посетителем.
@@ -56,6 +61,15 @@ export interface MountOptions {
   openValue?: number
   /** Убрать виджет со страницы после отправки ответа. */
   hideOnSubmit?: boolean
+  /**
+   * Рисовать ли СВОЮ кнопку виджета. `false` — форму открывает сайт: своим элементом
+   * с `data-trillix-open` или вызовом `Trillix.open` (снипет кабинета с 2026-08-28).
+   *
+   * Умолчание `true` — часть бессрочного контракта: вставки, стоящие на чужих сайтах
+   * с 2026-08, атрибута не несут, и прочитай мы его отсутствие как «не рисовать»,
+   * форма разом стала бы недоступной на всех них.
+   */
+  button?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
   alignLeft?: boolean
   /**
@@ -155,7 +169,13 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   // Виджет узнаётся по своему атрибуту, а не по data-mode: он единственный, кто
   // ничего не вставляет в поток страницы, и путать его с блоком опечаткой в режиме
   // («форма пропала со страницы») не стоит.
-  const widget = el.getAttribute('data-trillix-widget')
+  //
+  // ДВА АТРИБУТА, А НЕ ОДИН: `data-trillix-widget` — на нашем теге скрипта,
+  // `data-trillix-open` — на ЧУЖОЙ кнопке, к которой сайт цепляет форму. Настройки
+  // вида (угол, ширина, затемнение) читаются с того же элемента, поэтому разбор у
+  // них общий: иначе кнопка сайта открывала бы форму с умолчаниями, а не с тем, что
+  // автор настроил в кабинете.
+  const widget = el.getAttribute('data-trillix-widget') ?? el.getAttribute('data-trillix-open')
   const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
   const label = el.getAttribute('data-label')
@@ -180,6 +200,65 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
     open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
     openValue: size(el.getAttribute('data-open-value'), 0),
     hideOnSubmit: el.getAttribute('data-hide-on-submit') === '1',
+    button: el.getAttribute('data-button') !== 'none',
+  }
+}
+
+/**
+ * frameAdoption — разбор ГОТОВОГО фрейма двухтеговой вставки:
+ * `<iframe data-trillix-src="…"> + <script src="…/embed/v1.js">`.
+ *
+ * Вторая форма сниппета (§2 EMBED.md). Настройки вида в ней уже уехали в адрес — его
+ * собрал кабинет, — поэтому здесь не сборка, а ПРОВЕРКА чужой строки и добавление
+ * того, чего в кабинете быть не могло: меток источника хост-страницы.
+ *
+ * Адрес приходит ПАРАМЕТРОМ, а не читается из узла, потому что мест у него два:
+ * `data-trillix-src` у фрейма из нашего сниппета и обычный `src` у фрейма, который
+ * построил по «ссылке для вставки» чужой редактор (Notion, Ghost, Canva). Второму
+ * адрес менять нельзя — он уже загружен, — и вызывающий берёт оттуда только `opts`.
+ *
+ * null = фрейм не наш (нет атрибута, битый адрес, чужой origin, путь не `/r/{slug}`).
+ * Проверка origin обязательна: загрузчик не должен становиться универсальным
+ * подъёмником фреймов по адресу из разметки чужой страницы.
+ *
+ * Режим берётся из адреса, а не из атрибута: адрес — единственное, что описывает
+ * вставку целиком, и разойтись эти два источника не могут. Всё, что не `page`,
+ * считается блоком: фрейм стоит в потоке, и вести себя иначе он не может, что бы ни
+ * было написано в `embed`.
+ */
+export function frameAdoption(
+  origin: string,
+  address: string | null,
+  el: AttrSource,
+  hostSearch: string,
+): { src: string; opts: MountOptions } | null {
+  if (origin === '' || !isHttpUrl(address)) return null
+  const raw = address
+  const url = new URL(raw)
+  if (url.origin !== origin || !url.pathname.startsWith('/r/')) return null
+  const form = decodeURIComponent(url.pathname.slice('/r/'.length))
+  if (form === '' || form.includes('/')) return null
+
+  // Метки источника — с ХОСТ-страницы, как и у собранного загрузчиком адреса
+  // (`frameSrc`): в кабинете их знать неоткуда. Уже написанное в адресе не
+  // переписывается — это выбор того, кто сниппет правил.
+  const host = new URLSearchParams(hostSearch)
+  for (const key of UTM_KEYS) {
+    const value = host.get(key)
+    if (value && !url.searchParams.has(key)) url.searchParams.set(key, value)
+  }
+
+  return {
+    src: url.toString(),
+    opts: {
+      form,
+      mode: url.searchParams.get('embed') === 'page' ? 'page' : 'block',
+      // Высота фрейма записана в его собственном атрибуте `height`, а следование за
+      // содержимым выключается `data-dynamic-height="0"` — тем же атрибутом, что у
+      // однотегового сниппета.
+      height: size(el.getAttribute('height'), DEFAULT_HEIGHT),
+      dynamicHeight: el.getAttribute('data-dynamic-height') !== '0',
+    },
   }
 }
 
@@ -189,10 +268,12 @@ function size(raw: string | null, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-// Неизвестный угол — правый нижний: сниппет с опечаткой обязан показать кнопку, а не
-// потерять её за краем экрана.
+// Неизвестное расположение — правый нижний угол: сниппет с опечаткой обязан показать
+// форму, а не потерять её за краем экрана.
 function readPosition(raw: string | null): WidgetPosition {
-  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' ? raw : 'bottom-right'
+  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' || raw === 'center'
+    ? raw
+    : 'bottom-right'
 }
 
 /**

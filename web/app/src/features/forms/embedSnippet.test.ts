@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { textFromString, type Block } from '@entities/formSchema'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_WIDGET_WIDTH,
+  embedCode,
   frameUrl,
   iframeSnippet,
-  prefillFields,
-  prefillSnippet,
+  openSnippet,
+  previewCode,
   scriptSnippet,
+  withoutMode,
   type SnippetOptions,
 } from './embedSnippet'
 
@@ -18,13 +19,19 @@ const base: SnippetOptions = {
   mode: 'block',
 }
 
-const block = (over: Partial<Block>): Block =>
-  ({
-    id: 'blk_1',
-    groupId: 'g1',
-    type: 'short_text',
-    ...over,
-  }) as Block
+describe('withoutMode', () => {
+  // `?mode=block` тянулся за человеком по разделам формы и оставался в адресе,
+  // которым он делится: маршрут-получатель чужие ключи не вычищает, снимать их
+  // надо на выходе.
+  it('снимает вид вставки, остальное оставляет', () => {
+    expect(withoutMode({ mode: 'block', w: 'team' })).toEqual({ w: 'team' })
+  })
+
+  it('адрес без вида не меняется', () => {
+    expect(withoutMode({ w: 'team' })).toEqual({ w: 'team' })
+    expect(withoutMode({})).toEqual({})
+  })
+})
 
 describe('scriptSnippet', () => {
   it('блок — один тег со ссылкой на загрузчик того же домена, что и форма', () => {
@@ -33,16 +40,15 @@ describe('scriptSnippet', () => {
     )
   })
 
-  it('виджет — своим атрибутом, с надписью и углом', () => {
-    const code = scriptSnippet({
-      ...base,
-      mode: 'widget',
-      label: 'Оставить заявку',
-      position: 'bottom-left',
-    })
+  // Тег скрипта у всплывающей формы остался только под автооткрытие, и кнопки он
+  // больше не рисует — отсюда явный `data-button="none"` (его отсутствие загрузчик
+  // читает как «рисовать», ради вставок прошлых месяцев).
+  it('всплывающая форма — своим атрибутом, без своей кнопки', () => {
+    const code = scriptSnippet({ ...base, mode: 'widget', open: 'delay', openValue: 5 })
     expect(code).toContain('data-trillix-widget="opros"')
-    expect(code).toContain('data-label="Оставить заявку"')
-    expect(code).toContain('data-position="bottom-left"')
+    expect(code).toContain('data-button="none"')
+    expect(code).toContain('data-open="delay"')
+    expect(code).toContain('data-open-value="5"')
     expect(code).not.toContain('data-trillix-form')
   })
 
@@ -51,12 +57,8 @@ describe('scriptSnippet', () => {
     expect(scriptSnippet({ ...base, transparent: true })).toContain('data-bg="transparent"')
   })
 
-  // Надпись вводит владелец формы, а уезжает она в HTML-атрибут на ЧУЖОЙ странице:
-  // кавычка оборвала бы атрибут и превратила остаток сниппета в мусор там, куда мы
-  // уже не попадём.
-  it('надпись с кавычками не рвёт разметку', () => {
-    const code = scriptSnippet({ ...base, mode: 'widget', label: 'Оставить "заявку" <b>' })
-    expect(code).toContain('data-label="Оставить &quot;заявку&quot; &lt;b&gt;"')
+  it('тег скрипта остаётся одной строкой', () => {
+    const code = scriptSnippet({ ...base, mode: 'widget', open: 'exit' })
     expect(code).toMatch(/^<script src="[^"]+" [^>]*async><\/script>$/)
   })
 })
@@ -202,48 +204,113 @@ describe('iframeSnippet', () => {
   })
 })
 
-describe('prefillFields', () => {
-  const blocks: Block[] = [
-    block({ id: 'blk_t1', groupId: 'g1', type: 'label', text: textFromString('Ваша почта') }),
-    block({ id: 'blk_f1', groupId: 'g1', type: 'email' }),
-    block({ id: 'blk_t2', groupId: 'g2', type: 'label', text: textFromString('Комментарий') }),
-    block({ id: 'blk_f2', groupId: 'g2', type: 'long_text' }),
-    block({ id: 'blk_img', groupId: 'g3', type: 'image' }),
-  ]
-
-  it('только отвечаемые блоки, с подписью своего вопроса', () => {
-    expect(prefillFields(blocks)).toEqual([
-      { blockId: 'blk_f1', caption: 'Ваша почта' },
-      { blockId: 'blk_f2', caption: 'Комментарий' },
-    ])
-  })
-
-  // Ответ multi_choice — массив id вариантов, а предзаполнение передаёт строку:
-  // предложи мы его здесь, посетитель увидел бы группу без единой галочки и получил
-  // бы «ожидался список вариантов» на поле, которого не касался.
-  it('вопрос с несколькими вариантами не предлагается', () => {
-    const multi = [
-      block({ id: 'blk_t', groupId: 'gm', type: 'label', text: textFromString('Языки') }),
-      block({ id: 'blk_m', groupId: 'gm', type: 'multi_choice' }),
-      block({ id: 'blk_s', groupId: 'gs', type: 'single_choice' }),
-    ]
-    expect(prefillFields(multi).map((f) => f.blockId)).toEqual(['blk_s'])
-  })
-
-  it('вопрос без заголовка всё равно предзаполняем', () => {
-    const naked = [block({ id: 'blk_x', groupId: 'g9', type: 'short_text' })]
-    expect(prefillFields(naked)).toEqual([{ blockId: 'blk_x', caption: 'Без заголовка' }])
+describe('openSnippet', () => {
+  it('вызов из кода — форма и вид, без предзаполнения', () => {
+    const code = openSnippet(base)
+    expect(code).toContain("form: 'opros'")
+    expect(code).toContain("mode: 'block'")
+    // Список полей уехал в вики: экран отдаёт вызов, а не инструкцию к нему.
+    expect(code).not.toContain('prefill')
   })
 })
 
-describe('prefillSnippet', () => {
-  it('отдаёт объект целиком, с подписями в комментариях', () => {
-    const code = prefillSnippet(base, [{ blockId: 'blk_f1', caption: 'Ваша почта' }])
-    expect(code).toContain("form: 'opros'")
-    expect(code).toContain("'blk_f1': '', // Ваша почта")
+describe('embedCode', () => {
+  it('фрейм назван формой, а не словом «Форма»', () => {
+    expect(embedCode({ ...base, title: 'Заявка на монтаж' })).toContain('title="Заявка на монтаж"')
+    // Кавычка в названии иначе оборвала бы атрибут и превратила остаток в мусор.
+    expect(embedCode({ ...base, title: 'Опрос "Лето"' })).toContain(
+      'title="Опрос &quot;Лето&quot;"',
+    )
+    // Название без кабинета (тесты, будущие вызовы) — запасное слово.
+    expect(embedCode(base)).toContain('title="Форма"')
   })
 
-  it('форма без вопросов — вызов без предзаполнения', () => {
-    expect(prefillSnippet(base, [])).not.toContain('prefill')
+  // Старые атрибуты HTML4: их берут движки, которые до сих пор рисуют фрейму рамку
+  // и внутренние поля, а `style` на таком сайте может быть отброшен политикой.
+  it('у фрейма сняты рамка и внутренние поля старыми атрибутами', () => {
+    expect(embedCode(base)).toContain('frameborder="0" marginheight="0" marginwidth="0"')
+  })
+
+  it('блок — фрейм с адресом в data-trillix-src плюс тег загрузчика', () => {
+    const code = embedCode(base)
+    expect(code).toContain('<iframe data-trillix-src="https://f.trillix.ru/r/opros?embed=block"')
+    expect(code).toContain('<script async src="https://f.trillix.ru/embed/v1.js"></script>')
+    // Пустой src обязателен: иначе браузер начнёт грузить форму раньше, чем
+    // загрузчик подставит метки источника хост-страницы.
+    expect(code).not.toContain(' src="https://f.trillix.ru/r/')
+  })
+
+  // Геометрия атрибутами, а не style: строгая CSP отбрасывает атрибут style, и блок
+  // остался бы фреймом в 150 пикселей по умолчанию браузера.
+  it('у блока размер атрибутами, у страницы — фиксированным слоем', () => {
+    expect(embedCode(base)).toContain(`width="100%" height="${DEFAULT_BLOCK_HEIGHT}"`)
+    expect(embedCode(base)).not.toContain('style=')
+    expect(embedCode({ ...base, mode: 'page' })).toContain('position:fixed')
+  })
+
+  it('своя высота и выключенная подстройка едут во фрейм', () => {
+    const code = embedCode({ ...base, height: 900, dynamicHeight: false })
+    expect(code).toContain('height="900"')
+    expect(code).toContain('data-dynamic-height="0"')
+    // Умолчание не пишется: атрибут без него означает ровно то же самое.
+    expect(embedCode(base)).not.toContain('data-dynamic-height')
+  })
+
+  it('настройки вида уезжают в адрес фрейма, а не в атрибуты', () => {
+    const code = embedCode({ ...base, hideTitle: true, alignLeft: true, transparent: true })
+    expect(code).toContain('hideTitle=1')
+    expect(code).toContain('align=left')
+    expect(code).toContain('bg=transparent')
+    expect(code).not.toContain('data-hide-title')
+  })
+
+  // У всплывающей формы в потоке страницы ничего не стоит: готовый фрейм был бы
+  // фреймом, который никогда не показывают.
+  it('всплывающая форма по клику — загрузчик и кнопка сайта', () => {
+    const code = embedCode({ ...base, mode: 'widget', position: 'center', width: 700 })
+    expect(code).toContain('<script async src="https://f.trillix.ru/embed/v1.js"></script>')
+    expect(code).toContain('data-trillix-open="opros"')
+    expect(code).toContain('data-position="center"')
+    expect(code).toContain('data-width="700"')
+    expect(code).not.toContain('<iframe')
+    // Своей кнопки у загрузчика больше нет — значит и тега скрипта с настройками
+    // здесь быть не должно: открывает форму кнопка сайта.
+    expect(code).not.toContain('data-trillix-widget')
+  })
+
+  it('всплывающая форма по триггеру — один тег скрипта без кнопки', () => {
+    const code = embedCode({ ...base, mode: 'widget', open: 'scroll', openValue: 40 })
+    expect(code).toContain('data-trillix-widget="opros"')
+    expect(code).toContain('data-button="none"')
+    expect(code).not.toContain('data-trillix-open')
+  })
+
+  it('предпросмотр отличается ровно флагом в адресе фрейма', () => {
+    expect(embedCode({ ...base, preview: true })).toContain('preview=1')
+    expect(embedCode(base)).not.toContain('preview=1')
+  })
+})
+
+describe('previewCode', () => {
+  it('у блока — тот же код плюс флаг предпросмотра', () => {
+    expect(previewCode(base)).toBe(embedCode({ ...base, preview: true }))
+  })
+
+  // Кнопки на сцене быть не должно — автор пришёл смотреть на форму, — но открыть её
+  // чем-то надо: невидимый элемент оставляет макету тот же путь, каким форма
+  // откроется на настоящем сайте.
+  it('у всплывающей формы кнопка невидима', () => {
+    const code = previewCode({ ...base, mode: 'widget' })
+    expect(code).toContain('data-trillix-open="opros"')
+    expect(code).toContain('style="display:none"')
+    expect(code).toContain('data-preview="1"')
+  })
+
+  // Предпросмотр отвечает на «как это выглядит», а не «когда появится»: ждать паузу
+  // или прокручивать макет ради проверки вида — работа, которой автор не просил.
+  it('триггер в макете всегда клик, каким бы он ни был настроен', () => {
+    const code = previewCode({ ...base, mode: 'widget', open: 'delay', openValue: 5 })
+    expect(code).toContain('data-trillix-open="opros"')
+    expect(code).not.toContain('data-open="delay"')
   })
 })

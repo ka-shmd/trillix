@@ -1,135 +1,210 @@
 import { useState } from 'react'
+import { Check, Copy } from 'lucide-react'
 
-import { type FormDetail } from '../../../entities/form'
 import {
   frameUrl,
   iframeSnippet,
-  prefillFields,
-  prefillSnippet,
+  loaderTag,
+  openSnippet,
   type SnippetOptions,
 } from '../embedSnippet'
+import { highlight, type TokenKind } from './highlight'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
 
+// ПОДПИСЬ РАЗДЕЛА — ОДНА СТРОКА НА ВИД. Инструкции («в Тильде блок HTML, в WordPress
+// произвольный HTML») уехали в вики (решение владельца 2026-08-28): экран отдаёт код,
+// а не учит вставлять. Остаётся то, чего из самого кода не видно, — где его место и
+// что он сделает с чужой страницей.
+const PASTE = {
+  block: 'Вставьте этот HTML туда, где на странице должна появиться форма.',
+  // У всплывающей формы подпись зависит от того, чем её открывают: по клику вставка
+  // состоит из двух частей и одну из них нужно перенести на свою кнопку; сама собой —
+  // из одной, и кнопки на странице не будет вовсе.
+  widgetClick:
+    'Тег загрузчика — один раз на страницу. Атрибуты с кнопки-образца перенесите на свою кнопку или ссылку: форма откроется по клику по ней.',
+  widgetAuto:
+    'Вставьте один раз на любое место страницы. Кнопки не появится: форма откроется сама, когда сработает выбранное условие.',
+  page: 'Вставьте на отдельную страницу — форма займёт её целиком и накроет остальное содержимое.',
+}
+
+/** Какая из подписей относится к текущей вставке. */
+function pasteHint(opts: SnippetOptions): string {
+  if (opts.mode !== 'widget') return opts.mode === 'page' ? PASTE.page : PASTE.block
+  return (opts.open ?? 'click') === 'click' ? PASTE.widgetClick : PASTE.widgetAuto
+}
+
+// ЗАГОЛОВКИ РАЗДЕЛОВ — ТОГО ЖЕ КЕГЛЯ И ВЕСА, ЧТО «Встраивание» и «Опции» в колонке
+// слева (30/600, решение владельца 2026-08-28): экран один, и две шкалы заголовков на
+// нём читались бы как две разные страницы, сложенные рядом.
+//
 // Код вставки. Разложен по уровням, потому что у встраивания две несовместимые
 // аудитории: владелец сайта на Тильде, которому нужно скопировать одну строку, и
 // разработчик, встраивающий форму в своё приложение. Идентификаторы блоков
 // появляются только на втором уровне.
 export function CodePanel({
-  form,
   opts,
   snippet,
 }: {
-  form: FormDetail
   opts: SnippetOptions
   /** Готовый сниппет — тот же, что исполняется в макете (минус флаг предпросмотра). */
   snippet: string
 }) {
-  const fields = prefillFields(form.draftSchema.blocks)
-
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-base font-medium">Код для вставки</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Вставьте этот HTML на страницу, где должна появиться форма.
-        </p>
-        <Textarea
-          readOnly
-          aria-label="Код для вставки"
-          value={snippet}
-          rows={3}
-          className="mt-3 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={snippet} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Куда вставлять: в Тильде — блок «HTML» (T123), в WordPress — блок «Произвольный HTML» (не
-          визуальный редактор, он экранирует код), в остальных конструкторах — любое поле для
-          HTML-кода.
-        </p>
+        <h2 className="text-3xl font-semibold tracking-tight">Код для вставки</h2>
+        <p className="mt-1 text-sm text-code-muted">{pasteHint(opts)}</p>
+        <CodeBlock label="Код для вставки" code={snippet} />
       </section>
 
-      <section>
-        <h2 className="text-base font-medium">Ссылка для вставки</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Для редакторов, которые сами делают фрейм по адресу, — Notion, Ghost, Canva.
-        </p>
-        <Textarea
-          readOnly
-          aria-label="Ссылка для вставки"
-          value={frameUrl(opts)}
-          rows={2}
-          className="mt-3 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={frameUrl(opts)} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Высота у такой вставки фиксированная: подстраивать её под длину формы умеет только
-          загрузчик из кода выше.
-        </p>
-      </section>
+      {/* ВСТАВКА БЕЗ ЗАГРУЗЧИКА — ОДИН РАЗДЕЛ, А НЕ ДВА (решение владельца 2026-08-28).
+          Адрес фрейма и готовый `<iframe>` — одно и то же в разной упаковке: первый
+          для редакторов, которые строят фрейм сами (Notion, Ghost, Canva), второй для
+          поля «вставьте HTML». Разведённые по двум разделам, они читались как два
+          разных способа, между которыми надо выбрать.
 
-      {opts.mode !== 'widget' && (
+          Тег загрузчика лежит здесь же, хотя он и есть отрицание заголовка: без него
+          у такой вставки фиксированная высота, и место для этой оговорки — рядом с
+          тем, к чему её добавляют, а не в разделе выше. Так же устроен экран Tally.
+
+          У ВИДЖЕТА РАЗДЕЛА НЕТ ВОВСЕ: без загрузчика нет ни кнопки, ни модалки —
+          показывать нечего. У СТРАНИЦЫ нет ссылки (адрес есть, но чужой редактор всё
+          равно положит форму коробкой в поток), поэтому у неё остаётся голый фрейм и
+          своя оговорка про незапертую прокрутку. */}
+      {opts.mode === 'block' && (
         <section>
-          <h2 className="text-base font-medium">Без скрипта</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Если сайт запрещает сторонние скрипты (строгая CSP) — голый фрейм. Виджета в этом
-            варианте не существует, а высота остаётся фиксированной.
+          <h2 className="text-3xl font-semibold tracking-tight">Без загрузчика</h2>
+          <p className="mt-1 text-sm text-code-muted">
+            Адрес — для редакторов, которые делают фрейм сами (Notion, Ghost, Canva). Готовый тег —
+            для сайта, где сторонние скрипты запрещены.
           </p>
-          <Textarea
-            readOnly
-            aria-label="Код без скрипта"
-            value={iframeSnippet(opts)}
-            rows={3}
-            className="mt-3 font-mono text-xs"
-            onFocus={(e) => e.currentTarget.select()}
-          />
-          <CopyButton text={iframeSnippet(opts)} className="mt-2" />
+          <CodeBlock label="Ссылка для вставки" code={frameUrl(opts)} />
+          <CodeBlock label="Код без скрипта" code={iframeSnippet(opts)} />
+          <p className="mt-3 text-sm text-code-muted">
+            Высота у обеих фиксированная. Тег загрузчика включает подстройку под длину формы.
+          </p>
+          <CodeBlock label="Тег загрузчика" code={loaderTag(opts.baseUrl)} />
+        </section>
+      )}
+
+      {opts.mode === 'page' && (
+        <section>
+          <h2 className="text-3xl font-semibold tracking-tight">Без загрузчика</h2>
+          <p className="mt-1 text-sm text-code-muted">
+            Для сайта, где сторонние скрипты запрещены. Прокрутка под формой не запирается.
+          </p>
+          <CodeBlock label="Код без скрипта" code={iframeSnippet(opts)} />
         </section>
       )}
 
       <section>
-        <h2 className="text-base font-medium">Из кода приложения</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <h2 className="text-3xl font-semibold tracking-tight">Из кода приложения</h2>
+        <p className="mt-1 text-sm text-code-muted">
           Загрузчик заводит <code className="font-mono text-xs">window.Trillix</code> с методами{' '}
           <code className="font-mono text-xs">mount</code>,{' '}
           <code className="font-mono text-xs">open</code> и{' '}
-          <code className="font-mono text-xs">close</code>. Это нужно, когда форма открывается по
-          событию приложения, а не по клику на кнопку в разметке.
+          <code className="font-mono text-xs">close</code>.
         </p>
-        <Textarea
-          readOnly
-          aria-label="Вызов из кода"
-          value={prefillSnippet(opts, fields)}
-          rows={Math.min(4 + fields.length, 14)}
-          className="mt-3 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={prefillSnippet(opts, fields)} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Предзаполнение подставляет значения в вопросы, которые вы добавили сами, — новых полей оно
-          не создаёт. Ключ — идентификатор вопроса.{' '}
-          <strong className="font-medium">Если удалить вопрос и создать заново</strong>, ключ
-          сменится, и предзаполнение перестанет работать молча — правьте существующий вопрос, а не
-          пересоздавайте. Ключи взяты из черновика: по только что добавленному вопросу
-          предзаполнение заработает после публикации формы, а до неё будет игнорироваться.
-        </p>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Вопросы с несколькими вариантами ответа в списке не появляются: их ответ — набор
-          вариантов, а не строка, и предзаполнить его нечем. Значения приходят из браузера, поэтому
-          подставленная почта — это «что передал сайт», а не подтверждённый адрес.
-        </p>
+        <CodeBlock label="Вызов из кода" code={openSnippet(opts)} />
       </section>
     </div>
   )
 }
 
-export function CopyButton({ text, className }: { text: string; className?: string }) {
+/**
+ * CodeBlock — код на экране вставки: `<pre>` с подсветкой и кнопкой копирования в
+ * правом верхнем углу.
+ *
+ * ПОЛЕ ВВОДА ВМЕСТО КОДА БЫЛО ЛОЖЬЮ ФОРМЫ: `<textarea readonly>` выглядит местом,
+ * куда пишут, и предлагает каретку там, где менять нечего. Заодно у него нужно было
+ * угадывать `rows` — число строк заранее не известно (сниппет виджета короче
+ * блочного, вызов из кода растёт со списком вопросов), и промах давал либо пустоту
+ * под кодом, либо внутренний скролл в три строки.
+ *
+ * СТРОКИ ПЕРЕНОСЯТСЯ, А НЕ УЕЗЖАЮТ В ГОРИЗОНТАЛЬНЫЙ СКРОЛЛ (`break-all`): сниппет —
+ * одна длинная строка с адресом, и спрятать её половину за краем значит спрятать
+ * ровно то, что автор пришёл проверить. Разрыв в любом месте адрес не портит:
+ * копируется он кнопкой, а не выделением.
+ *
+ * КНОПКА ВНУТРИ БЛОКА, А НЕ ПОД НИМ (решение владельца 2026-08-28): у блоков разной
+ * высоты кнопка снизу оказывается каждый раз в новом месте, а угол — один и тот же
+ * для всех. Отсюда и отступ справа у самого кода: без него длинная строка подтекала
+ * бы под кнопку.
+ *
+ * Подсветка — своя (`highlight.ts`), токены превращаются в `<span>`; строкой разметка
+ * не собирается, `dangerouslySetInnerHTML` запрещён во всём репозитории (инвариант 4).
+ */
+function CodeBlock({ label, code }: { label: string; code: string }) {
+  return (
+    <div className="relative mt-3">
+      {/* tabIndex — чтобы до блока доходила клавиатура: aria-label называет его там,
+          где заголовок раздела отделён от кода абзацем. */}
+      <pre
+        tabIndex={0}
+        aria-label={label}
+        className="rounded-md border border-code-border bg-code-foreground/5 py-3 pr-14 pl-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap"
+      >
+        <code>
+          {highlight(code).map((token, i) => (
+            <span key={i} className={TOKEN_COLORS[token.kind]}>
+              {token.text}
+            </span>
+          ))}
+        </code>
+      </pre>
+      <CopyButton
+        text={code}
+        label={`Скопировать: ${label.toLowerCase()}`}
+        iconOnly
+        variant="ghost"
+        className="absolute top-1.5 right-1.5 text-code-muted hover:bg-code-foreground/10 hover:text-code-foreground"
+      />
+    </div>
+  )
+}
+
+// Цвет по виду токена. Пустая строка у `plain` — чернила полотна, а не «цвет по
+// умолчанию»: отдельный класс на каждый знак препинания раздул бы разметку вдвое.
+const TOKEN_COLORS: Record<TokenKind, string> = {
+  tag: 'text-code-tag',
+  attr: 'text-code-attr',
+  string: 'text-code-string',
+  comment: 'text-code-muted',
+  plain: '',
+}
+
+// Кнопка «скопировать» — одна на экран: куски кода здесь и ссылка встраивания в
+// панели слева (у блока). Подпись и вид приходят пропами, ответ на нажатие — общий: два
+// одинаковых буфера с разным поведением после клика читались бы как две разные
+// кнопки. Ответ этот — И СЛОВО, И ЗНАЧОК: у кнопки без границы (ghost) смена
+// подписи — единственное, что происходит на экране, и галочка делает её заметной.
+export function CopyButton({
+  text,
+  label = 'Копировать',
+  className,
+  variant,
+  size,
+  iconOnly = false,
+}: {
+  text: string
+  label?: string
+  className?: string
+  variant?: React.ComponentProps<typeof Button>['variant']
+  size?: React.ComponentProps<typeof Button>['size']
+  /**
+   * Только значок: внутри блока кода, где подпись отняла бы у кода треть строки.
+   * Подпись при этом не исчезает — уезжает в `aria-label` и всплывающую подсказку
+   * браузера, иначе кнопка осталась бы безымянной для скринридера.
+   */
+  iconOnly?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   return (
     <Button
-      size="sm"
+      variant={variant}
+      size={size ?? (iconOnly ? 'icon-sm' : 'sm')}
+      aria-label={iconOnly ? label : undefined}
+      title={iconOnly ? label : undefined}
       className={className}
       onClick={() => {
         navigator.clipboard
@@ -143,7 +218,15 @@ export function CopyButton({ text, className }: { text: string; className?: stri
           })
       }}
     >
-      {copied ? 'Готово' : 'Копировать'}
+      {copied ? (
+        <>
+          <Check className="size-4" /> {iconOnly ? '' : 'Скопировано'}
+        </>
+      ) : (
+        <>
+          <Copy className="size-4" /> {iconOnly ? '' : label}
+        </>
+      )}
     </Button>
   )
 }

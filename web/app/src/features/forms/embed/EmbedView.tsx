@@ -1,29 +1,35 @@
 import { useEffect, useState } from 'react'
-import { Link } from '@tanstack/react-router'
-import { Code2, Eye, X } from 'lucide-react'
+import { Code2, Eye, TriangleAlert, X } from 'lucide-react'
 
-import { type FormDetail } from '../../../entities/form'
+import { displayFormTitle, type FormDetail } from '../../../entities/form'
 import {
   DEFAULT_BLOCK_HEIGHT,
   DEFAULT_OPEN_DELAY,
   DEFAULT_WIDGET_WIDTH,
-  iframeSnippet,
-  scriptSnippet,
+  embedCode,
+  frameUrl,
+  previewCode,
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
 import { publicFormUrl } from '../publicUrl'
-import { CodePanel } from './CodePanel'
+import { CodePanel, CopyButton } from './CodePanel'
 import { MockSite } from './MockSite'
+import { ModeChoice } from './ModeChoice'
 import { SettingsPanel, type EmbedSettings } from './SettingsPanel'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
+import { Separator } from '@/components/ui/separator'
+import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet'
 
-// Экран «Встроить» (/forms/{slug}/embed): слева настройки вставки, справа —
-// страница-макет, в которой форма живёт ТЕМ ЖЕ кодом, что уезжает автору в буфер
-// обмена. Вид вставки приходит из адреса (три кнопки на «Поделиться» ведут сюда
-// каждая на свой), остальные настройки — локальное состояние: они нигде не
-// сохраняются и живут в самом сниппете (ADR §10).
+// Экран «Встроить» (/forms/{slug}/embed) — ОТДЕЛЬНЫЙ РЕЖИМ, а не страница кабинета
+// (решение владельца 2026-08-27). Две области и ничего сверх: слева настройки
+// вставки, справа страница-макет, в которой форма живёт ТЕМ ЖЕ кодом, что уезжает
+// автору в буфер обмена. Ни крошек, ни шапки с заголовком: кабинет вокруг сцены,
+// изображающей чужой сайт, делал бы сцену неправдой.
+//
+// Вид вставки приходит из адреса (три кнопки на «Поделиться» ведут сюда каждая на
+// свой), остальные настройки — локальное состояние: они нигде не сохраняются и живут
+// в самом сниппете (ADR §10).
 
 export function EmbedView({
   form,
@@ -38,9 +44,12 @@ export function EmbedView({
   onClose: () => void
 }) {
   const [settings, setSettings] = useState<EmbedSettings>({
-    label: 'Оставить заявку',
     position: 'bottom-right',
-    transparent: false,
+    // Прозрачный фон — с самого начала (решение владельца 2026-08-27): вставка на
+    // чужой странице должна выглядеть её частью, а белый прямоугольник поверх чужого
+    // фона выдаёт её первым же кадром. Умолчание ПАНЕЛИ, не загрузчика: у того фон
+    // остаётся непрозрачным — контракт `v1.js` бессрочный (EMBED.md §2).
+    transparent: true,
     // Оба включены по умолчанию (решение владельца 2026-08-16): над вставкой на чужой
     // странице почти всегда есть свой заголовок, а блок читается как часть страницы,
     // когда начинается от её левого края, а не по центру своей колонки.
@@ -55,7 +64,6 @@ export function EmbedView({
     open: 'click',
     openValue: DEFAULT_OPEN_DELAY,
     hideOnSubmit: false,
-    plain: false,
   })
   const [showCode, setShowCode] = useState(false)
 
@@ -67,7 +75,7 @@ export function EmbedView({
     baseUrl,
     slug: form.slug,
     mode,
-    label: settings.label,
+    title: displayFormTitle(form.title),
     position: settings.position,
     transparent: settings.transparent,
     hideTitle: settings.hideTitle,
@@ -80,12 +88,15 @@ export function EmbedView({
     openValue: settings.openValue,
     hideOnSubmit: settings.hideOnSubmit,
   }
-  const usePlain = settings.plain && mode !== 'widget'
-  const snippet = usePlain ? iframeSnippet(opts) : scriptSnippet(opts)
+  // ПАНЕЛЬ ВСЕГДА ПОКАЗЫВАЕТ ВСТАВКУ С ЗАГРУЗЧИКОМ. Голый `<iframe>` никуда не делся
+  // — он лежит на экране кода отдельным вариантом, вместе со ссылкой на фрейм и
+  // вызовом из кода приложения (CodePanel). Тумблера «Без скрипта» здесь нет
+  // (решение владельца 2026-08-27): выбор способа вставки делается там, где видны
+  // все три способа сразу, а не настройкой, тихо меняющей и код, и предпросмотр.
+  const snippet = embedCode(opts)
   // В макет уезжает тот же сниппет плюс флаг предпросмотра — единственное отличие
   // исполняемого кода от показанного (MockSite).
-  const previewOpts: SnippetOptions = { ...opts, preview: true }
-  const previewSnippet = usePlain ? iframeSnippet(previewOpts) : scriptSnippet(previewOpts)
+  const previewSnippet = previewCode(opts)
 
   return (
     // ЭКРАН ПОВЕРХ КАБИНЕТА, а не область внутри него, — тем же слоем и по тому же
@@ -99,75 +110,122 @@ export function EmbedView({
         aria-describedby={undefined}
         className="gap-0 overflow-hidden p-0"
       >
+        {/* Заголовка на экране нет — режим объясняет себя двумя своими областями, — но
+            слою имя нужно: без него Radix ругается, а скринридер не назовёт, куда
+            человек попал. */}
         <SheetTitle className="sr-only">Встроить форму на сайт</SheetTitle>
         <ScrollbarGutterOff />
-        <div className="flex h-dvh flex-col">
-          <header className="flex items-center justify-between border-b px-5 py-3">
-            <div>
-              <h1 className="text-base font-medium">Встроить на сайт</h1>
-              {/* Неопубликованная форма во фрейме отдаёт 404 (инвариант 5: черновик
-                  неотличим от несуществующей), и в макете это выглядит как поломка
-                  вставки. Говорим до того, как автор пойдёт искать причину в коде. */}
-              {form.publishedVersion === null ? (
-                <p className="text-xs text-muted-foreground">
-                  Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем сайте.
-                  Код ниже можно скопировать уже сейчас.
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Форма в макете настоящая: заполняется и проверяет поля, но ответ из предпросмотра
-                  не отправляется.
-                </p>
-              )}
-            </div>
-            <Button asChild variant="ghost" size="sm" className="gap-1.5">
-              <Link to="/forms/$slug/share" params={{ slug: form.slug }} search={(prev) => prev}>
-                <X className="size-4" /> Закрыть
-              </Link>
-            </Button>
-          </header>
+        <div className="flex h-dvh">
+          {/* КОЛОНКА — ДВА РАЗДЕЛА (решение владельца 2026-08-27): «Встраивание» —
+              что вставляем и чем это забрать (вид, код, ссылка), «Опции» — как оно
+              выглядит. Разница между ними не в важности, а в природе: первый раздел
+              одинаков у всех трёх видов, второй у каждого свой.
+              Рамки справа нет: колонка белая, страница-макет серая — границу рисует
+              сама разница поверхностей, и линия поверх неё была бы вторым забором. */}
+          <aside className="flex w-125 shrink-0 flex-col overflow-y-auto px-12.5 py-5">
+            <section className="flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-3xl font-semibold tracking-tight">Встраивание</h2>
+                {/* Выход из режима. Крестовина без подписи — жест закрытия читается
+                    сам, а место рядом с заголовком не оставляет сомнений, что
+                    закрывается экран, а не макет. */}
+                <SheetClose asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="-mr-2 text-muted-foreground"
+                    aria-label="Закрыть"
+                    title="Закрыть"
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </SheetClose>
+              </div>
+              <ModeChoice mode={mode} onModeChange={onModeChange} />
+              <div className="flex flex-col gap-2">
+                {/* Код — тумблер, а не вход: макет и код делят одну область, и
+                    вернуться нужно тем же жестом. */}
+                <Button
+                  className="w-full gap-1.5"
+                  // Чёрная, а не синяя: синий в кабинете значит «главное действие
+                  // экрана», а главное здесь — сама вставка, которую автор
+                  // настраивает; код это то, чем её забирают (DESIGN-SYSTEM §«цвет»).
+                  variant={showCode ? 'outline' : 'utility'}
+                  size="sm"
+                  aria-pressed={showCode}
+                  onClick={() => setShowCode((v) => !v)}
+                >
+                  {showCode ? (
+                    <>
+                      <Eye className="size-4" /> Вернуться к предпросмотру
+                    </>
+                  ) : (
+                    <>
+                      <Code2 className="size-4" /> Получить код
+                    </>
+                  )}
+                </Button>
+                {/* Ссылка на фрейм — второй способ забрать вставку, для редакторов,
+                    которые делают фрейм сами (Notion, Ghost, Canva). Она же есть
+                    внутри кода отдельным разделом; здесь — потому что за ней
+                    приходят так же часто, как за кодом, и открывать ради неё экран
+                    кода незачем.
 
-          <div className="flex min-h-0 flex-1">
-            <aside className="w-80 shrink-0 overflow-y-auto border-r p-5">
-              <Button
-                className="mb-5 w-full gap-1.5"
-                variant={showCode ? 'outline' : 'default'}
-                onClick={() => setShowCode((v) => !v)}
-              >
-                {showCode ? (
-                  <>
-                    <Eye className="size-4" /> Вернуться к предпросмотру
-                  </>
-                ) : (
-                  <>
-                    <Code2 className="size-4" /> Получить код
-                  </>
+                    ТОЛЬКО У БЛОКА: ссылка выражает документ, а не поведение. Виджет
+                    и страница — это триггер открытия, положение, перекрытие вьюпорта;
+                    адресу их нести некуда, а исполнять на чужой странице некому —
+                    редактор хоста просто вставит фрейм. У виджета вдобавок и адреса
+                    своего нет: `frameUrl` отдаёт ему `embed=block` (embedSnippet.ts),
+                    то есть скопированная ссылка молча возвращала бы блок вместо
+                    настроенного виджета. Так же разведено у Tally: «Copy embed link»
+                    стоит у Standard, у Popup и Full page — только «Get the code». */}
+                {mode === 'block' && (
+                  <CopyButton
+                    text={frameUrl(opts)}
+                    label="Скопировать ссылку встраивания"
+                    variant="ghost"
+                    className="w-full"
+                  />
                 )}
-              </Button>
-              <SettingsPanel
-                form={form}
-                mode={mode}
-                onModeChange={onModeChange}
-                settings={settings}
-                onChange={change}
-              />
-            </aside>
+              </div>
+            </section>
 
-            <main className="min-w-0 flex-1 overflow-y-auto bg-muted/30">
-              {showCode ? (
-                <div className="mx-auto max-w-3xl p-6">
-                  <CodePanel form={form} opts={opts} snippet={snippet} />
-                </div>
-              ) : (
-                // МАКЕТ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ на смену любой настройки: ключ — сам
-                // сниппет. Это не оптимизационная лень, а правда о вставке: на чужом
-                // сайте настройки меняются переписыванием кода и перезагрузкой
-                // страницы, промежуточного состояния «фрейм тот же, атрибуты другие»
-                // не бывает.
-                <PreviewArea snippet={previewSnippet} />
-              )}
-            </main>
-          </div>
+            <Separator className="my-6" />
+
+            <section className="flex flex-col gap-4">
+              <h2 className="text-3xl font-semibold tracking-tight">Опции</h2>
+              <SettingsPanel form={form} mode={mode} settings={settings} onChange={change} />
+            </section>
+          </aside>
+
+          {/* ПОЛОТНО КОДА ТЁМНОЕ (решение владельца 2026-08-28) и занимает ту же
+              колонку, что содержимое макета: 130 по бокам, 20 сверху — те же числа,
+              что у `.wrap` в MockSite. Экран остаётся одним и тем же местом при
+              переключении тумблера «Получить код»: меняется поверхность, а не
+              раскладка, и глазу не приходится искать колонку заново. Тёмное — чтобы
+              код читался чужой площадкой, а не ещё одной карточкой кабинета
+              (`--code`, своя пара токенов: `--utility` в тёмной теме
+              переворачивается). */}
+          <main
+            className={
+              showCode
+                ? 'min-w-0 flex-1 overflow-y-auto bg-code text-code-foreground'
+                : 'min-w-0 flex-1 overflow-y-auto bg-muted/30'
+            }
+          >
+            {showCode ? (
+              <div className="px-[130px] py-5">
+                <CodePanel opts={opts} snippet={snippet} />
+              </div>
+            ) : (
+              // МАКЕТ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ на смену любой настройки: ключ — сам
+              // сниппет. Это не оптимизационная лень, а правда о вставке: на чужом
+              // сайте настройки меняются переписыванием кода и перезагрузкой
+              // страницы, промежуточного состояния «фрейм тот же, атрибуты другие»
+              // не бывает.
+              <PreviewArea form={form} snippet={previewSnippet} mode={mode} />
+            )}
+          </main>
         </div>
       </SheetContent>
     </Sheet>
@@ -191,7 +249,24 @@ function ScrollbarGutterOff() {
 // PreviewArea — макет с задержкой пересборки: надпись на кнопке виджета вводится
 // посимвольно, и без паузы каждый символ перезагружал бы страницу-макет вместе с
 // формой в ней.
-function PreviewArea({ snippet }: { snippet: string }) {
+//
+// МАКЕТ ЗАНИМАЕТ ВСЮ ОБЛАСТЬ — без карточки, рамки и полей вокруг (решение владельца
+// 2026-08-27): рамка превращала чужую страницу в картинку на нашей, а она и есть
+// вторая половина экрана. Подписи под ней тоже нет — сцена объясняет себя сама.
+//
+// Единственное, что над макетом появляется, — предупреждение о неопубликованной
+// форме, и только оно: во фрейме такая форма отдаёт 404 (инвариант 5: черновик
+// неотличим от несуществующей), то есть выглядит как поломка вставки. Говорим до
+// того, как автор пойдёт искать причину в своём коде.
+function PreviewArea({
+  form,
+  snippet,
+  mode,
+}: {
+  form: FormDetail
+  snippet: string
+  mode: EmbedMode
+}) {
   const [applied, setApplied] = useState(snippet)
   useEffect(() => {
     const timer = setTimeout(() => setApplied(snippet), 350)
@@ -199,9 +274,18 @@ function PreviewArea({ snippet }: { snippet: string }) {
   }, [snippet])
 
   return (
-    <div className="h-full p-4">
-      <div className="h-full overflow-hidden rounded-lg border bg-white shadow-sm">
-        <MockSite snippet={applied} />
+    <div className="flex h-full flex-col">
+      {form.publishedVersion === null && (
+        <p className="flex items-start gap-1.5 bg-warning/10 px-4 py-2 text-xs text-muted-foreground">
+          <TriangleAlert className="mt-px size-3.5 shrink-0 text-warning" aria-hidden />
+          <span>
+            Форма ещё не опубликована — в макете она недоступна, как была бы и на вашем сайте. Код
+            можно скопировать уже сейчас.
+          </span>
+        </p>
+      )}
+      <div className="min-h-0 flex-1">
+        <MockSite snippet={applied} mode={mode} />
       </div>
     </div>
   )

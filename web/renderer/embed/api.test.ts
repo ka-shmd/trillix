@@ -4,6 +4,7 @@ import {
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
   DEFAULT_WIDTH,
+  frameAdoption,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -99,6 +100,7 @@ describe('optionsFromAttrs', () => {
       open: 'click',
       openValue: 0,
       hideOnSubmit: false,
+      button: true,
     })
   })
 
@@ -313,5 +315,141 @@ describe('frameSrc: кто исполняет переход', () => {
     expect(frameSrc('https://f.trillix.ru', { ...base, redirect: 'frame' }, '')).toContain(
       'redirect=frame',
     )
+  })
+})
+
+describe('frameAdoption', () => {
+  const ORIGIN = 'https://f.trillix.ru'
+  const adopt = (address: string | null, map: Record<string, string> = {}) =>
+    frameAdoption(ORIGIN, address, attrs(map), '')
+
+  it('поднимает фрейм по адресу своего origin', () => {
+    const got = adopt(`${ORIGIN}/r/opros?embed=block`)
+    expect(got?.src).toBe(`${ORIGIN}/r/opros?embed=block`)
+    expect(got?.opts).toMatchObject({ form: 'opros', mode: 'block', dynamicHeight: true })
+  })
+
+  // Загрузчик не универсальный подъёмник фреймов: адрес пишут в разметке чужой
+  // страницы, и чужой origin оттуда поднимать нельзя.
+  it('чужой origin, битый адрес и путь не /r/ — не наш фрейм', () => {
+    expect(adopt('https://evil.example/r/opros?embed=block')).toBeNull()
+    expect(adopt('javascript:alert(1)')).toBeNull()
+    expect(adopt(`${ORIGIN}/embed/v1.js`)).toBeNull()
+    expect(adopt(`${ORIGIN}/r/`)).toBeNull()
+    expect(adopt(null)).toBeNull()
+  })
+
+  // Пустой origin — загрузчик не смог прочитать собственный адрес; поднимать некуда.
+  it('без origin загрузчика фрейм не поднимается', () => {
+    expect(frameAdoption('', `${ORIGIN}/r/opros?embed=block`, attrs({}), '')).toBeNull()
+  })
+
+  it('режим читается из адреса, а не из атрибутов', () => {
+    expect(adopt(`${ORIGIN}/r/opros?embed=page`)?.opts.mode).toBe('page')
+    // Виджет фреймом в потоке быть не может — ведёт себя как блок.
+    expect(adopt(`${ORIGIN}/r/opros?embed=widget`)?.opts.mode).toBe('block')
+  })
+
+  // Метки источника лендинга в кабинете неизвестны — их добавляет загрузчик, ровно
+  // как и в адресе, который он собирает сам (frameSrc).
+  it('подставляет метки источника хост-страницы', () => {
+    const got = frameAdoption(
+      ORIGIN,
+      `${ORIGIN}/r/opros?embed=block`,
+      attrs({}),
+      '?utm_source=vk&ref=x',
+    )
+    expect(got?.src).toContain('utm_source=vk')
+    expect(got?.src).not.toContain('ref=x')
+  })
+
+  it('метку, уже написанную в адресе, не переписывает', () => {
+    const got = frameAdoption(
+      ORIGIN,
+      `${ORIGIN}/r/opros?embed=block&utm_source=letter`,
+      attrs({}),
+      '?utm_source=vk',
+    )
+    expect(got?.src).toContain('utm_source=letter')
+    expect(got?.src).not.toContain('utm_source=vk')
+  })
+
+  it('высота — из атрибута фрейма, мусор даёт умолчание', () => {
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, { height: '900' })?.opts.height).toBe(900)
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, { height: '100%' })?.opts.height).toBe(
+      DEFAULT_HEIGHT,
+    )
+  })
+
+  it('data-dynamic-height="0" останавливает подстройку высоты', () => {
+    const off = { 'data-dynamic-height': '0' }
+    expect(adopt(`${ORIGIN}/r/opros?embed=block`, off)?.opts.dynamicHeight).toBe(false)
+  })
+})
+
+describe('optionsFromAttrs: кнопка сайта', () => {
+  // С 2026-08-28 кабинет печатает настройки атрибутами на ЧУЖОЙ кнопке: без разбора
+  // этих атрибутов форма открывалась бы с умолчаниями, а не так, как её настроили.
+  it('data-trillix-open читается как виджет, вместе с настройками вида', () => {
+    const opts = optionsFromAttrs(
+      attrs({
+        'data-trillix-open': 'opros',
+        'data-position': 'center',
+        'data-width': '700',
+        'data-overlay': 'none',
+      }),
+    )
+    expect(opts).toMatchObject({
+      form: 'opros',
+      mode: 'widget',
+      position: 'center',
+      width: 700,
+      overlay: false,
+    })
+  })
+
+  // Кнопка, размеченная одним атрибутом (так делали до появления настроек на ней),
+  // обязана открывать форму с умолчаниями, а не молчать.
+  it('кнопка с одним атрибутом — умолчания', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-open': 'opros' }))).toMatchObject({
+      form: 'opros',
+      mode: 'widget',
+      position: 'bottom-right',
+      width: DEFAULT_WIDTH,
+    })
+  })
+})
+
+describe('optionsFromAttrs: своя кнопка загрузчика', () => {
+  // ОТСУТСТВИЕ АТРИБУТА = РИСОВАТЬ. Вставки, стоящие на чужих сайтах с прошлых
+  // месяцев, `data-button` не несут; прочитай мы его отсутствие как «не рисовать» —
+  // форма разом стала бы на них недоступной.
+  it('без атрибута кнопка рисуется', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros' }))?.button).toBe(true)
+  })
+
+  it('data-button="none" — кнопки нет', () => {
+    const opts = optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', 'data-button': 'none' }))
+    expect(opts?.button).toBe(false)
+  })
+})
+
+describe('optionsFromAttrs: расположение', () => {
+  const position = (value: string) =>
+    optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', 'data-position': value }))?.position
+
+  it('центр — новое значение контракта', () => {
+    expect(position('center')).toBe('center')
+  })
+
+  // Четыре угла остаются контрактом v1: кабинет их больше не предлагает, но вставки
+  // с ними живут на чужих сайтах.
+  it('прежние углы продолжают читаться', () => {
+    expect(position('top-left')).toBe('top-left')
+    expect(position('bottom-left')).toBe('bottom-left')
+  })
+
+  it('опечатка — правый нижний угол, а не потерянная форма', () => {
+    expect(position('centre')).toBe('bottom-right')
   })
 })
