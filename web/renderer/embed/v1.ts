@@ -354,15 +354,19 @@ function buildWidget(opts: MountOptions): Mounted {
   const narrow = window.matchMedia('(max-width: 640px)')
   const place = () => {
     const full = opts.mode === 'page' || narrow.matches
+    // ЦЕНТР — ОКНО, А НЕ УГОЛ: то же полотно, только выравнивание по обеим осям
+    // посередине. Отдельной ветки геометрии ему не нужно — панель у угла и окно по
+    // центру отличаются ровно двумя значениями flex.
+    const centered = corner === 'center'
     const top = corner === 'top-right' || corner === 'top-left'
     const left = corner === 'bottom-left' || corner === 'top-left'
 
     overlay.style.padding = full ? '0' : '24px'
-    // Раскладка одна на все четыре угла: flex-контейнер во весь вьюпорт и два
+    // Раскладка одна на все положения: flex-контейнер во весь вьюпорт и два
     // выравнивания. Позиционировать панель координатами было бы то же самое, но в
-    // четырёх ветках вместо двух строк.
-    overlay.style.alignItems = full ? 'center' : top ? 'flex-start' : 'flex-end'
-    overlay.style.justifyContent = full ? 'center' : left ? 'flex-start' : 'flex-end'
+    // пяти ветках вместо двух строк.
+    overlay.style.alignItems = full || centered ? 'center' : top ? 'flex-start' : 'flex-end'
+    overlay.style.justifyContent = full || centered ? 'center' : left ? 'flex-start' : 'flex-end'
 
     panel.style.maxWidth = full ? 'none' : (opts.width ?? DEFAULT_WIDTH) + 'px'
     panel.style.height = full ? '100%' : 'auto'
@@ -479,8 +483,10 @@ function createButton(opts: MountOptions) {
 // того, как её закрыли, читается не как второй шанс, а как повод уйти с сайта; поэтому
 // сработавший триггер снимает свои подписки и больше не наблюдает ни за чем.
 //
-// Кнопка при этом остаётся: закрывший форму человек должен иметь способ вернуться.
-function armTrigger(opts: MountOptions, button: HTMLButtonElement) {
+// Кнопка при этом остаётся, если она вообще есть: закрывший форму человек должен иметь
+// способ вернуться. У вставки без своей кнопки этот способ — элемент сайта, к которому
+// её прицепил владелец.
+function armTrigger(opts: MountOptions, button: HTMLButtonElement | null) {
   const trigger = opts.open ?? 'click'
   if (trigger === 'click') return
 
@@ -548,7 +554,12 @@ function listen() {
     const form = trigger.getAttribute('data-trillix-open')
     if (!form) return
     event.preventDefault()
-    open({ form, mode: 'widget' }, trigger as HTMLElement)
+    // НАСТРОЙКИ ЧИТАЮТСЯ С САМОГО ЭЛЕМЕНТА: с 2026-08-28 кабинет печатает их
+    // атрибутами на кнопке сайта (расположение, ширина, затемнение), и без разбора
+    // форма открывалась бы с умолчаниями — то есть не так, как автор её настроил.
+    // Запасной вариант оставлен для кнопок, размеченных до этого одним атрибутом.
+    const opts = optionsFromAttrs(trigger) ?? { form, mode: 'widget' as const }
+    open({ ...opts, mode: 'widget' }, trigger as HTMLElement)
   })
 
   window.addEventListener('message', onFrameMessage)
@@ -624,7 +635,12 @@ function attach(script: Element): void {
   const opts = optionsFromAttrs(script)
   if (!opts) return
   if (opts.mode === 'widget') {
-    armTrigger(opts, createButton(opts))
+    // СВОЯ КНОПКА — ТОЛЬКО У СТАРЫХ ВСТАВОК. Сниппет кабинета с 2026-08-28 несёт
+    // `data-button="none"` и открывается элементом сайта (`data-trillix-open`) или
+    // вызовом из кода; тег скрипта в этой форме нужен ради автооткрытия. Вставки,
+    // стоящие на чужих сайтах с прошлых месяцев, атрибута не несут — им кнопка
+    // по-прежнему рисуется, иначе форма разом стала бы на них недоступной.
+    armTrigger(opts, opts.button === false ? null : createButton(opts))
     return
   }
   // «Страница» ничего не вставляет в поток: она накрывает чужую страницу целиком, и

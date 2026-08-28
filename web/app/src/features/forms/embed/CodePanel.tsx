@@ -6,7 +6,6 @@ import {
   iframeSnippet,
   loaderTag,
   openSnippet,
-  type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
 import { highlight, type TokenKind } from './highlight'
@@ -16,10 +15,22 @@ import { Button } from '@/components/ui/button'
 // произвольный HTML») уехали в вики (решение владельца 2026-08-28): экран отдаёт код,
 // а не учит вставлять. Остаётся то, чего из самого кода не видно, — где его место и
 // что он сделает с чужой страницей.
-const PASTE: Record<EmbedMode, string> = {
+const PASTE = {
   block: 'Вставьте этот HTML туда, где на странице должна появиться форма.',
-  widget: 'Вставьте один раз на любое место страницы: угол кнопки задаёт настройка, а не разметка.',
+  // У всплывающей формы подпись зависит от того, чем её открывают: по клику вставка
+  // состоит из двух частей и одну из них нужно перенести на свою кнопку; сама собой —
+  // из одной, и кнопки на странице не будет вовсе.
+  widgetClick:
+    'Тег загрузчика — один раз на страницу. Атрибуты с кнопки-образца перенесите на свою кнопку или ссылку: форма откроется по клику по ней.',
+  widgetAuto:
+    'Вставьте один раз на любое место страницы. Кнопки не появится: форма откроется сама, когда сработает выбранное условие.',
   page: 'Вставьте на отдельную страницу — форма займёт её целиком и накроет остальное содержимое.',
+}
+
+/** Какая из подписей относится к текущей вставке. */
+function pasteHint(opts: SnippetOptions): string {
+  if (opts.mode !== 'widget') return opts.mode === 'page' ? PASTE.page : PASTE.block
+  return (opts.open ?? 'click') === 'click' ? PASTE.widgetClick : PASTE.widgetAuto
 }
 
 // ЗАГОЛОВКИ РАЗДЕЛОВ — ТОГО ЖЕ КЕГЛЯ И ВЕСА, ЧТО «Встраивание» и «Опции» в колонке
@@ -42,7 +53,7 @@ export function CodePanel({
     <div className="space-y-8">
       <section>
         <h2 className="text-3xl font-semibold tracking-tight">Код для вставки</h2>
-        <p className="mt-1 text-sm text-code-muted">{PASTE[opts.mode]}</p>
+        <p className="mt-1 text-sm text-code-muted">{pasteHint(opts)}</p>
         <CodeBlock label="Код для вставки" code={snippet} />
       </section>
 

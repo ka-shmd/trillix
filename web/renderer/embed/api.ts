@@ -8,8 +8,13 @@
 /** Как форма показана на чужой странице. */
 export type EmbedMode = 'block' | 'widget' | 'page'
 
-/** Угол, в котором стоит кнопка виджета. */
-export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+/**
+ * Где показывается всплывающая форма: панель в углу или окно по центру.
+ *
+ * Четыре угла — контракт v1: кабинет с 2026-08-28 предлагает только правый нижний и
+ * центр, но вставки с `top-left` и прочими живут на чужих сайтах и обязаны работать.
+ */
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center'
 
 /**
  * Что открывает виджет: клик по кнопке или одно из наблюдений за посетителем.
@@ -56,6 +61,15 @@ export interface MountOptions {
   openValue?: number
   /** Убрать виджет со страницы после отправки ответа. */
   hideOnSubmit?: boolean
+  /**
+   * Рисовать ли СВОЮ кнопку виджета. `false` — форму открывает сайт: своим элементом
+   * с `data-trillix-open` или вызовом `Trillix.open` (снипет кабинета с 2026-08-28).
+   *
+   * Умолчание `true` — часть бессрочного контракта: вставки, стоящие на чужих сайтах
+   * с 2026-08, атрибута не несут, и прочитай мы его отсутствие как «не рисовать»,
+   * форма разом стала бы недоступной на всех них.
+   */
+  button?: boolean
   /** Прижать содержимое влево независимо от оформления формы. */
   alignLeft?: boolean
   /**
@@ -155,7 +169,13 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   // Виджет узнаётся по своему атрибуту, а не по data-mode: он единственный, кто
   // ничего не вставляет в поток страницы, и путать его с блоком опечаткой в режиме
   // («форма пропала со страницы») не стоит.
-  const widget = el.getAttribute('data-trillix-widget')
+  //
+  // ДВА АТРИБУТА, А НЕ ОДИН: `data-trillix-widget` — на нашем теге скрипта,
+  // `data-trillix-open` — на ЧУЖОЙ кнопке, к которой сайт цепляет форму. Настройки
+  // вида (угол, ширина, затемнение) читаются с того же элемента, поэтому разбор у
+  // них общий: иначе кнопка сайта открывала бы форму с умолчаниями, а не с тем, что
+  // автор настроил в кабинете.
+  const widget = el.getAttribute('data-trillix-widget') ?? el.getAttribute('data-trillix-open')
   const form = widget ?? el.getAttribute('data-trillix-form')
   if (form === null || form === '') return null
   const label = el.getAttribute('data-label')
@@ -180,6 +200,7 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
     open: trigger !== null && TRIGGERS.includes(trigger) ? (trigger as OpenTrigger) : 'click',
     openValue: size(el.getAttribute('data-open-value'), 0),
     hideOnSubmit: el.getAttribute('data-hide-on-submit') === '1',
+    button: el.getAttribute('data-button') !== 'none',
   }
 }
 
@@ -247,10 +268,12 @@ function size(raw: string | null, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-// Неизвестный угол — правый нижний: сниппет с опечаткой обязан показать кнопку, а не
-// потерять её за краем экрана.
+// Неизвестное расположение — правый нижний угол: сниппет с опечаткой обязан показать
+// форму, а не потерять её за краем экрана.
 function readPosition(raw: string | null): WidgetPosition {
-  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' ? raw : 'bottom-right'
+  return raw === 'bottom-left' || raw === 'top-right' || raw === 'top-left' || raw === 'center'
+    ? raw
+    : 'bottom-right'
 }
 
 /**

@@ -127,17 +127,22 @@ test('форма живёт блоком и виджетом на посторо
   // вида его не закрывает — второй раз жать «Получить код» не нужно (да и нельзя:
   // это тумблер, и подпись у него теперь другая).
   await page.getByRole('tab', { name: 'Виджет' }).click()
-  await page.getByLabel('Надпись на кнопке').fill('Оставить заявку')
   const widgetSnippet =
     (await page.getByLabel('Код для вставки', { exact: true }).textContent()) ?? ''
-  expect(widgetSnippet).toContain(`data-trillix-widget="${form.slug}"`)
-  expect(widgetSnippet).toContain('data-label="Оставить заявку"')
+  // Всплывающая форма по клику — загрузчик плюс КНОПКА САЙТА: своей кнопки загрузчик
+  // больше не рисует, и тега скрипта с настройками у этой формы вставки нет.
+  expect(widgetSnippet).toContain('/embed/v1.js')
+  expect(widgetSnippet).toContain(`data-trillix-open="${form.slug}"`)
+  expect(widgetSnippet).not.toContain('data-trillix-widget')
   const widgetPage = await visitor.newPage()
   await widgetPage.route(HOST_PAGE, (route) =>
     route.fulfill({ contentType: 'text/html; charset=utf-8', body: hostHtml(widgetSnippet) }),
   )
   await widgetPage.goto(HOST_PAGE)
 
+  // Кнопка на странице ровно одна — та, что приехала в сниппете. Вторая означала бы,
+  // что загрузчик по-прежнему рисует свою поверх кнопки сайта.
+  await expect(widgetPage.getByRole('button')).toHaveCount(1)
   const trigger = widgetPage.getByRole('button', { name: 'Оставить заявку' })
   await expect(trigger).toBeVisible()
   // До нажатия формы нет вовсе: фрейм создаётся в момент открытия, иначе визит

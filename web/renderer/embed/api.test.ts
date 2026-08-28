@@ -100,6 +100,7 @@ describe('optionsFromAttrs', () => {
       open: 'click',
       openValue: 0,
       hideOnSubmit: false,
+      button: true,
     })
   })
 
@@ -383,5 +384,72 @@ describe('frameAdoption', () => {
   it('data-dynamic-height="0" останавливает подстройку высоты', () => {
     const off = { 'data-dynamic-height': '0' }
     expect(adopt(`${ORIGIN}/r/opros?embed=block`, off)?.opts.dynamicHeight).toBe(false)
+  })
+})
+
+describe('optionsFromAttrs: кнопка сайта', () => {
+  // С 2026-08-28 кабинет печатает настройки атрибутами на ЧУЖОЙ кнопке: без разбора
+  // этих атрибутов форма открывалась бы с умолчаниями, а не так, как её настроили.
+  it('data-trillix-open читается как виджет, вместе с настройками вида', () => {
+    const opts = optionsFromAttrs(
+      attrs({
+        'data-trillix-open': 'opros',
+        'data-position': 'center',
+        'data-width': '700',
+        'data-overlay': 'none',
+      }),
+    )
+    expect(opts).toMatchObject({
+      form: 'opros',
+      mode: 'widget',
+      position: 'center',
+      width: 700,
+      overlay: false,
+    })
+  })
+
+  // Кнопка, размеченная одним атрибутом (так делали до появления настроек на ней),
+  // обязана открывать форму с умолчаниями, а не молчать.
+  it('кнопка с одним атрибутом — умолчания', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-open': 'opros' }))).toMatchObject({
+      form: 'opros',
+      mode: 'widget',
+      position: 'bottom-right',
+      width: DEFAULT_WIDTH,
+    })
+  })
+})
+
+describe('optionsFromAttrs: своя кнопка загрузчика', () => {
+  // ОТСУТСТВИЕ АТРИБУТА = РИСОВАТЬ. Вставки, стоящие на чужих сайтах с прошлых
+  // месяцев, `data-button` не несут; прочитай мы его отсутствие как «не рисовать» —
+  // форма разом стала бы на них недоступной.
+  it('без атрибута кнопка рисуется', () => {
+    expect(optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros' }))?.button).toBe(true)
+  })
+
+  it('data-button="none" — кнопки нет', () => {
+    const opts = optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', 'data-button': 'none' }))
+    expect(opts?.button).toBe(false)
+  })
+})
+
+describe('optionsFromAttrs: расположение', () => {
+  const position = (value: string) =>
+    optionsFromAttrs(attrs({ 'data-trillix-widget': 'opros', 'data-position': value }))?.position
+
+  it('центр — новое значение контракта', () => {
+    expect(position('center')).toBe('center')
+  })
+
+  // Четыре угла остаются контрактом v1: кабинет их больше не предлагает, но вставки
+  // с ними живут на чужих сайтах.
+  it('прежние углы продолжают читаться', () => {
+    expect(position('top-left')).toBe('top-left')
+    expect(position('bottom-left')).toBe('bottom-left')
+  })
+
+  it('опечатка — правый нижний угол, а не потерянная форма', () => {
+    expect(position('centre')).toBe('bottom-right')
   })
 })

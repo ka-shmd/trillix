@@ -44,7 +44,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // Держать его ещё и здесь значило бы синхронизировать состояние с URL эффектом —
 // две правды об одном значении и лишний рендер на каждый переход «Назад».
 export interface EmbedSettings {
-  label: string
   position: WidgetPosition
   transparent: boolean
   hideTitle: boolean
@@ -210,7 +209,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
       )}
 
       <Row>
-        <Field id="embed-position" label="Угол экрана">
+        <Field id="embed-position" label="Расположение">
           <Select
             value={settings.position}
             onValueChange={(v) => onChange({ position: v as WidgetPosition })}
@@ -226,17 +225,6 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
               ))}
             </SelectContent>
           </Select>
-        </Field>
-      </Row>
-
-      <Row>
-        <Field id="embed-label" label="Надпись на кнопке">
-          <Input
-            id="embed-label"
-            value={settings.label}
-            onChange={(e) => onChange({ label: e.target.value })}
-            className={FIELD_TEXT}
-          />
         </Field>
       </Row>
 

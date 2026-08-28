@@ -26,20 +26,24 @@ export const MODE_HINTS: Record<EmbedMode, string> = {
   page: 'Форма занимает весь экран — удобно длинной анкете',
 }
 
-export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left'
+export type WidgetPosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center'
 
-export const WIDGET_POSITIONS: Record<WidgetPosition, string> = {
-  'bottom-right': 'Справа внизу',
-  'bottom-left': 'Слева внизу',
-  'top-right': 'Справа вверху',
-  'top-left': 'Слева вверху',
+/**
+ * РАСПОЛОЖЕНИЕ ВСПЛЫВАЮЩЕЙ ФОРМЫ — ДВА ВАРИАНТА (решение владельца 2026-08-28): панель
+ * в правом нижнем углу и окно по центру. Прежние три угла кабинет больше не
+ * предлагает; загрузчик их понимает по-прежнему — вставки с ними живут на чужих
+ * сайтах, и контракт `v1.js` бессрочный (EMBED §2).
+ */
+export const WIDGET_POSITIONS: Partial<Record<WidgetPosition, string>> = {
+  'bottom-right': 'Правый нижний угол',
+  center: 'Центр',
 }
 
 /** Что открывает виджет. Зеркалит `OpenTrigger` загрузчика (`embed/api.ts`). */
 export type OpenTrigger = 'click' | 'delay' | 'scroll' | 'exit'
 
 export const OPEN_TRIGGERS: Record<OpenTrigger, string> = {
-  click: 'По клику на кнопку',
+  click: 'По клику на кнопку сайта',
   delay: 'Через паузу после загрузки',
   scroll: 'Когда прокрутят страницу',
   exit: 'Когда уводят курсор со страницы',
@@ -56,8 +60,6 @@ export interface SnippetOptions {
    * (`displayFormTitle`), поэтому пустым это поле в кабинете не бывает.
    */
   title?: string
-  /** Надпись на кнопке виджета: вводит владелец формы, поэтому экранируется. */
-  label?: string
   position?: WidgetPosition
   transparent?: boolean
   /** Высота простого iframe: у него авторесайза нет, размер задаётся сразу. */
@@ -131,19 +133,18 @@ export function scriptSnippet(opts: SnippetOptions): string {
   const attrs: string[] = []
   if (opts.mode === 'widget') {
     attrs.push(`data-trillix-widget="${escapeAttr(opts.slug)}"`)
-    if (opts.label) attrs.push(`data-label="${escapeAttr(opts.label)}"`)
-    if (opts.position && opts.position !== 'bottom-right') {
-      attrs.push(`data-position="${opts.position}"`)
-    }
-    if (opts.width && opts.width !== DEFAULT_WIDGET_WIDTH) attrs.push(`data-width="${opts.width}"`)
-    if (opts.overlay === false) attrs.push('data-overlay="none"')
+    // СВОЕЙ КНОПКИ ЗАГРУЗЧИК БОЛЬШЕ НЕ РИСУЕТ (решение владельца 2026-08-28): форму
+    // открывает элемент сайта или вызов из кода. Атрибут пишется ЯВНО, потому что его
+    // отсутствие для загрузчика значит «рисовать» — иначе вставки, стоящие на чужих
+    // сайтах с прошлых месяцев, разом лишились бы кнопки (EMBED §2).
+    attrs.push('data-button="none"')
+    attrs.push(...widgetAttrs(opts))
     // Триггер и его значение пишутся вместе: «через паузу» без числа читалось бы как
     // «через сколько-то», а умолчание живёт в загрузчике и здесь не дублируется.
     if (opts.open && opts.open !== 'click') {
       attrs.push(`data-open="${opts.open}"`)
       if (opts.openValue) attrs.push(`data-open-value="${opts.openValue}"`)
     }
-    if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
   } else {
     attrs.push(`data-trillix-form="${escapeAttr(opts.slug)}"`)
     if (opts.mode === 'page') attrs.push('data-mode="page"')
@@ -156,20 +157,68 @@ export function scriptSnippet(opts: SnippetOptions): string {
     if (opts.mode === 'block' && opts.dynamicHeight === false) {
       attrs.push('data-dynamic-height="0"')
     }
+    // ДВЕ НАСТРОЙКИ ВИДА ПИШУТСЯ НЕ ВО ВСЕХ РЕЖИМАХ, и оба ограничения — здесь, а не
+    // только в панели: иначе включённая у блока настройка молча уезжала бы в сниппет
+    // после переключения вида, где её контрола нет и увидеть её негде.
+    //
+    // Скрытый заголовок — не у страницы: там форма и есть вся страница, и прятать её
+    // заголовок значит оставить документ вовсе без него.
+    if (opts.hideTitle && opts.mode !== 'page') attrs.push('data-hide-title="1"')
+    // Прижатие влево — только у блока: у виджета и страницы поля холста единственное,
+    // что отделяет форму от края панели и края экрана (то же правило продублировано
+    // селектором в рендерере — оно про вид, а не про кабинет).
+    if (opts.alignLeft && opts.mode === 'block') attrs.push('data-align="left"')
+    if (opts.preview) attrs.push('data-preview="1"')
   }
-  // ДВЕ НАСТРОЙКИ ВИДА ПИШУТСЯ НЕ ВО ВСЕХ РЕЖИМАХ, и оба ограничения — здесь, а не
-  // только в панели: иначе включённая у блока настройка молча уезжала бы в сниппет
-  // после переключения вида, где её контрола нет и увидеть её негде.
-  //
-  // Скрытый заголовок — не у страницы: там форма и есть вся страница, и прятать её
-  // заголовок значит оставить документ вовсе без него.
-  if (opts.hideTitle && opts.mode !== 'page') attrs.push('data-hide-title="1"')
-  // Прижатие влево — только у блока: у виджета и страницы поля холста единственное,
-  // что отделяет форму от края панели и края экрана (то же правило продублировано
-  // селектором в рендерере — оно про вид, а не про кабинет).
-  if (opts.alignLeft && opts.mode === 'block') attrs.push('data-align="left"')
-  if (opts.preview) attrs.push('data-preview="1"')
   return `<script src="${loaderUrl(opts.baseUrl)}" ${attrs.join(' ')} async></script>`
+}
+
+/** Текст кнопки-образца: его владелец сайта заменит на свой. */
+const TRIGGER_TEXT = 'Оставить заявку'
+
+/**
+ * widgetAttrs — настройки ВИДА всплывающей формы, общие для двух её носителей: тега
+ * скрипта (автооткрытие) и кнопки сайта (открытие по клику).
+ *
+ * Общие они не для краткости: разъехавшись, два места печатали бы одну настройку
+ * по-разному, и «Расположение» в кабинете перестало бы совпадать с тем, что видит
+ * посетитель, — в одном из двух случаев, то есть через раз.
+ */
+function widgetAttrs(opts: SnippetOptions): string[] {
+  const attrs: string[] = []
+  if (opts.position && opts.position !== 'bottom-right') {
+    attrs.push(`data-position="${opts.position}"`)
+  }
+  if (opts.width && opts.width !== DEFAULT_WIDGET_WIDTH) attrs.push(`data-width="${opts.width}"`)
+  if (opts.overlay === false) attrs.push('data-overlay="none"')
+  if (opts.hideOnSubmit) attrs.push('data-hide-on-submit="1"')
+  if (opts.transparent) attrs.push('data-bg="transparent"')
+  if (opts.hideTitle) attrs.push('data-hide-title="1"')
+  if (opts.preview) attrs.push('data-preview="1"')
+  return attrs
+}
+
+/**
+ * triggerTag — КНОПКА САЙТА, к которой цепляется всплывающая форма.
+ *
+ * Своей кнопки у вставки больше нет (решение владельца 2026-08-28): её рисовал
+ * загрузчик, и она всегда была чужой на чужом сайте — свой шрифт, свой цвет, свой
+ * угол. Теперь форму открывает элемент владельца сайта, а мы даём образец, который он
+ * заменит своим: атрибуты можно перенести на любую кнопку или ссылку.
+ *
+ * `hidden` — для макета на экране «Встроить»: там кнопка не нужна вовсе (автор пришёл
+ * смотреть на форму), но открыть форму чем-то надо, и невидимый элемент оставляет
+ * предпросмотру ровно тот путь, которым форма откроется на настоящем сайте.
+ */
+export function triggerTag(opts: SnippetOptions, hidden = false): string {
+  const attrs = [`data-trillix-open="${escapeAttr(opts.slug)}"`, ...widgetAttrs(opts)]
+  if (hidden) attrs.push('style="display:none"')
+  return `<button type="button" ${attrs.join(' ')}>${escapeText(TRIGGER_TEXT)}</button>`
+}
+
+/** Текст между тегами: те же три знака, что у значений атрибутов (`escapeAttr`). */
+function escapeText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 /**
@@ -180,15 +229,34 @@ export function scriptSnippet(opts: SnippetOptions): string {
  * автору виден: его можно двигать и оборачивать, не разбираясь в нашем коде.
  * Настройки вида уезжают в адрес фрейма — тот же, что и в «ссылке для вставки».
  *
- * Виджет — по-прежнему ОДИН тег скрипта: в потоке страницы ему нечего занимать,
- * кнопку и модалку строит загрузчик. Готовый `<iframe>` там был бы фреймом,
- * который никогда не показывают.
+ * Всплывающая форма — ДВЕ ФОРМЫ ВСТАВКИ, по способу открытия (решение владельца
+ * 2026-08-28). По клику: тег загрузчика плюс кнопка-образец с `data-trillix-open` —
+ * своей кнопки загрузчик больше не рисует, форму открывает элемент сайта. Само
+ * («через паузу», «когда прокрутят», «когда уводят курсор»): один тег скрипта с
+ * `data-button="none"` — открывать нечем и незачем, форма приходит сама.
  *
  * Обе формы поднимает один и тот же `embed/v1.js` (§2 EMBED.md).
  */
 export function embedCode(opts: SnippetOptions): string {
-  if (opts.mode === 'widget') return scriptSnippet(opts)
-  return `${frameTag(opts)}\n${loaderTag(opts.baseUrl)}`
+  if (opts.mode !== 'widget') return `${frameTag(opts)}\n${loaderTag(opts.baseUrl)}`
+  if ((opts.open ?? 'click') !== 'click') return scriptSnippet(opts)
+  return `${loaderTag(opts.baseUrl)}\n${triggerTag(opts)}`
+}
+
+/**
+ * previewCode — код, который исполняется в макете на экране «Встроить».
+ *
+ * От копируемого отличается двумя вещами, и обе про сцену, а не про поведение формы.
+ * Первая — флаг `preview` (визит не считается, ответ не уходит). Вторая — только у
+ * всплывающей формы: макет ВСЕГДА открывает её кликом по невидимой кнопке, каким бы
+ * ни был настроенный триггер. Предпросмотр отвечает на «как это выглядит», а не «когда
+ * появится»; ждать пять секунд паузы или прокручивать макет ради проверки вида —
+ * работа, которой автор не просил.
+ */
+export function previewCode(opts: SnippetOptions): string {
+  const preview: SnippetOptions = { ...opts, preview: true }
+  if (preview.mode !== 'widget') return embedCode(preview)
+  return `${loaderTag(preview.baseUrl)}\n${triggerTag(preview, true)}`
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   DEFAULT_WIDGET_WIDTH,
   embedCode,
   frameUrl,
+  previewCode,
   type EmbedMode,
   type SnippetOptions,
 } from '../embedSnippet'
@@ -43,7 +44,6 @@ export function EmbedView({
   onClose: () => void
 }) {
   const [settings, setSettings] = useState<EmbedSettings>({
-    label: 'Оставить заявку',
     position: 'bottom-right',
     // Прозрачный фон — с самого начала (решение владельца 2026-08-27): вставка на
     // чужой странице должна выглядеть её частью, а белый прямоугольник поверх чужого
@@ -76,7 +76,6 @@ export function EmbedView({
     slug: form.slug,
     mode,
     title: displayFormTitle(form.title),
-    label: settings.label,
     position: settings.position,
     transparent: settings.transparent,
     hideTitle: settings.hideTitle,
@@ -97,8 +96,7 @@ export function EmbedView({
   const snippet = embedCode(opts)
   // В макет уезжает тот же сниппет плюс флаг предпросмотра — единственное отличие
   // исполняемого кода от показанного (MockSite).
-  const previewOpts: SnippetOptions = { ...opts, preview: true }
-  const previewSnippet = embedCode(previewOpts)
+  const previewSnippet = previewCode(opts)
 
   return (
     // ЭКРАН ПОВЕРХ КАБИНЕТА, а не область внутри него, — тем же слоем и по тому же
