@@ -142,7 +142,7 @@ export function EmbedView({
                   </Button>
                 </SheetClose>
               </div>
-              <ModeChoice form={form} mode={mode} onModeChange={onModeChange} />
+              <ModeChoice mode={mode} onModeChange={onModeChange} />
               <div className="flex flex-col gap-2">
                 {/* Код — тумблер, а не вход: макет и код делят одну область, и
                     вернуться нужно тем же жестом. */}
@@ -170,13 +170,24 @@ export function EmbedView({
                     которые делают фрейм сами (Notion, Ghost, Canva). Она же есть
                     внутри кода отдельным разделом; здесь — потому что за ней
                     приходят так же часто, как за кодом, и открывать ради неё экран
-                    кода незачем. */}
-                <CopyButton
-                  text={frameUrl(opts)}
-                  label="Скопировать ссылку встраивания"
-                  variant="ghost"
-                  className="w-full"
-                />
+                    кода незачем.
+
+                    ТОЛЬКО У БЛОКА: ссылка выражает документ, а не поведение. Виджет
+                    и страница — это триггер открытия, положение, перекрытие вьюпорта;
+                    адресу их нести некуда, а исполнять на чужой странице некому —
+                    редактор хоста просто вставит фрейм. У виджета вдобавок и адреса
+                    своего нет: `frameUrl` отдаёт ему `embed=block` (embedSnippet.ts),
+                    то есть скопированная ссылка молча возвращала бы блок вместо
+                    настроенного виджета. Так же разведено у Tally: «Copy embed link»
+                    стоит у Standard, у Popup и Full page — только «Get the code». */}
+                {mode === 'block' && (
+                  <CopyButton
+                    text={frameUrl(opts)}
+                    label="Скопировать ссылку встраивания"
+                    variant="ghost"
+                    className="w-full"
+                  />
+                )}
               </div>
             </section>
 

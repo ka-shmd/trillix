@@ -51,25 +51,32 @@ export function CodePanel({
         </p>
       </section>
 
-      <section>
-        <h2 className="text-base font-medium">Ссылка для вставки</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Для редакторов, которые сами делают фрейм по адресу, — Notion, Ghost, Canva.
-        </p>
-        <Textarea
-          readOnly
-          aria-label="Ссылка для вставки"
-          value={frameUrl(opts)}
-          rows={2}
-          className="mt-3 font-mono text-xs"
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton text={frameUrl(opts)} className="mt-2" />
-        <p className="mt-3 text-sm text-muted-foreground">
-          Высота у такой вставки фиксированная: подстраивать её под длину формы умеет только
-          загрузчик из кода выше.
-        </p>
-      </section>
+      {/* ССЫЛКА ТОЛЬКО У БЛОКА (та же граница, что у кнопки на панели, — EmbedView):
+          адресом выражается документ, а не поведение. У виджета своего адреса нет
+          вовсе — `frameUrl` отдаёт ему `embed=block`, — а «страницу», вставленную по
+          ссылке в чужой редактор, хост всё равно положит коробкой в поток. Код ниже
+          остаётся у всех режимов: он несёт настройки, которых адрес не несёт. */}
+      {opts.mode === 'block' && (
+        <section>
+          <h2 className="text-base font-medium">Ссылка для вставки</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Для редакторов, которые сами делают фрейм по адресу, — Notion, Ghost, Canva.
+          </p>
+          <Textarea
+            readOnly
+            aria-label="Ссылка для вставки"
+            value={frameUrl(opts)}
+            rows={2}
+            className="mt-3 font-mono text-xs"
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <CopyButton text={frameUrl(opts)} className="mt-2" />
+          <p className="mt-3 text-sm text-muted-foreground">
+            Высота у такой вставки фиксированная: подстраивать её под длину формы умеет только
+            загрузчик из кода выше.
+          </p>
+        </section>
+      )}
 
       {opts.mode !== 'widget' && (
         <section>
@@ -126,8 +133,8 @@ export function CodePanel({
   )
 }
 
-// Кнопка «скопировать» — одна на экран: четыре куска кода здесь и ссылка встраивания
-// в панели слева. Подпись и вид приходят пропами, ответ на нажатие — общий: два
+// Кнопка «скопировать» — одна на экран: куски кода здесь и ссылка встраивания в
+// панели слева (у блока). Подпись и вид приходят пропами, ответ на нажатие — общий: два
 // одинаковых буфера с разным поведением после клика читались бы как две разные
 // кнопки. Ответ этот — И СЛОВО, И ЗНАЧОК: у кнопки без границы (ghost) смена
 // подписи — единственное, что происходит на экране, и галочка делает её заметной.
