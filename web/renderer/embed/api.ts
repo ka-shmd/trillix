@@ -183,6 +183,58 @@ export function optionsFromAttrs(el: AttrSource): MountOptions | null {
   }
 }
 
+/**
+ * frameAdoption — разбор ГОТОВОГО фрейма двухтеговой вставки:
+ * `<iframe data-trillix-src="…"> + <script src="…/embed/v1.js">`.
+ *
+ * Вторая форма сниппета (§2 EMBED.md). Настройки вида в ней уже уехали в адрес — его
+ * собрал кабинет, — поэтому здесь не сборка, а ПРОВЕРКА чужой строки и добавление
+ * того, чего в кабинете быть не могло: меток источника хост-страницы.
+ *
+ * null = фрейм не наш (нет атрибута, битый адрес, чужой origin, путь не `/r/{slug}`).
+ * Проверка origin обязательна: загрузчик не должен становиться универсальным
+ * подъёмником фреймов по адресу из разметки чужой страницы.
+ *
+ * Режим берётся из адреса, а не из атрибута: адрес — единственное, что описывает
+ * вставку целиком, и разойтись эти два источника не могут. Всё, что не `page`,
+ * считается блоком: фрейм стоит в потоке, и вести себя иначе он не может, что бы ни
+ * было написано в `embed`.
+ */
+export function frameAdoption(
+  origin: string,
+  el: AttrSource,
+  hostSearch: string,
+): { src: string; opts: MountOptions } | null {
+  const raw = el.getAttribute('data-trillix-src')
+  if (origin === '' || !isHttpUrl(raw)) return null
+  const url = new URL(raw)
+  if (url.origin !== origin || !url.pathname.startsWith('/r/')) return null
+  const form = decodeURIComponent(url.pathname.slice('/r/'.length))
+  if (form === '' || form.includes('/')) return null
+
+  // Метки источника — с ХОСТ-страницы, как и у собранного загрузчиком адреса
+  // (`frameSrc`): в кабинете их знать неоткуда. Уже написанное в адресе не
+  // переписывается — это выбор того, кто сниппет правил.
+  const host = new URLSearchParams(hostSearch)
+  for (const key of UTM_KEYS) {
+    const value = host.get(key)
+    if (value && !url.searchParams.has(key)) url.searchParams.set(key, value)
+  }
+
+  return {
+    src: url.toString(),
+    opts: {
+      form,
+      mode: url.searchParams.get('embed') === 'page' ? 'page' : 'block',
+      // Высота фрейма записана в его собственном атрибуте `height`, а следование за
+      // содержимым выключается `data-dynamic-height="0"` — тем же атрибутом, что у
+      // однотегового сниппета.
+      height: size(el.getAttribute('height'), DEFAULT_HEIGHT),
+      dynamicHeight: el.getAttribute('data-dynamic-height') !== '0',
+    },
+  }
+}
+
 /** Число из атрибута; мусор и не-положительное дают умолчание. */
 function size(raw: string | null, fallback: number): number {
   const value = Number(raw)

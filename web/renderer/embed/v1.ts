@@ -3,10 +3,18 @@
 // обратно совместимые; всё, что ломает вставленные сниппеты, обязано стать v2.js
 // (design/embed.md §3).
 //
-// Сниппет — один тег, без парного div:
+// У сниппета ДВЕ формы, и обе обязаны работать вечно.
+//
+// Однотеговая — скрипт сам вставляет фрейм на своё место:
 //   <script src="https://f.trillix.ru/embed/v1.js" data-trillix-form="opros" async></script>
 //   <script src="…/v1.js" data-trillix-widget="opros" data-label="Оставить заявку" async></script>
 //   <script src="…/v1.js" data-trillix-form="opros" data-mode="page" async></script>
+//
+// Двухтеговая — фрейм написан в разметке, загрузчик его усыновляет (`loadEmbeds`):
+//   <iframe data-trillix-src="…/r/opros?embed=block" width="100%" height="520"></iframe>
+//   <script async src="https://f.trillix.ru/embed/v1.js"></script>
+// Место фрейма в этой форме держит разметка, поэтому вставка не прыгает при загрузке,
+// а сам фрейм виден автору — его можно двигать и стилизовать, не трогая наш код.
 //
 // Стили везде назначаются через CSSOM (`el.style.x = …`), а не атрибутом style: на
 // сайте со строгой CSP без 'unsafe-inline' атрибут был бы отброшен и виджет остался
@@ -18,6 +26,7 @@ import {
   DEFAULT_OPEN_DELAY,
   DEFAULT_OPEN_SCROLL,
   DEFAULT_WIDTH,
+  frameAdoption,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -102,6 +111,53 @@ function mount(target: Element, opts: MountOptions): EmbedHandle | null {
     const i = mounted.indexOf(entry)
     if (i >= 0) mounted.splice(i, 1)
   })
+}
+
+/**
+ * loadEmbeds — поднять фреймы двухтеговой вставки: те, у кого есть `data-trillix-src`
+ * и ещё нет `src`.
+ *
+ * Публичный метод (`Trillix.loadEmbeds()`), а не только внутренний вызов: фрейм может
+ * появиться после загрузки — карточка товара в SPA, вкладка, аккордеон, — и поднять
+ * его тогда некому. Тот же метод и у Tally, и по той же причине.
+ *
+ * Повторный вызов безопасен: усыновлённому фрейму проставлен `src`, и селектор его
+ * больше не видит.
+ */
+function loadEmbeds(): void {
+  const frames = document.querySelectorAll<HTMLIFrameElement>(
+    'iframe[data-trillix-src]:not([src])',
+  )
+  for (const frame of Array.from(frames)) adoptFrame(frame)
+}
+
+/**
+ * adoptFrame — чужой по происхождению узел становится нашей вставкой.
+ *
+ * РЕГИСТРАЦИЯ В РЕЕСТРЕ ОБЯЗАТЕЛЬНА, и это не бухгалтерия: `onFrameMessage` ищет
+ * отправителя среди `mounted`, и фрейм мимо реестра не получил бы ни подстройки
+ * высоты, ни подтяжки страницы при смене шага — форма молча осталась бы ростом в
+ * атрибут `height`.
+ */
+function adoptFrame(frame: HTMLIFrameElement): void {
+  const adoption = frameAdoption(ORIGIN, frame, window.location.search)
+  if (adoption === null) return
+  frame.src = adoption.src
+  if (frame.title === '') frame.title = 'Форма'
+  // Высоту у блока ведёт содержимое, поэтому внутренний скролл там лишний — то же
+  // правило, что у собранного нами фрейма (`createFrame`). У страницы фрейм ростом с
+  // вьюпорт и скроллится сам.
+  if (adoption.opts.mode !== 'page' && adoption.opts.dynamicHeight !== false) {
+    frame.scrolling = 'no'
+  }
+  // «Страница» запирает прокрутку хозяина: за фиксированным фреймом прокручивать
+  // нечего, а незапертая страница уезжала бы колесом поверх формы. Замок живёт,
+  // пока живёт вставка, — снимать его закрытию виджета не даёт `pageMounted`.
+  if (adoption.opts.mode === 'page') {
+    pageMounted = true
+    lockScroll()
+  }
+  mounted.push({ frame, opts: adoption.opts, handlers: {} })
 }
 
 /**
@@ -585,6 +641,8 @@ declare global {
       mount(target: Element, opts: MountOptions): EmbedHandle | null
       open(opts: MountOptions, from?: HTMLElement | null): EmbedHandle | null
       close(): void
+      /** Поднять фреймы `data-trillix-src`, появившиеся после загрузки страницы. */
+      loadEmbeds(): void
       /** Внутреннее: второй экземпляр файла отдаёт свой сниппет первому. */
       attach?(script: Element): void
     }
@@ -600,8 +658,29 @@ declare global {
 const prior = window.Trillix
 if (prior?.attach) {
   if (current) prior.attach(current)
+  // Фреймы второй формы сниппета ищет ПЕРВЫЙ экземпляр — реестр и подписки живут
+  // там; второй только просит его посмотреть ещё раз. Осторожно, через `?.`: первым
+  // мог оказаться загрузчик соседнего контура (страница с формами двух доменов), и
+  // метода этого у него может не быть вовсе.
+  prior.loadEmbeds?.()
 } else {
   listen()
-  window.Trillix = { mount, open, close: closeWidget, attach }
+  window.Trillix = { mount, open, close: closeWidget, loadEmbeds, attach }
   if (current) attach(current)
+  scanEmbeds()
+}
+
+/**
+ * scanEmbeds — обход фреймов двухтеговой вставки на старте.
+ *
+ * Загрузчик стоит с `async`, то есть выполняется КОГДА УГОДНО относительно разбора
+ * документа: фрейм, написанный ниже по странице, в этот момент может ещё не
+ * существовать. Поэтому обход повторяется по `DOMContentLoaded` — иначе вставка
+ * поднималась бы через раз, в зависимости от скорости сети.
+ */
+function scanEmbeds(): void {
+  loadEmbeds()
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadEmbeds, { once: true })
+  }
 }

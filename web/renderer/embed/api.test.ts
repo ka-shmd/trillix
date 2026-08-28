@@ -4,6 +4,7 @@ import {
   DEFAULT_HEIGHT,
   DEFAULT_LABEL,
   DEFAULT_WIDTH,
+  frameAdoption,
   frameSrc,
   isHttpUrl,
   optionsFromAttrs,
@@ -313,5 +314,67 @@ describe('frameSrc: кто исполняет переход', () => {
     expect(frameSrc('https://f.trillix.ru', { ...base, redirect: 'frame' }, '')).toContain(
       'redirect=frame',
     )
+  })
+})
+
+describe('frameAdoption', () => {
+  const ORIGIN = 'https://f.trillix.ru'
+  const src = (value: string) => attrs({ 'data-trillix-src': value })
+
+  it('поднимает фрейм по адресу своего origin', () => {
+    const got = frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=block`), '')
+    expect(got?.src).toBe(`${ORIGIN}/r/opros?embed=block`)
+    expect(got?.opts).toMatchObject({ form: 'opros', mode: 'block', dynamicHeight: true })
+  })
+
+  // Загрузчик не универсальный подъёмник фреймов: адрес пишут в разметке чужой
+  // страницы, и чужой origin оттуда поднимать нельзя.
+  it('чужой origin, битый адрес и путь не /r/ — не наш фрейм', () => {
+    expect(frameAdoption(ORIGIN, src('https://evil.example/r/opros?embed=block'), '')).toBeNull()
+    expect(frameAdoption(ORIGIN, src('javascript:alert(1)'), '')).toBeNull()
+    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/embed/v1.js`), '')).toBeNull()
+    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/`), '')).toBeNull()
+    expect(frameAdoption(ORIGIN, attrs({}), '')).toBeNull()
+  })
+
+  // Пустой origin — загрузчик не смог прочитать собственный адрес; поднимать некуда.
+  it('без origin загрузчика фрейм не поднимается', () => {
+    expect(frameAdoption('', src(`${ORIGIN}/r/opros?embed=block`), '')).toBeNull()
+  })
+
+  it('режим читается из адреса, а не из атрибутов', () => {
+    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=page`), '')?.opts.mode).toBe('page')
+    // Виджет фреймом в потоке быть не может — ведёт себя как блок.
+    expect(frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=widget`), '')?.opts.mode).toBe('block')
+  })
+
+  // Метки источника лендинга в кабинете неизвестны — их добавляет загрузчик, ровно
+  // как и в адресе, который он собирает сам (frameSrc).
+  it('подставляет метки источника хост-страницы', () => {
+    const got = frameAdoption(ORIGIN, src(`${ORIGIN}/r/opros?embed=block`), '?utm_source=vk&ref=x')
+    expect(got?.src).toContain('utm_source=vk')
+    expect(got?.src).not.toContain('ref=x')
+  })
+
+  it('метку, уже написанную в адресе, не переписывает', () => {
+    const got = frameAdoption(
+      ORIGIN,
+      src(`${ORIGIN}/r/opros?embed=block&utm_source=letter`),
+      '?utm_source=vk',
+    )
+    expect(got?.src).toContain('utm_source=letter')
+    expect(got?.src).not.toContain('utm_source=vk')
+  })
+
+  it('высота — из атрибута фрейма, мусор даёт умолчание', () => {
+    const withHeight = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, height: '900' }
+    expect(frameAdoption(ORIGIN, attrs(withHeight), '')?.opts.height).toBe(900)
+    const percent = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, height: '100%' }
+    expect(frameAdoption(ORIGIN, attrs(percent), '')?.opts.height).toBe(DEFAULT_HEIGHT)
+  })
+
+  it('data-dynamic-height="0" останавливает подстройку высоты', () => {
+    const off = { 'data-trillix-src': `${ORIGIN}/r/opros?embed=block`, 'data-dynamic-height': '0' }
+    expect(frameAdoption(ORIGIN, attrs(off), '')?.opts.dynamicHeight).toBe(false)
   })
 })
