@@ -97,14 +97,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
     <>
       <Row>
         <Field id="embed-height" label="Высота">
-          {/* Единица измерения — В ПОЛЕ, а не в подписи: «Высота» отвечает на «что»,
-              «px» на «в чём», и вместе они читаются одной строкой. Кегль и вес у них
-              общие — иначе «px» читается не концом строки, а меткой поверх неё.
-              Кегль — общий с полями виджета (`FIELD_TEXT` ниже).
-              ПОЛЕ СПРАВА ОСТАВЛЯЕТ МЕСТО ДВОИМ: стрелки счётчика браузер рисует у
-              правого края СОДЕРЖИМОГО, то есть внутри этого отступа, а «px» стоит
-              правее — в самом отступе. Уменьшишь `pr` — они наедут друг на друга. */}
-          <div className="relative">
+          <WithUnit unit="px">
             <Input
               id="embed-height"
               type="number"
@@ -115,10 +108,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
               onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
               className={`pr-9 ${FIELD_TEXT}`}
             />
-            <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-base font-medium text-muted-foreground">
-              px
-            </span>
-          </div>
+          </WithUnit>
         </Field>
       </Row>
       <Row>
@@ -160,14 +150,16 @@ function BlockSettings({ settings, onChange }: ModeProps) {
 }
 
 /**
- * Кегль набранного значения — 16/500, как у поля «Высота» у блока.
+ * Кегль набранного значения в контролах панели — 16/500 на всех ширинах.
  *
- * Умолчание shadcn — `text-base md:text-sm`, то есть на десктопе 14: рядом с полем
- * блока это читалось двумя разными панелями. Кегль поднимается ТЕМ ЖЕ вариантом,
- * каким задан у компонента (`md:text-base`) — плоский `text-base` не пересилил бы
- * `md:text-sm`, класс на элементе был бы, а вида нет (web/CLAUDE.md).
+ * Умолчания shadcn мельче и РАЗНЫЕ: у `Input` это `text-base md:text-sm` (на десктопе
+ * 14), у `SelectTrigger` — `text-sm` вовсе без брейкпоинта. Поэтому кегль назван в
+ * обеих ступенях: `md:text-base` перебивает `md:text-sm` у поля, `text-base` —
+ * `text-sm` у списка. Перебивать нужно ТЕМ ЖЕ вариантом, каким значение задано у
+ * компонента: плоский класс против `md:` не сработает, и вида не будет при том, что
+ * класс на элементе есть (web/CLAUDE.md).
  */
-const FIELD_TEXT = 'font-medium md:text-base'
+const FIELD_TEXT = 'text-base font-medium md:text-base'
 
 // Виджет и страница ждут своей очереди редизайна (решение владельца 2026-08-27):
 // набор контролов у них прежний, изменился только каркас вокруг.
@@ -177,7 +169,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
       <Row>
         <Field id="embed-open" label="Когда открывать">
           <Select value={settings.open} onValueChange={(v) => onChange({ open: v as OpenTrigger })}>
-            <SelectTrigger id="embed-open" className="w-full">
+            <SelectTrigger id="embed-open" className={`w-full ${FIELD_TEXT}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -223,7 +215,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
             value={settings.position}
             onValueChange={(v) => onChange({ position: v as WidgetPosition })}
           >
-            <SelectTrigger id="embed-position" className="w-full">
+            <SelectTrigger id="embed-position" className={`w-full ${FIELD_TEXT}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -249,16 +241,19 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
       </Row>
 
       <Row>
-        <Field id="embed-width" label="Ширина панели, px">
-          <Input
-            id="embed-width"
-            type="number"
-            min={280}
-            max={720}
-            value={settings.width}
-            onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
-            className={FIELD_TEXT}
-          />
+        <Field id="embed-width" label="Ширина панели">
+          <WithUnit unit="px">
+            <Input
+              id="embed-width"
+              type="number"
+              inputMode="numeric"
+              min={280}
+              max={720}
+              value={settings.width}
+              onChange={(e) => onChange({ width: Number(e.target.value) || DEFAULT_WIDGET_WIDTH })}
+              className={`pr-9 ${FIELD_TEXT}`}
+            />
+          </WithUnit>
         </Field>
       </Row>
 
@@ -369,6 +364,28 @@ function BadgeToggle({ form }: { form: FormDetail }) {
 // только вертикальный воздух вокруг содержимого.
 function Row({ children }: { children: ReactNode }) {
   return <div className="flex flex-col gap-2 py-4">{children}</div>
+}
+
+/**
+ * WithUnit — единица измерения ВНУТРИ поля, у правого края.
+ *
+ * Не в подписи: «Ширина панели» отвечает на «что», «px» — на «в чём», и вместе они
+ * читаются одной строкой, а подпись остаётся короткой. Кегль и вес у единицы общие
+ * со значением — иначе «px» читается не концом строки, а меткой поверх неё.
+ *
+ * МЕСТО СПРАВА ДЕЛЯТ ДВОЕ: стрелки счётчика браузер рисует у правого края
+ * СОДЕРЖИМОГО, то есть внутри отступа поля (`pr-9` на самом `Input`), а единица стоит
+ * правее — в самом отступе. Уменьшишь `pr` — они наедут друг на друга.
+ */
+function WithUnit({ unit, children }: { unit: string; children: ReactNode }) {
+  return (
+    <div className="relative">
+      {children}
+      <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-base font-medium text-muted-foreground">
+        {unit}
+      </span>
+    </div>
+  )
 }
 
 // Поле с подписью над контролом. Просвет 8, а не 4: четвёрка в ритме кабинета
