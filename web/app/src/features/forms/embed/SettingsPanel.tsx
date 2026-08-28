@@ -12,6 +12,8 @@ import {
   type OpenTrigger,
   type WidgetPosition,
 } from '../embedSnippet'
+import { CircleHelp } from 'lucide-react'
+
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -22,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Настройки вставки. ВСЕ ОНИ ЖИВУТ В САМОМ СНИППЕТЕ и никогда на сервере (ADR §10):
 // одна форма вставляется в несколько мест по-разному, и серверная копия настроек
@@ -308,7 +311,8 @@ function BadgeToggle({ form }: { form: FormDetail }) {
         checked={show}
         disabled={update.isPending}
         onChange={(v) => update.mutate({ form, show: v })}
-        text="Показывать «Сделано в Trillix»"
+        text="Брендинг Trillix"
+        tip="Показывать «Сделано в Trillix» на вашей форме"
       />
       {!show && !canRemove && (
         <p className="text-xs text-muted-foreground">
@@ -364,19 +368,41 @@ function Toggle({
   checked,
   onChange,
   text,
+  tip,
   disabled = false,
 }: {
   id: string
   checked: boolean
   onChange: (value: boolean) => void
   text: string
+  /** Пояснение под значком вопроса — там, где подписи мало, а строки под ней нет. */
+  tip?: string
   disabled?: boolean
 }) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <Label htmlFor={id} className="font-normal">
-        {text}
-      </Label>
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor={id} className="font-normal">
+          {text}
+        </Label>
+        {tip && (
+          <Tooltip>
+            {/* Настоящая кнопка, а не значок: тултип обязан открываться и с
+                клавиатуры, а `TooltipTrigger` вешает обработчики на то, что ему
+                дали. Тип `button` — иначе внутри формы это отправка. */}
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label={tip}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <CircleHelp className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>{tip}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
       <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
     </div>
   )
