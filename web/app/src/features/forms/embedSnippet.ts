@@ -14,6 +14,24 @@ export const embedModeSchema = z.enum(['block', 'widget', 'page'])
 export type EmbedMode = z.infer<typeof embedModeSchema>
 export const DEFAULT_EMBED_MODE: EmbedMode = 'block'
 
+/**
+ * withoutMode — search для ссылки, УВОДЯЩЕЙ С ЭКРАНА ВСТАВКИ.
+ *
+ * Вид вставки принадлежит этому экрану и за его пределами не значит ничего: ни один
+ * другой экран его не читает. Но `search={(prev) => prev}`, которым ссылки кабинета
+ * переносят пространство, переносит и его — и `?mode=block` тянулся за человеком по
+ * разделам формы, оставаясь в адресе, которым он поделится.
+ *
+ * Снимается ИМЕННО ЗДЕСЬ, на выходе, а не на входе: маршрут-получатель чужие ключи не
+ * вычищает — `validateSearch` разбирает адрес, но не переписывает его. Тот же приём и
+ * по тому же доводу у периода аналитики (`shared/period.ts`, `withoutPeriod`).
+ */
+export function withoutMode<T extends object>(prev: T): Omit<T, 'mode'> {
+  const rest = { ...prev } as T & { mode?: unknown }
+  delete rest.mode
+  return rest
+}
+
 /** Как вид вставки называется и что обещает — один текст на все три экрана. */
 export const MODE_TITLES: Record<EmbedMode, string> = {
   block: 'Блок',

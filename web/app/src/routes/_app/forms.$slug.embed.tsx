@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { embedModeSchema, DEFAULT_EMBED_MODE } from '../../features/forms/embedSnippet'
+import { embedModeSchema, withoutMode, DEFAULT_EMBED_MODE } from '../../features/forms/embedSnippet'
 import { EmbedView } from '../../features/forms/embed/EmbedView'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
@@ -67,7 +67,10 @@ function EmbedPage() {
         void navigate({ to: '.', search: (prev) => ({ ...prev, mode: next }), replace: true })
       }
       onClose={() =>
-        void navigate({ to: '/forms/$slug/share', params: { slug }, search: (prev) => prev })
+        // Вид вставки со страницы уходит вместе с режимом: за его пределами он не
+        // значит ничего, а `?mode=block` иначе тянулся бы за человеком по разделам
+        // формы и оставался в адресе, которым он поделится (`withoutMode`).
+        void navigate({ to: '/forms/$slug/share', params: { slug }, search: withoutMode })
       }
     />
   )

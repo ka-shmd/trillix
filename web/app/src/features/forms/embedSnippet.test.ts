@@ -9,6 +9,7 @@ import {
   openSnippet,
   previewCode,
   scriptSnippet,
+  withoutMode,
   type SnippetOptions,
 } from './embedSnippet'
 
@@ -17,6 +18,20 @@ const base: SnippetOptions = {
   slug: 'opros',
   mode: 'block',
 }
+
+describe('withoutMode', () => {
+  // `?mode=block` тянулся за человеком по разделам формы и оставался в адресе,
+  // которым он делится: маршрут-получатель чужие ключи не вычищает, снимать их
+  // надо на выходе.
+  it('снимает вид вставки, остальное оставляет', () => {
+    expect(withoutMode({ mode: 'block', w: 'team' })).toEqual({ w: 'team' })
+  })
+
+  it('адрес без вида не меняется', () => {
+    expect(withoutMode({ w: 'team' })).toEqual({ w: 'team' })
+    expect(withoutMode({})).toEqual({})
+  })
+})
 
 describe('scriptSnippet', () => {
   it('блок — один тег со ссылкой на загрузчик того же домена, что и форма', () => {
