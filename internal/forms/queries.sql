@@ -56,7 +56,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -84,7 +84,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -221,6 +221,15 @@ SET notify_email = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormBehavior :one
+-- Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
+-- Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
+-- по отдельности они не спрашиваются нигде. Тарифа у обеих нет.
+UPDATE forms
+SET auto_jump = $3, save_locally = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: UpdateFormLinkPreview :one
 -- Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
 -- Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
@@ -310,6 +319,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
     -- сервис поверх этого значения ничего не спрашивает.
     f.progress,
+    -- auto_jump/save_locally: как форма ведёт себя у респондента (0044). Живые
+    -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
+    f.auto_jump,
+    f.save_locally,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

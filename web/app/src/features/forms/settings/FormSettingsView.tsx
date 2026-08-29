@@ -22,6 +22,7 @@ import {
   useReopenForm,
   useUnpublishForm,
   useUpdateAfterSubmit,
+  useUpdateBehavior,
   useUpdateBranding,
   useUpdateCloseSettings,
   useUpdateCollectPartial,
@@ -107,6 +108,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const updateNotify = useUpdateNotifyOnSubmission()
   const updatePartial = useUpdateCollectPartial()
   const updateProgress = useUpdateProgress()
+  const updateBehavior = useUpdateBehavior()
   const updateNotifyEmail = useUpdateNotifyEmail()
   const updateBranding = useUpdateBranding()
 
@@ -205,6 +207,17 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         if (e instanceof ApiError && e.code === 'plan_required') {
           toast.error('Настройка письма доступна на платном тарифе')
         }
+      }
+    }
+
+    if (jobs.behavior) {
+      try {
+        await updateBehavior.mutateAsync({
+          id: form.id,
+          behavior: { autoJump: draft.autoJump, saveLocally: draft.saveLocally },
+        })
+      } catch {
+        broke = true
       }
     }
 
@@ -367,6 +380,30 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             onChange={() => undefined}
             disabled
             stub="Заглушка: строка нарисована, отправки нет. Задача — в BACKLOG.md, «Почта формы»."
+          />
+        </div>
+      </Section>
+
+      <Section title="Поведение">
+        <div className="flex flex-col divide-y border-t">
+          <SettingRow
+            id="auto-jump"
+            label="Переход по ответу"
+            description="Форма сама листает на следующую страницу, когда человек выбрал вариант. Работает там, где на странице один вопрос выбором — один из списка, выпадающий список или шкала."
+            checked={draft.autoJump}
+            onChange={(v) => set('autoJump', v)}
+          />
+
+          {/* НЕ ПУТАТЬ С «Частичными ответами»: там черновик уезжает на сервер и его
+              читает автор, здесь ответы остаются в браузере респондента. Пояснение
+              обязано говорить это прямо — иначе два соседних тумблера выглядят одним
+              и тем же. */}
+          <SettingRow
+            id="save-locally"
+            label="Продолжить позже"
+            description="Незаполненная форма запомнит ответы в браузере респондента, и он вернётся к ней с того же места даже после закрытия вкладки. Ответы остаются на его компьютере и никуда не отправляются."
+            checked={draft.saveLocally}
+            onChange={(v) => set('saveLocally', v)}
           />
         </div>
       </Section>

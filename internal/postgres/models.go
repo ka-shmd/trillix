@@ -47,6 +47,8 @@ type Form struct {
 	Progress           bool
 	NotifyEmail        []byte
 	ClosedTitle        pgtype.Text
+	AutoJump           bool
+	SaveLocally        bool
 }
 
 type FormIntegration struct {

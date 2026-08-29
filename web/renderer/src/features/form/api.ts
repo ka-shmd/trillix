@@ -31,6 +31,11 @@ const publicFormSchema = z.object({
   // прошлой версии из кеша) — значит шкалы нет. Падать из-за отсутствия поля нельзя,
   // правило то же, что у бейджа.
   progress: z.boolean().default(false),
+  // Поведение формы у респондента (0044): листать страницу сразу после ответа и
+  // хранить незавершённые ответы дольше вкладки. Дефолты — те же, что у колонок:
+  // тело прошлой версии из кеша не имеет права включить ни то, ни другое.
+  autoJump: z.boolean().default(false),
+  saveLocally: z.boolean().default(false),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 

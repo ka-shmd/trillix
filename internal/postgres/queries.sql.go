@@ -1477,7 +1477,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1508,6 +1508,8 @@ type GetFormRow struct {
 	Branding              bool
 	Progress              bool
 	NotifyEmail           []byte
+	AutoJump              bool
+	SaveLocally           bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1542,6 +1544,8 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.Branding,
 		&i.Progress,
 		&i.NotifyEmail,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1565,7 +1569,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1596,6 +1600,8 @@ type GetFormBySlugRow struct {
 	Branding              bool
 	Progress              bool
 	NotifyEmail           []byte
+	AutoJump              bool
+	SaveLocally           bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1632,6 +1638,8 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.Branding,
 		&i.Progress,
 		&i.NotifyEmail,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1870,6 +1878,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
     -- сервис поверх этого значения ничего не спрашивает.
     f.progress,
+    -- auto_jump/save_locally: как форма ведёт себя у респондента (0044). Живые
+    -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
+    f.auto_jump,
+    f.save_locally,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1897,6 +1909,8 @@ type GetPublicFormBySlugRow struct {
 	LinkPreview        []byte
 	Branding           bool
 	Progress           bool
+	AutoJump           bool
+	SaveLocally        bool
 	SubmissionCount    int64
 }
 
@@ -1936,6 +1950,8 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.LinkPreview,
 		&i.Branding,
 		&i.Progress,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -4272,6 +4288,57 @@ type StartFormIntegrationBackfillParams struct {
 func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
 	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
+}
+
+const updateFormBehavior = `-- name: UpdateFormBehavior :one
+UPDATE forms
+SET auto_jump = $3, save_locally = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormBehaviorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	AutoJump    bool
+	SaveLocally bool
+}
+
+type UpdateFormBehaviorRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
+// Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
+// по отдельности они не спрашиваются нигде. Тарифа у обеих нет.
+func (q *Queries) UpdateFormBehavior(ctx context.Context, arg UpdateFormBehaviorParams) (UpdateFormBehaviorRow, error) {
+	row := q.db.QueryRow(ctx, updateFormBehavior,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.AutoJump,
+		arg.SaveLocally,
+	)
+	var i UpdateFormBehaviorRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateFormBranding = `-- name: UpdateFormBranding :one

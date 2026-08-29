@@ -83,6 +83,11 @@ type Form struct {
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
 	NotifyOnSubmission bool
+	// Behavior — раздел «Поведение» (0044): автопереход на следующую страницу и
+	// хранение ответов в браузере респондента дольше сессии. Живые колонки; та же
+	// мина, что у Branding, — заполняют только Get/GetBySlug.
+	AutoJump    bool
+	SaveLocally bool
 	// NotifyEmail — настройка письма о новом ответе (nil = не настраивали → письмо
 	// уходит дефолтным шаблоном). Живая колонка (0042); заполняют только
 	// Get/GetBySlug — та же мина, что у Branding.
@@ -149,6 +154,10 @@ type PublicForm struct {
 	// БЕЗ тарифа: шкала открыта всем планам, и поверх намерения service ничего не
 	// спрашивает — рендерер получает его как есть.
 	Progress bool
+	// AutoJump/SaveLocally — поведение формы у респондента (0044). Как и Progress,
+	// чистое намерение автора: тарифа у них нет, и решать поверх нечего.
+	AutoJump    bool
+	SaveLocally bool
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -364,6 +373,8 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
 		Progress:              row.Progress,
+		AutoJump:              row.AutoJump,
+		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
@@ -402,6 +413,8 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
 		Progress:              row.Progress,
+		AutoJump:              row.AutoJump,
+		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
@@ -654,6 +667,8 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		CollectPartial:     row.CollectPartial,
 		Branding:           row.Branding,
 		Progress:           row.Progress,
+		AutoJump:           row.AutoJump,
+		SaveLocally:        row.SaveLocally,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -763,6 +778,32 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form link_preview: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormBehavior заменяет раздел «Поведение» целиком (0044): автопереход и
+// хранение ответов в браузере респондента. Набором, а не по одной колонке: это один
+// экранный раздел, по отдельности эти настройки не спрашиваются нигде.
+func (Repo) UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormBehavior(ctx, postgres.UpdateFormBehaviorParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		AutoJump:    autoJump,
+		SaveLocally: saveLocally,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form behavior: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

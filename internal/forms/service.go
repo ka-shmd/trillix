@@ -79,6 +79,7 @@ type Store interface {
 	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
+	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -414,6 +415,23 @@ func (s *Service) UpdateBranding(ctx context.Context, userID, formID uuid.UUID, 
 		return Form{}, err
 	}
 	updated, err := s.repo.UpdateBranding(ctx, s.db, form.ID, form.WorkspaceID, show)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateBehavior заменяет раздел «Поведение» (0044): автопереход и хранение ответов
+// в браузере респондента. Тарифа у обеих настроек нет — ни здесь, ни на отдаче.
+func (s *Service) UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormBehavior(ctx, s.db, form.ID, form.WorkspaceID, autoJump, saveLocally)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound

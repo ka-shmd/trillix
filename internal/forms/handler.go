@@ -41,6 +41,7 @@ type formsService interface {
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
+	UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally bool) (Form, error)
 	UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
@@ -138,6 +139,10 @@ type formDetailResponse struct {
 	// формы, миграция 0040). Та же мина, что у Branding: только в детали формы, а
 	// false у списка и мутаций значит «шкала снята».
 	Progress bool `json:"progress"`
+	// Behavior — раздел «Поведение» (0044). Та же мина, что у Branding: только в
+	// детали формы.
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
 	// NotifyEmail — настройка письма о новом ответе; null = не настраивали, письмо
 	// уходит дефолтным шаблоном. Отдаётся НЕЗАВИСИМО от тарифа, как и карточка
 	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
@@ -159,6 +164,13 @@ type linkPreviewBody struct {
 	Description string `json:"description"`
 	ImageKey    string `json:"imageKey"`
 	IconKey     string `json:"iconKey"`
+}
+
+// behaviorBody — фасет behavior в PATCH: раздел «Поведение» целиком (0044). Набором,
+// а не по тумблеру: это один экранный раздел, и кабинет сохраняет его одной кнопкой.
+type behaviorBody struct {
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
@@ -202,6 +214,7 @@ type patchRequest struct {
 	CollectPartial     *bool              `json:"collectPartial"`
 	Branding           *bool              `json:"branding"`
 	Progress           *bool              `json:"progress"`
+	Behavior           *behaviorBody      `json:"behavior"`
 	NotifyEmail        *notifyEmailBody   `json:"notifyEmail"`
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
 }
@@ -283,6 +296,8 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
 		Progress:           f.Progress,
+		AutoJump:           f.AutoJump,
+		SaveLocally:        f.SaveLocally,
 		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 	}
@@ -434,6 +449,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.CollectPartial != nil,
 		req.Branding != nil,
 		req.Progress != nil,
+		req.Behavior != nil,
 		req.NotifyEmail != nil,
 		req.LinkPreview != nil,
 	}
@@ -443,7 +459,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/notifyEmail/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -476,6 +492,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateBranding(r.Context(), userID, formID, *req.Branding)
 	case req.Progress != nil:
 		form, err = h.svc.UpdateProgress(r.Context(), userID, formID, *req.Progress)
+	case req.Behavior != nil:
+		form, err = h.svc.UpdateBehavior(r.Context(), userID, formID, req.Behavior.AutoJump, req.Behavior.SaveLocally)
 	case req.NotifyEmail != nil:
 		ne := *req.NotifyEmail
 		form, err = h.svc.UpdateNotifyEmail(r.Context(), userID, formID, &domain.NotifyEmail{

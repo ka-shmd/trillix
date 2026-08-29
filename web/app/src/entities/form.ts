@@ -170,6 +170,11 @@ export const formDetailSchema = formSchema.extend({
   // дефолтным шаблоном. Отдаётся независимо от тарифа (как карточка ссылки), а
   // применяется отправкой письма.
   notifyEmail: notifyEmailSchema.nullable(),
+  // Поведение формы у респондента (0044): листать страницу сразу после ответа и
+  // хранить незавершённые ответы в его браузере дольше вкладки. Живые колонки без
+  // тарифа; только в детали формы.
+  autoJump: z.boolean(),
+  saveLocally: z.boolean(),
   // Шкала прогресса — индикатор шагов многостраничной формы; true = показывать.
   // Живая колонка (миграция 0040), как бейдж, и по тому же доводу: тумблер обязан
   // доезжать до респондента без перепубликации. Тарифа у неё нет вовсе. Только в
@@ -199,6 +204,13 @@ export const MAX_NOTIFY_BODY_LEN = 2000
 // Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
 // отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка
 // (пустая = дефолт), closeAt/responseLimit — null снимает ограничение.
+// Раздел «Поведение» для отправки в PATCH (фасет behavior): набором, а не по
+// тумблеру — это один экранный раздел.
+export type BehaviorInput = {
+  autoJump: boolean
+  saveLocally: boolean
+}
+
 export type CloseSettingsInput = {
   closeAt: string | null
   responseLimit: number | null

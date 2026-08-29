@@ -132,6 +132,11 @@ func (f *fakeStore) UpdateBranding(_ context.Context, _ postgres.DBTX, id, works
 	return Form{ID: id, WorkspaceID: workspaceID, Branding: show}, nil
 }
 
+func (f *fakeStore) UpdateFormBehavior(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+	f.updated = true
+	return Form{ID: id, WorkspaceID: workspaceID, AutoJump: autoJump, SaveLocally: saveLocally}, nil
+}
+
 func (f *fakeStore) SetFormReopened(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
 	f.updated = true
 	return Form{ID: id, WorkspaceID: workspaceID, Status: domain.FormStatusPublished}, nil

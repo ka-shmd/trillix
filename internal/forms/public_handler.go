@@ -124,6 +124,11 @@ type publicFormResponse struct {
 	// клиента из схемы, — потому что живёт оно в колонке формы, которой в снапшоте
 	// версии нет.
 	Progress bool `json:"progress"`
+	// AutoJump/SaveLocally — поведение формы у респондента (0044): переходить на
+	// следующую страницу сразу после ответа и хранить незавершённые ответы в браузере
+	// дольше сессии. Как и Progress — чистое намерение автора, без тарифа.
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
@@ -201,7 +206,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
 	// пока не сменится версия.
 	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
-	etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress) + `"`
+	etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -236,6 +241,8 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		ShowBadge:      showBadge,
 		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
 		Progress:       pf.Progress,
+		AutoJump:       pf.AutoJump,
+		SaveLocally:    pf.SaveLocally,
 	})
 }
 
@@ -281,13 +288,19 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 //
 // МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
 // автор переключил тумблер, а все, кто форму уже открывал, видят старое.
-func viewETagSuffix(showBadge, progress bool) string {
+func viewETagSuffix(showBadge, progress, autoJump, saveLocally bool) string {
 	suffix := ""
 	if showBadge {
 		suffix += "+b"
 	}
 	if progress {
 		suffix += "+p"
+	}
+	if autoJump {
+		suffix += "+j"
+	}
+	if saveLocally {
+		suffix += "+s"
 	}
 	return suffix
 }

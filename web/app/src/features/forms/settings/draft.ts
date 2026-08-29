@@ -46,6 +46,9 @@ export interface SettingsDraft {
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
   progress: boolean
   branding: boolean
+  // Раздел «Поведение» (0044).
+  autoJump: boolean
+  saveLocally: boolean
 }
 
 export function settingsFromForm(form: FormDetail): SettingsDraft {
@@ -70,6 +73,8 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     partial: form.collectPartial,
     progress: form.progress,
     branding: form.branding,
+    autoJump: form.autoJump,
+    saveLocally: form.saveLocally,
   }
 }
 
@@ -156,6 +161,7 @@ export interface PendingChanges {
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
   progress: boolean
   branding: boolean
+  behavior: boolean
 }
 
 export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): PendingChanges {
@@ -173,6 +179,7 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
     partial: draft.partial !== saved.partial,
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,
+    behavior: draft.autoJump !== saved.autoJump || draft.saveLocally !== saved.saveLocally,
   }
 }
 

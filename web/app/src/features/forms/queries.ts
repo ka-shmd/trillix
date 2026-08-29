@@ -15,6 +15,7 @@ import {
   unpublishForm,
   updateBranding,
   updateProgress,
+  updateBehavior,
   reopenForm,
   updateNotifyEmail,
   updateCloseSettings,
@@ -28,6 +29,7 @@ import {
   type CloseSettingsInput,
   type FormDetail,
   type FormsSort,
+  type BehaviorInput,
   type LinkPreview,
   type NotifyEmail,
 } from '../../entities/form'
@@ -272,6 +274,21 @@ export function useUpdateNotifyEmail() {
       const stored = Object.values(value).some((v) => v !== '') ? value : null
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, notifyEmail: stored } : old,
+      )
+    },
+  })
+}
+
+// Раздел «Поведение» (0044). Живые колонки: применяется со следующего же открытия
+// формы, без перепубликации.
+export function useUpdateBehavior() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, behavior }: { id: string; behavior: BehaviorInput }) =>
+      updateBehavior(id, behavior),
+    onSuccess: (form, { behavior }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, ...behavior } : old,
       )
     },
   })

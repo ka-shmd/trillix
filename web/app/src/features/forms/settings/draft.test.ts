@@ -33,6 +33,8 @@ const saved: SettingsDraft = {
   partial: false,
   progress: false,
   branding: true,
+  autoJump: false,
+  saveLocally: false,
 }
 
 describe('черновик страницы настроек', () => {
@@ -46,6 +48,7 @@ describe('черновик страницы настроек', () => {
       partial: false,
       progress: false,
       branding: false,
+      behavior: false,
     })
     expect(isDirty(saved, { ...saved })).toBe(false)
   })
@@ -60,6 +63,8 @@ describe('черновик страницы настроек', () => {
     expect(pendingChanges(saved, { ...saved, progress: true }).progress).toBe(true)
     expect(pendingChanges(saved, { ...saved, branding: false }).branding).toBe(true)
     expect(pendingChanges(saved, { ...saved, notifySubject: 'Заявка' }).notifyEmail).toBe(true)
+    expect(pendingChanges(saved, { ...saved, autoJump: true }).behavior).toBe(true)
+    expect(pendingChanges(saved, { ...saved, saveLocally: true }).behavior).toBe(true)
   })
 
   it('тумблер входит в «есть несохранённое» наравне с полями', () => {

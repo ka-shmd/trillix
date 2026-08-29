@@ -45,6 +45,8 @@ function seedDetail(qc: QueryClient) {
     collectPartial: false,
     branding: true,
     progress: true,
+    autoJump: false,
+    saveLocally: false,
     notifyEmail: null,
     linkPreview: null,
   })

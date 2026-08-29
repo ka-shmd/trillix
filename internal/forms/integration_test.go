@@ -394,6 +394,71 @@ func TestForms_Branding_AppliesWithoutRepublish(t *testing.T) {
 	patchBranding(t, bob, srv, form.ID, false, http.StatusNotFound)
 }
 
+// Раздел «Поведение» (0044): фасет доезжает набором, доходит до публичной выдачи без
+// перепубликации и меняет ETag. Тарифа у него нет — план в тесте не трогается.
+func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-behavior@example.com")
+	bob := registerUser(t, srv, "bob-behavior@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+
+	// У новой формы обе настройки выключены: ни прыжки по страницам, ни хранение
+	// ответов дольше сессии не включаются за автора.
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || d.SaveLocally {
+		t.Fatal("у новой формы «Поведение» обязано быть выключено")
+	}
+	before, etag := getPublicOK(t, anon, srv, form.Slug)
+	if before.AutoJump || before.SaveLocally {
+		t.Fatal("публичная форма отдана с включённым поведением до всякой настройки")
+	}
+
+	patchBehavior(t, alice, srv, form.ID, `{"autoJump":true,"saveLocally":true}`, http.StatusOK)
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if !d.AutoJump || !d.SaveLocally {
+		t.Fatal("настройки не сохранились")
+	}
+
+	after, etagAfter := getPublicOK(t, anon, srv, form.Slug)
+	if !after.AutoJump || !after.SaveLocally {
+		t.Fatal("поведение не доехало до публичной формы без перепубликации")
+	}
+	if after.Version != before.Version {
+		t.Fatalf("версия изменилась (%d → %d) — настройка не имеет права публиковать", before.Version, after.Version)
+	}
+	if etag == etagAfter {
+		t.Fatalf("ETag не изменился вместе с поведением: %s", etag)
+	}
+
+	// Набор заменяется целиком: половина раздела снимается тем же фасетом.
+	patchBehavior(t, alice, srv, form.ID, `{"autoJump":false,"saveLocally":true}`, http.StatusOK)
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || !d.SaveLocally {
+		t.Fatalf("набор не заменился целиком: autoJump=%v saveLocally=%v", d.AutoJump, d.SaveLocally)
+	}
+
+	// Два фасета за запрос → 422; чужая форма → 404.
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"behavior":{"autoJump":true,"saveLocally":true},"progress":true}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+	patchBehavior(t, bob, srv, form.ID, `{"autoJump":true,"saveLocally":true}`, http.StatusNotFound)
+}
+
+func patchBehavior(t *testing.T, c *http.Client, srv *httptest.Server, id, behavior string, wantStatus int) {
+	t.Helper()
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id,
+		`{"behavior":`+behavior+`}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH behavior: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
 // Шкала прогресса — живая колонка (миграция 0040) и та же проверка, что у бейджа:
 // тумблер обязан доезжать до респондента без перепубликации. Отличие одно, и оно
 // здесь главное: ТАРИФА У ШКАЛЫ НЕТ — план в тесте не трогается вовсе, и снять её
@@ -1296,6 +1361,8 @@ type formDetailDTO struct {
 	ResponseLimit *int            `json:"responseLimit"`
 	ClosedMessage *string         `json:"closedMessage"`
 	ClosedTitle   *string         `json:"closedTitle"`
+	AutoJump      bool            `json:"autoJump"`
+	SaveLocally   bool            `json:"saveLocally"`
 	Branding      bool            `json:"branding"`
 	Progress      bool            `json:"progress"`
 	LinkPreview   *struct {
@@ -1474,9 +1541,11 @@ type publicFormDTO struct {
 	Schema  json.RawMessage `json:"schema"`
 	// Token остаётся полем DTO, чтобы тест мог доказать его ОТСУТСТВИЕ в
 	// кэшируемом теле: токен выдаёт отдельная некэшируемая ручка (ADR §10).
-	Token     string `json:"token"`
-	ShowBadge bool   `json:"showBadge"`
-	Progress  bool   `json:"progress"`
+	Token       string `json:"token"`
+	ShowBadge   bool   `json:"showBadge"`
+	Progress    bool   `json:"progress"`
+	AutoJump    bool   `json:"autoJump"`
+	SaveLocally bool   `json:"saveLocally"`
 }
 
 // getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.
