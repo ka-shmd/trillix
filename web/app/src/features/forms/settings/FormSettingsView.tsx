@@ -384,30 +384,6 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
-      <Section title="Поведение">
-        <div className="flex flex-col divide-y border-t">
-          <SettingRow
-            id="auto-jump"
-            label="Переход по ответу"
-            description="Форма сама листает на следующую страницу, когда человек выбрал вариант. Работает там, где на странице один вопрос выбором — один из списка, выпадающий список или шкала."
-            checked={draft.autoJump}
-            onChange={(v) => set('autoJump', v)}
-          />
-
-          {/* НЕ ПУТАТЬ С «Частичными ответами»: там черновик уезжает на сервер и его
-              читает автор, здесь ответы остаются в браузере респондента. Пояснение
-              обязано говорить это прямо — иначе два соседних тумблера выглядят одним
-              и тем же. */}
-          <SettingRow
-            id="save-locally"
-            label="Продолжить позже"
-            description="Незаполненная форма запомнит ответы в браузере респондента, и он вернётся к ней с того же места даже после закрытия вкладки. Ответы остаются на его компьютере и никуда не отправляются."
-            checked={draft.saveLocally}
-            onChange={(v) => set('saveLocally', v)}
-          />
-        </div>
-      </Section>
-
       <Section title="Доступность">
         <div className="flex flex-col divide-y border-t">
           {/* ЗАГЛУШКА (решение владельца 2026-08-29): пароля на форму нет нигде —
@@ -510,6 +486,30 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               закрыт».
             </p>
           </SettingRow>
+        </div>
+      </Section>
+
+      <Section title="Поведение">
+        <div className="flex flex-col divide-y border-t">
+          <SettingRow
+            id="auto-jump"
+            label="Переход по ответу"
+            description="Форма сама листает на следующую страницу, когда человек выбрал вариант. Работает там, где на странице один вопрос выбором — один из списка, выпадающий список или шкала."
+            checked={draft.autoJump}
+            onChange={(v) => set('autoJump', v)}
+          />
+
+          {/* НЕ ПУТАТЬ С «Частичными ответами»: там черновик уезжает на сервер и его
+              читает автор, здесь ответы остаются в браузере респондента. Пояснение
+              обязано говорить это прямо — иначе два соседних тумблера выглядят одним
+              и тем же. */}
+          <SettingRow
+            id="save-locally"
+            label="Продолжить позже"
+            description="Незаполненная форма запомнит ответы в браузере респондента, и он вернётся к ней с того же места даже после закрытия вкладки. Ответы остаются на его компьютере и никуда не отправляются."
+            checked={draft.saveLocally}
+            onChange={(v) => set('saveLocally', v)}
+          />
         </div>
       </Section>
 
