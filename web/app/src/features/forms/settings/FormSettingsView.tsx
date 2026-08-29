@@ -30,6 +30,8 @@ import {
   useUpdateProgress,
 } from '../queries'
 
+import { TimeField } from '../../../shared/TimeField'
+
 import { LazyCalendar } from './lazyCalendar'
 import {
   closeSettingsValue,
@@ -58,13 +60,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -534,12 +529,6 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   )
 }
 
-// Часы и минуты списками. Двузначные строки, а не числа: они же и есть значение
-// поля («09», а не «9»), и приведение туда-обратно на каждом рендере — лишний повод
-// разойтись с форматом ЧЧ:ММ.
-const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
-const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
-
 // Дата и время закрытия — КАЛЕНДАРЬ ПЛЮС ВРЕМЯ (решение владельца 2026-08-29,
 // отменяет одно поле `datetime-local`). Разные контролы, потому что вопросы разные:
 // день автор выбирает глазами по сетке месяца, а время печатает.
@@ -563,7 +552,6 @@ function CloseAtFields({
   const [open, setOpen] = useState(false)
   const day = value.slice(0, 10)
   const time = value.slice(11, 16)
-  const [hh, mm] = time === '' ? ['', ''] : time.split(':')
   const selected = day === '' ? undefined : new Date(`${day}T00:00`)
 
   // Дата без времени значит КОНЕЦ дня: «закрыть 1 сентября» — это весь первый
@@ -606,44 +594,11 @@ function CloseAtFields({
             <LazyCalendar mode="single" selected={selected} onSelect={setDay} autoFocus />
           </PopoverContent>
         </Popover>
-        {/* ВРЕМЯ — ДВА СЕЛЕКТА, а не `Input type="time"`. Своего тайм-пикера у shadcn
-            нет вовсе, а нативное поле показывает 12 или 24 часа по локали браузера, и
-            выбрать формат нельзя ничем: ни атрибутом, ни CSS. Автор в русском
-            интерфейсе не должен видеть «11:59 PM» — поэтому часы и минуты выбираются
-            списками, и «23» там всегда «23». */}
-        <Select
-          value={hh}
-          disabled={day === ''}
-          onValueChange={(v) => onChange(`${day}T${v}:${mm === '' ? '00' : mm}`)}
-        >
-          <SelectTrigger className="w-20" aria-label="Часы">
-            <SelectValue placeholder="ЧЧ" />
-          </SelectTrigger>
-          <SelectContent>
-            {HOURS.map((h) => (
-              <SelectItem key={h} value={h}>
-                {h}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <span className="text-muted-foreground">:</span>
-        <Select
-          value={mm}
-          disabled={day === ''}
-          onValueChange={(v) => onChange(`${day}T${hh === '' ? '00' : hh}:${v}`)}
-        >
-          <SelectTrigger className="w-20" aria-label="Минуты">
-            <SelectValue placeholder="ММ" />
-          </SelectTrigger>
-          <SelectContent>
-            {MINUTES.map((m) => (
-              <SelectItem key={m} value={m}>
-                {m}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Время — своё сегментное поле (`shared/TimeField`): у shadcn тайм-пикера
+            нет, нативный `input type="time"` показывает формат по локали браузера, а
+            два списка на 24 и 60 строк — простыня там, где человек знает, что
+            печатать. Довод и клавиатура — в самом компоненте. */}
+        <TimeField value={time} disabled={day === ''} onChange={(v) => onChange(`${day}T${v}`)} />
       </div>
       <p className="text-sm text-muted-foreground">
         Время вашего часового пояса — того, в котором работает этот браузер.
