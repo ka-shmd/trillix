@@ -1,24 +1,35 @@
-import { useRef, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { Clock } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
-// Поле времени в 24 часах — СВОЙ КОНТРОЛ, и это осознанное отступление от правила
-// «весь кабинет на shadcn» (web/CLAUDE.md).
+// Поле времени в 24 часах: кнопка со значением, по нажатию — панель с двумя
+// прокручиваемыми колёсами (часы и минуты), как на телефоне.
 //
-// Причина в том, что заменять нечем. Тайм-пикера у shadcn/ui нет вовсе, нативный
-// `input type="time"` показывает 12 или 24 часа по локали браузера (формат не
-// задаётся ни атрибутом, ни CSS — в русском интерфейсе автор мог увидеть «11:59 PM»),
-// а два `Select` со списками на 24 и 60 строк — это выбор из простыни там, где
-// человек и так знает, что печатать (решение владельца 2026-08-29).
+// СВОЙ КОНТРОЛ, и это осознанное отступление от правила «весь кабинет на shadcn»
+// (web/CLAUDE.md): тайм-пикера у shadcn/ui нет вовсе, а нативный `input type="time"`
+// берёт формат из локали браузера — в русском интерфейсе автор мог увидеть «11:59 PM»,
+// и задать формат нельзя ни атрибутом, ни CSS.
 //
-// Поле СЕГМЕНТНОЕ: два двузначных окна в одной коробке. Коробка нарисована ровно как
-// `Input` (те же граница, высота, кольцо фокуса) — она и должна читаться полем ввода,
-// а не панелью из двух полей.
+// Колесо — обычная прокрутка со snap'ом, а не своя физика: браузер уже умеет и
+// инерцию, и прилипание (`snap-y snap-mandatory`), и колесо мыши, и палец. Значение
+// назначает та строка, что оказалась в центре, — её же обводит неподвижная полоса.
 //
-// Клавиатура — главный способ ввода, мышь не обязательна: цифры набираются подряд
-// (вторая цифра часов сама переводит в минуты), стрелки вверх/вниз крутят значение по
-// кругу, Backspace на пустых минутах возвращает в часы.
+// КЛАВИАТУРА РАВНОПРАВНА мыши: колесо это `listbox` с фокусом, стрелки двигают выбор
+// (по кругу, 23 → 00), Home/End бросают на края. Прокручиваемая полоса без этого была
+// бы органом, до которого с клавиатуры не добраться.
+
+// Высота строки колеса. Числом, а не классом: по нему считается и прокрутка до
+// выбранного, и обратный перевод «положение → значение», — три места обязаны знать
+// одно и то же число.
+const ROW = 36
+// Строк видно пять: центральная — выбранная, по две сверху и снизу для контекста.
+const VISIBLE = 5
+
+const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
+const MINUTES = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
 
 export function TimeField({
   value,
@@ -27,135 +38,146 @@ export function TimeField({
   invalid,
   className,
 }: {
-  // Значение «ЧЧ:ММ» либо пустая строка. Промежуточных состояний у поля нет:
-  // недобранная цифра дополняется нулём сразу, поэтому наружу всегда уезжает время,
-  // которое можно сохранить.
+  // Значение «ЧЧ:ММ» либо пустая строка (время ещё не выбирали).
   value: string
   onChange: (value: string) => void
   disabled?: boolean
   invalid?: boolean
   className?: string
 }) {
-  const hours = useRef<HTMLInputElement>(null)
-  const minutes = useRef<HTMLInputElement>(null)
-  // focus() ПЕРЕД select(): сам по себе select() выделяет текст, но перевод фокуса
-  // спецификацией не обещает — в браузере он случается попутно, а в тесте (happy-dom)
-  // не случается вовсе, и переход между сегментами оказался бы непроверяемым.
-  const focusSegment = (el: HTMLInputElement | null) => {
-    el?.focus()
-    el?.select()
-  }
-
-  // Разбор терпимый к мусору: значение приходит из черновика страницы, а тот
-  // склеивается из даты и времени — «10» без минут там законное промежуточное
-  // состояние, и падать на нём поле не имеет права.
+  const [open, setOpen] = useState(false)
   const [rawH = '', rawM = ''] = value === '' ? ['', ''] : value.split(':')
-  const hh = rawH
-  const mm = rawM
-  const commit = (h: string, m: string) => onChange(`${pad(h)}:${pad(m)}`)
-
-  // Набор цифр: берём ПОСЛЕДНИЕ две (человек, перепечатывающий поверх, не должен
-  // сначала стирать), клампим по потолку сегмента. Переход в минуты — когда часы
-  // дописаны: две цифры либо первая цифра, больше которой часа не бывает («3» — это
-  // уже 03, второй цифры не будет).
-  const typeHours = (raw: string) => {
-    const digits = raw.replace(/\D/g, '').slice(-2)
-    if (digits === '') {
-      commit('00', mm)
-      return
-    }
-    const n = Math.min(Number(digits), 23)
-    commit(String(n), mm)
-    if (digits.length === 2 || Number(digits) > 2) focusSegment(minutes.current)
-  }
-
-  const typeMinutes = (raw: string) => {
-    const digits = raw.replace(/\D/g, '').slice(-2)
-    commit(hh, digits === '' ? '00' : String(Math.min(Number(digits), 59)))
-  }
-
-  // Стрелки крутят по кругу: 23 → 00 вверх и 00 → 23 вниз. Крайнее значение,
-  // упирающееся в стенку, заставляет прокручивать поле обратно целиком.
-  const step = (unit: 'h' | 'm', delta: number) => {
-    const max = unit === 'h' ? 24 : 60
-    const current = Number((unit === 'h' ? hh : mm) || '0')
-    const next = String((current + delta + max) % max)
-    if (unit === 'h') commit(next, mm)
-    else commit(hh, next)
-  }
-
-  // Два обработчика, а не один с параметром: каррированная фабрика, созданная в
-  // рендере, для линта React Compiler неотличима от чтения ref'а во время рендера
-  // (react-hooks/refs), и правило краснеет на ровном месте.
-  const hoursKeys = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      e.preventDefault()
-      step('h', e.key === 'ArrowUp' ? 1 : -1)
-      return
-    }
-    // Двоеточие и стрелка вправо переводят в минуты — так это поле ведёт себя в
-    // любом календаре, и переучивать человека незачем.
-    if (e.key === ':' || e.key === 'ArrowRight') {
-      e.preventDefault()
-      focusSegment(minutes.current)
-    }
-  }
-
-  const minutesKeys = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      e.preventDefault()
-      step('m', e.key === 'ArrowUp' ? 1 : -1)
-      return
-    }
-    if (e.key === 'ArrowLeft' || (e.key === 'Backspace' && mm === '00')) {
-      e.preventDefault()
-      focusSegment(hours.current)
-    }
-  }
-
-  const segment =
-    'w-[2ch] bg-transparent text-center tabular-nums outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed'
+  const hh = pad(rawH)
+  const mm = pad(rawM)
 
   return (
-    // Коробка повторяет геометрию `Input`; фокус кольцом обводит ВСЁ поле, а не
-    // сегмент, — внутри него человек уже ориентируется кареткой.
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          disabled={disabled}
+          aria-invalid={invalid}
+          className={cn('w-32 justify-start gap-2 font-normal tabular-nums', className)}
+        >
+          <Clock className="size-4 text-muted-foreground" />
+          {value === '' ? <span className="text-muted-foreground">Время</span> : `${hh}:${mm}`}
+        </Button>
+      </PopoverTrigger>
+      {/* Панель без полей: колёса упираются в её края, как ленты, а не как два поля
+          на подложке. */}
+      <PopoverContent className="w-auto p-0" align="start">
+        <div className="relative flex" style={{ height: ROW * VISIBLE }}>
+          {/* Неподвижная полоса выбора: под ней проезжают значения, и центр перестаёт
+              быть догадкой. Ниже колёс по слою, чтобы не перехватывать прокрутку. */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-1 top-1/2 -translate-y-1/2 rounded-md bg-accent"
+            style={{ height: ROW }}
+          />
+          <Wheel label="Часы" items={HOURS} value={hh} onSelect={(v) => onChange(`${v}:${mm}`)} />
+          <Wheel
+            label="Минуты"
+            items={MINUTES}
+            value={mm}
+            onSelect={(v) => onChange(`${hh}:${v}`)}
+          />
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+function Wheel({
+  label,
+  items,
+  value,
+  onSelect,
+}: {
+  label: string
+  items: string[]
+  value: string
+  onSelect: (value: string) => void
+}) {
+  const list = useRef<HTMLDivElement>(null)
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const index = Math.max(0, items.indexOf(value))
+
+  // Открытая панель показывает выбранное В ЦЕНТРЕ, а не сверху: колесо, начатое с
+  // нуля, требует прокрутить его к своему же значению.
+  useEffect(() => {
+    const el = list.current
+    if (el) el.scrollTop = index * ROW
+    // Только на монтирование: дальше положением управляет человек, и подкручивать
+    // ленту под ним на каждый рендер значило бы драться с его пальцем.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Значение назначает строка, оказавшаяся в центре. Считаем ПОСЛЕ остановки
+  // (инерция прокрутки шлёт события пачкой): иначе значение прыгало бы всю дорогу, а
+  // с ним и вся страница — черновик настроек считается на каждое изменение.
+  const onScroll = () => {
+    if (settle.current) clearTimeout(settle.current)
+    settle.current = setTimeout(() => {
+      const el = list.current
+      if (!el) return
+      const next = items[Math.round(el.scrollTop / ROW)]
+      if (next !== undefined && next !== value) onSelect(next)
+    }, 120)
+  }
+
+  const move = (to: number) => {
+    const next = items[(to + items.length) % items.length]
+    if (next === undefined) return
+    onSelect(next)
+    list.current?.scrollTo({ top: ((to + items.length) % items.length) * ROW, behavior: 'smooth' })
+  }
+
+  const keys = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      move(index + 1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      move(index - 1)
+    } else if (e.key === 'Home') {
+      e.preventDefault()
+      move(0)
+    } else if (e.key === 'End') {
+      e.preventDefault()
+      move(items.length - 1)
+    }
+  }
+
+  return (
     <div
-      className={cn(
-        'flex h-9 items-center gap-1 rounded-md border border-input bg-transparent px-3 text-base shadow-xs transition-[color,box-shadow] md:text-sm dark:bg-input/30',
-        'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
-        invalid && 'border-destructive ring-destructive/20 dark:ring-destructive/40',
-        disabled && 'pointer-events-none opacity-50',
-        className,
-      )}
+      ref={list}
+      role="listbox"
+      aria-label={label}
+      tabIndex={0}
+      onScroll={onScroll}
+      onKeyDown={keys}
+      // Поля сверху и снизу ростом в две строки — чтобы первое и последнее значение
+      // тоже вставали в центр, а не упирались в край ленты.
+      style={{ paddingBlock: ROW * ((VISIBLE - 1) / 2) }}
+      className="relative w-16 snap-y snap-mandatory overflow-y-auto rounded-md outline-none [scrollbar-width:none] focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-scrollbar]:hidden"
     >
-      <Clock className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-      <input
-        ref={hours}
-        aria-label="Часы"
-        inputMode="numeric"
-        disabled={disabled}
-        placeholder="ЧЧ"
-        value={hh}
-        onFocus={(e) => e.currentTarget.select()}
-        onChange={(e) => typeHours(e.target.value)}
-        onKeyDown={hoursKeys}
-        className={segment}
-      />
-      <span aria-hidden className="text-muted-foreground">
-        :
-      </span>
-      <input
-        ref={minutes}
-        aria-label="Минуты"
-        inputMode="numeric"
-        disabled={disabled}
-        placeholder="ММ"
-        value={mm}
-        onFocus={(e) => e.currentTarget.select()}
-        onChange={(e) => typeMinutes(e.target.value)}
-        onKeyDown={minutesKeys}
-        className={segment}
-      />
+      {items.map((item) => (
+        <button
+          key={item}
+          type="button"
+          role="option"
+          aria-selected={item === value}
+          tabIndex={-1}
+          onClick={() => move(items.indexOf(item))}
+          style={{ height: ROW }}
+          className={cn(
+            'flex w-full snap-center items-center justify-center text-sm tabular-nums transition-colors',
+            item === value ? 'font-medium text-foreground' : 'text-muted-foreground',
+          )}
+        >
+          {item}
+        </button>
+      ))}
     </div>
   )
 }
