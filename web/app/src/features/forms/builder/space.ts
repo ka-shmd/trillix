@@ -10,7 +10,10 @@ import { type Block } from '@entities/formSchema'
 // класс, собранный из переменной, в CSS не попадёт вовсе — правило исчезнет молча.
 const SPACE_MT: Record<SpaceStep, string> = {
   base: 'mt-[calc(0.75rem*var(--rf-density))]',
-  q: 'mt-[calc(1.5rem*var(--rf-density))]',
+  // Ступень вопроса — через токен, а не числом: её правит автор (--rf-space-q,
+  // design.controls.marginBottom). Класс при этом остаётся статической строкой —
+  // собранный из переменной, он в CSS не попал бы вовсе (см. выше).
+  q: 'mt-[calc(var(--rf-space-q)*var(--rf-density))]',
   h1: 'mt-[calc(2.5rem*var(--rf-density))]',
   h2: 'mt-[calc(2rem*var(--rf-density))]',
   h3: 'mt-[calc(1.5rem*var(--rf-density))]',

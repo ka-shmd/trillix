@@ -8,7 +8,7 @@ import {
   openSnippet,
   type SnippetOptions,
 } from '../embedSnippet'
-import { highlight, type TokenKind } from './highlight'
+import { highlight, type TokenKind } from '../../../shared/highlight'
 import { Button } from '@/components/ui/button'
 
 // ПОДПИСЬ РАЗДЕЛА — ОДНА СТРОКА НА ВИД. Инструкции («в Тильде блок HTML, в WordPress

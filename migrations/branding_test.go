@@ -16,6 +16,11 @@ import (
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
+// Версия миграции, которую проверяет этот тест. Числом, а не «последняя»: смысл теста
+// в конкретном переносе данных, и привязка к концу списка ломается на каждой новой
+// миграции — ровно так он и сломался на 0039.
+const brandingVersion uint = 38
+
 func TestBrandingMigration(t *testing.T) {
 	ctx := context.Background()
 	dsn, stop, err := pgtest.StartDSN(ctx)
@@ -27,11 +32,22 @@ func TestBrandingMigration(t *testing.T) {
 	if err := postgres.MigrateUp(dsn); err != nil {
 		t.Fatalf("накат: %v", err)
 	}
-	// Шаг назад — в состояние ДО 0038: колонки нет, намерение снова в документах.
-	// Так и получается «база предыдущей версии», в которую можно положить данные
-	// старого формата, не выписывая её схему руками.
-	if down, err := postgres.MigrateDown(dsn, nil); err != nil || !down.Applied() {
-		t.Fatalf("откат 0038: %v (применён: %v)", err, down.Applied())
+	// Назад — в состояние ДО 0038: колонки нет, намерение снова в документах. Так и
+	// получается «база предыдущей версии», в которую можно положить данные старого
+	// формата, не выписывая её схему руками.
+	//
+	// ЦИКЛОМ, А НЕ ОДНИМ ШАГОМ. MigrateDown откатывает ровно одну миграцию, и «шаг
+	// назад = до 0038» верно ровно до тех пор, пока 0038 последняя. Первая же
+	// следующая миграция (0039) молча увела тест на шаг: он откатывал её, оставался
+	// ПОСЛЕ 0038 и падал так, будто перенос бейджа сломался.
+	for {
+		down, err := postgres.MigrateDown(dsn, nil)
+		if err != nil || !down.Applied() {
+			t.Fatalf("откат до %d: %v (применён: %v)", brandingVersion, err, down.Applied())
+		}
+		if down.Version == brandingVersion {
+			break
+		}
 	}
 
 	pool, err := postgres.NewPool(ctx, dsn)

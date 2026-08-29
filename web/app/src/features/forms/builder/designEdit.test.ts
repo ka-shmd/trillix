@@ -7,7 +7,11 @@ import {
   patchCoverHeight,
   patchLogo,
   patchTop,
+  BORDER_PALETTE_FIELD,
+  BUTTON_PALETTE_FIELDS,
+  FIELD_PALETTE_FIELDS,
   PALETTE_FIELDS,
+  PALETTE_FIELDS_HIDDEN,
 } from './designEdit'
 
 describe('patch', () => {
@@ -85,11 +89,19 @@ describe('patchTop', () => {
 })
 
 describe('PALETTE_FIELDS', () => {
-  it('перечисляет ровно поля палитры контракта', () => {
-    // Забытое поле означает цвет, который контракт принимает, а панель не
-    // показывает: настройка есть, добраться до неё нельзя.
+  it('вместе со скрытыми покрывает поля палитры контракта', () => {
+    // Часть цветов панель не показывает, и это решение, а не забывчивость, —
+    // поэтому сверяется объединение двух списков. Цвет, не попавший ни в один из
+    // них, означает настройку, которую контракт принимает, а панель потеряла молча.
     const inSchema = Object.keys(designSchema.shape.palette.unwrap().shape)
-    expect(PALETTE_FIELDS.map((f) => f.key)).toEqual(inSchema)
+    const inPanel = [
+      ...PALETTE_FIELDS.map((f) => f.key),
+      ...FIELD_PALETTE_FIELDS.map((f) => f.key),
+      BORDER_PALETTE_FIELD.key,
+      ...BUTTON_PALETTE_FIELDS.map((f) => f.key),
+      ...PALETTE_FIELDS_HIDDEN,
+    ]
+    expect([...inPanel].sort()).toEqual([...inSchema].sort())
   })
 })
 

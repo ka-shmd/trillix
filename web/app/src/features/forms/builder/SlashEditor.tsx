@@ -1827,7 +1827,12 @@ function StepButtonEditor({
   onChange: (next: string) => void
 }) {
   return (
-    <span className={`group/btn ${GAP_BRIDGE} relative`}>
+    // ОБЁРТКА ОБЯЗАНА НЕСТИ ШИРИНУ КНОПКИ. Она заведена под значок настроек, но она же
+    // flex-элемент ряда, и `width: 100%` у самой кнопки считается ОТ НЕЁ: обёртка по
+    // содержимому — кнопка «во всю ширину» на полотне оставалась по тексту, хотя в
+    // превью и у респондента растягивалась (там ширину несёт .rf-nav-main). max-w-full
+    // держит фиксированную ширину в колонке: у полотна нет flex-shrink обёртки превью.
+    <span className={`group/btn ${GAP_BRIDGE} relative w-[var(--rf-submit-width)] max-w-full`}>
       <span className={className}>{label}</span>
       <Popover>
         <PopoverTrigger asChild>

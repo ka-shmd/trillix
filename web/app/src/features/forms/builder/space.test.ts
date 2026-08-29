@@ -72,7 +72,7 @@ describe('ступень воздуха на полотне', () => {
     expect(spaceMt('h1')).toBe('mt-[calc(2.5rem*var(--rf-density))]')
     expect(spaceMt('h2')).toBe('mt-[calc(2rem*var(--rf-density))]')
     expect(spaceMt('h3')).toBe('mt-[calc(1.5rem*var(--rf-density))]')
-    expect(spaceMt('q')).toBe('mt-[calc(1.5rem*var(--rf-density))]')
+    expect(spaceMt('q')).toBe('mt-[calc(var(--rf-space-q)*var(--rf-density))]')
     expect(spaceMt('base')).toBe('mt-[calc(0.75rem*var(--rf-density))]')
     expect(spaceMt('pb')).toBe('mt-[calc(3rem*var(--rf-density))]')
   })

@@ -34,12 +34,36 @@ export function hasCustomFields(design: FormDesign | undefined): boolean {
   return CUSTOM_KEYS.some((k) => design[k] !== undefined)
 }
 
+// Ключи раздела «Дополнительно» — лэйаут, поля, кнопки. Отдельно от CUSTOM_KEYS:
+// тот отвечает на «оформление стало пользовательским?» и считает заодно цвета со
+// шрифтом, а этот — на «в платном разделе что-то задано?», и палитра со шрифтом,
+// живущие выше разделителя, в него не входят.
+const ADVANCED_KEYS = ['layout', 'controls', 'button'] as const
+
+// hasAdvancedFields — есть ли в разделе «Дополнительно» хоть одно значение автора.
+// По документу, а не по событию правки: предупреждение обязано стоять и у формы,
+// которую открыли завтра, — иначе оно исчезало бы ровно у той формы, где уже
+// накоплено то, что не опубликовать.
+export function hasAdvancedFields(design: FormDesign | undefined): boolean {
+  if (!design) return false
+  return ADVANCED_KEYS.some((k) => design[k] !== undefined)
+}
+
 // currentTheme — что показывает дропдаун.
 //
 // Отсутствие темы и светлая тема — ОДНО состояние вида, и показывать их по-разному
 // нельзя: форма, которой оформления не касались, выглядела бы «ничем не выбранной».
 export function currentTheme(design: FormDesign | undefined): ThemeChoice {
   if (hasCustomFields(design)) return 'custom'
+  return baseTheme(design)
+}
+
+// baseTheme — готовая тема, ПОВЕРХ которой лежат правки автора. От currentTheme
+// отличается тем, что «пользовательской» здесь не бывает: своё оформление — это
+// всегда светлая или тёмная база плюс правки (см. шапку файла), и цвет, которого
+// автор не задавал, форма берёт у базы. Этим и пользуется панель, показывая в строке
+// цвета не «по теме», а то, что нарисовано.
+export function baseTheme(design: FormDesign | undefined): 'light' | 'dark' {
   return design?.theme === 'dark' ? 'dark' : 'light'
 }
 
@@ -66,6 +90,28 @@ export function resetToTheme(
   if (design?.css) kept.css = design.css
   if (theme === 'dark') kept.theme = 'dark'
   return Object.keys(kept).length === 0 ? undefined : kept
+}
+
+// dropPaid — снять из оформления РОВНО ТО, что не пускает форму в публикацию: платные
+// группы, на которые у пространства нет права. Зовётся из диалога отказа, где автору
+// предложены два выхода — оплатить или снять.
+//
+// СНИМАЕТСЯ ТОЛЬКО ЗАКРЫТОЕ, а не всё своё: у пространства может не быть права на CSS
+// при живом праве на цвета, и «заодно» стёртая палитра была бы потерей работы, которой
+// автору никто не обещал. Тема переживает всегда — обе бесплатны (BILLING §10).
+//
+// Схлопывание пустого — то же, что у patch: оформление, из которого сняли последнее
+// значение, обязано исчезнуть целиком, а не остаться пустым объектом.
+export function dropPaid(
+  design: FormDesign | undefined,
+  allowCustom: boolean,
+  allowCSS: boolean,
+): FormDesign | undefined {
+  if (!design) return undefined
+  const next: Record<string, unknown> = { ...design }
+  if (!allowCustom) for (const key of CUSTOM_KEYS) delete next[key]
+  if (!allowCSS) delete next.css
+  return Object.keys(next).length === 0 ? undefined : (next as FormDesign)
 }
 
 // withTheme — смена базы БЕЗ сброса своих значений. Нужна там, где сбрасывать

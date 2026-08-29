@@ -378,10 +378,21 @@ if [ -n "$hits" ]; then
 	err "fields.css: отношение шкалы обязано быть безразмерным числом" "$hits"
 fi
 
+# --rf-submit-size — ЕДИНСТВЕННЫЙ разрешённый переход через второй токен: кегль
+# кнопки автор задаёт числом, а пока не задал, токен выведен от базы. Что он выведен
+# именно от неё, проверяется отдельно ниже — иначе разрешение здесь открыло бы дорогу
+# любому литералу, спрятанному за собственным токеном.
 hits=$(printf '%s\n' "$code" | grep -oP '^\s*font-size:\s*\K[^;]+' |
-	grep -vF 'var(--rf-font-size)' || true)
+	grep -vF 'var(--rf-font-size)' | grep -vF 'var(--rf-submit-size)' || true)
 if [ -n "$hits" ]; then
 	err "fields.css: кегль литералом — размер берётся от базы через --rf-ratio-*" "$hits"
+fi
+
+submit=$(printf '%s\n' "$code" | grep -oP '^\s*--rf-submit-size\s*:\s*\K[^;]+' || true)
+if [ -z "$submit" ]; then
+	err "fields.css: --rf-submit-size не объявлен — кегль кнопки ссылается в пустоту" "$css"
+elif ! printf '%s' "$submit" | grep -qF 'var(--rf-font-size)'; then
+	err "fields.css: --rf-submit-size оторван от базы шкалы" "--rf-submit-size: $submit"
 fi
 
 hits=$(printf '%s\n' "$code" | grep -nP '^\s*line-height:.*var\(--rf-(font-size|ratio-)' || true)
@@ -431,6 +442,39 @@ if [ -n "$hits" ]; then
 	err "renderer/index.css: фолбэк в var(--rf-…) — на тёмной теме он врёт светлым значением" "$hits"
 fi
 ok_if_clean "токены и шкала кеглей fields.css сходятся"
+
+
+# --- 8.5. Цвета тем в панели «Оформление» ↔ fields.css -----------------------
+# Строка палитры в шторке показывает не «по теме», а цвет, который форма рисует
+# сейчас (решение владельца 2026-08-28), — значит кабинет знает три токена каждой
+# темы наизусть (designDefaults.ts). Копия разъезжается молча и в худшую сторону:
+# панель уверенно показывает цвет, которого на форме нет, и автор подбирает свой
+# относительно вранья.
+# Мутация: поменять цифру в CSS_TOKENS или в --rf-accent тёмной темы → краснеет.
+begin
+defaults=web/app/src/features/forms/builder/designDefaults.ts
+for pair in "light|:root {" "dark|.rf-theme-dark {"; do
+	theme=${pair%%|*}
+	sel=${pair##*|}
+	cssblock=$(printf '%s\n' "$code" | awk -v s="$sel" 'index($0,s)==1{f=1;next} f&&/^\}/{exit} f')
+	tsblock=$(awk -v t="  $theme: {" 'index($0,t)==1{f=1;next} f&&/^  \},/{exit} f' "$defaults")
+	for key in canvas field text placeholder border accent button buttonText; do
+		var=$(grep -oP "^\s*$key: '\K--rf-[a-z-]+(?=')" "$defaults" || true)
+		if [ -z "$var" ]; then
+			err "designDefaults.ts: у цвета «$key» не назван токен в PALETTE_CSS_VAR" "$defaults"
+			continue
+		fi
+		want=$(printf '%s\n' "$cssblock" | grep -oP "^\s*$var\s*:\s*\K[^;]+" || true)
+		got=$(printf '%s\n' "$tsblock" | grep -oP "^\s*$key:\s*'\K[^']+" || true)
+		if [ -z "$want" ]; then
+			err "fields.css: у темы «$theme» нет токена $var — зеркалу панели нечего сверять" "$css"
+		elif [ "$want" != "$got" ]; then
+			err "designDefaults.ts: цвет «$key» темы «$theme» разошёлся с fields.css" \
+				"fields.css: $want · панель: ${got:-—}"
+		fi
+	done
+done
+ok_if_clean "цвета тем в панели оформления сходятся с fields.css"
 
 
 # --- 9. Брендовая картинка карточки ссылки: кабинет ↔ рендерер ---------------

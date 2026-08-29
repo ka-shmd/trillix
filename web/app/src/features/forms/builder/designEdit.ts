@@ -6,20 +6,54 @@ import type { FormCover, FormDesign, FormLogo } from '@entities/formSchema'
 // открывает (STATUS.md).
 
 export type PaletteField =
-  'canvas' | 'field' | 'text' | 'muted' | 'accent' | 'button' | 'buttonText'
+  | 'canvas'
+  | 'field'
+  | 'text'
+  | 'muted'
+  | 'placeholder'
+  | 'border'
+  | 'accent'
+  | 'button'
+  | 'buttonText'
 
-// Порядок — как в панели: сверху вниз от «самого крупного» к деталям. Он же порядок
-// в схеме и в designToVars, и держать его одинаковым дешевле, чем однажды искать,
-// почему панель показывает не то, что печатается.
+// Цвета ВЕРХНЕГО РАЗДЕЛА — основные решения о виде формы (решение владельца
+// 2026-08-28). Остальные цвета контракта разошлись по секции «Поля» и по списку
+// скрытых; порядок — как в панели.
 export const PALETTE_FIELDS: ReadonlyArray<{ key: PaletteField; title: string }> = [
-  { key: 'canvas', title: 'Фон страницы' },
-  { key: 'field', title: 'Фон полей' },
+  { key: 'canvas', title: 'Задний фон' },
   { key: 'text', title: 'Текст' },
-  { key: 'muted', title: 'Приглушённый текст' },
   { key: 'accent', title: 'Акцент' },
-  { key: 'button', title: 'Кнопка' },
-  { key: 'buttonText', title: 'Текст кнопки' },
 ]
+
+// Цвета, которые показывает секция «Поля» (решение владельца 2026-08-29). Отдельный
+// список, а не продолжение верхнего: там основные решения о виде формы, здесь —
+// свойства одного элемента, и порядок в каждом свой.
+export const FIELD_PALETTE_FIELDS: ReadonlyArray<{ key: PaletteField; title: string }> = [
+  { key: 'field', title: 'Задний фон' },
+  { key: 'placeholder', title: 'Плейсхолдер' },
+]
+
+// Цвет края контрола — своей строкой в ряду «Бордер · Ширина · Радиус», поэтому
+// отдельно от FIELD_PALETTE_FIELDS: те два стоят рядом друг с другом, этот — рядом с
+// толщиной и радиусом, то есть с настройками той же рамки.
+export const BORDER_PALETTE_FIELD: { key: PaletteField; title: string } = {
+  key: 'border',
+  title: 'Бордер',
+}
+
+// Цвета секции «Кнопки» (решение владельца 2026-08-29). Подписи короткие: секция уже
+// сказала, о чьём фоне и тексте речь.
+export const BUTTON_PALETTE_FIELDS: ReadonlyArray<{ key: PaletteField; title: string }> = [
+  { key: 'button', title: 'Задний фон' },
+  { key: 'buttonText', title: 'Текст' },
+]
+
+// Цвета контракта, до которых в панели не добраться. Перечислены списком, а не
+// опущены молча: тест сверяет объединение всех списков панели с составом схемы, поэтому
+// новый цвет контракта обязан попасть в один из них — иначе он потерялся бы
+// незаметно. Схемы это не касается: документ с этими полями принимается и рисуется
+// как раньше, недоступна только правка руками.
+export const PALETTE_FIELDS_HIDDEN: readonly PaletteField[] = ['muted']
 
 // Готовые цвета выборщика. Не палитра продукта (её нет и не будет — ADR §10: цвет
 // свободный), а всего лишь удобные стартовые точки.
@@ -120,7 +154,9 @@ export function patch<K extends 'palette' | 'layout' | 'controls' | 'button'>(
   design: FormDesign | undefined,
   group: K,
   key: string,
-  value: string | number | undefined,
+  // boolean — ради `layout.fullWidth`, единственного флага оформления: полная ширина
+  // хранится наличием ключа, как и все остальные дефолты фазы (`true` или ничего).
+  value: string | number | boolean | undefined,
 ): FormDesign | undefined {
   const nextGroup: Record<string, unknown> = { ...(design?.[group] as object) }
   if (value === undefined) delete nextGroup[key]
